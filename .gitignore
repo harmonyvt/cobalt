@@ -4,6 +4,11 @@ desktop.ini
 
 # node
 node_modules
+.expo
+
+# expo prebuild output
+mobile/android
+mobile/ios
 
 # static build
 build

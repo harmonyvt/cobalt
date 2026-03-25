@@ -43,10 +43,12 @@ it also includes documentation in the [docs tree](/docs/):
 
 ### local development
 from the repo root:
-- `pnpm dev` starts the api, web client, and expo mobile client together.
-- `pnpm dev:ios` starts the full stack and opens the iOS simulator flow.
-- `pnpm dev:android` starts the full stack and opens the Android emulator flow.
+- `pnpm dev` starts the api, web client, and metro for the installed Expo development client.
+- `pnpm dev:ios` starts the full stack, generates native iOS files if needed, and launches the iOS development build.
+- `pnpm dev:android` starts the full stack, generates native Android files if needed, and launches the Android development build.
 - `pnpm dev:api`, `pnpm dev:web`, and `pnpm dev:mobile` start each app individually.
+
+mobile now uses `expo-dev-client` instead of Expo Go. The first `pnpm dev:ios` / `pnpm mobile:ios` run builds and installs the development client locally, and later `pnpm dev` / `pnpm mobile:start` runs reconnect metro to that installed app.
 
 the local defaults are:
 - api: `http://localhost:9000`
