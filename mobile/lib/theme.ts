@@ -47,6 +47,61 @@ export const THEME = {
   },
 } as const;
 
+const toCssVarValue = (value: string) => {
+  if (value.startsWith('hsl(') && value.endsWith(')')) {
+    return value.slice(4, -1);
+  }
+
+  return value;
+};
+
+export const THEME_VARS: Record<'light' | 'dark', Record<string, string>> = {
+  light: {
+    '--background': toCssVarValue(THEME.light.background),
+    '--foreground': toCssVarValue(THEME.light.foreground),
+    '--card': toCssVarValue(THEME.light.card),
+    '--card-foreground': toCssVarValue(THEME.light.cardForeground),
+    '--popover': toCssVarValue(THEME.light.popover),
+    '--popover-foreground': toCssVarValue(THEME.light.popoverForeground),
+    '--primary': toCssVarValue(THEME.light.primary),
+    '--primary-foreground': toCssVarValue(THEME.light.primaryForeground),
+    '--secondary': toCssVarValue(THEME.light.secondary),
+    '--secondary-foreground': toCssVarValue(THEME.light.secondaryForeground),
+    '--muted': toCssVarValue(THEME.light.muted),
+    '--muted-foreground': toCssVarValue(THEME.light.mutedForeground),
+    '--accent': toCssVarValue(THEME.light.accent),
+    '--accent-foreground': toCssVarValue(THEME.light.accentForeground),
+    '--destructive': toCssVarValue(THEME.light.destructive),
+    '--destructive-foreground': toCssVarValue(THEME.light.destructiveForeground),
+    '--border': toCssVarValue(THEME.light.border),
+    '--input': toCssVarValue(THEME.light.input),
+    '--ring': toCssVarValue(THEME.light.ring),
+    '--radius': toCssVarValue(THEME.light.radius),
+  },
+  dark: {
+    '--background': toCssVarValue(THEME.dark.background),
+    '--foreground': toCssVarValue(THEME.dark.foreground),
+    '--card': toCssVarValue(THEME.dark.card),
+    '--card-foreground': toCssVarValue(THEME.dark.cardForeground),
+    '--popover': toCssVarValue(THEME.dark.popover),
+    '--popover-foreground': toCssVarValue(THEME.dark.popoverForeground),
+    '--primary': toCssVarValue(THEME.dark.primary),
+    '--primary-foreground': toCssVarValue(THEME.dark.primaryForeground),
+    '--secondary': toCssVarValue(THEME.dark.secondary),
+    '--secondary-foreground': toCssVarValue(THEME.dark.secondaryForeground),
+    '--muted': toCssVarValue(THEME.dark.muted),
+    '--muted-foreground': toCssVarValue(THEME.dark.mutedForeground),
+    '--accent': toCssVarValue(THEME.dark.accent),
+    '--accent-foreground': toCssVarValue(THEME.dark.accentForeground),
+    '--destructive': toCssVarValue(THEME.dark.destructive),
+    '--destructive-foreground': toCssVarValue(THEME.dark.destructiveForeground),
+    '--border': toCssVarValue(THEME.dark.border),
+    '--input': toCssVarValue(THEME.dark.input),
+    '--ring': toCssVarValue(THEME.dark.ring),
+    '--radius': toCssVarValue(THEME.dark.radius),
+  },
+};
+
 export const NAV_THEME: Record<'light' | 'dark', Theme> = {
   light: {
     ...DefaultTheme,

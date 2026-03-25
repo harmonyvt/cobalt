@@ -1,11 +1,16 @@
-import { useColorScheme } from 'react-native';
+import { useEffect } from 'react';
+import { useColorScheme } from 'nativewind';
 
 export function useAppColorScheme() {
-  const system = useColorScheme();
-  const colorScheme: 'light' | 'dark' = system === 'dark' ? 'dark' : 'light';
+  const { colorScheme, setColorScheme } = useColorScheme();
+  const resolvedColorScheme: 'light' | 'dark' = colorScheme === 'dark' ? 'dark' : 'light';
+
+  useEffect(() => {
+    setColorScheme('system');
+  }, [setColorScheme]);
 
   return {
-    colorScheme,
-    isDarkColorScheme: colorScheme === 'dark',
+    colorScheme: resolvedColorScheme,
+    isDarkColorScheme: resolvedColorScheme === 'dark',
   };
 }

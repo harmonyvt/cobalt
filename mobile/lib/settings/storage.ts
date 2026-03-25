@@ -3,8 +3,8 @@ import * as SecureStore from 'expo-secure-store';
 import { DEFAULT_SETTINGS } from '@/lib/settings/defaults';
 import type { AppSettings } from '@/lib/settings/types';
 
-const SETTINGS_KEY = 'cobalt-mobile:settings:v1';
-const SESSION_KEY = 'cobalt-mobile:session:v1';
+const SETTINGS_KEY = 'cobalt_mobile.settings.v1';
+const SESSION_KEY = 'cobalt_mobile.session.v1';
 
 export async function loadSettings() {
   const stored = await SecureStore.getItemAsync(SETTINGS_KEY);
@@ -13,12 +13,14 @@ export async function loadSettings() {
   }
 
   try {
+    const parsed = JSON.parse(stored) as Partial<AppSettings>;
+
     return {
       ...DEFAULT_SETTINGS,
-      ...JSON.parse(stored),
+      ...parsed,
       saveDefaults: {
         ...DEFAULT_SETTINGS.saveDefaults,
-        ...JSON.parse(stored).saveDefaults,
+        ...parsed.saveDefaults,
       },
     } as AppSettings;
   } catch {
