@@ -1,0 +1,26 @@
+{
+  "cli": {
+    "version": ">= 16.17.0"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_DEFAULT_API_URL": "https://api.cobalt.tools/"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_DEFAULT_API_URL": "https://api.cobalt.tools/"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_DEFAULT_API_URL": "https://api.cobalt.tools/"
+      }
+    }
+  }
+}

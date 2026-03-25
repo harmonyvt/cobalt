@@ -24,6 +24,7 @@
     },
     "homepage": "https://cobalt.tools/",
     "devDependencies": {
+        "@imput/cobalt-client": "workspace:^",
         "@eslint/js": "^9.5.0",
         "@fontsource/ibm-plex-mono": "^5.0.13",
         "@fontsource/redaction-10": "^5.0.2",

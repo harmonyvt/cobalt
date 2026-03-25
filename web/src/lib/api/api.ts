@@ -1,3 +1,8 @@
+import {
+    createCobaltError,
+    probeCobaltTunnel,
+    requestCobalt,
+} from "@imput/cobalt-client";
 import { get } from "svelte/store";
 
 import settings from "$lib/state/settings";
@@ -8,7 +13,6 @@ import { turnstileEnabled, turnstileSolved } from "$lib/state/turnstile";
 import cachedInfo from "$lib/state/server-info";
 import { getServerInfo } from "$lib/api/server-info";
 
-import type { Optional } from "$lib/types/generic";
 import type { CobaltAPIResponse, CobaltErrorResponse, CobaltSaveRequestBody } from "$lib/types/api";
 
 const waitForTurnstile = async () => {
@@ -42,12 +46,7 @@ const getAuthorization = async () => {
         try {
             await waitForTurnstile();
         } catch {
-            return {
-                status: "error",
-                error: {
-                    code: "error.captcha_too_long"
-                }
-            } as CobaltErrorResponse;
+            return createCobaltError("error.captcha_too_long") as CobaltErrorResponse;
         }
     }
 
@@ -70,12 +69,7 @@ const request = async (requestBody: CobaltSaveRequestBody, justRetried = false) 
     const getCachedInfo = get(cachedInfo);
 
     if (!getCachedInfo) {
-        return {
-            status: "error",
-            error: {
-                code: "error.api.unreachable"
-            }
-        } as CobaltErrorResponse;
+        return createCobaltError("error.api.unreachable") as CobaltErrorResponse;
     }
 
     const api = currentApiURL();
@@ -85,36 +79,17 @@ const request = async (requestBody: CobaltSaveRequestBody, justRetried = false) 
         return authorization;
     }
 
-    let extraHeaders = {};
+    let authorizationHeader: string | undefined;
 
     if (authorization) {
-        extraHeaders = {
-            "Authorization": authorization
-        }
+        authorizationHeader = authorization;
     }
 
-    const response: Optional<CobaltAPIResponse> = await fetch(api, {
-        method: "POST",
-        redirect: "manual",
-        signal: AbortSignal.timeout(20000),
-        body: JSON.stringify(requestBody),
-        headers: {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            ...extraHeaders,
-        },
-    })
-    .then(r => r.json())
-    .catch((e) => {
-        if (e?.message?.includes("timed out")) {
-            return {
-                status: "error",
-                error: {
-                    code: "error.api.timed_out"
-                }
-            } as CobaltErrorResponse;
-        }
-    });
+    const response = await requestCobalt(
+        api,
+        requestBody,
+        authorizationHeader
+    ) as CobaltAPIResponse | undefined;
 
     if (
         response?.status === 'error'
@@ -127,14 +102,6 @@ const request = async (requestBody: CobaltSaveRequestBody, justRetried = false) 
     }
 
     return response;
-}
-
-const probeCobaltTunnel = async (url: string) => {
-    const request = await fetch(`${url}&p=1`).catch(() => {});
-    if (request?.status === 200) {
-        return request?.status;
-    }
-    return 0;
 }
 
 export default {

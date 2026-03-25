@@ -1,3 +1,4 @@
+import { createCobaltError, createCobaltSession, withAbsoluteSessionExpiry } from "@imput/cobalt-client";
 import turnstile from "$lib/api/turnstile";
 import { currentApiURL } from "$lib/api/api-url";
 
@@ -6,34 +7,12 @@ import type { CobaltSession, CobaltErrorResponse, CobaltSessionResponse } from "
 let cache: CobaltSession | undefined;
 
 export const requestSession = async () => {
-    const apiEndpoint = `${currentApiURL()}/session`;
-
-    let requestHeaders = {};
-
     const turnstileResponse = turnstile.getResponse();
-    if (turnstileResponse) {
-        requestHeaders = {
-            "cf-turnstile-response": turnstileResponse
-        };
-    }
 
-    const response: CobaltSessionResponse = await fetch(apiEndpoint, {
-        method: "POST",
-        redirect: "manual",
-        signal: AbortSignal.timeout(10000),
-        headers: requestHeaders,
-    })
-    .then(r => r.json())
-    .catch((e) => {
-        if (e?.message?.includes("timed out")) {
-            return {
-                status: "error",
-                error: {
-                    code: "error.api.timed_out"
-                }
-            } as CobaltErrorResponse
-        }
-    });
+    const response = await createCobaltSession(
+        currentApiURL(),
+        turnstileResponse ?? undefined
+    ) as CobaltSessionResponse | undefined;
 
     turnstile.reset();
 
@@ -49,16 +28,10 @@ export const getSession = async () => {
 
     const newSession = await requestSession();
 
-    if (!newSession) return {
-        status: "error",
-        error: {
-            code: "error.api.unreachable"
-        }
-    } as CobaltErrorResponse
+    if (!newSession) return createCobaltError("error.api.unreachable") as CobaltErrorResponse
 
     if (!("status" in newSession)) {
-        newSession.exp = currentTime() + newSession.exp;
-        cache = newSession;
+        cache = withAbsoluteSessionExpiry(newSession, currentTime());
     }
     return newSession;
 }

@@ -1,7 +1,16 @@
 {
     "name": "cobalt",
     "packageManager": "pnpm@9.6.0",
+    "private": true,
     "engines": {
         "pnpm": ">=9"
+    },
+    "scripts": {
+        "mobile:start": "pnpm --filter mobile start",
+        "mobile:ios": "pnpm --filter mobile ios",
+        "mobile:android": "pnpm --filter mobile android",
+        "mobile:lint": "pnpm --filter mobile lint",
+        "mobile:typecheck": "pnpm --filter mobile typecheck",
+        "mobile:test": "pnpm --filter mobile test"
     }
 }
