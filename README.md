@@ -41,6 +41,23 @@ it also includes documentation in the [docs tree](/docs/):
 - [cobalt api instance environment variables](/docs/api-env-variables.md)
 - [cobalt api documentation](/docs/api.md)
 
+### local development
+from the repo root:
+- `pnpm dev` starts the api, web client, and expo mobile client together.
+- `pnpm dev:ios` starts the full stack and opens the iOS simulator flow.
+- `pnpm dev:android` starts the full stack and opens the Android emulator flow.
+- `pnpm dev:api`, `pnpm dev:web`, and `pnpm dev:mobile` start each app individually.
+
+the local defaults are:
+- api: `http://localhost:9000`
+- web: `http://localhost:5173`
+- mobile default api: `http://localhost:9000`
+
+to point web and mobile at a LAN-reachable local api for physical device testing, override `COBALT_DEV_API_URL`:
+- `COBALT_DEV_API_URL=http://192.168.1.50:9000 pnpm dev`
+
+to avoid port conflicts, you can also override `COBALT_DEV_API_PORT` and `COBALT_DEV_WEB_PORT`.
+
 ### ethics
 cobalt is a tool that makes downloading public content easier. it takes **zero liability**.
 the end user is responsible for what they download, how they use and distribute that content.

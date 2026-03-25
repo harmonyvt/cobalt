@@ -6,11 +6,18 @@
         "pnpm": ">=9"
     },
     "scripts": {
-        "mobile:start": "pnpm --filter mobile start",
-        "mobile:ios": "pnpm --filter mobile ios",
-        "mobile:android": "pnpm --filter mobile android",
-        "mobile:lint": "pnpm --filter mobile lint",
-        "mobile:typecheck": "pnpm --filter mobile typecheck",
-        "mobile:test": "pnpm --filter mobile test"
+        "dev": "./scripts/dev-stack.sh start",
+        "dev:all": "./scripts/dev-stack.sh start",
+        "dev:ios": "./scripts/dev-stack.sh ios",
+        "dev:android": "./scripts/dev-stack.sh android",
+        "dev:api": "API_PORT=${COBALT_DEV_API_PORT:-9000} API_URL=${COBALT_DEV_API_URL:-http://localhost:${COBALT_DEV_API_PORT:-9000}} pnpm --filter @imput/cobalt-api run start",
+        "dev:web": "WEB_DEFAULT_API=${COBALT_DEV_API_URL:-http://localhost:${COBALT_DEV_API_PORT:-9000}} pnpm --filter @imput/cobalt-web exec vite dev --host 0.0.0.0 --port ${COBALT_DEV_WEB_PORT:-5173}",
+        "dev:mobile": "EXPO_PUBLIC_DEFAULT_API_URL=${COBALT_DEV_API_URL:-http://localhost:${COBALT_DEV_API_PORT:-9000}} pnpm --filter @imput/cobalt-mobile run start",
+        "mobile:start": "pnpm --filter @imput/cobalt-mobile run start",
+        "mobile:ios": "pnpm --filter @imput/cobalt-mobile run ios",
+        "mobile:android": "pnpm --filter @imput/cobalt-mobile run android",
+        "mobile:lint": "pnpm --filter @imput/cobalt-mobile run lint",
+        "mobile:typecheck": "pnpm --filter @imput/cobalt-mobile run typecheck",
+        "mobile:test": "pnpm --filter @imput/cobalt-mobile run test"
     }
 }
