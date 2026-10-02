@@ -1,0 +1,117 @@
+// The library's D1 side (migration 0004_library.sql, LIBRARY-CONTRACT.md): the
+// media_items rows the API Worker and Durable Object write. Free of Cloudflare
+// imports, so it runs under plain node in the tests.
+//
+// Writing a row is bookkeeping: it must never fail the operation that made the
+// file, so every call here swallows (and logs) its errors.
+
+import { randomBase62 } from "./ids";
+
+export const ITEM_ID_LENGTH = 16;
+
+// Key id the web Worker's service-authenticated calls run as (index of the
+// contract's "Internal service auth").
+export const SERVICE_KEY_ID = "service:library";
+
+export type MediaSource = "webp" | "studio" | "host" | "upload" | "saved";
+
+export type MediaItemInput = {
+    kind: "public" | "private";
+    source: MediaSource;
+    bucket: "media" | "originals";
+    r2_key: string;
+    url?: string | null;
+    name: string;
+    content_type?: string | null;
+    bytes?: number | null;
+    width?: number | null;
+    height?: number | null;
+    duration?: number | null;
+    link?: string | null;
+    session_id?: string | null;
+    key_id?: string | null;
+    created_at: number;
+};
+
+export const mintItemId = (rb?: (n: number) => Uint8Array) =>
+    randomBase62(ITEM_ID_LENGTH, rb);
+
+const orNull = <T>(v: T | null | undefined): T | null => (v === undefined ? null : v);
+
+// Inserts a row unless one for the same bucket + key already exists (a poll
+// that repeats, or the backfill having run first). Returns the new row's id,
+// or null when nothing was inserted (already there, no database, or D1 failed).
+export async function insertMediaItem(
+    db: D1Database | undefined,
+    item: MediaItemInput,
+    randomBytes?: (n: number) => Uint8Array,
+): Promise<string | null> {
+    if (!db) return null;
+    const id = mintItemId(randomBytes);
+    try {
+        const res = await db
+            .prepare(
+                "INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at) " +
+                    "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16 " +
+                    "WHERE NOT EXISTS (SELECT 1 FROM media_items WHERE bucket = ?4 AND r2_key = ?5)",
+            )
+            .bind(
+                id,
+                item.kind,
+                item.source,
+                item.bucket,
+                item.r2_key,
+                orNull(item.url),
+                item.name.slice(0, 300),
+                orNull(item.content_type),
+                orNull(item.bytes),
+                orNull(item.width),
+                orNull(item.height),
+                orNull(item.duration),
+                orNull(item.link),
+                orNull(item.session_id),
+                orNull(item.key_id),
+                item.created_at,
+            )
+            .run();
+        return Number(res.meta?.changes ?? 0) > 0 ? id : null;
+    } catch (e) {
+        console.error("[library] media_items insert failed", item.source, item.r2_key, String(e));
+        return null;
+    }
+}
+
+// Marks the live row for a stored object as deleted.
+export async function markMediaDeleted(
+    db: D1Database | undefined,
+    bucket: "media" | "originals",
+    r2Key: string,
+    now: number,
+): Promise<void> {
+    if (!db) return;
+    try {
+        await db
+            .prepare(
+                "UPDATE media_items SET deleted_at = ?1 WHERE bucket = ?2 AND r2_key = ?3 AND deleted_at IS NULL",
+            )
+            .bind(now, bucket, r2Key)
+            .run();
+    } catch (e) {
+        console.error("[library] media_items delete mark failed", bucket, r2Key, String(e));
+    }
+}
+
+// The file name part of a public media URL (https://media.../<name>), or null.
+export function mediaNameFromUrl(url: string | null | undefined): string | null {
+    if (!url) return null;
+    try {
+        const last = new URL(url).pathname.split("/").pop();
+        return last ? decodeURIComponent(last) : null;
+    } catch {
+        return null;
+    }
+}
+
+// A session's `link` for display: uploads carry "upload:<item id>" instead of a page.
+export const pageLink = (link: string | null | undefined): string | null =>
+    link && /^https?:\/\//i.test(link) ? link : null;

@@ -1,0 +1,22 @@
+{
+    "name": "cobalt-api-worker",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run",
+        "deploy": "./prepare-git-info.sh && cf deploy --secrets-file \"${COBALT_SECRETS_FILE:-$HOME/.config/cobalt/secrets.json}\"",
+        "dry-run": "./prepare-git-info.sh && cf deploy --dry-run --secrets-file \"${COBALT_SECRETS_FILE:-$HOME/.config/cobalt/secrets.json}\""
+    },
+    "dependencies": {
+        "@cloudflare/containers": "^0.3.7"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "^5.20260929.1",
+        "@types/node": "^22.20.4",
+        "cf": "1.0.0-beta.5",
+        "typescript": "^7.0.2",
+        "vitest": "^5.0.2",
+        "wrangler": "^4.143.0"
+    }
+}

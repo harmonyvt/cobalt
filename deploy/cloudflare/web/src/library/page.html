@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>cobalt library</title>
+<link rel="icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">
+<style>
+/* Tokens: cobalt's own (web/src/app.css), light and dark by prefers-color-scheme. */
+:root {
+  --primary: #ffffff; --secondary: #000000; --gray: #6b6b74;
+  --red: #c8182a; --green: #1f7a12; --blue: #1f6fd6; --orange: #a65b08;
+  --button: #f4f4f4; --button-hover: #ededed; --button-stroke: rgba(0,0,0,0.06);
+  --button-text: #282828; --button-elevated: #e3e3e3; --input-border: #adadb7;
+  --page: #ffffff; --track: #e9e9ee; --drop: rgba(31,111,214,0.08);
+  --radius: 11px;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #000000; --secondary: #e1e1e1; --gray: #9a9aa2;
+    --red: #ff6b6b; --green: #5fd35a; --blue: #5aa2ff; --orange: #f5ad5b;
+    --button: #191919; --button-hover: #242424; --button-stroke: rgba(255,255,255,0.05);
+    --button-text: #e1e1e1; --button-elevated: #282828; --input-border: #383838;
+    --page: #000000; --track: #1c1c20; --drop: rgba(90,162,255,0.10);
+    color-scheme: dark;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { margin: 0; background: var(--page); color: var(--secondary); font: 14px/1.5 var(--f-mono); overflow-wrap: anywhere; }
+h1, h2, h3, p { margin: 0; font-weight: 600; }
+p { font-weight: 400; }
+h2 { font-size: 17px; }
+button, input, select { font: inherit; color: inherit; }
+button, .btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-align: center;
+  background: var(--button); color: var(--button-text); border: 0; box-shadow: 0 0 0 1px var(--button-stroke) inset;
+  border-radius: var(--radius); padding: 0 12px; min-height: 40px; cursor: pointer; font-weight: 500; text-decoration: none;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+button:hover, .btn:hover { background: var(--button-hover); }
+button.primary { background: var(--secondary); color: var(--primary); }
+button.primary:hover { opacity: .88; }
+button.danger { color: var(--red); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:focus-visible, input:focus-visible, a:focus-visible, .drop:focus-visible, .btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+a { color: inherit; }
+.muted { color: var(--gray); }
+.small { font-size: 12px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+[hidden] { display: none !important; }
+@media (pointer: coarse), (max-width: 640px) {
+  button, .btn { min-height: 44px; }
+}
+
+.page {
+  max-width: 1120px; margin: 0 auto; display: grid; gap: 16px;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+}
+.bar { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; align-items: center; padding: 6px 14px; background: var(--button); border-radius: 14px; box-shadow: 0 0 0 1px var(--button-stroke) inset; font-size: 12px; }
+.bar b { font-size: 13px; }
+.bar a.back { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; padding-right: 8px; }
+.lock { display: inline-flex; gap: 6px; align-items: center; color: var(--gray); }
+.lock::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+.banner { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 8px 14px; border-radius: var(--radius); background: var(--button); color: var(--red); box-shadow: 0 0 0 1px currentColor inset; font-weight: 500; }
+
+.card { background: var(--button); border-radius: var(--radius); padding: 14px; box-shadow: 0 0 0 1px var(--button-stroke) inset; display: grid; gap: 12px; min-width: 0; align-content: start; }
+.pane { display: grid; gap: 10px; min-width: 0; }
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--page); border-radius: var(--radius); padding: 3px; box-shadow: 0 0 0 1px var(--button-stroke) inset; width: fit-content; max-width: 100%; }
+.seg button { background: transparent; box-shadow: none; padding: 0 12px; border-radius: 8px; min-height: 36px; }
+.seg button:hover { background: var(--button-hover); }
+.seg button[aria-pressed="true"] { background: var(--secondary); color: var(--primary); }
+@media (pointer: coarse), (max-width: 640px) { .seg button { min-height: 44px; } }
+
+.omni { display: flex; gap: 8px; background: var(--page); border-radius: var(--radius); padding: 6px; box-shadow: 0 0 0 1px var(--input-border) inset; }
+.omni input { flex: 1; min-width: 0; background: transparent; border: 0; padding: 0 8px; min-height: 40px; outline: none; font-size: 14px; }
+.omni:focus-within { box-shadow: 0 0 0 2px var(--blue) inset; }
+@media (pointer: coarse), (max-width: 640px) { .omni input { min-height: 44px; font-size: 16px; } }
+.actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+.act { display: grid; gap: 2px; text-align: left; justify-items: start; align-content: center; padding: 8px 12px; min-height: 56px; }
+.act b { font-weight: 600; }
+.act span { font-size: 11.5px; color: var(--gray); font-weight: 400; }
+@media (max-width: 420px) { .actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } .act { padding: 8px 10px; } }
+
+.status { font-size: 12.5px; min-height: 1.4em; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.status.ok { color: var(--green); }
+.status.bad { color: var(--red); }
+.status code { font-size: 11.5px; color: var(--gray); }
+.spin { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--gray); border-top-color: transparent; animation: spin .8s linear infinite; flex: none; align-self: center; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } }
+.extra { display: flex; gap: 8px; flex-wrap: wrap; }
+.linkbox { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--page); border-radius: 8px; padding: 6px 6px 6px 10px; box-shadow: 0 0 0 1px var(--input-border) inset; }
+.linkbox code { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; }
+
+.drop { border: 2px dashed var(--input-border); border-radius: var(--radius); padding: 22px 14px; display: grid; gap: 6px; place-items: center; text-align: center; background: var(--page); cursor: pointer; min-height: 96px; }
+.drop.over { border-color: var(--blue); background: var(--drop); }
+.files { display: grid; gap: 8px; }
+.file { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; background: var(--page); box-shadow: 0 0 0 1px var(--button-stroke) inset; }
+.file .thumb { width: 44px; height: 44px; border-radius: 8px; overflow: hidden; background: var(--track); display: grid; place-items: center; color: var(--gray); font-size: 10px; text-transform: uppercase; }
+.file .thumb img, .file .thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.file .name { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file .meta { font-size: 11.5px; color: var(--gray); }
+.file .meta.bad { color: var(--red); }
+.file .meta.ok { color: var(--green); }
+.file .opts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.file .opts button, .file .opts .btn { font-size: 12px; padding: 0 10px; min-height: 40px; }
+@media (pointer: coarse), (max-width: 640px) { .file .opts button, .file .opts .btn { min-height: 44px; } }
+@media (max-width: 560px) { .file { grid-template-columns: 44px minmax(0, 1fr); } .file .opts { grid-column: 1 / -1; justify-content: flex-start; } }
+.prog { height: 5px; border-radius: 3px; background: var(--track); overflow: hidden; margin-top: 4px; }
+.prog i { display: block; height: 100%; background: var(--secondary); width: 0; }
+
+.filters { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; }
+.meter-wrap { display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--gray); flex-wrap: wrap; }
+.meter { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; width: 140px; }
+.meter i { display: block; height: 100%; background: var(--secondary); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; }
+.tile { background: var(--button); border-radius: var(--radius); box-shadow: 0 0 0 1px var(--button-stroke) inset; overflow: hidden; display: grid; grid-template-rows: auto 1fr auto; text-align: left; min-width: 0; align-content: start; }
+.thumb-l { display: block; position: relative; aspect-ratio: 16 / 11; background: var(--track); overflow: hidden; color: inherit; text-decoration: none; }
+.thumb-l img, .thumb-l video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; background: var(--track); }
+.ph { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 4px; color: var(--gray); font-size: 11px; text-transform: lowercase; }
+.ph svg { width: 28px; height: 28px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.tile .cap { padding: 8px 10px 4px; display: grid; gap: 3px; min-width: 0; align-content: start; }
+.tile .name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .meta { font-size: 11px; color: var(--gray); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.badge { font-size: 10px; padding: 1px 6px; border-radius: 99px; box-shadow: 0 0 0 1px currentColor inset; }
+.badge.pub { color: var(--blue); } .badge.priv { color: var(--gray); } .badge.studio { color: var(--orange); }
+.tact { display: flex; gap: 6px; padding: 4px 10px 10px; flex-wrap: wrap; align-self: end; }
+.tact button, .tact .btn { font-size: 11.5px; padding: 0 8px; min-height: 36px; }
+@media (pointer: coarse), (max-width: 640px) { .tact button, .tact .btn { min-height: 44px; } }
+@media (max-width: 420px) { .tact { display: grid; grid-template-columns: minmax(0, 1fr); } }
+.confirm { font-size: 11.5px; color: var(--red); padding: 4px 10px 10px; display: grid; gap: 6px; align-self: end; }
+.empty { color: var(--gray); font-size: 13px; padding: 10px 0; }
+.more { display: flex; justify-content: center; }
+.toast { position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: calc(100vw - 24px); background: var(--secondary); color: var(--primary); padding: 8px 14px; border-radius: 99px; font-size: 12.5px; display: flex; gap: 10px; align-items: center; z-index: 5; }
+.toast a { color: inherit; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="bar">
+    <a class="back" href="/">&larr; cobalt</a>
+    <b>library</b>
+    <span class="lock">signed in &middot; only you</span>
+  </header>
+
+  <div class="banner" id="banner" role="alert" hidden>
+    <span>your login expired, reload to sign in</span>
+    <button id="reload" class="primary" type="button">reload</button>
+  </div>
+
+  <main style="display:grid; gap:16px">
+    <section class="card" aria-label="add something">
+      <div class="seg" role="group" aria-label="add from">
+        <button id="tabLink" type="button" aria-pressed="true">from a link</button>
+        <button id="tabFiles" type="button" aria-pressed="false">from your files</button>
+      </div>
+
+      <div class="pane" id="linkPane">
+        <form class="omni" id="linkForm" autocomplete="off">
+          <input id="link" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="paste a link (x, tiktok, bluesky…)" aria-label="link">
+        </form>
+        <div class="actions" id="actions">
+          <button class="act" type="button" data-act="webp"><b>make webp</b><span>the whole clip, up to 10 s &rarr; public link</span></button>
+          <button class="act" type="button" data-act="studio"><b>open in studio</b><span>pick the part you want, then make a webp</span></button>
+          <button class="act" type="button" data-act="host"><b>host as-is</b><span>the original file (mp4/gif/image) &rarr; public link</span></button>
+          <button class="act" type="button" data-act="keep"><b>keep a private copy</b><span>saved to your library, no public link</span></button>
+        </div>
+        <div class="status" id="linkStatus" role="status" aria-live="polite"></div>
+        <div class="extra" id="linkExtra"></div>
+        <div class="linkbox" id="linkResult" hidden><code id="linkResultUrl"></code><button id="copyLinkResult" type="button">copy</button><a class="btn" id="openLinkResult" href="#" target="_blank" rel="noopener">open</a></div>
+      </div>
+
+      <div class="pane" id="filesPane" hidden>
+        <input id="pick" class="sr" type="file" multiple tabindex="-1" aria-label="choose files" accept="image/gif,image/webp,image/png,image/jpeg,video/mp4,video/quicktime,image/heic,.gif,.webp,.png,.jpg,.jpeg,.mp4,.mov,.heic">
+        <div class="drop" id="drop" tabindex="0" role="button" aria-label="choose files or drop them here">
+          <b>drop files here, or tap to choose</b>
+          <span class="small muted">gif, webp, png, jpg, mp4, mov, heic &middot; up to 100 MB each &middot; on a phone this opens your photos</span>
+        </div>
+        <div class="files" id="files"></div>
+        <div class="status" id="filesStatus" role="status" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section style="display:grid; gap:10px" aria-label="your library">
+      <div class="filters">
+        <div class="seg" role="group" aria-label="show" id="filters">
+          <button type="button" data-f="all" aria-pressed="true">all</button>
+          <button type="button" data-f="public" aria-pressed="false">public links</button>
+          <button type="button" data-f="private" aria-pressed="false">private</button>
+          <button type="button" data-f="studio" aria-pressed="false">studios</button>
+        </div>
+        <div class="meter-wrap"><span id="usage">&nbsp;</span><div class="meter" id="meter" role="img" aria-label="storage used"><i id="meterFill" style="width:0"></i></div></div>
+      </div>
+      <div class="grid" id="grid"></div>
+      <div class="empty" id="gridNote" role="status" aria-live="polite">loading your library…</div>
+      <div class="more" id="more" hidden><button id="moreBtn" type="button">load more</button></div>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+/* ---------- constants ---------- */
+var MAX_BYTES = 100000000;          // contract: bytes <= 100_000_000
+var LIMIT_S = 10;                   // webp length limit (WEBP_MAX_SECONDS)
+var FREE_BYTES = 10e9;              // the 10 GB meter
+var PAGE_SIZE = 48;
+var DEFAULT_API = "https://api.capybaraharmony.com";
+// content type -> extension (the server accepts exactly these)
+var TYPES = { "image/gif": "gif", "image/webp": "webp", "image/png": "png", "image/jpeg": "jpg", "video/mp4": "mp4", "video/quicktime": "mov", "image/heic": "heic" };
+var EXT_TYPE = { gif: "image/gif", webp: "image/webp", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", mp4: "video/mp4", mov: "video/quicktime", heic: "image/heic", heif: "image/heic" };
+var CONVERTIBLE = { gif: 1, mp4: 1, mov: 1 };   // webp and heic: host only (ffmpeg here can't decode them)
+
+/* ---------- api base for the studio render calls (public routes, no cookie) ---------- */
+var API = DEFAULT_API;
+try {
+  if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+    var q = new URLSearchParams(location.search).get("api");
+    if (q && /^https?:\/\/[^\/?#]+$/.test(q)) API = q;
+  }
+} catch (e) {}
+
+/* ---------- helpers ---------- */
+var $ = function (id) { return document.getElementById(id); };
+var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+function h(tag, attrs) {
+  var el = document.createElement(tag);
+  for (var k in (attrs || {})) {
+    var v = attrs[k];
+    if (v == null || v === false) continue;
+    if (k === "text") el.textContent = v;
+    else if (k.indexOf("on") === 0) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (var i = 2; i < arguments.length; i++) if (arguments[i]) el.append(arguments[i]);
+  return el;
+}
+function fmtBytes(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + " GB";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + " MB";
+  if (n >= 1e3) return Math.round(n / 1e3) + " KB";
+  return n + " B";
+}
+function fmtSecs(s) { return (Math.round(s * 10) / 10) + " s"; }
+function fmtElapsed(ms) { var s = Math.floor(ms / 1000); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+function ago(ms) {
+  var s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 129600) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " d ago";
+}
+function inDays(ms) {
+  var s = Math.max(0, Math.round((ms - Date.now()) / 1000));
+  if (s < 5400) return "under 2 h";
+  if (s < 129600) return Math.round(s / 3600) + " h";
+  return Math.round(s / 86400) + " d";
+}
+function hostOf(u) { try { return new URL(u).host.replace(/^www\./, ""); } catch (e) { return ""; } }
+function isVideoType(t) { return !!t && t.indexOf("video/") === 0; }
+function isImageType(t) { return !!t && t.indexOf("image/") === 0 && t !== "image/heic" && t !== "image/heif"; }
+function extOf(name) { var m = /\.([0-9A-Za-z]{1,8})$/.exec(name || ""); return m ? m[1].toLowerCase() : ""; }
+function typeOfFile(file) {
+  var t = (file.type || "").toLowerCase();
+  if (t === "image/heif") t = "image/heic";
+  if (TYPES[t]) return t;
+  return EXT_TYPE[extOf(file.name)] || "";
+}
+
+/* ---------- errors ---------- */
+function Fail(code) { this.code = code; this.message = code; }
+Fail.prototype = Object.create(Error.prototype);
+var MESSAGES = {
+  "network": "can't reach the server right now. check your connection and try again.",
+  "expired": "your login expired, reload to sign in.",
+  "error.library.invalid_url": "that doesn't look like a link. it should start with https://",
+  "error.library.bad_request": "that request wasn't valid.",
+  "error.library.upstream": "the server couldn't reach cobalt's api. try again in a moment.",
+  "error.library.timeout": "this is taking too long. try again.",
+  "error.library.unsupported": "that file type isn't supported.",
+  "error.library.too_large": "too big: the limit is 100 MB.",
+  "error.library.empty": "that file is empty.",
+  "error.library.incomplete": "the upload didn't finish. try again.",
+  "error.library.missing": "the stored file is gone.",
+  "error.library.not_found": "that isn't in your library anymore.",
+  "error.library.already_public": "that already has a public link.",
+  "error.library.storage": "couldn't copy the file to public storage. try again.",
+  "error.library.no_duration": "couldn't read how long this clip is. trim it in studio instead.",
+  "error.library.too_short": "this clip is shorter than 0.5 s, so a webp can't be made.",
+  "error.studio.no_link": "no link found in that text.",
+  "error.studio.busy": "another save or encode is running. try again in a moment.",
+  "error.studio.too_large": "that video is over the 200 MB limit, so it wasn't saved.",
+  "error.studio.expired": "that studio expired.",
+  "error.studio.not_found": "that studio doesn't exist anymore.",
+  "error.studio.not_video": "only videos and gifs can be opened in studio.",
+  "error.studio.not_ready": "that studio isn't ready yet.",
+  "error.studio.storage": "couldn't copy the file to public storage. try again.",
+  "error.webp.too_long": "this clip is over 10 s. use \"open in studio\" to pick a part.",
+  "error.webp.busy": "another webp is being made right now. try again in a moment.",
+  "error.webp.invalid_params": "that clip can't be made into a webp."
+};
+function messageFor(code) {
+  if (MESSAGES[code]) return MESSAGES[code];
+  if (code && code.indexOf("error.api.") === 0) return "cobalt couldn't fetch this link. the post may be private, removed, or from a site cobalt can't read.";
+  if (code && code.indexOf("error.webp.") === 0) return "couldn't make the webp.";
+  return "something went wrong.";
+}
+function describe(e) {
+  var code = e && e.code ? e.code : "error";
+  return { text: messageFor(code), code: (code === "network" || code === "expired") ? "" : code };
+}
+
+/* ---------- requests ---------- */
+function showExpired() { $("banner").hidden = false; }
+$("reload").onclick = function () { location.reload(); };
+// Same-origin library API. redirect: "manual": an expired Access session answers
+// with a redirect to the login page, which must surface as "expired", not a crash.
+async function lib(path, init, timeoutMs) {
+  var ctl = new AbortController();
+  var timer = setTimeout(function () { ctl.abort(); }, timeoutMs || 40000);
+  var res;
+  try {
+    res = await fetch(path, Object.assign({}, init || {}, { signal: ctl.signal, redirect: "manual", cache: "no-store", credentials: "same-origin" }));
+  } catch (e) {
+    throw new Fail("network");
+  } finally { clearTimeout(timer); }
+  if (res.type === "opaqueredirect" || res.status === 0 || res.status === 401) { showExpired(); throw new Fail("expired"); }
+  var body = null;
+  try { body = await res.json(); } catch (e) {}
+  return { status: res.status, body: body };
+}
+function libPost(path, body) {
+  return lib(path, { method: "POST", headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+}
+function errCode(r) { return r && r.body && r.body.error && r.body.error.code || ""; }
+// 2xx with a non-error body, else a Fail carrying the code.
+function ok(r) {
+  if (r.status >= 200 && r.status < 300 && r.body && r.body.status !== "error") return r.body;
+  throw new Fail(errCode(r) || "error.library.upstream");
+}
+// Public studio routes, straight to the API (id-as-credential, no cookies).
+async function direct(path, body) {
+  var res;
+  try {
+    res = await fetch(API + path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), cache: "no-store" } : { cache: "no-store" });
+  } catch (e) { throw new Fail("network"); }
+  var j = null;
+  try { j = await res.json(); } catch (e) {}
+  return { status: res.status, body: j };
+}
+
+// Long-poll until done. `step` returns {done, value} or throws; network blips retry.
+async function pollLoop(step, limitMs) {
+  var end = Date.now() + (limitMs || 6 * 60000), fails = 0;
+  for (;;) {
+    if (Date.now() > end) throw new Fail("error.library.timeout");
+    var t0 = Date.now(), r;
+    try { r = await step(); fails = 0; }
+    catch (e) {
+      if (!(e instanceof Fail) || e.code !== "network") throw e;
+      if (++fails > 4) throw e;
+      await sleep(1500 * fails);
+      continue;
+    }
+    if (r.done) return r.value;
+    var spent = Date.now() - t0;
+    if (spent < 800) await sleep(1000 - spent);
+  }
+}
+function waitStudio(sid) {
+  return pollLoop(async function () {
+    var r = await lib("/api/library/studio/" + sid + "?wait=20", {}, 45000);
+    var b = r.body;
+    if (r.status >= 500 && !(b && b.status)) throw new Fail("network");
+    if (!b || typeof b !== "object") throw new Fail("error.library.upstream");
+    if (b.status === "error" || r.status >= 400) throw new Fail(errCode(r) || (b.error && b.error.code) || "error.library.upstream");
+    return { done: b.status === "ready", value: b };
+  });
+}
+function waitWebp(job) {
+  return pollLoop(async function () {
+    var r = await lib("/api/library/webp/" + job + "?wait=20", {}, 45000);
+    var b = r.body;
+    if (r.status >= 500 && !(b && b.status)) throw new Fail("network");
+    if (!b || typeof b !== "object") throw new Fail("error.library.upstream");
+    if (b.status === "error" || r.status >= 400) throw new Fail(errCode(r) || "error.library.upstream");
+    return { done: b.status === "success", value: b };
+  });
+}
+function waitRender(sid, job) {
+  return pollLoop(async function () {
+    var r = await direct("/studio/" + sid + "/render/" + job + "?wait=20");
+    var b = r.body;
+    if (r.status >= 500 && !(b && b.status)) throw new Fail("network");
+    if (!b || typeof b !== "object") throw new Fail("error.library.upstream");
+    if (b.status === "error" || r.status >= 400) throw new Fail(errCode(r) || "error.library.upstream");
+    return { done: b.status === "success", value: b };
+  });
+}
+
+/* ---------- toast, copy ---------- */
+var toastTimer = 0;
+function toast(msg, link) {
+  var t = $("toast");
+  t.textContent = msg;
+  if (link) t.append(h("a", { href: link.href, target: "_blank", rel: "noopener", text: link.label }));
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.hidden = true; }, link ? 8000 : 2200);
+}
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("copied");
+    return;
+  } catch (e) {}
+  var ta = h("textarea", { "aria-hidden": "true", style: "position:fixed;opacity:0;top:0;left:0" });
+  ta.value = text;
+  document.body.append(ta);
+  ta.select();
+  var done = false;
+  try { done = document.execCommand("copy"); } catch (e) {}
+  ta.remove();
+  toast(done ? "copied" : "couldn't copy. long-press the link instead.");
+}
+// Call synchronously from a click handler: the blank tab is opened inside the
+// user gesture (popup blockers), then pointed at the studio once it exists.
+function openTabFor(makeUrl) {
+  var w = null;
+  try { w = window.open("about:blank", "_blank"); if (w) w.opener = null; } catch (e) {}
+  return makeUrl().then(function (url) {
+    if (w) { w.location.href = url; }
+    else toast("studio ready", { href: url, label: "open" });
+    return url;
+  }, function (e) { if (w) w.close(); throw e; });
+}
+
+/* ---------- panes ---------- */
+function setPane(name) {
+  var l = name === "link";
+  $("linkPane").hidden = !l; $("filesPane").hidden = l;
+  $("tabLink").setAttribute("aria-pressed", String(l));
+  $("tabFiles").setAttribute("aria-pressed", String(!l));
+}
+$("tabLink").onclick = function () { setPane("link"); };
+$("tabFiles").onclick = function () { setPane("files"); };
+
+/* ---------- from a link ---------- */
+var linkBusy = false;
+function linkStatus(kind, text, code, spinning) {
+  var el = $("linkStatus");
+  el.className = "status" + (kind ? " " + kind : "");
+  el.textContent = "";
+  if (spinning) el.append(h("span", { class: "spin", "aria-hidden": "true" }));
+  el.append(h("span", { text: text }));
+  if (code) el.append(h("code", { text: code }));
+}
+function setLinkButtons(disabled) {
+  document.querySelectorAll("#actions button").forEach(function (b) { b.disabled = disabled; });
+}
+function showResult(url, text) {
+  $("linkResultUrl").textContent = url;
+  $("openLinkResult").href = url;
+  $("linkResult").hidden = false;
+  linkStatus("ok", text);
+}
+async function runLink(act) {
+  if (linkBusy) return;
+  $("linkResult").hidden = true;
+  $("linkExtra").textContent = "";
+  var text = $("link").value.trim();
+  if (!text) { linkStatus("bad", "paste a link first"); $("link").focus(); return; }
+  if (!/https?:\/\/\S/i.test(text)) { linkStatus("bad", messageFor("error.library.invalid_url"), "error.library.invalid_url"); return; }
+  linkBusy = true; setLinkButtons(true);
+  var began = Date.now();
+  var phase = "starting";
+  var tick = setInterval(function () { linkStatus("", phase + "… " + fmtElapsed(Date.now() - began), "", true); }, 1000);
+  linkStatus("", phase + "…", "", true);
+  try {
+    if (act === "webp") {
+      phase = "making your webp";
+      var r = ok(await libPost("/api/library/link", { url: text, action: "webp" }));
+      var out = await waitWebp(r.job);
+      clearInterval(tick);
+      showResult(out.url, "webp ready" + (out.bytes ? " · " + fmtBytes(out.bytes) : "") + (out.seconds ? " · " + fmtSecs(out.seconds) : ""));
+      refreshGrid();
+    } else if (act === "studio") {
+      phase = "opening studio";
+      var url = await openTabFor(async function () {
+        var s = ok(await libPost("/api/library/link", { url: text, action: "studio" }));
+        return s.url;
+      });
+      clearInterval(tick);
+      $("linkResultUrl").textContent = url;
+      $("openLinkResult").href = url;
+      $("linkResult").hidden = false;
+      linkStatus("ok", "studio opened in a new tab");
+      refreshGrid();
+    } else {
+      phase = "saving the video";
+      var s2 = ok(await libPost("/api/library/link", { url: text, action: act }));
+      await waitStudio(s2.studio);
+      if (act === "host") {
+        phase = "publishing";
+        var p = ok(await libPost("/api/library/studio/" + s2.studio + "/publish"));
+        clearInterval(tick);
+        showResult(p.url, "hosted as-is" + (p.bytes ? " · " + fmtBytes(p.bytes) : ""));
+      } else {
+        clearInterval(tick);
+        linkStatus("ok", "saved privately to your library");
+      }
+      refreshGrid();
+    }
+  } catch (e) {
+    clearInterval(tick);
+    var d = describe(e);
+    linkStatus("bad", d.text, d.code);
+    if (e.code === "error.webp.too_long") {
+      $("linkExtra").append(h("button", { type: "button", class: "primary", text: "open in studio", onclick: function () { runLink("studio"); } }));
+    }
+  } finally {
+    clearInterval(tick);
+    linkBusy = false; setLinkButtons(false);
+  }
+}
+document.querySelectorAll("#actions button").forEach(function (b) { b.onclick = function () { runLink(b.dataset.act); }; });
+$("linkForm").addEventListener("submit", function (e) { e.preventDefault(); runLink("webp"); });
+$("copyLinkResult").onclick = function () { copyText($("linkResultUrl").textContent); };
+
+/* ---------- from your files ---------- */
+var files = [];           // entries, newest last
+var nextFileId = 1;
+var uploading = 0;
+var queue = [];
+
+function convertible(f) { return !!CONVERTIBLE[f.ext]; }
+function fileThumb(f) {
+  var box = h("div", { class: "thumb", "aria-hidden": "true" });
+  var t = f.type;
+  if (f.bad) { box.textContent = f.ext || "?"; return box; }
+  if (isImageType(t)) {
+    var img = h("img", { alt: "", src: f.preview });
+    img.addEventListener("error", function () { img.remove(); box.textContent = f.ext; });
+    box.append(img);
+  } else if (isVideoType(t)) {
+    var v = h("video", { muted: true, playsinline: true, preload: "metadata", src: f.preview + "#t=0.1" });
+    v.muted = true;
+    v.addEventListener("error", function () { v.remove(); box.textContent = f.ext; });
+    box.append(v);
+  } else box.textContent = f.ext;
+  return box;
+}
+function fileOptions(f) {
+  var o = [];
+  var remove = h("button", { type: "button", "aria-label": "remove " + f.name + " from this list", title: "remove from this list", text: "✕", onclick: function () { removeFile(f); } });
+  if (f.state === "ready") {
+    o.push(h("button", { type: "button", "data-fa": "host", text: "host as-is", onclick: function () { hostFile(f); } }));
+    var trim = convertible(f) && (f.long || f.noDur || f.dur > LIMIT_S);
+    if (convertible(f) && !trim) o.push(h("button", { type: "button", class: "primary", "data-fa": "convert", text: "convert to webp", onclick: function () { convertFile(f); } }));
+    if (trim) o.push(h("button", { type: "button", "data-fa": "trim", text: "trim in studio", onclick: function () { trimFile(f); } }));
+    o.push(remove);
+  } else if (f.state === "done") {
+    if (f.url) {
+      o.push(h("button", { type: "button", "data-fa": "copy", text: "copy link", onclick: function () { copyText(f.url); } }));
+      o.push(h("a", { class: "btn", "data-fa": "open", href: f.url, target: "_blank", rel: "noopener", text: "open" }));
+    }
+    o.push(remove);
+  } else if (f.state === "failed") {
+    o.push(h("button", { type: "button", "data-fa": "retry", text: "retry upload", onclick: function () { f.state = "queued"; f.pct = 0; f.note = ""; renderFile(f); enqueue(f); } }));
+    o.push(remove);
+  } else if (f.state === "bad") {
+    o.push(remove);
+  }
+  return o;
+}
+function fileMeta(f) {
+  var m = h("div", { class: "meta", "aria-live": "polite" });
+  var line = "", cls = "";
+  if (f.state === "bad") { line = f.note; cls = "bad"; }
+  else if (f.state === "queued") line = "waiting to upload…";
+  else if (f.state === "uploading") line = "uploading " + f.pct + "%";
+  else if (f.state === "working") line = f.busyText || "working…";
+  else if (f.state === "failed") { line = f.note; cls = "bad"; }
+  else if (f.state === "done") { line = f.note; cls = "ok"; }
+  else if (f.state === "ready") {
+    if (f.error) { line = f.error; cls = "bad"; }
+    else if (f.long) line = fmtSecs(f.long) + ": over the 10 s limit, trim it in studio";
+    else if (f.dur > LIMIT_S) line = fmtSecs(f.dur) + ": over the 10 s limit, trim it in studio";
+    else if (f.ext === "heic") line = "uploaded · heic photo: can be hosted, not converted yet";
+    else if (f.ext === "webp") line = "uploaded · webp: can be hosted as-is";
+    else line = "uploaded" + (f.dur ? " · " + fmtSecs(f.dur) : "") + " · ready";
+  }
+  m.className = "meta " + cls;
+  m.textContent = line;
+  return m;
+}
+function renderFile(f) {
+  var row = h("div", { class: "file", "data-fid": String(f.id) },
+    fileThumb(f),
+    (function () {
+      var mid = h("div", { style: "min-width:0" },
+        h("div", { class: "name", text: f.name, title: f.name }),
+        h("div", { class: "meta", text: fmtBytes(f.bytes) + " · " + (f.ext || "?") }),
+        fileMeta(f));
+      if (f.state === "uploading" || f.state === "queued") {
+        var bar = h("div", { class: "prog", role: "progressbar", "aria-label": "uploading " + f.name, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(f.pct) }, h("i", { style: "width:" + f.pct + "%" }));
+        mid.append(bar);
+      }
+      return mid;
+    })(),
+    h("div", { class: "opts" }, ...fileOptions(f)));
+  if (f.el && f.el.parentNode) f.el.replaceWith(row); else $("files").append(row);
+  f.el = row;
+}
+function renderProgress(f) {
+  if (!f.el) return;
+  var i = f.el.querySelector(".prog i");
+  if (i) i.style.width = f.pct + "%";
+  var bar = f.el.querySelector(".prog");
+  if (bar) bar.setAttribute("aria-valuenow", String(f.pct));
+  var metas = f.el.querySelectorAll(".meta");
+  if (metas[1]) metas[1].textContent = "uploading " + f.pct + "%";
+}
+function setBusy(f, text) { f.state = "working"; f.busyText = text; f.error = ""; renderFile(f); }
+function removeFile(f) {
+  files = files.filter(function (x) { return x !== f; });
+  queue = queue.filter(function (x) { return x !== f; });
+  if (f.xhr) { try { f.xhr.abort(); } catch (e) {} }
+  if (f.preview) URL.revokeObjectURL(f.preview);
+  if (f.el) f.el.remove();
+}
+
+function probeDuration(file) {
+  return new Promise(function (resolve) {
+    var v = document.createElement("video");
+    var url = URL.createObjectURL(file);
+    var finished = false;
+    function done(d) { if (finished) return; finished = true; URL.revokeObjectURL(url); v.removeAttribute("src"); v.load(); resolve(d); }
+    v.preload = "metadata"; v.muted = true;
+    v.onloadedmetadata = function () { done(isFinite(v.duration) ? v.duration : 0); };
+    v.onerror = function () { done(0); };
+    setTimeout(function () { done(0); }, 4000);
+    v.src = url;
+  });
+}
+
+function addFiles(list) {
+  var added = 0, skipped = 0;
+  Array.prototype.forEach.call(list, function (file) {
+    var type = typeOfFile(file);
+    var f = { id: nextFileId++, file: file, name: file.name || "file", bytes: file.size, type: type, ext: type ? TYPES[type] : extOf(file.name), state: "queued", pct: 0, note: "", bad: false };
+    if (!type) { f.bad = true; f.state = "bad"; f.note = (f.ext ? "." + f.ext : "that type") + " isn't supported"; }
+    else if (file.size > MAX_BYTES) { f.bad = true; f.state = "bad"; f.note = "too big: " + fmtBytes(file.size) + ", the limit is 100 MB"; }
+    else if (file.size === 0) { f.bad = true; f.state = "bad"; f.note = "that file is empty"; }
+    if (f.bad) skipped++; else { added++; f.preview = URL.createObjectURL(file); }
+    files.push(f);
+    renderFile(f);
+    if (!f.bad) {
+      enqueue(f);
+      if (CONVERTIBLE[f.ext] && f.ext !== "gif") probeDuration(file).then(function (d) { if (d > 0 && files.indexOf(f) >= 0) { f.dur = d; if (f.state === "ready") renderFile(f); } });
+    }
+  });
+  var msg = added + " file" + (added === 1 ? "" : "s") + " added" + (added ? ", uploading" : "");
+  if (skipped) msg += (added ? " · " : "") + skipped + " skipped";
+  $("filesStatus").className = "status" + (skipped && !added ? " bad" : "");
+  $("filesStatus").textContent = msg;
+}
+
+function enqueue(f) { queue.push(f); pump(); }
+function pump() {
+  while (uploading < 2 && queue.length) {
+    var f = queue.shift();
+    if (files.indexOf(f) < 0) continue;
+    uploading++;
+    uploadFile(f).then(function () { uploading--; pump(); });
+  }
+}
+function uploadFile(f) {
+  return new Promise(function (resolve) {
+    f.state = "uploading"; f.pct = 0; renderFile(f);
+    var xhr = new XMLHttpRequest();
+    f.xhr = xhr;
+    xhr.open("PUT", "/api/library/upload?name=" + encodeURIComponent(f.name));
+    xhr.setRequestHeader("content-type", f.type);
+    xhr.upload.onprogress = function (e) {
+      if (!e.lengthComputable) return;
+      f.pct = Math.min(99, Math.floor((e.loaded / e.total) * 100));
+      renderProgress(f);
+    };
+    function fail(code) {
+      f.state = "failed"; f.note = messageFor(code) + (code === "network" ? "" : " (" + code + ")");
+      renderFile(f); resolve();
+    }
+    xhr.onerror = async function () {
+      // A redirect to the login page shows up as a plain network error: ask the API whether we're still signed in.
+      try { await lib("/api/library?limit=1"); fail("network"); } catch (e) { if (e && e.code === "expired") fail("expired"); else fail("network"); }
+    };
+    xhr.onabort = function () { resolve(); };
+    xhr.onload = function () {
+      var b = null;
+      try { b = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status === 401 || xhr.responseURL && xhr.responseURL.indexOf("/api/library/upload") < 0) { showExpired(); return fail("expired"); }
+      if (xhr.status === 201 && b && b.item) {
+        f.item = b.item; f.pct = 100; f.state = "ready"; f.noDur = false;
+        if (typeof b.item.duration === "number" && b.item.duration > 0 && !f.dur) f.dur = b.item.duration;
+        renderFile(f); refreshGrid(); return resolve();
+      }
+      fail(b && b.error && b.error.code || "error.library.upstream");
+    };
+    xhr.send(f.file);
+  });
+}
+
+async function hostFile(f) {
+  setBusy(f, "publishing…");
+  try {
+    var r = ok(await libPost("/api/library/items/" + f.item.id + "/publish"));
+    f.url = r.item.url; f.state = "done"; f.note = "hosted · public link ready";
+    renderFile(f); refreshGrid();
+  } catch (e) { var d = describe(e); f.state = "ready"; f.error = d.text + (d.code ? " (" + d.code + ")" : ""); renderFile(f); }
+}
+async function convertFile(f) {
+  setBusy(f, "opening studio…");
+  try {
+    if (!f.studio) {
+      var a = ok(await libPost("/api/library/items/" + f.item.id + "/studio"));
+      f.studio = { sid: a.studio, url: a.url };
+    }
+    setBusy(f, "reading the clip…");
+    var s = await waitStudio(f.studio.sid);
+    var dur = s.duration;
+    if (!(dur > 0)) { f.noDur = true; throw new Fail("error.library.no_duration"); }
+    if (dur > LIMIT_S + 0.05) { f.long = dur; f.state = "ready"; f.error = ""; renderFile(f); return; }
+    var length = Math.min(LIMIT_S, Math.floor(dur * 1000) / 1000);
+    if (length < 0.5) throw new Fail("error.library.too_short");
+    setBusy(f, "making your webp…");
+    var r = await direct("/studio/" + f.studio.sid + "/render", { start: 0, length: length });
+    if (r.status !== 202 || !r.body || r.body.status !== "pending") throw new Fail(errCode(r) || "error.library.upstream");
+    var out = await waitRender(f.studio.sid, r.body.job);
+    f.url = out.url; f.state = "done";
+    f.note = "converted · " + fmtBytes(out.bytes || 0) + " webp";
+    renderFile(f); refreshGrid();
+  } catch (e) {
+    var d = describe(e);
+    f.state = "ready"; f.error = d.text + (d.code ? " (" + d.code + ")" : "");
+    renderFile(f);
+  }
+}
+function trimFile(f) {
+  if (f.studio) { window.open(f.studio.url, "_blank", "noopener"); return; }
+  setBusy(f, "opening studio…");
+  openTabFor(async function () {
+    var a = ok(await libPost("/api/library/items/" + f.item.id + "/studio"));
+    f.studio = { sid: a.studio, url: a.url };
+    return a.url;
+  }).then(function () { f.state = "ready"; f.error = ""; renderFile(f); refreshGrid(); }, function (e) {
+    var d = describe(e); f.state = "ready"; f.error = d.text + (d.code ? " (" + d.code + ")" : ""); renderFile(f);
+  });
+}
+
+var drop = $("drop"), pick = $("pick");
+drop.addEventListener("click", function () { pick.click(); });
+drop.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick.click(); } });
+pick.addEventListener("change", function () { if (pick.files && pick.files.length) addFiles(pick.files); pick.value = ""; });
+function hasFiles(e) { return e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") >= 0; }
+window.addEventListener("dragover", function (e) { if (hasFiles(e)) { e.preventDefault(); drop.classList.toggle("over", e.target === drop || drop.contains(e.target)); } });
+window.addEventListener("dragleave", function (e) { if (e.target === drop) drop.classList.remove("over"); });
+window.addEventListener("drop", function (e) {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); drop.classList.remove("over");
+  setPane("files");
+  if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+});
+
+/* ---------- the library ---------- */
+var ICONS = {
+  film: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  image: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="M21 16l-5-5-8 9"/></svg>'
+};
+var SOURCES = { webp: "made from a link", studio: "made in studio", host: "hosted original", upload: "upload", saved: "saved original" };
+var EMPTY = {
+  all: "nothing here yet. paste a link or add a file above.",
+  "public": "no public links yet.",
+  "private": "no private files yet.",
+  studio: "no open studios."
+};
+var G = { filter: "all", items: [], studios: [], next: null, usage: null, seq: 0, confirm: null, busy: {}, loading: false, error: false };
+
+function placeholder(icon, label) {
+  var d = h("div", { class: "ph" });
+  d.innerHTML = ICONS[icon];
+  d.append(h("span", { text: label }));
+  return d;
+}
+function itemThumb(it) {
+  var wrap;
+  var linkable = it.kind === "public" && it.url;
+  wrap = linkable
+    ? h("a", { class: "thumb-l", href: it.url, target: "_blank", rel: "noopener", "aria-label": "open " + it.name })
+    : h("div", { class: "thumb-l" });
+  var ext = extOf(it.name) || (TYPES[it.content_type] || "");
+  if (it.kind === "public" && isImageType(it.content_type)) {
+    var img = h("img", { alt: "", loading: "lazy", src: it.url });
+    img.addEventListener("error", function () { img.remove(); wrap.append(placeholder("image", ext || "image")); });
+    wrap.append(img);
+  } else if (it.kind === "public" && isVideoType(it.content_type)) {
+    var v = h("video", { muted: true, playsinline: true, preload: "metadata", "aria-hidden": "true", tabindex: "-1", src: it.url + "#t=0.1" });
+    v.muted = true;
+    v.addEventListener("error", function () { v.remove(); wrap.append(placeholder("film", ext || "video")); });
+    wrap.append(v);
+  } else if (it.kind === "private") wrap.append(placeholder("lock", "private · " + (ext || "file")));
+  else wrap.append(placeholder("image", ext || "file"));
+  return wrap;
+}
+function studioThumb(s) {
+  var wrap = h("a", { class: "thumb-l", href: s.url, target: "_blank", rel: "noopener", "aria-label": "open studio" });
+  wrap.append(placeholder("film", "studio"));
+  return wrap;
+}
+function confirmText(e) {
+  if (e.t === "studio") return "close this studio? its webps stay.";
+  if (e.kind === "public") return "delete for everyone? the link stops working in discord.";
+  return "delete this private copy?";
+}
+function tileFor(e) {
+  var id = e.id, busy = !!G.busy[id];
+  var thumb = e.t === "studio" ? studioThumb(e.s) : itemThumb(e.it);
+  var name, badge, sub, meta2;
+  if (e.t === "studio") {
+    var s = e.s;
+    name = s.title || hostOf(s.link) || "studio";
+    badge = h("span", { class: "badge studio", text: "studio" });
+    sub = s.status === "saving" ? "saving…" : (s.duration ? fmtSecs(s.duration) + " · " : "") + (s.renders ? s.renders + " webp" + (s.renders === 1 ? "" : "s") + " made" : "no webps yet");
+    meta2 = ["expires in " + inDays(s.expires_at), ago(s.created_at)];
+  } else {
+    var it = e.it;
+    name = it.name;
+    badge = h("span", { class: "badge " + (it.kind === "public" ? "pub" : "priv"), text: it.kind });
+    sub = (SOURCES[it.source] || it.source) + (it.link && hostOf(it.link) ? " · " + hostOf(it.link) : "");
+    meta2 = [it.bytes != null ? fmtBytes(it.bytes) : "", ago(it.created_at)];
+  }
+  var cap = h("div", { class: "cap" },
+    h("div", { class: "name", text: name, title: name }),
+    h("div", { class: "meta" }, badge, h("span", { text: sub })),
+    h("div", { class: "meta" }, ...meta2.filter(Boolean).map(function (t) { return h("span", { text: t }); })));
+  var tail;
+  if (G.confirm === id) {
+    tail = h("div", { class: "confirm" },
+      h("span", { text: confirmText(e.t === "studio" ? e : e.it) }),
+      h("div", { class: "tact", style: "padding:0" },
+        h("button", { type: "button", class: "danger", "data-ga": "yes", disabled: busy, text: "delete", onclick: function () { doDelete(e); } }),
+        h("button", { type: "button", "data-ga": "no", text: "keep", onclick: function () { G.confirm = null; renderGrid(); } })));
+  } else {
+    var acts = [];
+    if (e.t === "studio") {
+      acts.push(h("a", { class: "btn", "data-ga": "open", href: e.s.url, target: "_blank", rel: "noopener", text: "open studio" }));
+    } else if (e.it.kind === "public") {
+      acts.push(h("button", { type: "button", "data-ga": "copy", text: "copy link", onclick: function () { copyText(e.it.url); } }));
+    } else {
+      var t = e.it.content_type || "";
+      if (isVideoType(t) || t === "image/gif") acts.push(h("button", { type: "button", "data-ga": "studio", disabled: busy, text: "open in studio", onclick: function () { privateToStudio(e.it); } }));
+      acts.push(h("button", { type: "button", "data-ga": "host", disabled: busy, text: "host as-is", onclick: function () { privateToPublic(e.it); } }));
+    }
+    acts.push(h("button", { type: "button", class: "danger", "data-ga": "del", disabled: busy, text: "delete", onclick: function () { G.confirm = id; renderGrid(); } }));
+    tail = h("div", { class: "tact" }, ...acts);
+  }
+  return h("div", { class: "tile", "data-id": id, "data-kind": e.t === "studio" ? "studio" : e.it.kind }, thumb, cap, tail);
+}
+function entries() {
+  var all = G.items.map(function (it) { return { t: "item", id: it.id, at: it.created_at, it: it }; })
+    .concat(G.studios.map(function (s) { return { t: "studio", id: s.id, at: s.created_at, s: s }; }));
+  all.sort(function (a, b) { return b.at - a.at; });
+  return all;
+}
+function renderUsage() {
+  var u = G.usage;
+  if (!u) return;
+  var total = u.public_bytes + u.private_bytes;
+  $("usage").textContent = fmtBytes(total) + " of 10 GB used";
+  $("meter").setAttribute("aria-label", "storage used: " + fmtBytes(u.public_bytes) + " public, " + fmtBytes(u.private_bytes) + " private, of 10 GB");
+  $("meterFill").style.width = (total > 0 ? Math.max(0.5, Math.min(100, total / FREE_BYTES * 100)) : 0).toFixed(2) + "%";
+}
+function renderGrid() {
+  var list = entries();
+  var grid = $("grid");
+  grid.textContent = "";
+  list.forEach(function (e) { grid.append(tileFor(e)); });
+  var note = $("gridNote");
+  if (G.loading && !list.length) { note.hidden = false; note.textContent = "loading your library…"; }
+  else if (G.error && !list.length) {
+    note.hidden = false; note.textContent = "couldn't load your library. ";
+    note.append(h("button", { type: "button", text: "try again", onclick: function () { refreshGrid(); } }));
+  }
+  else if (!list.length) { note.hidden = false; note.textContent = EMPTY[G.filter]; }
+  else note.hidden = true;
+  $("more").hidden = !G.next;
+  $("moreBtn").disabled = G.loading;
+  document.querySelectorAll("#filters button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.f === G.filter)); });
+  renderUsage();
+}
+async function loadPage(reset) {
+  var seq = ++G.seq;
+  G.loading = true; G.error = false;
+  if (reset) { G.items = []; G.studios = []; G.next = null; }
+  renderGrid();
+  var url = "/api/library?filter=" + G.filter + "&limit=" + PAGE_SIZE + (!reset && G.next ? "&before=" + G.next : "");
+  try {
+    var r = await lib(url);
+    if (seq !== G.seq) return;
+    if (r.status !== 200 || !r.body) throw new Fail("error.library.upstream");
+    G.items = G.items.concat(r.body.items || []);
+    G.studios = G.studios.concat(r.body.studios || []);
+    G.next = r.body.next_before || null;
+    G.usage = r.body.usage || G.usage;
+  } catch (e) {
+    if (seq !== G.seq) return;
+    G.error = true;
+    if (e && e.code === "expired") G.error = false;
+  } finally {
+    if (seq === G.seq) { G.loading = false; renderGrid(); }
+  }
+}
+function refreshGrid() { return loadPage(true); }
+async function reloadUsage() {
+  try { var r = await lib("/api/library?filter=public&limit=1"); if (r.body && r.body.usage) { G.usage = r.body.usage; renderUsage(); } } catch (e) {}
+}
+document.querySelectorAll("#filters button").forEach(function (b) {
+  b.onclick = function () { if (G.filter === b.dataset.f) return; G.filter = b.dataset.f; G.confirm = null; loadPage(true); };
+});
+$("moreBtn").onclick = function () { loadPage(false); };
+
+async function doDelete(e) {
+  G.busy[e.id] = true; renderGrid();
+  try {
+    var path = e.t === "studio" ? "/api/library/studios/" + e.id : "/api/library/items/" + e.id;
+    ok(await lib(path, { method: "DELETE" }));
+    if (e.t === "studio") G.studios = G.studios.filter(function (s) { return s.id !== e.id; });
+    else {
+      G.items = G.items.filter(function (i) { return i.id !== e.id; });
+      // deleting a private original closes the studios made from it
+      if (e.it.kind === "private") { reloadStudiosSoon(); }
+    }
+    toast(e.t === "studio" ? "studio closed" : "deleted");
+    G.confirm = null; delete G.busy[e.id]; renderGrid(); reloadUsage();
+  } catch (err) {
+    delete G.busy[e.id]; G.confirm = null; renderGrid();
+    toast(describe(err).text);
+  }
+}
+function reloadStudiosSoon() { setTimeout(function () { if (G.filter === "all" || G.filter === "studio") refreshGrid(); }, 300); }
+async function privateToPublic(it) {
+  G.busy[it.id] = true; renderGrid();
+  try {
+    var r = ok(await libPost("/api/library/items/" + it.id + "/publish"));
+    delete G.busy[it.id];
+    toast("hosted: public link ready", { href: r.item.url, label: "open" });
+    refreshGrid();
+  } catch (e) { delete G.busy[it.id]; renderGrid(); toast(describe(e).text); }
+}
+function privateToStudio(it) {
+  G.busy[it.id] = true; renderGrid();
+  openTabFor(async function () {
+    return ok(await libPost("/api/library/items/" + it.id + "/studio")).url;
+  }).then(function () { delete G.busy[it.id]; renderGrid(); refreshGrid(); }, function (e) { delete G.busy[it.id]; renderGrid(); toast(describe(e).text); });
+}
+
+setPane("link");
+refreshGrid();
+</script>
+</body>
+</html>

@@ -1,0 +1,625 @@
+// cobalt library: the page (GET /library) and its JSON API (/api/library*),
+// served by the web Worker. See ../../LIBRARY-CONTRACT.md (pinned).
+//
+// Every route needs the owner's Cloudflare Access JWT, verified by the same
+// code as /api/keys; POST/PUT/DELETE also need Origin = WEB_ORIGIN. The browser
+// never holds an API key: this Worker calls the API Worker over a service
+// binding with the internal key in `x-cobalt-service`.
+//
+// Streams: R2 -> R2 copies use a manual reader/writer loop into a
+// FixedLengthStream (pipeTo between streams is not implemented in the Workers
+// runtime), and uploads hand request.body (known content-length) straight to R2.
+import { verifyAccessJwt, type AccessConfig } from "./access";
+import { jwksFor, type Deps, type Env } from "./keys";
+import { LIBRARY_HTML } from "./library/page.generated";
+
+export const API_BASE = "https://api.capybaraharmony.com";
+export const DEFAULT_MEDIA_BASE = "https://media.capybaraharmony.com/";
+export const MAX_UPLOAD_BYTES = 100_000_000;
+export const MAX_PAGE = 100;
+export const DEFAULT_PAGE = 48;
+export const MAX_WAIT = 25;
+const MAX_LINK_CHARS = 2048;
+const MAX_NAME_CHARS = 120;
+const MAX_BODY_BYTES = 8192;
+
+// Pinned by LIBRARY-CONTRACT.md: like the studio page, plus same-origin API
+// calls and media/images from the public bucket.
+export const LIBRARY_CSP =
+    "default-src 'self'; base-uri 'none'; " +
+    "connect-src 'self' https://api.capybaraharmony.com; " +
+    "media-src 'self' https://media.capybaraharmony.com blob:; " +
+    "img-src 'self' data: blob: https://media.capybaraharmony.com; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
+
+export const libraryHeaders = (): Record<string, string> => ({
+    "content-type": "text/html; charset=utf-8",
+    "content-security-policy": LIBRARY_CSP,
+    "referrer-policy": "no-referrer",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+});
+
+// Allowed uploads: content type -> stored extension.
+export const UPLOAD_TYPES: Record<string, string> = {
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "video/mp4": "mp4",
+    "video/quicktime": "mov",
+    "image/heic": "heic",
+};
+
+export type LibraryDeps = Deps & {
+    // Workers' FixedLengthStream; injectable because Node has none.
+    fixedLength?: (n: number) => { readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array> };
+    randomId?: (n: number) => string;
+};
+
+type MediaRow = {
+    id: string;
+    kind: string;
+    source: string;
+    bucket: string;
+    r2_key: string;
+    url: string | null;
+    name: string;
+    content_type: string | null;
+    bytes: number | null;
+    width: number | null;
+    height: number | null;
+    duration: number | null;
+    link: string | null;
+    session_id: string | null;
+    key_id: string | null;
+    created_at: number;
+    deleted_at: number | null;
+};
+
+const ITEM_COLUMNS =
+    "id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at";
+
+export const itemShape = (r: MediaRow) => ({
+    id: r.id,
+    kind: r.kind,
+    source: r.source,
+    name: r.name,
+    url: r.url,
+    content_type: r.content_type,
+    bytes: r.bytes,
+    width: r.width,
+    height: r.height,
+    duration: r.duration,
+    link: r.link,
+    session_id: r.session_id,
+    created_at: r.created_at,
+});
+
+const json = (status: number, body: unknown, extra: Record<string, string> = {}) =>
+    new Response(JSON.stringify(body), {
+        status,
+        headers: {
+            "content-type": "application/json",
+            "cache-control": "no-store",
+            "x-content-type-options": "nosniff",
+            ...extra,
+        },
+    });
+
+const err = (status: number, code: string, extra?: Record<string, string>) =>
+    json(status, { status: "error", error: { code } }, extra);
+
+const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+export function base62(n: number): string {
+    let out = "";
+    const buf = new Uint8Array(n * 2);
+    while (out.length < n) {
+        crypto.getRandomValues(buf);
+        for (const b of buf) {
+            if (b < 248 && out.length < n) out += BASE62[b % 62]; // 248 = 62 * 4: no modulo bias
+        }
+    }
+    return out;
+}
+
+const mediaBase = (env: Env) => (env.MEDIA_BASE_URL || DEFAULT_MEDIA_BASE).replace(/\/+$/, "") + "/";
+
+type Route =
+    | { name: "page" }
+    | { name: "list" }
+    | { name: "link" }
+    | { name: "upload" }
+    | { name: "webp"; id: string }
+    | { name: "studio"; id: string }
+    | { name: "studioPublish"; id: string }
+    | { name: "itemPublish"; id: string }
+    | { name: "itemStudio"; id: string }
+    | { name: "itemDelete"; id: string }
+    | { name: "studioDelete"; id: string };
+
+const ALLOWED: Record<Route["name"], string[]> = {
+    page: ["GET", "HEAD"],
+    list: ["GET"],
+    link: ["POST"],
+    upload: ["PUT"],
+    webp: ["GET"],
+    studio: ["GET"],
+    studioPublish: ["POST"],
+    itemPublish: ["POST"],
+    itemStudio: ["POST"],
+    itemDelete: ["DELETE"],
+    studioDelete: ["DELETE"],
+};
+
+export function matchRoute(pathname: string): Route | null {
+    if (pathname === "/library") return { name: "page" };
+    if (pathname === "/api/library") return { name: "list" };
+    if (pathname === "/api/library/link") return { name: "link" };
+    if (pathname === "/api/library/upload") return { name: "upload" };
+    let m: RegExpExecArray | null;
+    if ((m = /^\/api\/library\/webp\/([0-9A-Za-z]{16,32})$/.exec(pathname))) return { name: "webp", id: m[1]! };
+    if ((m = /^\/api\/library\/studio\/([0-9A-Za-z]{22})$/.exec(pathname))) return { name: "studio", id: m[1]! };
+    if ((m = /^\/api\/library\/studio\/([0-9A-Za-z]{22})\/publish$/.exec(pathname))) return { name: "studioPublish", id: m[1]! };
+    if ((m = /^\/api\/library\/items\/([0-9A-Za-z]{16})\/publish$/.exec(pathname))) return { name: "itemPublish", id: m[1]! };
+    if ((m = /^\/api\/library\/items\/([0-9A-Za-z]{16})\/studio$/.exec(pathname))) return { name: "itemStudio", id: m[1]! };
+    if ((m = /^\/api\/library\/items\/([0-9A-Za-z]{16})$/.exec(pathname))) return { name: "itemDelete", id: m[1]! };
+    if ((m = /^\/api\/library\/studios\/([0-9A-Za-z]{22})$/.exec(pathname))) return { name: "studioDelete", id: m[1]! };
+    return null;
+}
+
+export async function handleLibrary(request: Request, env: Env, deps?: Partial<LibraryDeps>): Promise<Response> {
+    const now = deps?.now ?? Date.now;
+    const jwks = deps?.jwks ?? jwksFor(env.ACCESS_TEAM_DOMAIN);
+    const access: AccessConfig = {
+        teamDomain: env.ACCESS_TEAM_DOMAIN,
+        aud: env.ACCESS_AUD,
+        ownerEmail: env.OWNER_EMAIL,
+    };
+
+    // 1. Authenticate, failing closed on any problem (JWKS outage included).
+    const auth = await verifyAccessJwt(request.headers.get("Cf-Access-Jwt-Assertion"), access, jwks, now());
+    if (!auth.ok) return err(401, "unauthorized");
+
+    // 2. Route shape and method before the CSRF check.
+    const { pathname, searchParams } = new URL(request.url);
+    const route = matchRoute(pathname);
+    if (!route) return err(404, "error.library.not_found");
+    const allowed = ALLOWED[route.name];
+    if (!allowed.includes(request.method)) {
+        return err(405, "error.library.method", { allow: allowed.join(", ") });
+    }
+
+    // 3. CSRF: state-changing calls must come from the web app itself.
+    if (request.method !== "GET" && request.method !== "HEAD" && request.headers.get("Origin") !== env.WEB_ORIGIN) {
+        return err(403, "forbidden");
+    }
+
+    const ctx: Ctx = { env, deps: { ...deps, now, jwks }, now: now() };
+    try {
+        switch (route.name) {
+            case "page":
+                return new Response(request.method === "HEAD" ? null : LIBRARY_HTML, { status: 200, headers: libraryHeaders() });
+            case "list":
+                return await list(ctx, searchParams);
+            case "link":
+                return await link(ctx, request);
+            case "upload":
+                return await upload(ctx, request, searchParams);
+            case "webp":
+                return await relayGet(ctx, `/webp/${route.id}`, searchParams, true);
+            case "studio":
+                return await relayGet(ctx, `/studio/${route.id}`, searchParams, false);
+            case "studioPublish":
+                return await relayPost(ctx, `/studio/${route.id}/publish`, undefined, (b) => b);
+            case "itemPublish":
+                return await itemPublish(ctx, route.id);
+            case "itemStudio":
+                return await itemStudio(ctx, route.id);
+            case "itemDelete":
+                return await itemDelete(ctx, route.id);
+            case "studioDelete":
+                return await studioDelete(ctx, route.id);
+        }
+    } catch {
+        return err(500, "error.library.server");
+    }
+}
+
+type Ctx = { env: Env; deps: Partial<LibraryDeps>; now: number };
+
+const isObject = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+
+const isJson = (request: Request) =>
+    (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() === "application/json";
+
+async function readJson(request: Request): Promise<Record<string, unknown> | null> {
+    if (!isJson(request)) return null;
+    const declared = Number(request.headers.get("content-length") ?? 0);
+    if (declared > MAX_BODY_BYTES) return null;
+    const text = await request.text();
+    if (text.length > MAX_BODY_BYTES) return null;
+    try {
+        const body = JSON.parse(text);
+        return isObject(body) ? body : null;
+    } catch {
+        return null;
+    }
+}
+
+const intParam = (v: string | null): number | null =>
+    v !== null && /^\d{1,16}$/.test(v) ? Number(v) : null;
+
+// ---------- GET /api/library ----------
+
+type StudioRow = {
+    id: string;
+    status: string;
+    link: string | null;
+    title: string | null;
+    duration: number | null;
+    renders: number;
+    created_at: number;
+    expires_at: number;
+};
+
+const FILTERS = ["all", "public", "private", "studio"];
+
+async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
+    const filter = q.get("filter") ?? "all";
+    if (!FILTERS.includes(filter)) return err(400, "error.library.bad_request");
+    let limit = DEFAULT_PAGE;
+    if (q.has("limit")) {
+        const n = intParam(q.get("limit"));
+        if (n === null || n < 1 || n > MAX_PAGE) return err(400, "error.library.bad_request");
+        limit = n;
+    }
+    let before = Number.MAX_SAFE_INTEGER;
+    if (q.has("before")) {
+        const n = intParam(q.get("before"));
+        if (n === null || n < 1) return err(400, "error.library.bad_request");
+        before = n;
+    }
+    const { DB } = ctx.env;
+
+    type Entry =
+        | { t: "item"; created_at: number; id: string; row: MediaRow }
+        | { t: "studio"; created_at: number; id: string; row: StudioRow };
+    const entries: Entry[] = [];
+
+    if (filter !== "studio") {
+        const kind = filter === "all" ? null : filter;
+        const { results } = await DB.prepare(
+            `SELECT ${ITEM_COLUMNS} FROM media_items
+             WHERE deleted_at IS NULL AND created_at < ?1 AND (?2 IS NULL OR kind = ?2)
+             ORDER BY created_at DESC, id DESC LIMIT ?3`,
+        )
+            .bind(before, kind, limit + 1)
+            .all<MediaRow>();
+        for (const row of results) entries.push({ t: "item", created_at: row.created_at, id: row.id, row });
+    }
+    if (filter === "all" || filter === "studio") {
+        const { results } = await DB.prepare(
+            `SELECT s.id, s.status, s.link, s.title, s.duration, s.created_at, s.expires_at,
+                    (SELECT COUNT(*) FROM studio_renders r WHERE r.session_id = s.id AND r.status = 'success') AS renders
+             FROM studio_sessions s
+             WHERE s.expires_at > ?1 AND s.status IN ('saving', 'ready') AND s.created_at < ?2
+             ORDER BY s.created_at DESC, s.id DESC LIMIT ?3`,
+        )
+            .bind(ctx.now, before, limit + 1)
+            .all<StudioRow>();
+        for (const row of results) entries.push({ t: "studio", created_at: row.created_at, id: row.id, row });
+    }
+
+    entries.sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    const more = entries.length > limit;
+    const page = entries.slice(0, limit);
+
+    const usage = { public_bytes: 0, private_bytes: 0 };
+    const { results: sums } = await DB.prepare(
+        "SELECT kind, COALESCE(SUM(bytes), 0) AS total FROM media_items WHERE deleted_at IS NULL GROUP BY kind",
+    ).all<{ kind: string; total: number }>();
+    for (const s of sums) {
+        if (s.kind === "public") usage.public_bytes = s.total;
+        else if (s.kind === "private") usage.private_bytes = s.total;
+    }
+
+    const webOrigin = ctx.env.WEB_ORIGIN.replace(/\/+$/, "");
+    return json(200, {
+        items: page.filter((e) => e.t === "item").map((e) => itemShape((e as Extract<Entry, { t: "item" }>).row)),
+        studios: page
+            .filter((e) => e.t === "studio")
+            .map((e) => {
+                const s = (e as Extract<Entry, { t: "studio" }>).row;
+                return {
+                    id: s.id,
+                    url: `${webOrigin}/studio/${s.id}`,
+                    status: s.status,
+                    link: s.link,
+                    title: s.title,
+                    duration: s.duration,
+                    renders: s.renders,
+                    created_at: s.created_at,
+                    expires_at: s.expires_at,
+                };
+            }),
+        usage,
+        next_before: more && page.length ? page[page.length - 1]!.created_at : null,
+    });
+}
+
+// ---------- calls into the API Worker ----------
+
+async function callApi(ctx: Ctx, path: string, init: { method: string; body?: unknown }): Promise<Response | null> {
+    const key = ctx.env.COBALT_API_KEY;
+    if (!key) return null;
+    const headers = new Headers({ "x-cobalt-service": key, accept: "application/json" });
+    let body: string | undefined;
+    if (init.body !== undefined) {
+        headers.set("content-type", "application/json");
+        body = JSON.stringify(init.body);
+    }
+    try {
+        return await ctx.env.API.fetch(new Request(API_BASE + path, { method: init.method, headers, body }));
+    } catch {
+        return null;
+    }
+}
+
+// Turns an API answer into ours. Upstream 401/403 mean the service key is
+// wrong, which must never look like an expired login to the page (it reloads
+// on 401), so they become 502.
+async function relayResponse(res: Response | null, map: (b: Record<string, unknown>) => Record<string, unknown>): Promise<Response> {
+    if (!res) return err(502, "error.library.upstream");
+    if (res.status === 401 || res.status === 403) return err(502, "error.library.upstream");
+    let body: unknown;
+    try {
+        body = JSON.parse(await res.text());
+    } catch {
+        return err(502, "error.library.upstream");
+    }
+    if (!isObject(body)) return err(502, "error.library.upstream");
+    if (body.status === "error" || res.status >= 400) {
+        const e = body.error;
+        const code = isObject(e) && typeof e.code === "string" ? e.code : "error.library.upstream";
+        // A finished-but-failed job is a 200 upstream; keep the status, the body carries the error.
+        return err(res.status, code);
+    }
+    return json(res.status, map(body));
+}
+
+const jobAlias = (b: Record<string, unknown>) => {
+    if (typeof b.id === "string" && b.job === undefined) return { ...b, job: b.id };
+    return b;
+};
+
+async function relayGet(ctx: Ctx, path: string, q: URLSearchParams, job: boolean): Promise<Response> {
+    let wait = 0;
+    if (q.has("wait")) {
+        const n = intParam(q.get("wait"));
+        if (n === null) return err(400, "error.library.bad_request");
+        wait = Math.min(n, MAX_WAIT);
+    }
+    const res = await callApi(ctx, wait ? `${path}?wait=${wait}` : path, { method: "GET" });
+    return relayResponse(res, job ? jobAlias : (b) => b);
+}
+
+async function relayPost(ctx: Ctx, path: string, body: unknown, map: (b: Record<string, unknown>) => Record<string, unknown>): Promise<Response> {
+    const res = await callApi(ctx, path, { method: "POST", body });
+    return relayResponse(res, map);
+}
+
+// ---------- POST /api/library/link ----------
+
+const LINK_ACTIONS = ["webp", "studio", "host", "keep"];
+
+async function link(ctx: Ctx, request: Request): Promise<Response> {
+    const body = await readJson(request);
+    if (!body) return err(400, "error.library.bad_request");
+    const { url, action } = body;
+    if (typeof action !== "string" || !LINK_ACTIONS.includes(action)) return err(400, "error.library.bad_request");
+    if (typeof url !== "string") return err(400, "error.library.bad_request");
+    const text = url.trim();
+    if (!text || text.length > MAX_LINK_CHARS) return err(400, "error.library.bad_request");
+    // Free text is fine (the API pulls out the first link), but there must be one.
+    if (!/https?:\/\/\S/i.test(text)) return err(400, "error.library.invalid_url");
+
+    if (action === "webp") {
+        return relayPost(ctx, "/webp", { url: text }, (b) => {
+            const out = jobAlias(b);
+            return { status: out.status, job: out.job };
+        });
+    }
+    return relayPost(ctx, "/studio", { url: text }, (b) => ({ status: "success", studio: b.id, url: b.url }));
+}
+
+// ---------- PUT /api/library/upload ----------
+
+const cleanName = (raw: string | null, ext: string): string => {
+    let name = raw ?? "";
+    // eslint-disable-next-line no-control-regex
+    name = name.replace(/[\u0000-\u001f\u007f]/g, "");
+    name = name.split(/[\\/]/).pop() ?? "";
+    name = Array.from(name.trim()).slice(0, MAX_NAME_CHARS).join("").trim();
+    return name && name !== "." && name !== ".." ? name : `upload.${ext}`;
+};
+
+async function upload(ctx: Ctx, request: Request, q: URLSearchParams): Promise<Response> {
+    const reject = (status: number, code: string) => {
+        void request.body?.cancel().catch(() => {});
+        return err(status, code);
+    };
+    const type = (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+    const ext = UPLOAD_TYPES[type];
+    if (!ext) return reject(415, "error.library.unsupported");
+
+    const declared = request.headers.get("content-length");
+    if (declared === null || !/^\d{1,15}$/.test(declared)) return reject(411, "error.library.length_required");
+    const size = Number(declared);
+    if (size > MAX_UPLOAD_BYTES) return reject(413, "error.library.too_large");
+    if (size === 0 || !request.body) return reject(400, "error.library.empty");
+
+    const id = (ctx.deps.randomId ?? base62)(16);
+    const key = `uploads/${id}.${ext}`;
+    const name = cleanName(q.get("name"), ext);
+
+    // Straight from the request to R2: the body has a known length, nothing is buffered.
+    const obj = await ctx.env.ORIGINALS.put(key, request.body, { httpMetadata: { contentType: type } });
+    if (!obj || obj.size !== size) {
+        await ctx.env.ORIGINALS.delete(key).catch(() => {});
+        return err(400, "error.library.incomplete");
+    }
+    try {
+        await ctx.env.DB.prepare(
+            `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, created_at)
+             VALUES (?1, 'private', 'upload', 'originals', ?2, NULL, ?3, ?4, ?5, ?6)`,
+        )
+            .bind(id, key, name, type, size, ctx.now)
+            .run();
+    } catch (e) {
+        await ctx.env.ORIGINALS.delete(key).catch(() => {});
+        throw e;
+    }
+    const row = await getItem(ctx, id);
+    return json(201, { status: "success", item: itemShape(row!) });
+}
+
+async function getItem(ctx: Ctx, id: string): Promise<MediaRow | null> {
+    return (
+        (await ctx.env.DB.prepare(`SELECT ${ITEM_COLUMNS} FROM media_items WHERE id = ?1 AND deleted_at IS NULL`)
+            .bind(id)
+            .first<MediaRow>()) ?? null
+    );
+}
+
+// ---------- POST /api/library/items/<id>/publish ----------
+
+async function copyToMedia(ctx: Ctx, from: R2ObjectBody, to: string, contentType: string): Promise<void> {
+    const fixed = ctx.deps.fixedLength ?? ((n: number) => new FixedLengthStream(n));
+    const { readable, writable } = fixed(from.size);
+    // Start the put first so the readable side is being consumed while we write.
+    const put = ctx.env.MEDIA.put(to, readable, { httpMetadata: { contentType } });
+    // If the put fails early nothing reads the readable side and a pending
+    // write would wait forever: race every write against the put failing.
+    const failed = new Promise<never>((_, reject) => {
+        put.then(() => {}, reject);
+    });
+    failed.catch(() => {});
+    const writer = writable.getWriter();
+    const reader = from.body.getReader();
+    try {
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const w = writer.write(value);
+            w.catch(() => {});
+            await Promise.race([w, failed]);
+        }
+        const closed = writer.close();
+        closed.catch(() => {});
+        await Promise.race([closed, failed]);
+    } catch (e) {
+        reader.cancel().catch(() => {});
+        writer.abort(e).catch(() => {});
+        put.catch(() => {});
+        throw e;
+    }
+    await put;
+}
+
+async function itemPublish(ctx: Ctx, id: string): Promise<Response> {
+    const row = await getItem(ctx, id);
+    if (!row) return err(404, "error.library.not_found");
+    if (row.kind !== "private" || row.bucket !== "originals") return err(409, "error.library.already_public");
+
+    const obj = await ctx.env.ORIGINALS.get(row.r2_key);
+    if (!obj) return err(404, "error.library.missing");
+    const ext = /\.([0-9A-Za-z]{1,8})$/.exec(row.r2_key)?.[1]?.toLowerCase() ?? "bin";
+    const name = `${(ctx.deps.randomId ?? base62)(10)}.${ext}`;
+    const contentType = row.content_type ?? obj.httpMetadata?.contentType ?? "application/octet-stream";
+    try {
+        await copyToMedia(ctx, obj, name, contentType);
+    } catch {
+        await ctx.env.MEDIA.delete(name).catch(() => {});
+        return err(502, "error.library.storage");
+    }
+    const newId = (ctx.deps.randomId ?? base62)(16);
+    const url = mediaBase(ctx.env) + name;
+    try {
+        await ctx.env.DB.prepare(
+            `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, created_at)
+             VALUES (?1, 'public', 'host', 'media', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
+        )
+            .bind(newId, name, url, row.name, contentType, obj.size, row.width, row.height, row.duration, row.link, row.session_id, ctx.now)
+            .run();
+    } catch (e) {
+        await ctx.env.MEDIA.delete(name).catch(() => {});
+        throw e;
+    }
+    const created = await getItem(ctx, newId);
+    return json(201, { status: "success", item: itemShape(created!) });
+}
+
+// ---------- POST /api/library/items/<id>/studio ----------
+
+async function itemStudio(ctx: Ctx, id: string): Promise<Response> {
+    const row = await getItem(ctx, id);
+    if (!row) return err(404, "error.library.not_found");
+    if (row.bucket !== "originals" || row.kind !== "private") return err(409, "error.library.not_private");
+    const type = row.content_type ?? "";
+    if (!(type.startsWith("video/") || type === "image/gif")) return err(400, "error.studio.not_video");
+    // A saved original whose own studio is still open: reopen that studio (its
+    // webps stay listed) instead of minting a new one.
+    if (row.session_id) {
+        const open = await ctx.env.DB.prepare(
+            "SELECT id FROM studio_sessions WHERE id = ?1 AND status = 'ready' AND expires_at > ?2 AND r2_key = ?3",
+        )
+            .bind(row.session_id, ctx.now, row.r2_key)
+            .first<{ id: string }>();
+        if (open) {
+            const base = ctx.env.WEB_ORIGIN.replace(/\/+$/, "");
+            return json(200, { status: "success", studio: open.id, url: `${base}/studio/${open.id}` });
+        }
+    }
+    return relayPost(
+        ctx,
+        "/library/adopt",
+        { r2_key: row.r2_key, name: row.name, content_type: type, bytes: row.bytes ?? 0, item_id: row.id },
+        (b) => ({ status: "success", studio: b.id, url: b.url }),
+    );
+}
+
+// ---------- DELETE ----------
+
+async function itemDelete(ctx: Ctx, id: string): Promise<Response> {
+    const row = await getItem(ctx, id);
+    if (!row) return err(404, "error.library.not_found");
+    const bucket = row.bucket === "media" ? ctx.env.MEDIA : ctx.env.ORIGINALS;
+    try {
+        await bucket.delete(row.r2_key); // deleting a missing object succeeds
+    } catch {
+        return err(502, "error.library.storage");
+    }
+    await ctx.env.DB.prepare("UPDATE media_items SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL")
+        .bind(ctx.now, id)
+        .run();
+    if (row.bucket === "originals") {
+        // The studios that read this original can no longer render from it.
+        await ctx.env.DB.prepare("UPDATE studio_sessions SET expires_at = ?1 WHERE r2_key = ?2 AND expires_at > ?1")
+            .bind(ctx.now, row.r2_key)
+            .run();
+    }
+    return json(200, { status: "success" });
+}
+
+async function studioDelete(ctx: Ctx, sid: string): Promise<Response> {
+    const res = await ctx.env.DB.prepare(
+        "UPDATE studio_sessions SET expires_at = ?1 WHERE id = ?2 AND expires_at > ?1 RETURNING id",
+    )
+        .bind(ctx.now, sid)
+        .all<{ id: string }>();
+    if (res.results.length === 0) return err(404, "error.library.not_found");
+    return json(200, { status: "success" });
+}

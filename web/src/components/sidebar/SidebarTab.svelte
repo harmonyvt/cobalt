@@ -9,6 +9,11 @@
 
     export let beta = false;
 
+    // a full-page link to a page served outside the SvelteKit app
+    // (rel="external": no client-side routing, and the prerender crawler skips it)
+    export let external = false;
+    export let label = "";
+
     const firstTabPage = ["save", "remux", "settings"];
 
     let tab: HTMLElement;
@@ -38,6 +43,7 @@
     class="sidebar-tab"
     class:active={isTabActive}
     href={path}
+    rel={external ? "external" : undefined}
     bind:this={tab}
     on:focus={() => showTab(tab)}
     role="tab"
@@ -48,7 +54,7 @@
     {/if}
 
     <svelte:component this={icon} />
-    <span class="tab-title">{$t(`tabs.${name}`)}</span>
+    <span class="tab-title">{$t(label || `tabs.${name}`)}</span>
 </a>
 
 <style>

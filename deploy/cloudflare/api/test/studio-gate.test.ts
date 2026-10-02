@@ -1,0 +1,132 @@
+import { describe, expect, it } from "vitest";
+import { decide, isStudioPath, type GateRequest } from "../src/gate";
+
+const KEY = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
+const ORIGIN = "https://cobalt.capybaraharmony.com";
+const cfg = { corsUrl: ORIGIN, now: 1_800_000_000_000 };
+const SID = "aB3dE6gH9jK2mN5pQ8sTuV";
+const JOB = "aB3dE6gH9jK2mN5pQ8sT";
+
+const req = (o: Partial<GateRequest>): GateRequest => ({
+    method: "GET",
+    pathname: "/",
+    searchParams: new URLSearchParams(),
+    origin: null,
+    authorization: null,
+    ...o,
+});
+const d = (o: Partial<GateRequest>) => decide(req(o), cfg);
+const notFound = { action: "reject", status: 404 };
+
+describe("isStudioPath", () => {
+    it("matches /studio and /studio/..., nothing that merely starts with the word", () => {
+        expect(isStudioPath("/studio")).toBe(true);
+        expect(isStudioPath(`/studio/${SID}`)).toBe(true);
+        expect(isStudioPath("/studios")).toBe(false);
+        expect(isStudioPath("/studio-x/a")).toBe(false);
+        expect(isStudioPath("/webp/x")).toBe(false);
+    });
+});
+
+describe("POST /studio (needs a key)", () => {
+    it("looks the key up, then creates", () => {
+        expect(d({ method: "POST", pathname: "/studio", authorization: `Api-Key ${KEY}` })).toEqual({
+            action: "lookup",
+            key: KEY,
+            then: "studio_create",
+        });
+    });
+    it("401s like POST / without a well-formed key", () => {
+        const post = (authorization: string | null) => d({ method: "POST", pathname: "/studio", authorization });
+        expect(post(null)).toMatchObject({ status: 401, errorCode: "error.api.auth.key.missing" });
+        expect(post("Bearer x")).toMatchObject({ status: 401, errorCode: "error.api.auth.key.not_api_key" });
+        expect(post("Api-Key nope")).toMatchObject({ status: 401, errorCode: "error.api.auth.key.invalid" });
+    });
+    it("an Origin does not substitute for a key", () => {
+        expect(d({ method: "POST", pathname: "/studio", origin: ORIGIN })).toMatchObject({ status: 401 });
+    });
+    it("only POST: GET, PUT, DELETE /studio are 404", () => {
+        for (const method of ["GET", "PUT", "DELETE", "HEAD"]) {
+            expect(d({ method, pathname: "/studio", authorization: `Api-Key ${KEY}` })).toMatchObject(notFound);
+        }
+    });
+});
+
+describe("routes that need no key (the id is the credential)", () => {
+    it("GET /studio/<sid> is the status route", () => {
+        expect(d({ pathname: `/studio/${SID}` })).toEqual({ action: "studio", op: "status", sid: SID });
+    });
+    it("GET and HEAD /studio/<sid>/source", () => {
+        expect(d({ pathname: `/studio/${SID}/source` })).toEqual({ action: "studio", op: "source", sid: SID });
+        expect(d({ method: "HEAD", pathname: `/studio/${SID}/source` })).toEqual({ action: "studio", op: "source", sid: SID });
+    });
+    it("POST /studio/<sid>/render", () => {
+        expect(d({ method: "POST", pathname: `/studio/${SID}/render` })).toEqual({ action: "studio", op: "render_create", sid: SID });
+    });
+    it("GET /studio/<sid>/render/<job>", () => {
+        expect(d({ pathname: `/studio/${SID}/render/${JOB}` })).toEqual({ action: "studio", op: "render_status", sid: SID, job: JOB });
+    });
+    it("the query (wait) is not part of the decision", () => {
+        expect(d({ pathname: `/studio/${SID}`, searchParams: new URLSearchParams("wait=20") })).toMatchObject({ op: "status" });
+    });
+    it("an Authorization header is neither needed nor used", () => {
+        expect(d({ pathname: `/studio/${SID}`, authorization: "Api-Key junk" })).toMatchObject({ action: "studio" });
+    });
+});
+
+describe("ids are validated before anything is looked up", () => {
+    it.each([
+        "/studio/",
+        "/studio/short",
+        `/studio/${"a".repeat(21)}`,
+        `/studio/${"a".repeat(23)}`,
+        `/studio/${SID.slice(0, 21)}-`,
+        `/studio/..%2f${SID}`,
+        `/studio/${SID}/`,
+        `/studio/${SID}/source/`,
+        `/studio/${SID}/source/x`,
+        `/studio/${SID}/render/`,
+        `/studio/${SID}/render/short`,
+        `/studio/${SID}/render/${"a".repeat(21)}`,
+        `/studio/${SID}/render/${JOB}/x`,
+        `/studio/${SID}/other`,
+        // the DO's internal save-advance route is never public
+        `/studio/${SID}/advance`,
+        `/studio/${SID}/advance/x`,
+        `/studio/${SID}/render/${JOB}.json`,
+    ])("404 %s", (p) => {
+        expect(d({ pathname: p })).toMatchObject(notFound);
+        expect(d({ method: "POST", pathname: p })).toMatchObject(notFound);
+    });
+});
+
+describe("methods", () => {
+    it.each([
+        ["POST", `/studio/${SID}`],
+        ["DELETE", `/studio/${SID}`],
+        ["POST", `/studio/${SID}/source`],
+        ["GET", `/studio/${SID}/render`],
+        ["PUT", `/studio/${SID}/render`],
+        ["POST", `/studio/${SID}/render/${JOB}`],
+        ["DELETE", `/studio/${SID}/render/${JOB}`],
+        ["HEAD", `/studio/${SID}`],
+    ])("%s %s is a 404", (method, pathname) => {
+        expect(d({ method, pathname })).toMatchObject(notFound);
+    });
+});
+
+describe("OPTIONS preflight", () => {
+    it("studio paths from the web origin are answered by the Worker, not forwarded", () => {
+        for (const pathname of ["/studio", `/studio/${SID}`, `/studio/${SID}/source`, `/studio/${SID}/render`, `/studio/${SID}/render/${JOB}`]) {
+            expect(d({ method: "OPTIONS", pathname, origin: ORIGIN })).toEqual({ action: "studio", op: "preflight" });
+        }
+    });
+    it("other origins and no origin are 403", () => {
+        expect(d({ method: "OPTIONS", pathname: `/studio/${SID}`, origin: "https://evil.example" })).toMatchObject({ action: "reject", status: 403 });
+        expect(d({ method: "OPTIONS", pathname: "/studio" })).toMatchObject({ action: "reject", status: 403 });
+    });
+    it("non-studio OPTIONS is still forwarded from the web origin", () => {
+        expect(d({ method: "OPTIONS", pathname: "/", origin: ORIGIN })).toEqual({ action: "forward" });
+        expect(d({ method: "OPTIONS", pathname: "/webp", origin: ORIGIN })).toEqual({ action: "forward" });
+    });
+});

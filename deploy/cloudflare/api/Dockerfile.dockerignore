@@ -1,0 +1,18 @@
+# BuildKit uses <Dockerfile>.dockerignore in preference to the root .dockerignore.
+# Same as the root .dockerignore, plus things that must not enter the context.
+.DS_Store
+desktop.ini
+node_modules
+**/node_modules
+build
+**/.wrangler
+.env
+.env.*
+!.env.example
+cookies.json
+docker-compose.yml
+.vscode
+mobile
+deploy
+!deploy/cloudflare/api/.gitinfo
+!deploy/cloudflare/api/helper

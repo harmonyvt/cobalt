@@ -1,0 +1,840 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>cobalt studio</title>
+<link rel="icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">
+<style>
+/* Tokens: cobalt's own (web/src/app.css), light and dark by prefers-color-scheme. */
+:root {
+  --primary: #ffffff; --secondary: #000000; --gray: #6b6b74;
+  --red: #c8182a; --green: #1f7a12; --blue: #1f6fd6;
+  --button: #f4f4f4; --button-hover: #ededed; --button-stroke: rgba(0,0,0,0.06);
+  --button-text: #282828; --input-border: #adadb7;
+  --page: #ffffff; --note-bg: #f7f7f8; --track: #e9e9ee; --sel: rgba(31,111,214,0.18);
+  --sel-edge: #1f6fd6; --playhead: #c8182a; --over: rgba(200,24,42,0.18);
+  --film-a: #d9d9e0; --film-b: #cfcfd8; --dim: rgba(255,255,255,0.62);
+  --discord-bg: #f2f3f5; --discord-fg: #2e3338; --discord-muted: #5c5e66; --discord-link: #0067e0;
+  --radius: 11px;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #000000; --secondary: #e1e1e1; --gray: #9a9aa2;
+    --red: #ff6b6b; --green: #5fd35a; --blue: #5aa2ff;
+    --button: #191919; --button-hover: #242424; --button-stroke: rgba(255,255,255,0.05);
+    --button-text: #e1e1e1; --input-border: #383838;
+    --page: #000000; --note-bg: #0d0d0d; --track: #1c1c20; --sel: rgba(90,162,255,0.22);
+    --sel-edge: #5aa2ff; --playhead: #ff6b6b; --over: rgba(255,107,107,0.22);
+    --film-a: #26262c; --film-b: #2e2e35; --dim: rgba(0,0,0,0.6);
+    --discord-bg: #313338; --discord-fg: #dbdee1; --discord-muted: #949ba4; --discord-link: #00a8fc;
+    color-scheme: dark;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { margin: 0; background: var(--page); color: var(--secondary); font: 14px/1.5 var(--f-mono); overflow-wrap: anywhere; }
+h1, h2, h3, p { margin: 0; font-weight: 600; }
+p { font-weight: 400; }
+h2 { font-size: 17px; }
+h3 { font-size: 13px; }
+button, select { font: inherit; color: inherit; }
+button {
+  background: var(--button); color: var(--button-text); border: 0; box-shadow: 0 0 0 1px var(--button-stroke) inset;
+  border-radius: var(--radius); padding: 0 12px; min-height: 40px; cursor: pointer; font-weight: 500;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+button:hover { background: var(--button-hover); }
+button.primary { background: var(--secondary); color: var(--primary); }
+button.primary:hover { opacity: .88; }
+button.big { min-height: 48px; font-size: 15px; font-weight: 600; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:focus-visible, select:focus-visible, .tlwrap:focus-visible, a:focus-visible, .linkcode:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+a { color: inherit; }
+.muted { color: var(--gray); }
+.small { font-size: 12px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+[hidden] { display: none !important; }
+
+.page {
+  max-width: 1080px; margin: 0 auto; display: grid; gap: 14px;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+}
+.bar { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--button); border-radius: 14px; box-shadow: 0 0 0 1px var(--button-stroke) inset; font-size: 12px; }
+.bar b { font-size: 13px; }
+.lock { display: inline-flex; gap: 6px; align-items: center; color: var(--gray); }
+.lock::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+
+.card { background: var(--button); border-radius: var(--radius); padding: 12px; box-shadow: 0 0 0 1px var(--button-stroke) inset; display: grid; gap: 10px; min-width: 0; align-content: start; }
+.body { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.col { display: grid; gap: 14px; min-width: 0; align-content: start; }
+@media (max-width: 820px) { .body { grid-template-columns: minmax(0, 1fr); } }
+
+.state { padding: 16px; gap: 12px; }
+.state h2 { text-wrap: balance; }
+.state .link { font-size: 13px; color: var(--gray); }
+.indet { height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; position: relative; }
+.indet::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 35%; border-radius: 2px; background: var(--sel-edge); animation: slide 1.4s ease-in-out infinite; }
+@keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
+.note { padding: 8px 10px; border-radius: 8px; box-shadow: 0 0 0 1px var(--input-border) inset; font-size: 12.5px; }
+.err { padding: 10px 12px; border-radius: 8px; box-shadow: 0 0 0 1px var(--red) inset; font-size: 12.5px; display: grid; gap: 4px; }
+.err b { color: var(--red); word-break: break-all; }
+
+.head { display: flex; flex-wrap: wrap; gap: 2px 12px; justify-content: space-between; align-items: baseline; }
+.head h3 { min-width: 0; }
+.stage { position: relative; display: grid; place-items: center; background: var(--film-a); border-radius: 8px; overflow: hidden; }
+.stage video {
+  display: block; background: var(--film-a); aspect-ratio: var(--ar, 1); max-width: 100%;
+  width: min(100%, calc(55vh * var(--ar, 1))); max-height: 55vh; object-fit: contain; touch-action: manipulation;
+}
+@supports (height: 1dvh) { .stage video { width: min(100%, calc(55dvh * var(--ar, 1))); max-height: 55dvh; } }
+.stage .big-play {
+  position: absolute; inset: 0; margin: auto; width: 64px; height: 64px; min-height: 0; padding: 0; border-radius: 50%;
+  background: rgba(0,0,0,.55); color: #fff; font-size: 24px; line-height: 1; box-shadow: none; display: grid; place-items: center;
+}
+.stage .big-play:hover { background: rgba(0,0,0,.7); }
+.stage .loading { position: absolute; left: 8px; bottom: 8px; padding: 2px 8px; border-radius: 99px; background: rgba(0,0,0,.6); color: #fff; font-size: 11px; }
+
+.transport { display: grid; gap: 8px; }
+.tcrow { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+.tcrow button { min-width: 88px; }
+.tc { font-variant-numeric: tabular-nums; font-size: 13px; text-align: right; }
+.tools { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.tools button { padding: 0 4px; font-size: 12px; white-space: nowrap; }
+
+.tl { display: grid; gap: 4px; }
+.tlwrap { position: relative; padding: 0 22px; margin: 0 -10px; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: pointer; border-radius: 8px; }
+.track { position: relative; height: 64px; }
+.film { position: absolute; inset: 0; display: flex; background: var(--track); border-radius: 8px; overflow: hidden; }
+.film canvas, .film i { flex: 1 1 0; min-width: 0; height: 100%; object-fit: cover; border-right: 1px solid var(--page); }
+.film i:nth-child(odd) { background: var(--film-a); } .film i:nth-child(even) { background: var(--film-b); }
+.dim { position: absolute; top: 0; bottom: 0; background: var(--dim); pointer-events: none; }
+.sel { position: absolute; top: 0; bottom: 0; background: var(--sel); border-top: 2px solid var(--sel-edge); border-bottom: 2px solid var(--sel-edge); pointer-events: none; }
+.sel.over { background: var(--over); border-color: var(--red); }
+.handle { position: absolute; top: -4px; bottom: -4px; width: 14px; margin-left: -7px; border-radius: 5px; background: var(--sel-edge); pointer-events: none; display: grid; place-items: center; }
+.handle::after { content: ""; width: 2px; height: 20px; border-radius: 1px; background: var(--primary); opacity: .85; }
+.handle.over { background: var(--red); }
+.handle.grab { transform: scaleX(1.25); }
+.playhead { position: absolute; top: -6px; bottom: -6px; width: 2px; margin-left: -1px; background: var(--playhead); pointer-events: none; }
+.playhead::before { content: ""; position: absolute; top: 0; left: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--playhead); }
+.ruler { position: relative; height: 16px; font-size: 10px; color: var(--gray); margin: 0 12px; }
+.ruler span { position: absolute; transform: translateX(-50%); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.readout { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; font-variant-numeric: tabular-nums; align-items: center; }
+.readout b { font-weight: 600; }
+.pill { font-size: 11px; padding: 1px 8px; border-radius: 99px; box-shadow: 0 0 0 1px currentColor inset; }
+.pill.ok { color: var(--green); } .pill.bad { color: var(--red); }
+.keys { font-size: 11px; color: var(--gray); }
+kbd { font: 500 11px var(--f-mono); padding: 0 5px; border-radius: 4px; box-shadow: 0 0 0 1px var(--input-border) inset; }
+
+.opts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.opts label { display: grid; gap: 3px; font-size: 12px; color: var(--gray); }
+.opts select { background: var(--page); border: 1px solid var(--input-border); border-radius: 8px; padding: 0 6px; min-height: 40px; }
+.est { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 8px; padding: 8px 10px; border-radius: 8px; background: var(--page); font-size: 12.5px; }
+.est b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.prog { display: grid; gap: 6px; font-size: 12.5px; }
+.prog .step { color: var(--gray); } .prog .step::before { content: "○ "; }
+.prog .doing { color: var(--secondary); } .prog .doing::before { content: "◐ "; }
+.prog .done { color: var(--secondary); } .prog .done::before { content: "● "; color: var(--green); }
+.prog .row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.linkbox { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--page); border-radius: 8px; padding: 8px 10px; box-shadow: 0 0 0 1px var(--input-border) inset; }
+.linkcode { flex: 1 1 200px; min-width: 0; font-size: 12.5px; user-select: all; -webkit-user-select: all; border-radius: 4px; }
+.linkbox .big { flex: 1 1 100%; }
+.toast { font-size: 12px; color: var(--green); min-height: 1.3em; }
+.discord { background: var(--discord-bg); color: var(--discord-fg); border-radius: 8px; padding: 10px 12px; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 10px; font-size: 13px; }
+.discord .av { width: 32px; height: 32px; border-radius: 50%; background: var(--discord-link); opacity: .7; }
+.discord a { color: var(--discord-link); text-decoration: none; }
+.discord .when { font-size: 11px; color: var(--discord-muted); }
+.discord img { display: block; margin-top: 6px; border-radius: 6px; max-width: min(100%, 240px); height: auto; background: var(--film-a); }
+.hist { display: grid; gap: 6px; font-size: 12px; }
+.hist .item { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--button-stroke); }
+.hist .item:first-of-type { border-top: 0; }
+.hist .meta { min-width: 0; display: grid; gap: 1px; }
+
+/* touch: 44px targets, no keyboard hints, no zoom on select focus */
+@media (pointer: coarse) {
+  button { min-height: 44px; }
+  .opts select { min-height: 44px; font-size: 16px; }
+  .keys, kbd { display: none; }
+}
+@media (max-width: 380px) {
+  .page { gap: 10px; }
+  .card { padding: 10px; }
+  .tools button { font-size: 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  .indet::after { width: 100%; opacity: .5; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="bar">
+    <span><b>cobalt studio</b> <span class="muted" id="urlbox"></span></span>
+    <span class="lock">only you</span>
+  </header>
+  <p id="live" class="sr" role="status" aria-live="polite"></p>
+  <p class="note" id="netNote" hidden></p>
+
+  <section id="vConnecting" class="card state" aria-label="opening">
+    <h2>opening your studio…</h2>
+    <div class="indet" aria-hidden="true"></div>
+  </section>
+
+  <section id="vSaving" class="card state" aria-label="saving" hidden>
+    <h2>saving your video…</h2>
+    <p class="link" id="savingLink"></p>
+    <div class="indet" aria-hidden="true"></div>
+    <p class="muted small">saved once, privately, so you can trim it. this usually takes a few seconds. <span id="savingElapsed"></span></p>
+  </section>
+
+  <section id="vError" class="card state" aria-label="error" hidden>
+    <div class="err"><b id="errCode"></b><span id="errText"></span></div>
+    <p class="muted small">share the post to cobalt studio again to start a new one.</p>
+  </section>
+
+  <section id="vGone" class="card state" aria-label="expired" hidden>
+    <div class="err"><b>studio link not found</b><span>this studio link has expired or doesn't exist. share the post to cobalt studio again.</span></div>
+    <p class="muted small">webps you already made keep working.</p>
+  </section>
+
+  <div class="body" id="vReady" hidden>
+    <div class="col">
+      <div class="card" id="player">
+        <div class="head"><h3 id="srcTitle"></h3><span class="small muted" id="srcSaved"></span></div>
+        <div class="stage" id="stage">
+          <video id="vid" crossorigin="anonymous" playsinline muted preload="auto" disablepictureinpicture disableremoteplayback aria-label="video preview"></video>
+          <button type="button" class="big-play" id="bigPlay" tabindex="-1" aria-hidden="true">▶</button>
+          <span class="loading" id="vidLoading">loading video…</span>
+        </div>
+        <p class="err" id="vidErr" hidden>the saved video couldn't be played in this browser. you can still pick in and out points on the timeline.</p>
+        <div class="transport">
+          <div class="tcrow">
+            <button type="button" id="play" aria-label="play or pause the selection">play</button>
+            <span class="tc" id="tc" aria-hidden="true">00:00.00 / 00:00.00</span>
+          </div>
+          <div class="tools">
+            <button type="button" id="stepBack" aria-label="back one frame">◀ frame</button>
+            <button type="button" id="stepFwd" aria-label="forward one frame">frame ▶</button>
+            <button type="button" id="setIn" aria-label="set in point at the playhead">set in <kbd>I</kbd></button>
+            <button type="button" id="setOut" aria-label="set out point at the playhead">set out <kbd>O</kbd></button>
+          </div>
+        </div>
+        <div class="tl">
+          <div class="tlwrap" id="tlwrap" tabindex="0" role="slider" aria-label="timeline: drag to move the playhead, drag the in and out handles to trim" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="">
+            <div class="track" id="track">
+              <div class="film" id="film" aria-hidden="true"></div>
+              <div class="dim" id="dimL" aria-hidden="true"></div>
+              <div class="dim" id="dimR" aria-hidden="true"></div>
+              <div class="sel" id="sel" aria-hidden="true"></div>
+              <div class="handle" id="hIn" aria-hidden="true"></div>
+              <div class="handle" id="hOut" aria-hidden="true"></div>
+              <div class="playhead" id="ph" aria-hidden="true"></div>
+            </div>
+          </div>
+          <div class="ruler" id="ruler" aria-hidden="true"></div>
+        </div>
+        <div class="readout">
+          <span>in <b id="rIn">00:00.00</b></span><span>out <b id="rOut">00:00.00</b></span><span>length <b id="rLen">0.00 s</b></span>
+          <span class="pill ok" id="rPill">fits the 10 s limit</span>
+        </div>
+        <div class="keys" id="keys"><kbd>space</kbd> play/pause · <kbd>I</kbd> in · <kbd>O</kbd> out · <kbd>←</kbd>/<kbd>→</kbd> one frame · <kbd>shift</kbd>+arrow one second · drag the timeline to scrub</div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card" id="makeCard">
+        <h3>make webp</h3>
+        <div class="opts">
+          <label for="oW">width (px)<select id="oW"></select></label>
+          <label for="oQ">quality<select id="oQ"><option value="low">low</option><option value="med" selected>medium</option><option value="high">high</option></select></label>
+        </div>
+        <div class="est"><span class="muted">about</span><b id="estSize">—</b><span class="muted" id="estTime">—</span></div>
+        <button type="button" class="primary big" id="make" aria-describedby="rPill">make webp</button>
+        <div class="err" id="makeErr" hidden role="alert"><b id="makeErrCode"></b><span id="makeErrText"></span></div>
+        <div class="prog" id="prog" hidden>
+          <div id="pStep1" class="step">using the saved video (no new download)</div>
+          <div id="pStep2" class="step">encoding</div>
+          <div id="pStep3" class="step">uploading to media.capybaraharmony.com</div>
+          <div class="row"><span class="muted" id="pElapsed"></span><button type="button" id="notifyBtn" hidden>notify me when ready</button><button type="button" id="cancelBusy" hidden>stop waiting</button></div>
+        </div>
+      </div>
+
+      <div class="card" id="result" hidden>
+        <h3>ready</h3>
+        <div class="linkbox">
+          <code class="linkcode" id="outUrl" tabindex="0"></code>
+          <button type="button" class="primary big" id="copy">copy link</button>
+        </div>
+        <div class="toast" id="toast"></div>
+        <div class="discord"><div class="av" aria-hidden="true"></div><div><b>you</b> <span class="when">today</span><br><a id="dLink" href="#" target="_blank" rel="noopener noreferrer"></a><img id="dImg" alt="the animated webp, as it will look in a chat" decoding="async"></div></div>
+      </div>
+
+      <div class="card" id="webps" hidden>
+        <h3 id="webpsTitle">made in this studio</h3>
+        <div class="hist" id="hist"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+"use strict";
+
+/* ---------- constants ---------- */
+var LIMIT = 10;            // server limit (WEBP_MAX_SECONDS)
+var MIN_LEN = 0.5;         // server minimum
+var FPS = 30;              // assumed frame rate
+var THUMBS = 12;
+// One measured live encode (30 sep 2026): 9.6 s at 480 px, medium: 1.28 MB, 50.6 s.
+var MEASURED = { seconds: 9.6, bytes: 1283290, width: 480, encodeS: 50.6 };
+var QFACTOR = { low: 0.72, med: 1, high: 1.45 };
+var DEFAULT_API = "https://api.capybaraharmony.com";
+
+/* ---------- session id + api base ---------- */
+var m = /^\/studio\/([0-9A-Za-z]{22})$/.exec(location.pathname);
+var SID = m ? m[1] : null;
+var API = DEFAULT_API;
+try {
+  if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+    var q = new URLSearchParams(location.search).get("api");
+    if (q && /^https?:\/\/[^\/?#]+$/.test(q)) API = q;
+  }
+} catch (e) {}
+
+/* ---------- helpers ---------- */
+var $ = function (id) { return document.getElementById(id); };
+var clamp = function (v, lo, hi) { return Math.min(hi, Math.max(lo, v)); };
+var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+function snap(t) { return Math.round(t * FPS) / FPS; }
+function fmt(t) { var mm = Math.floor(t / 60), s = t - mm * 60; return String(mm).padStart(2, "0") + ":" + s.toFixed(2).padStart(5, "0"); }
+function fmtElapsed(ms) { var s = Math.floor(ms / 1000); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+function mb(bytes) { return (bytes / 1e6).toFixed(2) + " MB"; }
+function estimate(len, width, quality) {
+  var area = Math.pow(width / MEASURED.width, 2);
+  return {
+    mb: MEASURED.bytes * (len / MEASURED.seconds) * area * (QFACTOR[quality] || 1) / 1e6,
+    secs: MEASURED.encodeS * (len / MEASURED.seconds) * area
+  };
+}
+function checkSel(inn, out, dur) {
+  var len = +(out - inn).toFixed(3);
+  if (len > LIMIT + 1e-9) return { ok: false, kind: "over", len: len, over: len - LIMIT };
+  if (len < MIN_LEN - 1e-9) return { ok: false, kind: "short", len: len };
+  if (inn < 0 || inn + len > dur + 0.05) return { ok: false, kind: "range", len: len };
+  return { ok: true, kind: "ok", len: len };
+}
+function say(msg) { var l = $("live"); l.textContent = ""; setTimeout(function () { l.textContent = msg; }, 30); }
+function show(id, on) { $(id).hidden = !on; }
+function ago(ms) {
+  var s = Math.max(0, Math.round(ms / 1000));
+  if (s < 90) return s + " s";
+  if (s < 5400) return Math.round(s / 60) + " min";
+  if (s < 129600) return Math.round(s / 3600) + " h";
+  return Math.round(s / 86400) + " d";
+}
+function reducedMotion() { return window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches; }
+function h(tag, attrs) {
+  var el = document.createElement(tag);
+  for (var k in (attrs || {})) { if (k === "text") el.textContent = attrs[k]; else el.setAttribute(k, attrs[k]); }
+  for (var i = 2; i < arguments.length; i++) if (arguments[i]) el.append(arguments[i]);
+  return el;
+}
+
+/* ---------- api ---------- */
+async function api(path, opts) {
+  var ctl = new AbortController();
+  var timer = setTimeout(function () { ctl.abort(); }, 40000);
+  try {
+    var init = { signal: ctl.signal, cache: "no-store" };
+    if (opts && opts.body) { init.method = "POST"; init.headers = { "content-type": "application/json" }; init.body = JSON.stringify(opts.body); }
+    var r = await fetch(API + path, init);
+    var body = null;
+    try { body = await r.json(); } catch (e) {}
+    return { status: r.status, body: body };
+  } finally { clearTimeout(timer); }
+}
+function errCode(res) { return res && res.body && res.body.error && res.body.error.code || ""; }
+
+/* ---------- state ---------- */
+var S = {
+  session: null, dur: 0, inn: 0, out: 0, t: 0, playing: false, drag: null,
+  rendering: false, expiredNow: false, kind: "ok", renders: [], featured: null, thumbsStarted: false
+};
+var vid = $("vid");
+var raf = 0;
+
+function view(name) {
+  ["vConnecting", "vSaving", "vError", "vGone"].forEach(function (id) { show(id, id === name); });
+  show("vReady", name === "vReady");
+}
+$("urlbox").textContent = location.host + (SID ? "/studio/" + SID : "");
+document.title = "cobalt studio";
+
+/* ---------- loading the session ---------- */
+function friendlySaveError(code) {
+  if (code === "error.studio.too_large") return "this video is bigger than the 200 MB limit, so it wasn't saved.";
+  if (code && code.indexOf("error.api.") === 0) return "cobalt couldn't fetch this video. the post may be private, removed, or from a site cobalt can't read.";
+  return "the video couldn't be saved.";
+}
+function netNote(msg) { var n = $("netNote"); n.hidden = !msg; n.textContent = msg || ""; }
+async function loadSession() {
+  if (!SID) return view("vGone");
+  var attempt = 0, began = Date.now(), tick = 0;
+  for (;;) {
+    var started = Date.now(), res = null;
+    try { res = await api("/studio/" + SID + "?wait=20"); } catch (e) { res = null; }
+    if (!res || res.status >= 500 || !res.body || typeof res.body !== "object") {
+      attempt++;
+      var wait = Math.min(15000, 1000 * Math.pow(2, attempt - 1));
+      var sec = Math.round(wait / 1000);
+      netNote("can't reach the server right now. trying again in " + sec + " s (attempt " + attempt + ").");
+      await sleep(wait);
+      continue;
+    }
+    attempt = 0; netNote("");
+    if (res.status === 404 || res.status === 410) { document.title = "cobalt studio: expired"; say("this studio link has expired or doesn't exist."); return view("vGone"); }
+    if (res.status !== 200) { return showError(errCode(res), friendlySaveError(errCode(res))); }
+    var s = res.body; S.session = s;
+    if (s.status === "saving") {
+      view("vSaving");
+      $("savingLink").textContent = [s.service, s.link].filter(Boolean).join(" · ");
+      if (!tick) { say("saving your video"); document.title = "saving… · cobalt studio"; tick = setInterval(function () { $("savingElapsed").textContent = "(" + fmtElapsed(Date.now() - began) + ")"; }, 1000); }
+      var spent = Date.now() - started;
+      if (spent < 800) await sleep(1000 - spent);
+      continue;
+    }
+    if (tick) clearInterval(tick);
+    if (s.status === "error") return showError(s.error && s.error.code || "", friendlySaveError(s.error && s.error.code));
+    if (s.status === "ready") return showReady(s);
+    return showError("", "the studio sent something unexpected.");
+  }
+}
+function showError(code, text) {
+  view("vError");
+  $("errCode").textContent = code || "error";
+  $("errText").textContent = text;
+  document.title = "error · cobalt studio";
+  say(text);
+}
+
+/* ---------- ready view ---------- */
+function showReady(s) {
+  view("vReady");
+  var host = "";
+  try { host = new URL(s.link).host.replace(/^www\./, ""); } catch (e) {}
+  var svc = s.service || host || "video";
+  S.dur = (typeof s.duration === "number" && s.duration > 0) ? s.duration : 0;
+  var dims = s.width && s.height ? " · " + s.width + "×" + s.height : "";
+  var dtxt = S.dur ? " · " + S.dur.toFixed(1) + " s" : "";
+  $("srcTitle").textContent = (s.title ? s.title + " · " : "") + svc + dtxt + dims;
+  var now = Date.now();
+  $("srcSaved").textContent = (s.created_at ? "saved " + ago(now - s.created_at) + " ago" : "saved") + (s.expires_at ? " · expires in " + ago(s.expires_at - now) : "") + (s.bytes ? " · " + mb(s.bytes) : "");
+  document.title = svc + " · cobalt studio";
+  if (s.width && s.height) $("stage").style.setProperty("--ar", (s.width / s.height).toFixed(4));
+  setupOptions(s.width);
+  S.renders = (s.renders || []).slice();
+  vid.src = API + "/studio/" + SID + "/source";
+  if (S.dur) initTimeline(); else { $("vidLoading").textContent = "reading video…"; }
+  paintRenders();
+  say("your video is ready. " + (S.dur ? S.dur.toFixed(1) + " seconds." : ""));
+}
+function initTimeline() {
+  S.inn = 0; S.out = Math.min(S.dur, 6); S.t = 0;
+  $("tlwrap").setAttribute("aria-valuemax", S.dur.toFixed(2));
+  var film = $("film"); film.textContent = "";
+  for (var i = 0; i < THUMBS; i++) film.append(document.createElement("i"));
+  buildRuler(); paint(); paintOptions();
+}
+function setupOptions(srcW) {
+  var sel = $("oW"); sel.textContent = "";
+  var allowed = [320, 480].filter(function (w) { return !srcW || w <= srcW; });
+  if (!allowed.length) allowed = [320]; // source narrower than 320: the server decides
+  allowed.forEach(function (w) {
+    var o = h("option", { value: String(w), text: w + (srcW === w ? " (original)" : "") });
+    sel.append(o);
+  });
+  sel.value = String(allowed[allowed.length - 1]);
+}
+
+/* ---------- ruler ---------- */
+function buildRuler() {
+  if (!S.dur) return;
+  var w = $("track").clientWidth || 300, pps = w / S.dur;
+  var steps = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600], step = steps[steps.length - 1];
+  for (var i = 0; i < steps.length; i++) if (steps[i] * pps >= 56) { step = steps[i]; break; }
+  var r = $("ruler"); r.textContent = "";
+  for (var t = 0; t <= S.dur + 1e-9; t += step) {
+    var label = t >= 60 ? Math.floor(t / 60) + ":" + String(Math.round(t % 60)).padStart(2, "0") : (Math.round(t * 10) / 10) + "s";
+    var sp = h("span", { text: label }); sp.style.left = (t / S.dur * 100) + "%"; r.append(sp);
+  }
+  // the ruler is inset to line up with the track (the wrapper adds hit-area padding)
+}
+
+/* ---------- painting ---------- */
+function paint() {
+  if (!S.dur) return;
+  var pct = function (t) { return (t / S.dur * 100) + "%"; };
+  var c = checkSel(S.inn, S.out, S.dur);
+  var over = !c.ok && c.kind === "over";
+  $("sel").style.left = pct(S.inn); $("sel").style.width = ((S.out - S.inn) / S.dur * 100) + "%";
+  $("sel").classList.toggle("over", over);
+  $("dimL").style.left = "0"; $("dimL").style.width = pct(S.inn);
+  $("dimR").style.left = pct(S.out); $("dimR").style.width = ((S.dur - S.out) / S.dur * 100) + "%";
+  ["hIn", "hOut"].forEach(function (id) { $(id).classList.toggle("over", over); });
+  $("hIn").style.left = pct(S.inn); $("hOut").style.left = pct(S.out);
+  paintHead();
+  $("rIn").textContent = fmt(S.inn); $("rOut").textContent = fmt(S.out); $("rLen").textContent = c.len.toFixed(2) + " s";
+  var pill = $("rPill");
+  pill.className = "pill " + (c.ok ? "ok" : "bad");
+  pill.textContent = c.ok ? "fits the 10 s limit" : c.kind === "over" ? c.over.toFixed(2) + " s over the 10 s limit" : c.kind === "short" ? "under the 0.5 s minimum" : "outside the video";
+  if (c.kind !== S.kind) { S.kind = c.kind; say(pill.textContent); }
+  paintOptions();
+  paintAria();
+}
+function paintHead() {
+  $("ph").style.left = (S.t / S.dur * 100) + "%";
+  $("tc").textContent = fmt(S.t) + " / " + fmt(S.dur);
+}
+function paintAria() {
+  var tl = $("tlwrap");
+  tl.setAttribute("aria-valuenow", S.t.toFixed(2));
+  tl.setAttribute("aria-valuetext", "playhead " + fmt(S.t) + " of " + fmt(S.dur) + ", in " + fmt(S.inn) + ", out " + fmt(S.out) + ", length " + (S.out - S.inn).toFixed(2) + " seconds");
+}
+function paintOptions() {
+  if (!S.dur) return;
+  var c = checkSel(S.inn, S.out, S.dur);
+  var e = estimate(Math.max(0, c.len), +$("oW").value, $("oQ").value);
+  $("estSize").textContent = c.ok ? mb(e.mb * 1e6) : "—";
+  $("estTime").textContent = c.ok ? "~" + Math.max(3, Math.round(e.secs)) + " s to make" : c.kind === "over" ? "over the limit" : "check the selection";
+  $("make").disabled = !c.ok || S.rendering || S.expiredNow;
+  $("play").textContent = S.playing ? "pause" : "play";
+  $("bigPlay").hidden = S.playing;
+}
+
+/* ---------- playback ---------- */
+function seek(t) {
+  S.t = clamp(snap(t), 0, S.dur);
+  if (S.dur - S.t < 1 / (FPS * 2)) S.t = S.dur;
+  try { vid.currentTime = S.t; } catch (e) {}
+  paintHead(); if (!S.playing) paintAria();
+}
+function loop() {
+  if (!S.playing) return;
+  var t = vid.currentTime;
+  if (t >= S.out - 0.001 || t < S.inn - 0.25) { t = S.inn; try { vid.currentTime = t; } catch (e) {} }
+  S.t = t; paintHead();
+  raf = requestAnimationFrame(loop);
+}
+function syncPlaying() {
+  var p = !vid.paused && !vid.ended;
+  if (p === S.playing) { paintOptions(); return; }
+  S.playing = p;
+  cancelAnimationFrame(raf);
+  if (p) raf = requestAnimationFrame(loop); else { S.t = vid.currentTime; paintHead(); paintAria(); }
+  paintOptions();
+}
+function play() {
+  if (!S.dur) return;
+  if (S.t >= S.out - 0.001 || S.t < S.inn) seek(S.inn);
+  var p = vid.play();
+  if (p && p.catch) p.catch(function () { say("the preview couldn't start. tap play again."); });
+}
+function pause() { vid.pause(); }
+function togglePlay() { if (vid.paused || vid.ended) play(); else pause(); }
+vid.addEventListener("play", syncPlaying);
+vid.addEventListener("pause", syncPlaying);
+vid.addEventListener("playing", function () { $("vidLoading").hidden = true; syncPlaying(); });
+vid.addEventListener("waiting", function () { $("vidLoading").textContent = "loading video…"; $("vidLoading").hidden = false; });
+vid.addEventListener("ended", function () { S.playing = false; if (S.dur) { seek(S.inn); play(); } });
+vid.addEventListener("canplay", function () { $("vidLoading").hidden = true; startThumbs(); });
+vid.addEventListener("loadedmetadata", function () {
+  if (!S.session.width && vid.videoWidth) $("stage").style.setProperty("--ar", (vid.videoWidth / vid.videoHeight).toFixed(4));
+  if (!S.dur && isFinite(vid.duration) && vid.duration > 0) { S.dur = vid.duration; initTimeline(); }
+});
+vid.addEventListener("error", function () { $("vidErr").hidden = false; $("vidLoading").hidden = true; $("bigPlay").hidden = true; });
+$("bigPlay").addEventListener("click", togglePlay);
+vid.addEventListener("click", togglePlay);
+$("play").addEventListener("click", togglePlay);
+$("stepBack").addEventListener("click", function () { pause(); seek(S.t - 1 / FPS); });
+$("stepFwd").addEventListener("click", function () { pause(); seek(S.t + 1 / FPS); });
+function setIn() { S.inn = clamp(snap(Math.min(S.t, S.out - 1 / FPS)), 0, S.dur); paint(); }
+function setOut() { S.out = clamp(snap(Math.max(S.t, S.inn + 1 / FPS)), 0, S.dur); if (S.dur - S.out < 1 / (FPS * 2)) S.out = S.dur; paint(); }
+$("setIn").addEventListener("click", setIn);
+$("setOut").addEventListener("click", setOut);
+
+/* ---------- pointer interaction on the timeline ---------- */
+var wrap = $("tlwrap");
+function trackRect() { return $("track").getBoundingClientRect(); }
+function pick(x, w, type) {
+  var xi = S.inn / S.dur * w, xo = S.out / S.dur * w, R = type === "mouse" ? 12 : 22;
+  var di = Math.abs(x - xi), dO = Math.abs(x - xo);
+  if (di > R && dO > R) return null;
+  if (di < dO) return "in"; if (dO < di) return "out";
+  return x < xi ? "in" : "out";
+}
+wrap.addEventListener("pointerdown", function (ev) {
+  if (!S.dur || (ev.pointerType === "mouse" && ev.button !== 0)) return;
+  var r = trackRect(), x = ev.clientX - r.left;
+  var which = pick(x, r.width, ev.pointerType);
+  S.drag = { which: which || "seek", off: 0, id: ev.pointerId };
+  if (which) {
+    var hx = (which === "in" ? S.inn : S.out) / S.dur * r.width;
+    S.drag.off = hx - x; pause();
+    $(which === "in" ? "hIn" : "hOut").classList.add("grab");
+  }
+  try { wrap.setPointerCapture(ev.pointerId); } catch (e) {}
+  ev.preventDefault();
+  dragTo(ev);
+});
+wrap.addEventListener("pointermove", function (ev) { if (S.drag && S.drag.id === ev.pointerId) dragTo(ev); });
+function endDrag(ev) {
+  if (!S.drag || S.drag.id !== ev.pointerId) return;
+  S.drag = null; $("hIn").classList.remove("grab"); $("hOut").classList.remove("grab"); paintAria();
+}
+wrap.addEventListener("pointerup", endDrag);
+wrap.addEventListener("pointercancel", endDrag);
+function dragTo(ev) {
+  var r = trackRect(), d = S.drag;
+  var t = clamp((ev.clientX - r.left + d.off) / r.width, 0, 1) * S.dur;
+  t = clamp(snap(t), 0, S.dur); if (S.dur - t < 1 / (FPS * 2)) t = S.dur;
+  if (d.which === "in") { S.inn = Math.min(t, S.out - 1 / FPS); seek(S.inn); paint(); }
+  else if (d.which === "out") { S.out = Math.max(t, S.inn + 1 / FPS); seek(S.out); paint(); }
+  else seek(t);
+}
+wrap.addEventListener("contextmenu", function (ev) { ev.preventDefault(); });
+
+/* ---------- keyboard (desktop affordance) ---------- */
+document.addEventListener("keydown", function (ev) {
+  if (!S.dur || $("vReady").hidden || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  var tag = ev.target && ev.target.tagName;
+  if (tag === "SELECT" || tag === "INPUT" || tag === "TEXTAREA") return;
+  var k = ev.key.toLowerCase(), step = ev.shiftKey ? 1 : 1 / FPS;
+  if (k === "i") { setIn(); ev.preventDefault(); }
+  else if (k === "o") { setOut(); ev.preventDefault(); }
+  else if (k === " " && tag !== "BUTTON" && tag !== "A") { togglePlay(); ev.preventDefault(); }
+  else if (k === "arrowleft") { pause(); seek(S.t - step); ev.preventDefault(); }
+  else if (k === "arrowright") { pause(); seek(S.t + step); ev.preventDefault(); }
+});
+
+if (window.ResizeObserver) new ResizeObserver(function () { buildRuler(); }).observe($("track"));
+else window.addEventListener("resize", buildRuler);
+$("oW").addEventListener("change", paintOptions);
+$("oQ").addEventListener("change", paintOptions);
+
+/* ---------- filmstrip (best effort) ---------- */
+function once(el, ev, ms) {
+  return new Promise(function (res, rej) {
+    var to = setTimeout(function () { el.removeEventListener(ev, ok); rej(new Error("timeout " + ev)); }, ms);
+    function ok() { clearTimeout(to); res(); }
+    el.addEventListener(ev, ok, { once: true });
+  });
+}
+async function startThumbs() {
+  if (S.thumbsStarted || !S.dur) return;
+  S.thumbsStarted = true;
+  var tv = document.createElement("video");
+  tv.muted = true; tv.playsInline = true; tv.preload = "auto"; tv.crossOrigin = "anonymous";
+  tv.setAttribute("aria-hidden", "true");
+  tv.style.cssText = "position:absolute;width:2px;height:2px;opacity:0;pointer-events:none;left:-10px;top:0";
+  tv.src = API + "/studio/" + SID + "/source";
+  document.body.append(tv);
+  try {
+    if (tv.readyState < 2) await once(tv, "loadeddata", 20000);
+    var cells = $("film").children, cw = 72;
+    var ch = Math.max(1, Math.round(cw * (tv.videoHeight || 1) / (tv.videoWidth || 1)));
+    for (var i = 0; i < THUMBS; i++) {
+      var at = Math.min(S.dur - 0.05, (i + 0.5) / THUMBS * S.dur);
+      tv.currentTime = Math.max(0, at);
+      await once(tv, "seeked", 6000);
+      var c = document.createElement("canvas"); c.width = cw; c.height = ch;
+      c.getContext("2d").drawImage(tv, 0, 0, cw, ch);
+      var old = cells[i]; if (!old) break;
+      old.replaceWith(c);
+    }
+  } catch (e) { /* CORS or seek trouble: the plain track is fine */ }
+  finally { try { tv.removeAttribute("src"); tv.load(); } catch (e) {} tv.remove(); }
+}
+
+/* ---------- copy + notify ---------- */
+async function copyText(text, el) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
+  try {
+    if (el) { var rg = document.createRange(); rg.selectNodeContents(el); var sl = getSelection(); sl.removeAllRanges(); sl.addRange(rg); }
+    return !!document.execCommand && document.execCommand("copy");
+  } catch (e) { return false; }
+}
+function canNotify() { return typeof window.Notification !== "undefined"; }
+function notifyReady(url) {
+  try {
+    if (canNotify() && Notification.permission === "granted" && document.visibilityState !== "visible") {
+      new Notification("webp ready", { body: url });
+    }
+  } catch (e) {}
+}
+$("notifyBtn").addEventListener("click", function () {
+  try {
+    var p = Notification.requestPermission(function () {});
+    Promise.resolve(p).then(function (perm) {
+      $("notifyBtn").hidden = true;
+      say(perm === "granted" ? "you'll get a notification when the webp is ready." : "notifications are blocked for this page.");
+    });
+  } catch (e) { $("notifyBtn").hidden = true; }
+});
+
+/* ---------- rendering ---------- */
+var RENDER_ERR = {
+  "error.webp.too_long": "the selection is longer than 10 seconds. drag a handle in.",
+  "error.webp.invalid_params": "those settings weren't accepted. check the in and out points and try again.",
+  "error.webp.busy": "another webp is being made right now.",
+  "error.studio.not_ready": "the video isn't saved yet. give it a moment and try again."
+};
+function makeError(code, text) {
+  var e = $("makeErr"); e.hidden = false;
+  $("makeErrCode").textContent = code || "error";
+  $("makeErrText").textContent = text || RENDER_ERR[code] || "the webp couldn't be made. try again.";
+  say(e.textContent);
+}
+function studioGone() {
+  S.expiredNow = true;
+  makeError("error.studio.expired", "this studio link has expired. share the post to cobalt studio again. webps you already made keep working.");
+}
+var stopBusy = false;
+$("cancelBusy").addEventListener("click", function () { stopBusy = true; });
+$("make").addEventListener("click", makeWebp);
+async function makeWebp() {
+  var c = checkSel(S.inn, S.out, S.dur);
+  if (!c.ok || S.rendering) return;
+  pause();
+  S.rendering = true; $("makeErr").hidden = true; paintOptions();
+  var width = +$("oW").value, quality = $("oQ").value;
+  var params = { start: +S.inn.toFixed(3), length: c.len, width: width, quality: quality };
+  var est = estimate(c.len, width, quality);
+  show("prog", true); $("pStep1").className = "step doing"; $("pStep2").className = "step"; $("pStep3").className = "step";
+  $("pStep2").textContent = "encoding (about " + Math.max(3, Math.round(est.secs)) + " s)";
+  $("notifyBtn").hidden = !(canNotify() && Notification.permission === "default");
+  var began = Date.now(), tick = setInterval(function () {
+    var el = Date.now() - began;
+    $("pElapsed").textContent = "elapsed " + fmtElapsed(el);
+    if (el / 1000 > est.secs && $("pStep2").className !== "step done") { $("pStep2").className = "step doing"; }
+  }, 500);
+  var done = function () { clearInterval(tick); S.rendering = false; $("notifyBtn").hidden = true; $("cancelBusy").hidden = true; paintOptions(); };
+  try {
+    // start the job; busy means another encode is running: retry every 5 s for up to 2 minutes
+    var job = null, waitStart = Date.now(), netFails = 0;
+    stopBusy = false;
+    while (!job) {
+      var res = null;
+      try { res = await api("/studio/" + SID + "/render", { body: params }); } catch (e) { res = null; }
+      if (!res || !res.body) {
+        if (++netFails > 3) { show("prog", false); done(); return makeError("network", "can't reach the server. check your connection and try again."); }
+        await sleep(2000); continue;
+      }
+      if (res.status === 202 && res.body.job) { job = res.body.job; break; }
+      var code = errCode(res);
+      if (res.status === 404 || res.status === 410) { show("prog", false); done(); return studioGone(); }
+      if (code === "error.webp.busy" || res.status === 429) {
+        $("cancelBusy").hidden = false;
+        $("pStep1").className = "step"; $("pStep2").className = "step";
+        $("pStep1").textContent = "another webp is being made, trying again…";
+        say("another webp is being made, trying again");
+        var until = Date.now() + 5000;
+        while (Date.now() < until && !stopBusy) await sleep(250);
+        if (stopBusy || Date.now() - waitStart > 120000) {
+          show("prog", false); done();
+          $("pStep1").textContent = "using the saved video (no new download)";
+          return makeError("error.webp.busy", stopBusy ? "stopped waiting. try again when the other webp is done." : "still busy after 2 minutes. try again in a moment.");
+        }
+        continue;
+      }
+      show("prog", false); done();
+      return makeError(code, RENDER_ERR[code]);
+    }
+    $("cancelBusy").hidden = true;
+    $("pStep1").textContent = "using the saved video (no new download)"; $("pStep1").className = "step done"; $("pStep2").className = "step doing";
+    say("making your webp");
+    // poll the job
+    var attempt = 0, out = null;
+    while (!out) {
+      var pr = null;
+      try { pr = await api("/studio/" + SID + "/render/" + job + "?wait=20"); } catch (e) { pr = null; }
+      if (!pr || pr.status >= 500 || !pr.body) {
+        attempt++; $("pElapsed").textContent = "connection problem, retrying… (" + attempt + ")";
+        await sleep(Math.min(10000, 1000 * Math.pow(2, attempt - 1))); continue;
+      }
+      attempt = 0;
+      if (pr.status === 404 || pr.status === 410) { show("prog", false); done(); return studioGone(); }
+      if (pr.body.status === "pending") { await sleep(300); continue; }
+      if (pr.body.status === "success") { out = pr.body; break; }
+      show("prog", false); done();
+      return makeError(errCode(pr), RENDER_ERR[errCode(pr)]);
+    }
+    $("pStep2").className = "step done"; $("pStep3").className = "step done";
+    var item = { id: job, url: out.url, start: params.start, length: params.length, width: out.width || width, quality: quality, bytes: out.bytes, created_at: Date.now() };
+    show("prog", false);
+    done();
+    showResult(item);
+  } catch (e) {
+    show("prog", false); done(); makeError("error", "something went wrong making the webp. try again.");
+  }
+}
+
+function showResult(item) {
+  if (S.featured) S.renders.unshift(S.featured);
+  S.featured = item;
+  $("outUrl").textContent = item.url;
+  $("dLink").textContent = item.url; $("dLink").setAttribute("href", item.url);
+  $("dImg").setAttribute("src", item.url);
+  show("result", true);
+  $("toast").textContent = "";
+  paintRenders();
+  var card = $("result");
+  card.scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
+  say("webp ready. " + mb(item.bytes || 0) + ".");
+  notifyReady(item.url);
+  copyText(item.url, $("outUrl")).then(function (ok) {
+    $("toast").textContent = ok ? "copied to your clipboard. paste it in discord." : "tap copy link to copy it.";
+  });
+}
+$("copy").addEventListener("click", function () {
+  if (!S.featured) return;
+  copyText(S.featured.url, $("outUrl")).then(function (ok) {
+    $("toast").textContent = ok ? "copied. paste it in discord." : "couldn't copy automatically. the link is selected: copy it by hand.";
+    say(ok ? "link copied" : "copy failed, the link is selected");
+  });
+});
+function paintRenders() {
+  var list = S.renders.filter(function (r) { return !S.featured || r.url !== S.featured.url; });
+  show("webps", list.length > 0);
+  $("webpsTitle").textContent = S.featured ? "earlier in this studio" : "made in this studio";
+  var box = $("hist"); box.textContent = "";
+  list.forEach(function (r) {
+    var name = String(r.url || "").replace(/^https?:\/\//, "");
+    var meta = fmt(r.start || 0) + "–" + fmt((r.start || 0) + (r.length || 0)) + " · " + (r.width || "?") + " px" + (r.bytes ? " · " + mb(r.bytes) : "");
+    var a = h("a", { href: r.url, target: "_blank", rel: "noopener noreferrer", text: name });
+    var code = h("code", null, a);
+    var btn = h("button", { type: "button", text: "copy", "aria-label": "copy link to " + name });
+    btn.addEventListener("click", function () {
+      copyText(r.url, code).then(function (ok) { btn.textContent = ok ? "copied" : "select+copy"; setTimeout(function () { btn.textContent = "copy"; }, 1800); });
+    });
+    box.append(h("div", { "class": "item" }, h("div", { "class": "meta" }, code, h("span", { "class": "muted", text: meta })), btn));
+  });
+}
+
+/* ---------- go ---------- */
+if (SID) loadSession(); else view("vGone");
+})();
+</script>
+</body>
+</html>

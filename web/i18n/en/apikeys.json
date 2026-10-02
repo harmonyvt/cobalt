@@ -1,0 +1,57 @@
+{
+    "title": "api keys",
+    "description": "keys let apps and scripts use your cobalt. this browser needs one too, or downloads won't work.",
+
+    "loading": "loading your keys...",
+    "unavailable": "key management is only available on the deployed site.",
+    "expired": "your login expired. reload the page to sign in again.",
+    "reload": "reload",
+    "load_failed": "couldn't load your keys.",
+    "retry": "try again",
+
+    "first_run.title": "this browser doesn't have a key yet",
+    "first_run.body": "create one to start downloading. it gets saved in this browser's settings.",
+    "create_for_browser": "create a key for this browser",
+    "create_another": "create a key",
+    "create_button": "create key",
+    "creating": "creating...",
+    "cancel": "cancel",
+
+    "name.label": "key name",
+    "name.hint": "so you can tell keys apart later, 1 to 40 characters.",
+    "name.error": "give the key a name, up to 40 characters.",
+
+    "created.title": "your new key",
+    "created.warning": "you won't see it again. copy it now.",
+    "created.copy": "copy key",
+    "created.copied": "copied",
+    "created.copy_failed": "couldn't copy automatically. select the key and copy it by hand.",
+    "created.header": "for scripts, send it as a header:",
+    "created.use_here": "use in this browser",
+    "created.use_here.saved": "saved to this browser's settings.",
+    "created.done": "done",
+
+    "list.title": "your keys",
+    "list.empty": "no keys yet.",
+    "list.created": "created {{value}}",
+    "list.last_used": "last used {{value}}",
+    "list.never": "never used",
+    "list.this_browser": "this browser",
+
+    "revoke": "revoke",
+    "revoke.confirm": "revoke \"{{value}}\"? anything using it will stop working.",
+    "revoke.confirm_here": "this is the key this browser uses. downloads here will stop working until you set a new key.",
+    "revoke.confirm_button": "revoke key",
+    "revoking": "revoking...",
+
+    "time.now": "just now",
+
+    "error.unauthorized": "your login expired. reload the page to sign in again.",
+    "error.forbidden": "your account isn't allowed to manage keys.",
+    "error.bad_request": "that name didn't work. try a different one.",
+    "error.not_found": "that key is already gone.",
+    "error.too_many_keys": "you've hit the key limit. revoke one you don't use, then try again.",
+    "error.server_error": "something went wrong on the server. try again in a moment.",
+    "error.network": "couldn't reach the server. check your connection and try again.",
+    "error.unknown": "something went wrong. try again."
+}

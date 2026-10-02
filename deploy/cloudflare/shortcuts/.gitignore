@@ -1,0 +1,3 @@
+# generated intermediates; only the signed cobalt-webp.shortcut and cobalt-studio.shortcut are kept
+*.unsigned.shortcut
+*.unsigned.xml

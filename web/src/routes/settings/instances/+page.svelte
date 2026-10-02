@@ -6,6 +6,7 @@
     import SettingsInput from "$components/settings/SettingsInput.svelte";
     import SettingsToggle from "$components/buttons/SettingsToggle.svelte";
     import SettingsCategory from "$components/settings/SettingsCategory.svelte";
+    import ApiKeys from "$components/settings/ApiKeys.svelte";
 </script>
 
 <SettingsCategory
@@ -32,6 +33,8 @@
         {$t("settings.processing.enable_custom.description")}
     </div>
 </SettingsCategory>
+
+<ApiKeys />
 
 <SettingsCategory
     sectionId="access-key"
