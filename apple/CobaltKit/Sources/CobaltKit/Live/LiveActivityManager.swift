@@ -250,7 +250,7 @@ final class LiveActivityManager: LiveSink {
         if let r = run, r.ended { return }              // a second terminal state changes nothing
 
         if run == nil {
-            let r = Run(id: p.liveRunID, attributes: p.liveAttributes(origin: "app"))
+            let r = Run(id: p.liveRunID, attributes: p.liveAttributes(origin: Self.origin(of: p)))
             r.session = p.sessionID
             run = r
             if case .failed = state {
@@ -279,7 +279,7 @@ final class LiveActivityManager: LiveSink {
             run = nil
             r = current
         } else {
-            r = Run(id: old.liveRunID, attributes: old.liveAttributes(origin: "app"))
+            r = Run(id: old.liveRunID, attributes: old.liveAttributes(origin: Self.origin(of: old)))
             r.session = old.sessionID
         }
         detached[ObjectIdentifier(background)] = DetachedRun(run: r, pipeline: background)
@@ -365,6 +365,12 @@ final class LiveActivityManager: LiveSink {
                 }
             }
         }
+    }
+
+    /// A share-sheet run the app took over keeps the share origin, so a tap on its activity opens that
+    /// run (`cobalt-apple://job/<run>`, CONTRACT-SHARE-QUICK.md section 4); the app's own runs open cobalt.
+    static func origin(of p: Pipeline) -> String {
+        p.origin == .shareExtension ? "share" : "app"
     }
 
     private static func staleWindow(for c: LiveContentState) -> Double {

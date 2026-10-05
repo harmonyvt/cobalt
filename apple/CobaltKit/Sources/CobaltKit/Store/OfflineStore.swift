@@ -172,7 +172,27 @@ public final class OfflineStore {
         if let s = sharedInstance { return s }
         let s = OfflineStore(root: AppGroup.directory("Videos"))
         sharedInstance = s
+        s.logRoot()
         return s
+    }
+
+    /// Where this process keeps the store (app group, the app's own folder, or nowhere) and whether it
+    /// takes writes: the first line to read when "nothing is ever kept" is reported from a device.
+    func logRoot() {
+        let location = AppGroup.location
+        var data = location.telemetry
+        data["root"] = .string(root.lastPathComponent)
+        data["index"] = .bool(FileManager.default.fileExists(atPath: Self.indexURL(root: root).path))
+        data["records"] = .int(records.count)
+        data["writable"] = .bool(AppGroup.writable(root))
+        Telemetry.log(location.kind == .appGroup ? .info : .warn, .store, "store root", data: data)
+    }
+
+    nonisolated static func failureData(step: String, _ error: any Error) -> [String: TelemetryValue] {
+        var data = Telemetry.errorData(error)
+        data["step"] = .string(step)
+        data["root"] = .string(AppGroup.location.kind.rawValue)
+        return data
     }
 
     /// Entries that have a file, and the bytes of those files plus every poster: summed from the
@@ -270,7 +290,13 @@ public final class OfflineStore {
         let id = UUID().uuidString.lowercased()
         let ext = file.pathExtension.isEmpty ? (kind == .webp ? "webp" : "mp4") : file.pathExtension.lowercased()
         let fileName = "\(id).\(ext)"
-        let destination = try await place(file, as: fileName, move: move)
+        let destination: URL
+        do {
+            destination = try await place(file, as: fileName, move: move)
+        } catch {
+            Telemetry.log(.error, .store, "store add failed", data: Self.failureData(step: "place", error))
+            throw error
+        }
 
         let size = ((try? fm.attributesOfItem(atPath: destination.path)[.size]) as? NSNumber)?.int64Value ?? media.bytes ?? 0
         var media = media
@@ -319,6 +345,7 @@ public final class OfflineStore {
                 survivor = records[i].id
             }
         } catch {
+            Telemetry.log(.error, .store, "store add failed", data: Self.failureData(step: "index", error))
             try? fm.removeItem(at: destination)
             try? fm.removeItem(at: posterURL)
             Self.delete(Eviction(previews: flipbook.names), root: root)
@@ -326,6 +353,10 @@ public final class OfflineStore {
         }
         Self.delete(discard, root: root)
         let added = result.video(root: root)
+        Telemetry.log(.info, .store, survivor == id ? "store add" : "store add merged", data: [
+            "kind": .string(kind.rawValue), "bytes": .bytes(size), "session": .bool(sessionID != nil),
+            "poster": .bool(hasPoster), "records": .int(records.count), "root": .string(AppGroup.location.kind.rawValue),
+        ])
         onAdd?(added)
         return added
     }
@@ -396,12 +427,19 @@ public final class OfflineStore {
     public func attach(file: URL, to id: String, move: Bool) async throws -> StoredVideo {
         let fm = FileManager.default
         guard let existing = Self.readRecords(root: root).first(where: { $0.id == id }) else {
+            Telemetry.log(.warn, .store, "store attach failed", data: ["step": "lookup", "reason": "not found"])
             throw OfflineStoreError.notFound
         }
         let ext = file.pathExtension.isEmpty
             ? (existing.kind == .webp ? "webp" : "mp4") : file.pathExtension.lowercased()
         let fileName = "\(id)-\(UUID().uuidString.prefix(6).lowercased()).\(ext)"
-        let destination = try await place(file, as: fileName, move: move)
+        let destination: URL
+        do {
+            destination = try await place(file, as: fileName, move: move)
+        } catch {
+            Telemetry.log(.error, .store, "store attach failed", data: Self.failureData(step: "place", error))
+            throw error
+        }
         let size = Self.fileSize(destination) ?? 0
 
         // The poster usually survived the eviction; make one only when the entry has none.
@@ -437,12 +475,14 @@ public final class OfflineStore {
                 result = records[i]
             }
         } catch {
+            Telemetry.log(.error, .store, "store attach failed", data: Self.failureData(step: "index", error))
             try? fm.removeItem(at: destination)
             if let madePoster { try? fm.removeItem(at: madePoster) }
             throw error
         }
         guard found, let result else {
             // removed while the download ran
+            Telemetry.log(.warn, .store, "store attach failed", data: ["step": "index", "reason": "removed while downloading"])
             try? fm.removeItem(at: destination)
             if let madePoster { try? fm.removeItem(at: madePoster) }
             throw OfflineStoreError.notFound
@@ -451,6 +491,7 @@ public final class OfflineStore {
             try? fm.removeItem(at: root.appendingPathComponent("files/\(replaced)"))
         }
         let refilled = result.video(root: root)
+        Telemetry.log(.info, .store, "store attach", data: ["kind": .string(existing.kind.rawValue), "bytes": .bytes(size)])
         onAdd?(refilled)
         return refilled
     }
@@ -1015,7 +1056,12 @@ public final class OfflineStore {
     /// write so the app and the extension never lose each other's entries.
     @discardableResult
     private static func mutate(root: URL, _ body: (inout [Record]) -> Void) throws -> [Record] {
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        } catch {
+            Telemetry.log(.error, .store, "store index write failed", data: failureData(step: "createRoot", error))
+            throw error
+        }
         let url = indexURL(root: root)
         var result: [Record] = []
         var failure: Error?
@@ -1033,7 +1079,10 @@ public final class OfflineStore {
                 failure = error
             }
         }
-        if let error = coordination ?? failure { throw error }
+        if let error = coordination ?? failure {
+            Telemetry.log(.error, .store, "store index write failed", data: failureData(step: coordination != nil ? "coordinate" : "write", error))
+            throw error
+        }
         return result
     }
 
@@ -1062,6 +1111,10 @@ public final class OfflineStore {
             return names.isEmpty || names.contains { missing("previews", $0) } || r.previewBytes == nil
         }
         var records = readRecords(root: root)
+        let lost = records.filter { missing("files", $0.fileName) }.count
+        if lost > 0 {
+            Telemetry.log(.warn, .store, "store files missing", data: ["files": .int(lost), "records": .int(records.count), "root": .string(AppGroup.location.kind.rawValue)])
+        }
         if records.contains(where: {
             missing("files", $0.fileName) || missing("posters", $0.posterName) || needsPosterSize($0) || brokenFlipbook($0)
                 || $0.mediaID == nil

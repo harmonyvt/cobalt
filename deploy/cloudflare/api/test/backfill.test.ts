@@ -119,6 +119,20 @@ describe("planning", () => {
         expect(by["Old0000001.webp"]).toMatchObject({ source: "webp", link: null, key_id: null, created_at: Date.parse("2026-09-28T10:00:00Z") });
         expect(by["StudioGone.webp"]).toMatchObject({ source: "studio", session_id: "S9zzzzzzzzzzzzzzzzzzzz", key_id: null, link: null });
     });
+    it("planWebp: a server-made poster (custom metadata poster=1) is not a library file; a hosted .jpg image is", () => {
+        const withPosters = [
+            ...OBJECTS,
+            { key: "PosterAbcd.jpg", size: 30000, custom_metadata: { poster: "1", itemId: "I1", createdAt: "1790000000000" }, http_metadata: { contentType: "image/jpeg" } },
+            { key: "HostedPhoto.jpg", size: 60000, custom_metadata: { published: "1", keyId: "k1" }, http_metadata: { contentType: "image/jpeg" } },
+        ];
+        expect(planWebp(withPosters, BASE).map((r: any) => r.r2_key)).toEqual([
+            "Render0001.webp",
+            "Plain00001.webp",
+            "Old0000001.webp",
+            "StudioGone.webp",
+            "HostedPhoto.jpg",
+        ]);
+    });
     it("dedupe: skips what exists and what repeats; the earlier plan wins", () => {
         const all = [...planStudio(RENDERS), ...planWebp(OBJECTS, BASE)];
         const out = dedupe(all, ["media\u0000Old0000001.webp"]);

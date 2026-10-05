@@ -282,6 +282,19 @@ describe("the app's library routes (keyed)", () => {
         expect(g("POST", `/library/items/${ID}/publish`)).toEqual(lookup("library_publish", { id: ID }));
         expect(g("POST", `/library/items/${ID}/studio`)).toEqual(lookup("library_studio", { id: ID }));
     });
+    it("POST /library/posters/backfill (section 13) looks the key up; the service credential passes; everything else is 404 or 401", () => {
+        expect(g("POST", "/library/posters/backfill")).toEqual(lookup("library_posters_backfill"));
+        expect(g("POST", "/library/posters/backfill", { service: true })).toEqual({ action: "service", then: "library_posters_backfill" });
+        for (const method of ["GET", "HEAD", "PUT", "DELETE", "PATCH"]) {
+            expect(g(method, "/library/posters/backfill")).toMatchObject({ action: "reject", status: 404 });
+        }
+        for (const path of ["/library/posters", "/library/posters/", "/library/posters/backfill/", "/library/posters/backfill/x", "/posters/kick", "/library/posters/other"]) {
+            expect(g("POST", path)).toMatchObject({ action: "reject", status: 404 });
+        }
+        expect(g("POST", "/library/posters/backfill", {})).toMatchObject({ action: "reject", status: 401, errorCode: "error.api.auth.key.missing" });
+        // an Origin is no substitute for a key
+        expect(g("POST", "/library/posters/backfill", { origin: ORIGIN })).toMatchObject({ status: 401 });
+    });
     it("DELETE /library/items/<id>/post looks the key up; the service credential passes; other methods are 404", () => {
         expect(g("DELETE", `/library/items/${ID}/post`)).toEqual(lookup("library_post_delete", { id: ID }));
         expect(g("DELETE", `/library/items/${ID}/post`, { service: true })).toEqual({

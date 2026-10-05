@@ -13,6 +13,58 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
     private var closed = false
     /// Sizes the presented sheet to the content (no empty space under the card).
     private lazy var fitter = SheetFitter(anchor: self)
+    private let openedAt = Date()
+    /// Card or sheet, and where the island is (CONTRACT-SHARE-QUICK.md section 2a).
+    private let stage = ShareStage(overlay: false)
+    /// The quick card asked for the full-screen overlay; decided at init from the setting.
+    private var wantsOverlay = false
+
+    // MARK: - Presentation
+
+    /// As early as possible: the host reads the principal controller's presentation style when it
+    /// presents it. The quick card asks for `.overFullScreen` (clear, so the app you were in shows
+    /// under the blur); the full-sheet setting keeps the system sheet.
+    override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
+        super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
+        configurePresentation()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configurePresentation()
+    }
+
+    private func configurePresentation() {
+        wantsOverlay = !Settings.shared().shareFullSheet
+        stage.overlay = wantsOverlay
+        if wantsOverlay {
+            modalPresentationStyle = .overFullScreen
+            modalTransitionStyle = .crossDissolve
+        }
+    }
+
+    /// The host honoured the overlay unless the extension still ended up in a sheet: then the compact
+    /// sheet card is used (the fallback, logged).
+    private func checkPresentation() {
+        guard wantsOverlay, stage.overlay else { return }
+        let sheet = sheetPresentationController ?? (presentationController as? UISheetPresentationController)
+        let style = presentationController.map { "\($0.presentationStyle.rawValue) \(type(of: $0))" } ?? "none"
+        Telemetry.log(.info, .share, "share presentation", data: ["overlay": .bool(sheet == nil), "style": .string(style)])
+        #if DEBUG
+        ShareDebug.log("presentation style=\(style) sheet=\(sheet != nil) frame=\(view.window?.frame ?? .zero) view=\(view.frame)")
+        #endif
+        if sheet != nil {
+            stage.overlay = false
+            model?.quickHoldSeconds = 0.6            // the sheet card's own beat (`ShareCore.quickHold`): no morph to wait for
+            fitter.attach()
+        }
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        stage.safeTop = view.window?.safeAreaInsets.top ?? view.safeAreaInsets.top
+        stage.safeBottom = view.window?.safeAreaInsets.bottom ?? view.safeAreaInsets.bottom
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -25,14 +77,27 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
 
     private func load() async {
         let items = (extensionContext?.inputItems as? [NSExtensionItem]) ?? []
-        let model = await ShareModel.live(
-            inputItems: items,
-            openApp: { [weak self] url in await self?.openHostApp(url) ?? false },
-            complete: { [weak self] in self?.finish() })
+        let openApp: @MainActor (URL) async -> Bool = { [weak self] url in await self?.openHostApp(url) ?? false }
+        let complete: @MainActor () -> Void = { [weak self] in self?.finish() }
+        #if DEBUG
+        let debugModel = await ShareDebug.model(inputItems: items, openApp: openApp, complete: complete)
+        let model: ShareModel
+        if let debugModel { model = debugModel } else { model = await ShareModel.live(inputItems: items, openApp: openApp, complete: complete) }
+        ShareDebug.probeLiveActivity()
+        #else
+        let model = await ShareModel.live(inputItems: items, openApp: openApp, complete: complete)
+        #endif
+        // The overlay hands off when its island morph is over (it calls `finishQuickHold()`); until it
+        // does, the hold only has a ceiling. Set before the server can answer.
+        if stage.overlay { model.quickHoldSeconds = QuickOverlay.holdCeiling }
         self.model = model
         watchModality(model)
+        watchQuick(model)
 
-        let host = UIHostingController(rootView: ShareRootView(model: model, onFit: { [weak self] height in self?.fitter.update(contentHeight: height) }))
+        let host = UIHostingController(rootView: ShareStageView(model: model, stage: stage, onFit: { [weak self] height in
+            guard let self, !self.stage.overlay else { return }
+            self.fitter.update(contentHeight: height)
+        }))
         host.view.backgroundColor = .clear
         addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false
@@ -46,21 +111,51 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
         host.didMove(toParent: self)
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        checkPresentation()
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        fitter.attach()
+        checkPresentation()
+        stage.safeTop = view.window?.safeAreaInsets.top ?? view.safeAreaInsets.top
+        stage.safeBottom = view.window?.safeAreaInsets.bottom ?? view.safeAreaInsets.bottom
+        if !stage.overlay { fitter.attach() }
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        fitter.attach()
+        if !stage.overlay { fitter.attach() }
     }
 
     private func finish() {
+        #if DEBUG
+        ShareDebug.log("complete after \(String(format: "%.2f", Date().timeIntervalSince(openedAt))) s quick=\(String(describing: model?.quick))")
+        #endif
         Telemetry.log(.info, .share, "share completed", data: Telemetry.memoryData())
         Telemetry.flush()
         closed = true
         extensionContext?.completeRequest(returningItems: nil)
+    }
+
+    // MARK: - Card or sheet
+
+    /// The quick card sits in a small, undimmed sheet with no grabber (the app underneath stays in view);
+    /// the full sheet is the usual dimmed one. Follows `model.quick` as the card hands off or expands.
+    private func watchQuick(_ model: ShareModel) {
+        fitter.compact = model.quick.showsCard
+        #if DEBUG
+        ShareDebug.log("quick \(String(describing: model.quick)) at \(String(format: "%.2f", Date().timeIntervalSince(openedAt))) s")
+        #endif
+        withObservationTracking {
+            _ = model.quick
+        } onChange: { [weak self, weak model] in
+            Task { @MainActor in
+                guard let self, let model else { return }
+                self.watchQuick(model)
+            }
+        }
     }
 
     // MARK: - Swiping the sheet away

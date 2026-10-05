@@ -7,6 +7,9 @@ struct IntakeFile: Sendable, Equatable {
     var name: String
     var bytes: Int64
     var contentType: String
+    /// The photo library asset this file was picked from (`PhotosPickerItem.itemIdentifier`), so the
+    /// album adopts that asset instead of adding the file to Photos a second time. Nil for Files.
+    var photosAssetID: String? = nil
 }
 
 /// Reads a picked file's size and copies it into the store's inbox. Behind a seam so previews can

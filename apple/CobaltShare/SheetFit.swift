@@ -29,6 +29,16 @@ final class SheetFitter {
     private var logged = false
     private let logger = Logger(subsystem: "com.capybaraharmony.cobalt", category: "sheet-fit")
 
+    /// The quick card (CONTRACT-SHARE-QUICK.md): no grabber and no dimming up to the fitted detent, so
+    /// the app underneath stays in view and the card reads as a floating card, not a sheet. False: the
+    /// full sheet, dimmed as usual.
+    var compact = false {
+        didSet {
+            guard compact != oldValue, let sheet else { return }
+            sheet.animateChanges { self.style(sheet) }
+        }
+    }
+
     init(anchor: UIViewController) {
         self.anchor = anchor
     }
@@ -92,9 +102,16 @@ final class SheetFitter {
             }
         ]
         sheet.selectedDetentIdentifier = Self.detentID
+        style(sheet)
         logger.notice("custom detent applied via \(found.name, privacy: .public)")
         NSLog("sheet-fit applied via \(found.name)")
         report("applied")
+    }
+
+    private func style(_ sheet: UISheetPresentationController) {
+        sheet.prefersGrabberVisible = false
+        sheet.largestUndimmedDetentIdentifier = compact ? Self.detentID : nil
+        sheet.prefersScrollingExpandsWhenScrolledToEdge = !compact
     }
 
     /// One line per resize: what the content measured, what the detent asks for, and what the sheet
@@ -105,7 +122,7 @@ final class SheetFitter {
             try? await Task.sleep(for: .milliseconds(700))
             guard let self, let anchor = self.anchor else { return }
             let sheetH = self.sheet?.presentedViewController.view.superview?.frame.height ?? -1
-            let line = "\(why) content=\(content) inset=\(anchor.view.safeAreaInsets.bottom) fitted=\(fitted) viewH=\(anchor.view.bounds.height) sheetContainerH=\(sheetH)"
+            let line = "\(why) compact=\(self.compact) content=\(content) inset=\(anchor.view.safeAreaInsets.bottom) fitted=\(fitted) viewH=\(anchor.view.bounds.height) sheetContainerH=\(sheetH)"
             self.logger.notice("\(line, privacy: .public)")
             NSLog("sheet-fit \(line)")
         }

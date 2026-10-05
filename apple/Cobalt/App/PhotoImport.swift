@@ -1,5 +1,7 @@
+import AVFoundation
 import CobaltKit
 import CoreTransferable
+import ImageIO
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -135,11 +137,14 @@ final class PhotoImport {
             let hold = UserDefaults.standard.double(forKey: "previewPhotoHold")
             if hold > 0 { try? await Task.sleep(for: .seconds(hold)) }
             #endif
+            // when the picture was made: from the file itself (no library permission needed), else today
+            var made = Date()
+            if case .success(let picked) = outcome, let taken = await Self.captureDate(of: picked.url) { made = taken }
             guard let self, !Task.isCancelled, self.isLoading else {
                 if case .success(let picked) = outcome { Self.discard(picked.url) }
                 return
             }
-            self.finish(outcome, item: item, model: model)
+            self.finish(outcome, item: item, made: made, model: model)
         }
     }
 
@@ -175,7 +180,7 @@ final class PhotoImport {
         }
     }
 
-    private func finish(_ outcome: Result<PickedMedia, Error>, item: PhotosPickerItem, model: AppModel) {
+    private func finish(_ outcome: Result<PickedMedia, Error>, item: PhotosPickerItem, made: Date, model: AppModel) {
         task = nil
         handle = nil
         switch outcome {
@@ -195,13 +200,17 @@ final class PhotoImport {
                 phase = .idle
                 return
             }
-            guard let inbox = Self.moveToInbox(picked.url, item: item, store: model.store) else {
+            guard let inbox = Self.moveToInbox(picked.url, item: item, made: made, store: model.store) else {
                 Telemetry.log(.error, .photos, "picker copy could not reach the inbox")
                 phase = .failed(.server(code: "error.app.file_unreadable"))
                 return
             }
             Telemetry.log(.info, .photos, "picker copy finished", data: ["bytes": Telemetry.fileSize(inbox), "ext": .string(inbox.pathExtension.lowercased())])
             phase = .idle
+            // the library's own asset id (the picker only reports one when the `PhotosPicker` was given
+            // `photoLibrary: .shared()`; nil otherwise and then nothing is adopted): the uploaded original joins the
+            // cobalt album as THAT asset instead of being saved to Photos a second time
+            model.pipeline.adoptPhotosAsset(item.itemIdentifier, forFile: inbox)
             // from here it is a file like any other: the pipeline measures it, checks the limit, uploads
             model.importFile(inbox)
         }
@@ -217,15 +226,39 @@ final class PhotoImport {
         try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
     }
 
-    /// The temp copy moves (a rename on the same volume, no second copy of a big video) into the store's
-    /// inbox. A name with no extension gets the one the picked item's own type says.
-    private static func moveToInbox(_ url: URL, item: PhotosPickerItem, store: OfflineStore) -> URL? {
-        var name = url.lastPathComponent
-        if (name as NSString).pathExtension.isEmpty,
-           let type = item.supportedContentTypes.first(where: { $0.conforms(to: .movie) || $0.conforms(to: .image) }),
-           let ext = type.preferredFilenameExtension {
-            name += ".\(ext)"
+    /// When the picked file was made: a movie's QuickTime creation date, a photo's Exif date. Nil when the file does
+    /// not say (an edited or iCloud-optimised copy can lose it): the caller uses the import date. Read from the copy,
+    /// so it needs no photo-library permission.
+    private nonisolated static func captureDate(of url: URL) async -> Date? {
+        let ext = url.pathExtension
+        let type = UTType(filenameExtension: ext)
+        if type?.conforms(to: .image) == true {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any],
+                  let text = exif[kCGImagePropertyExifDateTimeOriginal] as? String else { return nil }
+            let parser = DateFormatter()
+            parser.locale = Locale(identifier: "en_US_POSIX")
+            parser.dateFormat = "yyyy:MM:dd HH:mm:ss"
+            return parser.date(from: text)
         }
+        let asset = AVURLAsset(url: url)
+        guard let item = try? await asset.load(.creationDate), let date = try? await item.load(.dateValue) else { return nil }
+        // a clip with no date reads as the reference date: that is "not there", not a 2001 video
+        return date.timeIntervalSince1970 > 86_400 ? date : nil
+    }
+
+    /// The temp copy moves (a rename on the same volume, no second copy of a big video) into the store's
+    /// inbox. The library's file name is a UUID, so the copy is named for where it came from and when ("from photos ·
+    /// 4 oct"); the extension is kept (a name with none gets the one the picked item's own type says).
+    private static func moveToInbox(_ url: URL, item: PhotosPickerItem, made: Date, store: OfflineStore) -> URL? {
+        var ext = url.pathExtension
+        if ext.isEmpty,
+           let type = item.supportedContentTypes.first(where: { $0.conforms(to: .movie) || $0.conforms(to: .image) }),
+           let preferred = type.preferredFilenameExtension {
+            ext = preferred
+        }
+        let name = ext.isEmpty ? Copy.Media.fromPhotos(made) : "\(Copy.Media.fromPhotos(made)).\(ext)"
         let destination = store.inboxURL(for: name)
         let fm = FileManager.default
         do {

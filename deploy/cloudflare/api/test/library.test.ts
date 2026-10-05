@@ -949,6 +949,8 @@ describe("GET /capabilities", () => {
                 source_wait: true,
                 delete_post: true,
                 telemetry: true,
+                poster: true,
+                public_default: true,
             },
             limits: {
                 max_webp_seconds: 10,
@@ -1129,7 +1131,11 @@ describe("PUT /studio/upload", () => {
                 link: null,
                 session_id: null,
                 created_at: w.clock.t,
+                poster_url: null,
             });
+            // no `public` flag: today's behaviour, the answer only carries the two idle fields
+            expect(b.public_state).toBeNull();
+            expect(b.public_url).toBeNull();
             const key = `uploads/${b.item.id}.mov`;
             expect(w.originals.putValueTypes).toEqual(["ReadableStream"]); // streamed, never buffered
             expect(w.originals.objects.get(key)!.bytes).toEqual(data);
@@ -1615,6 +1621,7 @@ describe("GET /library (grouped into posts)", () => {
             created_at: T + 3000,
             media_name: "Abcdefghij.webp",
             deletable: true,
+            poster_url: null,
         });
         expect(p.files[2]).toEqual({
             id: "SavedItem0000001",
@@ -1630,6 +1637,7 @@ describe("GET /library (grouped into posts)", () => {
             created_at: T + 1000,
             media_name: null,
             deletable: false,
+            poster_url: null,
         });
         expect(b.counts).toEqual({ posts: 1, files: 3 });
         expect(b.next).toBeNull();
@@ -1902,8 +1910,15 @@ describe("GET /library (grouped into posts)", () => {
         it("never wakes the container, and no CORS header is added (the app sends no Origin)", async () => {
             seedPostA();
             const res = await list();
-            expect(w.seen).toHaveLength(0);
+            // the one Durable Object call is the internal "queue the missing posters" kick (it only
+            // writes records; the helper and the container are not involved); a library whose
+            // originals all have a poster makes no call at all (section 13)
+            expect(w.seen.map((r) => new URL(r.url).pathname)).toEqual(["/posters/kick"]);
             expect(res.headers.has("access-control-allow-origin")).toBe(false);
+            w.db.raw.prepare("UPDATE media_items SET poster = 'https://media.capybaraharmony.com/Pstr000001.jpg'").run();
+            w.seen.length = 0;
+            await list();
+            expect(w.seen).toHaveLength(0);
         });
     });
 });

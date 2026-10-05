@@ -117,6 +117,9 @@ export async function publishStudio(
             session_id: sid,
             key_id: keyId,
             created_at: d.now(),
+            // the public copy shares its original's poster (section 13); a poster made
+            // later reaches it through the session (PosterService)
+            poster: row.poster ?? null,
         },
         d.randomBytes,
     );

@@ -99,6 +99,8 @@ public final class Pipeline: Identifiable {
     @ObservationIgnored var errorPhase: ErrorPhase = .saving
     @ObservationIgnored var runStart = Date()
     @ObservationIgnored var uploadedItemID: String?
+    /// Set by `adoptPhotosAsset`, taken by the next `start(file:)` of that file.
+    @ObservationIgnored var pendingPhotosAsset: (path: String, id: String)?
     @ObservationIgnored var renderJobID: String?
     @ObservationIgnored var localFile: URL?
     /// Files this run downloaded only to read frames from or to add to Photos: removed with the run.
@@ -386,15 +388,27 @@ public final class Pipeline: Identifiable {
         launch { try await $0.runLink(info) }
     }
 
+    /// The file the owner picked in the Photos picker came from the library asset `localIdentifier`
+    /// (`PhotosPickerItem.itemIdentifier`): call it right before `start(file:)` with the same URL. The
+    /// uploaded original then goes into the cobalt album as THAT asset, not as a second copy
+    /// (`PhotosSync.adoptExistingAsset`). One-shot: only the next `start(file:)` of that very file
+    /// takes it. A nil identifier (a picker made without the shared photo library) does nothing.
+    public func adoptPhotosAsset(_ localIdentifier: String?, forFile url: URL) {
+        pendingPhotosAsset = localIdentifier.flatMap { $0.isEmpty ? nil : (url.standardizedFileURL.path, $0) }
+    }
+
     /// `file` is security-scoped; it is copied into the store's inbox first.
     public func start(file url: URL) {
         begin(input: nil)
-        let file: IntakeFile
+        var file: IntakeFile
         do { file = try ctx.intake.inspect(url) }
         catch {
+            pendingPhotosAsset = nil
             setState(.failed(.server(code: "error.app.file_unreadable")))
             return
         }
+        if let pending = pendingPhotosAsset, pending.path == url.standardizedFileURL.path { file.photosAssetID = pending.id }
+        pendingPhotosAsset = nil
         input = .file(name: file.name, bytes: file.bytes, contentType: file.contentType)
         let caps = ctx.capabilities
         switch caps.kind {

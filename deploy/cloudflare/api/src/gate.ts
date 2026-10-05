@@ -70,6 +70,7 @@ export type LookupThen =
     | "library_publish"
     | "library_studio"
     | "library_post_delete"
+    | "library_posters_backfill"
     | "live_start_token"
     | "live_run"
     | "live_state"
@@ -195,6 +196,10 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     // The app's library (keyed): GET /library, then per item /library/items/<id>/<sub>.
     if (req.pathname === "/library") {
         return req.method === "GET" ? lookupThen(req, "library_list") : reject(404);
+    }
+    // Queue the missing server-made posters (APP-API-CONTRACT.md section 13): keyed or service.
+    if (req.pathname === "/library/posters/backfill") {
+        return req.method === "POST" ? lookupThen(req, "library_posters_backfill") : reject(404);
     }
     if (req.pathname.startsWith("/library/items/")) {
         const [id, sub, ...rest] = req.pathname.slice("/library/items/".length).split("/");

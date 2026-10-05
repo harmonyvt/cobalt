@@ -296,6 +296,10 @@ struct DetailPlayer: View {
     @State private var withSound = false
     /// The video is on screen (a player is playing): until then the poster stands in, never a black frame.
     @State private var playing = false
+    /// Frames have run at least once: from then on the poster stays away, so a paused clip shows the frame it stopped on.
+    @State private var videoUp = false
+    /// The media controls (play, scrubber, sound, full screen) over a video that plays here.
+    @State private var transport = HeroTransport()
     /// Muted until the owner taps the picture (the orbit's players are always muted).
     @State private var muted = true
     /// The orbit's own player for this planet, when it lent it.
@@ -322,6 +326,21 @@ struct DetailPlayer: View {
     private var expander: (() -> Void)? {
         guard fullScreenRequest(withTime: false) != nil else { return nil }
         return { openFullScreen() }
+    }
+
+    /// The stored video is playing here, so the bar is up (not for a webp, a still, a poster or a remote picture).
+    private var hasBar: Bool { player != nil && video.kind == .original && onDisk && !isStill }
+
+    /// The bar's sound button: the first unmute swaps to the item with audio, muting gives the session back.
+    private func toggleSound() {
+        guard let player, video.kind == .original else { return }
+        muted.toggle()
+        if muted {
+            player.isMuted = true
+            AudioPolicy.release()
+        } else {
+            Task { await unmute(player) }
+        }
     }
 
     private func openFullScreen() {
@@ -363,9 +382,13 @@ struct DetailPlayer: View {
     private func watchStatus(of player: AVPlayer) {
         statusWatch?.invalidate()
         let flag = $playing
+        let latch = $videoUp
         statusWatch = player.observe(\.timeControlStatus, options: [.initial, .new]) { observed, _ in
             let isPlaying = observed.timeControlStatus == .playing
-            Task { @MainActor in flag.wrappedValue = isPlaying }
+            Task { @MainActor in
+                flag.wrappedValue = isPlaying
+                if isPlaying { latch.wrappedValue = true }
+            }
         }
     }
 
@@ -419,13 +442,13 @@ struct DetailPlayer: View {
                         if let player { PlayerSurface(player: player, gravity: .resizeAspect).allowsHitTesting(false) }
                         // the picture the zoom came from stays until the video is up
                         if let poster = video.posterURL {
-                            StillImage(url: poster).opacity(playing ? 0 : 1).allowsHitTesting(false)
+                            StillImage(url: poster).opacity(videoUp ? 0 : 1).allowsHitTesting(false)
                         } else if let firstFrame {
                             Image(decorative: firstFrame, scale: 1).resizable().scaledToFill()
-                                .opacity(playing ? 0 : 1).allowsHitTesting(false)
+                                .opacity(videoUp ? 0 : 1).allowsHitTesting(false)
                         }
                     }
-                    .animation(.easeOut(duration: 0.2), value: playing)
+                    .animation(.easeOut(duration: 0.2), value: videoUp)
                 }
             } else if video.fileURL != nil, !diskChecked {
                 ZStack {
@@ -436,35 +459,18 @@ struct DetailPlayer: View {
                 RemoteHeroPicture(poster: video.posterURL, remote: remote)
             }
         }
-        .overlay(alignment: .bottomLeading) {
-            if player != nil, video.kind == .original {
-                Image(systemName: muted ? Symbol.soundOff : Symbol.soundOn)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(CobaltColor.badgeInk)
-                    .frame(width: 24, height: 24)
-                    .background(CobaltColor.badgeBack, in: Circle())
-                    .padding(8)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+        .overlay {
+            // a video that plays here has the bar (full screen is in it); a webp keeps the lone corner button
+            if hasBar {
+                HeroControls(
+                    transport: transport, muted: muted, onSound: toggleSound, onFullScreen: fullScreenRequest(withTime: false) == nil ? nil : { openFullScreen() })
             }
         }
         .heroFrame(
             aspect: shape, maxHeight: maxHeight, label: label,
-            expand: expander)
+            expand: hasBar ? nil : expander)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { openFullScreen() }
-        .onTapGesture {
-            guard let player, video.kind == .original else { return }
-            muted.toggle()
-            if muted {
-                player.isMuted = true
-                AudioPolicy.release()
-            } else {
-                Task { await unmute(player) }
-            }
-        }
-        .accessibilityAddTraits(video.kind == .original && player != nil ? .isButton : [])
-        .accessibilityHint(video.kind == .original && player != nil ? (muted ? Copy.soundOn : Copy.soundOff) : "")
+        .onTapGesture(count: 2) { if !hasBar { openFullScreen() } }
         .task(id: video.fileURL) {
             guard let url = video.fileURL, FileManager.default.fileExists(atPath: url.path) else { onDisk = false; diskChecked = true; return }
             onDisk = true
@@ -474,6 +480,7 @@ struct DetailPlayer: View {
                 // the planet's own player, still playing: the picture is already on screen
                 player = lent.player
                 watchStatus(of: lent.player)
+                transport.attach(lent.player)
                 return
             }
             AudioPolicy.ambient()
@@ -488,22 +495,27 @@ struct DetailPlayer: View {
             watchLoop(of: item, on: next)
             player = next
             watchStatus(of: next)
+            transport.attach(next)
             next.play()
         }
         .onDisappear {
             if !muted { AudioPolicy.release() }
             if let lent, player === lent.player {
-                // the orbit's player goes back to the orbit: silent again, still playing
+                // the orbit's player goes back to the orbit: silent again, still playing (a pause is the owner's
+                // and ends here: the orbit shows moving pictures)
                 lent.player.isMuted = true
+                transport.resumeIfPausedByUser()
             } else {
                 player?.pause()
             }
+            transport.detach()
             if let loop { NotificationCenter.default.removeObserver(loop) }
             player = nil
             loop = nil
             statusWatch?.invalidate()
             statusWatch = nil
             playing = false
+            videoUp = false
         }
         .heroFullScreen(item: $fullScreen) { closedFullScreen(at: $0) }
         #if DEBUG
@@ -514,6 +526,8 @@ struct DetailPlayer: View {
             openFullScreen()
         }
         #endif
+        // a group, so the bar's own buttons stay reachable under the hero's name
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Media.heroA11y(video.name, evicted: !onDisk))
     }
 }

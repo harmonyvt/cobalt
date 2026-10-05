@@ -283,7 +283,10 @@ struct URLSessionBackgroundTransport: BackgroundTransport {
     func session(identifier: String, events: any BackgroundDownloadEvents) -> any BackgroundSession {
         if let hit = Self.cache.withLock({ $0[identifier] }) { return hit }
         let config = URLSessionConfiguration.background(withIdentifier: identifier)
-        config.sharedContainerIdentifier = AppGroup.id
+        // Only a process that really has the group: a re-signed build without it would hand the system a
+        // container it cannot open and the session would be invalidated (the app then simply downloads
+        // from the foreground, where nothing is rate-limited).
+        if AppGroup.location.kind == .appGroup { config.sharedContainerIdentifier = AppGroup.id }
         config.isDiscretionary = false
         config.sessionSendsLaunchEvents = true
         config.timeoutIntervalForRequest = 120

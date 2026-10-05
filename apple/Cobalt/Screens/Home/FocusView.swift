@@ -67,6 +67,10 @@ struct FocusLayer: View {
     @State private var copiedWebp = false
     @State private var copiedLink = false
     @State private var muted = true
+    /// The hero's media controls (CONTRACT-ORBIT 2, owner 1.3): what the bar reads and drives.
+    @State private var transport = HeroTransport()
+    /// The full-screen player or viewer, while it is up.
+    @State private var fullScreen: HeroFullScreen?
     @State private var dragY: CGFloat = 0
     @State private var slot: CGRect = .zero
     /// The lift has landed (its spring is over): from here the planet's room changes with the rows under it.
@@ -223,7 +227,8 @@ struct FocusLayer: View {
 
     private var title: String {
         if case .link(let info) = pipeline.input { return Copy.focusTitle(service: info.service, ref: info.ref) }
-        return pipeline.media?.name ?? localVideo?.name ?? Copy.appName
+        // a video picked from Photos is named "from photos · <date>" (PhotoImport); its extension is not part of the title
+        return Copy.Media.displayTitle(pipeline.media?.name ?? localVideo?.name ?? Copy.appName)
     }
 
     private var meta: String {
@@ -300,19 +305,25 @@ struct FocusLayer: View {
                 .allowsHitTesting(lifted)
                 // while the crop editor is up its own touches are the only ones on the planet
                 .gesture(closeDrag, including: isCropping ? .subviews : .all)
-                .onTapGesture { if hasSoundToggle, !isCropping { toggleSound() } }
-                .accessibilityElement(children: .ignore)
+                // the bar's buttons stay reachable for VoiceOver: the planet is a labelled group, not one element
+                .accessibilityElement(children: controlsMode == nil ? .ignore : .contain)
                 .accessibilityLabel(Copy.focusA11y)
                 .accessibilityValue(a11yValue)
                 .accessibilityHint(Copy.closeFocusHint)
                 .accessibilityHidden(!lifted)
                 .accessibilityActions {
                     if hasSoundToggle { Button(muted ? Copy.soundOn : Copy.soundOff) { toggleSound() } }
-                    Button(Copy.closeA11y) { onClose() }
+                    Button(Copy.closeA11y) { close() }
                 }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .coordinateSpace(name: "focusLayer")
+        .heroFullScreen(item: $fullScreen) { closedFullScreen(at: $0) }
+        // the bar follows the focused planet's player (made when the video first shows, handed away on the return)
+        .onChange(of: player.player.map { ObjectIdentifier($0) }, initial: true) { _, _ in
+            guard !warm else { return }
+            transport.attach(player.player)
+        }
         .onChange(of: pipeline.webpResult?.job) { old, new in
             guard new != nil, new != old else { return }
             shimmer += 1
@@ -350,7 +361,10 @@ struct FocusLayer: View {
                 trimPreview.stop()
             }
         }
-        .onDisappear { trimPreview.stop() }
+        .onDisappear {
+            trimPreview.stop()
+            transport.detach()
+        }
         .onAppear {
             guard !warm else { return }
             showsWebp = pipeline.webpResult != nil
@@ -532,14 +546,69 @@ struct FocusLayer: View {
 
     // MARK: the planet
 
+    /// What the planet's bar is wired to.
+    private var controlsSetup: HeroPlanet.Controls? {
+        guard let mode = controlsMode else { return nil }
+        let full: (() -> Void)? = canFullScreen ? { openFullScreen() } : nil
+        return HeroPlanet.Controls(mode: mode, transport: transport, onSound: { toggleSound() }, onFullScreen: full)
+    }
+
     private func hero(pose: HeroPose) -> some View {
         HeroPlanet(
             pose: pose, drag: dragY, reference: HeroPlanet.reference(aspect: aspect), posterImage: pipeline.posterFrame,
             posterURL: localVideo?.posterURL, original: originalURL, webp: webpSource, showsWebp: showsWebp,
-            muted: muted || showsWebp || !visible, videoPlays: !showsWebp && visible && !trimPreviewActive, progress: heroProgress,
+            muted: muted || showsWebp || !visible, videoPlays: videoPlays, progress: heroProgress,
             sharing: heroSharing, typeLabel: typeLabel, hasWebp: hasWebp && showsWebp, hasLink: hasLink,
             shimmer: shimmer, pulse: pulse, sound: hasSoundToggle, player: player,
-            trimPreview: trimPreviewActive ? trimPreview : nil, cropEditor: cropEditor)
+            trimPreview: trimPreviewActive ? trimPreview : nil, cropEditor: cropEditor,
+            controls: controlsSetup)
+    }
+
+    // MARK: media controls
+
+    /// The bar the planet wears: the whole bar for a video that plays here, a lone full-screen button for the webp, none
+    /// while the trim or the crop is open over the picture (they have the touches then) or the planet is not up.
+    private var controlsMode: HeroControlsMode? {
+        guard !warm, visible, !isCropping, !isTrimming else { return nil }
+        if showsWebp { return webpSource == nil ? nil : .webp }
+        return originalURL == nil ? nil : .video
+    }
+
+    private var canFullScreen: Bool { showsWebp ? webpSource != nil : originalURL != nil }
+
+    private func openFullScreen() {
+        guard lifted, !isCropping else { return }
+        let request: HeroFullScreen
+        if showsWebp, let source = webpSource {
+            request = .webp(source: source, aspect: aspect, name: title)
+        } else if let url = originalURL {
+            let start = player.player?.currentTime() ?? .zero
+            player.player?.pause()
+            request = .video(url: url, name: title, start: start.isValid ? start : .zero)
+        } else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = reduceMotion
+        withTransaction(transaction) { fullScreen = request }
+    }
+
+    /// Back from the full-screen player: the same planet, muted, from where it got to.
+    private func closedFullScreen(at time: CMTime?) {
+        muted = true
+        guard let queue = player.player else { return }
+        queue.isMuted = true
+        Task {
+            if let time, time.isValid { await queue.seek(to: time) }
+            if videoPlays { queue.play() }
+        }
+    }
+
+    /// The video should be running (not the webp, not off screen, not under the trim's preview).
+    private var videoPlays: Bool { !showsWebp && visible && !trimPreviewActive }
+
+    /// Close, or swipe down: a clip the owner paused is set going again first, so the orbit takes over a moving picture.
+    private func close() {
+        transport.resumeIfPausedByUser()
+        onClose()
     }
 
     private var closeDrag: some Gesture {
@@ -550,7 +619,7 @@ struct FocusLayer: View {
             .onEnded { value in
                 if value.translation.height > 90 || value.predictedEndTranslation.height > 220 {
                     dragY = 0
-                    onClose()
+                    close()
                 } else {
                     withAnimation(Motion.snap) { dragY = 0 }
                 }
@@ -746,7 +815,7 @@ struct FocusLayer: View {
                     .appear(lifted)
             }
         case .close:
-            ChoiceButton(title: Copy.close, symbol: Symbol.close, layout: layout, action: onClose)
+            ChoiceButton(title: Copy.close, symbol: Symbol.close, layout: layout, action: close)
                 .appear(lifted)
         case .copyWebp, .copyVideo:
             EmptyView()
@@ -871,6 +940,15 @@ struct HeroPlanet: View, @preconcurrency Animatable {
     var trimPreview: TrimPreview?
     /// The crop editor drawn over the picture while it is open (the planet's picture is its preview).
     var cropEditor: CropEditorModel?
+    /// The media controls over the picture (nil: none, the trim or the crop has the touches).
+    var controls: Controls?
+
+    struct Controls {
+        let mode: HeroControlsMode
+        let transport: HeroTransport
+        let onSound: () -> Void
+        var onFullScreen: (() -> Void)?
+    }
 
     static let bezel: CGFloat = 5
     static let radius: CGFloat = 18
@@ -960,7 +1038,8 @@ struct HeroPlanet: View, @preconcurrency Animatable {
                     RenderTicks(progress: progress, width: inner.width)
                     EdgeSweep(active: sharing, animated: !reduceMotion && !lowPower, radius: Self.radius)
                     ShimmerSweep(token: shimmer, radius: Self.radius)
-                    if sound, cropEditor == nil {
+                    if sound, cropEditor == nil, controls == nil, trimPreview == nil {
+                        // no bar (the planet is on its way): the sound's state stays in the corner
                         Image(systemName: muted ? Symbol.soundOff : Symbol.soundOn)
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(CobaltColor.badgeInk)
@@ -972,6 +1051,15 @@ struct HeroPlanet: View, @preconcurrency Animatable {
                     }
                 }
                 .opacity(chrome)
+            }
+            .overlay {
+                if let controls {
+                    HeroControls(
+                        transport: controls.transport, mode: controls.mode, muted: muted, onSound: controls.onSound,
+                        onFullScreen: controls.onFullScreen)
+                        .opacity(chrome)
+                        .allowsHitTesting(chrome > 0.9)
+                }
             }
             .clipShape(innerShape)
             .overlay(alignment: .topTrailing) {

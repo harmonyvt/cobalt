@@ -24,32 +24,42 @@ enum Notifications {
         }
     }
 
-    /// The `userInfo["url"]` the app delegate opens on tap.
-    static func url(forJob id: UUID) -> String { "cobalt-apple://job/\(id.uuidString)" }
+    /// The `userInfo["url"]` the app delegate opens on tap. With the run's studio session when it has
+    /// one (`?session=<sid>`): a build re-signed without the app group cannot read the share sheet's job
+    /// record, and the session is then all the app needs to follow the run (CONTRACT-SHARE-QUICK.md).
+    /// `trim`: the run is a "trim in cobalt" handoff (`&trim=1`), for the same reason.
+    static func url(forJob id: UUID, session: String? = nil, trim: Bool = false) -> String {
+        let plain = "cobalt-apple://job/\(id.uuidString)"
+        guard let session, !session.isEmpty else { return plain }
+        var parts = URLComponents(string: plain)
+        parts?.queryItems = [URLQueryItem(name: "session", value: session)] + (trim ? [URLQueryItem(name: "trim", value: "1")] : [])
+        return parts?.string ?? plain
+    }
 
     /// Where "your webp is ready" opens: the library (the finished webp is in the store, the job
     /// record is gone).
     static let libraryURL = "cobalt-apple://library"
 
-    /// Where "your video is saved" and "couldn't finish" open: the app, on the save tab.
+    /// The app, on the save tab.
     static let openURL = "cobalt-apple://open"
 
-    static func url(for kind: Kind, jobID: UUID) -> String {
+    /// "your webp is ready" opens the library; everything else opens its run (the app follows the job
+    /// when it has it, and otherwise lands on the save tab, which is where `openURL` went).
+    static func url(for kind: Kind, jobID: UUID, session: String? = nil) -> String {
         switch kind {
         case .webpReady: return libraryURL
-        case .saved, .failed: return openURL
-        default: return url(forJob: jobID)
+        default: return url(forJob: jobID, session: session, trim: kind == .trimInCobalt)
         }
     }
 
     /// Content and identifier of the request for `kind` (separate from `post` so it can be tested
     /// without a notification center, which does not exist outside an app bundle).
-    static func request(_ kind: Kind, jobID: UUID) -> UNNotificationRequest {
+    static func request(_ kind: Kind, jobID: UUID, session: String? = nil) -> UNNotificationRequest {
         let content = UNMutableNotificationContent()
         content.title = kind.title
         content.sound = .default
         content.threadIdentifier = "cobalt-jobs"
-        content.userInfo = ["url": url(for: kind, jobID: jobID)]
+        content.userInfo = ["url": url(for: kind, jobID: jobID, session: session)]
         // one notification per job and kind: posting it again replaces the first
         return UNNotificationRequest(identifier: identifier(kind, jobID: jobID), content: content, trigger: nil)
     }
@@ -76,25 +86,32 @@ enum Notifications {
     }
 
     /// `userInfo["url"]` is the `cobalt-apple://job/<uuid>` link the app opens on tap.
-    static func post(_ kind: Kind, jobID: UUID) async {
-        try? await UNUserNotificationCenter.current().add(request(kind, jobID: jobID))
+    static func post(_ kind: Kind, jobID: UUID, session: String? = nil) async {
+        try? await UNUserNotificationCenter.current().add(request(kind, jobID: jobID, session: session))
     }
 }
 
 /// The seam the share logic posts through, so it can be tested without a notification center.
 protocol NotificationPosting: Sendable {
     func post(_ kind: Notifications.Kind, jobID: UUID) async
+    /// With the run's session in the link (the share sheet's notifications). Defaults to `post(_:jobID:)`.
+    func post(_ kind: Notifications.Kind, jobID: UUID, session: String?) async
     /// Asks for permission to notify (once the answer is still open). Previews and tests do nothing.
     func requestAuthorization() async
 }
 
 extension NotificationPosting {
     func requestAuthorization() async {}
+    func post(_ kind: Notifications.Kind, jobID: UUID, session: String?) async { await post(kind, jobID: jobID) }
 }
 
 struct SystemNotifier: NotificationPosting {
     func post(_ kind: Notifications.Kind, jobID: UUID) async {
         await Notifications.post(kind, jobID: jobID)
+    }
+
+    func post(_ kind: Notifications.Kind, jobID: UUID, session: String?) async {
+        await Notifications.post(kind, jobID: jobID, session: session)
     }
 
     func requestAuthorization() async {

@@ -91,6 +91,7 @@ export class CobaltContainer extends Container<Env> {
                 const bulk =
                     path.startsWith("/jobs/upload") ||
                     path.startsWith("/probe") ||
+                    path.startsWith("/poster") ||
                     (path.startsWith("/fetch/") && path.endsWith("/file"));
                 const timeout = bulk ? 300_000 : path.endsWith("/file") ? 60_000 : 15_000;
                 return this.containerFetch(
@@ -198,6 +199,9 @@ export class CobaltContainer extends Container<Env> {
             renew: () => this.renewActivityTimeout(),
             live: this.live,
             notify: this.notify,
+            // server-made posters and `public: true` hosting (APP-API-CONTRACT.md section 13)
+            media: env.MEDIA,
+            mediaBaseUrl: env.MEDIA_BASE_URL,
         });
     }
 
@@ -323,14 +327,30 @@ export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         return handleRequest(request, env, getContainer(env.COBALT, "main"));
     },
-    // Daily cron (cloudflare.config.ts triggers): telemetry retention, 30 days.
-    // D1 and R2 only; the container and the Durable Object are not touched.
+    // Daily cron (cloudflare.config.ts triggers): telemetry retention, 30 days (D1 and R2
+    // only, the container and the Durable Object are not touched), and the poster backfill:
+    // a kick that queues up to 100 saved videos still without a server-made poster (the
+    // Durable Object only writes records and arms its sweep; the container wakes only if
+    // there is something to do, and a row that failed is not tried again for a day).
     async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
         ctx.waitUntil(
             runTelemetryRetention({ db: env.DB, originals: env.ORIGINALS, now: () => Date.now() }).then(
                 (r) => console.log("[telemetry] retention", JSON.stringify(r)),
                 (e) => console.error("[telemetry] retention failed", e instanceof Error ? e.name : "error"),
             ),
+        );
+        ctx.waitUntil(
+            getContainer(env.COBALT, "main")
+                .fetch(
+                    new Request("https://do.internal/posters/kick?limit=100", {
+                        method: "POST",
+                        headers: { [KEY_ID_HEADER]: "cron:posters" },
+                    }),
+                )
+                .then(
+                    async (res) => console.log("[posters] daily kick", res.status, await res.text().catch(() => "")),
+                    (e) => console.error("[posters] daily kick failed", e instanceof Error ? e.name : "error"),
+                ),
         );
     },
 } satisfies ExportedHandler<Env>;

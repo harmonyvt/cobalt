@@ -536,7 +536,10 @@ extension Pipeline {
     }
 
     /// The common tail of a file: from a picked file, a picker item, or an interrupted upload.
-    func runUpload(_ file: IntakeFile) async throws {
+    /// `keepsOriginal`: the file the owner picked stays on the phone as a stored original (what a
+    /// finished save does with its download). Off for a picker item's own download, which is not an upload
+    /// the owner made.
+    func runUpload(_ file: IntakeFile, keepsOriginal: Bool = true) async throws {
         let client = ctx.client
         let token = runToken
         localFile = file.url
@@ -585,8 +588,44 @@ extension Pipeline {
         media = MediaInfo(
             name: file.name, duration: s.duration, width: s.width, height: s.height,
             bytes: file.bytes, isImage: false)
+        // The upload is the original: it stays on this phone like a saved link's does (and, with the
+        // photos album on, goes into the album), as soon as the frames no longer need the file.
+        if keepsOriginal, let media { keepUploadedOriginal(file, session: sid, media: media) }
         try await ctx.clock.sleep(seconds: 0.25)
         enterReady()
+    }
+
+    /// Moves the uploaded file into the offline store, off the ready transition (the poster and the
+    /// flipbook take a moment). A Photos-picker upload first tells the album which asset it is, so the
+    /// album adopts that asset and the sync never adds the same video to Photos again.
+    func keepUploadedOriginal(_ file: IntakeFile, session id: String, media m: MediaInfo) {
+        guard ctx.settings.keepVideosOnDevice, !ctx.isPreview, stored == nil else { return }
+        guard FileManager.default.fileExists(atPath: file.url.path) else {
+            Telemetry.log(.warn, .store, "uploaded original not kept", data: ["reason": "file gone"])
+            return
+        }
+        var info = m
+        info.name = (file.name as NSString).deletingPathExtension
+        let store = ctx.store
+        let target = targetMediaID
+        let sync = ctx.photosSync
+        let assetID = file.photosAssetID
+        let source = file.url
+        let request = Task<StoredVideo?, Never> {
+            // Not cancellation-aware on purpose: the owner's upload is on the server already, and its
+            // local original must not be lost because the card was closed a moment later.
+            if let assetID { await sync?.adoptExistingAsset(localIdentifier: assetID, forSession: id) }
+            do {
+                return try await store.add(
+                    file: source, kind: .original, media: info, sessionID: id, link: nil, remoteURL: nil, move: true,
+                    mediaID: target)
+            } catch {
+                return nil                                        // `store.add` logged why
+            }
+        }
+        keepRequest = request
+        ctx.continued?.pipelineChanged(self)
+        spawn { p in await p.finishKeepOriginal(request, session: id) }
     }
 
     func uploadProgress(_ p: TransferProgress, token: UUID) {
@@ -649,7 +688,8 @@ extension Pipeline {
             let bytes = p.fileBytes(local) ?? 0
             let limit = caps.limits.maxUploadBytes
             if limit > 0, bytes > limit { throw PipelineFailure.tooLarge(limit: limit) }
-            try await p.runUpload(IntakeFile(url: local, name: name, bytes: bytes, contentType: MIME.type(forFileName: name)))
+            try await p.runUpload(
+                IntakeFile(url: local, name: name, bytes: bytes, contentType: MIME.type(forFileName: name)), keepsOriginal: false)
         }
     }
 

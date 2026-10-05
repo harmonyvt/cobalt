@@ -152,8 +152,10 @@ struct ShareHandoffTests {
         await drive(h) { s.pipeline.state == .ready }
         #expect(s.core.isLong && s.pipeline.trim == TrimRange(start: 0, end: 10))
 
+        let sid = try #require(s.pipeline.sessionID)
         await s.core.handOffToApp()
-        #expect(s.counter.opened == [URL(string: "cobalt-apple://job/\(s.core.jobID.uuidString)")!])
+        // the session rides along for a build without the app group (CONTRACT-SHARE-QUICK.md section 4)
+        #expect(s.counter.opened == [URL(string: "cobalt-apple://job/\(s.core.jobID.uuidString)?session=\(sid)&trim=1")!])
         #expect(s.notifier.posts.isEmpty && s.counter.completed == 1)
         #expect(s.notifier.authorizationRequests == 0, "the app opened: no notification, no permission prompt")
         let job = try #require(h.ctx.jobs.nextHandoff(now: h.clock.now()))

@@ -80,7 +80,9 @@ public final class AppModel {
             return HTTPCobaltClient(baseURL: server, apiKey: { Settings.apiKey(in: keychain, forServer: server) })
         }
         let store = OfflineStore.shared()
-        Telemetry.log(.info, .store, "store opened", data: ["media": .int(store.media.count), "videos": .int(store.videos.count)])
+        Telemetry.log(.info, .store, "store opened", data: [
+            "media": .int(store.media.count), "videos": .int(store.videos.count), "root": .string(AppGroup.location.kind.rawValue),
+        ])
         let ctx = PipelineContext(
             client: factory(settings), capabilities: .unknown, settings: settings, store: store,
             jobs: .shared(), tools: SystemMediaTools(), clock: SystemClock(), photos: SystemPhotosSaver(),
@@ -93,7 +95,9 @@ public final class AppModel {
         // The photos album and the background download of originals (CONTRACT-SYNC.md): the app only.
         let ledger = PhotosLedger.shared()
         ctx.photosLedger = ledger
-        let sync = PhotosSync(settings: settings, store: store, ledger: ledger, library: SystemPhotoLibrary())
+        let sync = PhotosSync(
+            settings: settings, store: store, ledger: ledger, library: SystemPhotoLibrary(),
+            isForeground: { [unowned ctx] in ctx.background.activity.isActive })
         let fetcher = OriginalFetcher(
             identifier: BackgroundSessionID.app, transport: URLSessionBackgroundTransport(), pending: .shared(),
             store: store, clock: ctx.clock)

@@ -120,10 +120,17 @@ export function planStudio(renders) {
     return out;
 }
 
-/** 'webp': R2 objects (as `cf r2 objects list` returns them) no row covers yet. */
+/** True for a server-made poster (APP-API-CONTRACT.md section 13): it is not a library file. */
+export const isPosterObject = (o) => (o.custom_metadata ?? o.customMetadata ?? {}).poster === "1";
+
+/**
+ * 'webp': R2 objects (as `cf r2 objects list` returns them) no row covers yet. Posters (JPEGs the
+ * Durable Object cut out of a saved video, tagged `poster: "1"` in their custom metadata) live in the
+ * same bucket but are not library files: media_items points at them through `poster`.
+ */
 export function planWebp(objects, baseUrl) {
     const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-    return objects.map((o) => {
+    return objects.filter((o) => !isPosterObject(o)).map((o) => {
         const meta = o.custom_metadata ?? o.customMetadata ?? {};
         const http = o.http_metadata ?? o.httpMetadata ?? {};
         const keyId = typeof meta.keyId === "string" ? meta.keyId : null;

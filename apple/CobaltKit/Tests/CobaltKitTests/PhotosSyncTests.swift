@@ -14,21 +14,29 @@ struct PhotosEnv {
     let sync: PhotosSync
     let directory: URL
 
-    /// The sync starts off, so adding videos does not race the test: turn it on with `settings.photosAlbumSync`.
+    /// The sync starts off (an explicit "off" and "no webps"), so adding videos does not race the test: turn it
+    /// on with `settings.photosAlbumSync`. `defaultsOn` leaves both unset instead, as a fresh install is.
     init(rw: PhotosReadWrite = .authorized, addOnly: PhotosAccess = .authorized, available: Bool = true,
-         library sharedLibrary: FakePhotoLibrary? = nil, directory shared: URL? = nil) throws {
+         library sharedLibrary: FakePhotoLibrary? = nil, directory shared: URL? = nil,
+         defaultsOn: Bool = false, isForeground: @escaping @MainActor () -> Bool = { true }) throws {
         let dir = try shared ?? makeTempDirectory()
         directory = dir
         let suite = "cobalt.sync.photos.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         settings = Settings(defaults: defaults, keychain: .memory())
+        if !defaultsOn {
+            settings.photosAlbumSync = false
+            settings.photosSyncWebps = false
+        }
         library = sharedLibrary ?? FakePhotoLibrary(rw: rw, addOnly: addOnly)
         store = OfflineStore(
             root: dir.appendingPathComponent("Videos", isDirectory: true),
             tools: PreviewMediaTools(clock: clock, clip: PreviewData.long), defaults: defaults)
         ledger = PhotosLedger(directory: dir.appendingPathComponent("Sync", isDirectory: true))
-        sync = PhotosSync(settings: settings, store: store, ledger: ledger, library: library, clock: clock, available: available)
+        sync = PhotosSync(
+            settings: settings, store: store, ledger: ledger, library: library, clock: clock, available: available,
+            isForeground: isForeground)
     }
 
     /// A second sync over the same ledger, library and files (another instance, as a second launch).
@@ -104,7 +112,7 @@ struct PhotosKeyTests {
         let upload = try await env.add(session: "S2", link: nil)
         let webp = try await env.add(session: "S1", remote: hostedWebp, kind: .webp)
         #expect(PhotosSync.isEligible(original, includeWebps: false))
-        #expect(!PhotosSync.isEligible(upload, includeWebps: true), "no link: it came from this phone")
+        #expect(PhotosSync.isEligible(upload, includeWebps: false), "an upload is kept like any save and goes into the album too")
         #expect(!PhotosSync.isEligible(webp, includeWebps: false) && PhotosSync.isEligible(webp, includeWebps: true))
         _ = await env.store.evict(original.id)
         let evicted = try #require(env.store.videos.first { $0.id == original.id })

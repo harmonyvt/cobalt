@@ -14,12 +14,12 @@ struct SyncSettingsTests {
         return Settings(defaults: defaults, keychain: .memory())
     }
 
-    @Test func defaultsAreOnFiveSecondsAndAlbumOff() {
+    @Test func defaultsAreOnFiveSecondsAndAlbumOn() {
         let s = settings()
         #expect(s.autoContinue == true)
         #expect(s.autoContinueSeconds == 5)
-        #expect(s.photosAlbumSync == false)
-        #expect(s.photosSyncWebps == false)
+        #expect(s.photosAlbumSync == true, "automatic is the owner's expectation (2026-10-05)")
+        #expect(s.photosSyncWebps == true)
         #expect(Settings.autoContinueChoices == [3, 5, 10])
     }
 

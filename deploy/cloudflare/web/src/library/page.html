@@ -805,6 +805,16 @@ function placeholder(icon, label) {
   d.append(h("span", { text: label }));
   return d;
 }
+// What a tile shows when it has no (working) server-made poster: the file itself, or a placeholder.
+function itemFallback(wrap, it, ext) {
+  if (it.kind === "public" && isVideoType(it.content_type)) {
+    var v = h("video", { muted: true, playsinline: true, preload: "metadata", "aria-hidden": "true", tabindex: "-1", src: it.url + "#t=0.1" });
+    v.muted = true;
+    v.addEventListener("error", function () { v.remove(); wrap.append(placeholder("film", ext || "video")); });
+    wrap.append(v);
+  } else if (it.kind === "private") wrap.append(placeholder("lock", "private · " + (ext || "file")));
+  else wrap.append(placeholder("image", ext || "file"));
+}
 function itemThumb(it) {
   var wrap;
   var linkable = it.kind === "public" && it.url;
@@ -816,18 +826,21 @@ function itemThumb(it) {
     var img = h("img", { alt: "", loading: "lazy", src: it.url });
     img.addEventListener("error", function () { img.remove(); wrap.append(placeholder("image", ext || "image")); });
     wrap.append(img);
-  } else if (it.kind === "public" && isVideoType(it.content_type)) {
-    var v = h("video", { muted: true, playsinline: true, preload: "metadata", "aria-hidden": "true", tabindex: "-1", src: it.url + "#t=0.1" });
-    v.muted = true;
-    v.addEventListener("error", function () { v.remove(); wrap.append(placeholder("film", ext || "video")); });
-    wrap.append(v);
-  } else if (it.kind === "private") wrap.append(placeholder("lock", "private · " + (ext || "file")));
-  else wrap.append(placeholder("image", ext || "file"));
+  } else if (it.poster_url) {
+    // the server cut a frame out of this video: a small picture instead of loading the video
+    var pic = h("img", { alt: "", loading: "lazy", src: it.poster_url });
+    pic.addEventListener("error", function () { pic.remove(); itemFallback(wrap, it, ext); });
+    wrap.append(pic);
+  } else itemFallback(wrap, it, ext);
   return wrap;
 }
 function studioThumb(s) {
   var wrap = h("a", { class: "thumb-l", href: s.url, target: "_blank", rel: "noopener", "aria-label": "open studio" });
-  wrap.append(placeholder("film", "studio"));
+  if (s.poster_url) {
+    var pic = h("img", { alt: "", loading: "lazy", src: s.poster_url });
+    pic.addEventListener("error", function () { pic.remove(); wrap.append(placeholder("film", "studio")); });
+    wrap.append(pic);
+  } else wrap.append(placeholder("film", "studio"));
   return wrap;
 }
 function confirmText(e) {

@@ -30,9 +30,39 @@ public final class ShareModel {
 
     @ObservationIgnored let core: ShareCore
 
-    init(context: PipelineContext, pipeline: Pipeline, notifier: any NotificationPosting = SystemNotifier()) {
+    init(
+        context: PipelineContext, pipeline: Pipeline, notifier: any NotificationPosting = SystemNotifier(),
+        quick: Bool = false
+    ) {
         self.pipeline = pipeline
-        self.core = ShareCore(context: context, pipeline: pipeline, notifier: notifier)
+        self.core = ShareCore(context: context, pipeline: pipeline, notifier: notifier, quick: quick)
+    }
+
+    // MARK: - The quick card (CONTRACT-SHARE-QUICK.md)
+
+    /// Card or full sheet, and where the card is.
+    public var quick: QuickShare { core.quick }
+
+    /// The card's expand control (and a long press on the card): the full sheet, for this run.
+    public func expand() { core.expandQuick(.asked) }
+
+    /// The failed card's "try again": the same link again, still as the card.
+    public func retryQuick() { core.retryQuick() }
+
+    /// The failed card's "open cobalt": the app opens, the sheet goes.
+    public func openCobalt() async { await core.openCobalt() }
+
+    /// The link the card names (`instagram · Dd7P496wolG`), when there is one.
+    public var quickTitle: String? { core.quickTitle }
+
+    /// The overlay's island morph is over: hand the run off now (no-op unless the card is holding).
+    public func finishQuickHold() async { await core.finishHoldNow() }
+
+    /// How long the card shows "cobalt has it" before the extension completes (0.6 s by default; the
+    /// overlay sets the length of its island morph). Set it before the server holds the save.
+    public var quickHoldSeconds: Double {
+        get { core.quickHoldSeconds }
+        set { core.quickHoldSeconds = max(0, newValue) }
     }
 
     /// The stay button: stops the countdown for good (the sheet stays open).
@@ -90,7 +120,8 @@ public final class ShareModel {
             intake: SystemFileIntake(), isPreview: false)
         ctx.background.allowsDetach = false      // the sheet hands off through `ShareCore`, never `detach()`
         ctx.frameEdge = 160                      // ~120 MB in an extension: small frames
-        let model = ShareModel(context: ctx, pipeline: Pipeline(context: ctx))
+        // The quick card unless the owner asked for the full sheet (CONTRACT-SHARE-QUICK.md).
+        let model = ShareModel(context: ctx, pipeline: Pipeline(context: ctx), quick: !settings.shareFullSheet)
         // The original follows the sheet out through a background URLSession of its own (only one
         // process may use a background session at a time), recorded in the app group.
         ctx.photosLedger = .shared()
@@ -111,10 +142,29 @@ public final class ShareModel {
 
     /// For `ShareRootView` previews: an idle pipeline over `PreviewClient`. Start it with
     /// `pipeline.start(link:)` / `start(file:)` like the controller does.
-    public static func preview(_ scenario: PreviewScenario = .happy) -> ShareModel {
+    /// `quick`: the quick card (its previews and the evidence harness).
+    public static func preview(_ scenario: PreviewScenario = .happy, quick: Bool = false) -> ShareModel {
         let ctx = PipelineContext.preview(scenario, timeScale: 1, clock: SystemClock())
-        return ShareModel(context: ctx, pipeline: Pipeline(context: ctx), notifier: SilentNotifier())
+        return ShareModel(context: ctx, pipeline: Pipeline(context: ctx), notifier: SilentNotifier(), quick: quick)
     }
+
+    /// For the quick card's previews: shows `state` and stops the real card logic (nothing hands off).
+    public func previewQuick(_ state: QuickShare) { core.previewQuick(state) }
+
+    #if DEBUG
+    /// Simulator evidence in the real extension: the sheet over `PreviewClient`, with the controller's
+    /// hooks, so the card closes the extension for real. Not started (the caller starts the run).
+    public static func debugPreview(
+        _ scenario: PreviewScenario, quick: Bool,
+        openApp: @escaping @MainActor (URL) async -> Bool, complete: @escaping @MainActor () -> Void
+    ) -> ShareModel {
+        let ctx = PipelineContext.preview(scenario, timeScale: 1, clock: SystemClock())
+        let model = ShareModel(context: ctx, pipeline: Pipeline(context: ctx), notifier: SilentNotifier(), quick: quick)
+        model.core.openApp = openApp
+        model.core.complete = complete
+        return model
+    }
+    #endif
 }
 
 /// Previews never post: no notification center, and nothing to open.
@@ -149,17 +199,35 @@ final class ShareCore {
     @ObservationIgnored var assistiveRunning: Bool
     @ObservationIgnored var closed = false
 
+    /// The quick card (CONTRACT-SHARE-QUICK.md); see `ShareCore+Quick.swift`.
+    var quick: QuickShare
+    @ObservationIgnored var quickTask: Task<Void, Never>?
+    /// A preview pinned the card's state: the card logic stays quiet.
+    @ObservationIgnored var quickPinned = false
+    /// How long "cobalt has it" stays before the hand-off closes the extension: the plain card's check,
+    /// or the island morph's whole run (the overlay sets it; CONTRACT-SHARE-QUICK.md section 2a).
+    @ObservationIgnored var quickHoldSeconds: Double = ShareCore.quickHold
+    /// When the sheet opened (the card's timing line in the log).
+    @ObservationIgnored let openedAt: Date
+
+    /// `quick`: the sheet opens as the quick card (the live sheet passes `!settings.shareFullSheet`;
+    /// previews and the older tests build the full sheet).
     init(
         context: PipelineContext, pipeline: Pipeline, notifier: any NotificationPosting,
         liveEnvironment: LiveEnvironment? = LiveEnvironment.current,
-        assistiveRunning: Bool = AssistiveTech.isRunning
+        assistiveRunning: Bool = AssistiveTech.isRunning,
+        quick: Bool = false
     ) {
         self.ctx = context
         self.pipeline = pipeline
         self.notifier = notifier
         self.capabilities = context.capabilities
         self.assistiveRunning = assistiveRunning
-        self.autoContinue = context.settings.autoContinue ? .armed : .off
+        self.quick = quick ? .working : .off
+        self.openedAt = context.clock.now()
+        // The card hands off as soon as the server holds the save: no countdown on top of it. Expanding
+        // is the owner choosing to look, so the full sheet it opens has none either.
+        self.autoContinue = context.settings.autoContinue && !quick ? .armed : .off
         self.relay = ShareLiveRelay(context: context, pipeline: pipeline, environment: liveEnvironment)
         if context.notifier == nil { context.notifier = notifier }
         // The sheet's run id is the job id, so the activity, the `SharedJob` and the server agree (2.1).
@@ -170,9 +238,11 @@ final class ShareCore {
             self?.capabilities = caps
             self?.relay.kick()
             self?.evaluateAutoContinue()
+            self?.evaluateQuick()
             previous?(caps)
         }
         observeAutoContinue()
+        observeQuick()
     }
 
     /// webp, studio and hosting exist on this server (a fork, old or new); plain cobalt only saves.
@@ -235,7 +305,7 @@ final class ShareCore {
             // no bridge on this server (or it did not answer): all that is left is this process's
             // own word, which says "still going", not "done"
             await notifier.requestAuthorization()   // the sheet closes with work left: the moment this notification matters
-            await notifier.post(rendering ? .stillMaking : .stillSaving, jobID: jobID)
+            await notifier.post(rendering ? .stillMaking : .stillSaving, jobID: jobID, session: sid)
         }
         return .continuesInBackground
     }
@@ -256,18 +326,18 @@ final class ShareCore {
     func handOffToApp() async {
         defer { complete?() }
         noteClosing()
-        guard pipeline.sessionID != nil else { return }
+        guard let sid = pipeline.sessionID else { return }
         ctx.jobs.upsert(makeJob(stage: .ready, wantsTrim: true))
         relay.detach()                              // the app takes the run over
         pipeline.cancel()
-        let url = URL(string: Notifications.url(forJob: jobID))!
+        let url = URL(string: Notifications.url(forJob: jobID, session: sid, trim: true))!
         let opened = await openApp?(url) ?? false
         Telemetry.log(.info, .share, "share hand off to app", data: ["opened": .bool(opened)])
         if !opened {
             // the notification is the only way back to the clip: make sure it can be shown (asked once,
             // in context; a no-op once answered)
             await notifier.requestAuthorization()
-            await notifier.post(.trimInCobalt, jobID: jobID)
+            await notifier.post(.trimInCobalt, jobID: jobID, session: sid)
         }
     }
 

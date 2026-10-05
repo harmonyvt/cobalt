@@ -299,6 +299,59 @@ export function buildFrameArgs(j) {
     ];
 }
 
+// --- poster frames --------------------------------------------------------------
+
+/** Longest side of a poster JPEG in pixels (never upscaled). */
+export const POSTER_MAX_SIDE = 720;
+/** ffmpeg `-q:v` for the poster JPEG (2 = best, 31 = worst; 4 is visually clean at about 15-40 KB). */
+export const POSTER_QUALITY = 4;
+/** The frame is taken at 10 % of the duration, at most this many seconds in. */
+export const POSTER_FRACTION = 0.1;
+export const POSTER_MAX_AT_SECONDS = 3;
+/** A poster larger than this is refused (a 720 px JPEG is tens of KB). */
+export const MAX_POSTER_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Where in the video the poster frame is taken: 10 % of the duration (a title card or a
+ * black first frame is not representative), at most POSTER_MAX_AT_SECONDS in, and 0 when
+ * the duration is not known.
+ * @param {number | null | undefined} duration seconds
+ * @returns {number}
+ */
+export function posterTime(duration) {
+    if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) return 0;
+    return +Math.min(duration * POSTER_FRACTION, POSTER_MAX_AT_SECONDS).toFixed(3);
+}
+
+/**
+ * ffmpeg argv that writes ONE JPEG frame at `at` seconds: scaled so the longer side is at
+ * most POSTER_MAX_SIDE (never upscaled; the rotation metadata is applied first, so a phone
+ * clip comes out upright), square pixels, 4:2:0 full-range (what every JPEG decoder takes).
+ * `-ss` before `-i` seeks the input (fast on a local file), the protocol whitelist keeps
+ * ffmpeg on local files.
+ * @param {{input: string, output: string, at: number}} j
+ */
+export function buildPosterArgs(j) {
+    const side = POSTER_MAX_SIDE;
+    return [
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-protocol_whitelist", "file,pipe",
+        "-ss", dec(j.at),
+        "-i", j.input,
+        "-frames:v", "1",
+        "-an", "-sn", "-dn",
+        "-vf",
+        `scale='if(gte(iw,ih),min(${side},iw),-1)':'if(gte(iw,ih),-1,min(${side},ih))':flags=lanczos,setsar=1,format=yuvj420p`,
+        "-q:v", String(POSTER_QUALITY),
+        "-f", "image2",
+        "-update", "1",
+        "-y",
+        j.output,
+    ];
+}
+
 /** Frame file names ffmpeg writes: f00001.png ... */
 export const FRAME_RE = /^f\d{5}\.png$/;
 

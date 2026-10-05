@@ -45,7 +45,7 @@ bind it as `DB`. Create the table (this touches the remote database; run it your
 Use the globally installed `cf`, not `npx cf`: on 2026-09-29 the project-pinned copy failed the remote apply with
 `[7403] account is not valid or is not authorized`, while the global one applied `0001` fine with the same login.
 (`cf d1 migrations` takes the database ID, not its name; `--dir` defaults to `./migrations`. Applied files are recorded
-in the `d1_migrations` table, so re-running only applies new ones. Add future schema changes as new numbered files (`0001` api_keys, `0002` request_log, `0003` studio, `0004` library, `0005` telemetry); never edit an applied one.) Deploy the web and API Workers after the table exists; until then `/api/keys` answers 500 and `POST /` answers
+in the `d1_migrations` table, so re-running only applies new ones. Add future schema changes as new numbered files (`0001` api_keys, `0002` request_log, `0003` studio, `0004` library, `0005` telemetry, `0006` posters and public hosting); never edit an applied one.) Deploy the web and API Workers after the table exists; until then `/api/keys` answers 500 and `POST /` answers
 503, and nothing is forwarded to the container.
 
 ## 1. Deploy the API
@@ -803,3 +803,36 @@ inside the frame and refuses under 64 px (`error.webp.invalid_params`); the help
 filter on a 640x360 clip gave 320x180 frames for a half crop and 480x270 without one, and on the same clip tagged with a 90 degree
 rotation (probed as 360x640) a bottom-half crop gave 360x320 frames: the crop is read in the displayed orientation. Not run in the
 container image (Alpine's ffmpeg); the helper change ships in the image, so the deploy restarts the container once.
+
+## Server-made posters and public by default (`APP-API-CONTRACT.md` section 13)
+
+Two additive features (owner, 2026-10-05: "by default videos are public and they should have a thumbnail by the server").
+
+- **Posters.** Every saved video or gif original gets a small JPEG (frame at 10 % of the duration, at most 3 s in; longer side at
+  most 720 px; `-q:v 4`) cut by the container's ffmpeg (`helper/server.js` `POST /poster?id=`, body = the video streamed from R2, answer =
+  the JPEG; one ffmpeg job at a time like `/probe`). The Durable Object stores it in the PUBLIC bucket as `<10 base62>.jpg` and records
+  the URL in `media_items.poster` (mirrored on `studio_sessions.poster` and on the public copies hosted from the same original).
+  `ready` never waits for it: it only writes a `poster:<item id>` record (Durable Object storage) and arms the job sweep, which makes
+  one poster per pass while the helper is free (`src/poster.ts` `PosterService`); a render, save or upload that arrives meanwhile waits for
+  it. Existing saves are filled lazily: a library read that shows an original without a poster queues it (`POST /posters/kick` inside the
+  DO, records only), `POST /library/posters/backfill[?limit=]` queues up to 100, the daily cron kicks up to 100. A row that failed is
+  skipped for 24 h (`media_items.poster_at`). Webps get none (ffmpeg here cannot decode animated WebP; the webp is its own picture).
+  The poster of a private video is public (unguessable name).
+- **`public: true`** on `POST /studio` and `?public=1` on `PUT /studio/upload`: when the save is ready the Durable Object hosts the
+  original publicly with the same code as `POST /studio/<sid>/publish` (`publishStudio`), recording `public_state`
+  (`pending` / `ready` / `failed`) and `public_url` on the session. A failed copy never fails the save: it is retried by the sweep (4
+  attempts), then `failed`. Uploads that get no session (images, a refused adopt) are hosted inline by the library publish code. Without
+  the flag nothing changes.
+- **Capabilities**: `features.poster`, `features.public_default`.
+- **Responses**: `poster_url` on sessions, library posts and files, upload items and the web library's items and studios; `public_state`
+  and `public_url` on sessions and the upload answer; `public_url` on library posts. The web library page shows the poster as the tile
+  picture.
+- **Deleting**: `DELETE /library/items/<id>/post` and the web's item delete remove a poster once no live row names it (the original and
+  its public copy share one object); nothing that expires or sweeps deletes media, so nothing orphans a poster; the library backfill
+  script skips objects tagged `poster: "1"`.
+- **Deploy**: migration `0006` FIRST (additive), then the API (the helper changed: the container restarts once), then the web.
+  Tests: `npm test && npm run typecheck` in `api/` and `web/`; the helper's `POST /poster` is tested against the real ffmpeg on the
+  fixture clips in `api/test/fixtures` (skipped when no ffmpeg is on the PATH; `FFMPEG_PATH` overrides).
+- **Verified**: those tests, `cf deploy --dry-run`, and the real helper's `POST /poster` inside the image the dry run built (ffmpeg-static,
+  linux/amd64 under emulation) on all six fixture clips (correct sizes, upright, 5 to 17 KB). **Not verified until deployed**: a poster
+  write and the R2 to R2 copy from inside the Durable Object, real timings.

@@ -107,6 +107,30 @@ extension Copy {
         /// The hero's full-screen button, and its way back.
         static let fullScreen = "full screen"
         static let exitFullScreen = "exit full screen"
+        /// The hero's player controls (play or pause, the scrubber and what VoiceOver says of it).
+        static let play = "play"
+        static let pause = "pause"
+        static let scrubber = "playback position"
+        static func scrubberValue(_ elapsed: String, of total: String) -> String { "\(elapsed) of \(total)" }
+        /// What a video picked from the photo library is called until the owner names it: the library's file name is
+        /// a UUID, so the title says where it came from and when ("from photos · 4 oct", the year when it is not this
+        /// one). The date is lowercase and locale independent, like `Format.when`.
+        static let fromPhotosLead = "from photos"
+        static func fromPhotos(_ date: Date, now: Date = Date()) -> String {
+            let months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+            let cal = Calendar.current
+            let c = cal.dateComponents([.year, .month, .day], from: date)
+            var when = "\(c.day ?? 1) \(months[max(0, min(11, (c.month ?? 1) - 1))])"
+            if c.year != cal.component(.year, from: now) { when += " \(c.year ?? 0)" }
+            return "\(fromPhotosLead) · \(when)"
+        }
+        /// A title for a file name: a picker import's ("from photos · 4 oct.mov") reads without its extension; every
+        /// other name is shown as it is.
+        static func displayTitle(_ name: String) -> String {
+            guard name.hasPrefix("\(fromPhotosLead) · ") else { return name }
+            let ext = (name as NSString).pathExtension
+            return ext.isEmpty || ext.count > 5 ? name : (name as NSString).deletingPathExtension
+        }
         /// VoiceOver on the full-screen webp viewer (it closes with a tap, a swipe down or Escape).
         static func webpViewerA11y(_ name: String) -> String { "\(name), full screen. tap to close" }
     }

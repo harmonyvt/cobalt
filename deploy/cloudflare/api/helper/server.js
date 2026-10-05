@@ -47,6 +47,15 @@
 //                      at the end of the request -> 200 {duration,width,height}
 //                      (duration may be null) | 400 error.studio.not_video (no
 //                      video stream, or empty) | 413 | 429 busy
+//
+// Poster frames (APP-API-CONTRACT.md section 13): a thumbnail for a stored video.
+//   POST   /poster?id=        body = the video bytes (streamed to /tmp/poster/<id>, at most
+//                      200 MB); ffmpeg writes ONE JPEG (frame at 10 % of the duration, at most
+//                      3 s in; longer side at most 720 px, never upscaled; rotation applied),
+//                      the file is deleted, and the answer IS the JPEG: 200 image/jpeg with
+//                      content-length | 400 error.studio.not_video | 413 error.studio.too_large
+//                      | 422 error.poster.failed (ffmpeg made no frame) | 429 busy (one job at
+//                      a time, like /probe) | 502 error.studio.upload_failed
 
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
@@ -65,13 +74,17 @@ import {
     JobError,
     MAX_FETCH_BYTES,
     MAX_OUTPUT_BYTES,
+    MAX_POSTER_BYTES,
     VIDEO_TYPES,
     downloadToFile,
     encodeAnimatedWebp,
     keyMatches,
     parseVideoInfo,
+    buildPosterArgs,
     parseWebp,
     planClip,
+    posterTime,
+    runProcess,
     resolveSource,
     serviceFromUrl,
     studioCode,
@@ -96,6 +109,7 @@ export const APNS_DEFAULT_TIMEOUT_MS = 2000;
 /**
  * @param {{
  *   appDir?: string, internalKey?: string, workDir?: string, fetchDir?: string, probeDir?: string,
+ *   posterDir?: string, posterTimeoutMs?: number,
  *   cobaltOrigin?: string, apiOrigin?: string,
  *   ffmpegTimeoutMs?: number, downloadTimeoutMs?: number, fetchTimeoutMs?: number,
  *   maxFetchBytes?: number, keepJobs?: number, jobTtlMs?: number,
@@ -116,6 +130,9 @@ export function createHelper(opts = {}) {
     const WORK_DIR = opts.workDir ?? "/tmp/webp";
     const FETCH_DIR = opts.fetchDir ?? "/tmp/fetch";
     const PROBE_DIR = opts.probeDir ?? "/tmp/probe";
+    const POSTER_DIR = opts.posterDir ?? "/tmp/poster";
+    // one frame out of a local file: a second or two; the budget only stops a hung ffmpeg
+    const POSTER_TIMEOUT_MS = opts.posterTimeoutMs ?? 30_000;
     const COBALT = opts.cobaltOrigin ?? COBALT_ORIGIN;
     const FFMPEG_TIMEOUT_MS = opts.ffmpegTimeoutMs ?? 240_000;
     const DOWNLOAD_TIMEOUT_MS = opts.downloadTimeoutMs ?? 120_000;
@@ -142,7 +159,7 @@ export function createHelper(opts = {}) {
     /** @type {Map<string, Job>} */
     const fetches = new Map();
 
-    /** probes in flight (POST /probe): they hold the helper like a job does */
+    /** probes and poster frames in flight (POST /probe, POST /poster): they hold the helper like a job does */
     const probing = new Set();
 
     const busy = () =>
@@ -573,6 +590,95 @@ export function createHelper(opts = {}) {
         );
     }
 
+    // POST /poster?id=: the body goes to disk, ffmpeg writes one JPEG frame, the file is
+    // deleted, and the JPEG is the answer (a few tens of KB). One request, one answer; the
+    // helper is busy until the directory is gone (like /probe). A frame past the end of a
+    // clip that reports a longer duration than it has is retried at the very start.
+    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {URL} url */
+    async function handlePoster(req, res, url) {
+        if (req.method !== "POST") return fail(res, 405, "error.webp.bad_request");
+        const id = url.searchParams.get("id") ?? "";
+        if (!ID_RE.test(id)) return failAndClose(req, res, 400, "error.webp.invalid_params");
+        if (busy()) return failAndClose(req, res, 429, "error.webp.busy");
+
+        const declared = Number(req.headers["content-length"]);
+        if (Number.isFinite(declared) && declared > MAX_FETCH) {
+            return failAndClose(req, res, 413, "error.studio.too_large");
+        }
+
+        probing.add(id);
+        const dir = path.join(POSTER_DIR, id);
+        const input = path.join(dir, "in");
+        const output = path.join(dir, "poster.jpg");
+        let n = 0;
+        const counter = new Transform({
+            transform(chunk, _e, cb) {
+                n += chunk.length;
+                if (n > MAX_FETCH) cb(new JobError("error.studio.too_large"));
+                else cb(null, chunk);
+            },
+        });
+        /** @param {number} at */
+        const frame = async (at) => {
+            await rm(output, { force: true });
+            try {
+                await runProcess({
+                    bin: ffmpegPath(),
+                    args: buildPosterArgs({ input, output, at }),
+                    timeoutMs: POSTER_TIMEOUT_MS,
+                    label: `poster ${id}`,
+                });
+            } catch (e) {
+                // a timeout is final; any other failure may just be a seek past the end
+                if (e instanceof JobError && e.code === "error.webp.timeout") throw e;
+                return false;
+            }
+            return (await stat(output).catch(() => null))?.size > 0;
+        };
+        /** @type {Buffer | null} */
+        let jpeg = null;
+        let code = "";
+        try {
+            await mkdir(dir, { recursive: true });
+            await pipeline(req, counter, createWriteStream(input));
+            if (n === 0) throw new JobError("error.studio.not_video");
+            const info = await probe(input);
+            // no video stream: audio, a document or a broken file has no frame to show
+            if (info.width === null || info.height === null) throw new JobError("error.studio.not_video");
+            const at = posterTime(info.duration);
+            let made = await frame(at);
+            if (!made && at > 0) made = await frame(0);
+            if (!made) throw new JobError("error.poster.failed");
+            const { size } = await stat(output);
+            if (size > MAX_POSTER_BYTES) throw new JobError("error.poster.failed");
+            jpeg = await readFile(output);
+        } catch (e) {
+            code = e instanceof JobError ? e.code : "error.studio.upload_failed";
+            if (code === "error.webp.timeout") code = "error.poster.failed";
+            if (!(e instanceof JobError)) console.error("[webp-helper] poster failed:", e);
+        }
+        // files first, then the answer (and the helper stays busy until both)
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+        probing.delete(id);
+        if (res.headersSent || res.destroyed) return;
+        if (jpeg) {
+            res.writeHead(200, { "content-type": "image/jpeg", "content-length": jpeg.length });
+            return void res.end(jpeg);
+        }
+        return failAndClose(
+            req,
+            res,
+            code === "error.studio.too_large"
+                ? 413
+                : code === "error.studio.not_video"
+                  ? 400
+                  : code === "error.poster.failed"
+                    ? 422
+                    : 502,
+            code,
+        );
+    }
+
     /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {string} pathname */
     async function handleFetchRoute(req, res, pathname) {
         const m = pathname.match(/^\/fetch(?:\/([A-Za-z0-9]+)(\/file)?)?$/);
@@ -844,6 +950,7 @@ export function createHelper(opts = {}) {
             if (pathname === "/apns") return await handleApns(req, res);
             if (pathname === "/jobs/upload") return await handleUpload(req, res, url);
             if (pathname === "/probe") return await handleProbe(req, res, url);
+            if (pathname === "/poster") return await handlePoster(req, res, url);
             if (pathname === "/fetch" || pathname.startsWith("/fetch/")) {
                 return await handleFetchRoute(req, res, pathname);
             }

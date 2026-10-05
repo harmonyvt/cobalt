@@ -85,7 +85,10 @@ struct AppShell: View {
             // the system picker needs no photo-library permission
             .photosPicker(
                 isPresented: $showPhotos, selection: $pickedPhoto, matching: .any(of: [.videos, .images]),
-                preferredItemEncoding: .current)
+                preferredItemEncoding: .current,
+                // `.shared()` gives each item its PHAsset id, so a picked video joins the cobalt album as
+                // itself instead of a second copy (PhotosSync.adoptExistingAsset). Still no library permission.
+                photoLibrary: .shared())
             .onChange(of: pickedPhoto) { _, item in
                 guard let item else { return }
                 pickedPhoto = nil

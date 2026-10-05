@@ -1,9 +1,17 @@
 import Foundation
 import Observation
+import Synchronization
 
 /// App group plumbing with the fallbacks section 4.6 pins: no container → this process's
 /// Application Support; no suite → `.standard`. macOS has no extension, so it never touches the
 /// group container (which would trigger the "access data from other apps" prompt).
+///
+/// Where everything lives is decided ONCE per process (`location`) and every folder (`Videos`, `Sync`,
+/// `Jobs`, `Telemetry`) hangs off that one answer, so reads and writes can never disagree. A sideloaded
+/// build re-signed with another certificate (Feather, Sideloadly, AltStore) loses or renames the
+/// app-group entitlement: `containerURL` then answers nil, or a folder the process cannot write. Both
+/// fall back to the app's own Application Support, which is always there. The share extension then has
+/// its own folder and cannot hand files to the app (the app downloads from the server instead).
 enum AppGroup {
     static let id = "group.com.capybaraharmony.cobalt"
 
@@ -23,14 +31,119 @@ enum AppGroup {
         #endif
     }
 
-    /// `<app group container>/<name>`, else `Application Support/<name>`; created on demand.
-    static func directory(_ name: String) -> URL {
+    /// Which folder holds everything this process stores.
+    enum RootKind: String, Sendable {
+        /// `<app group container>`: shared with the extension.
+        case appGroup
+        /// This process's Application Support: the group container is missing or unwritable.
+        case fallback
+        /// Not even Application Support could be written; the temporary directory stands in (nothing
+        /// survives a relaunch there).
+        case none
+    }
+
+    /// The answer of `resolve`: the base folder, which kind it is, and why the group was not used.
+    struct Location: Sendable, Equatable {
+        var kind: RootKind
+        var base: URL
+        /// Whether `base` accepted a probe write.
+        var writable: Bool
+        /// The group container was not used because: `macos`, `no-container` (entitlement missing or
+        /// renamed), or `unwritable`. Nil when the group is used.
+        var groupSkipped: String?
+        /// A folder moved from the fallback into the group when the group became available.
+        var migrated: [String] = []
+
+        /// One-line telemetry payload.
+        var telemetry: [String: TelemetryValue] {
+            var data: [String: TelemetryValue] = ["kind": .string(kind.rawValue), "writable": .bool(writable)]
+            if let groupSkipped { data["groupSkipped"] = .string(groupSkipped) }
+            if !migrated.isEmpty { data["migrated"] = .string(migrated.joined(separator: ",")) }
+            return data
+        }
+    }
+
+    private static let resolved = Mutex<Location?>(nil)
+
+    /// Decided once per process.
+    static var location: Location {
+        resolved.withLock { slot in
+            if let slot { return slot }
+            let made = resolve(container: containerURL(), applicationSupport: applicationSupportURL())
+            slot = made
+            return made
+        }
+    }
+
+    private static func applicationSupportURL() -> URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    }
+
+    /// The Mac has no extension and never opens the group container (that triggers the "access data
+    /// from other apps" prompt).
+    static var usesGroup: Bool {
+        #if os(macOS)
+        return false
+        #else
+        return true
+        #endif
+    }
+
+    /// The decision itself, with its inputs passed in (tests give it a missing, an unwritable and a good container).
+    static func resolve(container: URL?, applicationSupport: URL?, usesGroup: Bool = AppGroup.usesGroup) -> Location {
         let fm = FileManager.default
-        let base = containerURL()
-            ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fm.temporaryDirectory
-        let dir = base.appendingPathComponent(name, isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        var skipped: String?
+        if !usesGroup {
+            skipped = "macos"
+        } else if let container {
+            if writable(container) {
+                var location = Location(kind: .appGroup, base: container, writable: true, groupSkipped: nil)
+                if let support = applicationSupport { location.migrated = migrateFallback(from: support, into: container) }
+                return location
+            }
+            skipped = "unwritable"
+        } else {
+            skipped = "no-container"
+        }
+        if let support = applicationSupport, writable(support) {
+            return Location(kind: .fallback, base: support, writable: true, groupSkipped: skipped)
+        }
+        return Location(kind: .none, base: fm.temporaryDirectory, writable: writable(fm.temporaryDirectory), groupSkipped: skipped)
+    }
+
+    /// Creates the folder when needed and proves it takes a file (a container can exist and still refuse writes).
+    static func writable(_ dir: URL) -> Bool {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            let probe = dir.appendingPathComponent(".cobalt-probe-\(UUID().uuidString.prefix(8))")
+            try Data("x".utf8).write(to: probe)
+            try? fm.removeItem(at: probe)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// The folders a build that ran without the group left in Application Support move into the group
+    /// once it is there (a properly signed build replaces the sideloaded one): only when the group
+    /// has no such folder yet, so nothing is ever merged or overwritten. Returns the names moved.
+    private static func migrateFallback(from support: URL, into container: URL) -> [String] {
+        let fm = FileManager.default
+        var moved: [String] = []
+        for name in ["Videos", "Sync", "Jobs"] {
+            let old = support.appendingPathComponent(name, isDirectory: true)
+            let new = container.appendingPathComponent(name, isDirectory: true)
+            guard fm.fileExists(atPath: old.path), !fm.fileExists(atPath: new.path) else { continue }
+            if (try? fm.moveItem(at: old, to: new)) != nil { moved.append(name) }
+        }
+        return moved
+    }
+
+    /// `<root>/<name>`; created on demand. The root is the group container, else Application Support.
+    static func directory(_ name: String) -> URL {
+        let dir = location.base.appendingPathComponent(name, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 }
@@ -151,21 +264,24 @@ public final class Settings {
 
     nonisolated public static let autoContinueChoices: [Int] = [3, 5, 10]
 
-    /// "save to a photos album": off until the owner turns it on (`PhotosSync.enable()` asks for access
-    /// first and only then sets it).
+    /// "save to a photos album": ON until the owner turns it off (2026-10-05: automatic is what the owner
+    /// expects). An install that never touched the toggle has no stored value and so reads on; the
+    /// system's permission prompt appears the first time something is about to be saved
+    /// (`PhotosSync`), not at launch. `PhotosSync.enable()` / `disable()` store an explicit answer.
     public var photosAlbumSync: Bool {
         get {
             access(keyPath: \.photosAlbumSync)
-            return defaults.object(forKey: "photosAlbumSync") as? Bool ?? false
+            return defaults.object(forKey: "photosAlbumSync") as? Bool ?? true
         }
         set { withMutation(keyPath: \.photosAlbumSync) { defaults.set(newValue, forKey: "photosAlbumSync") } }
     }
 
-    /// "include webps": off by default; applies to webps kept from the moment it is turned on.
+    /// "include webps": on by default (PhotoKit keeps them as stills; the settings footnote says so). Turned
+    /// on later, it applies to webps kept from then on.
     public var photosSyncWebps: Bool {
         get {
             access(keyPath: \.photosSyncWebps)
-            return defaults.object(forKey: "photosSyncWebps") as? Bool ?? false
+            return defaults.object(forKey: "photosSyncWebps") as? Bool ?? true
         }
         set { withMutation(keyPath: \.photosSyncWebps) { defaults.set(newValue, forKey: "photosSyncWebps") } }
     }

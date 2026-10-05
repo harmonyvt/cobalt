@@ -217,6 +217,16 @@ export class FakeHelper {
     probeError: { status: number; code: string } | null = null;
     probeHang = false; // never answers (a hung helper call)
     probedBytes: number[] = [];
+    // POST /poster?id= (server-made posters, APP-API-CONTRACT.md section 13): this many answer 429
+    // first, then the JPEG (or posterError); posterBytes records the streamed video lengths,
+    // posterIds the ids asked for. posterGate holds the call until it resolves (a poster "in progress").
+    posterBusy = 0;
+    posterFailures = 0; // this many answer 500 first
+    posterError: { status: number; code: string } | null = null;
+    posterJpeg: Uint8Array = Uint8Array.from([0xff, 0xd8, ...new Array(300).fill(5), 0xff, 0xd9]);
+    posterBytes: number[] = [];
+    posterIds: string[] = [];
+    posterGate: Promise<void> | null = null;
     jobPolls = 0;
     jobsGone = false; // GET /jobs/:id -> 404 (the container restarted and forgot every job)
     // DELETE /jobs/:id really drops the job (like the real helper): a later GET
@@ -299,6 +309,26 @@ export class FakeHelper {
                 return json(this.probeError.status, { status: "error", error: { code: this.probeError.code } });
             }
             return json(200, this.probeResult);
+        }
+
+        if (method === "POST" && p === "/poster") {
+            this.posterIds.push(u.searchParams.get("id") ?? "");
+            if (this.posterGate) await this.posterGate;
+            if (this.posterBusy > 0) {
+                this.posterBusy--;
+                return json(429, { status: "error", error: { code: "error.webp.busy" } });
+            }
+            this.posterBytes.push((await collect(init?.body as ReadableStream)).length);
+            if (this.posterFailures > 0) {
+                this.posterFailures--;
+                return json(500, { status: "error", error: { code: "error.studio.upload_failed" } });
+            }
+            if (this.posterError) {
+                return json(this.posterError.status, { status: "error", error: { code: this.posterError.code } });
+            }
+            return new Response(this.posterJpeg, {
+                headers: { "content-type": "image/jpeg", "content-length": String(this.posterJpeg.length) },
+            });
         }
 
         if (method === "POST" && p === "/jobs/upload") {

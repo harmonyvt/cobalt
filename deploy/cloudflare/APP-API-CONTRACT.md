@@ -88,7 +88,8 @@ Response `200`:
 ```
 
 - Later additions to `features` (a missing key = `false`): `live_activity_push` (section 8.5),
-  `notify_bridge` (section 9.1), `crop` (section 10; `true` on any server that has it).
+  `notify_bridge` (section 9.1), `crop` (section 10; `true` on any server that has it), `delete_post` (section 12), `source_wait`
+  (section 11), `poster` and `public_default` (section 13).
 - `server` is the fork marker. The app treats any 200 JSON with `server == "cobalt-cloudflare"`
   as this fork and reads `features` / `limits` from it (missing feature keys = `false`, missing
   limits = the values above).
@@ -1170,3 +1171,157 @@ Code: `src/gate.ts` (the `post` sub-route), `src/app-routes.ts` (`libraryPostDel
 dispatch). Tests: `test/library.test.ts` ("DELETE /library/items/<id>/post"), `test/gate.test.ts`, `test/worker.test.ts`
 (the flag). `OriginalsBucket` (`src/studio.ts`) and `PublishBucket` (`src/publish.ts`) already declared `delete(key)`, and
 the test fakes already implemented it, so no interface change was needed. Deploying is the owner's.
+
+## 13. Server-made posters and "public by default" (addendum, built 2026-10-05; owner: "by default videos are public and they should have a thumbnail by the server")
+
+Two additive features, built as one change. **Backward compatible**: no existing route, gate decision, status code, error code or
+row meaning changes; old apps (1.0 to 1.3), the web library, the studio page and upstream-style clients (`POST /`) see only extra JSON
+fields. Both are announced by capability flags: `GET /capabilities` gains `features.poster: true` and `features.public_default: true`
+(missing = `false`: an older server ignores `public` and makes no posters, so the app keeps its own thumbnails and hosts by hand).
+
+### 13.1 Migration `d1/migrations/0006_posters_public.sql` (additive: nullable columns and one index)
+
+| table | new column | meaning |
+|---|---|---|
+| `media_items` | `poster TEXT` | public URL of the row's poster JPEG (`https://media.capybaraharmony.com/<10 base62>.jpg`) |
+| `media_items` | `poster_at INTEGER` | ms; when a poster was made, or when the last attempt ended without one (a row without a poster is not tried again for 24 h) |
+| `studio_sessions` | `poster TEXT` | the same URL, mirrored from the session's original (so `GET /studio/<sid>` needs no join) |
+| `studio_sessions` | `public_state TEXT` | `NULL` (never asked), `'pending'`, `'ready'`, `'failed'` |
+| `studio_sessions` | `public_url TEXT` | the hosted original's public URL when `public_state = 'ready'` |
+
+Plus `idx_media_items_object ON media_items (bucket, r2_key)`. Nothing existing is rewritten. Statements that name their columns (every
+one the code before this change ran) keep working on the migrated database, so **apply the migration first, deploy after**.
+`test/migration-0006.test.ts` applies it on top of 0005 with data in every table and asserts the rows survive untouched, the new columns
+read NULL, the old statements still run, and the file contains nothing but `ALTER TABLE ... ADD COLUMN` and `CREATE INDEX`.
+
+### 13.2 `public: true`: host the original publicly when the save is ready
+
+- **`POST /studio`**: optional `"public": true` next to `url`. `true` asks for it; absent, `null` and `false` are exactly today's
+  behaviour. Any other type (`"yes"`, `1`, an object) is `400 error.studio.invalid_params` and nothing is created. The response is
+  unchanged (`201 {status, id, url}`). The flag survives the Worker's link extraction from free text.
+- **`PUT /studio/upload?name=...&public=1`** (the upload contract's own style: options travel in the query). `1` and `true` ask for it;
+  absent, empty, `0` and `false` are today's behaviour; any other value is `400 error.library.bad_request`, refused before the body is
+  read. (There is no header form.)
+- **What happens.** The session row records `public_state = 'pending'` at creation (an errored save resets it to `NULL`: nothing to
+  host). When the save becomes `ready` (the very `UPDATE ... SET status = 'ready'` is untouched and happens first), the Durable Object
+  hosts the stored original with **the same code as `POST /studio/<sid>/publish`** (`publishStudio`): the same unguessable
+  `<10 base62>.<ext>` name, the same chunk-free R2 to R2 stream copy, the same `host` row (same columns, `session_id = <sid>`,
+  `key_id` = the session's key, `link`, size, duration) and the same object metadata (`published: "1"`, `sessionId`, ...). Then
+  `public_state = 'ready'` and `public_url` = the file. The poll that reports `ready` normally already carries `public_url` (the copy
+  ran before that response was sent); if the copy is slow the poll just takes longer, and `status` was `ready` in D1 the whole time
+  (`/studio/<sid>/source?wait=` is not held back). The helper copy and the `save:` record are released **before** the copy starts, so it
+  cannot hold up the next save.
+- **Failure never fails the save.** A `public:<sid>` record in the Durable Object's storage is written before the first attempt; if the
+  attempt does not finish (R2 hiccup, eviction) the job sweep retries it every pass. 4 attempts in all (counted when one starts), then
+  `public_state = 'failed'`: the original stays private and the owner can still host it by hand (`POST /library/items/<id>/publish`).
+  A session that expired or vanished is `'failed'` at once. A save whose hosting already exists (an earlier attempt copied the file but
+  died before recording it) just records the existing copy: nothing is copied twice. Without the public bucket wired, `'failed'`.
+- **An upload that gets no session** (an image: `png`, `jpeg`, `webp`, `heic`; or a video whose adopt was refused, e.g. `busy`) is hosted
+  by the same call, inline, with `POST /library/items/<id>/publish`'s own code (`libraryPublish`): `public_state` `'ready'` with
+  `public_url`, or `'failed'` (the private upload stays; still `201`). Known gap, as for route 5c: such a copy has no session, so it is
+  listed as a second post next to its private upload.
+- **Responses (all additive).**
+  - `GET /studio/<sid>` (and the Durable Object's advance reply, the Worker's D1 answers and its fallback): `public_state`
+    (`null | "pending" | "ready" | "failed"`) and `public_url` (`string | null`), always present, `null` when never asked.
+  - `PUT /studio/upload` `201`: the same two keys.
+  - `GET /library`: each post gains `public_url` (the newest `host` file's URL, else `null`); the hosted copy is also a normal file
+    (`kind "public"`, `source "host"`, `url`) in `files`, as it always was for a published original.
+- **Unchanged**: a session's lifetime (7 days), `POST /studio/<sid>/publish`, the web studio page, the web library.
+
+### 13.3 Posters
+
+- **What gets one**: the private ORIGINAL of a video or gif (`content_type` `video/*` or `image/gif`): a saved link, an upload. The
+  public copy hosted from it shares the original's poster object. **Webps get none** (decision): ffmpeg here cannot decode animated
+  WebP (LIBRARY-CONTRACT conversion rules), and a webp is its own picture. Images need none.
+- **Picture**: one JPEG, `-q:v 4`, frame at **10 % of the duration, at most 3 s in** (0 when the duration is unknown), longer side at
+  most **720 px** (never upscaled, rotation metadata applied so a phone clip is upright, square pixels, 4:2:0). Tens of KB (14 to 17 KB for the test clips).
+  A frame past the end of a clip whose container over-reports its duration is retried at the very start.
+- **Where**: the PUBLIC bucket `cobalt-media`, name `<10 base62>.jpg` (unguessable; never matches `DELETE /media/<name>`'s
+  `.webp` pattern), `content-type: image/jpeg`, `cache-control: public, max-age=31536000, immutable`, custom metadata
+  `poster: "1"`, `itemId`, `createdAt`. The URL is recorded in `media_items.poster` (the original's row) and mirrored on every session
+  of that original (`studio_sessions.poster`, matched by `r2_key`) and on the `host` rows hosted from those sessions. **The poster of a
+  private video is therefore public** (an unguessable URL), by the owner's decision.
+- **Helper** (`helper/server.js`, `helper/lib.js`): `POST /poster?id=<16..32 alnum>`, body = the video bytes (streamed to
+  `/tmp/poster/<id>/in`, at most 200 MB), `x-internal-key`. It probes (no video stream: `400 error.studio.not_video`), runs ffmpeg
+  once (30 s budget), deletes the directory, and answers `200 image/jpeg` with `content-length`. Errors: `413 error.studio.too_large`,
+  `422 error.poster.failed` (no frame, a hung or failing ffmpeg, an empty or over-2 MB file), `429 error.webp.busy` (**one job at a
+  time**, the same rule as `/probe`: a poster holds the helper like a job does), `502 error.studio.upload_failed`.
+- **When (never delays `ready`)**: `ready` only writes a `poster:<item id>` record into the Durable Object's storage and arms the job
+  sweep. The sweep makes **one poster per pass**, oldest first, and only while the helper is free (no save in flight, no encode; a
+  `429` from the helper also counts as "not now" and is not an attempt, up to 10 minutes). A render, save or upload that arrives while
+  a poster is being made **waits for it** (at most 20 s) instead of finding the helper busy. Typical delay from `ready` to a poster:
+  the sweep cadence (5 s) plus a second or two of ffmpeg.
+- **Retries**: 3 helper attempts per job (counted when one starts, so a poison file cannot loop), then `poster_at = now` and the job
+  is dropped; a refusal for good (4xx from the helper: not a video, no frame) gives up at once. The lazy backfill skips a row for 24 h
+  after `poster_at`.
+- **Existing saves, lazily or in one go** (no migration data step):
+  - **a library read** (`GET /library`, and the web's `GET /api/library`) that shows an original with no poster (and not tried in the
+    last 24 h) asks the Durable Object to queue it: one internal call (`POST /posters/kick`, 1.5 s cap, errors swallowed), which only
+    writes records (up to 25 newest first). The container is not woken by the call, only by the sweep that follows;
+  - **`POST /library/posters/backfill[?limit=1..100]`** (keyed, or the service header): the same kick, default 25, answers
+    `200 {"status":"success","queued":<new>,"eligible":<all rows still without a poster and out of cooldown>}`. Call it until
+    `eligible` is 0 (the sweep drains the queue meanwhile). No CORS, `cache-control: no-store`;
+  - **the daily cron** (03:23 UTC, the telemetry retention's trigger) kicks up to 100.
+- **Responses (all additive)**:
+  - `GET /studio/<sid>` (and the other session answers): `poster_url` (`string | null`).
+  - `GET /library`: each post gains `poster_url` (the original's, else any file's), each file gains `poster_url`; the item shape
+    returned by `PUT /studio/upload` and the web's `itemShape` gain `poster_url`. `null` until made, always `null` for webps.
+  - web `GET /api/library`: items and studios gain `poster_url`; the page uses it as the tile picture (a small `<img>` instead of a
+    `<video>` or a lock icon), falling back to what it showed before if the image does not load.
+- **Not done**: no re-encode of an existing poster, no poster for webp/png/jpeg/heic, no poster from the helper's held copy of a
+  fresh link save (the video is streamed from R2 again: one more R2 read and one container upload per save; fine at this size, a
+  possible later optimisation).
+
+### 13.4 Deleting
+
+- **`DELETE /library/items/<id>/post`** (section 12) deletes the posters of the rows it deletes: after every row of the post is
+  soft-deleted, each distinct `poster` URL among them is released. **A poster object is deleted only when no live row still names it**
+  (the original and its public copy share one: deleting the last of them removes it); a row that stayed live in `remaining` keeps its
+  poster until the retry. Only objects named like a poster (`<10 base62>.jpg`) are ever deleted through the column. A failed poster delete
+  is logged, not reported (`200` / `502 partial` keep their meaning); the object is then an orphan nothing lists (tens of KB).
+- **The web library's `DELETE /api/library/items/<id>`** does the same for its one row (and the host copy keeps the shared poster until
+  it is deleted too). The web's `POST /api/library/items/<id>/publish` copies the poster URL to the new `host` row.
+- **Per-file deletes**: `DELETE /media/<name>.webp` (webps have no poster) is unchanged and a poster name is a `404` at the gate.
+- **Lifetime paths**: nothing that expires or sweeps ever deletes media. The 7-day session expiry keeps the original (the library's
+  gallery), so its poster stays; the job sweep deletes no object; the 30-day retention (`runTelemetryRetention`) only touches telemetry
+  rows and `telemetry/...` crash objects. `test/poster-delete.test.ts` pins every `.delete(` on a bucket in `src/` so a new deletion
+  path cannot appear without a review against posters.
+- **`scripts/backfill-library.mjs`** (the one-off library backfill) skips objects whose custom metadata says `poster: "1"`: they are
+  not library files. (A hosted `.jpg` image has the same name shape, so the metadata, not the name, decides.)
+
+### 13.5 Files and tests
+
+New: `d1/migrations/0006_posters_public.sql`, `api/src/poster.ts` (`PosterService`: queue, sweep, job, kick, `idle`),
+`api/test/{poster,public-default,poster-delete,poster-helper,migration-0006}.test.ts`, `api/test/poster-world.ts`,
+`api/test/fixtures/clip-*.mp4|gif` (six small clips, 140 KB in all). Edited: `api/helper/{lib,server}.js` (`posterTime`,
+`buildPosterArgs`, `POST /poster`), `api/src/{studio,publish,library,app-routes,gate,worker,index}.ts`, `api/test/{studio-fakes,
+library,gate,backfill}.test.ts` (the fake helper answers `/poster`; the expected shapes gain the new keys), `scripts/backfill-library.mjs`,
+`web/src/library.ts`, `web/src/library/page.html` (+ the generated embed), `web/test/library.test.ts`, `README.md`.
+
+Code map: `studio.ts` (`create`/`adopt` parse `public`; `afterReady`, `hostPublic`, `kickPosters`; `sweep` runs the public retries and one
+poster; `sessionBody` adds the three keys; `/posters/kick` in `handleStudioRoute`), `poster.ts`, `publish.ts` (the host row copies the
+session's poster), `library.ts` (`releasePoster`, `poster` in `insertMediaItem`), `app-routes.ts` (the flag on upload, `poster_url` and
+`public_url` in `GET /library`, the lazy kick, `libraryPostersBackfill`, poster release in `libraryPostDelete`), `gate.ts` and `worker.ts`
+(`library_posters_backfill`), `index.ts` (the public bucket into `StudioService`, `/poster` in the helper call budget, the cron kick).
+
+Tests (real SQL on `node:sqlite` over every migration; the helper's HTTP API against the REAL ffmpeg on the fixture clips and against a
+scripted stand-in): poster generated and recorded (original row, session mirror, public copies), never inside the save, one job per
+pass, busy/retry/give-up/cooldown, deleted-meanwhile guard, render/save waiting for a poster, the lazy kick and the backfill route (gate,
+auth, limits), `poster_url` in every response, `public` on link and upload (video, image, refused adopt), absent flag = today's, failure
+and retry and recovery of the public copy, shared poster refcount on delete, lifetime paths, the migration on top of 0005. The real-ffmpeg
+half skips itself when no ffmpeg is found (`FFMPEG_PATH` or `ffmpeg` on the PATH).
+
+### 13.6 Deploy (owner; not run by the lane)
+
+1. **Migration first**: `cd deploy/cloudflare/web && cf d1 migrations apply 42f18bb0-837a-47f7-b1e2-606eb705ab6c --dir ../d1/migrations`
+   (the GLOBAL `cf`). Additive; the running Workers keep working on it.
+2. **API**: `deploy/cloudflare/api/prepare-git-info.sh`, then `cd deploy/cloudflare/api && cf deploy --secrets-file ~/.config/cobalt/secrets.json`.
+   The helper changed, so the deploy restarts the container once.
+3. **Web**: `deploy/cloudflare/build-web.sh`, then `cd deploy/cloudflare/web && cf deploy --secrets-file ~/.config/cobalt/secrets.json`.
+4. **Backfill** (optional, the library read and the cron do it lazily): `curl -X POST -H "Authorization: Api-Key <key>"
+   https://api.capybaraharmony.com/library/posters/backfill?limit=100` until `eligible` is 0.
+5. **Verified on the image**: the container image the dry run built (linux/amd64 under emulation, ffmpeg-static) ran the real helper's
+   `POST /poster` on the six fixture clips: 200 `image/jpeg`, 720x405 (1080p), 640x360, 360x640 (portrait and the rotation-tagged clip),
+   200x120 (gif), 64x64, 5 to 17 KB each, 0.3 to 1.6 s each (emulated, on a heavily loaded machine).
+   **Unverified until deployed**: a poster write and the R2 to R2 copy from inside the Durable Object (the same R2 calls the Worker
+   already makes), and the real timings (poster delay after `ready`, hosting time for a large file).

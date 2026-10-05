@@ -26,6 +26,8 @@ import { STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "./gate";
 import { SERVICE_KEY_ID, insertMediaItem, mediaNameFromUrl, pageLink } from "./library";
 import { LIVE_PUSH_MS, type LiveHooks, type LiveRenderEvent } from "./live";
 import type { NotifyHooks, NotifyRenderEvent } from "./notify";
+import { PosterService, POSTER_BATCH, type MediaStore } from "./poster";
+import { publishStudio } from "./publish";
 
 export const SID_LENGTH = 22;
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -110,7 +112,16 @@ export type SessionRow = {
     height: number | null;
     created_at: number;
     expires_at: number;
+    // migration 0006 (section 13). Optional: rows seeded without them read as null.
+    // The poster JPEG's public URL, mirrored from the session's original.
+    poster?: string | null;
+    // `public: true` on the save: 'pending' until the original is hosted, then 'ready'
+    // (public_url) or 'failed'; null when it was never asked for.
+    public_state?: PublicState | null;
+    public_url?: string | null;
 };
+
+export type PublicState = "pending" | "ready" | "failed";
 
 export type RenderRow = {
     id: string;
@@ -179,6 +190,11 @@ export function sessionBody(row: SessionRow, renders: RenderRow[], progress?: Sa
         width: row.width ?? null,
         height: row.height ?? null,
         bytes: row.bytes ?? null,
+        // server-made thumbnail (null until the container has cut it; section 13)
+        poster_url: row.poster ?? null,
+        // public hosting asked for with `public: true` (null = not asked) and where it is
+        public_state: row.public_state ?? null,
+        public_url: row.public_url ?? null,
         // save progress (null / false when the DO does not know)
         step: p?.step ?? null,
         step_bytes: p?.bytes ?? null,
@@ -425,7 +441,19 @@ export type StudioDeps = {
     // against `notifyMs` (default NOTIFY_CALL_MS): it can never fail or stall a poll for long.
     notify?: NotifyHooks;
     notifyMs?: number;
+    // The public bucket and its base URL (APP-API-CONTRACT.md section 13): server-made posters
+    // and `public: true` hosting. Absent = both off (a save that asks for `public` ends with
+    // public_state 'failed'; no poster jobs are queued).
+    media?: MediaStore;
+    mediaBaseUrl?: string;
+    // How long a save, upload or render waits for a poster being made (POSTER_IDLE_WAIT_MS).
+    posterIdleMs?: number;
 };
+
+// A save's public copy is retried by the sweep this many times, then it is 'failed'.
+export const MAX_PUBLIC_ATTEMPTS = 4;
+type PublicJob = { attempts: number; at: number };
+const PUBLIC_PREFIX = "public:";
 
 type FetchDone = {
     status: "done";
@@ -489,7 +517,29 @@ export class StudioService {
     // sid -> when the copy into R2 last told the live service its byte count
     private lastStoringPush = new Map<string, number>();
 
-    constructor(private d: StudioDeps) {}
+    // Server-made posters (section 13); undefined when no public bucket is wired.
+    private posters?: PosterService;
+    // sid -> its public copy is being made right now (in memory only)
+    private hosting = new Set<string>();
+
+    constructor(private d: StudioDeps) {
+        if (d.media && d.mediaBaseUrl) {
+            this.posters = new PosterService({
+                db: d.db,
+                storage: d.storage,
+                originals: d.originals,
+                media: d.media,
+                mediaBaseUrl: d.mediaBaseUrl,
+                now: d.now,
+                randomBytes: d.randomBytes,
+                ensureRunning: d.ensureRunning,
+                callHelper: (path, init, ms) => this.callHelper(path, init, ms),
+                helperBusy: async () => (await this.saveActive()) || this.encoding(),
+                scheduleSweep: () => this.scheduleSweep(),
+                renew: d.renew,
+            });
+        }
+    }
 
     private async scheduleSweep(): Promise<void> {
         try {
@@ -634,18 +684,26 @@ export class StudioService {
 
     async create(keyId: string, rawBody: string): Promise<StudioReply> {
         let link: string | null = null;
+        let publicFlag: unknown;
         try {
             if (rawBody.length <= MAX_BODY_BYTES) {
                 const parsed = JSON.parse(rawBody);
                 if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                     link = linkFrom((parsed as { url?: unknown }).url);
+                    publicFlag = (parsed as { public?: unknown }).public;
                 }
             }
         } catch {
             // no link
         }
         if (!link) return studioErr(400, "error.studio.no_link");
+        // `public: true` (section 13): host the original publicly once the save is ready
+        if (publicFlag !== undefined && publicFlag !== null && typeof publicFlag !== "boolean") {
+            return studioErr(400, "error.studio.invalid_params");
+        }
+        const wantsPublic = publicFlag === true;
 
+        await this.posters?.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         if ((await this.saveActive()) || this.encoding()) {
             return studioErr(429, "error.studio.busy");
@@ -656,9 +714,9 @@ export class StudioService {
         try {
             await this.d.db
                 .prepare(
-                    "INSERT INTO studio_sessions (id, key_id, link, service, status, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, 'saving', ?5, ?6)",
+                    "INSERT INTO studio_sessions (id, key_id, link, service, status, created_at, expires_at, public_state) VALUES (?1, ?2, ?3, ?4, 'saving', ?5, ?6, ?7)",
                 )
-                .bind(sid, keyId, link, serviceFromUrl(link), now, now + SESSION_TTL_MS)
+                .bind(sid, keyId, link, serviceFromUrl(link), now, now + SESSION_TTL_MS, wantsPublic ? "pending" : null)
                 .run();
         } catch {
             return studioErr(503, "error.api.generic");
@@ -744,7 +802,7 @@ export class StudioService {
         try {
             const res = await this.d.db
                 .prepare(
-                    "UPDATE studio_sessions SET status = 'error', error_code = ?1 WHERE id = ?2 AND status = 'saving'",
+                    "UPDATE studio_sessions SET status = 'error', error_code = ?1, public_state = NULL WHERE id = ?2 AND status = 'saving'",
                 )
                 .bind(code, sid)
                 .run();
@@ -1065,6 +1123,7 @@ export class StudioService {
                 sid,
             )
             .run();
+        let becameReady = false;
         if (Number(res.meta?.changes ?? 0) === 0) {
             // Marked lost meanwhile: do not keep an object nothing points at.
             await this.d.originals.delete(key).catch(() => {});
@@ -1089,12 +1148,131 @@ export class StudioService {
             });
             // the save is ready: the owner who walked away is told (once: the event's record)
             await this.notifyCall("saved", (n) => n.onSaved(sid));
+            becameReady = true;
         }
         await this.dropHelperCopy(sid);
         await this.d.storage.delete(`save:${sid}`).catch(() => {});
         this.progress.delete(sid);
         this.lastStoringPush.delete(sid);
+        // The poster and, when asked for, the public copy (section 13). `ready` is already recorded
+        // and the helper and the save record are already free, so neither can delay what else wants
+        // them, and a failure of either never fails the save.
+        if (becameReady) await this.afterReady(sid, row.public_state === "pending", key);
         return POLL_INTERVAL_MS;
+    }
+
+    // ---- after a save is ready: the poster, and the public copy (section 13) ------------------
+
+    // Both are bookkeeping that must never fail or delay the save: the poster is only queued
+    // (the sweep makes it), the public copy is made here when asked for, with a record for the
+    // sweep to finish it if this attempt does not (a Durable Object eviction, an R2 hiccup).
+    private async afterReady(sid: string, wantsPublic: boolean, r2Key: string): Promise<void> {
+        try {
+            await this.posters?.onReady(r2Key);
+            if (!wantsPublic) return;
+            await this.d.storage.put(`${PUBLIC_PREFIX}${sid}`, { attempts: 0, at: this.d.now() } satisfies PublicJob);
+            await this.scheduleSweep();
+            await this.hostPublic(sid);
+        } catch (e) {
+            console.error("[studio] after-ready work failed", sid, String(e));
+        }
+    }
+
+    private async setPublic(sid: string, state: PublicState, url: string | null): Promise<void> {
+        try {
+            await this.d.db
+                .prepare("UPDATE studio_sessions SET public_state = ?1, public_url = ?2 WHERE id = ?3 AND public_state = 'pending'")
+                .bind(state, url, sid)
+                .run();
+        } catch (e) {
+            console.error("[studio] could not record the public copy", sid, String(e));
+        }
+    }
+
+    // Hosts a ready session's original publicly (the same code path as POST /studio/<sid>/publish:
+    // publishStudio, the same names, the same `host` row). Idempotent: a session already hosted
+    // (an earlier attempt copied the file but died before recording it) just records it. A
+    // transient failure leaves the `public:<sid>` record for the next sweep pass; after
+    // MAX_PUBLIC_ATTEMPTS, or on a failure that cannot improve, the state is 'failed' and the
+    // original stays private (the owner can still host it by hand). Never throws.
+    async hostPublic(sid: string): Promise<void> {
+        if (this.hosting.has(sid)) return;
+        this.hosting.add(sid);
+        const key = `${PUBLIC_PREFIX}${sid}`;
+        try {
+            const row = await getSession(this.d.db, sid);
+            if (!row || row.public_state !== "pending" || row.status !== "ready") {
+                await this.d.storage.delete(key).catch(() => {});
+                return;
+            }
+            const rec = (await this.d.storage.get<PublicJob>(key)) ?? { attempts: 0, at: this.d.now() };
+            if (!this.d.media || !this.d.mediaBaseUrl) {
+                await this.setPublic(sid, "failed", null);
+                await this.d.storage.delete(key).catch(() => {});
+                return;
+            }
+            let url: string | null = null;
+            const have = await this.d.db
+                .prepare(
+                    "SELECT url FROM media_items WHERE session_id = ?1 AND source = 'host' AND bucket = 'media' AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 1",
+                )
+                .bind(sid)
+                .first<{ url: string | null }>();
+            if (have?.url) url = have.url;
+            if (!url) {
+                if (rec.attempts >= MAX_PUBLIC_ATTEMPTS) {
+                    await this.setPublic(sid, "failed", null);
+                    await this.d.storage.delete(key).catch(() => {});
+                    return;
+                }
+                // counted when it starts: an attempt that takes the Durable Object down still ends
+                await this.d.storage.put(key, { attempts: rec.attempts + 1, at: this.d.now() } satisfies PublicJob);
+                const reply = await publishStudio(
+                    {
+                        db: this.d.db,
+                        originals: this.d.originals,
+                        media: this.d.media,
+                        mediaBaseUrl: this.d.mediaBaseUrl,
+                        now: this.d.now,
+                        randomBytes: this.d.randomBytes,
+                    },
+                    sid,
+                    row.key_id ?? SERVICE_KEY_ID,
+                );
+                const b = reply.body as { url?: unknown; error?: { code?: unknown } };
+                if (reply.status === 201 && typeof b.url === "string") {
+                    url = b.url;
+                } else {
+                    const code = typeof b.error?.code === "string" ? b.error.code : "error.api.generic";
+                    console.error("[studio] public copy failed", sid, reply.status, code);
+                    // a session that is gone, expired or not ready will not get better
+                    if (reply.status === 404 || reply.status === 410 || reply.status === 409) {
+                        await this.setPublic(sid, "failed", null);
+                        await this.d.storage.delete(key).catch(() => {});
+                    }
+                    return;
+                }
+            }
+            await this.setPublic(sid, "ready", url);
+            await this.d.storage.delete(key).catch(() => {});
+        } catch (e) {
+            console.error("[studio] public copy threw", sid, String(e));
+        } finally {
+            this.hosting.delete(sid);
+        }
+    }
+
+    // POST /posters/kick (the Worker's call: the library read, the cron, the backfill route):
+    // queues the posters still missing. Never wakes the container (the sweep does the work).
+    async kickPosters(limit?: number): Promise<StudioReply> {
+        if (!this.posters) return studioErr(503, "error.api.generic");
+        try {
+            const r = await this.posters.kick(limit ?? POSTER_BATCH);
+            return { status: 200, body: { status: "success", queued: r.queued, eligible: r.eligible } };
+        } catch (e) {
+            console.error("[studio] poster kick failed", String(e));
+            return studioErr(503, "error.api.generic");
+        }
     }
 
     // ---- POST /library/adopt ----------------------------------------------------------
@@ -1118,6 +1296,9 @@ export class StudioService {
         }
 
         const { r2_key: r2Key, name, content_type: rawType, bytes, item_id: itemId } = b;
+        // `public: true` (section 13): host the original publicly once it is ready
+        if (b.public !== undefined && b.public !== null && typeof b.public !== "boolean") return invalid();
+        const wantsPublic = b.public === true;
         // Uploads AND saved studio originals: the library's "open in studio" on a
         // saved original sent originals/<sid>.<ext> and got invalid_params
         // (live, 2026-10-02).
@@ -1137,6 +1318,7 @@ export class StudioService {
         if (typeof bytes !== "number" || !Number.isInteger(bytes) || bytes <= 0) return invalid();
         if (bytes > MAX_SOURCE_BYTES) return studioErr(413, "error.studio.too_large");
 
+        await this.posters?.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         if ((await this.saveActive()) || this.encoding()) {
             return studioErr(429, "error.studio.busy");
@@ -1145,11 +1327,14 @@ export class StudioService {
         const sid = mintSid(this.d.randomBytes);
         const now = this.d.now();
         try {
+            // (a reopened original that already has a poster hands it to its new session)
             await this.d.db
                 .prepare(
-                    "INSERT INTO studio_sessions (id, key_id, link, service, title, status, r2_key, content_type, bytes, created_at, expires_at) VALUES (?1, ?2, ?3, 'upload', ?4, 'saving', ?5, ?6, ?7, ?8, ?9)",
+                    `INSERT INTO studio_sessions (id, key_id, link, service, title, status, r2_key, content_type, bytes, created_at, expires_at, public_state, poster)
+                     VALUES (?1, ?2, ?3, 'upload', ?4, 'saving', ?5, ?6, ?7, ?8, ?9, ?10,
+                             (SELECT poster FROM media_items WHERE bucket = 'originals' AND r2_key = ?5 AND deleted_at IS NULL LIMIT 1))`,
                 )
-                .bind(sid, keyId, `upload:${itemId}`, name.trim(), r2Key, contentType, bytes, now, now + SESSION_TTL_MS)
+                .bind(sid, keyId, `upload:${itemId}`, name.trim(), r2Key, contentType, bytes, now, now + SESSION_TTL_MS, wantsPublic ? "pending" : null)
                 .run();
         } catch {
             return studioErr(503, "error.api.generic");
@@ -1236,7 +1421,7 @@ export class StudioService {
         if (width === null || height === null) return await this.fail(sid, "error.studio.not_video");
 
         // (0 changes = marked lost meanwhile; the upload is not ours to delete)
-        await this.d.db
+        const ready = await this.d.db
             .prepare(
                 "UPDATE studio_sessions SET status = 'ready', error_code = NULL, duration = ?1, width = ?2, height = ?3, bytes = ?4 WHERE id = ?5 AND status = 'saving'",
             )
@@ -1244,6 +1429,7 @@ export class StudioService {
             .run();
         await this.d.storage.delete(`save:${sid}`).catch(() => {});
         this.progress.delete(sid);
+        if (Number(ready.meta?.changes ?? 0) > 0) await this.afterReady(sid, row.public_state === "pending", key);
         return POLL_INTERVAL_MS;
     }
 
@@ -1286,6 +1472,7 @@ export class StudioService {
         if (!check.ok) return studioErr(check.status, check.code);
         const p = check.params;
 
+        await this.posters?.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         // a save is running: the helper is not free (one job at a time)
         if (await this.saveActive()) return studioErr(429, "error.webp.busy");
@@ -1532,6 +1719,35 @@ export class StudioService {
                 pending++;
             }
         }
+
+        // public copies that did not finish inline (section 13): the same record-driven retry
+        let publics: Map<string, PublicJob> = new Map();
+        try {
+            publics = await this.d.storage.list<PublicJob>({ prefix: PUBLIC_PREFIX });
+        } catch (e) {
+            console.error("[studio] sweep: listing public copies failed", String(e));
+        }
+        for (const [key] of publics) {
+            const sid = key.slice(PUBLIC_PREFIX.length);
+            try {
+                if (!this.hosting.has(sid)) await raceCeiling(this.hostPublic(sid), itemMs, `sweep of public copy ${sid}`);
+                if (await this.d.storage.get(key)) pending++;
+            } catch (e) {
+                console.error("[studio] sweep: public copy failed", sid, String(e));
+                pending++;
+            }
+        }
+
+        // posters: one per pass, only while nothing else needs the helper (the poster service
+        // checks that itself and counts what is still queued)
+        if (this.posters) {
+            try {
+                pending += await raceCeiling(this.posters.sweep(), itemMs, "sweep of posters");
+            } catch (e) {
+                console.error("[studio] sweep: poster failed", String(e));
+                pending++;
+            }
+        }
         return { pending };
     }
 
@@ -1553,7 +1769,8 @@ export class StudioService {
 export const isStudioRoute = (pathname: string) =>
     pathname === "/studio" ||
     pathname.startsWith("/studio/") ||
-    pathname === "/library/adopt";
+    pathname === "/library/adopt" ||
+    pathname === "/posters/kick";
 
 const toResponse = (r: StudioReply) =>
     new Response(JSON.stringify(r.body), {
@@ -1587,6 +1804,16 @@ export async function handleStudioRoute(
         const keyId = request.headers.get(KEY_ID_HEADER);
         if (!keyId) return new Response(null, { status: 403 });
         return toResponse(await service.adopt(keyId, await request.text()));
+    }
+
+    // POST /posters/kick?limit=N: the Worker's own call (a library read that saw missing
+    // posters, POST /library/posters/backfill) or the cron's. Internal like the adopt path:
+    // the public gate answers 404 for the path, the key id header is the Worker's word.
+    if (request.method === "POST" && p === "/posters/kick") {
+        if (!request.headers.get(KEY_ID_HEADER)) return new Response(null, { status: 403 });
+        const raw = url.searchParams.get("limit");
+        const limit = raw !== null && /^\d{1,4}$/.test(raw) ? Number(raw) : undefined;
+        return toResponse(await service.kickPosters(limit));
     }
 
     // POST /library/adopt: the web Worker's service call. The Worker only

@@ -20,7 +20,8 @@ import { version as apiVersion } from "../../../../api/package.json";
 import { randomBase62 } from "./ids";
 import { lookupKey } from "./keys";
 import { MEDIA_NAME_REGEX } from "./gate";
-import { SERVICE_KEY_ID, mintItemId, pageLink } from "./library";
+import { SERVICE_KEY_ID, mintItemId, pageLink, releasePoster } from "./library";
+import { POSTER_COOLDOWN_MS, isPosterType } from "./poster";
 import type { PublishBucket } from "./publish";
 import {
     MAX_RENDER_SECONDS,
@@ -75,6 +76,9 @@ export type AppDeps = {
     // Hands a stored upload to the Durable Object's internal adopt path
     // (POST /studio/upload/adopt with the caller's key id).
     adopt: (keyId: string, body: Record<string, unknown>) => Promise<StudioReply>;
+    // Asks the Durable Object to queue the posters still missing (section 13). Absent in
+    // tests that do not care; never awaited for long (see bounded()).
+    kickPosters?: (limit?: number) => Promise<StudioReply>;
     randomBytes?: (n: number) => Uint8Array;
 };
 
@@ -101,10 +105,13 @@ type MediaRow = {
     key_id: string | null;
     created_at: number;
     deleted_at: number | null;
+    // migration 0006 (section 13)
+    poster: string | null;
+    poster_at: number | null;
 };
 
 const ITEM_COLUMNS =
-    "id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at";
+    "id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at, poster, poster_at";
 
 // The web Worker's itemShape (web/src/library.ts), so both clients see one item.
 export const itemShape = (r: MediaRow) => ({
@@ -121,6 +128,8 @@ export const itemShape = (r: MediaRow) => ({
     link: r.link,
     session_id: r.session_id,
     created_at: r.created_at,
+    // the server-made thumbnail (null until the container has cut it)
+    poster_url: r.poster ?? null,
 });
 
 async function getItem(db: D1Database, id: string): Promise<MediaRow | null> {
@@ -196,6 +205,10 @@ export async function capabilities(
                 source_wait: true,
                 delete_post: true,
                 telemetry: true,
+                // server-made posters and `public: true` on POST /studio and PUT /studio/upload
+                // (APP-API-CONTRACT.md section 13)
+                poster: true,
+                public_default: true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,
@@ -255,6 +268,14 @@ export async function studioUpload(
     const type = (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
     const ext = UPLOAD_TYPES[type];
     if (!ext) return reject(415, "error.library.unsupported");
+    // `?public=1|true` (section 13): host the original publicly once it is ready. Absent or
+    // empty = today's behaviour; anything but 1/true/0/false is refused before the body is read.
+    const rawPublic = q.get("public");
+    let wantsPublic = false;
+    if (rawPublic !== null && rawPublic !== "") {
+        if (rawPublic === "1" || rawPublic === "true") wantsPublic = true;
+        else if (rawPublic !== "0" && rawPublic !== "false") return reject(400, "error.library.bad_request");
+    }
 
     const declared = request.headers.get("content-length");
     if (declared === null || !/^\d{1,15}$/.test(declared)) return reject(411, "error.library.length_required");
@@ -322,6 +343,8 @@ export async function studioUpload(
                 content_type: type,
                 bytes: size,
                 item_id: id,
+                // the Durable Object hosts the original when the session is ready
+                ...(wantsPublic ? { public: true } : {}),
             });
             const b = a.body as { status?: string; id?: unknown; url?: unknown; error?: { code?: unknown } };
             if (a.status === 201 && b.status === "success" && typeof b.id === "string") {
@@ -337,9 +360,40 @@ export async function studioUpload(
         }
     }
 
+    // Public hosting (section 13). A video that got a session is hosted by the Durable Object
+    // when the session is ready ("pending" now). Everything else (an image, a video whose
+    // session was refused) is hosted right here, by the same code as POST
+    // /library/items/<id>/publish, since nothing else will do it.
+    let publicState: "pending" | "ready" | "failed" | null = null;
+    let publicUrl: string | null = null;
+    if (wantsPublic) {
+        if (sid) {
+            publicState = "pending";
+        } else if (row) {
+            const hosted = await libraryPublish(d, id, keyId);
+            const hb = hosted.body as { url?: unknown };
+            if (hosted.status === 201 && typeof hb.url === "string") {
+                publicState = "ready";
+                publicUrl = hb.url;
+            } else {
+                publicState = "failed";
+            }
+        } else {
+            publicState = "failed";
+        }
+    }
+
     return {
         status: 201,
-        body: { status: "success", id: sid, url, item: row ? itemShape(row) : null, studio_error: studioError },
+        body: {
+            status: "success",
+            id: sid,
+            url,
+            item: row ? itemShape(row) : null,
+            studio_error: studioError,
+            public_state: publicState,
+            public_url: publicUrl,
+        },
     };
 }
 
@@ -392,6 +446,21 @@ const isVideoish = (r: MediaRow) => {
     const t = r.content_type ?? "";
     return t.startsWith("video/") || t === "image/gif" || t === "image/webp";
 };
+
+// A call that must not hold the response up: it answers null after `ms`.
+async function bounded<T>(p: Promise<T>, ms: number): Promise<T | null> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+        return await Promise.race([
+            p,
+            new Promise<null>((resolve) => {
+                timer = setTimeout(() => resolve(null), ms);
+            }),
+        ]);
+    } finally {
+        if (timer !== undefined) clearTimeout(timer);
+    }
+}
 
 export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<StudioReply> {
     const bad = () => err(400, "error.library.bad_request");
@@ -479,6 +548,8 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
             const link = original?.link ?? fs.find((f) => f.link)?.link ?? null;
             const open = ss.find((s) => s.expires_at > now && (s.status === "saving" || s.status === "ready")) ?? null;
             const service = ss[0]?.service ?? (link ? serviceFromUrl(link) : null);
+            // the hosted original (section 13): the newest public copy of the post's video
+            const hosted = fs.find((f) => f.kind === "public" && f.source === "host" && f.url);
             return {
                 id: k.post_key,
                 service,
@@ -487,6 +558,9 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                 duration: meta?.duration ?? null,
                 width: meta?.width ?? null,
                 height: meta?.height ?? null,
+                // the post's thumbnail: the original's, else any file's (null until made)
+                poster_url: original?.poster ?? fs.find((f) => f.poster)?.poster ?? null,
+                public_url: hosted?.url ?? null,
                 created_at: k.latest,
                 session: open
                     ? {
@@ -510,9 +584,26 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                     created_at: f.created_at,
                     media_name: f.bucket === "media" ? f.r2_key : null,
                     deletable: f.bucket === "media" && MEDIA_NAME_REGEX.test(f.r2_key),
+                    poster_url: f.poster ?? null,
                 })),
             };
         });
+
+        // A page showing originals that still have no poster (and were not tried in the last
+        // day) asks the Durable Object to queue them (section 13); it only writes records, the
+        // container wakes in its own sweep. Best effort: the answer never waits for it.
+        if (
+            d.kickPosters &&
+            files.some(
+                (f) =>
+                    f.bucket === "originals" &&
+                    !f.poster &&
+                    isPosterType(f.content_type) &&
+                    (f.poster_at === null || f.poster_at < now - POSTER_COOLDOWN_MS),
+            )
+        ) {
+            await bounded(d.kickPosters().catch(() => null), 1500);
+        }
 
         // totals over the whole library, not the page
         const nFiles = await db
@@ -710,8 +801,8 @@ export async function libraryPublish(d: AppDeps, id: string, keyId: string = SER
     try {
         await d.db
             .prepare(
-                `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at)
-                 VALUES (?1, 'public', 'host', 'media', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
+                `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, poster)
+                 VALUES (?1, 'public', 'host', 'media', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`,
             )
             .bind(
                 itemId,
@@ -727,6 +818,8 @@ export async function libraryPublish(d: AppDeps, id: string, keyId: string = SER
                 row.session_id,
                 keyId,
                 now,
+                // the public copy shares the original's poster (section 13)
+                row.poster,
             )
             .run();
     } catch (e) {
@@ -824,7 +917,7 @@ export const POST_DELETE_BUSY_MS = 15 * 60 * 1000;
 const SESSION_POST_KEY_SQL = "CASE WHEN s.link LIKE 'upload:%' THEN substr(s.link, 8) ELSE s.id END";
 
 type PostSession = { id: string; status: string; r2_key: string | null; created_at: number };
-type PostFile = Pick<MediaRow, "id" | "bucket" | "r2_key" | "bytes">;
+type PostFile = Pick<MediaRow, "id" | "bucket" | "r2_key" | "bytes" | "poster">;
 
 // Deletes everything of the post the anchor file belongs to: the anchor is read including
 // soft-deleted rows, so the call is idempotent and any file id of the post works. Order
@@ -880,7 +973,7 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
         files = (
             await d.db
                 .prepare(
-                    `SELECT id, bucket, r2_key, bytes FROM (SELECT m.id, m.bucket, m.r2_key, m.bytes, m.created_at, m.deleted_at,
+                    `SELECT id, bucket, r2_key, bytes, poster FROM (SELECT m.id, m.bucket, m.r2_key, m.bytes, m.poster, m.created_at, m.deleted_at,
                                                                    ${POST_KEY_SQL} AS post_key FROM media_items m)
                      WHERE post_key = ?1 AND deleted_at IS NULL ORDER BY created_at ASC, id ASC`,
                 )
@@ -896,6 +989,7 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
     // deleted stays live and is reported, so a retry finishes it)
     const deleted = { files: 0, bytes: 0 };
     const remaining: string[] = [];
+    const posters = new Set<string>();
     for (const f of files) {
         try {
             await (f.bucket === "media" ? d.media : d.originals).delete(f.r2_key);
@@ -905,11 +999,17 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
                 .run();
             deleted.files += 1;
             deleted.bytes += typeof f.bytes === "number" ? f.bytes : 0;
+            if (f.poster) posters.add(f.poster);
         } catch (e) {
             console.error("[library] post delete file failed", f.id, f.bucket, String(e));
             remaining.push(f.id);
         }
     }
+
+    // 2b. the posters of the rows just deleted (section 13): each object goes unless a live row
+    // still names it (an original and its public copy share one; a row that stayed live in
+    // `remaining` keeps the poster until the retry). A failed delete is logged, not reported.
+    for (const url of posters) await releasePoster(d.db, d.media, url);
 
     // 3. a session's stored original that has no row of its own (its session is already
     // expired, so nothing can read it through any route: a failure is logged, not reported)
@@ -929,4 +1029,19 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
         };
     }
     return { status: 200, body: { status: "success", post, deleted, remaining } };
+}
+
+
+// ---- 13. POST /library/posters/backfill ------------------------------------------------------
+
+// Queues up to `limit` (default 25, at most 100) saved videos that have no poster yet and were
+// not tried in the last day. Only records are written; the container is woken by the sweep.
+export async function libraryPostersBackfill(d: AppDeps, limit?: number): Promise<StudioReply> {
+    if (!d.kickPosters) return err(503, "error.api.generic");
+    try {
+        return await d.kickPosters(limit);
+    } catch (e) {
+        console.error("[library] poster backfill failed", String(e));
+        return err(503, "error.api.generic");
+    }
 }

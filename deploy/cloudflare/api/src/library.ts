@@ -30,6 +30,8 @@ export type MediaItemInput = {
     link?: string | null;
     session_id?: string | null;
     key_id?: string | null;
+    // public URL of the row's poster JPEG (section 13), when it already has one
+    poster?: string | null;
     created_at: number;
 };
 
@@ -51,8 +53,8 @@ export async function insertMediaItem(
     try {
         const res = await db
             .prepare(
-                "INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at) " +
-                    "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16 " +
+                "INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, poster) " +
+                    "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17 " +
                     "WHERE NOT EXISTS (SELECT 1 FROM media_items WHERE bucket = ?4 AND r2_key = ?5)",
             )
             .bind(
@@ -72,6 +74,7 @@ export async function insertMediaItem(
                 orNull(item.session_id),
                 orNull(item.key_id),
                 item.created_at,
+                orNull(item.poster),
             )
             .run();
         return Number(res.meta?.changes ?? 0) > 0 ? id : null;
@@ -115,3 +118,35 @@ export function mediaNameFromUrl(url: string | null | undefined): string | null 
 // A session's `link` for display: uploads carry "upload:<item id>" instead of a page.
 export const pageLink = (link: string | null | undefined): string | null =>
     link && /^https?:\/\//i.test(link) ? link : null;
+
+// ---- posters (APP-API-CONTRACT.md section 13) -------------------------------------------------
+
+// A poster object in the public bucket: <10 base62>.jpg (never matches MEDIA_NAME_REGEX,
+// so DELETE /media/<name> cannot reach it).
+export const POSTER_NAME_REGEX = /^[A-Za-z0-9]{10}\.jpg$/;
+
+// Deletes the poster object behind `url` unless a live row still names it (an original and
+// the public copy hosted from it share one object). Call it AFTER the row that held the
+// poster was soft-deleted. Never throws: a failed delete is logged (the object is then an
+// orphan nothing lists, which costs a few tens of KB). Returns whether it deleted.
+export async function releasePoster(
+    db: D1Database | undefined,
+    media: { delete(key: string): Promise<void> } | undefined,
+    url: string | null | undefined,
+): Promise<boolean> {
+    if (!db || !media || !url) return false;
+    const name = mediaNameFromUrl(url);
+    if (!name || !POSTER_NAME_REGEX.test(name)) return false;
+    try {
+        const live = await db
+            .prepare("SELECT COUNT(*) AS n FROM media_items WHERE poster = ?1 AND deleted_at IS NULL")
+            .bind(url)
+            .first<{ n: number }>();
+        if ((live?.n ?? 0) > 0) return false;
+        await media.delete(name);
+        return true;
+    } catch (e) {
+        console.error("[library] poster delete failed", name, String(e));
+        return false;
+    }
+}

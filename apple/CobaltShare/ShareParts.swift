@@ -31,6 +31,17 @@ enum ShareCopy {
     static let previewFailed = "couldn't load the preview \u{2014} the webp still works."
     static let webpReady = "your webp is ready."
 
+    // The quick card (CONTRACT-SHARE-QUICK.md section 5).
+    static let quickSaving = "saving to cobalt"
+    /// Under "saving to cobalt" until the link is known.
+    static let quickChecking = "reading the link"
+    static let quickHeld = "cobalt has it"
+    static let quickNotify = "we'll notify you when it's saved"
+    static let quickOpenLater = "open cobalt to see it"
+    static let quickFailed = "couldn't save"
+    static let quickOpenCobalt = "open cobalt"
+    static let quickExpandA11y = "show the full sheet"
+
     /// Why a save to photos failed, in one line. A server-side miss reads like the rest of the app;
     /// anything else is most often the photos permission.
     static func photosFailure(_ failure: PipelineFailure) -> String {
@@ -46,6 +57,10 @@ enum ShareSymbol {
     static let share = "square.and.arrow.up"
     /// "stay": keep the sheet open, stop the countdown.
     static let stay = "hand.raised"
+    /// The quick card's expand control: the full sheet.
+    static let expand = "chevron.up"
+    /// The quick card's failure mark.
+    static let failed = "exclamationmark"
 }
 
 /// The ring around "continue in background"'s icon while the countdown runs: it drains from full to

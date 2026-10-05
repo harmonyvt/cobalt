@@ -76,10 +76,19 @@ type MediaRow = {
     key_id: string | null;
     created_at: number;
     deleted_at: number | null;
+    // migration 0006 (APP-API-CONTRACT.md section 13): the server-made thumbnail's public URL
+    poster: string | null;
+    poster_at: number | null;
 };
 
 const ITEM_COLUMNS =
-    "id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at";
+    "id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at, poster, poster_at";
+
+// A row whose poster could not be made is not tried again for this long (API side: src/poster.ts).
+export const POSTER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const POSTER_NAME = /^[A-Za-z0-9]{10}\.jpg$/;
+// Videos and gifs have a frame to show; everything else is its own picture (or none).
+const hasPosterFrame = (t: string | null) => !!t && (t.startsWith("video/") || t === "image/gif");
 
 export const itemShape = (r: MediaRow) => ({
     id: r.id,
@@ -95,6 +104,7 @@ export const itemShape = (r: MediaRow) => ({
     link: r.link,
     session_id: r.session_id,
     created_at: r.created_at,
+    poster_url: r.poster ?? null,
 });
 
 const json = (status: number, body: unknown, extra: Record<string, string> = {}) =>
@@ -260,6 +270,7 @@ type StudioRow = {
     link: string | null;
     title: string | null;
     duration: number | null;
+    poster: string | null;
     renders: number;
     created_at: number;
     expires_at: number;
@@ -302,7 +313,7 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
     }
     if (filter === "all" || filter === "studio") {
         const { results } = await DB.prepare(
-            `SELECT s.id, s.status, s.link, s.title, s.duration, s.created_at, s.expires_at,
+            `SELECT s.id, s.status, s.link, s.title, s.duration, s.poster, s.created_at, s.expires_at,
                     (SELECT COUNT(*) FROM studio_renders r WHERE r.session_id = s.id AND r.status = 'success') AS renders
              FROM studio_sessions s
              WHERE s.expires_at > ?1 AND s.status IN ('saving', 'ready') AND s.created_at < ?2
@@ -326,6 +337,25 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
         else if (s.kind === "private") usage.private_bytes = s.total;
     }
 
+    // A page that shows originals without a poster (and not tried in the last day) asks the API to
+    // queue them (section 13: only records are written, the container wakes in its own sweep).
+    // Best effort and bounded: the page never waits for it.
+    const missing = page.some((e) => {
+        if (e.t !== "item") return false;
+        const r = e.row;
+        return r.bucket === "originals" && !r.poster && hasPosterFrame(r.content_type) && (r.poster_at === null || r.poster_at < ctx.now - POSTER_COOLDOWN_MS);
+    });
+    if (missing) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+            callApi(ctx, "/library/posters/backfill", { method: "POST" }).catch(() => null),
+            new Promise((resolve) => {
+                timer = setTimeout(resolve, 1500);
+            }),
+        ]);
+        if (timer !== undefined) clearTimeout(timer);
+    }
+
     const webOrigin = ctx.env.WEB_ORIGIN.replace(/\/+$/, "");
     return json(200, {
         items: page.filter((e) => e.t === "item").map((e) => itemShape((e as Extract<Entry, { t: "item" }>).row)),
@@ -340,6 +370,7 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
                     link: s.link,
                     title: s.title,
                     duration: s.duration,
+                    poster_url: s.poster ?? null,
                     renders: s.renders,
                     created_at: s.created_at,
                     expires_at: s.expires_at,
@@ -549,10 +580,11 @@ async function itemPublish(ctx: Ctx, id: string): Promise<Response> {
     const url = mediaBase(ctx.env) + name;
     try {
         await ctx.env.DB.prepare(
-            `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, created_at)
-             VALUES (?1, 'public', 'host', 'media', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
+            `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, created_at, poster)
+             VALUES (?1, 'public', 'host', 'media', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
         )
-            .bind(newId, name, url, row.name, contentType, obj.size, row.width, row.height, row.duration, row.link, row.session_id, ctx.now)
+            // the public copy shares the original's poster (section 13)
+            .bind(newId, name, url, row.name, contentType, obj.size, row.width, row.height, row.duration, row.link, row.session_id, ctx.now, row.poster)
             .run();
     } catch (e) {
         await ctx.env.MEDIA.delete(name).catch(() => {});
@@ -611,7 +643,30 @@ async function itemDelete(ctx: Ctx, id: string): Promise<Response> {
             .bind(ctx.now, row.r2_key)
             .run();
     }
+    // The poster goes with its row, unless a live row (the public copy of an original, or the
+    // original of a public copy) still shows it. Never fails the delete.
+    await releasePoster(ctx, row.poster);
     return json(200, { status: "success" });
+}
+
+async function releasePoster(ctx: Ctx, url: string | null): Promise<void> {
+    if (!url) return;
+    let name: string | null = null;
+    try {
+        name = decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
+    } catch {
+        return;
+    }
+    if (!POSTER_NAME.test(name)) return;
+    try {
+        const live = await ctx.env.DB.prepare("SELECT COUNT(*) AS n FROM media_items WHERE poster = ?1 AND deleted_at IS NULL")
+            .bind(url)
+            .first<{ n: number }>();
+        if ((live?.n ?? 0) > 0) return;
+        await ctx.env.MEDIA.delete(name);
+    } catch (e) {
+        console.error("[library] poster delete failed", name, String(e));
+    }
 }
 
 async function studioDelete(ctx: Ctx, sid: string): Promise<Response> {

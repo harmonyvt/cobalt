@@ -429,15 +429,16 @@ describe("GET /api/library", () => {
             {
                 id: pub.id, kind: "public", source: "webp", name: "a.webp", url: pub.url, content_type: "image/webp",
                 bytes: 600, width: 480, height: 270, duration: 3.5, link: "https://x.com/a", session_id: SID, created_at: pub.created_at,
+                poster_url: null,
             },
         ]);
         expect(Object.keys(b.items[0]).sort()).toEqual(
-            ["id", "kind", "source", "name", "url", "content_type", "bytes", "width", "height", "duration", "link", "session_id", "created_at"].sort(),
+            ["id", "kind", "source", "name", "url", "content_type", "bytes", "width", "height", "duration", "link", "session_id", "created_at", "poster_url"].sort(),
         );
         expect(b.studios).toEqual([
             {
                 id: SID, url: `${WEB_ORIGIN}/studio/${SID}`, status: "ready", link: "https://x.com/a/status/1", title: "maria_rcks",
-                duration: 9.6, renders: 2, created_at: NOW - 5000, expires_at: NOW - 5000 + 7 * 86400_000,
+                duration: 9.6, poster_url: null, renders: 2, created_at: NOW - 5000, expires_at: NOW - 5000 + 7 * 86400_000,
             },
         ]);
         expect(b.next_before).toBeNull();
@@ -1063,5 +1064,240 @@ describe("DELETE /api/library/studios/<sid>", () => {
     it("a D1 outage is a 500", async () => {
         db.breakIt();
         expect((await call("DELETE", `/api/library/studios/${SID}`)).status).toBe(500);
+    });
+});
+
+// ---------- posters (APP-API-CONTRACT.md section 13) ----------
+
+describe("server-made posters", () => {
+    const P1 = `${MEDIA}PosterAAAA.jpg`;
+    const P2 = `${MEDIA}PosterBBBB.jpg`;
+    const setPoster = (id: string, url: string | null, at: number | null = null) =>
+        db.raw.prepare("UPDATE media_items SET poster = ?, poster_at = ? WHERE id = ?").run(url, at, id);
+    const putPoster = (url: string) => media.objects.set(url.slice(MEDIA.length), { bytes: bytesOf(5), size: 5 });
+    const kicks = () => apiCalls.filter((c) => c.url === `${API_BASE}/library/posters/backfill`);
+
+    describe("GET /api/library", () => {
+        it("items and studios carry poster_url (null until the server has cut one)", async () => {
+            const priv = seedItem({ kind: "private", source: "saved", name: "clip" });
+            setPoster(priv.id, P1);
+            const bare = seedItem({ kind: "private", source: "upload", name: "bare" });
+            seedStudio({ id: SID });
+            db.raw.prepare("UPDATE studio_sessions SET poster = ? WHERE id = ?").run(P1, SID);
+            const b = await json(await call("GET", "/api/library"));
+            const by = Object.fromEntries(b.items.map((i: any) => [i.id, i]));
+            expect(by[priv.id].poster_url).toBe(P1);
+            expect(by[bare.id].poster_url).toBeNull();
+            expect(b.studios[0].poster_url).toBe(P1);
+            // no storage internals leak with it
+            expect(JSON.stringify(b)).not.toMatch(/poster_at|"poster"/);
+        });
+
+        it("a page showing an original with no poster asks the API (service key, POST) to queue it; once it has one, or inside the cooldown, no call", async () => {
+            const priv = seedItem({ kind: "private", source: "saved", content_type: "video/mp4" });
+            await call("GET", "/api/library");
+            expect(kicks()).toHaveLength(1);
+            expect(kicks()[0]).toMatchObject({ method: "POST", headers: { "x-cobalt-service": SERVICE_KEY } });
+            for (const h of ["authorization", "cookie", "cf-access-jwt-assertion", "origin"]) expect(kicks()[0]!.headers[h]).toBeUndefined();
+
+            apiCalls.length = 0;
+            setPoster(priv.id, null, clock - 1000); // tried a moment ago and failed: cooldown
+            await call("GET", "/api/library");
+            expect(kicks()).toHaveLength(0);
+
+            setPoster(priv.id, null, clock - 24 * 3600_000 - 1); // the cooldown is over
+            await call("GET", "/api/library");
+            expect(kicks()).toHaveLength(1);
+
+            apiCalls.length = 0;
+            setPoster(priv.id, P1, clock);
+            await call("GET", "/api/library");
+            expect(kicks()).toHaveLength(0);
+        });
+
+        it("no call for what has no frame to cut (images, webps) or when only public files are listed", async () => {
+            seedItem({ kind: "private", source: "upload", content_type: "image/png" });
+            seedItem({ kind: "public", source: "studio" });
+            await call("GET", "/api/library");
+            expect(kicks()).toHaveLength(0);
+            seedItem({ kind: "private", source: "saved", content_type: "video/mp4" });
+            await call("GET", "/api/library?filter=public");
+            expect(kicks()).toHaveLength(0);
+        });
+
+        it("an API that fails, throws or hangs never fails (or noticeably delays) the list", { timeout: 30_000 }, async () => {
+            seedItem({ kind: "private", source: "saved", content_type: "video/mp4" });
+            apiReply = () => jsonRes(500, { status: "error" });
+            expect((await call("GET", "/api/library")).status).toBe(200);
+            apiThrows = true;
+            expect((await call("GET", "/api/library")).status).toBe(200);
+            apiThrows = false;
+            apiReply = () => new Promise<Response>(() => {});
+            const t0 = Date.now();
+            const r = await call("GET", "/api/library");
+            expect(r.status).toBe(200);
+            expect(Date.now() - t0).toBeLessThan(25_000); // bounded at 1.5 s (generous: the machine may be loaded)
+            expect((await json(r)).items).toHaveLength(1);
+        });
+
+        it("a missing service key makes no call and still lists", async () => {
+            seedItem({ kind: "private", source: "saved", content_type: "video/mp4" });
+            env.COBALT_API_KEY = "";
+            expect((await call("GET", "/api/library")).status).toBe(200);
+            expect(apiCalls).toHaveLength(0);
+        });
+    });
+
+    describe("POST /api/library/items/<id>/publish", () => {
+        it("the public copy shares the original's poster URL (no new object)", async () => {
+            const src = seedItem({ kind: "private", source: "upload", content_type: "video/mp4", name: "clip.mp4" });
+            originals.objects.set(src.r2_key, { bytes: bytesOf(100), size: 100, contentType: "video/mp4" });
+            setPoster(src.id, P1);
+            putPoster(P1);
+            const b = await json(await call("POST", `/api/library/items/${src.id}/publish`));
+            expect(b.item.poster_url).toBe(P1);
+            expect(rowOf(b.item.id).poster).toBe(P1);
+            expect([...media.objects.keys()].filter((k) => k.endsWith(".jpg"))).toEqual(["PosterAAAA.jpg"]);
+        });
+        it("an original without a poster yields a copy without one", async () => {
+            const src = seedItem({ kind: "private", source: "upload", content_type: "video/mp4" });
+            originals.objects.set(src.r2_key, { bytes: bytesOf(100), size: 100 });
+            const b = await json(await call("POST", `/api/library/items/${src.id}/publish`));
+            expect(b.item.poster_url).toBeNull();
+        });
+    });
+
+    describe("DELETE /api/library/items/<id>", () => {
+        const pair = () => {
+            const orig = seedItem({ kind: "private", source: "saved", content_type: "video/mp4" });
+            originals.objects.set(orig.r2_key, { bytes: bytesOf(5), size: 5 });
+            const host = seedItem({ kind: "public", source: "host", content_type: "video/mp4", r2_key: "Hostmp4001.mp4", url: `${MEDIA}Hostmp4001.mp4` });
+            media.objects.set(host.r2_key, { bytes: bytesOf(5), size: 5 });
+            for (const r of [orig, host]) setPoster(r.id, P1);
+            putPoster(P1);
+            return { orig, host };
+        };
+        it("deleting one of two rows that share a poster keeps the object; deleting the last one deletes it", async () => {
+            const { orig, host } = pair();
+            expect((await call("DELETE", `/api/library/items/${orig.id}`)).status).toBe(200);
+            expect(media.objects.has("PosterAAAA.jpg")).toBe(true);
+            expect(media.deletes).toEqual([]);
+            expect((await call("DELETE", `/api/library/items/${host.id}`)).status).toBe(200);
+            expect(media.objects.has("PosterAAAA.jpg")).toBe(false);
+            expect(media.deletes).toEqual(["Hostmp4001.mp4", "PosterAAAA.jpg"]);
+        });
+        it("a row with its own poster: the object goes with it (private original)", async () => {
+            const orig = seedItem({ kind: "private", source: "upload", content_type: "video/mp4" });
+            originals.objects.set(orig.r2_key, { bytes: bytesOf(5), size: 5 });
+            setPoster(orig.id, P2);
+            putPoster(P2);
+            expect((await call("DELETE", `/api/library/items/${orig.id}`)).status).toBe(200);
+            expect(media.objects.has("PosterBBBB.jpg")).toBe(false);
+            expect(originals.deletes).toEqual([orig.r2_key]);
+            expect(rowOf(orig.id).deleted_at).toBe(NOW);
+        });
+        it("a row without a poster deletes exactly as before (no extra bucket call)", async () => {
+            const pub = seedItem({ kind: "public" });
+            media.objects.set(pub.r2_key, { bytes: bytesOf(5), size: 5 });
+            await call("DELETE", `/api/library/items/${pub.id}`);
+            expect(media.deletes).toEqual([pub.r2_key]);
+        });
+        it("a poster that cannot be deleted never fails the delete", async () => {
+            const orig = seedItem({ kind: "private", source: "upload", content_type: "video/mp4" });
+            originals.objects.set(orig.r2_key, { bytes: bytesOf(5), size: 5 });
+            setPoster(orig.id, P2);
+            putPoster(P2);
+            const real = media.delete.bind(media);
+            media.delete = async (k: string) => {
+                if (k.endsWith(".jpg")) throw new Error("R2 down");
+                return real(k);
+            };
+            const r = await call("DELETE", `/api/library/items/${orig.id}`);
+            expect(r.status).toBe(200);
+            expect(rowOf(orig.id).deleted_at).toBe(NOW);
+        });
+        it("only an object shaped like a poster is ever deleted through the poster column", async () => {
+            const orig = seedItem({ kind: "private", source: "upload", content_type: "video/mp4" });
+            originals.objects.set(orig.r2_key, { bytes: bytesOf(5), size: 5 });
+            for (const bad of [`${MEDIA}Hostmp4001.mp4`, `${MEDIA}Abcdefghij.webp`, `${MEDIA}short.jpg`, "not a url"]) {
+                media.objects.set("Hostmp4001.mp4", { bytes: bytesOf(5), size: 5 });
+                setPoster(orig.id, bad);
+                db.raw.prepare("UPDATE media_items SET deleted_at = NULL WHERE id = ?").run(orig.id);
+                originals.objects.set(orig.r2_key, { bytes: bytesOf(5), size: 5 });
+                await call("DELETE", `/api/library/items/${orig.id}`);
+            }
+            expect(media.deletes).toEqual([]);
+            expect(media.objects.has("Hostmp4001.mp4")).toBe(true);
+        });
+    });
+
+    describe("the page", () => {
+        // Runs the page's own tile functions against a tiny DOM stand-in.
+        const html = LIBRARY_HTML;
+        const src = html.slice(html.indexOf("function itemFallback(wrap, it, ext) {"), html.indexOf("function confirmText(e) {"));
+        type El = { tag: string; attrs: Record<string, unknown>; kids: El[]; handlers: Record<string, () => void>; append(...k: El[]): void; remove(): void; addEventListener(n: string, f: () => void): void; parent?: El; muted?: boolean; innerHTML?: string };
+        const el = (tag: string, attrs: Record<string, unknown> = {}, ...kids: El[]): El => {
+            const e: El = {
+                tag, attrs, kids: [...kids], handlers: {},
+                append(...k) { for (const x of k) { x.parent = e; e.kids.push(x); } },
+                remove() { if (e.parent) e.parent.kids = e.parent.kids.filter((x) => x !== e); },
+                addEventListener(n, f) { e.handlers[n] = f; },
+            };
+            return e;
+        };
+        const make = () =>
+            new Function(
+                "h", "placeholder", "isImageType", "isVideoType", "extOf", "TYPES",
+                `${src}\nreturn { itemThumb, studioThumb };`,
+            )(
+                el,
+                (icon: string, label: string) => el("ph", { icon, label }),
+                (t: string | null) => !!t && t.startsWith("image/") && t !== "image/heic",
+                (t: string | null) => !!t && t.startsWith("video/"),
+                (n: string) => (/\.([0-9A-Za-z]{1,8})$/.exec(n || "")?.[1] ?? "").toLowerCase(),
+                { "video/mp4": "mp4", "image/gif": "gif" },
+            ) as { itemThumb(it: any): El; studioThumb(s: any): El };
+        const kidsOf = (e: El) => e.kids.map((k) => k.tag + (k.attrs.src ? `:${k.attrs.src}` : k.attrs.icon ? `:${k.attrs.icon}` : ""));
+
+        it("has the functions the test runs, and the page still uses the same CSP (posters come from the media origin)", () => {
+            expect(src.length).toBeGreaterThan(200);
+            expect(CONTRACT_CSP).toContain("img-src 'self' data: blob: https://media.capybaraharmony.com");
+        });
+        it("a private video with a poster shows the poster as a picture (no <video>, no lock); if it fails to load, the lock placeholder", () => {
+            const { itemThumb } = make();
+            const it = { kind: "private", source: "saved", name: "clip", content_type: "video/mp4", url: null, poster_url: P1 };
+            const t = itemThumb(it);
+            expect(kidsOf(t)).toEqual([`img:${P1}`]);
+            t.kids[0]!.handlers.error!();
+            expect(kidsOf(t)).toEqual(["ph:lock"]);
+        });
+        it("a private video without a poster keeps the lock placeholder (as before)", () => {
+            const { itemThumb } = make();
+            expect(kidsOf(itemThumb({ kind: "private", name: "clip", content_type: "video/mp4", url: null, poster_url: null }))).toEqual(["ph:lock"]);
+            expect(kidsOf(itemThumb({ kind: "private", name: "clip", content_type: "video/mp4", url: null }))).toEqual(["ph:lock"]); // an older API: no field at all
+        });
+        it("a public video with a poster shows it; without one (or if it fails) the video itself, as before", () => {
+            const { itemThumb } = make();
+            const pub = { kind: "public", source: "host", name: "clip.mp4", content_type: "video/mp4", url: `${MEDIA}Hostmp4001.mp4` };
+            const withPoster = itemThumb({ ...pub, poster_url: P1 });
+            expect(kidsOf(withPoster)).toEqual([`img:${P1}`]);
+            withPoster.kids[0]!.handlers.error!();
+            expect(kidsOf(withPoster)).toEqual([`video:${pub.url}#t=0.1`]);
+            expect(kidsOf(itemThumb({ ...pub, poster_url: null }))).toEqual([`video:${pub.url}#t=0.1`]);
+        });
+        it("a webp or any public image is its own picture, poster or not", () => {
+            const { itemThumb } = make();
+            const webp = { kind: "public", source: "studio", name: "a.webp", content_type: "image/webp", url: `${MEDIA}Abcdefghij.webp`, poster_url: P1 };
+            expect(kidsOf(itemThumb(webp))).toEqual([`img:${webp.url}`]);
+        });
+        it("a studio tile shows its poster, else the film placeholder", () => {
+            const { studioThumb } = make();
+            const s = { url: `${WEB_ORIGIN}/studio/${SID}`, poster_url: P1 };
+            const t = studioThumb(s);
+            expect(kidsOf(t)).toEqual([`img:${P1}`]);
+            t.kids[0]!.handlers.error!();
+            expect(kidsOf(t)).toEqual(["ph:film"]);
+            expect(kidsOf(studioThumb({ ...s, poster_url: null }))).toEqual(["ph:film"]);
+        });
     });
 });

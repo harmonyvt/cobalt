@@ -68,6 +68,9 @@ public final class PhotosSync {
         let library: any PhotoLibrary
         let clock: any PipelineClock
         let available: Bool
+        /// Whether the system can show its permission prompt right now (the app is in front). A
+        /// background wake never asks: the prompt would not appear, and the answer would be "not asked".
+        let isForeground: @MainActor () -> Bool
     }
 
     var base = Base()
@@ -82,6 +85,8 @@ public final class PhotosSync {
     /// Keys `enable()` marked "already there": the backfill answer un-marks them.
     @ObservationIgnored private var pendingBackfill: [String] = []
     @ObservationIgnored private var existsCache: [String: (exists: Bool, at: Date)] = [:]
+    /// The permission prompt was shown (or tried) in this process: never twice, whatever the answer.
+    @ObservationIgnored private var askedThisLaunch = false
 
     public var status: Status {
         if let previewStatus { return previewStatus }
@@ -100,9 +105,12 @@ public final class PhotosSync {
 
     init(
         settings: Settings, store: OfflineStore, ledger: PhotosLedger, library: any PhotoLibrary,
-        clock: any PipelineClock = SystemClock(), available: Bool = PhotosSync.platformHasPhotos
+        clock: any PipelineClock = SystemClock(), available: Bool = PhotosSync.platformHasPhotos,
+        isForeground: @escaping @MainActor () -> Bool = { true }
     ) {
-        self.engine = Engine(settings: settings, store: store, ledger: ledger, library: library, clock: clock, available: available)
+        self.engine = Engine(
+            settings: settings, store: store, ledger: ledger, library: library, clock: clock, available: available,
+            isForeground: isForeground)
         base.access = available ? Self.access(of: library) : .unavailable
         // The app only: every add to the store (a finished download, a refill) runs the sync.
         store.onAdd = { [weak self] _ in
@@ -209,7 +217,7 @@ public final class PhotosSync {
     public func setIncludeWebps(_ on: Bool) {
         guard let engine else { return }
         if on {
-            let existing = engine.store.videos.filter { $0.kind == .webp && $0.link != nil && fileIsHere($0) }
+            let existing = engine.store.videos.filter { $0.kind == .webp && fileIsHere($0) }
             engine.ledger.skipPreexisting(existing.map { PhotosKey.of($0) }, now: engine.clock.now())
         }
         engine.settings.photosSyncWebps = on
@@ -255,7 +263,11 @@ public final class PhotosSync {
         base.access = engine.available ? Self.access(of: engine.library) : .unavailable
         base.problem = nil
         defer { base.progress = nil; recount(); revision += 1 }
-        guard engine.settings.photosAlbumSync, engine.settings.keepVideosOnDevice, canWork else { return }
+        guard engine.settings.photosAlbumSync, engine.settings.keepVideosOnDevice else { return }
+        // The album is on by default: the first time something is about to be saved, ask for access
+        // (the permission copy says why), here and not at launch.
+        if base.access == .notAsked, !pendingVideos().isEmpty { await askForAccessOnce(reason: "first save") }
+        guard canWork else { return }
 
         if base.access == .album { await repairAlbum() }
 
@@ -316,8 +328,9 @@ public final class PhotosSync {
         if base.access == .album { albumID = try? await ensureAlbum() }
         do {
             let asset = try await engine.library.addAsset(
-                fileURL: file, isImage: video.kind == .webp, albumID: albumID,
+                fileURL: file, isImage: Self.isStill(video), albumID: albumID,
                 placeholder: { id in ledger.recordAsset(key, id) })
+            Telemetry.log(.info, .photos, "album add", data: ["album": .bool(albumID != nil), "kind": .string(video.kind.rawValue), "bytes": .bytes(video.bytes)])
             ledger.finish(key, asset: asset, inAlbum: albumID == nil ? .no : .yes, now: engine.clock.now())
             return .added
         } catch {
@@ -356,6 +369,75 @@ public final class PhotosSync {
         }
         engine.ledger.fail(key, code: code, now: now)
         return .skipped
+    }
+
+    /// The permission prompt, once per launch, only while the app is in front and the system has not
+    /// been asked yet. Whatever the owner answers is then the access mode (decision 7): full access
+    /// fills the album, limited or add-only fills the library, a refusal leaves settings saying so.
+    private func askForAccessOnce(reason: String) async {
+        guard let engine, engine.available, !askedThisLaunch, engine.isForeground(),
+              engine.library.readWriteStatus() == .notDetermined else { return }
+        askedThisLaunch = true
+        Telemetry.log(.info, .photos, "photos access asked", data: ["reason": .string(reason)])
+        _ = await engine.library.requestReadWrite()
+        base.access = Self.access(of: engine.library)
+        Telemetry.log(.info, .photos, "photos access answered", data: ["access": .string(String(describing: base.access))])
+        revision += 1
+    }
+
+    // MARK: - An asset that is already in Photos
+
+    /// The upload of a video the owner picked from their photo library: the asset is already in Photos,
+    /// so it must not be added again. It is recorded in the ledger under the original's key
+    /// (`s:<session>`) as this asset, and, with the album on and full access, put into the cobalt
+    /// album (the existing asset, no copy). With the album off, or without full access, it is only
+    /// recorded: nothing adds the video a second time, and a later upgrade to full access moves it into
+    /// the album like any library-only item. Call it before the original is stored, so the store's
+    /// `onAdd` pass already finds the entry.
+    public func adoptExistingAsset(localIdentifier: String, forSession sessionID: String) async {
+        await adoptExistingAsset(localIdentifier: localIdentifier, key: PhotosKey.original(session: sessionID))
+    }
+
+    /// `adoptExistingAsset(localIdentifier:forSession:)` for a video that is already stored.
+    public func adoptExistingAsset(localIdentifier: String, for video: StoredVideo) async {
+        await adoptExistingAsset(localIdentifier: localIdentifier, key: PhotosKey.of(video))
+    }
+
+    func adoptExistingAsset(localIdentifier: String, key: String) async {
+        guard let engine, previewStatus == nil, !localIdentifier.isEmpty else { return }
+        let ledger = engine.ledger
+        let now = engine.clock.now()
+        switch ledger.claim(key, now: now) {
+        case .claimed:
+            break
+        case .doubt:
+            ledger.release(key)
+            guard case .claimed = ledger.claim(key, now: now) else { return }
+        case .alreadyDone, .skipped, .inFlight:
+            Telemetry.log(.info, .photos, "photos asset adopt skipped", data: ["reason": "already known"])
+            return
+        }
+        var albumID: String?
+        if engine.settings.photosAlbumSync, engine.settings.keepVideosOnDevice {
+            if base.access == .notAsked || base.access == .denied {
+                base.access = engine.available ? Self.access(of: engine.library) : .unavailable
+            }
+            if base.access == .notAsked { await askForAccessOnce(reason: "picked video") }
+            if base.access == .album { albumID = try? await ensureAlbum() }
+        }
+        var inAlbum = PhotosEntry.InAlbum.no
+        if let albumID {
+            do {
+                try await engine.library.addToAlbum(assetIDs: [localIdentifier], albumID: albumID)
+                inAlbum = .yes
+            } catch {
+                Telemetry.log(.warn, .photos, "photos asset adopt album add failed", data: Telemetry.errorData(error))
+            }
+        }
+        ledger.finish(key, asset: localIdentifier, inAlbum: inAlbum, now: engine.clock.now())
+        Telemetry.log(.info, .photos, "photos asset adopted", data: ["album": .bool(inAlbum == .yes), "access": .string(String(describing: base.access))])
+        recount()
+        revision += 1
     }
 
     // MARK: - Album
@@ -460,13 +542,18 @@ public final class PhotosSync {
 
     // MARK: - What is eligible
 
-    /// Originals that came from a web link, and webps when asked (decision 8). The file must be on
-    /// this phone: an evicted one has nothing to add until a refill brings it back.
+    /// Everything cobalt keeps, webps when asked (decision 8, amended 2026-10-05: uploads count too, a
+    /// video the owner picked from Photos is adopted in the ledger first, so it is never added twice).
+    /// The file must be on this phone: an evicted one has nothing to add until a refill brings it back.
     static func isEligible(_ video: StoredVideo, includeWebps: Bool) -> Bool {
-        guard video.link != nil else { return false }
         if video.kind == .webp, !includeWebps { return false }
         guard let file = video.fileURL else { return false }
         return FileManager.default.fileExists(atPath: file.path)
+    }
+
+    /// PhotoKit stores a webp, and a still original, as a picture; everything else as a video.
+    static func isStill(_ video: StoredVideo) -> Bool {
+        video.kind == .webp || (video.fileURL.map { OfflineStore.looksLikeImage($0.lastPathComponent) } ?? false)
     }
 
     private func fileIsHere(_ video: StoredVideo) -> Bool {

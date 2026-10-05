@@ -6,6 +6,7 @@ import {
     libraryFile,
     libraryList,
     libraryPostDelete,
+    libraryPostersBackfill,
     libraryPublish,
     libraryStudio,
     studioUpload,
@@ -294,6 +295,18 @@ async function handleInner(
             });
         }
 
+        // POST /library/posters/backfill: queues the posters still missing (section 13). The
+        // Durable Object only writes records; no CORS (the page does not call it).
+        if (decision.then === "library_posters_backfill") {
+            const raw = url.searchParams.get("limit");
+            const limit = raw !== null && /^\d{1,4}$/.test(raw) ? Number(raw) : undefined;
+            const r = await libraryPostersBackfill(appDeps(env, container, edge), limit);
+            return new Response(JSON.stringify(r.body), {
+                status: r.status,
+                headers: { "content-type": "application/json", "cache-control": "no-store" },
+            });
+        }
+
         // Live Activity push: handled by the Durable Object (token and run store, APNs),
         // which never wakes the container. Dispatched here, before anything that
         // reads a body or writes the request log: a relay arrives about once a
@@ -376,6 +389,22 @@ function appDeps(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps): AppD
         webUrl: env.CORS_URL,
         now: edge.now,
         fixedLength: edge.fixedLength ?? ((n) => new FixedLengthStream(n)),
+        // Queues the missing posters in the Durable Object (records only; it answers at once).
+        kickPosters: async (limit) => {
+            const res = await container.fetch(
+                new Request(`https://do.internal/posters/kick${limit ? `?limit=${limit}` : ""}`, {
+                    method: "POST",
+                    headers: { [KEY_ID_HEADER]: "worker:posters" },
+                }),
+            );
+            let parsed: unknown = null;
+            try {
+                parsed = await res.json();
+            } catch {
+                // not JSON: reported as a generic failure below
+            }
+            return { status: res.status, body: parsed ?? { status: "error", error: { code: "error.api.generic" } } };
+        },
         adopt: async (keyId, body) => {
             const res = await container.fetch(
                 new Request("https://do.internal/studio/upload/adopt", {
