@@ -302,7 +302,7 @@ describe("the app's library routes (keyed)", () => {
             then: "library_post_delete",
             params: { id: ID },
         });
-        for (const method of ["GET", "HEAD", "POST", "PUT", "PATCH"]) {
+        for (const method of ["GET", "HEAD", "POST", "PUT"]) {
             expect(g(method, `/library/items/${ID}/post`)).toMatchObject({ action: "reject", status: 404 });
         }
         // an Origin is no substitute for a key, and gets no CORS preflight answer
@@ -317,6 +317,34 @@ describe("the app's library routes (keyed)", () => {
             errorCode: "error.api.auth.key.invalid",
         });
         expect(g("DELETE", `/library/items/${ID}/post/x`)).toMatchObject({ status: 404 });
+    });
+    it("PATCH /library/items/<id>/post (section 15) looks the key up; the service credential passes; ids are checked; no key is 401", () => {
+        expect(g("PATCH", `/library/items/${ID}/post`)).toEqual(lookup("library_post_title", { id: ID }));
+        expect(g("PATCH", `/library/items/${ID}/post`, { service: true })).toEqual({
+            action: "service",
+            then: "library_post_title",
+            params: { id: ID },
+        });
+        for (const id of [ID.slice(0, 15), ID + "x", "", "Ab3dE6gH9jK2mN5-", "../../studio/aaaaa"]) {
+            expect(g("PATCH", `/library/items/${id}/post`)).toMatchObject({ action: "reject", status: 404 });
+        }
+        expect(g("PATCH", `/library/items/${ID}/post/x`)).toMatchObject({ status: 404 });
+        expect(g("PATCH", `/library/items/${ID}/file`)).toMatchObject({ status: 404 });
+        expect(g("PATCH", `/library/items/${ID}/post`, { origin: ORIGIN })).toMatchObject({ status: 401 });
+        expect(g("PATCH", `/library/items/${ID}/post`, {})).toMatchObject({
+            action: "reject",
+            status: 401,
+            errorCode: "error.api.auth.key.missing",
+        });
+        expect(g("PATCH", `/library/items/${ID}/post`, { authorization: "Api-Key nope" })).toMatchObject({
+            status: 401,
+            errorCode: "error.api.auth.key.invalid",
+        });
+        // the other methods are still 404, DELETE is still the post delete
+        for (const method of ["GET", "HEAD", "POST", "PUT"]) {
+            expect(g(method, `/library/items/${ID}/post`)).toMatchObject({ action: "reject", status: 404 });
+        }
+        expect(g("DELETE", `/library/items/${ID}/post`)).toEqual(lookup("library_post_delete", { id: ID }));
     });
     it("DELETE .../post: ids of 15 or 17 characters (or odd ones) are 404 before any lookup", () => {
         for (const id of [ID.slice(0, 15), ID + "x", "", "Ab3dE6gH9jK2mN5-", "../../studio/aaaaa"]) {

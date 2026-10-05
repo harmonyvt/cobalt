@@ -15,8 +15,9 @@ const m6 = sql("0006_posters_public.sql");
 const cols = (db: any, table: string) => (db.raw.prepare(`PRAGMA table_info(${table})`).all() as any[]).map((c) => c.name);
 
 describe("migration 0006", () => {
-    it("is the next file after 0005, and the last one", () => {
-        expect(files.slice(-2)).toEqual(["0005_telemetry.sql", "0006_posters_public.sql"]);
+    it("is the next file after 0005", () => {
+        const at = files.indexOf("0006_posters_public.sql");
+        expect(files[at - 1]).toBe("0005_telemetry.sql");
     });
 
     it("is additive only: nullable ADD COLUMNs and an index, nothing dropped, rewritten or deleted", () => {

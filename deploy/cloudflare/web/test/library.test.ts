@@ -429,11 +429,11 @@ describe("GET /api/library", () => {
             {
                 id: pub.id, kind: "public", source: "webp", name: "a.webp", url: pub.url, content_type: "image/webp",
                 bytes: 600, width: 480, height: 270, duration: 3.5, link: "https://x.com/a", session_id: SID, created_at: pub.created_at,
-                poster_url: null,
+                poster_url: null, custom_title: null,
             },
         ]);
         expect(Object.keys(b.items[0]).sort()).toEqual(
-            ["id", "kind", "source", "name", "url", "content_type", "bytes", "width", "height", "duration", "link", "session_id", "created_at", "poster_url"].sort(),
+            ["id", "kind", "source", "name", "url", "content_type", "bytes", "width", "height", "duration", "link", "session_id", "created_at", "poster_url", "custom_title"].sort(),
         );
         expect(b.studios).toEqual([
             {
@@ -1076,6 +1076,36 @@ describe("server-made posters", () => {
         db.raw.prepare("UPDATE media_items SET poster = ?, poster_at = ? WHERE id = ?").run(url, at, id);
     const putPoster = (url: string) => media.objects.set(url.slice(MEDIA.length), { bytes: bytesOf(5), size: 5 });
     const kicks = () => apiCalls.filter((c) => c.url === `${API_BASE}/library/posters/backfill`);
+
+    describe("GET /api/library: custom titles (APP-API-CONTRACT.md section 15)", () => {
+        const setTitle = (postKey: string, title: string) =>
+            db.raw.prepare("INSERT INTO media_titles (post_key, title, key_id, updated_at) VALUES (?, ?, NULL, 1)").run(postKey, title);
+        it("an item carries the custom title of its post (null when none): every file of the post, an upload with the webps of its session", async () => {
+            const up = seedItem({ kind: "private", source: "upload", name: "IMG_0412.mov" });
+            seedStudio({ id: SID, link: `upload:${up.id}` });
+            const render = seedItem({ source: "studio", name: "IMG_0412.webp", session_id: SID, link: null });
+            const other = seedItem({ kind: "private", source: "saved", name: "other" });
+            setTitle(up.id, "Kyoto, day 2");
+            const b = await json(await call("GET", "/api/library"));
+            const by = Object.fromEntries(b.items.map((i: any) => [i.id, i]));
+            expect(by[up.id].custom_title).toBe("Kyoto, day 2");
+            expect(by[render.id].custom_title).toBe("Kyoto, day 2");
+            expect(by[other.id].custom_title).toBeNull();
+            // `name` (the file name, which downloads use) is untouched
+            expect(by[up.id].name).toBe("IMG_0412.mov");
+        });
+        it("works without the table (0007 not applied yet): file names only, still a 200", async () => {
+            seedItem({ kind: "private", source: "saved", name: "clip" });
+            db.raw.exec("DROP TABLE media_titles");
+            const r = await call("GET", "/api/library");
+            expect(r.status).toBe(200);
+            expect((await json(r)).items[0].custom_title).toBeNull();
+        });
+        it("the page shows the custom title in place of the file name", async () => {
+            const html = await (await call("GET", "/library")).text();
+            expect(html).toContain("name = it.custom_title || it.name;");
+        });
+    });
 
     describe("GET /api/library", () => {
         it("items and studios carry poster_url (null until the server has cut one)", async () => {

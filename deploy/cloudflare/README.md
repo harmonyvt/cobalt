@@ -203,7 +203,8 @@ method is a 404 (see "cobalt studio"). `POST /studio/<sid>/publish` needs a key 
 needs the library service credential and nothing else (see "cobalt library"). The native app's routes (see "App routes"):
 `GET /capabilities` needs nothing (a missing, malformed or unknown key is reported in the body, never a 401);
 `PUT /studio/upload`, `GET /library`, `GET|HEAD /library/items/<16 alnum>/file`, `POST /library/items/<16 alnum>/publish|studio` and
-`DELETE /library/items/<16 alnum>/post` (deletes the whole post of any one of its files, D1 + R2 only; `APP-API-CONTRACT.md` section 12)
+`DELETE /library/items/<16 alnum>/post` (deletes the whole post of any one of its files, D1 + R2 only; `APP-API-CONTRACT.md` section 12),
+`PATCH /library/items/<16 alnum>/post` (`{"title": string|null}`: the post's custom title in D1 `media_titles`, migration `0007`, returned as `custom_title` by `GET /library`; section 15)
 need a well-formed key plus the D1 lookup, and are checked before the studio session-id rule (`/studio/upload` is the one
 `/studio/<x>` path whose second segment is not a session id); `/studio/upload/adopt` is internal to the Worker and a 404 from
 outside. A caller that sends the right
@@ -549,6 +550,7 @@ migration, no new binding, no web change. The Worker-side code is `api/src/app-r
 | `GET\|HEAD /library/items/<id>/file` | key | Worker (D1 + R2) |
 | `POST /library/items/<id>/publish` | key | Worker (D1 + R2) |
 | `POST /library/items/<id>/studio` | key | Worker (D1), then the DO's internal adopt (or reopens a ready session) |
+| `PATCH /library/items/<id>/post` | key | Worker (D1 only): set or clear the post's custom title |
 
 - **`/capabilities`** reports `server: "cobalt-cloudflare"`, the upstream `cobalt.version` (the one `version` field of the
   repo's `api/package.json`, bundled at build time; `null` if it were missing), the feature flags, the limits (imported from

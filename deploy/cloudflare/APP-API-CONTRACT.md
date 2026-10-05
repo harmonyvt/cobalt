@@ -1402,3 +1402,110 @@ service credential, forged key-id header, expired and deleted rows), `test/libra
 API deploy only: `deploy/cloudflare/api/prepare-git-info.sh`, then `cd deploy/cloudflare/api && cf deploy --secrets-file ~/.config/cobalt/secrets.json`.
 No D1 migration, no web deploy, no new secret. **Unverified until deployed:** the real timing of a share-origin `POST /studio` through the
 edge on a cold container (the cap is 1.2 s; the rest is Worker and D1), and `GET /studio/recent` against the real Durable Object storage.
+
+## 15. Custom titles: `PATCH /library/items/<id>/post`, `custom_title`, `features.titles` (addendum, built 2026-10-05; `apple/CONTRACT-LIBRARY2.md` section 6)
+
+Why: an uploaded file is listed as `service: "upload"` with its cleaned file name, and nothing could rename a post. The app now names
+a post (right after picking a file, and later from the library); the name has to live on the server so every device and the web
+library show it. All of it is **additive and backward compatible**: no existing route, status code, error code or response key changes
+(`GET /library` gains one key per post), no row of an existing table changes, and `title` (the file name) keeps its meaning; an
+older client ignores `custom_title`, an older server simply never sends it (the app then knows from the missing capability flag).
+
+### 15.1 Migration `d1/migrations/0007_titles.sql` (additive: one new table)
+
+```sql
+CREATE TABLE media_titles (
+    post_key   TEXT PRIMARY KEY,
+    title      TEXT NOT NULL,      -- 1..80 code points, trimmed, no control characters
+    key_id     TEXT,               -- api_keys.id (or service:library) that set it
+    updated_at INTEGER NOT NULL    -- ms
+);
+```
+
+One row per **post**, keyed by the post key `GET /library` groups by (`POST_KEY_SQL`, section 5a), so the title is the same for every
+file of the post (original, renders, hosted copy) and survives the deletion of any one file. No row = no custom title. Why a table
+and not `media_items.name` (lane decision): a custom title must be (a) distinguishable from the default so it can be cleared, (b)
+independent of whichever file row would carry it, and (c) possible for every post kind, including webp-only `/webp` posts with no
+original; overwriting `name` fails all three and changes download names. **Apply it BEFORE deploying the API and web Workers** (old
+code never touches it; the web library tolerates its absence, the API's `GET /library` does not).
+
+### 15.2 `PATCH /library/items/<id>/post` (keyed)
+
+- **Gate** (`gate.ts`, in the existing `/library/items/<id>/post` block): `PATCH` → `lookupThen(req, "library_post_title", { id })`;
+  `DELETE` is still section 12; every other method on `post` is 404. `<id>` is the usual `^[A-Za-z0-9]{16}$` (else 404). Auth like the
+  other library routes: `Authorization: Api-Key <key>` (D1 lookup) or the web Worker's `x-cobalt-service` (key id `service:library`);
+  missing/invalid key → the existing 401 codes. Answered by the Worker from D1 alone: the container and the Durable Objects are never
+  woken. No CORS (the web page does not call it).
+- **Body**: JSON, at most 1024 bytes (counted as read: a streamed body is cut off at the cap), UTF-8, an object with a `title` key that
+  is a string or `null`. Extra keys are ignored. Bad JSON, a non-object, a missing `title`, any other type, a body over 1024 bytes, or
+  a title that fails the rules below → `400 {"status":"error","error":{"code":"error.library.bad_title"}}`, nothing stored. The body is
+  judged **before** the id is looked up.
+- **Rules** (identical in the app, `apple/CONTRACT-LIBRARY2.md` decision 6; the server never sees an invalid title from the app, so the
+  `400` is for other callers): trim leading and trailing whitespace and line breaks (JS `trim()`); then reject any control character
+  `U+0000-U+001F`, `U+007F-U+009F`, `U+2028`, `U+2029` (inside the title: a line break in the middle is a `400`, at the ends it is
+  trimmed) and unpaired surrogates; at most **80 Unicode code points** (`Array.from(t).length`: an emoji is one, a combining mark is
+  one). `null`, `""` and whitespace only **clear** the title.
+- **Which post**: the anchor must be a **live** row (`deleted_at IS NULL`), else `404 {"error":{"code":"error.library.not_found"}}`; any
+  file of the post works (saved original, webp, upload, hosted copy, a render of a reopened session). The post key is `POST_KEY_SQL`
+  on the anchor, the same as `GET /library`'s `id`.
+- **Effect**: non-empty → `INSERT … ON CONFLICT(post_key) DO UPDATE SET title, key_id, updated_at` (the caller's key id, or
+  `service:library`; `updated_at` = now); clear → `DELETE FROM media_titles WHERE post_key = ?`.
+- **Response** `200 {"status":"success","post":"<post key>","title":"<title>"|null}`, `content-type: application/json`,
+  `cache-control: no-store`. **Idempotent**: the same body again gives the same answer, and clearing a post with no title is a `200`.
+  `title` in the answer is the cleaned one (trimmed). D1 failure → `503 error.api.generic`.
+
+### 15.3 `GET /library`: `custom_title`
+
+Each post gains `"custom_title": string | null`, next to `title`; `title` is **unchanged** (the file name, which downloads and the old
+clients use). One more query per page (`SELECT post_key, title FROM media_titles WHERE post_key IN (…)`); a D1 failure on it is the
+same `503` as any other failure of the list (never a list that silently drops titles). A title row whose post has no live file shows
+nowhere.
+
+### 15.4 Delete and publish
+
+- **`DELETE /library/items/<id>/post`** (section 12) also deletes the post's `media_titles` row, as a last step (4) after the files and
+  the sessions' originals. **Only when every file went** (`remaining: []`): a partly deleted post (`502 error.library.partial`) keeps
+  its title until the retry finishes it (a deviation from "always", chosen so a retry never leaves a live post that lost its name). A
+  failure of this step is logged, not reported. Deleting one webp (`DELETE /media/<name>`) leaves the post's title.
+- **`POST /library/items/<id>/publish`** (5c): when the new `host` row's post key differs from the source's (an **image** hosted from an
+  upload: the copy has no session, so it is its own post, section 5a "known gap"), the source post's custom title is copied to the new
+  key (`INSERT OR IGNORE`, so a title already on the copy stays). A video's host copy shares the source's post: nothing to copy. A
+  failure is logged and never fails the publish. **Known gap (accepted):** a title set *after* an image was hosted does not reach the
+  copy (it is a separate post); and an image hosted at upload time by `public: true` (section 13.2) is hosted before any title exists.
+  The app titles the post it sees in the library; the web library shows each file's own post title.
+
+### 15.5 Capability
+
+`GET /capabilities` gains `features.titles: true` (`app-routes.ts` `capabilities()`, next to `delete_post`). Absent = false: the app
+shows no title sheet and renames on the device only.
+
+### 15.6 Web library (lane W, optional, done)
+
+`GET /api/library` (the web Worker's own list, `web/src/library.ts`) gives each **item** `custom_title` (the title of the item's post,
+same post key SQL; `name` unchanged), and the page shows it in place of the file name on the tile. The lookup is a separate, best
+effort query: without the table (`0007` not applied yet) or on a D1 error the page shows file names and the list is still a `200`.
+
+### 15.7 Files and tests
+
+Edited: `src/gate.ts` (`library_post_title`), `src/app-routes.ts` (`libraryPostTitle`, `parseTitle`, `custom_title` in `libraryList`,
+the delete step, `copyTitle` in `libraryPublish`, the flag), `src/worker.ts` (the dispatch, answered like the delete: no CORS, no log
+row). New: `d1/migrations/0007_titles.sql`. Web: `web/src/library.ts`, `web/src/library/page.html` (+ regenerated
+`page.generated.ts`). Not edited: `studio.ts`, `notify.ts`, `PUT /studio/upload` (the title is sent after the upload answers, with its
+item id), `POST /studio`.
+Tests: `api/test/titles.test.ts` (migration additive and applying over data; the validation table; PATCH: set, replace, clear with
+`null` and whitespace, idempotent, trim, exactly 80 code points with emoji, 81, control characters, bad JSON / number / missing key /
+array / too large / not UTF-8, the 1024-byte boundary and a streamed body, anchors on every file of every post kind, unknown and
+soft-deleted anchors, D1 down, key / service / ids / methods / no CORS; `GET /library` titles on the right post only, across pages,
+one query, orphan rows, D1 down; delete-post removes it, partial keeps it, a failing delete is quiet; publish copies to an image host,
+leaves a video alone, never fails the publish; the flag), `api/test/gate.test.ts` (the PATCH decision), `api/test/library.test.ts` (the
+capability object), `api/test/migration-0006.test.ts` (no longer pins 0006 as the last migration), `web/test/library.test.ts` (item
+shape, titles by post, no table, the page).
+
+### 15.8 Deploy (owner; not run by the lane)
+
+1. Migration first (from `deploy/cloudflare/web`, with the global `cf`): `cf d1 migrations apply 42f18bb0-837a-47f7-b1e2-606eb705ab6c --dir ../d1/migrations`.
+2. API: `deploy/cloudflare/api/prepare-git-info.sh`, then `cd deploy/cloudflare/api && cf deploy --secrets-file ~/.config/cobalt/secrets.json`.
+3. Web (only for the library page's titles): `cd deploy/cloudflare/web && cf deploy`.
+
+No new secret. **Unverified until deployed:** the real D1 (the tests run the same SQL on `node:sqlite`), and the web page's tile in a
+browser (the page's one-line change is only asserted as text, not rendered).

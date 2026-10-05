@@ -860,7 +860,7 @@ function tileFor(e) {
     meta2 = ["expires in " + inDays(s.expires_at), ago(s.created_at)];
   } else {
     var it = e.it;
-    name = it.name;
+    name = it.custom_title || it.name;
     badge = h("span", { class: "badge " + (it.kind === "public" ? "pub" : "priv"), text: it.kind });
     sub = (SOURCES[it.source] || it.source) + (it.link && hostOf(it.link) ? " · " + hostOf(it.link) : "");
     meta2 = [it.bytes != null ? fmtBytes(it.bytes) : "", ago(it.created_at)];

@@ -6,6 +6,7 @@ import {
     libraryFile,
     libraryList,
     libraryPostDelete,
+    libraryPostTitle,
     libraryPostersBackfill,
     libraryPublish,
     libraryStudio,
@@ -289,6 +290,15 @@ async function handleInner(
         // DELETE /library/items/<id>/post: D1 + R2 only, no CORS (the web page does not call it).
         if (decision.then === "library_post_delete") {
             const r = await libraryPostDelete(appDeps(env, container, edge), decision.params!.id);
+            return new Response(JSON.stringify(r.body), {
+                status: r.status,
+                headers: { "content-type": "application/json", "cache-control": "no-store" },
+            });
+        }
+
+        // PATCH /library/items/<id>/post: a post's custom title (section 15). D1 only, no CORS.
+        if (decision.then === "library_post_title") {
+            const r = await libraryPostTitle(appDeps(env, container, edge), decision.params!.id, request, keyId);
             return new Response(JSON.stringify(r.body), {
                 status: r.status,
                 headers: { "content-type": "application/json", "cache-control": "no-store" },

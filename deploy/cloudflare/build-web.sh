@@ -25,7 +25,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 
 rsync -a \
     --exclude '/.git' --exclude 'node_modules' --exclude '/deploy' \
-    --exclude '/mobile' --exclude '/web/build' --exclude '/web/.svelte-kit' \
+    --exclude '/mobile' --exclude '/apple' --exclude '/web/build' --exclude '/web/.svelte-kit' \
     "$repo/" "$tmp/"
 cp -R "$here/api/.gitinfo" "$tmp/.git"
 

@@ -952,6 +952,7 @@ describe("GET /capabilities", () => {
                 poster: true,
                 public_default: true,
                 create_notify: true,
+                titles: true,
             },
             limits: {
                 max_webp_seconds: 10,

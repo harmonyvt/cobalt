@@ -212,6 +212,9 @@ export async function capabilities(
                 // `notify` and `origin: "share"` on POST /studio, and GET /studio/recent
                 // (APP-API-CONTRACT.md section 14)
                 create_notify: true,
+                // PATCH /library/items/<id>/post and `custom_title` in GET /library
+                // (APP-API-CONTRACT.md section 15)
+                titles: true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,
@@ -502,6 +505,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
 
         let files: FileRow[] = [];
         let sessions: SessionRowLite[] = [];
+        const titles = new Map<string, string>();
         if (page.length > 0) {
             const marks = placeholders(page.length);
             const binds = page.map((k) => k.post_key);
@@ -527,6 +531,12 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                     .bind(...binds)
                     .all<SessionRowLite>()
             ).results;
+            // 3. the posts' custom titles (section 15); a post with no row has none
+            const { results: custom } = await db
+                .prepare(`SELECT post_key, title FROM media_titles WHERE post_key IN (${marks})`)
+                .bind(...binds)
+                .all<{ post_key: string; title: string }>();
+            for (const t of custom) titles.set(t.post_key, t.title);
         }
 
         const filesByPost = new Map<string, FileRow[]>();
@@ -558,6 +568,8 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                 service,
                 link,
                 title: meta?.name ?? null,
+                // the owner's own title for the post (PATCH .../post), null = none (section 15)
+                custom_title: titles.get(k.post_key) ?? null,
                 duration: meta?.duration ?? null,
                 width: meta?.width ?? null,
                 height: meta?.height ?? null,
@@ -763,6 +775,35 @@ async function copyToMedia(
     await put;
 }
 
+// A hosted copy of an image is its own post (it has no session to join, section 5a "known
+// gap"): give it the source post's custom title so the owner's name follows the file. When
+// both rows resolve to the same post (a video: the host row copies the session) there is
+// nothing to copy. INSERT OR IGNORE keeps a title already set on the new post. Best effort:
+// a failure is logged and never fails the publish.
+async function copyTitle(db: D1Database, fromItem: string, toItem: string): Promise<void> {
+    try {
+        const keyOf = async (id: string) =>
+            (
+                await db
+                    .prepare(`SELECT ${POST_KEY_SQL} AS post_key FROM media_items m WHERE m.id = ?1`)
+                    .bind(id)
+                    .first<{ post_key: string }>()
+            )?.post_key ?? null;
+        const from = await keyOf(fromItem);
+        const to = await keyOf(toItem);
+        if (!from || !to || from === to) return;
+        await db
+            .prepare(
+                `INSERT OR IGNORE INTO media_titles (post_key, title, key_id, updated_at)
+                 SELECT ?1, title, key_id, updated_at FROM media_titles WHERE post_key = ?2`,
+            )
+            .bind(to, from)
+            .run();
+    } catch (e) {
+        console.error("[library] publish title copy failed", fromItem, String(e));
+    }
+}
+
 export async function libraryPublish(d: AppDeps, id: string, keyId: string = SERVICE_KEY_ID): Promise<StudioReply> {
     let row: MediaRow | null;
     try {
@@ -830,6 +871,7 @@ export async function libraryPublish(d: AppDeps, id: string, keyId: string = SER
         await d.media.delete(name).catch(() => {});
         return err(503, "error.api.generic");
     }
+    await copyTitle(d.db, id, itemId);
     return {
         status: 201,
         body: { status: "success", url, bytes: obj.size, content_type: contentType, item_id: itemId },
@@ -1025,6 +1067,17 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
         }
     }
 
+    // 4. the post's custom title (section 15). Only once every file is gone: a post that is
+    // still partly live keeps its title until the retry finishes the delete. A failure is
+    // logged, not reported (the title row of a post with no live file is invisible).
+    if (remaining.length === 0) {
+        try {
+            await d.db.prepare("DELETE FROM media_titles WHERE post_key = ?1").bind(post).run();
+        } catch (e) {
+            console.error("[library] post delete title failed", post, String(e));
+        }
+    }
+
     if (remaining.length > 0) {
         return {
             status: 502,
@@ -1034,6 +1087,111 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
     return { status: 200, body: { status: "success", post, deleted, remaining } };
 }
 
+
+// ---- 15. PATCH /library/items/<id>/post ------------------------------------------------------
+
+export const MAX_TITLE_CODE_POINTS = 80;
+const MAX_TITLE_BODY_BYTES = 1024;
+
+// U+0000-U+001F, U+007F-U+009F, U+2028, U+2029, and unpaired surrogates (which no
+// well-formed JSON text from a client should carry and D1 would mangle).
+const BAD_TITLE_CHARS =
+    /[\u0000-\u001F\u007F-\u009F\u2028\u2029]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+// The body as text, never reading past the cap (a client that sends more is answered, not
+// buffered). null = too large.
+async function readCapped(request: Request, cap: number): Promise<string | null> {
+    const declared = request.headers.get("content-length");
+    if (declared !== null && /^\d+$/.test(declared) && Number(declared) > cap) {
+        await request.body?.cancel().catch(() => {});
+        return null;
+    }
+    if (!request.body) return "";
+    const reader = request.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > cap) {
+            reader.cancel().catch(() => {});
+            return null;
+        }
+        chunks.push(value);
+    }
+    const all = new Uint8Array(total);
+    let at = 0;
+    for (const c of chunks) {
+        all.set(c, at);
+        at += c.byteLength;
+    }
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(all);
+}
+
+// "valid" carries the cleaned title, null = clear.
+export function parseTitle(text: string | null): { ok: true; title: string | null } | { ok: false } {
+    if (text === null) return { ok: false };
+    let body: unknown;
+    try {
+        body = JSON.parse(text);
+    } catch {
+        return { ok: false };
+    }
+    if (typeof body !== "object" || body === null || Array.isArray(body) || !Object.hasOwn(body, "title")) {
+        return { ok: false };
+    }
+    const raw = (body as { title: unknown }).title;
+    if (raw === null) return { ok: true, title: null };
+    if (typeof raw !== "string") return { ok: false };
+    // trim() takes whitespace and line breaks off both ends (including U+2028/2029)
+    const title = raw.trim();
+    if (title === "") return { ok: true, title: null };
+    if (BAD_TITLE_CHARS.test(title)) return { ok: false };
+    if (Array.from(title).length > MAX_TITLE_CODE_POINTS) return { ok: false };
+    return { ok: true, title };
+}
+
+// Sets (or, with null / empty, clears) the custom title of the post the anchor file belongs
+// to. The anchor must be a live row; the post key is the one GET /library groups by.
+// Idempotent. D1 only: no container, no Durable Object.
+export async function libraryPostTitle(
+    d: AppDeps,
+    id: string,
+    request: Request,
+    keyId: string = SERVICE_KEY_ID,
+): Promise<StudioReply> {
+    let text: string | null;
+    try {
+        text = await readCapped(request, MAX_TITLE_BODY_BYTES);
+    } catch {
+        text = null; // not UTF-8, or the body broke off
+    }
+    const parsed = parseTitle(text);
+    if (!parsed.ok) return err(400, "error.library.bad_title");
+    try {
+        const anchor = await d.db
+            .prepare(`SELECT ${POST_KEY_SQL} AS post_key FROM media_items m WHERE m.id = ?1 AND m.deleted_at IS NULL`)
+            .bind(id)
+            .first<{ post_key: string }>();
+        if (!anchor) return err(404, "error.library.not_found");
+        if (parsed.title === null) {
+            await d.db.prepare("DELETE FROM media_titles WHERE post_key = ?1").bind(anchor.post_key).run();
+        } else {
+            await d.db
+                .prepare(
+                    `INSERT INTO media_titles (post_key, title, key_id, updated_at) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(post_key) DO UPDATE SET title = excluded.title, key_id = excluded.key_id, updated_at = excluded.updated_at`,
+                )
+                .bind(anchor.post_key, parsed.title, keyId, d.now())
+                .run();
+        }
+        return { status: 200, body: { status: "success", post: anchor.post_key, title: parsed.title } };
+    } catch (e) {
+        console.error("[library] set title failed", id, String(e));
+        return err(503, "error.api.generic");
+    }
+}
 
 // ---- 13. POST /library/posters/backfill ------------------------------------------------------
 

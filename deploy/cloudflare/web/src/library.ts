@@ -90,6 +90,13 @@ const POSTER_NAME = /^[A-Za-z0-9]{10}\.jpg$/;
 // Videos and gifs have a frame to show; everything else is its own picture (or none).
 const hasPosterFrame = (t: string | null) => !!t && (t.startsWith("video/") || t === "image/gif");
 
+// One card per post, as GET /library on the API groups them (api/src/app-routes.ts POST_KEY_SQL):
+// an upload and the renders of its adopted session share a key. Custom titles (migration 0007,
+// APP-API-CONTRACT.md section 15) are keyed by it.
+const POST_KEY_SQL = `COALESCE(
+    (SELECT substr(s.link, 8) FROM studio_sessions s WHERE s.id = m.session_id AND s.link LIKE 'upload:%'),
+    m.session_id, m.link, m.id)`;
+
 export const itemShape = (r: MediaRow) => ({
     id: r.id,
     kind: r.kind,
@@ -356,9 +363,33 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
         if (timer !== undefined) clearTimeout(timer);
     }
 
+    // The owner's own title for each item's post, if any (the app sets it, section 15). Best
+    // effort: without the table (0007 not applied yet) or on a D1 error the page shows file names.
+    const titles = new Map<string, string>();
+    const ids = page.filter((e) => e.t === "item").map((e) => e.id);
+    if (ids.length > 0) {
+        try {
+            const { results } = await DB.prepare(
+                `SELECT m.id AS id, t.title AS title FROM media_items m
+                 JOIN media_titles t ON t.post_key = ${POST_KEY_SQL}
+                 WHERE m.id IN (${ids.map((_, i) => `?${i + 1}`).join(", ")})`,
+            )
+                .bind(...ids)
+                .all<{ id: string; title: string }>();
+            for (const r of results) titles.set(r.id, r.title);
+        } catch (e) {
+            console.error("[library] titles lookup failed", String(e));
+        }
+    }
+
     const webOrigin = ctx.env.WEB_ORIGIN.replace(/\/+$/, "");
     return json(200, {
-        items: page.filter((e) => e.t === "item").map((e) => itemShape((e as Extract<Entry, { t: "item" }>).row)),
+        items: page
+            .filter((e) => e.t === "item")
+            .map((e) => {
+                const row = (e as Extract<Entry, { t: "item" }>).row;
+                return { ...itemShape(row), custom_title: titles.get(row.id) ?? null };
+            }),
         studios: page
             .filter((e) => e.t === "studio")
             .map((e) => {

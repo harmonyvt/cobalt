@@ -70,6 +70,7 @@ export type LookupThen =
     | "library_publish"
     | "library_studio"
     | "library_post_delete"
+    | "library_post_title"
     | "library_posters_backfill"
     | "live_start_token"
     | "live_run"
@@ -216,9 +217,12 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         if (sub === "studio") {
             return req.method === "POST" ? lookupThen(req, "library_studio", { id: id! }) : reject(404);
         }
-        // Delete a whole post (APP-API-CONTRACT.md section 12): any file id of the post.
+        // Delete a whole post (APP-API-CONTRACT.md section 12) or set its custom title
+        // (section 15): any file id of the post.
         if (sub === "post") {
-            return req.method === "DELETE" ? lookupThen(req, "library_post_delete", { id: id! }) : reject(404);
+            if (req.method === "DELETE") return lookupThen(req, "library_post_delete", { id: id! });
+            if (req.method === "PATCH") return lookupThen(req, "library_post_title", { id: id! });
+            return reject(404);
         }
         return reject(404);
     }
