@@ -24,6 +24,9 @@ struct MediaDetail: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.shell) private var shell
     @Environment(\.dynamicTypeSize) private var typeSize
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
 
     /// The tabbed detail's entry point (CONTRACT-MEDIA 4.2): one media, opening on the rendition `initial` names
     /// (`Rendition.ID`; nil = the face).
@@ -111,8 +114,24 @@ struct MediaDetail: View {
         .navigationTitle(title(item))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        // iPadOS 26 floats the tab bar at the top centre when the sidebar is collapsed, in the same row as this
+        // bar, and the system's centred title slides under it. Regular width therefore drops the centred title
+        // and shows it beside the menu, at the trailing edge, where nothing floats.
+        .toolbar(removing: sizeClass == .regular ? .title : nil)
         #endif
         .toolbar {
+            #if os(iOS)
+            if !gone, sizeClass == .regular {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Text(title(item))
+                        .font(.headline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityAddTraits(.isHeader)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
+            #endif
             if !gone {
                 ToolbarItem(placement: .primaryAction) {
                     DetailMenu(controller: controller, item: item, rendition: selected) { openInLibrary(item) }
