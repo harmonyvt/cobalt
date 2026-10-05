@@ -260,31 +260,6 @@ private struct RemoteVideo: View {
     }
 }
 
-/// Items for a picture nobody hears.
-@MainActor
-enum HeroItems {
-    /// The clip's picture without its sound: an item over a composition holding only the video track, so no audio
-    /// pipeline starts for a muted hero (the sound comes with the tap). A clip with no audio, or one that cannot be
-    /// split, plays as it is.
-    static func pictureOnly(_ url: URL) async -> AVPlayerItem {
-        let asset = AVURLAsset(url: url)
-        do {
-            guard try await !asset.loadTracks(withMediaType: .audio).isEmpty,
-                  let source = try await asset.loadTracks(withMediaType: .video).first else { return AVPlayerItem(asset: asset) }
-            let (duration, transform) = try await (asset.load(.duration), source.load(.preferredTransform))
-            let composition = AVMutableComposition()
-            guard let track = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
-                return AVPlayerItem(asset: asset)
-            }
-            try track.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: source, at: .zero)
-            track.preferredTransform = transform
-            return AVPlayerItem(asset: composition)
-        } catch {
-            return AVPlayerItem(asset: asset)
-        }
-    }
-}
-
 // MARK: - the player
 
 /// The stored file of one rendition: a video muted and looping (the orbit's own player when it lent it, so the
@@ -323,6 +298,9 @@ struct DetailPlayer: View {
     @State private var muted = true
     /// The orbit's own player for this planet, when it lent it.
     @Environment(\.lentPlayer) private var lent
+    /// The orbit's player (it loops only the clip's first seconds), shown while this hero's own full-length player
+    /// gets its first frames up, so the zoom still carries the picture. Never played, muted or scrubbed from here.
+    @State private var bridge: AVPlayer?
     /// The full-screen player or viewer, while it is up.
     @State private var fullScreen: HeroFullScreen?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -402,11 +380,17 @@ struct DetailPlayer: View {
         statusWatch?.invalidate()
         let flag = $playing
         let latch = $videoUp
+        let handoff = $bridge
+        let ownsPicture = bridge == nil || bridge !== player
         statusWatch = player.observe(\.timeControlStatus, options: [.initial, .new]) { observed, _ in
             let isPlaying = observed.timeControlStatus == .playing
             Task { @MainActor in
                 flag.wrappedValue = isPlaying
-                if isPlaying { latch.wrappedValue = true }
+                if isPlaying {
+                    latch.wrappedValue = true
+                    // this hero's own player has frames: the orbit's stand-in goes
+                    if ownsPicture { handoff.wrappedValue = nil }
+                }
             }
         }
     }
@@ -458,7 +442,7 @@ struct DetailPlayer: View {
                 } else {
                     ZStack {
                         Rectangle().fill(FrameGradient.fill(1))
-                        if let player { PlayerSurface(player: player, gravity: .resizeAspect).allowsHitTesting(false) }
+                        if let shown = bridge ?? player { PlayerSurface(player: shown, gravity: .resizeAspect).allowsHitTesting(false) }
                         // the picture the zoom came from stays until the video is up
                         if let poster = video.posterURL {
                             StillImage(url: poster).opacity(videoUp ? 0 : 1).allowsHitTesting(false)
@@ -495,15 +479,24 @@ struct DetailPlayer: View {
             onDisk = true
             diskChecked = true
             guard video.kind == .original, !isStill else { return }
+            var resume = CMTime.zero
             if let lent, lent.id == video.id {
-                // the planet's own player, still playing: the picture is already on screen
-                player = lent.player
+                if lent.wholeClip {
+                    // the planet's own player, still playing the whole clip: the picture is already on screen
+                    player = lent.player
+                    watchStatus(of: lent.player)
+                    transport.attach(lent.player)
+                    return
+                }
+                // The orbit's player loops only the clip's first seconds (a scrub on it stops there, and the
+                // clip never gets past them): it keeps the picture up while this hero's own player, over the whole
+                // clip, starts from where the orbit's is.
+                bridge = lent.player
+                resume = lent.player.currentTime()
                 watchStatus(of: lent.player)
-                transport.attach(lent.player)
-                return
             }
             AudioPolicy.ambient()
-            if video.posterURL == nil { firstFrame = await Self.frame(of: url) }
+            if video.posterURL == nil, bridge == nil { firstFrame = await Self.frame(of: url) }
             // Muted until tapped: no audio pipeline is started for a picture nobody hears (the sound comes with the tap).
             let item = await HeroItems.pictureOnly(url)
             guard !Task.isCancelled else { return }
@@ -512,6 +505,8 @@ struct DetailPlayer: View {
             next.actionAtItemEnd = .none
             withSound = false
             watchLoop(of: item, on: next)
+            if resume.isValid, resume.seconds > 0 { await next.seek(to: resume) }
+            guard !Task.isCancelled else { return }
             player = next
             watchStatus(of: next)
             transport.attach(next)
@@ -519,6 +514,7 @@ struct DetailPlayer: View {
         }
         .onDisappear {
             if !muted { AudioPolicy.release() }
+            bridge = nil
             if let lent, player === lent.player {
                 // the orbit's player goes back to the orbit: silent again, still playing (a pause is the owner's
                 // and ends here: the orbit shows moving pictures)

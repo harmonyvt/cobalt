@@ -920,7 +920,7 @@ struct HomeScreen: View {
         #else
         if media.face.kind == .original, let lent = pool.lend(media.id) {
             // the detail knows the video by its record id
-            lentPlayer = LentPlayer(id: media.face.id, player: lent.player)
+            lentPlayer = LentPlayer(id: media.face.id, player: lent.player, wholeClip: lent.wholeClip)
         } else {
             lentPlayer = nil
         }

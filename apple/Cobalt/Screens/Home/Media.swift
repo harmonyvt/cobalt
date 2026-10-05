@@ -293,6 +293,9 @@ struct PlayerSurface: NSViewRepresentable {
 struct LentPlayer {
     let id: String
     let player: AVQueuePlayer
+    /// The player loops the whole clip. False for an orbit player (it loops only the first seconds, so the
+    /// detail must not play the clip on it: it plays its own and shows this one until that is up).
+    var wholeClip = false
 }
 
 private struct LentPlayerKey: EnvironmentKey {
@@ -312,6 +315,8 @@ final class OrbitPlayerPool {
     static let capacity = 3
     private(set) var players: [String: AVQueuePlayer] = [:]
     @ObservationIgnored private var loopers: [String: AVPlayerLooper] = [:]
+    /// The players that loop the whole clip (handed over from the focus layer, or a clip no longer than the orbit's window).
+    @ObservationIgnored private var wholeClip: Set<String> = []
     /// The planet whose detail is open: its player keeps playing under the detail (the detail shows it) and
     /// is still there, playing, when the detail goes away.
     @ObservationIgnored var lent: String?
@@ -319,7 +324,7 @@ final class OrbitPlayerPool {
     func lend(_ id: String) -> LentPlayer? {
         guard let player = players[id] else { return nil }
         lent = id
-        return LentPlayer(id: id, player: player)
+        return LentPlayer(id: id, player: player, wholeClip: wholeClip.contains(id))
     }
 
     /// `front` is ordered front-most first; `sources` maps an id to its local file and duration.
@@ -339,9 +344,10 @@ final class OrbitPlayerPool {
             let player = AVQueuePlayer()
             player.isMuted = true
             player.preventsDisplaySleepDuringVideoPlayback = false
-            let length = min(3, source.duration ?? 3)
-            let range = CMTimeRange(start: .zero, duration: CMTime(seconds: max(0.5, length), preferredTimescale: 600))
+            let length = PlaybackWindow.orbitLoopSeconds(duration: source.duration)
+            let range = CMTimeRange(start: .zero, duration: CMTime(seconds: length, preferredTimescale: 600))
             loopers[id] = AVPlayerLooper(player: player, templateItem: item, timeRange: range)
+            if PlaybackWindow.orbitLoopsWholeClip(duration: source.duration) { wholeClip.insert(id) }
             players[id] = player
             player.play()
         }
@@ -354,6 +360,7 @@ final class OrbitPlayerPool {
         player.isMuted = true
         loopers[id] = looper
         players[id] = player
+        wholeClip.insert(id)    // the focus layer loops the whole clip
         player.play()
     }
 
@@ -366,6 +373,7 @@ final class OrbitPlayerPool {
         loopers[id]?.disableLooping()
         loopers[id] = nil
         players[id] = nil
+        wholeClip.remove(id)
     }
 }
 
