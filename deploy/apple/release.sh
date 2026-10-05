@@ -347,8 +347,13 @@ else
         done <<<"$STALE"
     fi
 
-    # Verify what a client will fetch: the exact URL, no cache-buster. R2 sends no Cache-Control we can set
-    # through `cf`, and Cloudflare does not edge-cache .json by default; check rather than assume.
+    # The custom domain does edge-cache source.json (1.4 was served as 1.3 until purged), so purge it.
+    ZONE="${BASE_URL#https://}"; ZONE="${ZONE#*.}"
+    PURGE_BODY="$(jq -cn --arg u "$SOURCE_URL" '{files: [$u]}')"
+    if cf cache purge -z "$ZONE" -f --body "$PURGE_BODY" >/dev/null 2>&1; then say "purged the cached source.json"
+    else say "warning: could not purge the cached source.json (zone $ZONE); Feather may see the old list for a while"; fi
+
+    # Verify what a client will fetch: the exact URL, no cache-buster.
     step "verify"
     OK=0
     for attempt in 1 2 3; do
