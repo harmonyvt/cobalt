@@ -10,6 +10,9 @@ final class PipelineContext {
     let settings: Settings
     let store: OfflineStore
     let jobs: SharedJobStore
+    /// Titles whose send failed, retried on foreground, on `library.refresh()` and with the next run.
+    /// Lives next to the store's index (the app group's, shared with the extension).
+    let titles: TitleQueue
     let tools: any MediaTools
     let clock: any PipelineClock
     let photos: any PhotosSaver
@@ -95,6 +98,7 @@ final class PipelineContext {
         self.settings = settings
         self.store = store
         self.jobs = jobs
+        self.titles = TitleQueue(fileURL: store.root.appendingPathComponent("titles.json"))
         self.tools = tools
         self.clock = clock
         self.photos = photos

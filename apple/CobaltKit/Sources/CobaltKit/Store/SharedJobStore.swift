@@ -16,6 +16,9 @@ public struct SharedJob: Sendable, Codable, Equatable, Identifiable {
     public var wantsTrim: Bool          // "trim in cobalt": open the app on the trim
     public var pickedUp: Bool           // the app has taken it over
     public var updatedAt: Date
+    /// The title the owner typed in the sheet (CONTRACT-LIBRARY2 decision 4), for the app to apply when it
+    /// resumes the job if the extension was closed before it could. Additive: older records decode as nil.
+    public var pendingTitle: String?
 }
 
 /// Jobs crossing the app / share extension boundary: one JSON file in the app group, read and

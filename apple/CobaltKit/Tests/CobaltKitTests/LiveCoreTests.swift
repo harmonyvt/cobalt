@@ -355,7 +355,7 @@ struct LiveManagerLocalModeTests {
         await rig.settle()
         let request = try #require(rig.adapter.requests.first)
         #expect(request.attributes.input == "file" && request.attributes.service == "file" && request.attributes.ref == "IMG_0412.mov")
-        #expect(request.state.stage == .uploading && request.state.title == "IMG_0412.mov")
+        #expect(request.state.stage == .uploading && request.state.title == "IMG_0412")
     }
 
     @Test func theBackgroundGraceIsHeldOnlyWhileWorkIsInFlightInLocalMode() async throws {

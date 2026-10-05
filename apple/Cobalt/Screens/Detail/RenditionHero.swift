@@ -6,7 +6,8 @@ import UniformTypeIdentifiers
 /// The hero of one tab (CONTRACT-MEDIA 1.10): the rendition at its own aspect (a cropped webp is square or
 /// 4:5), at most `maxHeight` tall. The video plays muted and looping; a tap brings the sound. A webp animates.
 /// A file this device does not hold is never an empty box: a webp plays from its public link, a hosted video
-/// plays from its link, anything else shows the poster the device kept (or the first frame of a public file);
+/// plays from its link, anything else shows the poster the device kept, else the server's poster (so a private
+/// video that is not on this device still has its picture), else the first frame of a public file;
 /// "not on this iphone" is only a small cloud badge in the corner. The file type sits on the other corner like
 /// the planet's.
 struct RenditionHero: View {
@@ -22,6 +23,7 @@ struct RenditionHero: View {
             if let local = rendition.local {
                 DetailPlayer(video: local, maxHeight: maxHeight, aspect: rendition.aspect, remote: remote)
             } else {
+                // the server's poster comes through `remote.still`, so a private video not on this device has its picture
                 RemoteHero(
                     poster: nil, remote: remote, aspect: rendition.aspect, maxHeight: maxHeight,
                     label: rendition.typeLabel)
@@ -40,12 +42,16 @@ struct HeroRemote: Equatable {
     var animatedWebp: URL?
     /// A hosted mp4: plays muted and looping.
     var playableVideo: URL?
-    /// The first frame of a public file, for the poster while it loads (and for good when it cannot play).
+    /// The picture under (or instead of) the playing file: the server's poster for a video, else the first frame of
+    /// a public file, for the poster while it loads (and for good when it cannot play).
     var still: RemotePoster?
 
     init() {}
 
     init(_ r: Rendition, in item: MediaItem? = nil) {
+        // the server's poster for a video (the rendition's own, else the post's): a still the server made, cheaper
+        // and kinder than a frame pulled from the mp4, and the only picture a private-only video has
+        let serverPoster = (r.posterURL ?? (r.isWebp ? nil : item?.post?.posterURL)).map { RemotePoster(url: $0, isVideo: false) }
         if r.isWebp {
             if let url = r.publicURL ?? r.file?.url {
                 animatedWebp = url
@@ -53,8 +59,11 @@ struct HeroRemote: Equatable {
             }
         } else if let url = r.hosted?.url ?? r.publicURL, r.hosted?.contentType?.lowercased().hasPrefix("image/") != true {
             playableVideo = url
-            still = RemotePoster(url: url, isVideo: true)
+            still = serverPoster ?? RemotePoster(url: url, isVideo: true)
+        } else {
+            still = serverPoster
         }
+        if still == nil { still = serverPoster }
         // a video that is only a private copy (or whose hosted file will not play) has no picture of its own: the
         // media's newest public webp stands in, as it does on the library's card
         if still == nil, !r.isWebp, let url = item?.webps.last(where: { $0.publicURL != nil })?.publicURL {
@@ -122,7 +131,7 @@ private extension View {
 private enum PlanetBadgeInset { static let value: CGFloat = 4 }
 
 /// The picture of a rendition the device does not hold, without a frame around it: the poster the device kept,
-/// else the first frame of a public file, under the animated webp or the hosted video once they run; a small
+/// else the server's poster, else the first frame of a public file, under the animated webp or the hosted video once they run; a small
 /// cloud badge says it is not here.
 struct RemoteHeroPicture: View {
     var poster: URL?
@@ -134,7 +143,7 @@ struct RemoteHeroPicture: View {
             if let poster {
                 StillImage(url: poster)
             } else if let still = remote.still {
-                RemoteStill(poster: still)
+                RemoteStill(poster: still, maxPixel: 960)
             }
             if let webp = remote.animatedWebp {
                 AnimatedImageView(source: HeroSource.animated(webp))

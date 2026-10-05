@@ -10,6 +10,9 @@ import WidgetKit
 //
 //   160 pt card = 12 pt top + 136 pt content + 12 pt bottom
 //
+// The title (`LiveFacts.caption`) is one 12 pt row (about 16 pt with its gap 6) more: from ~110 to ~131 pt for
+// the in-progress card at the default size (step names drawn), under the 136 pt content budget.
+//
 // and every state is measured against it (see `LiveLock`). The rows are one line each, and what cannot
 // shrink is dropped rather than wrapped: step names under the dots, the waking footnote, the done card's
 // stepper. Dynamic Type is clamped to `LiveLock.largestType` because the card cannot grow with it.
@@ -41,6 +44,8 @@ struct LiveLockScreenView: View {
         VStack(alignment: .leading, spacing: LiveLock.gap) {
             VStack(alignment: .leading, spacing: LiveLock.gap) {
                 header(ink)
+                // the title, one line above the headline (CONTRACT-LIBRARY2 decision 9); one row of the budget
+                if let caption = facts.caption { LiveCaption(text: caption) }
                 if facts.isDone {
                     LiveLockDone(facts: facts)
                 } else {

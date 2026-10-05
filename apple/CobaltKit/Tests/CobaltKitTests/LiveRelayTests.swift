@@ -86,7 +86,7 @@ struct ShareRelayTests {
         let first = try #require(rig.log.runs.first)
         #expect(first.start && first.attributes.input == "file" && first.attributes.service == "file")
         #expect(first.attributes.ref == "IMG_0412.mov" && first.attributes.origin == "share")
-        #expect(first.state.stage == .uploading && first.state.title == "IMG_0412.mov")
+        #expect(first.state.stage == .uploading && first.state.title == "IMG_0412")
         let stages = rig.log.relays.map(\.stage)
         #expect(stages.contains(.uploading) || first.state.stage == .uploading)
         #expect(stages.contains(.reading) && stages.contains(.ready))

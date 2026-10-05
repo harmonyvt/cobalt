@@ -124,13 +124,13 @@ extension Copy {
             if c.year != cal.component(.year, from: now) { when += " \(c.year ?? 0)" }
             return "\(fromPhotosLead) · \(when)"
         }
-        /// A title for a file name: a picker import's ("from photos · 4 oct.mov") reads without its extension; every
-        /// other name is shown as it is.
-        static func displayTitle(_ name: String) -> String {
-            guard name.hasPrefix("\(fromPhotosLead) · ") else { return name }
-            let ext = (name as NSString).pathExtension
-            return ext.isEmpty || ext.count > 5 ? name : (name as NSString).deletingPathExtension
-        }
+        /// A title for a file name: the name without its media extension (`MediaTitle.stripExtension`, so
+        /// "from photos · 4 oct.mov" and "crop-gestures.MOV" read as titles; "clip.v2" keeps its dot).
+        static func displayTitle(_ name: String) -> String { MediaTitle.stripExtension(name) }
+        /// The title sheet's live line when the upload stopped behind it (CONTRACT-LIBRARY2 decision 3).
+        static let titleKept = "the upload stopped. your title is kept for try again."
+        /// The title field's clear button (VoiceOver).
+        static let clearTitle = "clear"
         /// VoiceOver on the full-screen webp viewer (it closes with a tap, a swipe down or Escape).
         static func webpViewerA11y(_ name: String) -> String { "\(name), full screen. tap to close" }
     }

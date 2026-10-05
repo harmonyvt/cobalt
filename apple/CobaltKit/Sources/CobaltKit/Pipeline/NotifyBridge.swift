@@ -224,12 +224,8 @@ extension Pipeline {
         }
     }
 
-    /// The name the notification calls this work.
-    var notifyLabel: String {
-        if let name = media?.name, !name.isEmpty { return (name as NSString).deletingPathExtension }
-        if case .link(let info) = input { return info.ref }
-        return "cobalt"
-    }
+    /// The name the notification calls this work: the run's title resolved (decision 9), cut to 60.
+    var notifyLabel: String { MediaTitle.text(resolvedTitle, limit: MediaTitle.notifyLength) }
 
     /// The opt-in this run would register right now, nil when the server has nothing to announce.
     var notifyOptIn: NotifyOptIn? {

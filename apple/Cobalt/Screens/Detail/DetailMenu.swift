@@ -1,7 +1,8 @@
 import CobaltKit
 import SwiftUI
 
-/// The detail's `more` menu (CONTRACT-MEDIA 1.10), in the contract's order: open in library (from the orbit,
+/// The detail's `more` menu (CONTRACT-MEDIA 1.10, CONTRACT-LIBRARY2 decision 5), in the contract's order: rename
+/// (first, on every width), open in library (from the orbit,
 /// when the library has the post), remove from this iphone, delete this webp (webp tab only), delete everything
 /// (destructive, last, only when the media has something on the server and a way to delete it).
 struct DetailMenu: View {
@@ -9,6 +10,8 @@ struct DetailMenu: View {
     let item: MediaItem
     let rendition: Rendition
     var openInLibrary: () -> Void
+    /// Opens the rename alert; the same item sits in the detail's title menu.
+    var rename: () -> Void = {}
 
     private var model: AppModel { controller.model }
 
@@ -21,6 +24,8 @@ struct DetailMenu: View {
         let deleting = controller.isDeleting
         let busy = controller.isBusy(item)
         Menu {
+            Button(Copy.Library2.rename, systemImage: Symbol.Library.rename, action: rename)
+                .disabled(deleting)
             if showsOpenInLibrary {
                 Button(Copy.Media.openInLibrary, systemImage: Symbol.Media.openInLibrary, action: openInLibrary)
             }

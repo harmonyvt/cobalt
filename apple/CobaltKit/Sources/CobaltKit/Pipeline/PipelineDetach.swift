@@ -62,6 +62,10 @@ extension Pipeline {
         result = old.result
         stored = old.stored
         uploadedItemID = old.uploadedItemID
+        titleItemID = old.titleItemID
+        titleUnsent = old.titleUnsent
+        runTitle = old.runTitle
+        titleChain = old.titleChain
         renderJobID = old.renderJobID
         localFile = old.localFile
         errorPhase = old.errorPhase

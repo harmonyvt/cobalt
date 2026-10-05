@@ -55,6 +55,12 @@ public struct StoredMedia: Sendable, Equatable, Identifiable {
         return webps.reversed().first { $0.link != nil }?.link
     }
 
+    /// The owner's title (decision 8): every record carries the same one; the original's, else the newest
+    /// webp's that has one.
+    public var customTitle: String? {
+        original?.title ?? webps.reversed().compactMap(\.title).first
+    }
+
     /// The original's name, else the face's name without ".webp".
     public var title: String {
         if let original { return original.name }

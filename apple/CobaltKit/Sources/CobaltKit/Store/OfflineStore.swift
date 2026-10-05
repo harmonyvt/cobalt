@@ -30,12 +30,16 @@ public struct StoredVideo: Sendable, Codable, Equatable, Identifiable {
     public var mediaID: String
     /// What a webp was made from, when this device made it (`.webp` only).
     public var clip: WebpClip?
+    /// The owner's title for this media (CONTRACT-LIBRARY2 decision 8). Every record of a media carries
+    /// the same value (`OfflineStore.setTitle(_:media:)`); nil = no custom title, the default shows.
+    /// `decodeIfPresent`: an index written before titles existed decodes as nil.
+    public var title: String?
 
     public init(
         id: String, kind: Kind, fileURL: URL?, posterURL: URL?, name: String, duration: Double?,
         width: Int?, height: Int?, bytes: Int64, sessionID: String?, link: URL?, remoteURL: URL?,
         createdAt: Date, previewFrameURLs: [URL] = [], publicURL: URL? = nil, mediaID: String? = nil,
-        clip: WebpClip? = nil
+        clip: WebpClip? = nil, title: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -54,6 +58,7 @@ public struct StoredVideo: Sendable, Codable, Equatable, Identifiable {
         self.publicURL = publicURL
         self.mediaID = mediaID.flatMap { $0.isEmpty ? nil : $0 } ?? id
         self.clip = clip
+        self.title = title
     }
 }
 
@@ -73,7 +78,8 @@ extension StoredVideo {
             previewFrameURLs: try c.decodeIfPresent([URL].self, forKey: .previewFrameURLs) ?? [],
             publicURL: try c.decodeIfPresent(URL.self, forKey: .publicURL),
             mediaID: try c.decodeIfPresent(String.self, forKey: .mediaID),
-            clip: try c.decodeIfPresent(WebpClip.self, forKey: .clip))
+            clip: try c.decodeIfPresent(WebpClip.self, forKey: .clip),
+            title: try c.decodeIfPresent(String.self, forKey: .title))
     }
 }
 
@@ -335,6 +341,8 @@ public final class OfflineStore {
                     // share extension can never split one media (CONTRACT-MEDIA 1.2).
                     var placed = record
                     placed.mediaID = Self.resolveMediaID(for: record, explicit: mediaID, in: records)
+                    // a new rendition of a titled media carries the media's title (decision 8)
+                    placed.title = records.first { $0.media == placed.media && $0.title != nil }?.title
                     records.insert(placed, at: 0)
                     result = placed
                     survivor = id
@@ -615,6 +623,30 @@ public final class OfflineStore {
         return merged.filter(matches).count
     }
 
+    /// The owner's title of a media, on every record of it, in one coordinated index write (the share
+    /// extension may write too). `title` is cleaned (`MediaTitle.clean`); nil, empty or blank clears it.
+    /// Unchanged records are not rewritten; an unknown media is a no-op. `videos` and `media` update
+    /// only when something changed.
+    public func setTitle(_ title: String?, media id: String) async {
+        writeTitle(title, media: id)
+    }
+
+    /// `setTitle` for callers that must not suspend (an optimistic rename, a run). False when the index
+    /// could not be written (the caller keeps the title in memory).
+    @discardableResult
+    func writeTitle(_ title: String?, media id: String) -> Bool {
+        let cleaned = title.flatMap(MediaTitle.clean)
+        var touched = 0
+        guard let merged = try? Self.mutate(root: root, { records in
+            for i in records.indices where records[i].media == id && records[i].title != cleaned {
+                records[i].title = cleaned
+                touched += 1
+            }
+        }) else { return false }
+        if touched > 0 { adopt(merged) }
+        return true
+    }
+
     /// "keep videos on this iphone" turned off.
     public func dropFilesKeepingPosters() async {
         var names: [String] = []
@@ -662,7 +694,8 @@ public final class OfflineStore {
             Record(
                 id: v.id, kind: v.kind, fileName: nil, posterName: nil, name: v.name, duration: v.duration,
                 width: v.width, height: v.height, bytes: v.bytes, sessionID: v.sessionID, link: v.link,
-                remoteURL: v.remoteURL, createdAt: v.createdAt, publicURL: v.publicURL, mediaID: v.mediaID, clip: v.clip)
+                remoteURL: v.remoteURL, createdAt: v.createdAt, publicURL: v.publicURL, mediaID: v.mediaID, clip: v.clip,
+                title: v.title)
         }
         if let written = try? Self.mutate(root: root, { $0 = records }) {
             adopt(written)
@@ -869,6 +902,8 @@ public final class OfflineStore {
         var mediaID: String?
         /// What a webp was made from, when this device made it.
         var clip: WebpClip?
+        /// The owner's title of the media (same value on every record of it); nil in an older index.
+        var title: String?
 
         /// The effective media id.
         var media: String { mediaID ?? id }
@@ -889,7 +924,7 @@ public final class OfflineStore {
                 name: name, duration: duration, width: width, height: height, bytes: bytes,
                 sessionID: sessionID, link: link, remoteURL: remoteURL, createdAt: createdAt,
                 previewFrameURLs: (previewNames ?? []).map { root.appendingPathComponent("previews/\($0)") },
-                publicURL: publicURL, mediaID: media, clip: clip)
+                publicURL: publicURL, mediaID: media, clip: clip, title: title)
         }
     }
 

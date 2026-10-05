@@ -901,7 +901,9 @@ struct HomeScreen: View {
     @ViewBuilder
     private var orbitActions: some View {
         ForEach(orbitMedia) { media in
-            Button(Copy.Media.planetA11y(title: media.title, webps: media.webps.count, hasVideo: media.original != nil)) { open(media) }
+            Button(Copy.Media.planetA11y(
+                title: model.mediaItem(for: baseMedia(media)).titleText, webps: media.webps.count,
+                hasVideo: media.original != nil)) { open(media) }
         }
     }
 
@@ -931,7 +933,9 @@ struct HomeScreen: View {
     private var soloCaption: (id: String, caption: OrbitCaption)? {
         guard orbitMedia.count == 1, !focusReserved, let media = orbitMedia.first else { return nil }
         let item = model.mediaItem(for: baseMedia(media))
-        let title = (item.service != nil && item.ref != nil) ? Copy.focusTitle(service: item.service ?? "", ref: item.ref ?? "") : media.title
+        // the one resolver (CONTRACT-LIBRARY2 decision 1): a custom title wins over `service · ref`; a file reads
+        // as its name without the extension, never as "upload"
+        let title = item.titleText
         let face = media.face
         var parts: [String] = []
         if let d = face.duration { parts.append(Format.seconds(d)) }

@@ -77,10 +77,24 @@ public final class LibraryModel {
         didApply(page: page)
     }
 
-    /// Called after every page (refresh, `loadMore`, `loadAll`, `locate`, the seed) has joined `posts`.
-    /// Wave K2 fills it: the title sync-down (a post that joins a local media and has a `custom_title`
-    /// different from the local one writes it to the store, CONTRACT-LIBRARY2 decision 8).
-    func didApply(page: LibraryPage) {}
+    /// Called after every page (refresh, `loadMore`, `loadAll`, `locate`, the seed) has joined `posts`:
+    /// the title sync-down. A post that joins a local media and has a `custom_title` different from the
+    /// local one writes it to the store (CONTRACT-LIBRARY2 decision 8), unless a newer title of this device
+    /// is still waiting to reach the server (`TitleQueue`). A post without a `custom_title` changes nothing:
+    /// a title typed offline must not be erased by a server that has not heard it yet.
+    func didApply(page: LibraryPage) {
+        let store = ctx.store
+        var pending: Set<String>?
+        for post in page.posts {
+            guard let title = post.customTitle.flatMap(MediaTitle.clean),
+                  let media = store.media.first(where: { MediaItem.joins($0, post) }),
+                  media.customTitle != title else { continue }
+            let queued = pending ?? Set(ctx.titles.all().map(\.itemID))
+            pending = queued
+            if post.files.contains(where: { queued.contains($0.id) }) { continue }
+            if store.writeTitle(title, media: media.id) { localTitles[media.id] = nil }
+        }
+    }
 
     public func refresh() async {
         guard !isLoading else { return }
@@ -88,6 +102,7 @@ public final class LibraryModel {
         defer { isLoading = false }
         do {
             let client = ctx.client
+            if ctx.capabilities.titles { await ctx.titles.flush(client: client) }       // titles that failed to send, before the page reads them
             let page = try await client.library(cursor: nil, limit: Self.pageSize)
             apply(page, replacing: true)
             failure = nil

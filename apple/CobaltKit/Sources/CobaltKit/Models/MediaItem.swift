@@ -188,9 +188,9 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
         return item
     }
 
-    /// This device's custom title of a media. Wave K2 reads `StoredVideo.title` here (decision 8); until
-    /// then the device keeps renames in `LibraryModel.localTitles` and `AppModel.mediaItem` overlays them.
-    static func localTitle(of local: StoredMedia) -> String? { nil }
+    /// This device's custom title of a media: `StoredVideo.title` (decision 8). A rename of a post this
+    /// device holds no media for lives in `LibraryModel.localTitles`, which `AppModel.mediaItem` overlays.
+    static func localTitle(of local: StoredMedia) -> String? { local.customTitle }
 
     /// The server's media name of a public webp URL (`<10 letters or digits>.webp`), the name
     /// `DELETE /media/<name>` takes; nil for any other URL.

@@ -20,10 +20,11 @@ extension AppModel {
     }
 
     /// The device's own rename of a media wins over a copy the store carries (it is the newer one).
+    /// A `StoredMedia` a view still holds may predate a rename: the store's record is the current one.
     private func withLocalTitle(_ item: MediaItem) -> MediaItem {
-        guard let title = library.localTitles[item.id] else { return item }
         var item = item
-        item.localTitle = title
+        if let local = item.local, let current = store.media(id: local.id) { item.localTitle = current.customTitle }
+        if let title = library.localTitles[item.id] { item.localTitle = title }
         return item
     }
 
@@ -41,7 +42,7 @@ extension AppModel {
 
         let post = item.post
         let previousPost = post?.customTitle
-        let previousLocal = library.localTitles[item.id]
+        let previousLocal = item.localTitle
         persistLocalTitle(new, for: item)
         guard capabilities.titles, let post, let anchor = post.files.first?.id else { return }
 
@@ -60,10 +61,15 @@ extension AppModel {
         }
     }
 
-    /// This device keeps the title too (decision 8). Wave K2 also writes it to the store
-    /// (`store.setTitle(_:media:)`, `StoredVideo.title`); until then it lives in `library.localTitles`.
+    /// This device keeps the title too (decision 8): on every record of the media (`StoredVideo.title`).
+    /// A post this device holds no media for (and a store write that failed) keeps it in memory only,
+    /// in `library.localTitles`, which `mediaItem(for:)` overlays.
     func persistLocalTitle(_ title: String?, for item: MediaItem) {
-        library.setLocalTitle(title, media: item.id)
+        if let local = item.local, store.writeTitle(title, media: local.id) {
+            library.setLocalTitle(nil, media: item.id)               // the store is the copy now
+        } else {
+            library.setLocalTitle(title, media: item.id)
+        }
     }
 
     // MARK: - Another webp

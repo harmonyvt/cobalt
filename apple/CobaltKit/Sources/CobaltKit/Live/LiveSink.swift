@@ -83,8 +83,9 @@ extension Pipeline {
 
     /// The facts the builder needs.
     func liveSnapshot(previous: LiveContentState?, now: Date) -> LiveSnapshot {
-        var title = media?.name
-        if title == nil, case .file(let name, _, _) = input { title = name }
+        // The owner's title, else the clip's name without its media extension (decision 9).
+        var title = runTitle ?? media.map { MediaTitle.stripExtension($0.name) }
+        if title == nil, case .file(let name, _, _) = input { title = MediaTitle.stripExtension(name) }
         return LiveSnapshot(
             title: title, duration: media?.duration, now: now.timeIntervalSince1970, previous: previous)
     }

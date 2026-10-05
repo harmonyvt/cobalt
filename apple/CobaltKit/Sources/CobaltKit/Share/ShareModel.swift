@@ -350,7 +350,7 @@ final class ShareCore {
         return SharedJob(
             id: jobID, origin: .shareExtension, link: link, sessionID: pipeline.sessionID,
             media: pipeline.media, trim: pipeline.trim, stage: stage, wantsTrim: wantsTrim,
-            pickedUp: false, updatedAt: ctx.clock.now())
+            pickedUp: false, updatedAt: ctx.clock.now(), pendingTitle: pipeline.runTitle)
     }
 }
 

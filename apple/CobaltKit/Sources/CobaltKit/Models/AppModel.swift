@@ -244,6 +244,7 @@ public final class AppModel {
         await store.reload()
         Telemetry.log(.info, .store, "store reloaded", data: ["media": .int(store.media.count), "videos": .int(store.videos.count)])
         takePendingJobs()
+        if capabilities.titles { await ctx.titles.flush(client: ctx.client) }      // titles that failed to send (decision 4)
         // Then what the share sheet handed to the background download, then the photos album
         // (CONTRACT-SYNC.md): in this order, so a clip that just landed goes into Photos at once.
         await ctx.originals?.reconcile()

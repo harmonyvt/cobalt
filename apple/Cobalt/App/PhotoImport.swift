@@ -98,6 +98,9 @@ final class PhotoImport {
     private(set) var phase: Phase = .idle
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var handle: LoadHandle?
+    /// What takes the copied file on from here: the shell's file intake (the upload and its title sheet). Without
+    /// one the model imports it directly.
+    @ObservationIgnored private var intake: (@MainActor (URL) -> Void)?
 
     var isLoading: Bool {
         if case .loading = phase { return true }
@@ -110,8 +113,9 @@ final class PhotoImport {
     }
 
     /// The owner picked `item`: copy it, then hand it to the pipeline like a file from Files.
-    func load(_ item: PhotosPickerItem, into model: AppModel) {
+    func load(_ item: PhotosPickerItem, into model: AppModel, intake: (@MainActor (URL) -> Void)? = nil) {
         guard model.pipelineIsFree, !isLoading else { return }
+        self.intake = intake
         model.selectedTab = .save
         model.pipeline.reset()
         phase = .loading(fraction: nil)
@@ -183,6 +187,8 @@ final class PhotoImport {
     private func finish(_ outcome: Result<PickedMedia, Error>, item: PhotosPickerItem, made: Date, model: AppModel) {
         task = nil
         handle = nil
+        let intake = self.intake
+        self.intake = nil
         switch outcome {
         case .failure(let error):
             Telemetry.log(.error, .photos, "picker copy failed", data: Telemetry.errorData(error))
@@ -212,7 +218,7 @@ final class PhotoImport {
             // cobalt album as THAT asset instead of being saved to Photos a second time
             model.pipeline.adoptPhotosAsset(item.itemIdentifier, forFile: inbox)
             // from here it is a file like any other: the pipeline measures it, checks the limit, uploads
-            model.importFile(inbox)
+            if let intake { intake(inbox) } else { model.importFile(inbox) }
         }
     }
 

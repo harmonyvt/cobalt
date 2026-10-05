@@ -475,6 +475,7 @@ extension Pipeline {
         if let url = hostedURL { ctx.store.setPublicURL(url, forSession: id, orEntry: video.id) }
         stored = ctx.store.videos.first { $0.id == video.id } ?? video
         pinStored(video.id)
+        syncStoreTitle()                            // the title typed before the original landed
     }
 
     // MARK: - Plain cobalt
@@ -505,6 +506,7 @@ extension Pipeline {
             file: local, kind: .original, media: m, sessionID: nil, link: info.url, remoteURL: nil, move: true)
         stored = video
         pinStored(video.id)
+        syncStoreTitle()
         localFile = video.fileURL
         setState(.savedLocally(video))
     }
@@ -551,6 +553,8 @@ extension Pipeline {
         try Task.checkCancellation()
         guard token == runToken else { throw CancellationError() }
         uploadedItemID = uploaded.item.id.isEmpty ? nil : uploaded.item.id
+        titleItemID = uploadedItemID
+        sendTitleIfPossible()                       // a title typed while the upload ran goes right behind its answer
 
         // The stored count stays on screen long enough to read.
         setState(.saving(bytes: file.bytes, total: file.bytes, since: ctx.clock.now()))
@@ -777,6 +781,7 @@ extension Pipeline {
                 _ = try await ctx.store.add(
                     file: file, kind: .webp, media: info, sessionID: sid, link: linkURL, remoteURL: r.url, move: true,
                     mediaID: targetMediaID, clip: clip)
+                syncStoreTitle()
             }
         } catch is CancellationError {
             throw CancellationError()
@@ -880,6 +885,12 @@ extension Pipeline {
         let linkInfo = job.link.flatMap { LinkInfo($0) }
         begin(input: linkInfo.map { .link($0) })
         origin = job.origin
+        if let title = job.pendingTitle {
+            // The sheet's typed title: applied here (idempotent when the extension already sent it); the item
+            // id is known from the interrupted upload, else from the session's `upload:<item id>` link.
+            applyTitle(title)
+            if let sid = job.sessionID { resolveTitleItem(session: sid) }
+        }
         opensOnTrim = job.wantsTrim             // "trim in cobalt": the focus card opens on the trim timeline
         liveRunID = job.id                      // the share sheet's activity (or this app's own, after a relaunch) carries on
         sessionID = job.sessionID
@@ -989,6 +1000,7 @@ extension Pipeline {
             name: post.title ?? post.ref ?? post.id, duration: post.duration ?? privateCopy?.duration,
             width: post.width, height: post.height, bytes: privateCopy?.bytes, isImage: false)
         media = m
+        titleItemID = post.files.first?.id
         let open = post.session.flatMap { $0.status == .ready && $0.expiresAt > ctx.clock.now() ? $0.id : nil }
         if open != nil {
             setState(.reading(developed: 0, of: Pipeline.frameCount))

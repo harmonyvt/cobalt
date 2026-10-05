@@ -26,6 +26,15 @@ extension AppModel {
         pipeline.start(file: url)
     }
 
+    /// The title sheet for the file upload `importFile` just started (CONTRACT-LIBRARY2 decision 3): nil when no
+    /// upload began (a refused or unreadable file) or when the server cannot keep a title (rename later is then
+    /// this device only). The default is the file's name without its media extension, which for a Photos pick is
+    /// `from photos · 4 oct`.
+    var titleRequestForRun: TitleRequest? {
+        guard capabilities.titles, case .uploading = pipeline.state, case .file(let name, _, _) = pipeline.input else { return nil }
+        return TitleRequest(defaultTitle: MediaTitle.stripExtension(name))
+    }
+
     var visibleTabs: [AppTab] {
         AppTab.allCases.filter { $0 != .library || capabilities.library }
     }
@@ -44,6 +53,8 @@ struct AppShell: View {
     @State private var pickedPhoto: PhotosPickerItem?
     @State private var photoImport = PhotoImport()
     @State private var dropTargeted = false
+    /// The `name it` sheet over the save tab while a picked file uploads.
+    @State private var titleRequest: TitleRequest?
     @State private var width: CGFloat = 0
     /// What a screen that has just popped left to say ("deleted."), drawn over the shell for a moment.
     @State private var status: String?
@@ -75,11 +86,11 @@ struct AppShell: View {
             .animation(Motion.card, value: status)
             .dropDestination(for: URL.self) { urls, _ in
                 guard let file = urls.first(where: \.isFileURL) else { return false }
-                model.importFile(file)
+                intake(file)
                 return true
             } isTargeted: { dropTargeted = $0 }
             .fileImporter(isPresented: $showImporter, allowedContentTypes: [.movie, .image, .gif, .webP]) { result in
-                if case .success(let url) = result { model.importFile(url) }
+                if case .success(let url) = result { intake(url) }
             }
             // single selection, the original as stored (a HEVC video or a HEIC photo is not transcoded);
             // the system picker needs no photo-library permission
@@ -92,11 +103,16 @@ struct AppShell: View {
             .onChange(of: pickedPhoto) { _, item in
                 guard let item else { return }
                 pickedPhoto = nil
-                photoImport.load(item, into: model)
+                photoImport.load(item, into: model) { intake($0) }
+            }
+            .sheet(item: $titleRequest) { request in
+                TitleSheet(pipeline: model.pipeline, defaultTitle: request.defaultTitle) { titleRequest = nil }
+                    .cobaltRoot(model: model)
             }
             .background { shortcuts }
             #if DEBUG
             .onAppear {
+                if let kind = UserDefaults.standard.string(forKey: "previewTitleSheet") { debugTitleSheet(kind) }
                 if let n = UserDefaults.standard.string(forKey: "previewDetail").flatMap(Int.init), model.store.media.indices.contains(n) {
                     debugDetail = model.mediaItem(for: model.store.media[n])
                 }
@@ -143,6 +159,37 @@ struct AppShell: View {
                 }
             }
     }
+
+    // MARK: file intake
+
+    /// Files, a drop on the window and Photos all come through here: the upload starts first (`importFile`), then
+    /// the title sheet rises over it (never in its way: the run does not wait for it). A beat later, so the
+    /// picker that returned the file has finished leaving, and only if the run is still that upload.
+    private func intake(_ url: URL) {
+        let wasFree = model.pipelineIsFree
+        model.importFile(url)
+        guard wasFree, let request = model.titleRequestForRun else { return }
+        Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            if model.pipeline.state != .idle, case .file = model.pipeline.input { titleRequest = request }
+        }
+    }
+
+    #if DEBUG
+    /// `-previewTitleSheet files|photos|long` (simulator evidence, over a preview scenario): picks a file the way
+    /// the importer would, so the upload starts and the `name it` sheet rises with that default.
+    private func debugTitleSheet(_ kind: String) {
+        let name = switch kind {
+        case "photos": "from photos · 4 oct.mov"
+        case "long": "the whole afternoon at the harbour, before the wind came up and everyone left.mov"
+        default: "IMG_0412.mov"
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            intake(URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(name))
+        }
+    }
+    #endif
 
     // MARK: navigation
 

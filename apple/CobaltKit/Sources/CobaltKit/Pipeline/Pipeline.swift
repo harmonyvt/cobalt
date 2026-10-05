@@ -75,6 +75,10 @@ public final class Pipeline: Identifiable {
     /// `origin == .shareExtension`.
     public var resumedFromShare: Bool { origin == .shareExtension }
 
+    /// The title the owner typed for this run (CONTRACT-LIBRARY2 decision 4); nil = the default shows.
+    /// `setTitle(_:)` sets it, at any state; it goes with the run (`begin`, `reset()`).
+    public internal(set) var runTitle: String?
+
     /// The media this run adds to ("another webp", the library's "make a webp"): its webp joins that
     /// media instead of being placed by session (CONTRACT-MEDIA 4.3). Set by `AppModel.makeWebp(for:)`
     /// right after the run begins; cleared with the run.
@@ -99,6 +103,13 @@ public final class Pipeline: Identifiable {
     @ObservationIgnored var errorPhase: ErrorPhase = .saving
     @ObservationIgnored var runStart = Date()
     @ObservationIgnored var uploadedItemID: String?
+    /// The library file the run's post is anchored on, once known: the upload's item, a reopened post's
+    /// first file, or the item a resumed upload session names. `PATCH /library/items/<id>/post` goes here.
+    @ObservationIgnored var titleItemID: String?
+    /// `runTitle` changed and the server has not been told yet (it waits for `titleItemID`).
+    @ObservationIgnored var titleUnsent = false
+    /// The server calls for titles, one after another, so the last title typed is the last one sent.
+    @ObservationIgnored var titleChain: Task<Void, Never>?
     /// Set by `adoptPhotosAsset`, taken by the next `start(file:)` of that file.
     @ObservationIgnored var pendingPhotosAsset: (path: String, id: String)?
     @ObservationIgnored var renderJobID: String?
@@ -247,7 +258,7 @@ public final class Pipeline: Identifiable {
         if case .link(let info) = input { link = info.url }
         ctx.jobs.upsert(SharedJob(
             id: jobRecordID, origin: .app, link: link, sessionID: sessionID, media: media, trim: trim,
-            stage: stage, wantsTrim: false, pickedUp: false, updatedAt: ctx.clock.now()))
+            stage: stage, wantsTrim: false, pickedUp: false, updatedAt: ctx.clock.now(), pendingTitle: runTitle))
     }
 
     /// The run no longer has anything in flight: its own record and a taken-over handoff go.
@@ -330,6 +341,9 @@ public final class Pipeline: Identifiable {
         result = nil
         stored = nil
         uploadedItemID = nil
+        titleItemID = nil
+        titleUnsent = false
+        runTitle = nil
         renderJobID = nil
         localFile = nil
         activeHandle = nil
@@ -337,6 +351,7 @@ public final class Pipeline: Identifiable {
         runStart = ctx.clock.now()
         lastRailIndex = 0
         ctx.live?.runBegan(self)
+        flushTitleQueue()                        // titles that failed to send go out with the next run
     }
 
     /// The flow that owns the visible state. A newer flow cancels the one before it.

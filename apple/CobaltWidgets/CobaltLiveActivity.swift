@@ -72,6 +72,15 @@ private enum LivePreview {
         }
     }
 
+    /// The same states carrying the owner's title (CONTRACT-LIBRARY2 decision 9): the caption above the headline.
+    static func titled(_ names: [String] = order, title: String, running: Double = 7) -> [LiveContentState] {
+        states(names, running: running).map { state in
+            var state = state
+            state.title = title
+            return state
+        }
+    }
+
     static let link = CobaltActivityAttributes(LiveRunAttributes(
         run: UUID(), input: "link", service: "instagram", ref: "Dd7P496wolG", origin: "app"))
     static let file = CobaltActivityAttributes(LiveRunAttributes(
@@ -114,6 +123,25 @@ private enum LivePreview {
     CobaltLiveActivity()
 } contentStates: {
     for state in LivePreview.states(["uploading", "ready"]) { state }
+}
+
+#Preview("lock screen · title caption", as: .content, using: LivePreview.file) {
+    CobaltLiveActivity()
+} contentStates: {
+    for state in LivePreview.titled(["uploading", "saving_storing", "reading", "done", "failed_fetch"], title: "beach day, 4 oct") { state }
+}
+
+#Preview("lock screen · long title", as: .content, using: LivePreview.link) {
+    CobaltLiveActivity()
+} contentStates: {
+    for state in LivePreview.titled(
+        ["decoding", "done"], title: "the whole afternoon at the harbour, before the wind came up and everyone left") { state }
+}
+
+#Preview("island · expanded · title", as: .dynamicIsland(.expanded), using: LivePreview.file) {
+    CobaltLiveActivity()
+} contentStates: {
+    for state in LivePreview.titled(["uploading", "done"], title: "beach day, 4 oct") { state }
 }
 
 #Preview("share run · lock screen", as: .content, using: LivePreview.share) {

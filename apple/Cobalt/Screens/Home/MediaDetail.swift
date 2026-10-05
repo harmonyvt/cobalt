@@ -21,6 +21,8 @@ struct MediaDetail: View {
     @State private var controller: DetailController
     @State private var width: CGFloat = 0
     @State private var gone = false
+    /// The rename alert (CONTRACT-LIBRARY2 decision 5), opened by the title menu or the `more` menu.
+    @State private var renaming: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.shell) private var shell
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -54,6 +56,7 @@ struct MediaDetail: View {
         self.postID = item.post?.id
         self.live = live
         _lastShown = State(initialValue: item)
+        _renaming = State(initialValue: preset?.renaming ?? false)
         let controller = DetailController(model: model)
         controller.selectedID = initial
         preset?.apply(to: controller)
@@ -80,13 +83,9 @@ struct MediaDetail: View {
         return local.map { model.mediaItem(for: $0) }
     }
 
-    private func title(_ item: MediaItem) -> String {
-        if item.service != nil {
-            let (service, ref) = Copy.libraryPostTitle(service: item.service, ref: item.ref)
-            return ref.map { "\(service) · \($0)" } ?? service
-        }
-        return item.local?.title ?? item.post?.title ?? Copy.libraryPostTitle(service: nil, ref: nil).0
-    }
+    /// The header, at every width: the title the whole app shares (the custom title; a link save's
+    /// `service · ref`; a file's name without its extension; `cobalt`), through `MediaTitle.resolve`.
+    private func title(_ item: MediaItem) -> String { item.titleText }
 
     // MARK: body
 
@@ -112,6 +111,10 @@ struct MediaDetail: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .navigationTitle(title(item))
+        // the title is a menu (iOS inline title, the Mac window title): `rename`
+        .toolbarTitleMenu {
+            if !gone { renameButton }
+        }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         // iPadOS 26 floats the tab bar at the top centre when the sidebar is collapsed, in the same row as this
@@ -123,22 +126,36 @@ struct MediaDetail: View {
             #if os(iOS)
             if !gone, sizeClass == .regular {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Text(title(item))
+                    // the centred title is gone here, so the trailing title carries the same menu
+                    Menu {
+                        renameButton
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(title(item))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10, weight: .semibold))
+                                .accessibilityHidden(true)
+                        }
                         .font(.headline)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .accessibilityAddTraits(.isHeader)
+                    }
+                    .accessibilityLabel(title(item))
+                    .accessibilityAddTraits(.isHeader)
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
             #endif
             if !gone {
                 ToolbarItem(placement: .primaryAction) {
-                    DetailMenu(controller: controller, item: item, rendition: selected) { openInLibrary(item) }
+                    DetailMenu(
+                        controller: controller, item: item, rendition: selected,
+                        openInLibrary: { openInLibrary(item) }, rename: { renaming = true })
                 }
             }
         }
         .detailDialogs(controller: controller, item: item) { ask in run(ask, item) }
+        .renameAlert(item: item, isPresented: $renaming, model: model) { controller.notice = $0 }
         .background { tabShortcuts(item) }
         .onChange(of: resolved) { old, now in
             if let now { lastShown = now }
@@ -171,6 +188,11 @@ struct MediaDetail: View {
     }
 
     // MARK: actions
+
+    /// `rename` (`pencil`): the title menu's one item; the `more` menu has the same one, first.
+    private var renameButton: some View {
+        Button(Copy.Library2.rename, systemImage: Symbol.Library.rename) { renaming = true }
+    }
 
     private func run(_ ask: DetailController.Confirm, _ item: MediaItem) {
         Task {
@@ -244,6 +266,8 @@ struct DetailPreset {
     var busy = false
     var failsDeletes = false
     var placement: PhotosPlacement?
+    /// The rename alert is already up (a preview of it).
+    var renaming = false
 
     @MainActor func apply(to controller: DetailController) {
         controller.confirm = confirm

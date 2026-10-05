@@ -39,6 +39,16 @@ struct LiveFacts {
             ? attributes.ref : attributes.service
     }
 
+    /// The run's title (CONTRACT-LIBRARY2 decision 9): what the owner typed, else the clip's name without its
+    /// extension (`LiveSink`). Drawn as a one-line caption above the headline, so a named file reads as its name
+    /// and not only as `file`. Nil when it adds nothing to the header's own source line.
+    var caption: String? {
+        guard let raw = state.title?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        let title = MediaTitle.stripExtension(raw)
+        guard title.caseInsensitiveCompare(MediaTitle.stripExtension(source)) != .orderedSame else { return nil }
+        return MediaTitle.text(.file(title))
+    }
+
     var isTerminal: Bool { state.isTerminal }
     var isFailed: Bool { state.stage == .failed }
     var isDone: Bool { state.stage == .done }
@@ -204,6 +214,22 @@ struct LiveTimer: View {
             .multilineTextAlignment(.trailing)
             .lineLimit(1)
             .frame(width: width, alignment: .trailing)
+    }
+}
+
+/// The title, one line, middle truncated (`beach d…y 2024` keeps both ends of a long name).
+struct LiveCaption: View {
+    let text: String
+    var size: CGFloat = 12
+    @Environment(\.isLuminanceReduced) private var reduced
+
+    var body: some View {
+        Text(text)
+            .font(liveFont(size, .medium))
+            .foregroundStyle(LiveInk(reduced: reduced).primary.opacity(0.78))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .accessibilityLabel(text)
     }
 }
 
@@ -426,12 +452,15 @@ struct LiveExpandedCenter: View {
     @Environment(\.isLuminanceReduced) private var reduced
 
     var body: some View {
-        Text(facts.story.headline)
-            .font(liveFont(facts.isFailed ? 12.5 : 14, .semibold))
-            .foregroundStyle(LiveInk(reduced: reduced).primary)
-            .lineLimit(facts.isFailed ? 2 : 1)
-            .minimumScaleFactor(0.8)
-            .multilineTextAlignment(.center)
+        VStack(spacing: 2) {
+            if let caption = facts.caption { LiveCaption(text: caption, size: 11.5) }
+            Text(facts.story.headline)
+                .font(liveFont(facts.isFailed ? 12.5 : 14, .semibold))
+                .foregroundStyle(LiveInk(reduced: reduced).primary)
+                .lineLimit(facts.isFailed ? 2 : 1)
+                .minimumScaleFactor(0.8)
+                .multilineTextAlignment(.center)
+        }
     }
 }
 

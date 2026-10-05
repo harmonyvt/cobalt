@@ -225,10 +225,22 @@ struct FocusLayer: View {
         return localVideo.map { PlanetType($0).label } ?? "mp4"
     }
 
+    /// The run's title (CONTRACT-LIBRARY2 decisions 1 and 9): what the owner typed (`pipeline.runTitle`, or the
+    /// title this device already keeps for the media), else a link save's `service · ref`, else the file's name
+    /// without its media extension (`from photos · 4 oct`, `IMG_0412`), else `cobalt`. A rename elsewhere shows
+    /// here at once because the run's records carry it.
     private var title: String {
-        if case .link(let info) = pipeline.input { return Copy.focusTitle(service: info.service, ref: info.ref) }
-        // a video picked from Photos is named "from photos · <date>" (PhotoImport); its extension is not part of the title
-        return Copy.Media.displayTitle(pipeline.media?.name ?? localVideo?.name ?? Copy.appName)
+        var service: String?
+        var ref: String?
+        var fileName: String?
+        if case .link(let info) = pipeline.input {
+            service = info.service
+            ref = info.ref
+        } else {
+            fileName = pipeline.media?.name ?? localVideo?.name
+        }
+        return MediaTitle.text(MediaTitle.resolve(
+            custom: pipeline.runTitle ?? localVideo?.title, service: service, ref: ref, fileName: fileName))
     }
 
     private var meta: String {
