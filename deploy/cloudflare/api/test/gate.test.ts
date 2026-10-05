@@ -351,6 +351,42 @@ describe("the app's library routes (keyed)", () => {
             expect(g("DELETE", `/library/items/${id}/post`)).toMatchObject({ action: "reject", status: 404 });
         }
     });
+    it("PATCH /library/items/<id>/visibility (section 16) looks the key up; the service credential passes; ids are checked; every other method is 404", () => {
+        expect(g("PATCH", `/library/items/${ID}/visibility`)).toEqual(lookup("library_visibility", { id: ID }));
+        expect(g("PATCH", `/library/items/${ID}/visibility`, { service: true })).toEqual({
+            action: "service",
+            then: "library_visibility",
+            params: { id: ID },
+        });
+        for (const method of ["GET", "HEAD", "POST", "PUT", "DELETE"]) {
+            expect(g(method, `/library/items/${ID}/visibility`)).toMatchObject({ action: "reject", status: 404 });
+        }
+        for (const id of [ID.slice(0, 15), ID + "x", "", "Ab3dE6gH9jK2mN5-"]) {
+            expect(g("PATCH", `/library/items/${id}/visibility`)).toMatchObject({ action: "reject", status: 404 });
+        }
+        expect(g("PATCH", `/library/items/${ID}/visibility/x`)).toMatchObject({ status: 404 });
+        expect(g("PATCH", `/library/items/${ID}/visibility`, { origin: ORIGIN })).toMatchObject({ status: 401 });
+        expect(g("PATCH", `/library/items/${ID}/visibility`, {})).toMatchObject({ status: 401, errorCode: "error.api.auth.key.missing" });
+        expect(g("PATCH", `/library/items/${ID}/visibility`, { authorization: "Api-Key nope" })).toMatchObject({
+            status: 401,
+            errorCode: "error.api.auth.key.invalid",
+        });
+    });
+    it("POST /library/visibility/migrate (section 16) looks the key up; the service credential passes; everything else is 404", () => {
+        expect(g("POST", "/library/visibility/migrate")).toEqual(lookup("library_visibility_migrate"));
+        expect(g("POST", "/library/visibility/migrate", { service: true })).toEqual({
+            action: "service",
+            then: "library_visibility_migrate",
+        });
+        for (const method of ["GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+            expect(g(method, "/library/visibility/migrate", method === "OPTIONS" ? { origin: ORIGIN } : keyed)).not.toMatchObject({ then: "library_visibility_migrate" });
+        }
+        for (const path of ["/library/visibility", "/library/visibility/", "/library/visibility/migrate/", "/library/visibility/other"]) {
+            expect(g("POST", path)).toMatchObject({ action: "reject", status: 404 });
+        }
+        expect(g("POST", "/library/visibility/migrate", {})).toMatchObject({ status: 401, errorCode: "error.api.auth.key.missing" });
+        expect(g("POST", "/library/visibility/migrate", { origin: ORIGIN })).toMatchObject({ status: 401 });
+    });
     it("without a key: 401 with the API's own codes; an Origin is no substitute", () => {
         for (const [method, p] of [
             ["GET", "/library"],

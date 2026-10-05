@@ -123,6 +123,9 @@ export function planStudio(renders) {
 /** True for a server-made poster (APP-API-CONTRACT.md section 13): it is not a library file. */
 export const isPosterObject = (o) => (o.custom_metadata ?? o.customMetadata ?? {}).poster === "1";
 
+/** True for a public mirror of a private original (customMetadata `mirror: "1"`): covered by its original's row. */
+export const isMirrorObject = (o) => (o.custom_metadata ?? o.customMetadata ?? {}).mirror === "1";
+
 /**
  * 'webp': R2 objects (as `cf r2 objects list` returns them) no row covers yet. Posters (JPEGs the
  * Durable Object cut out of a saved video, tagged `poster: "1"` in their custom metadata) live in the
@@ -130,7 +133,7 @@ export const isPosterObject = (o) => (o.custom_metadata ?? o.customMetadata ?? {
  */
 export function planWebp(objects, baseUrl) {
     const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-    return objects.filter((o) => !isPosterObject(o)).map((o) => {
+    return objects.filter((o) => !isPosterObject(o) && !isMirrorObject(o)).map((o) => {
         const meta = o.custom_metadata ?? o.customMetadata ?? {};
         const http = o.http_metadata ?? o.httpMetadata ?? {};
         const keyId = typeof meta.keyId === "string" ? meta.keyId : null;
@@ -247,6 +250,26 @@ function makeCf(bin) {
     };
 }
 
+/**
+ * Keys already covered: every row's bucket + r2_key, plus every original's `public_key` (its public
+ * mirror in the media bucket, migration 0008). Before 0008 is applied the column does not exist: a
+ * "no such column" error falls back to the r2_key-only query.
+ */
+export function coveredKeys(cf, db) {
+    let rows;
+    let withMirrors = true;
+    try {
+        rows = cf.query(db, "SELECT bucket, r2_key, public_key FROM media_items");
+    } catch (e) {
+        if (!/no such column/i.test(`${e?.message ?? ""} ${e?.stderr ?? ""} ${e?.stdout ?? ""}`)) throw e;
+        withMirrors = false;
+        rows = cf.query(db, "SELECT bucket, r2_key FROM media_items");
+    }
+    const out = rows.map((r) => `${r.bucket}\u0000${r.r2_key}`);
+    if (withMirrors) for (const r of rows) if (r.public_key) out.push(`media\u0000${r.public_key}`);
+    return out;
+}
+
 // ---- main ---------------------------------------------------------------------
 
 function parseArgs(argv) {
@@ -270,8 +293,7 @@ export async function main(argv = process.argv.slice(2)) {
     const o = parseArgs(argv);
     const cf = makeCf(o.cf);
 
-    const existingRows = cf.query(o.db, "SELECT bucket, r2_key FROM media_items");
-    const existing = existingRows.map((r) => `${r.bucket}\u0000${r.r2_key}`);
+    const existing = coveredKeys(cf, o.db);
     console.error(`media_items already holds ${existing.length} row(s)`);
 
     const sessions = cf.query(

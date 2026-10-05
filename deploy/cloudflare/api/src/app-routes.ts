@@ -9,7 +9,9 @@
 //   PUT  /studio/upload?name=                a file into R2 + library (+ a studio session)
 //   GET  /library                            the library grouped into posts
 //   GET|HEAD /library/items/<id>/file        a private file's bytes (Range aware)
-//   POST /library/items/<id>/publish         host a private file publicly
+//   POST /library/items/<id>/publish         make a file public (legacy spelling of the toggle)
+//   PATCH /library/items/<id>/visibility     the public/private toggle (section 16)
+//   POST /library/visibility/migrate         the one-row-per-file data step (section 16)
 //   POST /library/items/<id>/studio          open a studio session for a private video
 //   DELETE /library/items/<id>/post          delete a whole post: every file and its sessions (section 12)
 
@@ -17,12 +19,29 @@
 // not); the fork's Worker bundles this one field.
 import { version as apiVersion } from "../../../../api/package.json";
 
-import { randomBase62 } from "./ids";
 import { lookupKey } from "./keys";
-import { MEDIA_NAME_REGEX } from "./gate";
-import { SERVICE_KEY_ID, mintItemId, pageLink, releasePoster } from "./library";
+import { SERVICE_KEY_ID, mintItemId, readCapped, releasePoster } from "./library";
 import { POSTER_COOLDOWN_MS, isPosterType } from "./poster";
 import type { PublishBucket } from "./publish";
+import {
+    DEFAULT_MIGRATE_LIMIT,
+    ITEM_COLUMNS,
+    MAX_MIGRATE_LIMIT,
+    effectiveVisibility,
+    getRow,
+    isOriginalSource,
+    itemShape,
+    migrateVisibility,
+    publishOriginal,
+    purgeUrls,
+    setVisibility,
+    toggleable,
+    visSql,
+    webpName,
+    extOf,
+    type MediaRow,
+    type PurgeFn,
+} from "./visibility";
 import {
     MAX_RENDER_SECONDS,
     MAX_SOURCE_BYTES,
@@ -37,7 +56,7 @@ import {
     type OriginalsBucket,
     type StudioReply,
 } from "./studio";
-import { MEDIA_NAME_LENGTH, serviceFromUrl } from "./webp";
+import { serviceFromUrl } from "./webp";
 
 export const MAX_UPLOAD_BYTES = 100_000_000;
 export const MAX_NAME_CHARS = 120;
@@ -80,66 +99,19 @@ export type AppDeps = {
     // tests that do not care; never awaited for long (see bounded()).
     kickPosters?: (limit?: number) => Promise<StudioReply>;
     randomBytes?: (n: number) => Uint8Array;
+    // Edge-cache purge for the public bucket's URLs (section 16); absent = not configured.
+    purge?: PurgeFn;
 };
+
+// Re-exported for the callers that used to import it from here.
+export { itemShape };
 
 const withSlash = (u: string) => (u.endsWith("/") ? u : `${u}/`);
 const noSlash = (u: string) => u.replace(/\/+$/, "");
 
 // ---- media_items rows ---------------------------------------------------------
 
-type MediaRow = {
-    id: string;
-    kind: string;
-    source: string;
-    bucket: string;
-    r2_key: string;
-    url: string | null;
-    name: string;
-    content_type: string | null;
-    bytes: number | null;
-    width: number | null;
-    height: number | null;
-    duration: number | null;
-    link: string | null;
-    session_id: string | null;
-    key_id: string | null;
-    created_at: number;
-    deleted_at: number | null;
-    // migration 0006 (section 13)
-    poster: string | null;
-    poster_at: number | null;
-};
-
-const ITEM_COLUMNS =
-    "id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at, poster, poster_at";
-
-// The web Worker's itemShape (web/src/library.ts), so both clients see one item.
-export const itemShape = (r: MediaRow) => ({
-    id: r.id,
-    kind: r.kind,
-    source: r.source,
-    name: r.name,
-    url: r.url,
-    content_type: r.content_type,
-    bytes: r.bytes,
-    width: r.width,
-    height: r.height,
-    duration: r.duration,
-    link: r.link,
-    session_id: r.session_id,
-    created_at: r.created_at,
-    // the server-made thumbnail (null until the container has cut it)
-    poster_url: r.poster ?? null,
-});
-
-async function getItem(db: D1Database, id: string): Promise<MediaRow | null> {
-    return (
-        (await db
-            .prepare(`SELECT ${ITEM_COLUMNS} FROM media_items WHERE id = ?1 AND deleted_at IS NULL`)
-            .bind(id)
-            .first<MediaRow>()) ?? null
-    );
-}
+const getItem = (db: D1Database, id: string) => getRow(db, id);
 
 // ---- 1. GET /capabilities ----------------------------------------------------------
 
@@ -215,6 +187,9 @@ export async function capabilities(
                 // PATCH /library/items/<id>/post and `custom_title` in GET /library
                 // (APP-API-CONTRACT.md section 15)
                 titles: true,
+                // one file per rendition: PATCH /library/items/<id>/visibility, `v=2` on GET /library
+                // (APP-API-CONTRACT.md section 16)
+                visibility: true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,
@@ -316,8 +291,8 @@ export async function studioUpload(
     try {
         await d.db
             .prepare(
-                `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, key_id, created_at)
-                 VALUES (?1, 'private', 'upload', 'originals', ?2, NULL, ?3, ?4, ?5, ?6, ?7)`,
+                `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, key_id, created_at, visibility)
+                 VALUES (?1, 'private', 'upload', 'originals', ?2, NULL, ?3, ?4, ?5, ?6, ?7, 'private')`,
             )
             .bind(id, key, name, type, size, keyId, now)
             .run();
@@ -381,6 +356,12 @@ export async function studioUpload(
             if (hosted.status === 201 && typeof hb.url === "string") {
                 publicState = "ready";
                 publicUrl = hb.url;
+                // one row: the answer shows it public (an image is one post with one file)
+                try {
+                    row = (await getItem(d.db, id)) ?? row;
+                } catch {
+                    // the row read before is still a truthful item
+                }
             } else {
                 publicState = "failed";
             }
@@ -468,6 +449,79 @@ async function bounded<T>(p: Promise<T>, ms: number): Promise<T | null> {
     }
 }
 
+// The files of one post as a list entry. v2: one entry per row. Legacy: an original shows `url: null`
+// (as before) and each public original is followed by the synthesized host file old apps expect: its
+// retired host row's id (`public_id`), the host's time when the pair was merged (so the order within
+// the post is the one they always saw), kind 'public', source 'host'.
+// What the retired host row of a merged pair recorded (it is the rollback record, and the only place the old
+// file's own name, size and time survive).
+type Tomb = Pick<MediaRow, "id" | "name" | "content_type" | "bytes" | "width" | "height" | "duration" | "created_at" | "poster">;
+
+function listFiles(fs: FileRow[], v2: boolean, tombs: Map<string, Tomb>) {
+    const one = (f: FileRow) => {
+        const wn = webpName(f);
+        const isOrig = f.bucket === "originals" && isOriginalSource(f.source);
+        return {
+            id: f.id,
+            kind: f.kind,
+            source: f.source,
+            name: f.name,
+            url: !v2 && isOrig ? null : f.url,
+            content_type: f.content_type,
+            bytes: f.bytes,
+            width: f.width,
+            height: f.height,
+            duration: f.duration,
+            created_at: f.created_at,
+            media_name: wn ?? (f.bucket === "media" ? f.r2_key : null),
+            deletable: wn !== null,
+            poster_url: f.poster ?? null,
+            visibility: effectiveVisibility(f),
+            visibility_toggle: toggleable(f),
+        };
+    };
+    const out: ReturnType<typeof one>[] = fs.map(one);
+    if (v2) return out;
+    const synth = (o: FileRow): ReturnType<typeof one> => {
+        const ext = extOf(o.public_key!);
+        const t = tombs.get(o.public_id!);
+        return {
+            id: o.public_id!,
+            kind: "public",
+            source: "host",
+            // a merged pair lists the host exactly as the old row was; one made by the new code is named after its original
+            name: t ? t.name : o.name.toLowerCase().endsWith(`.${ext}`) ? o.name : `${o.name}.${ext}`,
+            url: o.url,
+            content_type: t ? t.content_type : o.content_type,
+            bytes: t ? t.bytes : o.bytes,
+            width: t ? t.width : o.width,
+            height: t ? t.height : o.height,
+            duration: t ? t.duration : o.duration,
+            created_at: t ? t.created_at : o.created_at,
+            media_name: o.public_key,
+            deletable: false,
+            poster_url: (t ? t.poster : null) ?? o.poster ?? null,
+            visibility: "public",
+            visibility_toggle: false,
+        };
+    };
+    const publicOriginals = fs.filter(
+        (f) => f.bucket === "originals" && isOriginalSource(f.source) && effectiveVisibility(f) === "public" && f.url && f.public_key && f.public_id,
+    );
+    // merged pairs go where the host row used to sort (newest first, ties by id descending)
+    for (const o of publicOriginals.filter((f) => tombs.has(f.public_id!))) {
+        const s = synth(o);
+        const at = out.findIndex((e) => e.created_at < s.created_at || (e.created_at === s.created_at && e.id < s.id));
+        out.splice(at === -1 ? out.length : at, 0, s);
+    }
+    // a pair made by the new code has no host row to place: right after its original
+    for (const o of publicOriginals.filter((f) => !tombs.has(f.public_id!))) {
+        const at = out.findIndex((e) => e.id === o.id);
+        out.splice(at + 1, 0, synth(o));
+    }
+    return out;
+}
+
 export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<StudioReply> {
     const bad = () => err(400, "error.library.bad_request");
     let limit = DEFAULT_LIBRARY_LIMIT;
@@ -487,13 +541,19 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
     }
     const now = d.now();
     const db = d.db;
+    // `v=2` (section 16): one entry per file with its visibility. Without it (old apps, 1.0-1.6) the
+    // answer is the legacy shape: a public original is listed as its private file plus a synthesized
+    // host file, exactly the pair those builds expect, and a private webp (which they have no word
+    // for) is left out.
+    const v2 = q.get("v") === "2";
+    const hide = v2 ? "" : ` AND NOT (m.source IN ('webp', 'studio') AND ${visSql("m.")} = 'private')`;
 
     try {
         // 1. the page of posts: newest file first, ties broken by the post key
         const { results: keys } = await db
             .prepare(
                 `WITH f AS (SELECT m.created_at AS created_at, ${POST_KEY_SQL} AS post_key
-                            FROM media_items m WHERE m.deleted_at IS NULL)
+                            FROM media_items m WHERE m.deleted_at IS NULL${hide})
                  SELECT post_key, MAX(created_at) AS latest FROM f GROUP BY post_key
                  HAVING MAX(created_at) < ?1 OR (MAX(created_at) = ?1 AND post_key < ?2)
                  ORDER BY latest DESC, post_key DESC LIMIT ?3`,
@@ -514,7 +574,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                 await db
                     .prepare(
                         `SELECT * FROM (SELECT ${ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${POST_KEY_SQL} AS post_key
-                                        FROM media_items m WHERE m.deleted_at IS NULL)
+                                        FROM media_items m WHERE m.deleted_at IS NULL${hide})
                          WHERE post_key IN (${marks}) ORDER BY created_at DESC, id DESC`,
                     )
                     .bind(...binds)
@@ -552,16 +612,31 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
             sessionsByPost.set(s.post_key, list);
         }
 
+        // legacy only: the retired host row of a merged pair keeps the old file's id and time
+        const tombs = new Map<string, Tomb>();
+        if (!v2) {
+            const pids = files.filter((f) => f.bucket === "originals" && f.visibility === "public" && f.public_id).map((f) => f.public_id!);
+            if (pids.length > 0) {
+                const { results } = await db
+                    .prepare(
+                        `SELECT id, name, content_type, bytes, width, height, duration, created_at, poster FROM media_items WHERE id IN (${placeholders(pids.length)}) AND merged_into IS NOT NULL`,
+                    )
+                    .bind(...pids)
+                    .all<Tomb>();
+                for (const t of results) tombs.set(t.id, t);
+            }
+        }
+
         const api = noSlash(d.apiUrl);
         const posts = page.map((k) => {
             const fs = filesByPost.get(k.post_key) ?? []; // newest first
             const ss = sessionsByPost.get(k.post_key) ?? []; // newest first
-            const original = fs.find((f) => f.bucket === "originals" && (f.source === "saved" || f.source === "upload"));
+            const original = fs.find((f) => f.bucket === "originals" && isOriginalSource(f.source));
             const meta = original ?? fs.find(isVideoish) ?? null;
             const link = original?.link ?? fs.find((f) => f.link)?.link ?? null;
             const open = ss.find((s) => s.expires_at > now && (s.status === "saving" || s.status === "ready")) ?? null;
             const service = ss[0]?.service ?? (link ? serviceFromUrl(link) : null);
-            // the hosted original (section 13): the newest public copy of the post's video
+            // the post's public link: its original's (section 16), else the newest unmerged host copy's
             const hosted = fs.find((f) => f.kind === "public" && f.source === "host" && f.url);
             return {
                 id: k.post_key,
@@ -575,7 +650,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                 height: meta?.height ?? null,
                 // the post's thumbnail: the original's, else any file's (null until made)
                 poster_url: original?.poster ?? fs.find((f) => f.poster)?.poster ?? null,
-                public_url: hosted?.url ?? null,
+                public_url: original?.url ?? hosted?.url ?? null,
                 created_at: k.latest,
                 session: open
                     ? {
@@ -585,22 +660,16 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                           source_url: `${api}/studio/${open.id}/source`,
                       }
                     : null,
-                files: fs.map((f) => ({
-                    id: f.id,
-                    kind: f.kind,
-                    source: f.source,
-                    name: f.name,
-                    url: f.url,
-                    content_type: f.content_type,
-                    bytes: f.bytes,
-                    width: f.width,
-                    height: f.height,
-                    duration: f.duration,
-                    created_at: f.created_at,
-                    media_name: f.bucket === "media" ? f.r2_key : null,
-                    deletable: f.bucket === "media" && MEDIA_NAME_REGEX.test(f.r2_key),
-                    poster_url: f.poster ?? null,
-                })),
+                files: listFiles(fs, v2, tombs),
+                ...(v2
+                    ? {
+                          visibility: original
+                              ? effectiveVisibility(original)
+                              : fs.some((f) => effectiveVisibility(f) === "public")
+                                ? "public"
+                                : "private",
+                      }
+                    : {}),
             };
         });
 
@@ -620,25 +689,24 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
             await bounded(d.kickPosters().catch(() => null), 1500);
         }
 
-        // totals over the whole library, not the page
+        // totals over the whole library, not the page (a public original is stored twice, so it counts
+        // in both byte totals; a file is one row)
         const nFiles = await db
-            .prepare("SELECT COUNT(*) AS n FROM media_items WHERE deleted_at IS NULL")
+            .prepare(`SELECT COUNT(*) AS n FROM media_items m WHERE m.deleted_at IS NULL${hide}`)
             .first<{ n: number }>();
         const nPosts = await db
             .prepare(
-                `SELECT COUNT(DISTINCT ${POST_KEY_SQL}) AS n FROM media_items m WHERE m.deleted_at IS NULL`,
+                `SELECT COUNT(DISTINCT ${POST_KEY_SQL}) AS n FROM media_items m WHERE m.deleted_at IS NULL${hide}`,
             )
             .first<{ n: number }>();
-        const usage = { public_bytes: 0, private_bytes: 0 };
-        const { results: sums } = await db
+        const sums = await db
             .prepare(
-                "SELECT kind, COALESCE(SUM(bytes), 0) AS total FROM media_items WHERE deleted_at IS NULL GROUP BY kind",
+                `SELECT COALESCE(SUM(CASE WHEN ${visSql()} = 'public' THEN bytes END), 0) AS pub,
+                        COALESCE(SUM(CASE WHEN bucket = 'originals' THEN bytes END), 0) AS priv
+                   FROM media_items WHERE deleted_at IS NULL`,
             )
-            .all<{ kind: string; total: number }>();
-        for (const s of sums) {
-            if (s.kind === "public") usage.public_bytes = s.total;
-            else if (s.kind === "private") usage.private_bytes = s.total;
-        }
+            .first<{ pub: number; priv: number }>();
+        const usage = { public_bytes: sums?.pub ?? 0, private_bytes: sums?.priv ?? 0 };
 
         const last = page[page.length - 1];
         return {
@@ -728,82 +796,11 @@ export async function libraryFile(d: AppDeps, id: string, request: Request): Pro
     return new Response(obj.body, { status, headers });
 }
 
-// ---- 5c. POST /library/items/<id>/publish -------------------------------------------------
+// ---- 5c. POST /library/items/<id>/publish (section 16: the legacy spelling of "make public") -------------
 
-// Copies an R2 object's body into the public bucket chunk by chunk. A manual
-// reader/writer loop into a FixedLengthStream: ReadableStream.pipeTo() between
-// streams is not implemented in the Workers runtime (it hung a put until the
-// Durable Object died, 2026-10-01).
-async function copyToMedia(
-    d: AppDeps,
-    from: { body: ReadableStream; size: number },
-    to: string,
-    contentType: string,
-    customMetadata: Record<string, string>,
-): Promise<void> {
-    const { readable, writable } = d.fixedLength(from.size);
-    // Start the put first so the readable side is being consumed while we write.
-    const put = d.media.put(to, readable, {
-        httpMetadata: { contentType, cacheControl: "public, max-age=31536000, immutable" },
-        customMetadata,
-    });
-    // If the put fails early nothing reads the readable side and a pending
-    // write would wait forever: race every write against the put failing.
-    const failed = new Promise<never>((_, reject) => {
-        put.then(() => {}, reject);
-    });
-    failed.catch(() => {});
-    const writer = writable.getWriter();
-    const reader = from.body.getReader();
-    try {
-        for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const w = writer.write(value);
-            w.catch(() => {});
-            await Promise.race([w, failed]);
-        }
-        const closed = writer.close();
-        closed.catch(() => {});
-        await Promise.race([closed, failed]);
-    } catch (e) {
-        reader.cancel().catch(() => {});
-        writer.abort(e).catch(() => {});
-        put.catch(() => {});
-        throw e;
-    }
-    await put;
-}
-
-// A hosted copy of an image is its own post (it has no session to join, section 5a "known
-// gap"): give it the source post's custom title so the owner's name follows the file. When
-// both rows resolve to the same post (a video: the host row copies the session) there is
-// nothing to copy. INSERT OR IGNORE keeps a title already set on the new post. Best effort:
-// a failure is logged and never fails the publish.
-async function copyTitle(db: D1Database, fromItem: string, toItem: string): Promise<void> {
-    try {
-        const keyOf = async (id: string) =>
-            (
-                await db
-                    .prepare(`SELECT ${POST_KEY_SQL} AS post_key FROM media_items m WHERE m.id = ?1`)
-                    .bind(id)
-                    .first<{ post_key: string }>()
-            )?.post_key ?? null;
-        const from = await keyOf(fromItem);
-        const to = await keyOf(toItem);
-        if (!from || !to || from === to) return;
-        await db
-            .prepare(
-                `INSERT OR IGNORE INTO media_titles (post_key, title, key_id, updated_at)
-                 SELECT ?1, title, key_id, updated_at FROM media_titles WHERE post_key = ?2`,
-            )
-            .bind(to, from)
-            .run();
-    } catch (e) {
-        console.error("[library] publish title copy failed", fromItem, String(e));
-    }
-}
-
+// Makes the file public: the same row, a mirror at its stable public name, so a repeat answers with the
+// same link (and nothing is copied twice). `id` may be a public_id (the id old apps know the public
+// file by). A webp still in the public bucket, or a legacy host copy, is already public.
 export async function libraryPublish(d: AppDeps, id: string, keyId: string = SERVICE_KEY_ID): Promise<StudioReply> {
     let row: MediaRow | null;
     try {
@@ -812,70 +809,66 @@ export async function libraryPublish(d: AppDeps, id: string, keyId: string = SER
         return err(503, "error.api.generic");
     }
     if (!row) return err(404, "error.library.not_found");
-    if (row.kind !== "private" || row.bucket !== "originals") return err(409, "error.library.already_public");
+    if (row.bucket !== "originals") return err(409, "error.library.already_public");
+    return publishOriginal(d, row, keyId);
+}
 
-    let obj: Awaited<ReturnType<OriginalsBucket["get"]>>;
+// ---- 16. PATCH /library/items/<id>/visibility ----------------------------------------------------
+
+const MAX_VISIBILITY_BODY_BYTES = 256;
+
+export async function libraryVisibility(
+    d: AppDeps,
+    id: string,
+    request: Request,
+    keyId: string = SERVICE_KEY_ID,
+): Promise<StudioReply> {
+    let text: string | null;
     try {
-        obj = await d.originals.get(row.r2_key);
+        text = await readCapped(request, MAX_VISIBILITY_BODY_BYTES);
     } catch {
-        return err(502, "error.library.storage");
+        text = null;
     }
-    if (!obj) return err(404, "error.library.missing");
+    let want: boolean | null = null;
+    if (text !== null) {
+        try {
+            const body: unknown = JSON.parse(text);
+            if (body && typeof body === "object" && !Array.isArray(body) && typeof (body as { public?: unknown }).public === "boolean") {
+                want = (body as { public: boolean }).public;
+            }
+        } catch {
+            // not JSON: bad request below
+        }
+    }
+    if (want === null) return err(400, "error.library.bad_request");
+    return setVisibility(d, id, want, keyId);
+}
 
-    const ext = /\.([0-9A-Za-z]{1,8})$/.exec(row.r2_key)?.[1]?.toLowerCase() ?? "bin";
-    const name = `${randomBase62(MEDIA_NAME_LENGTH, d.randomBytes)}.${ext}`;
-    const contentType = row.content_type ?? obj.httpMetadata?.contentType ?? "application/octet-stream";
-    const now = d.now();
-    try {
-        await copyToMedia(d, obj, name, contentType, {
-            keyId,
-            source: (pageLink(row.link) ?? "").slice(0, 1000),
-            sessionId: row.session_id ?? "",
-            createdAt: String(now),
-            published: "1",
-        });
-    } catch (e) {
-        console.error("[library] publish copy failed", id, String(e));
-        await obj.body.cancel().catch(() => {});
-        return err(502, "error.library.storage");
-    }
+// ---- 16. POST /library/visibility/migrate --------------------------------------------------------
 
-    const itemId = mintItemId(d.randomBytes);
-    const url = withSlash(d.mediaBaseUrl) + name;
-    try {
-        await d.db
-            .prepare(
-                `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, poster)
-                 VALUES (?1, 'public', 'host', 'media', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`,
-            )
-            .bind(
-                itemId,
-                name,
-                url,
-                row.name,
-                contentType,
-                obj.size,
-                row.width,
-                row.height,
-                row.duration,
-                row.link,
-                row.session_id,
-                keyId,
-                now,
-                // the public copy shares the original's poster (section 13)
-                row.poster,
-            )
-            .run();
-    } catch (e) {
-        console.error("[library] publish row failed", id, String(e));
-        await d.media.delete(name).catch(() => {});
-        return err(503, "error.api.generic");
+// The data step. Dry run unless dry_run=0; `limit` pairs per call; D1 writes only (R2 is only read).
+export async function libraryVisibilityMigrate(d: AppDeps, q: URLSearchParams): Promise<StudioReply> {
+    const bad = () => err(400, "error.library.bad_request");
+    let dryRun = true;
+    if (q.has("dry_run")) {
+        const raw = q.get("dry_run");
+        if (raw === "0" || raw === "false") dryRun = false;
+        else if (raw !== "1" && raw !== "true") return bad();
     }
-    await copyTitle(d.db, id, itemId);
-    return {
-        status: 201,
-        body: { status: "success", url, bytes: obj.size, content_type: contentType, item_id: itemId },
-    };
+    let undo = false;
+    if (q.has("undo")) {
+        const raw = q.get("undo");
+        if (raw === "1" || raw === "true") undo = true;
+        else if (raw !== "0" && raw !== "false") return bad();
+    }
+    let limit = DEFAULT_MIGRATE_LIMIT;
+    if (q.has("limit")) {
+        const raw = q.get("limit") ?? "";
+        if (!/^\d{1,3}$/.test(raw)) return bad();
+        limit = Number(raw);
+        if (limit < 1 || limit > MAX_MIGRATE_LIMIT) return bad();
+    }
+    return migrateVisibility(d, { dryRun, limit, undo });
 }
 
 // ---- 5d. POST /library/items/<id>/studio --------------------------------------------------
@@ -962,7 +955,7 @@ export const POST_DELETE_BUSY_MS = 15 * 60 * 1000;
 const SESSION_POST_KEY_SQL = "CASE WHEN s.link LIKE 'upload:%' THEN substr(s.link, 8) ELSE s.id END";
 
 type PostSession = { id: string; status: string; r2_key: string | null; created_at: number };
-type PostFile = Pick<MediaRow, "id" | "bucket" | "r2_key" | "bytes" | "poster">;
+type PostFile = Pick<MediaRow, "id" | "bucket" | "r2_key" | "bytes" | "poster" | "url" | "public_key">;
 
 // Deletes everything of the post the anchor file belongs to: the anchor is read including
 // soft-deleted rows, so the call is idempotent and any file id of the post works. Order
@@ -975,7 +968,7 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
     let files: PostFile[];
     try {
         const anchor = await d.db
-            .prepare(`SELECT ${POST_KEY_SQL} AS post_key FROM media_items m WHERE m.id = ?1`)
+            .prepare(`SELECT ${POST_KEY_SQL} AS post_key FROM media_items m WHERE m.id = ?1 OR m.public_id = ?1 ORDER BY (m.id = ?1) DESC LIMIT 1`)
             .bind(id)
             .first<{ post_key: string }>();
         if (!anchor) return err(404, "error.library.not_found");
@@ -1018,7 +1011,7 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
         files = (
             await d.db
                 .prepare(
-                    `SELECT id, bucket, r2_key, bytes, poster FROM (SELECT m.id, m.bucket, m.r2_key, m.bytes, m.poster, m.created_at, m.deleted_at,
+                    `SELECT id, bucket, r2_key, bytes, poster, url, public_key FROM (SELECT m.id, m.bucket, m.r2_key, m.bytes, m.poster, m.url, m.public_key, m.created_at, m.deleted_at,
                                                                    ${POST_KEY_SQL} AS post_key FROM media_items m)
                      WHERE post_key = ?1 AND deleted_at IS NULL ORDER BY created_at ASC, id ASC`,
                 )
@@ -1035,9 +1028,15 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
     const deleted = { files: 0, bytes: 0 };
     const remaining: string[] = [];
     const posters = new Set<string>();
+    const purged: string[] = [];
     for (const f of files) {
         try {
             await (f.bucket === "media" ? d.media : d.originals).delete(f.r2_key);
+            // the public mirror of a private file (section 16) goes with it, the edge copy is purged below
+            if (f.public_key) {
+                await d.media.delete(f.public_key);
+            }
+            if (f.url) purged.push(f.url);
             await d.db
                 .prepare("UPDATE media_items SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL")
                 .bind(now, f.id)
@@ -1055,6 +1054,9 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
     // still names it (an original and its public copy share one; a row that stayed live in
     // `remaining` keeps the poster until the retry). A failed delete is logged, not reported.
     for (const url of posters) await releasePoster(d.db, d.media, url);
+
+    // 2c. the public URLs of what was deleted, out of the edge cache (best effort: never changes the answer)
+    await purgeUrls(d, purged);
 
     // 3. a session's stored original that has no row of its own (its session is already
     // expired, so nothing can read it through any route: a failure is logged, not reported)
@@ -1098,37 +1100,6 @@ const MAX_TITLE_BODY_BYTES = 1024;
 const BAD_TITLE_CHARS =
     /[\u0000-\u001F\u007F-\u009F\u2028\u2029]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-// The body as text, never reading past the cap (a client that sends more is answered, not
-// buffered). null = too large.
-async function readCapped(request: Request, cap: number): Promise<string | null> {
-    const declared = request.headers.get("content-length");
-    if (declared !== null && /^\d+$/.test(declared) && Number(declared) > cap) {
-        await request.body?.cancel().catch(() => {});
-        return null;
-    }
-    if (!request.body) return "";
-    const reader = request.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        total += value.byteLength;
-        if (total > cap) {
-            reader.cancel().catch(() => {});
-            return null;
-        }
-        chunks.push(value);
-    }
-    const all = new Uint8Array(total);
-    let at = 0;
-    for (const c of chunks) {
-        all.set(c, at);
-        at += c.byteLength;
-    }
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(all);
-}
-
 // "valid" carries the cleaned title, null = clear.
 export function parseTitle(text: string | null): { ok: true; title: string | null } | { ok: false } {
     if (text === null) return { ok: false };
@@ -1171,7 +1142,7 @@ export async function libraryPostTitle(
     if (!parsed.ok) return err(400, "error.library.bad_title");
     try {
         const anchor = await d.db
-            .prepare(`SELECT ${POST_KEY_SQL} AS post_key FROM media_items m WHERE m.id = ?1 AND m.deleted_at IS NULL`)
+            .prepare(`SELECT ${POST_KEY_SQL} AS post_key FROM media_items m WHERE (m.id = ?1 OR m.public_id = ?1) AND m.deleted_at IS NULL ORDER BY (m.id = ?1) DESC LIMIT 1`)
             .bind(id)
             .first<{ post_key: string }>();
         if (!anchor) return err(404, "error.library.not_found");

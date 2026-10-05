@@ -27,7 +27,8 @@ import {
 } from "../src/studio";
 import { WebpService, handleWebpRoute, isWebpRoute } from "../src/webp";
 import { handleRequest, type WorkerEnv } from "../src/worker";
-import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
+import { type FakeD1 } from "../../test-support/d1-sqlite";
+import { createBatchD1 } from "./d1-batch";
 import { Clock, FakeHelper, MemoryKV, MemoryMedia, MemoryOriginals, fixedLength, fixedLengthPair } from "./studio-fakes";
 
 const ORIGIN = "https://cobalt.capybaraharmony.com";
@@ -47,7 +48,7 @@ const ADOPT = {
 };
 
 function world() {
-    const db: FakeD1 = createFakeD1();
+    const db: FakeD1 = createBatchD1();
     const clock = new Clock();
     const kv = new MemoryKV();
     const originals = new MemoryOriginals();
@@ -329,7 +330,7 @@ describe("POST /studio/<sid>/publish", () => {
         await addKey(w);
     });
 
-    it("copies the original into the public bucket: 201, new 10-char name, bytes, content type, cache control, host row", async () => {
+    it("makes the original public: 201, a mirror under a new 10-char name, bytes, content type, a short cache lifetime, and the ORIGINAL's own row turns public (one row per file)", async () => {
         w.seed();
         const res = await publish();
         expect(res.status).toBe(201);
@@ -344,21 +345,23 @@ describe("POST /studio/<sid>/publish", () => {
         const obj = w.media.objects.get(name)!;
         expect(obj.data).toEqual(new Uint8Array(4096).fill(7));
         expect(obj.contentType).toBe("video/mp4");
-        expect(obj.cacheControl).toBe("public, max-age=31536000, immutable");
-        expect(obj.meta).toMatchObject({ keyId: SERVICE_KEY_ID, sessionId: SID, source: LINK });
-        // the private original stays where it was
+        expect(obj.cacheControl).toBe("public, max-age=3600");
+        expect(obj.meta).toMatchObject({ keyId: SERVICE_KEY_ID, sessionId: SID, source: LINK, mirror: "1", published: "1" });
+        // the private original stays where it was, canonical
         expect(w.originals.objects.has(`originals/${SID}.mp4`)).toBe(true);
 
         const rows = w.items();
         expect(rows).toHaveLength(1);
         expect(rows[0]).toMatchObject({
-            id: body.item_id,
-            kind: "public",
-            source: "host",
-            bucket: "media",
-            r2_key: name,
+            kind: "private",
+            source: "saved",
+            bucket: "originals",
+            r2_key: `originals/${SID}.mp4`,
+            visibility: "public",
+            public_key: name,
+            public_id: body.item_id,
             url: body.url,
-            name: "x_2105237035271258436.mp4",
+            name: "x_2105237035271258436",
             content_type: "video/mp4",
             bytes: 4096,
             width: 480,
@@ -366,18 +369,21 @@ describe("POST /studio/<sid>/publish", () => {
             duration: 9.6,
             link: LINK,
             session_id: SID,
-            key_id: SERVICE_KEY_ID,
             deleted_at: null,
         });
+        expect(w.session(SID)).toMatchObject({ public_state: "ready", public_url: body.url });
         // answered by the Worker: the container was never involved
         expect(w.seen).toHaveLength(0);
     });
-    it("works with an Api-Key and records that key's id; the media name is new each time", async () => {
+    it("a repeat returns the same link and the same id and copies nothing; an Api-Key works too", async () => {
         w.seed();
         const a = (await (await publish(auth)).json()) as any;
+        const puts = w.media.puts.length;
         const b = (await (await publish(auth)).json()) as any;
-        expect(a.url).not.toBe(b.url);
-        expect(w.items().map((r) => r.key_id)).toEqual([KEY_ID, KEY_ID]);
+        expect(b.url).toBe(a.url);
+        expect(b.item_id).toBe(a.item_id);
+        expect(w.media.puts).toHaveLength(puts);
+        expect(w.items()).toHaveLength(1);
     });
     it("copies without pipeTo: the stored object's own body is handed to the public bucket (pipeTo/pipeThrough/tee throw here)", async () => {
         w.seed();
@@ -389,12 +395,12 @@ describe("POST /studio/<sid>/publish", () => {
         expect(w.media.objects.get(put.key)!.viaStream).toBe(true);
         expect(w.media.objects.get(put.key)!.data).toHaveLength(4096);
     });
-    it("takes the extension from the stored key (an upload) and does not double it in the display name", async () => {
+    it("takes the extension from the stored key (an upload) and keeps the row's name", async () => {
         w.seed({ id: SID, r2_key: `uploads/${ITEM}.mov`, content_type: "video/quicktime", title: "Clip.MOV", service: "upload", link: `upload:${ITEM}` });
         const body = (await (await publish()).json()) as any;
         expect(body.url).toMatch(/\.mov$/);
         expect(body.content_type).toBe("video/quicktime");
-        expect(w.items()[0]).toMatchObject({ name: "Clip.MOV", link: null, content_type: "video/quicktime" });
+        expect(w.items()[0]).toMatchObject({ name: "Clip.MOV", link: null, content_type: "video/quicktime", source: "upload" });
     });
 
     it("401 without a key or the service credential, nothing copied", async () => {
@@ -413,22 +419,21 @@ describe("POST /studio/<sid>/publish", () => {
         }
         expect(w.media.puts).toHaveLength(0);
     });
-    it("404 for an unknown session, 410 once it has expired", async () => {
+    it("404 for an unknown session; an expired session is still published (the row outlives the session)", async () => {
         const res = await publish();
         expect(res.status).toBe(404);
         expect(((await res.json()) as any).error.code).toBe("error.studio.not_found");
         w.seed();
         w.clock.t += SESSION_TTL_MS + 1;
-        const gone = await publish();
-        expect(gone.status).toBe(410);
-        expect(((await gone.json()) as any).error.code).toBe("error.studio.expired");
-        expect(w.media.puts).toHaveLength(0);
+        const late = await publish();
+        expect(late.status).toBe(201);
+        expect(w.media.puts).toHaveLength(1);
     });
-    it("502 error.studio.storage when the original is missing, unreadable, or the copy fails; no row, no object", async () => {
+    it("the original missing from R2 is 404 error.library.missing, an unreadable one or a failing copy is 502 error.library.storage; the row stays private and no object is left", async () => {
         w.seed({}, false);
         const missing = await publish();
-        expect(missing.status).toBe(502);
-        expect(((await missing.json()) as any).error.code).toBe("error.studio.storage");
+        expect(missing.status).toBe(404);
+        expect(((await missing.json()) as any).error.code).toBe("error.library.missing");
 
         w.originals.objects.set(`originals/${SID}.mp4`, { bytes: new Uint8Array(4096), contentType: "video/mp4", meta: {} });
         w.originals.failGet = true;
@@ -438,18 +443,25 @@ describe("POST /studio/<sid>/publish", () => {
         w.media.failPut = true;
         const failed = await publish();
         expect(failed.status).toBe(502);
-        expect(((await failed.json()) as any).error.code).toBe("error.studio.storage");
+        expect(((await failed.json()) as any).error.code).toBe("error.library.storage");
         expect(w.media.objects.size).toBe(0);
-        expect(w.items()).toHaveLength(0);
+        expect(w.items()).toHaveLength(1);
+        expect(w.items()[0]).toMatchObject({ visibility: "private", url: null, public_key: null });
     });
-    it("a failing media_items insert does not fail the publish (item_id is null)", async () => {
+    it("a ready save whose library row was never written gets its row now (the insert is bookkeeping that may fail), then is published", async () => {
         w.seed();
-        w.breakItems();
+        expect(w.items()).toHaveLength(0);
         const res = await publish();
         expect(res.status).toBe(201);
-        const body = (await res.json()) as any;
-        expect(body.item_id).toBeNull();
-        expect(w.media.objects.size).toBe(1);
+        expect(w.items()).toHaveLength(1);
+        // with D1 refusing media_items writes there is no row to publish: 503, nothing public
+        const w2 = world();
+        await addKey(w2);
+        w2.seed();
+        w2.breakItems();
+        const down = await w2.call(`/studio/${SID}/publish`, { method: "POST", headers: svc });
+        expect(down.status).toBe(503);
+        expect(w2.media.objects.size).toBe(0);
     });
     it("carries the studio CORS origin like every /studio* answer", async () => {
         w.seed();
@@ -849,10 +861,10 @@ describe("media_items: every source", () => {
         });
     });
 
-    it("host: see POST /studio/<sid>/publish above (one 'host' row per publish)", async () => {
+    it("publish makes no second row (section 16): the original's own row turns public", async () => {
         w.seed();
         await w.call(`/studio/${SID}/publish`, { method: "POST", headers: svc });
-        expect(w.items().map((r) => [r.source, r.kind, r.bucket])).toEqual([["host", "public", "media"]]);
+        expect(w.items().map((r) => [r.source, r.kind, r.bucket, r.visibility])).toEqual([["saved", "private", "originals", "public"]]);
     });
 
     it("the same stored object is never listed twice (bucket + key)", async () => {
@@ -953,6 +965,7 @@ describe("GET /capabilities", () => {
                 public_default: true,
                 create_notify: true,
                 titles: true,
+                visibility: true,
             },
             limits: {
                 max_webp_seconds: 10,
@@ -1134,6 +1147,10 @@ describe("PUT /studio/upload", () => {
                 session_id: null,
                 created_at: w.clock.t,
                 poster_url: null,
+                visibility: "private",
+                visibility_toggle: true,
+                media_name: null,
+                deletable: false,
             });
             // no `public` flag: today's behaviour, the answer only carries the two idle fields
             expect(b.public_state).toBeNull();
@@ -1467,7 +1484,7 @@ describe("PUT /studio/upload", () => {
         it("the row was inserted but reading it back failed: the object is KEPT (no row without a file), the upload still succeeds without an item (finding 6)", async () => {
             const orig = w.db.prepare.bind(w.db);
             (w.db as any).prepare = (sql: string) => {
-                if (/^SELECT .* FROM media_items WHERE id = \?1/.test(sql)) throw new Error("D1_ERROR: read down");
+                if (/^SELECT .* FROM media_items WHERE \(id = \?1 OR public_id = \?1\)/.test(sql)) throw new Error("D1_ERROR: read down");
                 return orig(sql);
             };
             const res = await put(bytesOf(4096), "video/mp4", "clip.mp4");
@@ -1624,6 +1641,8 @@ describe("GET /library (grouped into posts)", () => {
             media_name: "Abcdefghij.webp",
             deletable: true,
             poster_url: null,
+            visibility: "public",
+            visibility_toggle: true,
         });
         expect(p.files[2]).toEqual({
             id: "SavedItem0000001",
@@ -1640,6 +1659,8 @@ describe("GET /library (grouped into posts)", () => {
             media_name: null,
             deletable: false,
             poster_url: null,
+            visibility: "private",
+            visibility_toggle: true,
         });
         expect(b.counts).toEqual({ posts: 1, files: 3 });
         expect(b.next).toBeNull();
@@ -2177,25 +2198,27 @@ describe("POST /library/items/<id>/publish", () => {
         const obj = w.media.objects.get(name)!;
         expect(obj.data).toEqual(data);
         expect(obj.contentType).toBe("video/quicktime");
-        expect(obj.cacheControl).toBe("public, max-age=31536000, immutable");
+        expect(obj.cacheControl).toBe("public, max-age=3600"); // not immutable: a toggle off must end within the hour
         expect(obj.viaStream).toBe(true);
-        expect(obj.meta).toMatchObject({ keyId: KEY_ID, source: LINK, sessionId: SID, published: "1" });
+        expect(obj.meta).toMatchObject({ keyId: KEY_ID, source: LINK, sessionId: SID, published: "1", mirror: "1", itemId: ID });
         // the original is untouched
         expect(w.originals.objects.get(`uploads/${ID}.mov`)!.bytes).toEqual(data);
-        expect(w.items().find((r) => r.id === ID)).toMatchObject({ kind: "private", deleted_at: null });
+        expect(w.items().find((r) => r.id === ID)).toMatchObject({ kind: "private", deleted_at: null, visibility: "public", public_key: name });
     });
-    it("the new host row copies session, link, size and duration from the source and records the caller", async () => {
+    it("the same row turns public (no second row): it keeps its session, link, size and duration, the item id answered is the public id old apps know", async () => {
         seedPriv();
         const b = (await (await publish()).json()) as any;
-        const rows = hostRows();
-        expect(rows).toHaveLength(1);
-        expect(rows[0]).toMatchObject({
-            id: b.item_id,
-            kind: "public",
-            source: "host",
-            bucket: "media",
-            r2_key: b.url.split("/").pop(),
+        expect(hostRows()).toHaveLength(0);
+        expect(w.items()).toHaveLength(1);
+        expect(w.items()[0]).toMatchObject({
+            id: ID,
+            kind: "private",
+            source: "upload",
+            bucket: "originals",
             url: b.url,
+            public_key: b.url.split("/").pop(),
+            public_id: b.item_id,
+            visibility: "public",
             name: "IMG_0412.mov",
             content_type: "video/quicktime",
             bytes: 3000,
@@ -2204,10 +2227,11 @@ describe("POST /library/items/<id>/publish", () => {
             duration: 6.2,
             link: LINK,
             session_id: SID,
-            key_id: KEY_ID,
-            created_at: w.clock.t,
             deleted_at: null,
         });
+        // the public id works on item routes: a repeat through it is the same link
+        const again = (await (await publish(auth, b.item_id)).json()) as any;
+        expect(again.url).toBe(b.url);
     });
     it("it copes with streams whose pipeTo / pipeThrough / tee are not implemented (this runtime): the copy is a reader/writer loop", async () => {
         seedPriv();
@@ -2231,7 +2255,8 @@ describe("POST /library/items/<id>/publish", () => {
         const b = (await (await publish()).json()) as any;
         expect(b.url).toMatch(/\.png$/);
         expect(b.content_type).toBe("image/png");
-        expect(hostRows()[0]).toMatchObject({ link: null, session_id: null });
+        expect(w.items()).toHaveLength(1);
+        expect(w.items()[0]).toMatchObject({ link: null, session_id: null, visibility: "public" });
     });
     it("the content type falls back to the object's, then octet-stream", async () => {
         seedPriv({ content_type: null });
@@ -2240,7 +2265,8 @@ describe("POST /library/items/<id>/publish", () => {
     it("the service credential publishes as service:library", async () => {
         seedPriv();
         expect((await publish(svc)).status).toBe(201);
-        expect(hostRows()[0]).toMatchObject({ key_id: SERVICE_KEY_ID });
+        const name = w.items()[0].public_key as string;
+        expect(w.media.objects.get(name)!.meta).toMatchObject({ keyId: SERVICE_KEY_ID });
     });
     it("404 not_found for an unknown or deleted item; nothing is copied", async () => {
         expect(await (await publish()).json()).toEqual({ status: "error", error: { code: "error.library.not_found" } });

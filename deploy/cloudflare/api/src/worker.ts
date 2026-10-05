@@ -10,6 +10,8 @@ import {
     libraryPostersBackfill,
     libraryPublish,
     libraryStudio,
+    libraryVisibility,
+    libraryVisibilityMigrate,
     studioUpload,
     uploadLogInfo,
     type AppDeps,
@@ -22,6 +24,7 @@ import { lookupKey } from "./keys";
 import { SERVICE_KEY_ID } from "./library";
 import { publishStudio, type PublishBucket } from "./publish";
 import { serviceAuthorized } from "./service-auth";
+import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { ingestTelemetry } from "./telemetry";
 import {
     linkFrom,
@@ -62,6 +65,10 @@ export interface WorkerEnv {
     // Hark notification bridge (section 9): the webhook URL, a secret. Absent, empty or not
     // an https URL means the bridge is off and `features.notify_bridge` false.
     HARK_WEBHOOK_URL?: string;
+    // Edge-cache purge for the public bucket (section 16): the zone id (a plain var) and a Cache Purge
+    // token (a secret). Absent or empty: no purge, `cache_cleared: null`.
+    MEDIA_ZONE_ID?: string;
+    MEDIA_PURGE_TOKEN?: string;
 }
 
 // The single "main" Container Durable Object (a stub in production).
@@ -245,6 +252,7 @@ async function handleInner(
                     media: env.MEDIA,
                     mediaBaseUrl: env.MEDIA_BASE_URL,
                     now: edge.now,
+                    purge: purgeFrom(env),
                 },
                 decision.params!.sid,
                 keyId,
@@ -282,6 +290,25 @@ async function handleInner(
         if (decision.then === "library_publish") {
             const r = await libraryPublish(appDeps(env, container, edge), decision.params!.id, keyId);
             return json(r.status, r.body, allowOrigin);
+        }
+        // PATCH /library/items/<id>/visibility and POST /library/visibility/migrate (section 16):
+        // D1 + R2 only, no CORS (the web Worker calls them through the service binding).
+        if (decision.then === "library_visibility" || decision.then === "library_visibility_migrate") {
+            const deps = appDeps(env, container, edge);
+            const r =
+                decision.then === "library_visibility"
+                    ? await libraryVisibility(deps, decision.params!.id, request, keyId)
+                    : await libraryVisibilityMigrate(deps, url.searchParams);
+            return new Response(JSON.stringify(r.body), {
+                status: r.status,
+                headers: { "content-type": "application/json", "cache-control": "no-store" },
+            });
+        }
+        // DELETE /media/<name>.webp of a webp that was switched private once: its bytes live in the
+        // private bucket now, so both copies go here; any other name is the webp service's as before.
+        if (decision.then === "media_delete") {
+            const r = await deleteSwitchedWebp(appDeps(env, container, edge), decision.params!.name);
+            if (r) return json(r.status, r.body, allowOrigin);
         }
         if (decision.then === "library_studio") {
             const r = await libraryStudio(appDeps(env, container, edge), decision.params!.id, keyId);
@@ -400,6 +427,7 @@ function appDeps(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps): AppD
         apiUrl: env.API_URL,
         webUrl: env.CORS_URL,
         now: edge.now,
+        purge: purgeFrom(env),
         fixedLength: edge.fixedLength ?? ((n) => new FixedLengthStream(n)),
         // Queues the missing posters in the Durable Object (records only; it answers at once).
         kickPosters: async (limit) => {

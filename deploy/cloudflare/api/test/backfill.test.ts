@@ -187,7 +187,7 @@ describe("the INSERT, against the real schema", () => {
 const dir = mkdtempSync(path.join(tmpdir(), "backfill-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-function fakeCf(existing: unknown[]) {
+function fakeCf(existing: unknown[], opts: { noPublicKey?: boolean; objects?: unknown[] } = {}) {
     const log = path.join(dir, `log-${Math.random().toString(36).slice(2)}.jsonl`);
     const bin = path.join(dir, `cf-${Math.random().toString(36).slice(2)}.mjs`);
     writeFileSync(
@@ -196,12 +196,14 @@ function fakeCf(existing: unknown[]) {
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2).filter((a) => a !== "-q");
 appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
-const data = ${JSON.stringify({ existing, sessions: SESSIONS, renders: RENDERS, objects: OBJECTS })};
+const data = ${JSON.stringify({ existing, sessions: SESSIONS, renders: RENDERS, objects: opts.objects ?? OBJECTS })};
+const noPublicKey = ${JSON.stringify(!!opts.noPublicKey)};
 const arg = (n) => args[args.indexOf(n) + 1];
 const out = (o) => console.log(JSON.stringify(o));
 if (args[0] === "d1") {
     const sql = arg("--sql") ?? "";
     if (args.includes("--batch")) out({ result: [{ results: [], success: true }] });
+    else if (noPublicKey && sql.includes("public_key")) { console.error("D1_ERROR: no such column: public_key"); process.exit(1); }
     else if (sql.includes("FROM studio_renders")) out({ result: [{ results: data.renders, success: true }] });
     else if (sql.includes("FROM studio_sessions")) out({ result: [{ results: data.sessions, success: true }] });
     else if (sql.includes("GROUP BY")) out({ result: [{ results: [{ source: "x", kind: "y", n: 1 }], success: true }] });
@@ -279,5 +281,31 @@ describe("backfill-library.mjs against a fake cf", () => {
         ]);
         expect(await run(["--cf", f.bin])).toEqual([]);
         expect(f.calls().some((c) => c.includes("--batch"))).toBe(false);
+    });
+    it("an object named by a row's public_key is covered, not re-added as webp", async () => {
+        const mirror = { key: "Mirror0001.mp4", size: 5000, last_modified: "2026-09-26T10:00:00Z" };
+        const f = fakeCf([{ bucket: "originals", r2_key: "o/a.mp4", public_key: "Mirror0001.mp4" }], { objects: [mirror] });
+        const lines = await run(["--dry-run", "--cf", f.bin]);
+        expect(lines.some((l) => l.includes("Mirror0001.mp4"))).toBe(false);
+    });
+    it("an object with customMetadata mirror=1 is covered, an uncovered one still becomes a webp row", async () => {
+        const objects = [
+            { key: "Mirror0002.mp4", size: 5000, custom_metadata: { mirror: "1", published: "1" } },
+            { key: "Plain00002.webp", size: 900 },
+        ];
+        const f = fakeCf([], { objects });
+        const lines = await run(["--dry-run", "--cf", f.bin]);
+        expect(lines.some((l) => l.includes("Mirror0002.mp4"))).toBe(false);
+        expect(lines.filter((l) => l.startsWith("webp"))).toHaveLength(1);
+        expect(lines.some((l) => l.includes("media/Plain00002.webp"))).toBe(true);
+        expect(planWebp(objects, BASE).map((r: any) => r.r2_key)).toEqual(["Plain00002.webp"]);
+    });
+    it("before 0008 (no public_key column) it falls back to the r2_key-only query", async () => {
+        const f = fakeCf([{ bucket: "media", r2_key: "Old0000001.webp" }], { noPublicKey: true });
+        const lines = await run(["--dry-run", "--cf", f.bin]);
+        expect(lines.map((l) => l.split(/\s+/)[0])).toEqual(["saved", "studio", "webp", "studio"]);
+        const sqls = f.calls().filter((c) => c.includes("--sql")).map((c) => c[c.indexOf("--sql") + 1]);
+        expect(sqls.some((q) => q.includes("public_key"))).toBe(true);
+        expect(sqls.some((q) => q === "SELECT bucket, r2_key FROM media_items")).toBe(true);
     });
 });

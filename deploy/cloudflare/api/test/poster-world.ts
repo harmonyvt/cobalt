@@ -7,7 +7,8 @@ import { hashKey } from "../src/keys";
 import { SERVICE_HEADER } from "../src/headers";
 import { SESSION_TTL_MS, StudioService, handleStudioRoute, isStudioRoute } from "../src/studio";
 import { WebpService, handleWebpRoute, isWebpRoute } from "../src/webp";
-import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
+import { type FakeD1 } from "../../test-support/d1-sqlite";
+import { createBatchD1 } from "./d1-batch";
 import { Clock, FakeHelper, MemoryKV, MemoryMedia, MemoryOriginals, fixedLength, fixedLengthPair } from "./studio-fakes";
 
 export const ORIGIN = "https://cobalt.capybaraharmony.com";
@@ -27,7 +28,7 @@ export const asBody = (r: { body: unknown }) => r.body as any;
 
 export function world(opts: { media?: boolean } = {}) {
     const withMedia = opts.media !== false;
-    const db: FakeD1 = createFakeD1();
+    const db: FakeD1 = createBatchD1();
     const clock = new Clock();
     const kv = new MemoryKV();
     const originals = new MemoryOriginals();

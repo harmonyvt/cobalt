@@ -211,11 +211,17 @@ describe("a poster can not be deleted by hand, and nothing on a lifetime path or
         expect([...new Set(hits)].sort()).toEqual(
             [
                 "app-routes.ts:originals.delete(", // upload rollbacks, post delete (session originals)
-                "app-routes.ts:media.delete(", // publish rollback, post delete, poster release
+                "app-routes.ts:media.delete(", // post delete (the file's mirror), poster release
                 "library.ts:media.delete(", // releasePoster
                 "poster.ts:media.delete(", // an orphan guard / a failed put of a poster
                 "studio.ts:originals.delete(", // a save marked lost meanwhile
                 "telemetry.ts:originals.delete(", // crash payloads
+                // section 16: a toggle off deletes the public mirror (never a poster: the names differ in
+                // extension and the keys come from the row's own public_key), a failed or wrong-length
+                // mirror copy deletes the half-made object, and a webp's private copy is deleted again
+                // when its row turned out gone or its length wrong
+                "visibility.ts:media.delete(",
+                "visibility.ts:originals.delete(",
                 "webp.ts:bucket.delete(", // DELETE /media/<name>.webp
             ].sort(),
         );

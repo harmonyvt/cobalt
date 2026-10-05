@@ -90,26 +90,29 @@ describe("a saved link", () => {
         expect(w.posters()).toHaveLength(1);
     });
 
-    it("the public copy hosted from the original shares its poster (publish copies it; a later poster reaches an earlier copy)", async () => {
+    it("a file made public is the same row, so its poster is the original's whenever it is made: one object, before or after hosting", async () => {
         const sid = await save();
-        // hosted BEFORE the poster exists: the copy has none yet ...
         await w.addKey();
+        // hosted BEFORE the poster exists ...
         const pub = await w.call(`/studio/${sid}/publish`, { method: "POST", headers: auth });
         expect(pub.status).toBe(201);
-        const host = () => w.items().find((i) => i.source === "host")!;
-        expect(host().poster).toBeNull();
-        // ... and gets the original's when it is made
+        const row = () => w.items().find((i) => i.source === "saved")!;
+        expect(row()).toMatchObject({ visibility: "public", poster: null });
+        // ... and it has one when it is made
         await w.studio.sweep();
-        const url = w.items().find((i) => i.source === "saved")!.poster;
+        const url = row().poster;
         expect(url).toMatch(POSTER_URL);
-        expect(host().poster).toBe(url);
-        expect(w.posters()).toHaveLength(1); // one object for both rows
-        // hosted AFTER: copied at once
+        expect(w.posters()).toHaveLength(1);
+        expect(w.items().filter((i) => i.source === "host")).toEqual([]);
+        // the library lists the one file with it (v=2)
+        const lib = (await (await w.call("/library?v=2", { headers: auth })).json()) as any;
+        expect(lib.posts[0].files).toHaveLength(1);
+        expect(lib.posts[0].files[0]).toMatchObject({ poster_url: url, visibility: "public" });
+        // hosted AFTER the poster: still the same link and the same poster
         const again = await w.call(`/studio/${sid}/publish`, { method: "POST", headers: auth });
         expect(again.status).toBe(201);
-        const hosts = w.items().filter((i) => i.source === "host");
-        expect(hosts).toHaveLength(2);
-        expect(hosts.map((h) => h.poster)).toEqual([url, url]);
+        expect(((await again.json()) as any).url).toBe(((await pub.json()) as any).url);
+        expect(row().poster).toBe(url);
     });
 });
 

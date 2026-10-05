@@ -53,8 +53,8 @@ export async function insertMediaItem(
     try {
         const res = await db
             .prepare(
-                "INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, poster) " +
-                    "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17 " +
+                "INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, poster, visibility) " +
+                    "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18 " +
                     "WHERE NOT EXISTS (SELECT 1 FROM media_items WHERE bucket = ?4 AND r2_key = ?5)",
             )
             .bind(
@@ -75,6 +75,8 @@ export async function insertMediaItem(
                 orNull(item.key_id),
                 item.created_at,
                 orNull(item.poster),
+                // one row per file (section 16): an original is private until toggled, a public-bucket file is public
+                item.bucket === "media" ? "public" : "private",
             )
             .run();
         return Number(res.meta?.changes ?? 0) > 0 ? id : null;
@@ -149,4 +151,37 @@ export async function releasePoster(
         console.error("[library] poster delete failed", name, String(e));
         return false;
     }
+}
+
+// ---- request bodies -----------------------------------------------------------------------------
+
+// The body as text, never reading past the cap (a client that sends more is answered, not
+// buffered). null = too large. Throws on a body that is not UTF-8 or breaks off.
+export async function readCapped(request: Request, cap: number): Promise<string | null> {
+    const declared = request.headers.get("content-length");
+    if (declared !== null && /^\d+$/.test(declared) && Number(declared) > cap) {
+        await request.body?.cancel().catch(() => {});
+        return null;
+    }
+    if (!request.body) return "";
+    const reader = request.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > cap) {
+            reader.cancel().catch(() => {});
+            return null;
+        }
+        chunks.push(value);
+    }
+    const all = new Uint8Array(total);
+    let at = 0;
+    for (const c of chunks) {
+        all.set(c, at);
+        at += c.byteLength;
+    }
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(all);
 }

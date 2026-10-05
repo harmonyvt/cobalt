@@ -1509,3 +1509,91 @@ shape, titles by post, no table, the page).
 
 No new secret. **Unverified until deployed:** the real D1 (the tests run the same SQL on `node:sqlite`), and the web page's tile in a
 browser (the page's one-line change is only asserted as text, not rendered).
+
+
+## 16. One file per rendition, public or private (addendum, built 2026-10-05; `apple/CONTRACT-VISIBILITY.md`)
+
+Owner: "there shouldnt be seperate private and public of the same media it should just be a toggle". A library row is now the media
+file; "public" is a mirror object in `cobalt-media` at the row's stable `public_key`, owned by the same row. Everything below is
+additive for clients (old apps keep working, section 16.6).
+
+### 16.1 Migration `d1/migrations/0008_visibility.sql` (additive: four nullable columns, two indexes)
+
+`media_items.visibility` (`'public'|'private'`, NULL = not migrated: read as `bucket = 'media'` -> public, else private),
+`public_key` (the key of the public mirror in `cobalt-media`, kept after the row turns private so the same link comes back),
+`public_id` (the 16-base62 id old clients know the public file by: the retired host row's id after the merge, minted at the first
+publish otherwise; NULL for webps), `merged_into` (on a retired host row: the original it became). Indexes on `public_id`, `public_key`.
+Apply BEFORE deploying the Workers (old code names its columns). `kind`, `bucket`, `r2_key` keep their meaning (where the canonical
+bytes live); `url` is set exactly while the row is public.
+
+### 16.2 `PATCH /library/items/<id>/visibility` (keyed or service)
+
+Body `{"public": true|false}` (JSON, at most 256 bytes, extra keys ignored; anything else `400 error.library.bad_request`, judged
+before the lookup). `<id>` is an item id OR a `public_id`. Answered by the Worker (D1 + R2); `no-store`, no CORS.
+
+- Unknown or deleted -> `404 error.library.not_found`. A legacy `host` row (unmerged) -> `409 error.library.not_toggleable`. Toggleable:
+  every `bucket 'originals'` row and a webp (`source webp|studio`) in the public bucket.
+- A not-yet-merged pair is merged first (the data step's rule, 16.4), so the window between deploy and migration never mints a second mirror.
+- **ON**: `key = public_key ?? <10 base62>.<ext>`; if the object at `key` is missing or its size differs, copy the original there
+  (`cache-control: public, max-age=3600`, custom metadata `mirror: "1"`; a copy of the wrong length is deleted, `502`); original missing
+  `404 error.library.missing`, R2 failure `502 error.library.storage`, row unchanged in both. Only then `UPDATE ... visibility='public',
+  public_key, public_id, url`, sync `studio_sessions.public_state/public_url`, purge the URL (clears a cached 404).
+- **OFF**: delete the object at `public_key` FIRST (a failure is `502`, the row stays truthfully public), then `visibility='private', url=NULL`
+  (`public_key` and `public_id` kept), clear the sessions' `public_state/public_url`, purge the old URL.
+- One reconcile pass at the end (re-read; public with no object -> copy once; private with an object -> delete once) so racing calls converge.
+- **Response** `200 {"status":"success","item":<v2 file 16.5>,"cache_cleared":true|false|null}`. `cache_cleared` reports an OFF's purge
+  (`null`: nothing to purge or purge not configured; `false`: the API call failed). Idempotent: on when on, off when off do no copy or delete.
+- **Purge** (`MEDIA_PURGE_TOKEN` secret + `MEDIA_ZONE_ID` var, `api/cloudflare.config.ts`): `POST https://api.cloudflare.com/client/v4/zones/<zone>/purge_cache`
+  `{"files":[url,...]}` (30 per call), bearer token, 3 s cap. Never fails a toggle; unconfigured it is `null`.
+- **Webps (owner)**: a webp's bytes live only in the public bucket, so its first OFF copies them to `cobalt-originals/webps/<name>` (verified with
+  `head`), converts the row to `bucket 'originals'` with `public_key = <its public name>`, and then deletes the public object. ON copies back
+  to the SAME name; the private copy is KEPT (later toggles never copy to the private side again; delete removes both). New renders stay public.
+
+### 16.3 Capability and the other routes
+
+- `features.visibility: true`.
+- `POST /library/items/<id>/publish` and `POST /studio/<sid>/publish` are the legacy spelling of ON on the original's row: same `201 {status,url,bytes,content_type,item_id}`
+  (`item_id` = the `public_id`), a repeat returns the same link and copies nothing; a `bucket 'media'` row is `409 error.library.already_public`.
+  A ready session whose library row was never written (the insert is bookkeeping) gets its row written first. The 7-day session expiry no longer refuses it.
+- `public: true` on `POST /studio` and `PUT /studio/upload?public=1` run the same ON (a hosted image is now one row, one post).
+- `GET|HEAD .../file`, `POST .../studio`, `PATCH|DELETE .../post` resolve a `public_id`.
+- `DELETE /library/items/<id>/post` also deletes each row's mirror (`public_key`) and purges the public URLs (best effort).
+- `DELETE /media/<name>.webp` of a webp switched private once deletes both copies (Worker-side), otherwise the webp service as before.
+- Session bodies (`GET /studio/<sid>`, `/studio/recent`) gain `item_id` and `visibility` (the original's row, else null).
+
+### 16.4 `POST /library/visibility/migrate?dry_run=1|0&limit=1..100&undo=0|1` (keyed or service)
+
+The data step: dry run unless `dry_run=0`; `limit` (default 25) pairs per call; D1 writes only, R2 is only read (`head`), no object is ever
+written or deleted. Candidates = live `host` rows joined to their session's `r2_key` -> the one live original. One D1 `batch` per pair:
+the original takes the host's `public_key/public_id/url` (and its poster when it has none), the host row is retired (`deleted_at`,
+`merged_into`; the tombstone is the rollback record), the session says `ready`. Skips (reported, never guessed): `no_original`,
+`several_originals`, `several_hosts` (the newest is NOT picked), `object_missing`, `size_mismatch`, `storage_error`. After the last page
+every row with `visibility IS NULL` gets `public` (bucket media) or `private`. Idempotent (`already_merged` counts the tombstones).
+Response `{status,dry_run,undo,report{rows_live,originals,hosts_live,webps,merge{pairs,saved,upload,already_merged},skipped{...},
+after{rows_live,public,private,tombstones},visibility_unset,posters_missing,r2_writes:0,r2_deletes:0[,processed,backfilled]},items[],remaining}`.
+**`undo=1`** (also dry-run by default): restores each tombstone and clears the original's four columns, inserts the host row old code expects
+for an original the new code made public, then (last page) sets `visibility` back to NULL; byte-for-byte for the rows (replay test). A webp
+that was switched private has no pre-0008 shape: undo leaves it and reports `webps_switched` (make them public before a code rollback).
+Rollback order: `undo` until `remaining: 0`, THEN redeploy the old Workers.
+
+### 16.5 `GET /library`: `v=2`, `visibility`, legacy synthesis
+
+- Every real file gains `visibility` and `visibility_toggle` (both shapes, additive). `?v=2`: one entry per live row, `url` is the public URL while
+  public else null, posts gain `visibility` (the original's, else public if any file is). `media_name`/`deletable` for webps are the public name
+  (also when switched), an original's stay null/false.
+- Without `v` (old apps): the original is `url: null` as before and each public original is followed by a synthesized `host` file (id = `public_id`,
+  `kind 'public'`, `source 'host'`; for a merged pair every field, including name, size and time, comes from the retired host row, so the
+  list is the one they always saw). A private webp is left out (old apps have no word for it; a webp-only post vanishes).
+- `counts.files` counts what the shape lists (86 after the merge in the v2 shape; legacy counts the live rows); `usage.public_bytes` = live
+  effective-public rows, `usage.private_bytes` = live `bucket 'originals'` rows (a public original counts in both).
+
+### 16.6 Deploy (owner; not run by the lane)
+
+1. `cd deploy/cloudflare/web && cf d1 migrations apply 42f18bb0-837a-47f7-b1e2-606eb705ab6c --dir ../d1/migrations`
+2. `MEDIA_PURGE_TOKEN` is in `~/.config/cobalt/secrets.json`; `MEDIA_ZONE_ID` is in `api/cloudflare.config.ts`.
+3. API: `deploy/cloudflare/api/prepare-git-info.sh`, `cd deploy/cloudflare/api && cf deploy --secrets-file ~/.config/cobalt/secrets.json`; then web: `deploy/cloudflare/build-web.sh`, `cd deploy/cloudflare/web && cf deploy --secrets-file ~/.config/cobalt/secrets.json`.
+4. Dry run: `curl -X POST -H "Authorization: Api-Key <key>" 'https://api.capybaraharmony.com/library/visibility/migrate?dry_run=1&limit=100'` -> 6 pairs (5 saved, 1 upload), 0 skipped, after 86 / 35 / 51 / 6 (replayed on a copy of the real database).
+5. Apply: the same with `dry_run=0`, until `remaining: 0`; a second `dry_run=0` reports `already_merged: 6`.
+Tests: `api/test/{visibility,visibility-migrate,migration-0008}.test.ts` (+ `visibility-fixture.ts`, `d1-batch.ts`), `replay-prod.test.ts` (skipped
+unless `VIS_REPLAY_DIR` holds a D1 export and two bucket listings). **Unverified until deployed:** real R2-to-R2 copy time for a large file
+inside a Worker request, that a zone purge by URL clears R2 custom-domain cache for mp4s, the real D1 `batch`.

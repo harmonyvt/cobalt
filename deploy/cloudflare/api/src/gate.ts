@@ -68,6 +68,8 @@ export type LookupThen =
     | "library_list"
     | "library_file"
     | "library_publish"
+    | "library_visibility"
+    | "library_visibility_migrate"
     | "library_studio"
     | "library_post_delete"
     | "library_post_title"
@@ -203,6 +205,10 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     if (req.pathname === "/library/posters/backfill") {
         return req.method === "POST" ? lookupThen(req, "library_posters_backfill") : reject(404);
     }
+    // The one-row-per-file data step (APP-API-CONTRACT.md section 16): keyed or service.
+    if (req.pathname === "/library/visibility/migrate") {
+        return req.method === "POST" ? lookupThen(req, "library_visibility_migrate") : reject(404);
+    }
     if (req.pathname.startsWith("/library/items/")) {
         const [id, sub, ...rest] = req.pathname.slice("/library/items/".length).split("/");
         if (!ITEM_ID_REGEX.test(id ?? "") || rest.length > 0) return reject(404);
@@ -213,6 +219,10 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         }
         if (sub === "publish") {
             return req.method === "POST" ? lookupThen(req, "library_publish", { id: id! }) : reject(404);
+        }
+        // The public/private toggle (section 16)
+        if (sub === "visibility") {
+            return req.method === "PATCH" ? lookupThen(req, "library_visibility", { id: id! }) : reject(404);
         }
         if (sub === "studio") {
             return req.method === "POST" ? lookupThen(req, "library_studio", { id: id! }) : reject(404);

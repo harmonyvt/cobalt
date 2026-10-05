@@ -102,3 +102,46 @@ Errors: `{ "status": "error", "error": { "code" } }`; auth 401 `unauthorized`, o
 - convert to webp: gif, mp4, mov only (webp uploads: host only — ffmpeg here can't decode
   animated WebP; heic: host only). Length <= 10 s → whole clip; longer → studio trim.
 - host as-is: every allowed type.
+
+## Addendum v2: one file, public or private (2026-10-05)
+
+Owner request, specified in `apple/CONTRACT-VISIBILITY.md` (sections 1 decisions 12-13, 3.5). Needs
+migration `0008_visibility.sql` applied before this Worker is deployed; the data step (the keyed API route
+`POST /library/visibility/migrate`) can run before or after, because every reader goes through
+`COALESCE(visibility, CASE bucket WHEN 'media' THEN 'public' ELSE 'private' END)`.
+
+- `GET /api/library` is one tile per live file. Every item gains `"visibility": "public" | "private"` (that
+  expression) and `"visibility_toggle": <bucket = 'originals' OR (bucket = 'media' AND source IN ('webp','studio') AND
+  r2_key matches ^[A-Za-z0-9]{10}\.webp$)>` (the API's `toggleable()`; never a legacy `host` row, which
+  stays public with no switch). A webp switched private becomes a `bucket 'originals'` row (`r2_key
+  webps/<name>`, `public_key <name>`, `url` null); switched on again it stays in originals, public, with
+  the same `url`. So `source webp|studio` rows can sit in either bucket and are webp tiles, not videos.
+  `kind` and `source` keep their meaning (an original stays `kind "private"`); `url` is the row's `url`,
+  set exactly while the file is public. Retired host rows
+  (tombstones, `deleted_at` set by the merge) are excluded like any deleted row.
+- `filter=public|private` filters on that expression, not on `kind`; `all` and `studio` are unchanged.
+  `usage.public_bytes` = `SUM(bytes)` of live public files; `usage.private_bytes` = `SUM(bytes)` of live
+  `bucket 'originals'` files, so a public original, or a switched webp's private copy, counts in both (it is stored in both buckets). Usage is
+  the same whatever the filter.
+- `POST /api/library/items/<id>/publish` no longer copies anything in this Worker. It relays through the
+  service binding: `PATCH /library/items/<id>/visibility` with `{"public":true}` and the
+  `x-cobalt-service` header, and answers the API's status with
+  `{ "status": "success", "item": <file>, "cache_cleared": true|false|null }` (the repeat call is
+  idempotent, the same link). New `POST /api/library/items/<id>/private` is the same with
+  `{"public":false}`. Same Origin check as every other POST. API errors pass through with their status and
+  code (404 `error.library.not_found|missing`, 409 `error.library.not_toggleable`, 502
+  `error.library.storage`, 503 `error.api.generic`); an unreachable API or a wrong service key is 502
+  `error.library.upstream`. The id may be an item id or a `public_id` (the API resolves both). The web's own
+  R2-to-R2 copy (`copyToMedia`) and its `INSERT` of a second `host` row are gone.
+- `DELETE /api/library/items/<id>` on an original (or a switched webp, `bucket 'originals'`) that is public (`visibility` public) or remembers a
+  mirror (`public_key` set) first calls the toggle off through the service binding (the API deletes the
+  mirror and purges the edge), and only when that answers `200 success` runs the delete as before. If the
+  toggle-off call fails, nothing is deleted and its error is returned (fail closed: no retry path that
+  removes the original while a public copy might remain; a switched webp's private object is then deleted
+  from `cobalt-originals` at its `r2_key`). A webp still in the public bucket, legacy host rows, and
+  originals that were never public delete exactly as before, with no API call.
+- Page: one tile per original or webp (wherever `visibility_toggle` is true) with a `public` switch (a checkbox, `role="switch"`) where "host as-is"
+  was, next to "copy link" (while public) and "open in studio". Switching on posts `/publish` at once;
+  switching off asks "make private? the public link stops working." first, then posts `/private`. The
+  badge shows `visibility`; the public/private chips use the new filter. The add-from-link "host as-is"
+  action still goes through `POST /api/library/studio/<sid>/publish` (the API's route).

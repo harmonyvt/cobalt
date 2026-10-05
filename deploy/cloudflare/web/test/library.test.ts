@@ -1,6 +1,6 @@
-// /library page and /api/library*. Runs the real SQL (migrations 0001-0004) on
-// node:sqlite; R2 and the API Worker are in-memory fakes. Schema used: the real
-// d1/migrations/0004_library.sql (it was present when these tests were written).
+// /library page and /api/library*. Runs the real SQL (every migration in d1/migrations, 0008
+// visibility included) on node:sqlite; R2 and the API Worker are in-memory fakes. Public/private is
+// the API Worker's toggle (apple/CONTRACT-VISIBILITY.md section 3.5): the web only relays it.
 import { readFileSync } from "node:fs";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
@@ -153,8 +153,7 @@ beforeEach(() => {
 const deps = () => ({
     jwks: newCache(makeJwksFetch(() => [signer]).fetchFn),
     now: () => clock,
-    fixedLength: () => new TransformStream<Uint8Array, Uint8Array>(),
-    // 16 chars for items, 10 for public names: distinct, deterministic, base62
+    // 16 chars for items: distinct, deterministic, base62
     randomId: (n: number) => `${++idCounter}`.padStart(n, "0").slice(-n).replace(/^0/, "a"),
 });
 
@@ -191,6 +190,7 @@ type Seed = Partial<{
     id: string; kind: string; source: string; bucket: string; r2_key: string; url: string | null; name: string;
     content_type: string | null; bytes: number | null; width: number | null; height: number | null;
     duration: number | null; link: string | null; session_id: string | null; created_at: number; deleted_at: number | null;
+    visibility: string | null; public_key: string | null; public_id: string | null;
 }>;
 let seedN = 0;
 function seedItem(o: Seed = {}) {
@@ -202,12 +202,13 @@ function seedItem(o: Seed = {}) {
         r2_key: kind === "public" ? `pub${seedN}.webp` : `uploads/${id}.mp4`,
         url: kind === "public" ? `${MEDIA}pub${seedN}.webp` : null, name: `name${seedN}`,
         content_type: kind === "public" ? "image/webp" : "video/mp4", bytes: 1000, width: 480, height: 270,
-        duration: null, link: null, session_id: null, created_at: NOW - seedN * 1000, deleted_at: null, ...o,
+        duration: null, link: null, session_id: null, created_at: NOW - seedN * 1000, deleted_at: null,
+        visibility: null as string | null, public_key: null as string | null, public_id: null as string | null, ...o,
     };
     db.raw.prepare(
-        `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)`,
-    ).run(row.id, row.kind, row.source, row.bucket, row.r2_key, row.url, row.name, row.content_type, row.bytes, row.width, row.height, row.duration, row.link, row.session_id, row.created_at, row.deleted_at);
+        `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at, visibility, public_key, public_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?)`,
+    ).run(row.id, row.kind, row.source, row.bucket, row.r2_key, row.url, row.name, row.content_type, row.bytes, row.width, row.height, row.duration, row.link, row.session_id, row.created_at, row.deleted_at, row.visibility, row.public_key, row.public_id);
     return row;
 }
 function seedStudio(o: Partial<{ id: string; status: string; r2_key: string | null; created_at: number; expires_at: number; link: string | null; title: string | null; duration: number | null }> = {}) {
@@ -234,6 +235,7 @@ const ROUTES: [string, string][] = [
     ["GET", `/api/library/studio/${SID}`],
     ["POST", `/api/library/studio/${SID}/publish`],
     ["POST", "/api/library/items/aaaaaaaaaaaaaaaa/publish"],
+    ["POST", "/api/library/items/aaaaaaaaaaaaaaaa/private"],
     ["POST", "/api/library/items/aaaaaaaaaaaaaaaa/studio"],
     ["DELETE", "/api/library/items/aaaaaaaaaaaaaaaa"],
     ["DELETE", `/api/library/studios/${SID}`],
@@ -327,6 +329,8 @@ describe("route shape", () => {
         ["GET", `/api/library/studio/${SID.slice(1)}`],
         ["GET", `/api/library/studio/${SID}x`],
         ["POST", "/api/library/items/short/publish"],
+        ["POST", "/api/library/items/short/private"],
+        ["POST", "/api/library/items/aaaaaaaaaaaaaaaaa/private"],
         ["POST", "/api/library/items/aaaaaaaaaaaaaaaa/other"],
         ["DELETE", "/api/library/items/aaaaaaaaaaaaaaaaa"],
         ["DELETE", "/api/library/studios/short"],
@@ -342,6 +346,9 @@ describe("route shape", () => {
         ["DELETE", `/api/library/webp/${JOB}`, "GET"],
         ["DELETE", `/api/library/studio/${SID}`, "GET"],
         ["GET", `/api/library/studio/${SID}/publish`, "POST"],
+        ["GET", "/api/library/items/aaaaaaaaaaaaaaaa/publish", "POST"],
+        ["GET", "/api/library/items/aaaaaaaaaaaaaaaa/private", "POST"],
+        ["PATCH", "/api/library/items/aaaaaaaaaaaaaaaa/private", "POST"],
         ["GET", "/api/library/items/aaaaaaaaaaaaaaaa", "DELETE"],
         ["POST", `/api/library/studios/${SID}`, "DELETE"],
         ["POST", "/library", "GET, HEAD"],
@@ -352,6 +359,7 @@ describe("route shape", () => {
     });
     it("matchRoute only accepts the pinned id shapes", () => {
         expect(matchRoute("/api/library/items/AAAAAAAAAAAAAAAA/publish")).toEqual({ name: "itemPublish", id: "AAAAAAAAAAAAAAAA" });
+        expect(matchRoute("/api/library/items/AAAAAAAAAAAAAAAA/private")).toEqual({ name: "itemPrivate", id: "AAAAAAAAAAAAAAAA" });
         expect(matchRoute(`/api/library/studios/${SID}`)).toEqual({ name: "studioDelete", id: SID });
         expect(matchRoute("/api/library/items/aaaa-aaaaaaaaaaaa")).toBeNull();
     });
@@ -429,11 +437,11 @@ describe("GET /api/library", () => {
             {
                 id: pub.id, kind: "public", source: "webp", name: "a.webp", url: pub.url, content_type: "image/webp",
                 bytes: 600, width: 480, height: 270, duration: 3.5, link: "https://x.com/a", session_id: SID, created_at: pub.created_at,
-                poster_url: null, custom_title: null,
+                poster_url: null, custom_title: null, visibility: "public", visibility_toggle: false,
             },
         ]);
         expect(Object.keys(b.items[0]).sort()).toEqual(
-            ["id", "kind", "source", "name", "url", "content_type", "bytes", "width", "height", "duration", "link", "session_id", "created_at", "poster_url", "custom_title"].sort(),
+            ["id", "kind", "source", "name", "url", "content_type", "bytes", "width", "height", "duration", "link", "session_id", "created_at", "poster_url", "custom_title", "visibility", "visibility_toggle"].sort(),
         );
         expect(b.studios).toEqual([
             {
@@ -443,7 +451,7 @@ describe("GET /api/library", () => {
         ]);
         expect(b.next_before).toBeNull();
         // never leaks storage internals
-        expect(JSON.stringify(b)).not.toMatch(/r2_key|bucket|key_id|deleted_at/);
+        expect(JSON.stringify(b)).not.toMatch(/r2_key|bucket|key_id|deleted_at|public_key|public_id|merged_into/);
     });
 
     it("excludes deleted items, and expired or failed studios", async () => {
@@ -489,6 +497,116 @@ describe("GET /api/library", () => {
         const empty = createFakeD1();
         (env as any).DB = empty;
         expect((await json(await call("GET", "/api/library"))).usage).toEqual({ public_bytes: 0, private_bytes: 0 });
+    });
+
+    // One tile per file (apple/CONTRACT-VISIBILITY.md 3.3 / 3.5): `visibility` is the toggle's state.
+    describe("visibility (migration 0008)", () => {
+        const PUB = `${MEDIA}Mirror0001.mp4`;
+        const get = async (f = "all") => json(await call("GET", `/api/library?filter=${f}`));
+        const by = (b: any) => Object.fromEntries(b.items.map((i: any) => [i.id, i]));
+        // rows as they are before the data step, after it, and a merged original
+        function fixture() {
+            const unmigratedOrig = seedItem({ kind: "private", source: "saved", name: "unmigrated original", bytes: 4000 }); // visibility NULL, originals
+            const unmigratedWebp = seedItem({ kind: "public", source: "webp", name: "unmigrated webp", bytes: 300 }); // visibility NULL, media
+            const privOrig = seedItem({ kind: "private", source: "upload", name: "explicit private", bytes: 2000, visibility: "private" });
+            const privKept = seedItem({ kind: "private", source: "saved", name: "was public once", bytes: 1500, visibility: "private", public_key: "Mirror0002.mp4", public_id: "PublicId0000002a" });
+            const merged = seedItem({ kind: "private", source: "saved", name: "merged public original", bytes: 8000, visibility: "public", public_key: "Mirror0001.mp4", public_id: "PublicId0000001a", url: PUB });
+            const explicitMediaPub = seedItem({ kind: "public", source: "studio", name: "explicit public webp", bytes: 100, visibility: "public" });
+            const tomb = seedItem({ kind: "public", source: "host", name: "retired host row", bytes: 8000, deleted_at: NOW - 5 });
+            return { unmigratedOrig, unmigratedWebp, privOrig, privKept, merged, explicitMediaPub, tomb };
+        }
+        it("every item carries visibility (explicit, else public for the media bucket and private for originals) and visibility_toggle (originals only)", async () => {
+            const f = fixture();
+            const items = by(await get());
+            expect(items[f.unmigratedOrig.id]).toMatchObject({ visibility: "private", visibility_toggle: true, url: null });
+            expect(items[f.unmigratedWebp.id]).toMatchObject({ visibility: "public", visibility_toggle: false });
+            expect(items[f.privOrig.id]).toMatchObject({ visibility: "private", visibility_toggle: true, url: null });
+            expect(items[f.privKept.id]).toMatchObject({ visibility: "private", visibility_toggle: true, url: null });
+            expect(items[f.merged.id]).toMatchObject({ visibility: "public", visibility_toggle: true, url: PUB, kind: "private" });
+            expect(items[f.explicitMediaPub.id]).toMatchObject({ visibility: "public", visibility_toggle: false });
+            expect(items[f.tomb.id]).toBeUndefined();
+            expect(Object.keys(items)).toHaveLength(6);
+        });
+        it("filter=public|private filters on visibility, not kind: a merged public original is under public, an unmigrated original under private", async () => {
+            const f = fixture();
+            const ids = async (name: string) => (await get(name)).items.map((i: any) => i.id).sort();
+            expect(await ids("public")).toEqual([f.unmigratedWebp.id, f.merged.id, f.explicitMediaPub.id].sort());
+            expect(await ids("private")).toEqual([f.unmigratedOrig.id, f.privOrig.id, f.privKept.id].sort());
+            expect(await ids("all")).toHaveLength(6);
+            expect((await get("studio")).items).toEqual([]);
+            // the two chips partition the library
+            expect([...(await ids("public")), ...(await ids("private"))].sort()).toEqual(await ids("all"));
+        });
+        it("a tombstone (deleted_at set by the merge) never shows, under any filter", async () => {
+            const f = fixture();
+            for (const name of ["all", "public", "private"]) expect((await get(name)).items.map((i: any) => i.id)).not.toContain(f.tomb.id);
+        });
+        it("usage: public_bytes = live public files, private_bytes = live originals (a public original counts in both); tombstones excluded; same under every filter", async () => {
+            fixture();
+            // public: unmigrated webp 300 + merged 8000 + explicit webp 100; originals: 4000 + 2000 + 1500 + 8000
+            for (const f of ["all", "public", "private", "studio"]) {
+                expect((await get(f)).usage).toEqual({ public_bytes: 8400, private_bytes: 15500 });
+            }
+        });
+        it("usage keeps its old meaning on rows that were never migrated (visibility NULL everywhere)", async () => {
+            seedItem({ kind: "public", source: "host", bytes: 100 });
+            seedItem({ kind: "public", source: "webp", bytes: 50 });
+            seedItem({ kind: "private", source: "saved", bytes: 7000 });
+            expect((await get()).usage).toEqual({ public_bytes: 150, private_bytes: 7000 });
+        });
+        describe("webps are switchable too (owner follow-up)", () => {
+            const webp = (over: Seed = {}) => seedItem({ kind: "public", source: "webp", name: "a.webp", content_type: "image/webp", r2_key: "AbCdEf1234.webp", url: `${MEDIA}AbCdEf1234.webp`, ...over });
+            // what the API leaves after a switch-off: the bytes moved to the private bucket, kind/source unchanged
+            const switched = (over: Seed = {}) =>
+                webp({ bucket: "originals", r2_key: "webps/AbCdEf1234.webp", visibility: "private", public_key: "AbCdEf1234.webp", url: null, ...over });
+            it("visibility_toggle: a webp or studio render in the public bucket with a 10-char name, and a switched webp; never a legacy host row or a webp with another name shape", async () => {
+                const pubWebp = webp();
+                const studio = webp({ source: "studio", r2_key: "ZyXwVu9876.webp", url: `${MEDIA}ZyXwVu9876.webp` });
+                const sw = switched({ r2_key: "webps/QqQqQqQqQq.webp", public_key: "QqQqQqQqQq.webp" });
+                const host = seedItem({ kind: "public", source: "host", content_type: "video/mp4", r2_key: "AbCdEf1235.mp4", url: `${MEDIA}AbCdEf1235.mp4` });
+                const hostWebp = seedItem({ kind: "public", source: "host", content_type: "image/webp", r2_key: "AbCdEf1236.webp", url: `${MEDIA}AbCdEf1236.webp` });
+                const oddName = webp({ r2_key: "short.webp", url: `${MEDIA}short.webp` });
+                const wrongExt = webp({ r2_key: "AbCdEf1237.gif", url: `${MEDIA}AbCdEf1237.gif` });
+                const items = by(await get());
+                expect(items[pubWebp.id]).toMatchObject({ visibility: "public", visibility_toggle: true });
+                expect(items[studio.id]).toMatchObject({ visibility: "public", visibility_toggle: true });
+                expect(items[sw.id]).toMatchObject({ visibility: "private", visibility_toggle: true });
+                expect(items[host.id]).toMatchObject({ visibility: "public", visibility_toggle: false });
+                expect(items[hostWebp.id]).toMatchObject({ visibility: "public", visibility_toggle: false });
+                expect(items[oddName.id]).toMatchObject({ visibility_toggle: false });
+                expect(items[wrongExt.id]).toMatchObject({ visibility_toggle: false });
+            });
+            it("a switched private webp: url null, kind/source unchanged, listed under filter=private and not public; switched back on it is public again with the same url", async () => {
+                const sw = switched({ bytes: 700 });
+                const g = async (f: string) => (await get(f)).items.map((i: any) => i.id);
+                expect(by(await get())[sw.id]).toMatchObject({ kind: "public", source: "webp", url: null, visibility: "private", visibility_toggle: true, content_type: "image/webp" });
+                expect(await g("private")).toEqual([sw.id]);
+                expect(await g("public")).toEqual([]);
+                db.raw.prepare("UPDATE media_items SET visibility = 'public', url = ? WHERE id = ?").run(`${MEDIA}AbCdEf1234.webp`, sw.id);
+                expect(by(await get())[sw.id]).toMatchObject({ visibility: "public", url: `${MEDIA}AbCdEf1234.webp`, visibility_toggle: true });
+                expect(await g("public")).toEqual([sw.id]);
+                expect(await g("private")).toEqual([]);
+            });
+            it("usage: a switched webp's private copy counts in private_bytes (a switched-on one in both); a never-switched webp only in public_bytes", async () => {
+                webp({ bytes: 100 });
+                switched({ bytes: 30, r2_key: "webps/AAAAAAAAAA.webp", public_key: "AAAAAAAAAA.webp" });
+                switched({ bytes: 5, r2_key: "webps/BBBBBBBBBB.webp", public_key: "BBBBBBBBBB.webp", visibility: "public", url: `${MEDIA}BBBBBBBBBB.webp` });
+                expect((await get()).usage).toEqual({ public_bytes: 105, private_bytes: 35 });
+            });
+        });
+        it("a legacy pair before the data step is two tiles (original private, host public); after it, one", async () => {
+            const orig = seedItem({ kind: "private", source: "saved", name: "clip.mp4", bytes: 5000 });
+            const host = seedItem({ kind: "public", source: "host", name: "clip.mp4", bytes: 5000 });
+            expect((await get()).items.map((i: any) => i.id).sort()).toEqual([orig.id, host.id].sort());
+            // the data step: the original becomes the public one, the host row is retired
+            db.raw.prepare("UPDATE media_items SET visibility = 'public', public_key = ?, public_id = ?, url = ? WHERE id = ?").run("Hostmp4001.mp4", host.id, `${MEDIA}Hostmp4001.mp4`, orig.id);
+            db.raw.prepare("UPDATE media_items SET deleted_at = ?, merged_into = ? WHERE id = ?").run(NOW, orig.id, host.id);
+            const items = (await get()).items;
+            expect(items.map((i: any) => i.id)).toEqual([orig.id]);
+            expect(items[0]).toMatchObject({ visibility: "public", url: `${MEDIA}Hostmp4001.mp4`, visibility_toggle: true });
+            expect((await get("public")).items.map((i: any) => i.id)).toEqual([orig.id]);
+            expect((await get("private")).items).toEqual([]);
+        });
     });
 
     it("paginates newest first across items and studios with next_before", async () => {
@@ -840,82 +958,80 @@ describe("PUT /api/library/upload", () => {
 
 // ---------- publish (private -> public) ----------
 
-describe("POST /api/library/items/<id>/publish", () => {
-    async function seedUpload(bytes = bytesOf(1000, 5), over: Seed = {}) {
-        const row = seedItem({ kind: "private", source: "upload", content_type: "video/mp4", name: "clip.mp4", bytes: bytes.byteLength, width: 640, height: 360, duration: 7.5, link: "https://x.com/a", session_id: SID, ...over });
-        originals.objects.set(row.r2_key, { bytes, size: bytes.byteLength, contentType: row.content_type ?? undefined });
-        return row;
-    }
+// The web no longer copies anything: publish and private relay the API Worker's toggle
+// (PATCH /library/items/<id>/visibility), apple/CONTRACT-VISIBILITY.md sections 3.1 and 3.5.
+describe.each([
+    ["publish", true],
+    ["private", false],
+] as const)("POST /api/library/items/<id>/%s", (verb, isPublic) => {
+    const ID = "Orig000000000001";
+    const fileFor = (over: Record<string, unknown> = {}) => ({
+        id: ID, kind: "private", source: "saved", name: "clip.mp4", url: isPublic ? `${MEDIA}Mirror0001.mp4` : null,
+        content_type: "video/mp4", bytes: 5000, visibility: isPublic ? "public" : "private", visibility_toggle: true, ...over,
+    });
+    const okReply = (over: Record<string, unknown> = {}) => jsonRes(200, { status: "success", item: fileFor(), cache_cleared: isPublic ? null : true, ...over });
 
-    it("copies ORIGINALS -> MEDIA with a chunk loop (pipeTo throws in the fake) and inserts a public host item", async () => {
-        const data = Uint8Array.from({ length: 1000 }, (_, i) => i % 251);
-        const src = await seedUpload(data);
-        const r = await call("POST", `/api/library/items/${src.id}/publish`);
-        expect(r.status).toBe(201);
-        const b = await json(r);
-        expect(b.status).toBe("success");
-        expect(b.item).toMatchObject({ kind: "public", source: "host", name: "clip.mp4", content_type: "video/mp4", bytes: 1000, width: 640, height: 360, duration: 7.5, link: "https://x.com/a", session_id: SID });
-        expect(b.item.id).toMatch(/^[0-9A-Za-z]{16}$/);
-        expect(b.item.id).not.toBe(src.id);
-        expect(b.item.url).toMatch(/^https:\/\/media\.capybaraharmony\.com\/[0-9A-Za-z]{10}\.mp4$/);
-        const name = b.item.url.slice(MEDIA.length);
-        expect(media.puts).toEqual([{ key: name, valueKind: "stream", contentType: "video/mp4" }]);
-        expect([...media.objects.get(name)!.bytes!]).toEqual([...data]);
-        // the private original is untouched
-        expect(originals.objects.has(src.r2_key)).toBe(true);
-        expect(rowOf(src.id)).toMatchObject({ kind: "private", deleted_at: null });
-        expect(rowOf(b.item.id)).toMatchObject({ bucket: "media", r2_key: name, url: b.item.url, created_at: NOW });
+    it(`relays PATCH /library/items/<id>/visibility {"public":${isPublic}} through the service binding and returns the item`, async () => {
+        apiReply = () => okReply();
+        const r = await call("POST", `/api/library/items/${ID}/${verb}`);
+        expect(r.status).toBe(200);
+        expect(r.headers.get("cache-control")).toBe("no-store");
+        expect(await json(r)).toEqual({ status: "success", item: fileFor(), cache_cleared: isPublic ? null : true });
+        expect(apiCalls).toHaveLength(1);
+        expect(apiCalls[0]).toMatchObject({ method: "PATCH", url: `${API_BASE}/library/items/${ID}/visibility`, body: { public: isPublic } });
+        expect(apiCalls[0]!.headers["x-cobalt-service"]).toBe(SERVICE_KEY);
+        for (const h of ["authorization", "cookie", "cf-access-jwt-assertion", "origin"]) expect(apiCalls[0]!.headers[h]).toBeUndefined();
     });
-
-    it("publishes a studio-saved original the same way (any private item)", async () => {
-        const src = await seedUpload(bytesOf(100), { source: "saved", r2_key: `originals/${SID}.mp4` });
-        expect((await call("POST", `/api/library/items/${src.id}/publish`)).status).toBe(201);
-    });
-    it("uses the stored extension for the public name", async () => {
-        const src = await seedUpload(bytesOf(100), { content_type: "image/heic", name: "IMG_1.HEIC", r2_key: "uploads/zzzzzzzzzzzzzzzz.heic" });
-        const b = await json(await call("POST", `/api/library/items/${src.id}/publish`));
-        expect(b.item.url).toMatch(/\.heic$/);
-        expect(b.item.content_type).toBe("image/heic");
-    });
-    it("an already-public item is 409", async () => {
-        const pub = seedItem({ kind: "public" });
-        const r = await call("POST", `/api/library/items/${pub.id}/publish`);
-        expect(r.status).toBe(409);
-        expect(await errorCode(r)).toBe("error.library.already_public");
+    it("needs no row of its own in the web's D1 (the API resolves the id or public_id), and copies nothing itself", async () => {
+        apiReply = () => okReply();
+        await call("POST", `/api/library/items/${ID}/${verb}`);
         expect(media.puts).toEqual([]);
+        expect(originals.puts).toEqual([]);
+        expect(db.raw.prepare("SELECT COUNT(*) AS n FROM media_items").get()).toEqual({ n: 0 });
     });
-    it("unknown and deleted items are 404", async () => {
-        expect((await call("POST", "/api/library/items/aaaaaaaaaaaaaaaa/publish")).status).toBe(404);
-        const src = await seedUpload(bytesOf(10), { deleted_at: NOW - 1 });
-        expect((await call("POST", `/api/library/items/${src.id}/publish`)).status).toBe(404);
+    it.each([
+        [404, "error.library.not_found"],
+        [404, "error.library.missing"],
+        [409, "error.library.not_toggleable"],
+        [502, "error.library.storage"],
+        [503, "error.api.generic"],
+    ])("passes the API's %i %s through", async (status, code) => {
+        apiReply = () => jsonRes(status, { status: "error", error: { code } });
+        const r = await call("POST", `/api/library/items/${ID}/${verb}`);
+        expect(r.status).toBe(status);
+        expect(await json(r)).toEqual({ status: "error", error: { code } });
     });
-    it("a missing stored object is 404 error.library.missing and nothing is written", async () => {
-        const src = seedItem({ kind: "private" });
-        const r = await call("POST", `/api/library/items/${src.id}/publish`);
-        expect(r.status).toBe(404);
-        expect(await errorCode(r)).toBe("error.library.missing");
-        expect(media.puts).toEqual([]);
-    });
-    it("an R2 write failure is 502, leaves no public row and no object", async () => {
-        const src = await seedUpload();
-        media.failPut = true;
-        const r = await call("POST", `/api/library/items/${src.id}/publish`);
+    it("a downed API Worker is 502 error.library.upstream; a missing service key sends nothing", async () => {
+        apiThrows = true;
+        const r = await call("POST", `/api/library/items/${ID}/${verb}`);
         expect(r.status).toBe(502);
-        expect(await errorCode(r)).toBe("error.library.storage");
-        expect(db.raw.prepare("SELECT COUNT(*) AS n FROM media_items WHERE kind = 'public'").get()).toEqual({ n: 0 });
-        expect(media.objects.size).toBe(0);
+        expect(await errorCode(r)).toBe("error.library.upstream");
+        apiThrows = false;
+        (env as any).COBALT_API_KEY = "";
+        apiCalls.length = 0;
+        expect((await call("POST", `/api/library/items/${ID}/${verb}`)).status).toBe(502);
+        expect(apiCalls).toEqual([]);
     });
-    it("a D1 failure after the copy removes the public object", async () => {
-        const src = await seedUpload();
-        const failing = (env as any).DB as FakeD1;
-        const real = failing.prepare.bind(failing);
-        (failing as any).prepare = (sql: string) => {
-            if (sql.includes("INSERT INTO media_items")) throw new Error("D1_ERROR");
-            return real(sql);
-        };
-        const r = await call("POST", `/api/library/items/${src.id}/publish`);
-        expect(r.status).toBe(500);
-        expect(media.objects.size).toBe(0);
+    it("an upstream 401/403 (wrong service key) is 502, never 401", async () => {
+        for (const status of [401, 403]) {
+            apiReply = () => jsonRes(status, { status: "error", error: { code: "error.api.auth.key.invalid" } });
+            expect((await call("POST", `/api/library/items/${ID}/${verb}`)).status).toBe(502);
+        }
+    });
+    it("needs Origin = the web origin, and a login, before any call is made", async () => {
+        for (const origin of [null, "https://evil.example", "http://cobalt.capybaraharmony.com"]) {
+            expect((await call("POST", `/api/library/items/${ID}/${verb}`, { origin })).status).toBe(403);
+        }
+        expect((await call("POST", `/api/library/items/${ID}/${verb}`, { token: null })).status).toBe(401);
+        expect(apiCalls).toEqual([]);
+    });
+    it("only POST is allowed", async () => {
+        for (const method of ["GET", "PUT", "PATCH", "DELETE"]) {
+            const r = await call(method, `/api/library/items/${ID}/${verb}`);
+            expect(r.status).toBe(405);
+            expect(r.headers.get("allow")).toBe("POST");
+        }
+        expect(apiCalls).toEqual([]);
     });
 });
 
@@ -1037,6 +1153,170 @@ describe("DELETE /api/library/items/<id>", () => {
         const r = await call("DELETE", `/api/library/items/${pub.id}`);
         expect(r.status).toBe(502);
         expect(rowOf(pub.id).deleted_at).toBeNull();
+    });
+
+    // A public original has a mirror in cobalt-media owned by the API Worker: switch it off there
+    // first (deletes the mirror, purges the edge), then delete as before; fail closed.
+    describe("a public original (apple/CONTRACT-VISIBILITY.md 3.5)", () => {
+        const MIRROR = "Mirror0001.mp4";
+        const publicOriginal = (over: Seed = {}) => {
+            const row = seedItem({
+                kind: "private", source: "saved", bucket: "originals", r2_key: "originals/Pub0000000000000000000.mp4", content_type: "video/mp4",
+                bytes: 800, visibility: "public", public_key: MIRROR, public_id: "PublicId0000001a", url: `${MEDIA}${MIRROR}`, ...over,
+            });
+            originals.objects.set(row.r2_key, { bytes: bytesOf(8), size: 8 });
+            media.objects.set(MIRROR, { bytes: bytesOf(8), size: 8 });
+            return row;
+        };
+        // what the API's off toggle does to the world, in the order the calls happen
+        let order: string[];
+        beforeEach(() => {
+            order = [];
+            apiReply = (c) => {
+                order.push(`api:${c.method}:${(c.body as any)?.public}`);
+                return jsonRes(200, { status: "success", item: { visibility: "private" }, cache_cleared: true });
+            };
+            const del = originals.delete.bind(originals);
+            originals.delete = async (k: string) => {
+                order.push(`originals.delete:${k}`);
+                return del(k);
+            };
+        });
+
+        it("calls the toggle off through the service binding FIRST, then removes the original and the row", async () => {
+            const row = publicOriginal();
+            const r = await call("DELETE", `/api/library/items/${row.id}`);
+            expect(r.status).toBe(200);
+            expect(await json(r)).toEqual({ status: "success" });
+            expect(order).toEqual(["api:PATCH:false", `originals.delete:${row.r2_key}`]);
+            expect(apiCalls).toHaveLength(1);
+            expect(apiCalls[0]).toMatchObject({ method: "PATCH", url: `${API_BASE}/library/items/${row.id}/visibility`, body: { public: false } });
+            expect(apiCalls[0]!.headers["x-cobalt-service"]).toBe(SERVICE_KEY);
+            expect(rowOf(row.id).deleted_at).toBe(NOW);
+            expect(originals.objects.has(row.r2_key)).toBe(false);
+        });
+        it("expires the studios that read the original, like any original", async () => {
+            const row = publicOriginal();
+            seedStudio({ id: SID, r2_key: row.r2_key });
+            expect((await call("DELETE", `/api/library/items/${row.id}`)).status).toBe(200);
+            expect(sessionOf(SID).expires_at).toBe(NOW);
+        });
+        it("a private original that still remembers its public_key also goes through the toggle (idempotent off), per the contract", async () => {
+            const row = publicOriginal({ visibility: "private", url: null });
+            expect((await call("DELETE", `/api/library/items/${row.id}`)).status).toBe(200);
+            expect(order[0]).toBe("api:PATCH:false");
+        });
+        it("a public_key with no visibility yet (NULL) counts too", async () => {
+            const row = publicOriginal({ visibility: null });
+            expect((await call("DELETE", `/api/library/items/${row.id}`)).status).toBe(200);
+            expect(order[0]).toBe("api:PATCH:false");
+        });
+        it.each([
+            [404, "error.library.not_found"],
+            [409, "error.library.not_toggleable"],
+            [502, "error.library.storage"],
+            [503, "error.api.generic"],
+        ])("if the toggle answers %i %s nothing is deleted and the error is returned", async (status, code) => {
+            const row = publicOriginal();
+            seedStudio({ id: SID, r2_key: row.r2_key });
+            apiReply = (c) => (order.push(`api:${c.method}`), jsonRes(status, { status: "error", error: { code } }));
+            const r = await call("DELETE", `/api/library/items/${row.id}`);
+            expect(r.status).toBe(status);
+            expect(await json(r)).toEqual({ status: "error", error: { code } });
+            expect(order).toEqual(["api:PATCH"]);
+            expect(rowOf(row.id).deleted_at).toBeNull();
+            expect(originals.objects.has(row.r2_key)).toBe(true);
+            expect(media.objects.has(MIRROR)).toBe(true);
+            expect(sessionOf(SID).expires_at).toBeGreaterThan(NOW);
+        });
+        it("an unreachable API, a missing service key, an upstream 401 and garbage all abort the delete too (fail closed)", async () => {
+            const row = publicOriginal();
+            const expectAborted = async (status: number) => {
+                const r = await call("DELETE", `/api/library/items/${row.id}`);
+                expect(r.status).toBe(status);
+                expect(rowOf(row.id).deleted_at).toBeNull();
+                expect(originals.deletes).toEqual([]);
+            };
+            apiThrows = true;
+            await expectAborted(502);
+            apiThrows = false;
+            apiReply = () => jsonRes(401, { status: "error", error: { code: "error.api.auth.key.invalid" } });
+            await expectAborted(502);
+            apiReply = () => new Response("<html>oops</html>", { status: 200 });
+            await expectAborted(502);
+            apiReply = () => jsonRes(200, { status: "error", error: { code: "error.library.storage" } });
+            await expectAborted(502);
+            (env as any).COBALT_API_KEY = "";
+            await expectAborted(502);
+        });
+        it("if the toggle succeeds but the original's R2 delete fails: 502, the row stays (private now, nothing public left)", async () => {
+            const row = publicOriginal();
+            originals.failDelete = true;
+            const r = await call("DELETE", `/api/library/items/${row.id}`);
+            expect(r.status).toBe(502);
+            expect(rowOf(row.id).deleted_at).toBeNull();
+            expect(order[0]).toBe("api:PATCH:false");
+        });
+        it("a plain private original, a never-migrated original and a public webp make no API call at all", async () => {
+            const priv = seedItem({ kind: "private", source: "upload", visibility: "private" });
+            const old = seedItem({ kind: "private", source: "saved" }); // visibility NULL
+            const webp = seedItem({ kind: "public", source: "webp", visibility: "public" });
+            const host = seedItem({ kind: "public", source: "host" }); // an unmerged legacy host row
+            for (const row of [priv, old, webp, host]) expect((await call("DELETE", `/api/library/items/${row.id}`)).status).toBe(200);
+            expect(apiCalls).toEqual([]);
+        });
+        describe("a switched webp (bucket originals, source webp|studio)", () => {
+            const WNAME = "AbCdEf1234.webp";
+            const switchedWebp = (over: Seed = {}) => {
+                const row = seedItem({
+                    kind: "public", source: "webp", bucket: "originals", r2_key: `webps/${WNAME}`, content_type: "image/webp", name: "a.webp",
+                    bytes: 400, visibility: "private", public_key: WNAME, url: null, ...over,
+                });
+                originals.objects.set(row.r2_key, { bytes: bytesOf(4), size: 4 });
+                return row;
+            };
+            it("switched back on (public): the toggle off goes first, then its private object is deleted from cobalt-originals and the row soft-deleted", async () => {
+                const row = switchedWebp({ visibility: "public", url: `${MEDIA}${WNAME}` });
+                media.objects.set(WNAME, { bytes: bytesOf(4), size: 4 });
+                const r = await call("DELETE", `/api/library/items/${row.id}`);
+                expect(r.status).toBe(200);
+                expect(order).toEqual(["api:PATCH:false", `originals.delete:webps/${WNAME}`]);
+                expect(apiCalls[0]).toMatchObject({ method: "PATCH", url: `${API_BASE}/library/items/${row.id}/visibility`, body: { public: false } });
+                expect(originals.objects.has(row.r2_key)).toBe(false);
+                expect(rowOf(row.id).deleted_at).toBe(NOW);
+                expect((await json(await call("GET", "/api/library"))).items).toEqual([]);
+            });
+            it("switched off (private, public_key remembered): the toggle (idempotent off) still goes first, then the delete", async () => {
+                const row = switchedWebp();
+                expect((await call("DELETE", `/api/library/items/${row.id}`)).status).toBe(200);
+                expect(order).toEqual(["api:PATCH:false", `originals.delete:webps/${WNAME}`]);
+            });
+            it("if the toggle fails nothing is deleted", async () => {
+                const row = switchedWebp({ visibility: "public", url: `${MEDIA}${WNAME}` });
+                apiReply = (c) => (order.push(`api:${c.method}`), jsonRes(502, { status: "error", error: { code: "error.library.storage" } }));
+                const r = await call("DELETE", `/api/library/items/${row.id}`);
+                expect(r.status).toBe(502);
+                expect(order).toEqual(["api:PATCH"]);
+                expect(rowOf(row.id).deleted_at).toBeNull();
+                expect(originals.objects.has(row.r2_key)).toBe(true);
+            });
+            it("a never-switched webp (bucket media) deletes exactly as today: its MEDIA object, no API call", async () => {
+                const row = seedItem({ kind: "public", source: "webp", r2_key: WNAME, url: `${MEDIA}${WNAME}`, content_type: "image/webp" });
+                media.objects.set(WNAME, { bytes: bytesOf(4), size: 4 });
+                expect((await call("DELETE", `/api/library/items/${row.id}`)).status).toBe(200);
+                expect(apiCalls).toEqual([]);
+                expect(media.deletes).toEqual([WNAME]);
+                expect(originals.deletes).toEqual([]);
+            });
+        });
+        it("the poster is still released with the row", async () => {
+            const row = publicOriginal();
+            const P = `${MEDIA}PosterCCCC.jpg`;
+            db.raw.prepare("UPDATE media_items SET poster = ? WHERE id = ?").run(P, row.id);
+            media.objects.set("PosterCCCC.jpg", { bytes: bytesOf(5), size: 5 });
+            expect((await call("DELETE", `/api/library/items/${row.id}`)).status).toBe(200);
+            expect(media.objects.has("PosterCCCC.jpg")).toBe(false);
+        });
     });
 });
 
@@ -1178,25 +1458,6 @@ describe("server-made posters", () => {
         });
     });
 
-    describe("POST /api/library/items/<id>/publish", () => {
-        it("the public copy shares the original's poster URL (no new object)", async () => {
-            const src = seedItem({ kind: "private", source: "upload", content_type: "video/mp4", name: "clip.mp4" });
-            originals.objects.set(src.r2_key, { bytes: bytesOf(100), size: 100, contentType: "video/mp4" });
-            setPoster(src.id, P1);
-            putPoster(P1);
-            const b = await json(await call("POST", `/api/library/items/${src.id}/publish`));
-            expect(b.item.poster_url).toBe(P1);
-            expect(rowOf(b.item.id).poster).toBe(P1);
-            expect([...media.objects.keys()].filter((k) => k.endsWith(".jpg"))).toEqual(["PosterAAAA.jpg"]);
-        });
-        it("an original without a poster yields a copy without one", async () => {
-            const src = seedItem({ kind: "private", source: "upload", content_type: "video/mp4" });
-            originals.objects.set(src.r2_key, { bytes: bytesOf(100), size: 100 });
-            const b = await json(await call("POST", `/api/library/items/${src.id}/publish`));
-            expect(b.item.poster_url).toBeNull();
-        });
-    });
-
     describe("DELETE /api/library/items/<id>", () => {
         const pair = () => {
             const orig = seedItem({ kind: "private", source: "saved", content_type: "video/mp4" });
@@ -1264,7 +1525,7 @@ describe("server-made posters", () => {
     describe("the page", () => {
         // Runs the page's own tile functions against a tiny DOM stand-in.
         const html = LIBRARY_HTML;
-        const src = html.slice(html.indexOf("function itemFallback(wrap, it, ext) {"), html.indexOf("function confirmText(e) {"));
+        const src = html.slice(html.indexOf("function itemFallback(wrap, it, ext) {"), html.indexOf("function confirmText(e, act) {"));
         type El = { tag: string; attrs: Record<string, unknown>; kids: El[]; handlers: Record<string, () => void>; append(...k: El[]): void; remove(): void; addEventListener(n: string, f: () => void): void; parent?: El; muted?: boolean; innerHTML?: string };
         const el = (tag: string, attrs: Record<string, unknown> = {}, ...kids: El[]): El => {
             const e: El = {
@@ -1328,6 +1589,122 @@ describe("server-made posters", () => {
             t.kids[0]!.handlers.error!();
             expect(kidsOf(t)).toEqual(["ph:film"]);
             expect(kidsOf(studioThumb({ ...s, poster_url: null }))).toEqual(["ph:film"]);
+        });
+
+        // ----- one tile per original: the public / private switch -----
+        it("a tile has a public switch (a checkbox labelled public) where the host button was; the old host-as-is tile action and its copy code are gone", () => {
+            expect(LIBRARY_HTML).toContain('role: "switch"');
+            expect(LIBRARY_HTML).toContain('"data-ga": "vis"');
+            expect(LIBRARY_HTML).toContain('h("span", { text: "public" })');
+            expect(LIBRARY_HTML).toContain('"/api/library/items/" + it.id + (makePublic ? "/publish" : "/private")');
+            expect(LIBRARY_HTML).toContain("e.it.visibility_toggle");
+            expect(LIBRARY_HTML).not.toContain("privateToPublic");
+            expect(LIBRARY_HTML).not.toContain('"data-ga": "host"');
+        });
+        it("the badge is the file's visibility, and the chips filter by it on the server", () => {
+            expect(LIBRARY_HTML).toContain('isPub(it) ? "public" : "private"');
+            expect(LIBRARY_HTML).toContain('"/api/library?filter=" + G.filter');
+            expect(LIBRARY_HTML).toContain('data-f="public"');
+            expect(LIBRARY_HTML).toContain('data-f="private"');
+        });
+
+        const sw = html.slice(html.indexOf("function visSwitch(it, busy) {"), html.indexOf("function privateToStudio(it) {"));
+        const isPubSrc = html.slice(html.indexOf("function isPub(it) {"), html.indexOf("function tileFor(e) {"));
+        const makeSwitch = (reply: { status: number; body: any } = { status: 200, body: { status: "success", item: {} } }) => {
+            const log = { posts: [] as string[], renders: 0, usage: 0, toasts: [] as unknown[][] };
+            const G: any = { filter: "all", items: [] as any[], confirm: null, confirmAct: "delete", busy: {} };
+            const api = new Function(
+                "h", "G", "renderGrid", "reloadUsage", "libPost", "ok", "describe", "toast",
+                `${isPubSrc}\n${sw}\nreturn { visSwitch, setVisibility, isPub };`,
+            )(
+                el, G, () => { log.renders++; }, () => { log.usage++; },
+                async (path: string) => { log.posts.push(path); return reply; },
+                (r: any) => { if (r.status >= 200 && r.status < 300 && r.body.status !== "error") return r.body; throw { code: r.body?.error?.code }; },
+                (e: any) => ({ text: e.code, code: e.code }),
+                (...a: unknown[]) => { log.toasts.push(a); },
+            ) as { visSwitch(it: any, busy: boolean): El; setVisibility(it: any, on: boolean): Promise<void>; isPub(it: any): boolean };
+            return { api, G, log };
+        };
+        const orig = (visibility: string, over: Record<string, unknown> = {}) => ({
+            id: "Orig000000000001", kind: "private", visibility, visibility_toggle: true, name: "clip.mp4", url: visibility === "public" ? `${MEDIA}Mirror0001.mp4` : null, ...over,
+        });
+
+        it("isPub reads visibility, and falls back to kind for an answer that has none", () => {
+            const { api } = makeSwitch();
+            expect(api.isPub({ visibility: "public", kind: "private" })).toBe(true);
+            expect(api.isPub({ visibility: "private", kind: "public" })).toBe(false);
+            expect(api.isPub({ kind: "public" })).toBe(true);
+            expect(api.isPub({ kind: "private" })).toBe(false);
+        });
+        it("the switch is a labelled checkbox reflecting visibility, disabled while busy", () => {
+            const { api } = makeSwitch();
+            const on = api.visSwitch(orig("public"), false);
+            expect(on.tag).toBe("label");
+            const [box, label] = on.kids;
+            expect(box!.tag).toBe("input");
+            expect(box!.attrs).toMatchObject({ type: "checkbox", role: "switch", "data-ga": "vis", "aria-label": "public", checked: true, disabled: false });
+            expect(label!.attrs.text).toBe("public");
+            expect(api.visSwitch(orig("private"), false).kids[0]!.attrs.checked).toBe(false);
+            expect(api.visSwitch(orig("private"), true).kids[0]!.attrs.disabled).toBe(true);
+        });
+        it("turning it on posts /publish at once and swaps the returned file into the grid (custom title kept)", async () => {
+            const item = { id: "Orig000000000001", visibility: "public", url: `${MEDIA}Mirror0001.mp4` };
+            const { api, G, log } = makeSwitch({ status: 200, body: { status: "success", item, cache_cleared: null } });
+            G.items = [{ ...orig("private"), custom_title: "Kyoto" }];
+            api.visSwitch(G.items[0], false).kids[0]!.handlers.change!();
+            await new Promise((r) => setTimeout(r, 0));
+            expect(log.posts).toEqual(["/api/library/items/Orig000000000001/publish"]);
+            expect(G.items[0]).toMatchObject({ visibility: "public", url: item.url, custom_title: "Kyoto" });
+            expect(G.busy).toEqual({});
+            expect(log.usage).toBe(1);
+            expect(log.toasts[0]).toEqual(["public: link ready", { href: item.url, label: "open" }]);
+        });
+        it("turning it off asks first (nothing is posted); 'make private' posts /private", async () => {
+            const item = { id: "Orig000000000001", visibility: "private", url: null };
+            const { api, G, log } = makeSwitch({ status: 200, body: { status: "success", item, cache_cleared: true } });
+            G.items = [orig("public")];
+            api.visSwitch(G.items[0], false).kids[0]!.handlers.change!();
+            expect(log.posts).toEqual([]);
+            expect(G.confirm).toBe("Orig000000000001");
+            expect(G.confirmAct).toBe("private");
+            const text = new Function("isPub", `${isPubSrc.slice(isPubSrc.indexOf("function confirmText"))}\nreturn confirmText;`)(api.isPub) as (e: any, a?: string) => string;
+            expect(text(G.items[0], "private")).toBe("make private? the public link stops working.");
+            expect(text(G.items[0], "delete")).toBe("delete for everyone? the link stops working in discord.");
+            expect(text(orig("private"), "delete")).toBe("delete this private copy?");
+            await api.setVisibility(G.items[0], false);
+            expect(log.posts).toEqual(["/api/library/items/Orig000000000001/private"]);
+            expect(G.items[0]).toMatchObject({ visibility: "private", url: null });
+        });
+        it("a file that just switched leaves the public/private chip it no longer belongs to", async () => {
+            const { api, G } = makeSwitch({ status: 200, body: { status: "success", item: { id: "Orig000000000001", visibility: "private", url: null } } });
+            G.filter = "public";
+            G.items = [orig("public"), orig("public", { id: "Other00000000002" })];
+            await api.setVisibility(G.items[0], false);
+            expect(G.items.map((i: any) => i.id)).toEqual(["Other00000000002"]);
+        });
+        it("a failed toggle changes nothing and says why (409 not_toggleable, 502 storage)", async () => {
+            for (const code of ["error.library.not_toggleable", "error.library.storage"]) {
+                const { api, G, log } = makeSwitch({ status: code.endsWith("storage") ? 502 : 409, body: { status: "error", error: { code } } });
+                G.items = [orig("public")];
+                await api.setVisibility(G.items[0], false);
+                expect(G.items[0]).toMatchObject({ visibility: "public" });
+                expect(G.busy).toEqual({});
+                expect(log.toasts[0]).toEqual([code]);
+            }
+        });
+        it("a webp tile gets the same switch; a private (switched) webp has no url, so a placeholder instead of the animation", () => {
+            const { api } = makeSwitch();
+            const pubWebp = { id: "Webp000000000001", kind: "public", source: "webp", visibility: "public", visibility_toggle: true, content_type: "image/webp", name: "a.webp", url: `${MEDIA}AbCdEf1234.webp` };
+            expect(api.visSwitch(pubWebp, false).kids[0]!.attrs.checked).toBe(true);
+            const privWebp = { ...pubWebp, visibility: "private", url: null };
+            expect(api.visSwitch(privWebp, false).kids[0]!.attrs.checked).toBe(false);
+            const { itemThumb } = make();
+            expect(kidsOf(itemThumb(privWebp))).toEqual(["ph:lock"]); // not an <img src=null>
+            expect(kidsOf(itemThumb(pubWebp))).toEqual([`img:${pubWebp.url}`]);
+        });
+        it("explains the new error codes in the page's own words", () => {
+            expect(LIBRARY_HTML).toContain('"error.library.not_toggleable"');
+            expect(LIBRARY_HTML).toContain('"error.api.generic"');
         });
     });
 });

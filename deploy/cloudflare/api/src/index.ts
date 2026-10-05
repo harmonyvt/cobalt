@@ -7,6 +7,7 @@ import { handleNotifyRoute, harkConfigFrom, isNotifyRoute, NotifyService } from 
 import { handleStudioRoute, isStudioRoute, StudioService } from "./studio";
 import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
+import { purgeFrom } from "./visibility";
 import { handleRequest, type WorkerEnv } from "./worker";
 
 export interface Env extends WorkerEnv {
@@ -202,6 +203,8 @@ export class CobaltContainer extends Container<Env> {
             // server-made posters and `public: true` hosting (APP-API-CONTRACT.md section 13)
             media: env.MEDIA,
             mediaBaseUrl: env.MEDIA_BASE_URL,
+            // edge-cache purge for `public: true` hosting (section 16)
+            purge: purgeFrom(env),
         });
     }
 

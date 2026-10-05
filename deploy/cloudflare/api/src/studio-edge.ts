@@ -23,6 +23,7 @@ import {
     type SessionRow,
     type StudioReply,
 } from "./studio";
+import { sessionItem } from "./visibility";
 
 export type EdgeDeps = {
     now: () => number;
@@ -112,14 +113,14 @@ export async function studioStatus(
         } catch (e) {
             why = `throw ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`.slice(0, 300);
         }
-        const fallback = jsonResponse({ status: 200, body: sessionBody(row, []) });
+        const fallback = jsonResponse({ status: 200, body: sessionBody(row, [], null, await sessionItem(db, row.r2_key)) });
         fallback.headers.set("x-studio-advance", why.replace(/[\r\n]+/g, " "));
         return fallback;
     }
 
     try {
         const renders = row.status === "ready" ? await listSuccessfulRenders(db, sid) : [];
-        return jsonResponse({ status: 200, body: sessionBody(row, renders) });
+        return jsonResponse({ status: 200, body: sessionBody(row, renders, null, await sessionItem(db, row.r2_key)) });
     } catch {
         return jsonResponse(studioErr(503, "error.api.generic"));
     }

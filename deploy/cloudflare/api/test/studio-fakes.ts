@@ -135,8 +135,28 @@ export class MemoryMedia implements MediaBucket, PublishBucket {
         });
         return { size: data.length };
     }
+    failDelete = false;
+    deletes: string[] = [];
     async delete(key: string) {
+        this.deletes.push(key);
+        if (this.failDelete) throw new Error("R2 delete down");
         this.objects.delete(key);
+    }
+    heads: string[] = [];
+    async head(key: string) {
+        this.heads.push(key);
+        const o = this.objects.get(key);
+        return o ? { size: o.data.length } : null;
+    }
+    // A fresh body per call, like R2's get()
+    async get(key: string) {
+        const o = this.objects.get(key);
+        if (!o) return null;
+        return {
+            body: new Blob([o.data]).stream() as ReadableStream,
+            size: o.data.length,
+            httpMetadata: { contentType: o.contentType },
+        };
     }
 }
 

@@ -1,6 +1,8 @@
 // "Public by default" (APP-API-CONTRACT.md section 13): `public: true` on POST /studio and
 // `?public=1` on PUT /studio/upload make the server host the original publicly once the save is
 // ready, through the SAME code as POST /studio/<sid>/publish; without the flag nothing changes.
+// Since migration 0008 (section 16) hosting is one row per file: the original's own row turns public
+// and its mirror is the object in the public bucket; there is no second `host` row.
 // The Worker, the Durable Object's services and the real SQL run together; the helper and both
 // R2 buckets are fakes.
 import { beforeEach, describe, expect, it } from "vitest";
@@ -8,7 +10,9 @@ import { MAX_PUBLIC_ATTEMPTS, SESSION_TTL_MS } from "../src/studio";
 import { HOST_URL, KEY_ID, LINK, MEDIA_BASE, POSTER_URL, asBody, auth, json, world, type World } from "./poster-world";
 
 const publicRecords = (w: World) => [...w.kv.m.keys()].filter((k) => k.startsWith("public:"));
-const hostRows = (w: World) => w.items().filter((i) => i.source === "host");
+// the originals that are public now (one row each), and any legacy `host` rows (there are none made by new code)
+const hostRows = (w: World) => w.items().filter((i) => i.bucket === "originals" && i.visibility === "public");
+const legacyHosts = (w: World) => w.items().filter((i) => i.source === "host");
 
 let w: World;
 beforeEach(async () => {
@@ -39,13 +43,16 @@ describe("POST /studio with public: true", () => {
 
         const host = hostRows(w);
         expect(host).toHaveLength(1);
-        const name = host[0].r2_key as string;
+        expect(legacyHosts(w)).toEqual([]);
+        const name = host[0].public_key as string;
         expect(name).toMatch(/^[A-Za-z0-9]{10}\.mp4$/);
         expect(done.public_url).toBe(`${MEDIA_BASE}${name}`);
         expect(host[0]).toMatchObject({
-            kind: "public",
-            source: "host",
-            bucket: "media",
+            kind: "private",
+            source: "saved",
+            bucket: "originals",
+            visibility: "public",
+            public_id: expect.stringMatching(/^[A-Za-z0-9]{16}$/),
             url: `${MEDIA_BASE}${name}`,
             content_type: "video/mp4",
             bytes: w.helper.videoBytes.length,
@@ -53,14 +60,13 @@ describe("POST /studio with public: true", () => {
             height: 560,
             link: LINK,
             session_id: sid,
-            key_id: KEY_ID,
             deleted_at: null,
         });
         expect(w.media.objects.get(name)).toMatchObject({
             contentType: "video/mp4",
-            cacheControl: "public, max-age=31536000, immutable",
+            cacheControl: "public, max-age=3600",
             viaStream: true,
-            meta: { keyId: KEY_ID, sessionId: sid, source: LINK, published: "1" },
+            meta: { mirror: "1", published: "1", keyId: KEY_ID, sessionId: sid, source: LINK, itemId: host[0].id },
         });
         expect(w.media.objects.get(name)!.data).toEqual(w.helper.videoBytes);
         // the private original is still there, and still the original
@@ -70,7 +76,7 @@ describe("POST /studio with public: true", () => {
         expect(publicRecords(w)).toEqual([]);
         // GET /studio/<sid> says it too
         const get = (await (await w.call(`/studio/${sid}`)).json()) as any;
-        expect(get).toMatchObject({ public_state: "ready", public_url: `${MEDIA_BASE}${name}` });
+        expect(get).toMatchObject({ public_state: "ready", public_url: `${MEDIA_BASE}${name}`, visibility: "public", item_id: host[0].id });
     });
 
     it("the helper and the save record are already free while the public copy runs (it cannot hold up the next save)", async () => {
@@ -94,7 +100,7 @@ describe("POST /studio with public: true", () => {
         expect(asBody(await running)).toMatchObject({ status: "ready", public_state: "ready" });
     });
 
-    it("the hosted copy is what POST /studio/<sid>/publish makes: same name shape, same row, same object metadata", async () => {
+    it("the hosted copy is what POST /studio/<sid>/publish makes: same name shape, same row state, same object metadata", async () => {
         const viaFlag = asBody(await create()).id as string;
         await w.settle(viaFlag);
         const manual = asBody(await w.studio.create(KEY_ID, json({ url: LINK }))).id as string;
@@ -103,9 +109,9 @@ describe("POST /studio with public: true", () => {
         expect(pub.status).toBe(201);
 
         const rowOf = (sid: string) => hostRows(w).find((r) => r.session_id === sid)!;
-        const shape = (r: any) => ({ ...r, id: "-", r2_key: "-", url: "-", name: "-", session_id: "-", created_at: 0 });
+        const shape = (r: any) => ({ ...r, id: "-", r2_key: "-", url: "-", name: "-", session_id: "-", created_at: 0, public_key: "-", public_id: "-" });
         expect(shape(rowOf(viaFlag))).toEqual(shape(rowOf(manual)));
-        const meta = (sid: string) => w.media.objects.get(rowOf(sid).r2_key)!;
+        const meta = (sid: string) => w.media.objects.get(rowOf(sid).public_key)!;
         expect(Object.keys(meta(viaFlag).meta).sort()).toEqual(Object.keys(meta(manual).meta).sort());
         expect(meta(viaFlag).cacheControl).toBe(meta(manual).cacheControl);
         expect(meta(viaFlag).contentType).toBe(meta(manual).contentType);
@@ -159,6 +165,7 @@ describe("POST /studio with public: true", () => {
         const b = (await (await w.call("/library", { headers: auth })).json()) as any;
         expect(b.posts).toHaveLength(1);
         const post = b.posts[0];
+        // the old (no `v`) shape: the original plus the synthesized host file old apps expect
         const host = post.files.find((f: any) => f.source === "host");
         expect(host).toMatchObject({ kind: "public", content_type: "video/mp4", deletable: false });
         expect(host.url).toMatch(HOST_URL);
@@ -166,7 +173,12 @@ describe("POST /studio with public: true", () => {
         expect(post.poster_url).toMatch(POSTER_URL);
         expect(host.poster_url).toBe(post.poster_url);
         expect(post.files.find((f: any) => f.source === "saved").poster_url).toBe(post.poster_url);
-        expect(b.counts).toEqual({ posts: 1, files: 2 });
+        expect(b.counts).toEqual({ posts: 1, files: 1 });
+        // v=2: one entry, public, with its link
+        const v2 = ((await (await w.call("/library?v=2", { headers: auth })).json()) as any).posts[0];
+        expect(v2.files).toHaveLength(1);
+        expect(v2.files[0]).toMatchObject({ source: "saved", visibility: "public", url: host.url, poster_url: v2.poster_url });
+        expect(v2.visibility).toBe("public");
     });
 });
 
@@ -221,13 +233,13 @@ describe("when the copy does not go through", () => {
     });
 
     it("idempotent: a session that is already hosted (an earlier attempt died before recording it) records the existing copy and copies nothing", async () => {
-        const { sid } = w.seed();
+        const { sid, itemId } = w.seed();
         w.db.raw.prepare("UPDATE studio_sessions SET public_state = 'pending' WHERE id = ?").run(sid);
+        // the earlier attempt flipped the row and made the mirror, then died before the session recorded it
         w.db.raw
-            .prepare(
-                "INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, session_id, created_at) VALUES ('HostItem00000001','public','host','media','Hostmp4001.mp4',?,'a.mp4','video/mp4',?,?)",
-            )
-            .run(`${MEDIA_BASE}Hostmp4001.mp4`, sid, w.clock.t);
+            .prepare("UPDATE media_items SET visibility = 'public', public_key = 'Hostmp4001.mp4', public_id = 'HostItem00000001', url = ? WHERE id = ?")
+            .run(`${MEDIA_BASE}Hostmp4001.mp4`, itemId);
+        w.media.objects.set("Hostmp4001.mp4", { bytes: 4096, meta: {}, data: new Uint8Array(4096).fill(7), viaStream: true });
         w.kv.m.set(`public:${sid}`, { attempts: 1, at: w.clock.t });
         await w.studio.sweep();
         expect(w.session(sid)).toMatchObject({ public_state: "ready", public_url: `${MEDIA_BASE}Hostmp4001.mp4` });
@@ -235,13 +247,32 @@ describe("when the copy does not go through", () => {
         expect(hostRows(w)).toHaveLength(1);
     });
 
-    it("a session that expired or vanished before it could be hosted is 'failed', not retried for ever", async () => {
+    it("a pair left by the old code (original + `host` row, not merged yet) is adopted, not copied again: the lazy merge reuses the host's file and URL", async () => {
+        const { sid, itemId } = w.seed();
+        w.db.raw.prepare("UPDATE studio_sessions SET public_state = 'pending' WHERE id = ?").run(sid);
+        w.db.raw
+            .prepare(
+                "INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, session_id, created_at) VALUES ('HostItem00000001','public','host','media','Hostmp4001.mp4',?,'a.mp4','video/mp4',4096,?,?)",
+            )
+            .run(`${MEDIA_BASE}Hostmp4001.mp4`, sid, w.clock.t);
+        w.media.objects.set("Hostmp4001.mp4", { bytes: 4096, meta: {}, data: new Uint8Array(4096).fill(7), viaStream: true });
+        w.kv.m.set(`public:${sid}`, { attempts: 1, at: w.clock.t });
+        await w.studio.sweep();
+        expect(w.session(sid)).toMatchObject({ public_state: "ready", public_url: `${MEDIA_BASE}Hostmp4001.mp4` });
+        expect(w.media.puts).toEqual([]);
+        expect(hostRows(w).map((r) => [r.id, r.public_key, r.public_id])).toEqual([[itemId, "Hostmp4001.mp4", "HostItem00000001"]]);
+        // the old host row is retired into the original (a tombstone), not listed
+        expect(w.item("HostItem00000001")).toMatchObject({ merged_into: itemId });
+        expect(w.item("HostItem00000001").deleted_at).not.toBeNull();
+    });
+
+    it("a session that vanished before it could be hosted is dropped, not retried for ever; one that merely expired is still hosted (its row outlives the session)", async () => {
         const { sid } = w.seed({ expires_at: 1 });
         w.db.raw.prepare("UPDATE studio_sessions SET public_state = 'pending' WHERE id = ?").run(sid);
         w.kv.m.set(`public:${sid}`, { attempts: 0, at: w.clock.t });
         w.kv.m.set("public:" + "Z".repeat(22), { attempts: 0, at: w.clock.t }); // no such session
         await w.studio.sweep();
-        expect(w.session(sid).public_state).toBe("failed");
+        expect(w.session(sid)).toMatchObject({ public_state: "ready", public_url: expect.stringMatching(HOST_URL) });
         expect(publicRecords(w)).toEqual([]);
     });
 
@@ -276,9 +307,10 @@ describe("PUT /studio/upload?public=1", () => {
             expect(done.public_url).toMatch(/^https:\/\/media\.capybaraharmony\.com\/[A-Za-z0-9]{10}\.mov$/);
             const host = hostRows(w);
             expect(host).toHaveLength(1);
-            expect(host[0]).toMatchObject({ kind: "public", content_type: "video/quicktime", session_id: b.id, key_id: KEY_ID, name: "IMG_0412.mov" });
-            // the upload's own private item is untouched
+            // one row: the upload's own item is the public one
+            expect(host[0]).toMatchObject({ source: "upload", content_type: "video/quicktime", key_id: KEY_ID, name: "IMG_0412.mov", visibility: "public" });
             expect(w.items().filter((i) => i.source === "upload")).toHaveLength(1);
+            expect(legacyHosts(w)).toEqual([]);
         });
 
         it("public=true is the same; public=0, public=false, an empty value and no flag are today's behaviour", async () => {
@@ -298,7 +330,7 @@ describe("PUT /studio/upload?public=1", () => {
             await w.studio.sweep();
             const upload = w.items().find((i) => i.source === "upload")!;
             expect(upload.poster).toMatch(POSTER_URL);
-            expect(hostRows(w)[0].poster).toBe(upload.poster);
+            expect(hostRows(w)[0].poster).toBe(upload.poster); // one row: the same one
             expect(w.session(b.id).poster).toBe(upload.poster);
         });
 
@@ -310,7 +342,7 @@ describe("PUT /studio/upload?public=1", () => {
             expect(b).toMatchObject({ id: null, url: null, studio_error: { code: "error.studio.busy" }, public_state: "ready" });
             expect(b.public_url).toMatch(HOST_URL);
             expect(hostRows(w)).toHaveLength(1);
-            expect(hostRows(w)[0]).toMatchObject({ session_id: null, key_id: KEY_ID });
+            expect(hostRows(w)[0]).toMatchObject({ source: "upload", key_id: KEY_ID });
         });
     });
 
@@ -326,7 +358,10 @@ describe("PUT /studio/upload?public=1", () => {
             const b = (await res.json()) as any;
             expect(b).toMatchObject({ id: null, url: null, studio_error: null, public_state: "ready" });
             expect(b.public_url).toMatch(new RegExp(`^https://media\\.capybaraharmony\\.com/[A-Za-z0-9]{10}\\.${ext}$`));
+            // one row, one file: the image is its own public file (the 5a "known gap" is closed)
             expect(hostRows(w)).toHaveLength(1);
+            expect(w.items()).toHaveLength(1);
+            expect(b.item).toMatchObject({ visibility: "public", url: b.public_url });
             expect(w.media.objects.size).toBe(1);
             expect(w.seen).toHaveLength(0);
             expect(w.items().filter((i) => i.source === "upload")).toHaveLength(1);

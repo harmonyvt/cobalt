@@ -524,29 +524,29 @@ describe("POST /library/items/<id>/publish copies the title to a hosted image", 
         return (await res.json()) as any;
     };
 
-    it("an image upload's title follows its hosted copy (its own post): both show it; the source keeps it", async () => {
+    it("an image upload's title stays with it when hosted: one row, one post (section 16), nothing to copy", async () => {
         const id = await upload("image/png", "photo.png");
         await patch(id, { title: "Sunset" });
         const hosted = await publish(id);
         const rows = titles();
-        expect(rows).toHaveLength(2);
-        expect(rows.map((r) => r.title)).toEqual(["Sunset", "Sunset"]);
-        expect(rows.map((r) => r.post_key).sort()).toEqual([id, hosted.item_id].sort());
+        expect(rows.map((r) => [r.post_key, r.title])).toEqual([[id, "Sunset"]]);
+        expect(hosted.item_id).not.toBe(id); // the public id old apps know, resolved by every item route
         const lib = await library();
-        expect(lib.posts).toHaveLength(2);
-        expect(lib.posts.map((p: any) => p.custom_title)).toEqual(["Sunset", "Sunset"]);
+        expect(lib.posts).toHaveLength(1);
+        expect(lib.posts[0].custom_title).toBe("Sunset");
     });
 
-    it("an image with no title copies nothing; a title set on the copy before is not overwritten", async () => {
+    it("hosting an image twice is the same link; a title set afterwards is on the one post", async () => {
         const id = await upload("image/jpeg", "a.jpg");
         const h1 = await publish(id);
         expect(titles()).toEqual([]);
-        await patch(id, { title: "late" }); // set after hosting: the copy is its own post, untouched
+        await patch(id, { title: "late" });
         expect(titles().map((t) => t.post_key)).toEqual([id]);
-        await patch(h1.item_id, { title: "mine" });
-        const h2 = await publish(id); // a second host copy gets the source's title
-        expect(titles().find((t) => t.post_key === h2.item_id)?.title).toBe("late");
-        expect(titles().find((t) => t.post_key === h1.item_id)?.title).toBe("mine");
+        const h2 = await publish(id);
+        expect(h2.url).toBe(h1.url);
+        expect(h2.item_id).toBe(h1.item_id);
+        await patch(h1.item_id, { title: "mine" }); // the public id resolves like the item id
+        expect(titles().map((t) => [t.post_key, t.title])).toEqual([[id, "mine"]]);
     });
 
     it("a video's host copy stays in the source post: one row, nothing added", async () => {
@@ -556,19 +556,6 @@ describe("POST /library/items/<id>/publish copies the title to a hosted image", 
         const res = await w.call(`/library/items/${SAVED}/publish`, { method: "POST", headers: auth });
         expect(res.status).toBe(201);
         expect(titles()).toEqual([expect.objectContaining({ post_key: SID, title: "Clip" })]);
-    });
-
-    it("a failing title copy never fails the publish", async () => {
-        const id = await upload("image/png", "photo.png");
-        await patch(id, { title: "Sunset" });
-        const orig = w.db.prepare.bind(w.db);
-        (w.db as any).prepare = (sql: string) => {
-            if (/INSERT OR IGNORE INTO media_titles/.test(sql)) throw new Error("D1_ERROR: down");
-            return orig(sql);
-        };
-        const res = await w.call(`/library/items/${id}/publish`, { method: "POST", headers: auth });
-        (w.db as any).prepare = orig;
-        expect(res.status).toBe(201);
     });
 });
 

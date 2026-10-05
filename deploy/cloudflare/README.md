@@ -838,3 +838,21 @@ Two additive features (owner, 2026-10-05: "by default videos are public and they
 - **Verified**: those tests, `cf deploy --dry-run`, and the real helper's `POST /poster` inside the image the dry run built (ffmpeg-static,
   linux/amd64 under emulation) on all six fixture clips (correct sizes, upright, 5 to 17 KB). **Not verified until deployed**: a poster
   write and the R2 to R2 copy from inside the Durable Object, real timings.
+
+## One file per rendition, public or private (`APP-API-CONTRACT.md` section 16, `apple/CONTRACT-VISIBILITY.md`)
+
+A library row is the media file: the canonical bytes stay private (`cobalt-originals`) and "public" is a mirror object in `cobalt-media`
+at the row's stable `public_key`, so a toggle is one row and a link that comes back unchanged. Webps are switchable too (their first OFF
+moves the bytes to `cobalt-originals/webps/<name>`; ON copies back to the same name; the private copy is kept).
+
+- **Migration `0008`** (additive, apply before deploying), **`PATCH /library/items/<id>/visibility`**, **`POST /library/visibility/migrate`**
+  (the keyed data step: dry run by default, paged, idempotent, `undo`, D1 writes only), `features.visibility`, `GET /library?v=2`.
+  Code: `api/src/visibility.ts`. Old apps get the legacy shape (synthesized host files); old publish routes mean "make public".
+- **Edge cache**: turning a file private deletes the public object and purges its URL (`MEDIA_PURGE_TOKEN` secret, Zone > Cache Purge on
+  `capybaraharmony.com`; `MEDIA_ZONE_ID` is a plain var in `api/cloudflare.config.ts`). New mirrors cache for an hour, not a year, so
+  even a failed purge ends soon; mirrors made before this change keep their one-year metadata (the purge is what matters for them).
+  A missing token only makes `cache_cleared` null.
+- **Runbook** (owner): migration, deploy API then web, `migrate?dry_run=1&limit=100` (expect 6 pairs, 0 skipped), then `dry_run=0` until
+  `remaining: 0`. Rollback: `undo=1&dry_run=0` until `remaining: 0`, THEN redeploy the old Workers.
+- **`scripts/backfill-library.mjs`** treats an object as covered when a row names it in `r2_key` or `public_key`, or its metadata says
+  `mirror: "1"` (else it would re-add mirrors as webp rows).

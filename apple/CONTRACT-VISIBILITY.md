@@ -135,9 +135,19 @@ The six pairs (host row → original row, mirror object, etag today):
    max-age=3600` (not `immutable`), so even a failed purge ends within an hour. The six existing mirrors keep
    their one-year metadata (rewriting them is not worth it): for them the purge is what matters. Not
    revocable by anyone: copies already in a viewer's browser or in Discord's media proxy.
-6. **(lane, owner question 2) Webps stay always public, no toggle.** A webp is made to be shared, has no private
-   copy, and already has its own delete (`DELETE /media/<name>.webp`). The toggle is on the video (the
-   original). Posts with only webps are public.
+6. **(owner, 2026-10-05, overrides the lane's first call) Webps are switchable too.** The owner answered question 2
+   "yes". A webp's canonical bytes live only in `cobalt-media`, so its first OFF is: (1) copy the object to
+   `cobalt-originals/webps/<its public name>` and verify it with `head` (size equal, else delete the half copy and
+   `502`); (2) turn the row into a `bucket 'originals'` row (`r2_key = webps/<name>`, `public_key = <name>`,
+   `visibility 'public'` still); (3) from there it is the ordinary OFF: delete the public object, then
+   `visibility 'private', url NULL`, purge. ON copies back to the SAME name (old shared links come back). **The
+   private copy is kept** after an ON (later toggles never write the private side again; one copy per toggle;
+   cost is the webp's size, tens of KB to a few MB, and it keeps a failed ON recoverable); delete-everything and
+   `DELETE /media/<name>.webp` remove both copies and purge. New renders stay public as today. Rows stay
+   `kind 'public'`, `source 'webp'|'studio'`. The migration needs nothing for webps (visibility `public`, no private
+   copy). Old apps: a private webp is **left out of their list** (not shown without a url: an old build has no
+   state for "public kind, no url"); a webp-only post vanishes from the old list. Rollback: `undo` leaves switched
+   webps and reports `webps_switched` (make them public before rolling the code back).
 7. **(owner, 13.3 stands) Posters always, public-unguessable.** Every video original gets one regardless of
    visibility (already true: 57/57); the poster of a private video stays a public unguessable JPEG (owner's
    section 13 decision). The app shows it everywhere a server picture can appear: library (done in 1.6),
@@ -197,7 +207,8 @@ Invariants (asserted in tests over every route):
 - I1. `visibility = 'public'` ⇔ `url IS NOT NULL`, for every live row after the migration.
 - I2. A live `bucket 'originals'` row with `visibility 'public'` has `public_key`, `public_id`, and an object at
   `cobalt-media/<public_key>`; with `'private'`, no object at `public_key` (when set).
-- I3. A live `bucket 'media'` row is `'public'` (webps, studio renders, unmerged legacy hosts).
+- I3. A live `bucket 'media'` row is `'public'` (webps never switched, studio renders, unmerged legacy hosts). A webp
+  switched private even once is a `bucket 'originals'` row (`r2_key webps/<name>`, `public_key <name>`) and obeys I2.
 - I4. At most one live row names a given `public_key`; no live row has `bucket 'media' AND r2_key = <some
   original's public_key>` after the merge.
 - I5. `studio_sessions.public_url` of every session whose `r2_key` is an original's equals that original's `url`
@@ -216,8 +227,8 @@ Invariants (asserted in tests over every route):
 - **Body**: JSON ≤ 256 bytes, an object with `"public": true | false` (extra keys ignored). Anything else →
   `400 error.library.bad_request`, judged before the lookup.
 - **Row**: `SELECT … FROM media_items WHERE (id = ?1 OR public_id = ?1) AND deleted_at IS NULL` (unknown →
-  `404 error.library.not_found`). `bucket <> 'originals'` (webp, studio render, unmerged legacy host) →
-  `409 error.library.not_toggleable`.
+  `404 error.library.not_found`). `bucket <> 'originals'` (an unmerged legacy host; a webp or studio render IS toggleable, see decision 6 and
+  section 11) → `409 error.library.not_toggleable`.
 - **Lazy merge first**: if the row has no `public_key` and a live legacy `host` row matches it (rule in 4.3),
   run the 4.3 statements for that pair before anything else.
 - **On** (`public: true`): `key = public_key ?? "<10 base62>.<ext of r2_key>"`, `pid = public_id ?? <16 base62>`.
@@ -592,13 +603,53 @@ Gates (every lane; Fable reruns): the four Apple commands (`xcodegen generate`; 
 
 ## 10. Owner questions (the defaults apply unless the owner says otherwise)
 
-1. **The 51 videos saved privately before today: leave them private, or make them all public once?** Default:
-   leave them private (nothing goes public that was not asked to). If "all public": one call per video through
-   the toggle (≈ 298 MB copied), run by the owner after the migration.
-2. **Should webps get the switch too?** Default: no, webps stay public links (decision 6). Yes means a private
-   webp lives in the private bucket and a new "private webp" state across the app; a larger change.
+1. **The 51 videos saved privately before today: leave them private, or make them all public once?**
+   **Answered (owner, 2026-10-05): leave them private** (the default). No bulk publish.
+2. **Should webps get the switch too?** **Answered (owner, 2026-10-05): yes.** Mechanism in decision 6; app impact:
+   a webp rendition gets the same `public link` toggle (it has `visibility_toggle` true), a private webp has no
+   url and shows no animation (a lock placeholder), and `GET /library?v=2` lists it with `visibility: "private"`.
 
-## 11. Not verified here
+## 11. Build record: lanes A1 + A2 + A3 (server), 2026-10-05
+
+Built in the `apple-app` worktree; nothing committed, deployed or run against production. Where the build differs from the text above:
+
+- **Webps switchable** (decision 6): `toggleable()` = every `bucket 'originals'` row, or a `bucket 'media'` webp/studio row with a 10-char
+  `.webp` name. `DELETE /media/<name>.webp` for a switched webp is handled in the Worker (`deleteSwitchedWebp`), the webp service is
+  untouched. `media_name`/`deletable` on a webp entry are its public name whichever bucket holds the bytes.
+- **`POST /studio/<sid>/publish` on a ready session with no library row** writes the row (the save's insert is documented bookkeeping that
+  may fail) and publishes it, instead of the 404 section 3.4 asked for. A session with no `r2_key` is still `409 not_ready`.
+- **Legacy synthesized host file**: for a merged pair its fields come from the retired host row (name, size, width/height/duration, time,
+  poster), not from `<name>.<ext>`. Found by the replay: the real hosts' names have no extension (web-published copies) and an upload's
+  host has the session's duration. With it the old-shape list of the real database is identical before and after the merge (files,
+  order, ids, urls) apart from `counts.files` (92 -> 86) and the additive keys. A pair made by the new code is named `<name>.<ext>`
+  and placed right after its original.
+- **Legacy `counts.files`** counts what that shape lists (private webps are not counted); v2 counts live rows.
+- **Post `visibility`** (v2 only): the original's, else `public` when any file is public, else `private`.
+- **Undo** also sets `visibility` back to NULL on every row (not the switched webps), so the restored rows equal the pre-merge rows
+  byte for byte (checked on the real export); `studio_sessions.public_state/public_url` set by the merge are not reverted (old code
+  ignores a `ready` it did not ask for).
+- **Skip reason `storage_error`** (a `head` that throws) is added to the contract's list; `report.processed`/`backfilled` appear on
+  `dry_run=0` calls.
+- **New inserts say it**: `insertMediaItem` and the upload insert write `visibility` (`private` for an originals row, `public` for a
+  `media` row), so I1 holds without the data step.
+- **`MEDIA_PURGE_TOKEN`** is declared with `bindings.secret()` (the owner added it to `secrets.json`); `MEDIA_ZONE_ID`
+  (`560c4ad4961a65fa19899b4dfa8b5702`, read with `cf zones list`, not a secret) is a text var. A `cf deploy --dry-run` with a secrets
+  file lacking the token completes; whether a real deploy tolerates it is not verified (it is present).
+- **A3**: the backfill script's covered set includes `public_key` (falling back to the pre-0008 query when the column is missing) and
+  skips `mirror: "1"` objects.
+- **Tests**: `api/test/{visibility,visibility-migrate,migration-0008}.test.ts` (+ `visibility-fixture.ts`, `d1-batch.ts`: the shared D1 fake
+  has no `batch`, so tests wrap it in a real transaction) and `replay-prod.test.ts` (the V0 replay, below).
+
+### 11.1 V0 replay (done): the real database, copied
+
+`cf d1 export <db> --output-format polling --dump-options-tables media_items studio_sessions studio_renders media_titles` (read-only; the
+other tables, with key hashes and telemetry, were not exported) + `cf r2 objects list --per-page 1000` of both buckets, loaded into
+`node:sqlite`, 0008 applied, the Worker's migrate route run on it: dry run = **6 pairs (5 saved, 1 upload), 0 skipped; after 86 rows,
+35 public, 51 private, 6 tombstones; 92 unset; 0 posters missing; 0 R2 writes/deletes**; apply processed 6 and backfilled 80; the rerun
+reported `already_merged: 6`, pairs 0; the six public originals carry the six URLs of section 0.4; the old-shape list is unchanged;
+`undo` restored all 94 exported rows byte for byte. (The export is the same data as section 0.4: 94 `media_items` rows, 92 live.)
+
+## 12. Not verified here (original read)
 
 - Nothing was built or run: no test, no build, no deploy. All code citations are reads of `b2813e27f` plus the
   dirty tree as of 10:50 UTC.

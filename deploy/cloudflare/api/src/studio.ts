@@ -28,6 +28,7 @@ import { LIVE_PUSH_MS, type LiveHooks, type LiveRenderEvent } from "./live";
 import { NOTIFY_MAX_BODY_BYTES, parseOptIn, type NotifyHooks, type NotifyRenderEvent } from "./notify";
 import { PosterService, POSTER_BATCH, type MediaStore } from "./poster";
 import { publishStudio } from "./publish";
+import { sessionItem, type PurgeFn } from "./visibility";
 
 export const SID_LENGTH = 22;
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -195,7 +196,13 @@ export type SaveProgress = {
     waking: boolean;
 };
 
-export function sessionBody(row: SessionRow, renders: RenderRow[], progress?: SaveProgress | null) {
+export function sessionBody(
+    row: SessionRow,
+    renders: RenderRow[],
+    progress?: SaveProgress | null,
+    // the session's original in the library (section 16): its row id and visibility, null = none
+    item?: { item_id: string; visibility: "public" | "private" } | null,
+) {
     // progress only means something while the session is saving
     const p = row.status === "saving" ? (progress ?? null) : null;
     return {
@@ -213,6 +220,9 @@ export function sessionBody(row: SessionRow, renders: RenderRow[], progress?: Sa
         // public hosting asked for with `public: true` (null = not asked) and where it is
         public_state: row.public_state ?? null,
         public_url: row.public_url ?? null,
+        // the library row of this session's original and whether it is public (section 16)
+        item_id: item?.item_id ?? null,
+        visibility: item?.visibility ?? null,
         // save progress (null / false when the DO does not know)
         step: p?.step ?? null,
         step_bytes: p?.bytes ?? null,
@@ -464,6 +474,8 @@ export type StudioDeps = {
     // public_state 'failed'; no poster jobs are queued).
     media?: MediaStore;
     mediaBaseUrl?: string;
+    // Edge-cache purge (section 16); absent = not configured
+    purge?: PurgeFn;
     // How long a save, upload or render waits for a poster being made (POSTER_IDLE_WAIT_MS).
     posterIdleMs?: number;
 };
@@ -849,7 +861,7 @@ export class StudioService {
                 const row = await getSession(this.d.db, sid);
                 // an expired session is gone for the app too; a row of another key never shows
                 if (!row || row.key_id !== keyId || row.expires_at <= now) continue;
-                sessions.push(sessionBody(row, [], this.progress.get(row.id)));
+                sessions.push(sessionBody(row, [], this.progress.get(row.id), await sessionItem(this.d.db, row.r2_key)));
             }
         } catch {
             return studioErr(503, "error.api.generic");
@@ -954,7 +966,7 @@ export class StudioService {
     private async sessionReply(row: SessionRow): Promise<StudioReply> {
         try {
             const renders = row.status === "ready" ? await listSuccessfulRenders(this.d.db, row.id) : [];
-            return { status: 200, body: sessionBody(row, renders, this.progress.get(row.id)) };
+            return { status: 200, body: sessionBody(row, renders, this.progress.get(row.id), await sessionItem(this.d.db, row.r2_key)) };
         } catch {
             return studioErr(503, "error.api.generic");
         }
@@ -1328,12 +1340,15 @@ export class StudioService {
                 return;
             }
             let url: string | null = null;
-            const have = await this.d.db
-                .prepare(
-                    "SELECT url FROM media_items WHERE session_id = ?1 AND source = 'host' AND bucket = 'media' AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 1",
-                )
-                .bind(sid)
-                .first<{ url: string | null }>();
+            // the original is already public (one row per file, section 16): just record it
+            const have = row.r2_key
+                ? await this.d.db
+                      .prepare(
+                          "SELECT url FROM media_items WHERE bucket = 'originals' AND r2_key = ?1 AND visibility = 'public' AND url IS NOT NULL AND deleted_at IS NULL LIMIT 1",
+                      )
+                      .bind(row.r2_key)
+                      .first<{ url: string | null }>()
+                : null;
             if (have?.url) url = have.url;
             if (!url) {
                 if (rec.attempts >= MAX_PUBLIC_ATTEMPTS) {
@@ -1351,6 +1366,7 @@ export class StudioService {
                         mediaBaseUrl: this.d.mediaBaseUrl,
                         now: this.d.now,
                         randomBytes: this.d.randomBytes,
+                        purge: this.d.purge,
                     },
                     sid,
                     row.key_id ?? SERVICE_KEY_ID,
@@ -1446,9 +1462,11 @@ export class StudioService {
             // (a reopened original that already has a poster hands it to its new session)
             await this.d.db
                 .prepare(
-                    `INSERT INTO studio_sessions (id, key_id, link, service, title, status, r2_key, content_type, bytes, created_at, expires_at, public_state, poster)
-                     VALUES (?1, ?2, ?3, 'upload', ?4, 'saving', ?5, ?6, ?7, ?8, ?9, ?10,
-                             (SELECT poster FROM media_items WHERE bucket = 'originals' AND r2_key = ?5 AND deleted_at IS NULL LIMIT 1))`,
+                    `INSERT INTO studio_sessions (id, key_id, link, service, title, status, r2_key, content_type, bytes, created_at, expires_at, public_state, poster, public_url)
+                     VALUES (?1, ?2, ?3, 'upload', ?4, 'saving', ?5, ?6, ?7, ?8, ?9,
+                             COALESCE(?10, (SELECT CASE WHEN visibility = 'public' AND url IS NOT NULL THEN 'ready' END FROM media_items WHERE bucket = 'originals' AND r2_key = ?5 AND deleted_at IS NULL LIMIT 1)),
+                             (SELECT poster FROM media_items WHERE bucket = 'originals' AND r2_key = ?5 AND deleted_at IS NULL LIMIT 1),
+                             (SELECT CASE WHEN visibility = 'public' THEN url END FROM media_items WHERE bucket = 'originals' AND r2_key = ?5 AND deleted_at IS NULL LIMIT 1))`,
                 )
                 .bind(sid, keyId, `upload:${itemId}`, name.trim(), r2Key, contentType, bytes, now, now + SESSION_TTL_MS, wantsPublic ? "pending" : null)
                 .run();

@@ -1,20 +1,15 @@
-// POST /studio/<sid>/publish (LIBRARY-CONTRACT.md route 1): copies a ready
-// session's stored original from the private bucket to the public one under a
-// new unguessable name, and records it in the library. Runs in the Worker
-// (D1 + R2 only), the container is never involved. Free of Cloudflare imports
-// so it runs under plain node in the tests.
-//
-// The copy hands the R2 object's own body to the other bucket's put(): the
-// object body has a known length, so there is no buffering and no FixedLength
-// wrapper, and no ReadableStream.pipeTo() (unimplemented between streams in
-// this runtime, which hung a put until the Durable Object died, 2026-10-01).
+// POST /studio/<sid>/publish (LIBRARY-CONTRACT.md route 1, APP-API-CONTRACT.md section 16): makes a
+// ready session's stored original public. Since migration 0008 there is one row per file: this is
+// the legacy spelling of "toggle on" (visibility.ts) on the session's original row, so a repeat
+// returns the same link and nothing is copied twice. Runs in the Worker (D1 + R2 only), the
+// container is never involved. Free of Cloudflare imports so it runs under plain node in the tests.
 
-import { randomBase62 } from "./ids";
-import { insertMediaItem, pageLink, SERVICE_KEY_ID } from "./library";
-import { MEDIA_NAME_LENGTH } from "./webp";
-import { getSession, studioErr, type OriginalsBucket, type SessionRow, type StudioReply } from "./studio";
+import { SERVICE_KEY_ID, insertMediaItem, pageLink } from "./library";
+import { getOriginalByKey, publishOriginal, type PurgeFn } from "./visibility";
+import { getSession, studioErr, type OriginalsBucket, type StudioReply } from "./studio";
 
-// The public bucket `cobalt-media`, as publish needs it (a stream body).
+// The public bucket `cobalt-media`, as publish needs it (a stream body). Posters, mirrors and
+// the webp switch also read it back (head / get).
 export interface PublishBucket {
     put(
         key: string,
@@ -25,6 +20,12 @@ export interface PublishBucket {
         },
     ): Promise<{ size: number } | null>;
     delete(key: string): Promise<void>;
+    head(key: string): Promise<{ size: number } | null>;
+    get(key: string): Promise<{
+        body: ReadableStream;
+        size: number;
+        httpMetadata?: { contentType?: string };
+    } | null>;
 }
 
 export type PublishDeps = {
@@ -34,98 +35,57 @@ export type PublishDeps = {
     mediaBaseUrl: string;
     now: () => number;
     randomBytes?: (n: number) => Uint8Array;
+    // edge-cache purge (section 16); absent = not configured
+    purge?: PurgeFn;
 };
-
-const extOf = (key: string): string => {
-    const m = /\.([A-Za-z0-9]{1,8})$/.exec(key);
-    return m ? m[1].toLowerCase() : "bin";
-};
-
-// "<title>.<ext>" unless the title already ends that way (uploads carry their file name).
-function displayName(row: SessionRow, ext: string, name: string): string {
-    const title = row.title?.trim();
-    if (!title) return name;
-    return title.toLowerCase().endsWith(`.${ext}`) ? title : `${title}.${ext}`;
-}
 
 export async function publishStudio(
     d: PublishDeps,
     sid: string,
     keyId: string = SERVICE_KEY_ID,
 ): Promise<StudioReply> {
-    let row: SessionRow | null;
+    let session;
+    let row: Awaited<ReturnType<typeof getOriginalByKey>> = null;
     try {
-        row = await getSession(d.db, sid);
+        session = await getSession(d.db, sid);
+        if (session?.r2_key) row = await getOriginalByKey(d.db, session.r2_key);
     } catch {
         return studioErr(503, "error.api.generic");
     }
-    if (!row) return studioErr(404, "error.studio.not_found");
-    if (d.now() > row.expires_at) return studioErr(410, "error.studio.expired");
-    if (row.status !== "ready" || !row.r2_key) return studioErr(409, "error.studio.not_ready");
-
-    const ext = extOf(row.r2_key);
-    const contentType = row.content_type || "video/mp4";
-    const name = `${randomBase62(MEDIA_NAME_LENGTH, d.randomBytes)}.${ext}`;
-
-    let obj;
-    try {
-        obj = await d.originals.get(row.r2_key);
-    } catch {
-        return studioErr(502, "error.studio.storage");
-    }
-    if (!obj) return studioErr(502, "error.studio.storage");
-
-    let stored: { size: number } | null;
-    try {
-        stored = await d.media.put(name, obj.body, {
-            httpMetadata: {
-                contentType,
-                cacheControl: "public, max-age=31536000, immutable",
+    if (!session) return studioErr(404, "error.studio.not_found");
+    if (session.status !== "ready" || !session.r2_key) return studioErr(409, "error.studio.not_ready");
+    // the row outlives the session, so a session past its 7 days can still be published
+    if (!row) {
+        // A ready save whose library row was never written (the insert is bookkeeping that may fail
+        // without failing the save): write it now, then publish it like any other.
+        const upload = (session.link ?? "").startsWith("upload:");
+        await insertMediaItem(
+            d.db,
+            {
+                kind: "private",
+                source: upload ? "upload" : "saved",
+                bucket: "originals",
+                r2_key: session.r2_key,
+                name: session.title ?? session.r2_key.split("/").pop() ?? session.r2_key,
+                content_type: session.content_type,
+                bytes: session.bytes,
+                width: session.width,
+                height: session.height,
+                duration: session.duration,
+                link: pageLink(session.link),
+                session_id: session.id,
+                key_id: session.key_id,
+                created_at: d.now(),
+                poster: session.poster ?? null,
             },
-            customMetadata: {
-                keyId,
-                source: (pageLink(row.link) ?? "").slice(0, 1000),
-                sessionId: sid,
-                createdAt: String(d.now()),
-                published: "1",
-            },
-        });
-    } catch (e) {
-        console.error("[publish] R2 copy failed", sid, String(e));
-        await obj.body.cancel().catch(() => {});
-        return studioErr(502, "error.studio.storage");
+            d.randomBytes,
+        );
+        try {
+            row = await getOriginalByKey(d.db, session.r2_key);
+        } catch {
+            return studioErr(503, "error.api.generic");
+        }
+        if (!row) return studioErr(503, "error.api.generic");
     }
-
-    const bytes = stored?.size ?? obj.size;
-    const base = d.mediaBaseUrl.endsWith("/") ? d.mediaBaseUrl : `${d.mediaBaseUrl}/`;
-    const url = `${base}${name}`;
-    const itemId = await insertMediaItem(
-        d.db,
-        {
-            kind: "public",
-            source: "host",
-            bucket: "media",
-            r2_key: name,
-            url,
-            name: displayName(row, ext, name),
-            content_type: contentType,
-            bytes,
-            width: row.width,
-            height: row.height,
-            duration: row.duration,
-            link: pageLink(row.link),
-            session_id: sid,
-            key_id: keyId,
-            created_at: d.now(),
-            // the public copy shares its original's poster (section 13); a poster made
-            // later reaches it through the session (PosterService)
-            poster: row.poster ?? null,
-        },
-        d.randomBytes,
-    );
-
-    return {
-        status: 201,
-        body: { status: "success", url, bytes, content_type: contentType, item_id: itemId },
-    };
+    return publishOriginal(d, row, keyId);
 }

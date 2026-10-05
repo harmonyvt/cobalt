@@ -81,6 +81,14 @@ export default defineConfig({
 			// on the account) and a public custom domain, see ../README.md.
 			MEDIA: bindings.r2({ name: "cobalt-media" }),
 			MEDIA_BASE_URL: bindings.text("https://media.capybaraharmony.com/"),
+			// Edge-cache purge for the public bucket (APP-API-CONTRACT.md section 16): turning a
+			// file private deletes its public object, then purges its URL here so the edge stops
+			// serving it. MEDIA_ZONE_ID is the capybaraharmony.com zone id (not a secret);
+			// MEDIA_PURGE_TOKEN is a token scoped to Zone > Cache Purge on that zone, a SECRET from
+			// ~/.config/cobalt/secrets.json through `--secrets-file`. Missing or empty: the toggle
+			// still works and answers `cache_cleared: null`.
+			MEDIA_ZONE_ID: bindings.text("560c4ad4961a65fa19899b4dfa8b5702"),
+			MEDIA_PURGE_TOKEN: bindings.secret(),
 			// cobalt studio (POST /studio): PRIVATE copies of saved source
 			// videos, originals/<session id>.<ext>. No public domain; only the
 			// Worker reads it (GET /studio/<id>/source). Bucket already exists.

@@ -6,15 +6,14 @@
 // never holds an API key: this Worker calls the API Worker over a service
 // binding with the internal key in `x-cobalt-service`.
 //
-// Streams: R2 -> R2 copies use a manual reader/writer loop into a
-// FixedLengthStream (pipeTo between streams is not implemented in the Workers
-// runtime), and uploads hand request.body (known content-length) straight to R2.
+// Uploads hand request.body (known content-length) straight to R2. Public/private is the
+// API Worker's job (PATCH /library/items/<id>/visibility, apple/CONTRACT-VISIBILITY.md
+// decision 12): this Worker relays the toggle and never copies public files itself.
 import { verifyAccessJwt, type AccessConfig } from "./access";
 import { jwksFor, type Deps, type Env } from "./keys";
 import { LIBRARY_HTML } from "./library/page.generated";
 
 export const API_BASE = "https://api.capybaraharmony.com";
-export const DEFAULT_MEDIA_BASE = "https://media.capybaraharmony.com/";
 export const MAX_UPLOAD_BYTES = 100_000_000;
 export const MAX_PAGE = 100;
 export const DEFAULT_PAGE = 48;
@@ -53,8 +52,6 @@ export const UPLOAD_TYPES: Record<string, string> = {
 };
 
 export type LibraryDeps = Deps & {
-    // Workers' FixedLengthStream; injectable because Node has none.
-    fixedLength?: (n: number) => { readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array> };
     randomId?: (n: number) => string;
 };
 
@@ -79,10 +76,18 @@ type MediaRow = {
     // migration 0006 (APP-API-CONTRACT.md section 13): the server-made thumbnail's public URL
     poster: string | null;
     poster_at: number | null;
+    // migration 0008 (apple/CONTRACT-VISIBILITY.md section 2): NULL = not migrated yet, read through
+    // VISIBILITY_SQL. public_key = the originals row's public mirror in cobalt-media (kept while private).
+    visibility: string | null;
+    public_key: string | null;
 };
 
 const ITEM_COLUMNS =
-    "id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at, poster, poster_at";
+    "id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at, poster, poster_at, visibility, public_key";
+
+// The one visibility rule every reader uses: an explicit value, else where the bytes live
+// (media bucket = public, originals = private).
+const VISIBILITY_SQL = "COALESCE(visibility, CASE bucket WHEN 'media' THEN 'public' ELSE 'private' END)";
 
 // A row whose poster could not be made is not tried again for this long (API side: src/poster.ts).
 export const POSTER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
@@ -96,6 +101,17 @@ const hasPosterFrame = (t: string | null) => !!t && (t.startsWith("video/") || t
 const POST_KEY_SQL = `COALESCE(
     (SELECT substr(s.link, 8) FROM studio_sessions s WHERE s.id = m.session_id AND s.link LIKE 'upload:%'),
     m.session_id, m.link, m.id)`;
+
+export const visibilityOf = (r: Pick<MediaRow, "visibility" | "bucket">): "public" | "private" =>
+    (r.visibility ?? (r.bucket === "media" ? "public" : "private")) === "public" ? "public" : "private";
+
+// Who gets the public/private switch (same rule as the API's toggleable(), api/src/visibility.ts):
+// every row whose canonical bytes are private (originals, and a webp that was switched private), and
+// a webp made by this app in the public bucket (<10 base62>.webp). Never a legacy `host` row.
+const MEDIA_WEBP_NAME = /^[A-Za-z0-9]{10}\.webp$/;
+export const toggleable = (r: Pick<MediaRow, "bucket" | "source" | "r2_key">): boolean =>
+    r.bucket === "originals" ||
+    (r.bucket === "media" && (r.source === "webp" || r.source === "studio") && MEDIA_WEBP_NAME.test(r.r2_key));
 
 export const itemShape = (r: MediaRow) => ({
     id: r.id,
@@ -112,6 +128,9 @@ export const itemShape = (r: MediaRow) => ({
     session_id: r.session_id,
     created_at: r.created_at,
     poster_url: r.poster ?? null,
+    // one tile per file; the switch is on originals and webps (not legacy host rows)
+    visibility: visibilityOf(r),
+    visibility_toggle: toggleable(r),
 });
 
 const json = (status: number, body: unknown, extra: Record<string, string> = {}) =>
@@ -141,8 +160,6 @@ export function base62(n: number): string {
     return out;
 }
 
-const mediaBase = (env: Env) => (env.MEDIA_BASE_URL || DEFAULT_MEDIA_BASE).replace(/\/+$/, "") + "/";
-
 type Route =
     | { name: "page" }
     | { name: "list" }
@@ -152,6 +169,7 @@ type Route =
     | { name: "studio"; id: string }
     | { name: "studioPublish"; id: string }
     | { name: "itemPublish"; id: string }
+    | { name: "itemPrivate"; id: string }
     | { name: "itemStudio"; id: string }
     | { name: "itemDelete"; id: string }
     | { name: "studioDelete"; id: string };
@@ -165,6 +183,7 @@ const ALLOWED: Record<Route["name"], string[]> = {
     studio: ["GET"],
     studioPublish: ["POST"],
     itemPublish: ["POST"],
+    itemPrivate: ["POST"],
     itemStudio: ["POST"],
     itemDelete: ["DELETE"],
     studioDelete: ["DELETE"],
@@ -180,6 +199,7 @@ export function matchRoute(pathname: string): Route | null {
     if ((m = /^\/api\/library\/studio\/([0-9A-Za-z]{22})$/.exec(pathname))) return { name: "studio", id: m[1]! };
     if ((m = /^\/api\/library\/studio\/([0-9A-Za-z]{22})\/publish$/.exec(pathname))) return { name: "studioPublish", id: m[1]! };
     if ((m = /^\/api\/library\/items\/([0-9A-Za-z]{16})\/publish$/.exec(pathname))) return { name: "itemPublish", id: m[1]! };
+    if ((m = /^\/api\/library\/items\/([0-9A-Za-z]{16})\/private$/.exec(pathname))) return { name: "itemPrivate", id: m[1]! };
     if ((m = /^\/api\/library\/items\/([0-9A-Za-z]{16})\/studio$/.exec(pathname))) return { name: "itemStudio", id: m[1]! };
     if ((m = /^\/api\/library\/items\/([0-9A-Za-z]{16})$/.exec(pathname))) return { name: "itemDelete", id: m[1]! };
     if ((m = /^\/api\/library\/studios\/([0-9A-Za-z]{22})$/.exec(pathname))) return { name: "studioDelete", id: m[1]! };
@@ -231,7 +251,9 @@ export async function handleLibrary(request: Request, env: Env, deps?: Partial<L
             case "studioPublish":
                 return await relayPost(ctx, `/studio/${route.id}/publish`, undefined, (b) => b);
             case "itemPublish":
-                return await itemPublish(ctx, route.id);
+                return await setVisibility(ctx, route.id, true);
+            case "itemPrivate":
+                return await setVisibility(ctx, route.id, false);
             case "itemStudio":
                 return await itemStudio(ctx, route.id);
             case "itemDelete":
@@ -308,13 +330,14 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
     const entries: Entry[] = [];
 
     if (filter !== "studio") {
-        const kind = filter === "all" ? null : filter;
+        // public/private filter on the file's visibility (the toggle), not on kind
+        const vis = filter === "all" ? null : filter;
         const { results } = await DB.prepare(
             `SELECT ${ITEM_COLUMNS} FROM media_items
-             WHERE deleted_at IS NULL AND created_at < ?1 AND (?2 IS NULL OR kind = ?2)
+             WHERE deleted_at IS NULL AND created_at < ?1 AND (?2 IS NULL OR ${VISIBILITY_SQL} = ?2)
              ORDER BY created_at DESC, id DESC LIMIT ?3`,
         )
-            .bind(before, kind, limit + 1)
+            .bind(before, vis, limit + 1)
             .all<MediaRow>();
         for (const row of results) entries.push({ t: "item", created_at: row.created_at, id: row.id, row });
     }
@@ -335,14 +358,14 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
     const more = entries.length > limit;
     const page = entries.slice(0, limit);
 
-    const usage = { public_bytes: 0, private_bytes: 0 };
-    const { results: sums } = await DB.prepare(
-        "SELECT kind, COALESCE(SUM(bytes), 0) AS total FROM media_items WHERE deleted_at IS NULL GROUP BY kind",
-    ).all<{ kind: string; total: number }>();
-    for (const s of sums) {
-        if (s.kind === "public") usage.public_bytes = s.total;
-        else if (s.kind === "private") usage.private_bytes = s.total;
-    }
+    // public = every live public file; private = every live original (a public original is stored
+    // in both buckets, so it counts in both).
+    const sums = await DB.prepare(
+        `SELECT COALESCE(SUM(CASE WHEN ${VISIBILITY_SQL} = 'public' THEN bytes END), 0) AS public_bytes,
+                COALESCE(SUM(CASE WHEN bucket = 'originals' THEN bytes END), 0) AS private_bytes
+         FROM media_items WHERE deleted_at IS NULL`,
+    ).first<{ public_bytes: number; private_bytes: number }>();
+    const usage = { public_bytes: sums?.public_bytes ?? 0, private_bytes: sums?.private_bytes ?? 0 };
 
     // A page that shows originals without a poster (and not tried in the last day) asks the API to
     // queue them (section 13: only records are written, the container wakes in its own sweep).
@@ -556,73 +579,15 @@ async function getItem(ctx: Ctx, id: string): Promise<MediaRow | null> {
     );
 }
 
-// ---------- POST /api/library/items/<id>/publish ----------
+// ---------- POST /api/library/items/<id>/publish and /private ----------
 
-async function copyToMedia(ctx: Ctx, from: R2ObjectBody, to: string, contentType: string): Promise<void> {
-    const fixed = ctx.deps.fixedLength ?? ((n: number) => new FixedLengthStream(n));
-    const { readable, writable } = fixed(from.size);
-    // Start the put first so the readable side is being consumed while we write.
-    const put = ctx.env.MEDIA.put(to, readable, { httpMetadata: { contentType } });
-    // If the put fails early nothing reads the readable side and a pending
-    // write would wait forever: race every write against the put failing.
-    const failed = new Promise<never>((_, reject) => {
-        put.then(() => {}, reject);
-    });
-    failed.catch(() => {});
-    const writer = writable.getWriter();
-    const reader = from.body.getReader();
-    try {
-        for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const w = writer.write(value);
-            w.catch(() => {});
-            await Promise.race([w, failed]);
-        }
-        const closed = writer.close();
-        closed.catch(() => {});
-        await Promise.race([closed, failed]);
-    } catch (e) {
-        reader.cancel().catch(() => {});
-        writer.abort(e).catch(() => {});
-        put.catch(() => {});
-        throw e;
-    }
-    await put;
-}
-
-async function itemPublish(ctx: Ctx, id: string): Promise<Response> {
-    const row = await getItem(ctx, id);
-    if (!row) return err(404, "error.library.not_found");
-    if (row.kind !== "private" || row.bucket !== "originals") return err(409, "error.library.already_public");
-
-    const obj = await ctx.env.ORIGINALS.get(row.r2_key);
-    if (!obj) return err(404, "error.library.missing");
-    const ext = /\.([0-9A-Za-z]{1,8})$/.exec(row.r2_key)?.[1]?.toLowerCase() ?? "bin";
-    const name = `${(ctx.deps.randomId ?? base62)(10)}.${ext}`;
-    const contentType = row.content_type ?? obj.httpMetadata?.contentType ?? "application/octet-stream";
-    try {
-        await copyToMedia(ctx, obj, name, contentType);
-    } catch {
-        await ctx.env.MEDIA.delete(name).catch(() => {});
-        return err(502, "error.library.storage");
-    }
-    const newId = (ctx.deps.randomId ?? base62)(16);
-    const url = mediaBase(ctx.env) + name;
-    try {
-        await ctx.env.DB.prepare(
-            `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, created_at, poster)
-             VALUES (?1, 'public', 'host', 'media', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
-        )
-            // the public copy shares the original's poster (section 13)
-            .bind(newId, name, url, row.name, contentType, obj.size, row.width, row.height, row.duration, row.link, row.session_id, ctx.now, row.poster)
-            .run();
-    } catch (e) {
-        await ctx.env.MEDIA.delete(name).catch(() => {});
-        throw e;
-    }
-    const created = await getItem(ctx, newId);
-    return json(201, { status: "success", item: itemShape(created!) });
+// The toggle lives in the API Worker (copy or delete of the public mirror, cache purge,
+// reconcile): PATCH /library/items/<id>/visibility {"public": bool}. Its 200 body is
+// {status, item: <file>, cache_cleared}; its error codes (404 not_found/missing,
+// 409 not_toggleable, 502 storage, 503) and statuses pass straight through.
+async function setVisibility(ctx: Ctx, id: string, isPublic: boolean): Promise<Response> {
+    const res = await callApi(ctx, `/library/items/${id}/visibility`, { method: "PATCH", body: { public: isPublic } });
+    return relayResponse(res, (b) => ({ status: "success", item: b.item, cache_cleared: b.cache_cleared ?? null }));
 }
 
 // ---------- POST /api/library/items/<id>/studio ----------
@@ -659,6 +624,15 @@ async function itemStudio(ctx: Ctx, id: string): Promise<Response> {
 async function itemDelete(ctx: Ctx, id: string): Promise<Response> {
     const row = await getItem(ctx, id);
     if (!row) return err(404, "error.library.not_found");
+    // A public original (or a webp switched private and back, which lives in cobalt-originals too)
+    // has a public mirror: switch it off through the API first (it deletes the mirror and purges the
+    // edge). Failing closed: if that does not succeed, nothing is deleted, so a "private" delete can
+    // never leave a public file behind. A webp still in the public bucket deletes as before.
+    if (row.bucket === "originals" && (visibilityOf(row) === "public" || row.public_key)) {
+        const off = await setVisibility(ctx, id, false);
+        const done = off.status === 200 && ((await off.clone().json()) as { status?: string }).status === "success";
+        if (!done) return off.status >= 400 ? off : err(502, "error.library.upstream");
+    }
     const bucket = row.bucket === "media" ? ctx.env.MEDIA : ctx.env.ORIGINALS;
     try {
         await bucket.delete(row.r2_key); // deleting a missing object succeeds

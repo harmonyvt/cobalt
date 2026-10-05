@@ -136,9 +136,18 @@ a { color: inherit; }
 .tile .meta { font-size: 11px; color: var(--gray); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .badge { font-size: 10px; padding: 1px 6px; border-radius: 99px; box-shadow: 0 0 0 1px currentColor inset; }
 .badge.pub { color: var(--blue); } .badge.priv { color: var(--gray); } .badge.studio { color: var(--orange); }
-.tact { display: flex; gap: 6px; padding: 4px 10px 10px; flex-wrap: wrap; align-self: end; }
+.tact { display: flex; gap: 6px; padding: 4px 10px 10px; flex-wrap: wrap; align-self: end; align-items: center; }
 .tact button, .tact .btn { font-size: 11.5px; padding: 0 8px; min-height: 36px; }
 @media (pointer: coarse), (max-width: 640px) { .tact button, .tact .btn { min-height: 44px; } }
+.sw { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; min-height: 36px; padding: 0 4px; cursor: pointer; user-select: none; }
+.sw input { -webkit-appearance: none; appearance: none; width: 30px; height: 18px; border-radius: 99px; background: var(--track); position: relative; margin: 0; cursor: pointer; box-shadow: 0 0 0 1px var(--button-stroke) inset; transition: background .15s; flex: none; }
+.sw input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--gray); transition: transform .15s, background .15s; }
+.sw input:checked { background: var(--blue); }
+.sw input:checked::after { transform: translateX(12px); background: #fff; }
+.sw input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.sw input:disabled { opacity: .5; cursor: default; }
+@media (pointer: coarse), (max-width: 640px) { .sw { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .sw input, .sw input::after { transition: none; } }
 @media (max-width: 420px) { .tact { display: grid; grid-template-columns: minmax(0, 1fr); } }
 .confirm { font-size: 11.5px; color: var(--red); padding: 4px 10px 10px; display: grid; gap: 6px; align-self: end; }
 .empty { color: var(--gray); font-size: 13px; padding: 10px 0; }
@@ -296,7 +305,9 @@ var MESSAGES = {
   "error.library.missing": "the stored file is gone.",
   "error.library.not_found": "that isn't in your library anymore.",
   "error.library.already_public": "that already has a public link.",
-  "error.library.storage": "couldn't copy the file to public storage. try again.",
+  "error.library.not_toggleable": "that file is always public. delete it to remove the link.",
+  "error.library.storage": "couldn't update public storage. try again.",
+  "error.api.generic": "the server couldn't do that right now. try again in a moment.",
   "error.library.no_duration": "couldn't read how long this clip is. trim it in studio instead.",
   "error.library.too_short": "this clip is shorter than 0.5 s, so a webp can't be made.",
   "error.studio.no_link": "no link found in that text.",
@@ -797,7 +808,7 @@ var EMPTY = {
   "private": "no private files yet.",
   studio: "no open studios."
 };
-var G = { filter: "all", items: [], studios: [], next: null, usage: null, seq: 0, confirm: null, busy: {}, loading: false, error: false };
+var G = { filter: "all", items: [], studios: [], next: null, usage: null, seq: 0, confirm: null, confirmAct: "delete", busy: {}, loading: false, error: false };
 
 function placeholder(icon, label) {
   var d = h("div", { class: "ph" });
@@ -807,22 +818,22 @@ function placeholder(icon, label) {
 }
 // What a tile shows when it has no (working) server-made poster: the file itself, or a placeholder.
 function itemFallback(wrap, it, ext) {
-  if (it.kind === "public" && isVideoType(it.content_type)) {
+  if (isPub(it) && it.url && isVideoType(it.content_type)) {
     var v = h("video", { muted: true, playsinline: true, preload: "metadata", "aria-hidden": "true", tabindex: "-1", src: it.url + "#t=0.1" });
     v.muted = true;
     v.addEventListener("error", function () { v.remove(); wrap.append(placeholder("film", ext || "video")); });
     wrap.append(v);
-  } else if (it.kind === "private") wrap.append(placeholder("lock", "private · " + (ext || "file")));
+  } else if (!isPub(it)) wrap.append(placeholder("lock", "private · " + (ext || "file")));
   else wrap.append(placeholder("image", ext || "file"));
 }
 function itemThumb(it) {
   var wrap;
-  var linkable = it.kind === "public" && it.url;
+  var linkable = isPub(it) && it.url;
   wrap = linkable
     ? h("a", { class: "thumb-l", href: it.url, target: "_blank", rel: "noopener", "aria-label": "open " + it.name })
     : h("div", { class: "thumb-l" });
   var ext = extOf(it.name) || (TYPES[it.content_type] || "");
-  if (it.kind === "public" && isImageType(it.content_type)) {
+  if (isPub(it) && it.url && isImageType(it.content_type)) {
     var img = h("img", { alt: "", loading: "lazy", src: it.url });
     img.addEventListener("error", function () { img.remove(); wrap.append(placeholder("image", ext || "image")); });
     wrap.append(img);
@@ -843,9 +854,12 @@ function studioThumb(s) {
   } else wrap.append(placeholder("film", "studio"));
   return wrap;
 }
-function confirmText(e) {
+// A file is public when the server says so (visibility, the toggle's state); older answers only have kind.
+function isPub(it) { return it.visibility ? it.visibility === "public" : it.kind === "public"; }
+function confirmText(e, act) {
+  if (act === "private") return "make private? the public link stops working.";
   if (e.t === "studio") return "close this studio? its webps stay.";
-  if (e.kind === "public") return "delete for everyone? the link stops working in discord.";
+  if (isPub(e)) return "delete for everyone? the link stops working in discord.";
   return "delete this private copy?";
 }
 function tileFor(e) {
@@ -861,7 +875,7 @@ function tileFor(e) {
   } else {
     var it = e.it;
     name = it.custom_title || it.name;
-    badge = h("span", { class: "badge " + (it.kind === "public" ? "pub" : "priv"), text: it.kind });
+    badge = h("span", { class: "badge " + (isPub(it) ? "pub" : "priv"), text: isPub(it) ? "public" : "private" });
     sub = (SOURCES[it.source] || it.source) + (it.link && hostOf(it.link) ? " · " + hostOf(it.link) : "");
     meta2 = [it.bytes != null ? fmtBytes(it.bytes) : "", ago(it.created_at)];
   }
@@ -872,25 +886,30 @@ function tileFor(e) {
   var tail;
   if (G.confirm === id) {
     tail = h("div", { class: "confirm" },
-      h("span", { text: confirmText(e.t === "studio" ? e : e.it) }),
-      h("div", { class: "tact", style: "padding:0" },
-        h("button", { type: "button", class: "danger", "data-ga": "yes", disabled: busy, text: "delete", onclick: function () { doDelete(e); } }),
-        h("button", { type: "button", "data-ga": "no", text: "keep", onclick: function () { G.confirm = null; renderGrid(); } })));
+      h("span", { text: confirmText(e.t === "studio" ? e : e.it, G.confirmAct) }),
+      G.confirmAct === "private"
+        ? h("div", { class: "tact", style: "padding:0" },
+            h("button", { type: "button", "data-ga": "yes", disabled: busy, text: "make private", onclick: function () { G.confirm = null; setVisibility(e.it, false); } }),
+            h("button", { type: "button", "data-ga": "no", text: "keep public", onclick: function () { G.confirm = null; renderGrid(); } }))
+        : h("div", { class: "tact", style: "padding:0" },
+            h("button", { type: "button", class: "danger", "data-ga": "yes", disabled: busy, text: "delete", onclick: function () { doDelete(e); } }),
+            h("button", { type: "button", "data-ga": "no", text: "keep", onclick: function () { G.confirm = null; renderGrid(); } })));
   } else {
     var acts = [];
     if (e.t === "studio") {
       acts.push(h("a", { class: "btn", "data-ga": "open", href: e.s.url, target: "_blank", rel: "noopener", text: "open studio" }));
-    } else if (e.it.kind === "public") {
-      acts.push(h("button", { type: "button", "data-ga": "copy", text: "copy link", onclick: function () { copyText(e.it.url); } }));
     } else {
       var t = e.it.content_type || "";
-      if (isVideoType(t) || t === "image/gif") acts.push(h("button", { type: "button", "data-ga": "studio", disabled: busy, text: "open in studio", onclick: function () { privateToStudio(e.it); } }));
-      acts.push(h("button", { type: "button", "data-ga": "host", disabled: busy, text: "host as-is", onclick: function () { privateToPublic(e.it); } }));
+      var pub = isPub(e.it);
+      // one tile per original: the switch is where "host as-is" used to be (webps are always public)
+      if (e.it.visibility_toggle) acts.push(visSwitch(e.it, busy));
+      if (pub && e.it.url) acts.push(h("button", { type: "button", "data-ga": "copy", text: "copy link", onclick: function () { copyText(e.it.url); } }));
+      if (e.it.visibility_toggle && (isVideoType(t) || t === "image/gif")) acts.push(h("button", { type: "button", "data-ga": "studio", disabled: busy, text: "open in studio", onclick: function () { privateToStudio(e.it); } }));
     }
-    acts.push(h("button", { type: "button", class: "danger", "data-ga": "del", disabled: busy, text: "delete", onclick: function () { G.confirm = id; renderGrid(); } }));
+    acts.push(h("button", { type: "button", class: "danger", "data-ga": "del", disabled: busy, text: "delete", onclick: function () { G.confirm = id; G.confirmAct = "delete"; renderGrid(); } }));
     tail = h("div", { class: "tact" }, ...acts);
   }
-  return h("div", { class: "tile", "data-id": id, "data-kind": e.t === "studio" ? "studio" : e.it.kind }, thumb, cap, tail);
+  return h("div", { class: "tile", "data-id": id, "data-kind": e.t === "studio" ? "studio" : (isPub(e.it) ? "public" : "private") }, thumb, cap, tail);
 }
 function entries() {
   var all = G.items.map(function (it) { return { t: "item", id: it.id, at: it.created_at, it: it }; })
@@ -974,13 +993,31 @@ async function doDelete(e) {
   }
 }
 function reloadStudiosSoon() { setTimeout(function () { if (G.filter === "all" || G.filter === "studio") refreshGrid(); }, 300); }
-async function privateToPublic(it) {
+// The public/private switch. Turning it on happens at once; turning it off asks first (the link
+// stops working), so the box stays checked until the answer is yes.
+function visSwitch(it, busy) {
+  var on = isPub(it);
+  var box = h("input", { type: "checkbox", role: "switch", "data-ga": "vis", "aria-label": "public", checked: on, disabled: busy });
+  box.addEventListener("change", function () {
+    if (on) { G.confirm = it.id; G.confirmAct = "private"; renderGrid(); }
+    else setVisibility(it, true);
+  });
+  return h("label", { class: "sw" }, box, h("span", { text: "public" }));
+}
+async function setVisibility(it, makePublic) {
   G.busy[it.id] = true; renderGrid();
   try {
-    var r = ok(await libPost("/api/library/items/" + it.id + "/publish"));
+    var r = ok(await libPost("/api/library/items/" + it.id + (makePublic ? "/publish" : "/private")));
     delete G.busy[it.id];
-    toast("hosted: public link ready", { href: r.item.url, label: "open" });
-    refreshGrid();
+    var next = r.item;
+    G.items = G.items.map(function (i) { return i.id === it.id && next ? Object.assign({}, i, next) : i; });
+    // under the public/private chips a file that just switched no longer belongs
+    if ((G.filter === "public" || G.filter === "private") && next && next.visibility !== G.filter) {
+      G.items = G.items.filter(function (i) { return i.id !== it.id; });
+    }
+    renderGrid(); reloadUsage();
+    if (makePublic && next && next.url) toast("public: link ready", { href: next.url, label: "open" });
+    else toast(makePublic ? "public" : "private");
   } catch (e) { delete G.busy[it.id]; renderGrid(); toast(describe(e).text); }
 }
 function privateToStudio(it) {
