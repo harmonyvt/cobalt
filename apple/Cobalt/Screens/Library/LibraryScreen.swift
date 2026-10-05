@@ -1,71 +1,361 @@
 import CobaltKit
 import SwiftUI
 
-/// The library tab: one card per media (CONTRACT-MEDIA 1.13), as native lists. A card is the media, not the
-/// post's files: its picture is the newest webp (else the video) at its real aspect, and its chips name what
-/// exists (`video`, `webp ×3`). Tapping the card opens the same tabbed `MediaDetail` as the orbit, on that
-/// picture's tab; tapping a chip opens that tab.
+/// The library tab (CONTRACT-LIBRARY2): the owner's media as a mosaic or a table, one remembered switcher.
 ///
-/// Compact (iPhone): an inset-grouped list that pushes the detail. Regular and wide (iPad, Mac): a list and the
-/// detail side by side (a split view; an `HSplitView` on the Mac, whose own window already has the sidebar).
-/// The cards are the server's posts in the server's order (latest activity first) and its counts; the device's
-/// own copies join each one (`AppModel.mediaItem(for:)`).
+/// The **mosaic** is a dense masonry of faces at their real aspect (`LibraryMosaic`); the **table** is a real
+/// sortable `Table` on the iPad and Mac and a dense two-line list on the iPhone (`LibraryTable`). Search, sort and
+/// show live in the toolbar; a search, a filter or a sort other than newest first loads the whole library first
+/// (the server pages by date only). Tapping opens the same tabbed `MediaDetail` as the orbit: pushed on the
+/// phone (with the zoom from the tile), in a trailing inspector on the iPad and Mac. The context menu, rename and
+/// `delete everything` are the same in every view.
+///
+/// Compact (iPhone, or any narrow window): the shell provides the navigation stack. Regular and wide: this screen
+/// brings its own on iOS; the Mac's window toolbar is already there.
 struct LibraryScreen: View {
     let model: AppModel
     let tier: Tier
 
-    private var library: LibraryModel { model.library }
+    @State private var controller: LibraryController
+
+    init(model: AppModel, tier: Tier) {
+        self.model = model
+        self.tier = tier
+        _controller = State(initialValue: LibraryController(model: model))
+    }
 
     var body: some View {
         Group {
+            #if os(iOS)
             if tier == .compact {
-                #if os(macOS)
-                NavigationStack { LibraryList(model: model).libraryChrome(model) }
-                #else
-                LibraryList(model: model).libraryChrome(model)
-                #endif
+                LibraryContent(model: model, tier: tier, controller: controller)
             } else {
-                LibrarySplit(model: model)
+                NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
             }
+            #else
+            if tier == .compact {
+                NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
+            } else {
+                LibraryContent(model: model, tier: tier, controller: controller)
+            }
+            #endif
         }
         .task {
             #if DEBUG
             if LibraryDebug.state != nil { return }
             #endif
-            if library.posts.isEmpty { await library.refresh() }
+            if model.library.posts.isEmpty { await model.library.refresh() }
         }
     }
 }
 
-/// The title, the "15 posts · 24 files" subtitle, and paste / file in the toolbar. On iPad it goes
-/// on the list column of the split view, which owns its own navigation bar.
-private struct LibraryChrome: ViewModifier {
-    let model: AppModel
+// MARK: - what the library shows
 
-    func body(content: Content) -> some View {
-        content
+/// What the content area is: the rows, or the reason there are none.
+enum LibraryPhase: Equatable {
+    case rows, loading, failed, empty
+    case noMatch(String)
+}
+
+private struct LibraryContent: View {
+    let model: AppModel
+    let tier: Tier
+    @Bindable var controller: LibraryController
+
+    @Environment(\.shell) private var shell
+    @Namespace private var zoomSpace
+    #if DEBUG
+    @Environment(\.libraryDebugRows) private var debugRows
+    #endif
+
+    private var library: LibraryModel { model.library }
+
+    private var rows: [LibraryRow] {
+        #if DEBUG
+        if LibraryDebug.state != nil { return [] }
+        if !debugRows.isEmpty { return LibraryDebug.merged(model.libraryRows, with: debugRows, query: library.query) }
+        #endif
+        return model.libraryRows
+    }
+
+    private func phase(_ rows: [LibraryRow]) -> LibraryPhase {
+        #if DEBUG
+        if let forced = LibraryDebug.state {
+            switch forced {
+            case .failed: return .failed
+            case .loading: return .loading
+            case .empty: return .empty
+            }
+        }
+        #endif
+        if !rows.isEmpty { return .rows }
+        if library.failure != nil, library.posts.isEmpty { return .failed }
+        if library.isLoading || library.loadingAll != nil { return .loading }
+        let query = library.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty { return .noMatch(query) }
+        return .empty
+    }
+
+    private var footer: LibraryFooter {
+        if library.failure != nil, !library.posts.isEmpty { return .failed }
+        return library.hasMore ? .loading : .none
+    }
+
+    private var searchPlacement: SearchFieldPlacement {
+        #if os(iOS)
+        tier == .compact ? .navigationBarDrawer(displayMode: .always) : .toolbar
+        #else
+        .toolbar
+        #endif
+    }
+
+    // MARK: body
+
+    var body: some View {
+        @Bindable var library = model.library
+        let rows = self.rows
+        let phase = phase(rows)
+        content(rows: rows, phase: phase)
             .navigationTitle(Copy.library)
-            .navigationSubtitle(Copy.libraryCounts(posts: model.library.postCount, files: model.library.fileCount))
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    PasteFileButtons(showsFile: model.capabilities.showsFileButton)
+            .navigationSubtitle(Copy.libraryCounts(posts: library.postCount, files: library.fileCount))
+            .searchable(text: $library.query, placement: searchPlacement, prompt: Copy.Library2.searchPrompt)
+            .toolbar { toolbar }
+            .safeAreaInset(edge: .top, spacing: 0) { loadingAllLine }
+            .modifier(LibraryInspector(model: model, controller: controller, enabled: tier != .compact))
+            .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: tier == .compact))
+            .renameAlert(item: $controller.renaming, model: model)
+            .confirmationDialog(
+                Copy.Media.deleteEverythingTitle, isPresented: deletingPresented, titleVisibility: .visible,
+                presenting: controller.deleting
+            ) { item in
+                Button(Copy.Media.deleteEverything, role: .destructive) { controller.deleteEverything(item) }
+                Button(Copy.Media.keep, role: .cancel) {}
+            } message: { item in
+                Text(controller.deleteMessage(item))
+            }
+            #if os(macOS)
+            .background { macShortcuts }
+            #endif
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { controller.decideInspector(width: $0) }
+            .onChange(of: tier, initial: true) { controller.compact = tier == .compact }
+            .onAppear { controller.showStatus = { shell.showStatus($0) } }
+            .task(id: library.needsWholeLibrary) {
+                if library.needsWholeLibrary { await library.loadAll() }
+            }
+            .onChange(of: library.expandedPostID, initial: true) { _, id in
+                guard let id else { return }
+                library.expandedPostID = nil
+                Task { await reveal(id) }
+            }
+    }
+
+    @ViewBuilder
+    private func content(rows: [LibraryRow], phase: LibraryPhase) -> some View {
+        switch phase {
+        case .rows:
+            switch library.viewMode {
+            case .mosaic:
+                LibraryMosaic(rows: rows, controller: controller, tier: tier, footer: footer, skeleton: false, zoom: zoomSpace)
+            case .table:
+                if tier == .compact {
+                    LibraryList(rows: rows, controller: controller, footer: footer, zoom: zoomSpace)
+                } else {
+                    LibraryTable(rows: rows, controller: controller, footer: footer)
                 }
             }
+        case .loading where library.viewMode == .mosaic:
+            LibraryMosaic(rows: [], controller: controller, tier: tier, footer: .none, skeleton: true)
+        default:
+            LibraryPlaceholder(phase: phase, controller: controller)
+        }
+    }
+
+    // MARK: toolbar
+
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        #if os(iOS)
+        ToolbarItem(placement: .topBarLeading) { LibraryViewSwitcher(library: library) }
+        #else
+        ToolbarItem(placement: .navigation) { LibraryViewSwitcher(library: library) }
+        #endif
+        ToolbarItemGroup(placement: .primaryAction) {
+            LibrarySortMenu(library: library)
+            #if os(macOS)
+            Button(Copy.Library2.refresh, systemImage: Symbol.Library.refresh) { Task { await controller.refresh() } }
+                .keyboardShortcut("r", modifiers: .command)
+                .help(Copy.Library2.refresh)
+            #endif
+            PasteFileButtons(showsFile: model.capabilities.showsFileButton)
+            if tier != .compact {
+                Button(Copy.Library2.toggleDetail, systemImage: Symbol.Library.inspector) {
+                    controller.inspectorOpen.toggle()
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .help(Copy.Library2.toggleDetail)
+            }
+        }
+    }
+
+    #if os(macOS)
+    /// `view ▸ as mosaic ⌘1` / `as table ⌘2`: invisible buttons that stay in the hierarchy so the shortcuts work.
+    private var macShortcuts: some View {
+        Group {
+            Button(Copy.Library2.asMosaic) { library.viewMode = .mosaic }.keyboardShortcut("1", modifiers: .command)
+            Button(Copy.Library2.asTable) { library.viewMode = .table }.keyboardShortcut("2", modifiers: .command)
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
+    }
+    #endif
+
+    @ViewBuilder
+    private var loadingAllLine: some View {
+        if let progress = library.loadingAll {
+            LibraryLoadingLine(loaded: progress.loaded, total: progress.total)
+        }
+    }
+
+    private var deletingPresented: Binding<Bool> {
+        Binding(get: { controller.deleting != nil }, set: { if !$0 { controller.deleting = nil } })
+    }
+
+    // MARK: "open in library"
+
+    /// Loads pages until the post is in, makes sure a filter does not hide it, and shows it: the mosaic scrolls it
+    /// to the centre and lights it, the table selects it (the iPad and Mac's inspector shows it).
+    private func reveal(_ id: String) async {
+        guard await library.locate(postID: id) else {
+            shell.showStatus(Copy.Library2.notFound)
+            return
+        }
+        if !model.libraryRows.contains(where: { $0.id == id }) {
+            library.query = ""
+            library.show = .everything
+        }
+        if tier != .compact {
+            controller.selection = id
+            controller.inspectorOpen = true
+        }
+        // the iPad and Mac's table has only the selection to show; every other view scrolls to it and lights it
+        if tier == .compact || library.viewMode == .mosaic { controller.reveal = LibraryReveal(id: id) }
     }
 }
 
-private extension View {
-    func libraryChrome(_ model: AppModel) -> some View { modifier(LibraryChrome(model: model)) }
+/// The quiet line above the results while the whole library loads: `loading the whole library · 60 of 140`.
+struct LibraryLoadingLine: View {
+    let loaded: Int
+    let total: Int
+
+    var body: some View {
+        Text(Copy.Library2.loadingAll(loaded, of: total))
+            .font(CobaltType.captionSmall)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(.bar)
+            .accessibilityAddTraits(.updatesFrequently)
+    }
 }
 
-// MARK: - the three states of an empty list
+// MARK: - the pushed detail (phone) and the inspector (iPad, Mac)
 
-/// What the list shows in place of cards.
+/// The phone's detail: pushed on the media's face, with the zoom from the tile it was opened from.
+private struct LibraryPush: ViewModifier {
+    let model: AppModel
+    @Bindable var controller: LibraryController
+    let zoom: Namespace.ID
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        content.navigationDestination(item: $controller.opened) { target in
+            detail(target)
+        }
+    }
+
+    @ViewBuilder
+    private func detail(_ target: OpenedMedia) -> some View {
+        let screen = MediaDetail(model: model, item: target.item, initial: target.initial)
+        #if os(iOS)
+        screen.navigationTransition(.zoom(sourceID: target.item.post?.id ?? target.item.id, in: zoom))
+        #else
+        screen
+        #endif
+    }
+}
+
+/// The detail column of the iPad and Mac: a trailing inspector (360-460 pt, resizable) holding the same
+/// `MediaDetail` in its own navigation stack, following the selection. Its state is remembered per device.
+private struct LibraryInspector: ViewModifier {
+    let model: AppModel
+    @Bindable var controller: LibraryController
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        content.inspector(isPresented: enabled ? $controller.inspectorOpen : .constant(false)) {
+            Group {
+                if let item = controller.selectedItem {
+                    NavigationStack {
+                        MediaDetail(model: model, item: item, initial: item.face.id)
+                    }
+                    .id(controller.selection)
+                } else {
+                    Text(Copy.Library2.pickSomething)
+                        .font(CobaltType.body)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .inspectorColumnWidth(min: 360, ideal: 420, max: 460)
+        }
+    }
+}
+
+// MARK: - the states with no rows
+
+/// What the content area shows in place of rows: the spinner of a table's first load, `can't load the
+/// library.` with `try again`, the quiet empty line, or `nothing matches "<q>".`. A scroll view, so pulling
+/// down still refreshes.
+private struct LibraryPlaceholder: View {
+    let phase: LibraryPhase
+    let controller: LibraryController
+
+    var body: some View {
+        ScrollView {
+            Group {
+                switch phase {
+                case .noMatch(let query):
+                    Text(Copy.Library2.noMatch(query))
+                        .font(CobaltType.body)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 56)
+                case .failed:
+                    LibraryProblem(state: .failed) { Task { await controller.refresh() } }
+                case .loading:
+                    LibraryProblem(state: .loading) {}
+                case .empty, .rows:
+                    LibraryProblem(state: .empty) {}
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 40)
+        }
+        .refreshable { await controller.refresh() }
+    }
+}
+
+/// What the screen shows in place of tiles: a spinner, "can't load the library." with `try again`, or the
+/// quiet empty line.
 enum LibraryProblemState: Equatable {
     case failed, loading, empty
 }
 
-/// "can't load the library." + "try again", the loading spinner, or the quiet empty line.
 struct LibraryProblem: View {
     let state: LibraryProblemState
     let retry: () -> Void
@@ -92,328 +382,3 @@ struct LibraryProblem: View {
         }
     }
 }
-
-/// What the screen shows for the library as it is now (debug builds can force a state for evidence).
-@MainActor
-private func problemState(_ library: LibraryModel) -> LibraryProblemState {
-    #if DEBUG
-    if let forced = LibraryDebug.state { return forced }
-    #endif
-    if library.failure != nil { return .failed }
-    return library.isLoading ? .loading : .empty
-}
-
-/// The cards: the library's posts, each joined with the device's copies. Debug builds can empty the list.
-@MainActor
-private func libraryPosts(_ library: LibraryModel) -> [LibraryPost] {
-    #if DEBUG
-    if LibraryDebug.state != nil { return [] }
-    #endif
-    return library.posts
-}
-
-// MARK: - the card
-
-/// The card's heading: the service in semibold, the reference in the caption colour ("x · 2105435404002562056").
-private func cardTitle(_ item: MediaItem, size: CGFloat = 13) -> (text: Text, spoken: String) {
-    let (service, ref) = Copy.libraryPostTitle(service: item.service, ref: item.ref)
-    let head = Text(service).font(Font.cobalt(size, .semibold, relativeTo: .body)).foregroundStyle(.primary)
-    let tail = Text(ref.map { " · \($0)" } ?? "").font(Font.cobalt(size, .regular, relativeTo: .body)).foregroundStyle(.secondary)
-    return (Text("\(head)\(tail)"), LibraryCardCopy.spokenTitle(service: service, ref: ref))
-}
-
-/// One media as a library card: preview, title, meta, and its rendition chips. `openFace` makes the head a
-/// button (compact: it pushes the detail); without it the surrounding row owns the tap (the split's
-/// selection). A chip always opens its own tab.
-struct MediaCard: View {
-    let item: MediaItem
-    var previewSize: CGFloat = 64
-    var openFace: (() -> Void)?
-    let openTab: (Rendition.ID) -> Void
-
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    private var title: (text: Text, spoken: String) { cardTitle(item) }
-    private var meta: String { LibraryCardCopy.meta(item, now: Date()) }
-    private var stacked: Bool { typeSize.isAccessibilitySize }
-
-    private var details: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            title.text.lineLimit(stacked ? nil : 1).truncationMode(.middle)
-            Text(meta)
-                .font(CobaltType.captionSmall)
-                .foregroundStyle(.secondary)
-                .lineLimit(stacked ? nil : 2)
-                .monospacedDigit()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var headContent: some View {
-        Group {
-            if stacked {
-                VStack(alignment: .leading, spacing: 10) {
-                    MediaPreview(item: item, size: previewSize)
-                    details
-                }
-            } else {
-                HStack(spacing: 12) {
-                    MediaPreview(item: item, size: previewSize)
-                    details
-                    if openFace != nil {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.tertiary)
-                            .accessibilityHidden(true)
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 6)
-        .contentShape(Rectangle())
-    }
-
-    @ViewBuilder
-    private var head: some View {
-        let label = Copy.Media.planetA11y(title: title.spoken, webps: item.webpCount, hasVideo: item.video != nil)
-        if let openFace {
-            Button(action: openFace) { headContent }
-                .buttonStyle(CardPress())
-                .accessibilityLabel(label)
-                .accessibilityValue(meta)
-        } else {
-            headContent
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(label)
-                .accessibilityValue(meta)
-        }
-    }
-
-    private var chipViews: some View {
-        Group {
-            if let video = item.video {
-                RenditionChip(style: .video(hosted: video.hosted != nil || video.publicURL != nil,
-                                            privateCopy: video.file != nil)) { openTab(video.id) }
-            }
-            if let newest = item.webps.last {
-                RenditionChip(style: .webp(count: item.webpCount)) { openTab(newest.id) }
-            }
-        }
-    }
-
-    private var chips: some View {
-        // side by side; stacked when huge text does not leave the room
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) { chipViews }
-            VStack(alignment: .leading, spacing: 0) { chipViews }
-        }
-        // under the picture's title, or flush left when the picture sits above it
-        .padding(.leading, stacked ? 0 : previewSize + 12)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            head
-            chips
-        }
-    }
-}
-
-// MARK: - compact: inset-grouped list that pushes the detail
-
-/// What a card opened: the media as it was then (the detail keeps itself current) and the tab to start on.
-private struct OpenedMedia: Identifiable, Hashable {
-    let item: MediaItem
-    let initial: Rendition.ID?
-
-    var id: String { "\(item.id)|\(initial ?? "")" }
-    static func == (a: OpenedMedia, b: OpenedMedia) -> Bool { a.id == b.id }
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
-}
-
-private struct LibraryList: View {
-    let model: AppModel
-    @State private var opened: OpenedMedia?
-    /// The card "open in library" asked for: scrolled to, and lit for a moment.
-    @State private var lit: String?
-    private var library: LibraryModel { model.library }
-
-    private func reveal(_ proxy: ScrollViewProxy) {
-        guard let id = library.expandedPostID, library.posts.contains(where: { $0.id == id }) else { return }
-        withAnimation(Motion.card) { proxy.scrollTo(id, anchor: .center) }
-        lit = id
-        library.expandedPostID = nil
-        Task {
-            try? await Task.sleep(for: .seconds(1.6))
-            if lit == id { withAnimation(Motion.card) { lit = nil } }
-        }
-    }
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            List {
-                let posts = libraryPosts(library)
-                if posts.isEmpty {
-                    Section {
-                        LibraryProblem(state: problemState(library)) { Task { await library.refresh() } }
-                            .listRowBackground(Color.clear)
-                    }
-                }
-                // One section (one card) per media.
-                ForEach(posts) { post in
-                    let item = model.mediaItem(for: post)
-                    Section {
-                        MediaCard(
-                            item: item,
-                            openFace: { opened = OpenedMedia(item: item, initial: item.face.id) },
-                            openTab: { opened = OpenedMedia(item: item, initial: $0) })
-                            .id(post.id)
-                    }
-                    .listRowBackground(lit == post.id ? CobaltColor.focus.opacity(0.14) : nil)
-                    .onAppear {
-                        if post.id == library.posts.last?.id, library.hasMore { Task { await library.loadMore() } }
-                    }
-                }
-            }
-            #if os(iOS)
-            .listStyle(.insetGrouped)
-            #endif
-            .refreshable { await library.refresh() }
-            .accessibilityLabel(Copy.postsA11y)
-            .onAppear { reveal(proxy) }
-            .onChange(of: library.expandedPostID) { _, _ in reveal(proxy) }
-        }
-        .navigationDestination(item: $opened) { target in
-            MediaDetail(model: model, item: target.item, initial: target.initial)
-        }
-    }
-}
-
-// MARK: - regular and wide: list + detail
-
-private struct LibrarySplit: View {
-    let model: AppModel
-    /// A chip's tab, for the post it was tapped on; a card tap (the list's own selection) clears it.
-    @State private var chosen: (post: String, tab: Rendition.ID)?
-    private var library: LibraryModel { model.library }
-
-    private var selected: LibraryPost? {
-        let posts = libraryPosts(library)
-        return posts.first { $0.id == library.expandedPostID } ?? posts.first
-    }
-
-    private var selection: Binding<String?> {
-        Binding(get: { selected?.id }, set: { library.expandedPostID = $0; chosen = nil })
-    }
-
-    private var list: some View {
-        List(selection: selection) {
-            let posts = libraryPosts(library)
-            if posts.isEmpty {
-                Section {
-                    LibraryProblem(state: problemState(library)) { Task { await library.refresh() } }
-                        .listRowBackground(Color.clear)
-                }
-            }
-            ForEach(posts) { post in
-                MediaCard(item: model.mediaItem(for: post), previewSize: 52, openTab: { tab in
-                    library.expandedPostID = post.id
-                    chosen = (post.id, tab)
-                })
-                .padding(.bottom, 2)
-                .tag(post.id)
-                .onAppear {
-                    if post.id == library.posts.last?.id, library.hasMore { Task { await library.loadMore() } }
-                }
-            }
-        }
-        .refreshable { await library.refresh() }
-        .accessibilityLabel(Copy.postsA11y)
-    }
-
-    @ViewBuilder
-    private var detail: some View {
-        if let post = selected {
-            let item = model.mediaItem(for: post)
-            let initial = chosen.flatMap { $0.post == post.id ? $0.tab : nil }
-            NavigationStack {
-                MediaDetail(model: model, item: item, initial: initial ?? item.face.id)
-            }
-            // a different card or chip is a fresh screen: its tab, its own state
-            .id("\(post.id)|\(initial ?? "")")
-        } else {
-            LibraryProblem(state: problemState(library)) { Task { await library.refresh() } }
-                .frame(maxHeight: .infinity, alignment: .top)
-        }
-    }
-
-    var body: some View {
-        #if os(macOS)
-        HSplitView {
-            list.frame(minWidth: 250, idealWidth: 320, maxWidth: 420)
-            detail.frame(minWidth: 340, idealWidth: 420, maxWidth: .infinity)
-        }
-        .frame(minWidth: 0, maxWidth: .infinity)
-        .libraryChrome(model)
-        #else
-        NavigationSplitView {
-            list.navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 440).libraryChrome(model)
-        } detail: {
-            detail
-        }
-        .navigationSplitViewStyle(.balanced)
-        #endif
-    }
-}
-
-#if DEBUG
-/// `-previewLibraryState empty|failed|loading` (simulator evidence): the library shows that state with no
-/// cards, whatever the scenario holds, and does not load.
-enum LibraryDebug {
-    static let state: LibraryProblemState? = {
-        switch UserDefaults.standard.string(forKey: "previewLibraryState") {
-        case "empty": return .empty
-        case "failed": return .failed
-        case "loading": return .loading
-        default: return nil
-        }
-    }()
-}
-
-#Preview("library · compact, renditions") {
-    PreviewHost(.renditions, tab: .library) { model in
-        NavigationStack { LibraryScreen(model: model, tier: .compact) }
-    }
-}
-#Preview("library · compact, plain cobalt (no library)") {
-    PreviewHost(.plainCobalt, tab: .library) { model in
-        NavigationStack { LibraryScreen(model: model, tier: .compact) }
-    }
-}
-#Preview("library · compact, empty") {
-    List { Section { LibraryProblem(state: .empty) {} } }
-}
-#Preview("library · compact, can't load") {
-    List { Section { LibraryProblem(state: .failed) {} } }
-}
-#Preview("library · compact, loading") {
-    List { Section { LibraryProblem(state: .loading) {} } }
-}
-#Preview("library · compact, AX3 text", traits: .fixedLayout(width: 390, height: 844)) {
-    PreviewHost(.renditions, tab: .library) { model in
-        NavigationStack { LibraryScreen(model: model, tier: .compact) }
-    }
-    .dynamicTypeSize(.accessibility3)
-}
-#Preview("library · regular", traits: .fixedLayout(width: 820, height: 760)) {
-    PreviewHost(.renditions, tab: .library) { model in
-        NavigationStack { LibraryScreen(model: model, tier: .regular) }
-    }
-}
-#Preview("library · wide list and detail", traits: .fixedLayout(width: 1280, height: 780)) {
-    PreviewHost(.renditions, tab: .library) { model in
-        NavigationStack { LibraryScreen(model: model, tier: .wide) }
-    }
-}
-#endif
