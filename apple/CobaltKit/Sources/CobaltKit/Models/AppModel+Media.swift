@@ -10,13 +10,60 @@ extension AppModel {
     /// The device's media, joined with the library's post for it when the library has one.
     public func mediaItem(for local: StoredMedia) -> MediaItem {
         let post = library.posts.first { MediaItem.joins(local, $0) }
-        return MediaItem.merge(local: local, post: post)!          // `local` is non-nil: never nil
+        return withLocalTitle(MediaItem.merge(local: local, post: post)!)          // `local` is non-nil: never nil
     }
 
     /// The library's post, joined with the device's media for it when the store has one.
     public func mediaItem(for post: LibraryPost) -> MediaItem {
         let local = store.media.first { MediaItem.joins($0, post) }
-        return MediaItem.merge(local: local, post: post)!          // `post` is non-nil: never nil
+        return withLocalTitle(MediaItem.merge(local: local, post: post)!)          // `post` is non-nil: never nil
+    }
+
+    /// The device's own rename of a media wins over a copy the store carries (it is the newer one).
+    private func withLocalTitle(_ item: MediaItem) -> MediaItem {
+        guard let title = library.localTitles[item.id] else { return item }
+        var item = item
+        item.localTitle = title
+        return item
+    }
+
+    // MARK: - Renaming (CONTRACT-LIBRARY2 decisions 5-8)
+
+    /// Decision 5: optimistic (the title shows at once, on the library's post and on this device), then
+    /// `PATCH /library/items/<id>/post` when the media has a server file and the server has `titles`;
+    /// a failure reverts both and throws the mapped failure (`couldn't rename that. try again.`).
+    /// `nil`, an empty or blank text, or the default text clears the custom title. Without the capability
+    /// (an older deploy, plain cobalt) the rename stays on this device and no request is made.
+    public func rename(_ item: MediaItem, to raw: String?) async throws {
+        let cleaned = raw.flatMap(MediaTitle.clean)
+        let new: String? = cleaned == item.defaultTitleText ? nil : cleaned
+        guard new != item.customTitle else { return }
+
+        let post = item.post
+        let previousPost = post?.customTitle
+        let previousLocal = library.localTitles[item.id]
+        persistLocalTitle(new, for: item)
+        guard capabilities.titles, let post, let anchor = post.files.first?.id else { return }
+
+        library.setCustomTitle(new, post: post.id)
+        do {
+            let result = try await ctx.client.setTitle(anchor: anchor, new)
+            // the server may have trimmed or cut it further than we did: its answer is the truth
+            if result.title != new {
+                library.setCustomTitle(result.title, post: post.id)
+                persistLocalTitle(result.title, for: item)
+            }
+        } catch {
+            library.setCustomTitle(previousPost, post: post.id)
+            persistLocalTitle(previousLocal, for: item)
+            throw failure(from: error)
+        }
+    }
+
+    /// This device keeps the title too (decision 8). Wave K2 also writes it to the store
+    /// (`store.setTitle(_:media:)`, `StoredVideo.title`); until then it lives in `library.localTitles`.
+    func persistLocalTitle(_ title: String?, for item: MediaItem) {
+        library.setLocalTitle(title, media: item.id)
     }
 
     // MARK: - Another webp

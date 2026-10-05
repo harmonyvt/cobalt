@@ -951,6 +951,7 @@ describe("GET /capabilities", () => {
                 telemetry: true,
                 poster: true,
                 public_default: true,
+                create_notify: true,
             },
             limits: {
                 max_webp_seconds: 10,

@@ -47,6 +47,11 @@ export const NOTIFY_MAX_LABEL = 60;
 export const HARK_MAX_TITLE = 80;
 export const HARK_MAX_BODY = 2000;
 
+// What a tap on the notification opens: the app, on this session's run (the app routes
+// `cobalt-apple://session/<sid>` in AppModel.openRunLink). The sid is a studio session id, not
+// a secret; the webhook URL and the key never go into it.
+export const sessionUrl = (sid: string): string => `cobalt-apple://session/${sid}`;
+
 export const NOTIFY_EVENTS = ["saved", "rendered", "failed"] as const;
 export type NotifyEvent = (typeof NOTIFY_EVENTS)[number];
 
@@ -449,7 +454,7 @@ export class NotifyService implements NotifyHooks, SweepNotify {
         const next: EventRecord = { ...rec, tries, retryAt: delay === undefined ? null : now + delay };
         await this.d.storage.put(key, next);
 
-        const r = await this.send(rec.title, rec.body);
+        const r = await this.send(rec.title, rec.body, rec.sid);
         if (r.kind === "ok") {
             this.logLine(rec.sid, "sent", r.status);
             await this.d.storage.put(key, this.marker(next, "sent"));
@@ -470,7 +475,7 @@ export class NotifyService implements NotifyHooks, SweepNotify {
         }
     }
 
-    private async send(title: string, body: string): Promise<SendResult> {
+    private async send(title: string, body: string, sid: string): Promise<SendResult> {
         const url = this.d.webhookUrl;
         if (!url) return { kind: "retry", status: "network" };
         const ac = new AbortController();
@@ -479,7 +484,7 @@ export class NotifyService implements NotifyHooks, SweepNotify {
                 this.d.fetch(url, {
                     method: "POST",
                     headers: { "content-type": "application/json" },
-                    body: JSON.stringify({ title, body }),
+                    body: JSON.stringify({ title, body, url: sessionUrl(sid) }),
                     redirect: "manual",
                     signal: ac.signal,
                 }),

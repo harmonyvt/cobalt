@@ -76,6 +76,7 @@ export type LookupThen =
     | "live_state"
     | "live_selftest"
     | "studio_notify"
+    | "studio_recent"
     | "telemetry_ingest";
 
 export type StudioOp =
@@ -299,6 +300,13 @@ function decideStudio(req: GateRequest): GateDecision {
     // the session id check below and is a 404.
     if (req.pathname === "/studio/upload") {
         return req.method === "PUT" ? lookupThen(req, "studio_upload") : reject(404);
+    }
+    // GET /studio/recent (keyed; the library service credential gets 404): the sessions this
+    // key created from a share sheet (APP-API-CONTRACT.md section 14). Like /studio/upload, the
+    // only public path under /studio/ whose second segment is not a session id.
+    if (req.pathname === "/studio/recent") {
+        if (req.service) return reject(404);
+        return req.method === "GET" ? lookupThen(req, "studio_recent") : reject(404);
     }
     const parts = req.pathname.slice("/studio/".length).split("/");
     const [sid, sub, job, ...rest] = parts;

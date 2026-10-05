@@ -970,6 +970,10 @@ video is not supported`, `the session expired`, `storing the file failed`, `the 
 available`, `the clip is too long`, else `something went wrong on the server`). Copy is lowercase;
 the title is cut to 80 characters and the body to 2000 (by code points, with `…`).
 
+Every message carries `url: cobalt-apple://session/<sid>` (the studio session id, never the webhook URL or a
+key), so a tap opens cobalt on that run instead of Hark; the app routes it in `AppModel.openRunLink`. A
+retried send carries it too.
+
 ### 9.5 Exactly once, retries, timeouts
 
 - Every event has a record in DO storage (`notify:ev:<sid>:<event>`; a render's is per job, so a
@@ -1325,3 +1329,76 @@ half skips itself when no ffmpeg is found (`FFMPEG_PATH` or `ffmpeg` on the PATH
    200x120 (gif), 64x64, 5 to 17 KB each, 0.3 to 1.6 s each (emulated, on a heavily loaded machine).
    **Unverified until deployed**: a poster write and the R2 to R2 copy from inside the Durable Object (the same R2 calls the Worker
    already makes), and the real timings (poster delay after `ready`, hosting time for a large file).
+
+## 14. Instant share: `notify` and `origin: "share"` on `POST /studio`, and `GET /studio/recent` (addendum, built 2026-10-05; `apple/CONTRACT-SHARE-QUICK.md` section 9)
+
+Why: the share extension shows nothing that waits (owner: "maybe we remove the share screen entirely with a notification"). It
+queues ONE background `POST /studio` and goes. The server has to do on that single call what the sheet used to do in three
+(create, `PUT .../notify`, hand the original off), and the app has to be able to find what the extension created without sharing a
+file with it (a build re-signed without the app group has no shared container). All of it is **additive and backward compatible**:
+no existing route, status code, error code or response key changes; an older client sees nothing new, an older server ignores the
+new fields (and the app then learns it from the missing capability flag). `GET /capabilities` gains `features.create_notify: true`
+(missing = `false`) for all three pieces below.
+
+### 14.1 `POST /studio` takes `notify` and `origin`
+
+```json
+{ "url": "https://www.instagram.com/p/Dc2QA4ng-US/", "public": true, "origin": "share",
+  "notify": { "on": ["saved", "failed"], "label": "instagram · Dc2QA4ng-US" } }
+```
+
+- **`notify`** (optional; absent and `null` = today's behaviour): the body of `PUT /studio/<sid>/notify` (section 9.2), validated by the
+  SAME parser (`parseOptIn`): an object, `on` = 1 to 8 entries from `saved` / `rendered` / `failed` (repeats folded), `label` optional (at
+  most 60 characters, no control characters), at most 1024 bytes once serialised. Anything else is
+  `400 {"status":"error","error":{"code":"error.notify.invalid"}}` and **nothing is created** (no row, no record, no helper call). The
+  opt-in is registered **after the session row exists and before the save can move**, through the same service call as the PUT route
+  (so the stored record, its 24 h life and its owner check are identical), which means an instant save is already announced when it
+  finishes. It is validated even when the bridge is off; with the bridge off (`features.notify_bridge: false`) it is then ignored:
+  nothing stored, nothing sent. A failure to store it never fails the save (the app's own poll still tells the owner).
+- **`origin`** (optional): only `"share"` (a share sheet's save) is accepted; any other value, any other type is
+  `400 error.studio.invalid_params`, nothing created. It does three things:
+  1. the session is remembered for `GET /studio/recent` (14.2) for 24 hours;
+  2. it is **never refused as busy**: a share has no one to retry a `429`, so its save queues behind the running one (a save already
+     waits for the helper for up to 2 minutes and then fails with `error.studio.busy`, which the opt-in announces). A save without
+     `origin` still gets `429 error.studio.busy` while another is running, exactly as before;
+  3. the `201` is answered within `SHARE_KICK_MS` (1.2 s) instead of `KICK_MS` (4 s): the container's cold start (6 s measured) is left
+     to the sweep, which is already scheduled by the create. The extension's request must be answered before the extension is torn down.
+- **Response** `201`: `{status, id, url}` as before, plus `notify: {bridge, on, label, expires_at}` (the opt-in's answer) when `notify`
+  was sent and the server has the Hark service. `bridge: false` means nothing was stored.
+
+### 14.2 `GET /studio/recent?since=<ms>&limit=<1..25>` (keyed)
+
+The sessions this key created with `origin: "share"` in the last 24 hours, newest first:
+
+```json
+{ "status": "success", "now": 1790000000000, "sessions": [ { "status": "saving", "id": "<sid>", "link": "...", ...the body of GET /studio/<sid> } ] }
+```
+
+- `Authorization: Api-Key <key>`; no key or a wrong one is the gate's usual `401`; the library-service credential and any method but
+  `GET` are `404`; no CORS (the app sends no `Origin`); `cache-control: no-store`.
+- `since`: unix milliseconds, clamped to the last 24 hours (absent or junk = 24 hours). `limit`: default and maximum 25 (junk = 25, 0 = 1).
+- Only the caller's own sessions, only share-origin ones, never an expired one or a deleted row. Each element is exactly what
+  `GET /studio/<sid>` answers for the session (status, link, service, title, duration, size, `public_url`, `error`, ...). Failed
+  saves are listed (`status: "error"`); the client skips them.
+- Why it exists: a build re-signed without the app group cannot read what the extension left, and a force-quit app is never woken for
+  the extension's background request. On every foreground the app asks this route and keeps the original of what it does not have yet
+  (`apple/CONTRACT-SHARE-QUICK.md` section 9). A server without the route answers `404`; the app then relies on the system's wake.
+- Storage: DO storage `share:<sid>` = `{keyId, at}`, written by the create, pruned at the next share-origin create after 24 hours. No
+  D1 change, no migration.
+
+### 14.3 Files and tests
+
+Edited: `src/studio.ts` (`create` parses and validates `notify` and `origin`, registers the opt-in through `NotifyService.put`, records the
+share, `recent`, `kick` takes a cap, the route in `handleStudioRoute`), `src/gate.ts` (`/studio/recent`, `studio_recent`), `src/worker.ts`
+(the DO forward next to `studio_notify`), `src/app-routes.ts` (the flag). **Not edited:** `src/notify.ts` (another lane's `url` field in
+the Hark payload; `NotifyService.put` is called structurally, see `scratchpad/instant-share/requests.md`), `src/index.ts`, no migration.
+Tests: `test/instant-share.test.ts` (the opt-in registered and identical to the PUT's; announced when the save finishes or fails;
+every invalid shape is a 400 with nothing created; bridge off ignored; a Durable Object with no Hark service; the flag; `origin`
+validated, remembered, never busy, answered within the cap; `GET /studio/recent`: ownership, order, `since`, `limit`, 24 h, gate, no
+service credential, forged key-id header, expired and deleted rows), `test/library.test.ts` (the capability object).
+
+### 14.4 Deploy (owner; not run by the lane)
+
+API deploy only: `deploy/cloudflare/api/prepare-git-info.sh`, then `cd deploy/cloudflare/api && cf deploy --secrets-file ~/.config/cobalt/secrets.json`.
+No D1 migration, no web deploy, no new secret. **Unverified until deployed:** the real timing of a share-origin `POST /studio` through the
+edge on a cold container (the cap is 1.2 s; the rest is Worker and D1), and `GET /studio/recent` against the real Durable Object storage.

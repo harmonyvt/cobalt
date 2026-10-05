@@ -21,6 +21,7 @@ import {
     plainReason,
     renderedMessage,
     savedMessage,
+    sessionUrl,
     type NotifyDeps,
 } from "../src/notify";
 import { StudioService } from "../src/studio";
@@ -37,7 +38,7 @@ const SECRET_PATH = "T0pS3cretHookToken";
 const HOOK = `https://hark.example/api/webhook/${SECRET_PATH}`;
 const INTERNAL_KEY = "9d3a1c6e-2f4b-4c8d-8e7a-5b1f0a2c3d4e";
 
-type Call = { url: string; init: RequestInit; json: { title: string; body: string } };
+type Call = { url: string; init: RequestInit; json: { title: string; body: string; url?: string } };
 
 // A scriptable webhook: answers in order from `script` (then 200), recording every call.
 class FakeHark {
@@ -346,7 +347,7 @@ describe("parseOptIn", () => {
 describe("saved", () => {
     it("fires once when the save becomes ready, with the pinned copy", async () => {
         const w = wire();
-        await savedSession(w, { on: ["saved"], label: "x · 2105435404002562056" });
+        const sid = await savedSession(w, { on: ["saved"], label: "x · 2105435404002562056" });
         expect(w.hark.calls).toHaveLength(1);
         const c = w.hark.calls[0]!;
         expect(c.url).toBe(HOOK);
@@ -355,6 +356,7 @@ describe("saved", () => {
         expect(c.json).toEqual({
             title: "cobalt",
             body: "x · 2105435404002562056 is saved · 9.6 s — open cobalt to make a webp",
+            url: `cobalt-apple://session/${sid}`,
         });
         expect(c.init.redirect).toBe("manual");
     });
@@ -463,7 +465,11 @@ describe("rendered", () => {
         expect(done.status).toBe("success");
         expect(b.body).toMatchObject({ status: "success", url: done.url });
         expect(w.hark.calls).toHaveLength(1);
-        expect(w.hark.calls[0]!.json).toEqual({ title: "cobalt", body: `webp ready · 480×560 · 2 KB\n${done.url}` });
+        expect(w.hark.calls[0]!.json).toEqual({
+            title: "cobalt",
+            body: `webp ready · 480×560 · 2 KB\n${done.url}`,
+            url: `cobalt-apple://session/${sid}`,
+        });
         // a later poll of the finished job is quiet too
         await w.studio.renderStatus(sid, job, 0);
         await w.sweep();
@@ -527,7 +533,11 @@ describe('"notify": true on POST /studio/<sid>/render (render-only opt-in)', () 
         const job = await startRender(w, sid, { notify: true });
         await w.studio.renderStatus(sid, job, 0);
         expect(w.hark.calls).toHaveLength(1);
-        expect(w.hark.calls[0]!.json).toEqual({ title: "cobalt couldn't finish", body: "couldn't make the webp — something went wrong on the server" });
+        expect(w.hark.calls[0]!.json).toEqual({
+            title: "cobalt couldn't finish",
+            body: "couldn't make the webp — something went wrong on the server",
+            url: `cobalt-apple://session/${sid}`,
+        });
     });
     it("covers a render the session opt-in does not (on: saved only)", async () => {
         const w = wire();
@@ -573,6 +583,7 @@ describe("failed", () => {
         expect(w.hark.calls[0]!.json).toEqual({
             title: "cobalt couldn't finish",
             body: "couldn't save instagram · Dd7P496wolG — the link could not be fetched",
+            url: `cobalt-apple://session/${sid}`,
         });
         await w.studio.advance(sid, 0);
         await w.sweep();
@@ -841,12 +852,55 @@ describe("payload shape and limits", () => {
         expect([...m.body].length).toBe(HARK_MAX_BODY);
         expect(m.body).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
     });
-    it("what is sent is exactly {title, body} as JSON, nothing else", async () => {
+    it("what is sent is exactly {title, body, url} as JSON, nothing else", async () => {
         const w = wire();
-        await savedSession(w);
+        const sid = await savedSession(w);
         const sent = JSON.parse(String(w.hark.calls[0]!.init.body));
-        expect(Object.keys(sent).sort()).toEqual(["body", "title"]);
+        expect(Object.keys(sent).sort()).toEqual(["body", "title", "url"]);
+        expect(sent.url).toBe(`cobalt-apple://session/${sid}`);
         expect(Object.keys(w.hark.calls[0]!.init.headers as object)).toEqual(["content-type"]);
+    });
+    it("every message that has a session carries the app link: saved, save failed, rendered, render failed, and a retried send", async () => {
+        const link = (sid: string) => `cobalt-apple://session/${sid}`;
+        // saved + rendered
+        const a = wire();
+        const sidA = await savedSession(a);
+        const jobA = await startRender(a, sidA);
+        await a.studio.renderStatus(sidA, jobA, 0);
+        expect(a.hark.calls.map((c) => c.json.url)).toEqual([link(sidA), link(sidA)]);
+        // save failed
+        const b = wire();
+        const sidB = await newSession(b);
+        await optIn(b, sidB, { on: ["failed"] });
+        b.helper.fetchError = "error.api.fetch.empty";
+        b.clock.t += 2000;
+        await b.studio.advance(sidB, 0);
+        expect(b.hark.calls.map((c) => c.json.url)).toEqual([link(sidB)]);
+        // render failed
+        const c = wire();
+        const sidC = await savedSession(c, null);
+        c.helper.jobError = "error.webp.encode_failed";
+        const jobC = await startRender(c, sidC, { notify: true });
+        await c.studio.renderStatus(sidC, jobC, 0);
+        expect(c.hark.calls.map((x) => x.json.url)).toEqual([link(sidC)]);
+        // a send retried by the sweep keeps the link
+        const d = wire();
+        d.hark.script = [503];
+        const sidD = await savedSession(d, { on: ["saved"] });
+        d.clock.t += 6000;
+        await d.sweep();
+        expect(d.hark.calls).toHaveLength(2);
+        expect(d.hark.calls.map((x) => x.json.url)).toEqual([link(sidD), link(sidD)]);
+    });
+    it("the link is only the session id: never the webhook URL, a key, or the key id", async () => {
+        const w = wire();
+        const sid = await savedSession(w);
+        const url = w.hark.calls[0]!.json.url!;
+        expect(url).toMatch(/^cobalt-apple:\/\/session\/[A-Za-z0-9]+$/);
+        for (const secret of [SECRET_PATH, "hark.example", HOOK, INTERNAL_KEY, KEY_ID]) {
+            expect(url, secret).not.toContain(secret);
+        }
+        expect(url).toBe(sessionUrl(sid));
     });
     it("describeJob: label first, then service · ref, then the title", () => {
         expect(describeJob("mine", null)).toBe("mine");

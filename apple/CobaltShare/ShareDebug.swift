@@ -6,7 +6,8 @@ import Foundation
 /// Simulator evidence for the quick card in the REAL extension (debug builds only). Off unless the
 /// host file `/tmp/cobalt-sq/share-debug.json` exists (the simulator reads the Mac's /tmp):
 ///
-///   {"scenario": "coldStart"}       run the sheet over `PreviewClient` (no server, no key needed)
+///   {"scenario": "coldStart"}       run the full sheet over `PreviewClient` (no server, no key needed)
+///   {"quick": true}                 with a scenario: the quick card instead (it is not presented otherwise)
 ///   {"probeActivity": true}         also call `Activity.request` from the extension and log the answer
 ///
 /// Log lines carry `[sharequick]` (`xcrun simctl spawn <device> log stream --predicate 'eventMessage CONTAINS "[sharequick]"'`).
@@ -15,6 +16,8 @@ enum ShareDebug {
     private struct Flags: Decodable {
         var scenario: String?
         var probeActivity: Bool?
+        /// Show the (no longer presented) quick card instead of the full sheet.
+        var quick: Bool?
     }
 
     private static let flags: Flags? = {
@@ -32,7 +35,7 @@ enum ShareDebug {
         complete: @escaping @MainActor () -> Void
     ) async -> ShareModel? {
         guard let raw = flags?.scenario, let scenario = PreviewScenario(rawValue: raw) else { return nil }
-        let quick = !Settings.shared().shareFullSheet
+        let quick = flags?.quick ?? false
         log("debug scenario \(raw) quick=\(quick) items=\(inputItems.count)")
         let model = ShareModel.debugPreview(scenario, quick: quick, openApp: openApp, complete: complete)
         if let url = URL(string: scenario.pasteText) { model.pipeline.start(link: url) }

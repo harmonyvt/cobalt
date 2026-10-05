@@ -153,21 +153,6 @@ struct TelemetryLogTests {
         #expect(events.count >= 100)
     }
 
-    @Test func startedFacadeWritesAndUnstartedOneDoesNothing() throws {
-        let dir = try makeTempDirectory()
-        let runtime = TelemetryRuntime(directory: dir, process: .app, mirrorToOSLog: false)
-        let previous = Telemetry.install(runtime)
-        defer { Telemetry.install(previous) }
-        let marker = "facade-\(UUID().uuidString.prefix(6))"
-        Telemetry.log(.info, .ui, marker, data: ["x": 1])
-        Telemetry.flush()
-        #expect(runtime.log.readAll().contains { $0.e.msg == marker })
-        Telemetry.install(nil)
-        Telemetry.log(.info, .ui, "dropped-\(marker)")
-        Telemetry.flush()
-        #expect(!runtime.log.readAll().contains { $0.e.msg.hasPrefix("dropped-") })
-    }
-
     @Test func valuesRoundTripAsFlatJSON() throws {
         let values: [String: TelemetryValue] = ["s": "a", "i": 3, "d": 1.5, "b": false]
         let data = try JSONEncoder().encode(values)

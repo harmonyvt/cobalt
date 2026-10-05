@@ -131,18 +131,34 @@ final class TelemetryRuntime: Sendable {
 
     private static let previousHandler = Mutex<(@convention(c) (NSException) -> Void)?>(nil)
 
+    /// The one handler this type ever installs. A C function pointer cannot capture, so the handler it
+    /// chains to lives in `previousHandler`; installing is therefore idempotent (see below).
+    private static let breadcrumb: @convention(c) (NSException) -> Void = { exception in
+        var data: [String: TelemetryValue] = [
+            "name": .string(exception.name.rawValue), "reason": .string(exception.reason ?? ""),
+        ]
+        for (n, frame) in exception.callStackSymbols.prefix(6).enumerated() { data["frame\(n)"] = .string(frame) }
+        Telemetry.logNow(.error, .app, "uncaught exception", data: data)
+        TelemetryRuntime.previousHandler.withLock { $0 }?(exception)
+    }
+
+    private static func isBreadcrumb(_ handler: (@convention(c) (NSException) -> Void)?) -> Bool {
+        guard let handler else { return false }
+        return unsafeBitCast(handler, to: UnsafeRawPointer.self) == unsafeBitCast(breadcrumb, to: UnsafeRawPointer.self)
+    }
+
     /// An Objective-C exception is about to take the process down: write what it was, synchronously.
     /// Not a signal handler, so ordinary calls are fine here. Signals are left to MetricKit and the
     /// unclean-exit marker: nothing in a signal handler can safely allocate or take a lock.
+    ///
+    /// Idempotent: if our handler is already the process's, the handler to chain to is left alone.
+    /// Recording ourselves as "the previous handler" would make the first exception call itself until the
+    /// stack ran out.
     func installExceptionBreadcrumb() {
-        Self.previousHandler.withLock { $0 = NSGetUncaughtExceptionHandler() }
-        NSSetUncaughtExceptionHandler { exception in
-            var data: [String: TelemetryValue] = [
-                "name": .string(exception.name.rawValue), "reason": .string(exception.reason ?? ""),
-            ]
-            for (n, frame) in exception.callStackSymbols.prefix(6).enumerated() { data["frame\(n)"] = .string(frame) }
-            Telemetry.logNow(.error, .app, "uncaught exception", data: data)
-            TelemetryRuntime.previousHandler.withLock { $0 }?(exception)
+        Self.previousHandler.withLock { previous in
+            let current = NSGetUncaughtExceptionHandler()
+            if !Self.isBreadcrumb(current) { previous = current }
+            NSSetUncaughtExceptionHandler(Self.breadcrumb)
         }
     }
 }

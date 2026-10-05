@@ -7,8 +7,8 @@ import Synchronization
 /// throws `.noAPIKey` before any request.
 public struct HTTPCobaltClient: CobaltClient {
     public let baseURL: URL
-    private let apiKey: @Sendable () -> String?
-    private let urlSession: URLSession
+    let apiKey: @Sendable () -> String?
+    let urlSession: URLSession
 
     public init(baseURL: URL, apiKey: @escaping @Sendable () -> String?, session: URLSession = .shared) {
         self.baseURL = baseURL
@@ -170,6 +170,8 @@ public struct HTTPCobaltClient: CobaltClient {
                 var sourceWait: Bool?
                 var deletePost: Bool?
                 var telemetry: Bool?
+                var createNotify: Bool?
+                var titles: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -216,7 +218,9 @@ public struct HTTPCobaltClient: CobaltClient {
             crop: f?.crop ?? false,
             sourceWait: f?.sourceWait ?? false,
             deletePost: f?.deletePost ?? false,
-            telemetry: f?.telemetry ?? false)
+            telemetry: f?.telemetry ?? false,
+            createNotify: f?.createNotify ?? false,
+            titles: f?.titles ?? false)
     }
 
     // MARK: - Resolve and studio
@@ -249,6 +253,34 @@ public struct HTTPCobaltClient: CobaltClient {
         let req = try makeRequest("POST", "/studio", keyed: true)
         let wire = try await sendJSON(IDWire.self, req, body: Self.jsonBody(["url": link.absoluteString]))
         return StudioCreated(id: wire.id, pageURL: wire.url.flatMap(URL.init(string:)))
+    }
+
+    // MARK: - Instant share (APP-API-CONTRACT section 14)
+
+    /// `POST /studio` for a share sheet's background save: the link, `public: true`, `origin: "share"`
+    /// and the Hark opt-in for `saved` and `failed`, in one call. The body is returned apart from the
+    /// request because a background `URLSession` uploads from a file. Throws `.noAPIKey` without a key
+    /// for this server (the extension then shows its one-line card instead of queueing anything).
+    public func shareSaveRequest(link: URL, label: String) throws -> (request: URLRequest, body: Data) {
+        var req = try makeRequest("POST", "/studio", keyed: true, timeout: 60)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let fields: [String: Any] = [
+            "url": link.absoluteString, "public": true, "origin": "share",
+            "notify": ["on": ["saved", "failed"], "label": label] as [String: Any],
+        ]
+        guard let body = Self.jsonBody(fields) else { throw CobaltError.invalidResponse(httpStatus: 0) }
+        return (req, body)
+    }
+
+    /// `GET /studio/recent` (keyed): the sessions this key created from a share sheet in the last 24
+    /// hours, newest first. A server without the route answers 404, which throws.
+    public func recentShares(since: Date? = nil, limit: Int = 25) async throws -> [StudioSession] {
+        var query = [("limit", String(max(1, min(25, limit))))]
+        if let since { query.append(("since", String(Int64((since.timeIntervalSince1970 * 1000).rounded())))) }
+        let req = try makeRequest("GET", "/studio/recent", query: query, keyed: true, timeout: 20)
+        struct Wire: Decodable { var sessions: [Lossy<StudioSession>] }
+        let wire = try await sendJSON(Wire.self, req)
+        return wire.sessions.compactMap(\.value)
     }
 
     public func upload(

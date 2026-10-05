@@ -209,6 +209,9 @@ export async function capabilities(
                 // (APP-API-CONTRACT.md section 13)
                 poster: true,
                 public_default: true,
+                // `notify` and `origin: "share"` on POST /studio, and GET /studio/recent
+                // (APP-API-CONTRACT.md section 14)
+                create_notify: true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,

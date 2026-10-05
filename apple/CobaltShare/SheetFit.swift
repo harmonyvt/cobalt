@@ -8,7 +8,8 @@ import UIKit
 /// One resize per real change: heights are rounded up to whole points, changes under 2 pt are
 /// ignored, and a burst of layout passes (a card swapping its content) is coalesced into a single
 /// `animateChanges { invalidateDetents() }`. The SwiftUI side does not animate layout height, so the
-/// sheet is the only thing moving.
+/// sheet is the only thing moving. The full sheet always hugs its content: it never asks for the
+/// full-screen overlay (whose blur showed as a grey area above the card in a host that ignored it).
 ///
 /// Which object owns the sheet in a share extension is not documented, so `attach()` looks at every
 /// candidate, logs which ones exist (category `sheet-fit`, also `NSLog` so `simctl log show` sees it),
@@ -72,11 +73,14 @@ final class SheetFitter {
     private func apply(_ height: CGFloat) {
         guard abs(height - contentHeight) >= 1 || contentHeight == 0 else { return }
         contentHeight = height
+        // Both ways to size the sheet are given, always: a host that sizes an extension by
+        // `preferredContentSize` (the owner's iOS 27 host drew a grey area around a card that only asked
+        // for a detent) and a `UISheetPresentationController` we can reach. Neither can hurt the other.
+        anchor?.preferredContentSize = CGSize(width: 0, height: fittedHeight)
         if let sheet {
             sheet.animateChanges { sheet.invalidateDetents() }
             report("resize")
         } else {
-            anchor?.preferredContentSize = CGSize(width: 0, height: fittedHeight)
             attach()
         }
     }

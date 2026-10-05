@@ -9,6 +9,8 @@ extension Copy {
         static let shareGroup = "share sheet"
         static let autoContinue = "continue in background automatically"
         static let wait = "wait"
+        static let fullSheet = "show the full share sheet"
+        static let quickFooter = "sharing a link shows a small card that closes once cobalt has it. turn this on for the full sheet with the trim and the countdown."
         static func seconds(_ s: Int) -> String { "\(s) s" }
         static let autoContinueFooter = "after you share a link, the sheet waits this long, then closes and cobalt finishes on its own. tap stay to keep it open."
         // settings · photos

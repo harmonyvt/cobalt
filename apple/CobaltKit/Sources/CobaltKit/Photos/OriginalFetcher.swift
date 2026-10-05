@@ -50,7 +50,7 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
     let pending: PendingOriginals
     let clock: any PipelineClock
     private let inboxRoot: URL
-    private let store: OfflineStore
+    let store: OfflineStore
 
     /// The app is in the foreground. Background wakes restart a task at most twice; a foreground
     /// restart is never rate-limited, so it waits for `reconcile()`.
@@ -62,6 +62,39 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
 
     private let sessions = Mutex<[String: any BackgroundSession]>([:])
     @MainActor private var ingesting: Set<String> = []
+
+    // Instant share (CONTRACT-SHARE-QUICK.md section 9; `OriginalFetcher+Shares.swift`). Seams so tests
+    // run without URLSession, a server or the app's settings.
+    /// The background sessions of the extension's `POST /studio` requests, as the app re-attaches to them
+    /// when the system wakes it.
+    var saveTransport: any SaveTransport = URLSessionSaveTransport(mode: .background)
+    /// What the extension's request answered, while the app was not running (filled off the main actor).
+    let saveAnswers = SaveAnswers()
+    /// Ask the server for the share-sheet saves on every foreground. iOS only: the Mac has no share
+    /// extension, and must not pull the phone's videos into its own store.
+    @MainActor var discoversShares: Bool = {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }()
+    /// The server's base URL, and whether a finished save should be kept on this phone.
+    @MainActor var serverURL: () -> URL = { Settings.shared().serverURL }
+    @MainActor var keepsOriginals: () -> Bool = { Settings.shared().keepVideosOnDevice }
+    /// `GET /studio/recent`: the sessions this key created from a share sheet. Empty without a key or a
+    /// server that has the route.
+    @MainActor var recentShares: () async -> [StudioSession] = { await OriginalFetcher.liveRecentShares() }
+    /// `GET /studio/<sid>`: a saving session's title and size, once its video lands (nil: unknown).
+    @MainActor var sessionInfo: @MainActor @Sendable (String) async -> StudioSession? = { await OriginalFetcher.liveSessionInfo($0) }
+    /// An instant share's request was refused or never answered: tell the owner (a local notification).
+    @MainActor var instantFailed: (_ link: URL?, _ status: Int?) async -> Void = { link, status in
+        await Notifications.postInstantFailed(link: link, status: status)
+    }
+    /// The extension's "saving to cobalt" notifications have nothing left to say once the app is in front.
+    @MainActor var clearInstantNotifications: () -> Void = { Notifications.clearInstantSaving() }
+    /// Where the extension left its request bodies (`Saves`): the ones a day old are deleted.
+    @MainActor var savesDirectory: () -> URL = { AppGroup.directory("Saves") }
 
     @MainActor
     init(
@@ -215,7 +248,7 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
             pending.update(id, now: clock.now()) { $0.state = .queued }
             return
         }
-        let media = entry.media ?? MediaInfo(name: id, duration: nil, width: nil, height: nil, bytes: nil, isImage: false)
+        let media = await enriched(entry.media ?? MediaInfo(name: id, duration: nil, width: nil, height: nil, bytes: nil, isImage: false), session: id)
         do {
             let video = try await store.add(
                 file: file, kind: .original, media: media, sessionID: id, link: entry.link, remoteURL: nil, move: true)
@@ -231,6 +264,10 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
     /// The system woke the app for `identifier`'s finished tasks.
     @MainActor
     func handleWake(identifier id: String) async {
+        if BackgroundSessionID.isSave(id) {
+            await handleSaveWake(identifier: id)
+            return
+        }
         let s = session(id)
         await s.waitForEvents(timeout: 25)
         for entry in pending.all() { if case .arrived = entry.state { await ingest(entry.id) } }
@@ -266,6 +303,9 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
             }
         }
         _ = now
+        await discoverShares()
+        pruneSaveFiles()
+        clearInstantNotifications()
         await landed?()
     }
 

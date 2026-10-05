@@ -364,6 +364,12 @@ struct HomeScreen: View {
             try? await Task.sleep(for: .milliseconds(700))
             warming = false
         }
+        .onChange(of: model.requestedMediaID, initial: true) { _, id in
+            // a run link (the Hark tap, the activity's tap) asked for a finished run's media
+            guard let id else { return }
+            model.requestedMediaID = nil
+            if let media = model.store.media(id: id) { open(media) }
+        }
         .onChange(of: openedID) { _, id in
             // the detail went away: its planet's player is the orbit's again
             if id == nil { pool.lent = nil; lentPlayer = nil }

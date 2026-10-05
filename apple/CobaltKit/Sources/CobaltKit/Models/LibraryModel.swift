@@ -15,20 +15,52 @@ public final class LibraryModel {
     /// far. An entry exists exactly while its download runs, so a card can show a ring from it.
     public internal(set) var redownloads: [String: TransferProgress] = [:]
 
+    // MARK: - View state (CONTRACT-LIBRARY2 decisions 10, 14; persisted per device except `query`)
+
+    /// `mosaic` or `table`; remembered ("library.view"), `mosaic` by default.
+    public var viewMode: LibraryViewMode {
+        didSet { if viewMode != oldValue { defaults.set(viewMode.rawValue, forKey: LibraryDefaults.view) } }
+    }
+    /// The sort ("library.sort", `date.desc` by default).
+    public var sort: LibrarySort {
+        didSet { if sort != oldValue { defaults.set(sort.stored, forKey: LibraryDefaults.sort) } }
+    }
+    /// The visibility filter ("library.show", `everything` by default).
+    public var show: LibraryShow {
+        didSet { if show != oldValue { defaults.set(show.rawValue, forKey: LibraryDefaults.show) } }
+    }
+    /// The search text; not persisted.
+    public var query: String = ""
+    /// While `loadAll` runs: pages in so far and the server's total (the quiet line above the results).
+    public private(set) var loadingAll: (loaded: Int, total: Int)?
+
+    /// Titles the owner gave on this device, by local media id (CONTRACT-LIBRARY2 decision 8). Memory only
+    /// in K1: wave K2 writes them to `StoredVideo.title` and `MediaItem.localTitle` reads them from there.
+    public internal(set) var localTitles: [String: String] = [:]
+
     @ObservationIgnored let ctx: PipelineContext
+    @ObservationIgnored let defaults: UserDefaults
     @ObservationIgnored var cursor: String?
     @ObservationIgnored var redownloadTasks: [String: Task<StoredVideo, Error>] = [:]
 
     static let pageSize = 20
+    static let wholePageSize = 50
 
-    init(context: PipelineContext, seed: LibraryPage? = nil) {
+    /// `defaults`: where the view state is remembered. The app's settings defaults unless injected (tests
+    /// pass a fresh suite).
+    init(context: PipelineContext, seed: LibraryPage? = nil, defaults: UserDefaults? = nil) {
         self.ctx = context
+        let defaults = defaults ?? context.settings.defaults
+        self.defaults = defaults
+        self.viewMode = defaults.string(forKey: LibraryDefaults.view).flatMap(LibraryViewMode.init(rawValue:)) ?? .mosaic
+        self.sort = defaults.string(forKey: LibraryDefaults.sort).flatMap(LibrarySort.init(stored:)) ?? .newest
+        self.show = defaults.string(forKey: LibraryDefaults.show).flatMap(LibraryShow.init(rawValue:)) ?? .everything
         if let seed { apply(seed, replacing: true) }
     }
 
     func reset() {
         posts = []; postCount = 0; fileCount = 0; failure = nil; hasMore = false; cursor = nil
-        expandedPostID = nil
+        expandedPostID = nil; loadingAll = nil; localTitles = [:]
     }
 
     func apply(_ page: LibraryPage, replacing: Bool) {
@@ -42,7 +74,13 @@ public final class LibraryModel {
         fileCount = page.fileCount
         cursor = page.next
         hasMore = page.next != nil
+        didApply(page: page)
     }
+
+    /// Called after every page (refresh, `loadMore`, `loadAll`, `locate`, the seed) has joined `posts`.
+    /// Wave K2 fills it: the title sync-down (a post that joins a local media and has a `custom_title`
+    /// different from the local one writes it to the store, CONTRACT-LIBRARY2 decision 8).
+    func didApply(page: LibraryPage) {}
 
     public func refresh() async {
         guard !isLoading else { return }
@@ -70,6 +108,70 @@ public final class LibraryModel {
         } catch {
             if let f = pipelineFailure(from: error, during: .saving) { failure = f }
         }
+    }
+
+    // MARK: - The whole library (search, filter, sort, "open in library")
+
+    /// Everything on device: pages of 50 until the server has no more or `cap` posts are in. A quiet
+    /// `loadingAll` reports the count while it runs. A failure stops it and lands in `failure`.
+    public func loadAll(cap: Int = 1000) async {
+        await settle()
+        guard !isLoading else { return }
+        guard posts.isEmpty || hasMore else { return }
+        isLoading = true
+        defer { isLoading = false; loadingAll = nil }
+        await pages(cap: cap, progress: true) { _ in false }
+    }
+
+    /// Loads pages until the post is in `posts` (or the server has no more, or the cap of 1000 posts):
+    /// true when it is loaded.
+    public func locate(postID: String) async -> Bool {
+        if posts.contains(where: { $0.id == postID }) { return true }
+        await settle()
+        if posts.contains(where: { $0.id == postID }) { return true }
+        guard !isLoading, posts.isEmpty || hasMore else { return false }
+        isLoading = true
+        defer { isLoading = false }
+        await pages(cap: 1000, progress: false) { [postID] loaded in loaded.contains { $0.id == postID } }
+        return posts.contains { $0.id == postID }
+    }
+
+    /// Waits out a load that is already running, so a search typed during the first page still sees it.
+    private func settle() async {
+        while isLoading, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(20)) }
+    }
+
+    /// The paging loop of `loadAll` and `locate`. `isLoading` is held by the caller.
+    private func pages(cap: Int, progress: Bool, found: ([LibraryPost]) -> Bool) async {
+        do {
+            let client = ctx.client
+            var next = posts.isEmpty ? nil : cursor
+            while posts.count < cap {
+                let limit = min(Self.wholePageSize, cap - posts.count)
+                let page = try await client.library(cursor: next, limit: limit)
+                apply(page, replacing: next == nil && posts.isEmpty)
+                failure = nil
+                if progress { loadingAll = (loaded: posts.count, total: max(postCount, posts.count)) }
+                next = page.next
+                if next == nil || page.posts.isEmpty || found(page.posts) { break }
+            }
+        } catch {
+            if let f = pipelineFailure(from: error, during: .saving) { failure = f }
+        }
+    }
+
+    // MARK: - Titles
+
+    /// Optimistic edit of a post's custom title (nil clears); `AppModel.rename` calls it, and reverts the
+    /// same way. The next library page replaces it with the server's value.
+    public func setCustomTitle(_ title: String?, post id: String) {
+        guard let index = posts.firstIndex(where: { $0.id == id }) else { return }
+        posts[index].customTitle = title
+    }
+
+    /// This device's own copy of a media's title (nil clears), by local media id.
+    func setLocalTitle(_ title: String?, media id: String) {
+        if let title { localTitles[id] = title } else { localTitles[id] = nil }
     }
 
     public func copyLink(_ file: LibraryFile) {

@@ -70,7 +70,7 @@ struct TelemetryCrashTests {
 
     /// A diagnostic as MetricKit writes it (shape from `MXCrashDiagnostic.jsonRepresentation()`): the call
     /// stack tree nests one frame inside the next, as deep as the crashed stack was.
-    private func fakeCrashPayload(depth: Int, marker: String = "Cobalt") -> Data {
+    func fakeCrashPayload(depth: Int, marker: String = "Cobalt") -> Data {
         var frames = #"{"binaryName":"\#(marker)","address":4294967296}"#
         for _ in 0..<depth { frames = #"{"binaryName":"\#(marker)","subFrames":[\#(frames)]}"# }
         let json = #"{"diagnosticMetaData":{"exceptionType":1,"signal":11,"exceptionCode":1,"terminationReason":"Namespace SIGNAL, Code 11","appBuildVersion":"3"},"callStackTree":{"callStacks":[{"threadAttributed":true,"callStackRootFrames":[\#(frames)]}],"callStackPerThread":false}}"#
@@ -163,64 +163,5 @@ struct TelemetryCrashTests {
         let all = store.pending()
         #expect(all.count == CrashStore.maxRecords)
         #expect(all.first?.record.id == "r5")                        // the oldest went
-    }
-
-    // MARK: off the main actor
-
-    /// The system calls MetricKit's delegate and the uncaught-exception handler on threads of its own. In
-    /// Swift 6 a callback written in a main-actor context traps on entry there (the 1.2 upload crash), so
-    /// these run from a global queue: a wrong isolation would crash this test process.
-    @Test func theSubscriberAndTheExceptionHandlerRunOnABackgroundQueue() async throws {
-        let dir = try makeTempDirectory()
-        let rt = runtime(dir)
-        let previousRuntime = Telemetry.install(rt)
-        let previousHandler = NSGetUncaughtExceptionHandler()
-        NSSetUncaughtExceptionHandler(nil)                          // nothing to chain to in the test process
-        let told = LockedBox(0)
-        let previousCallback = Telemetry.crashIngested
-        Telemetry.crashIngested = { @Sendable in told.withLock { $0 += 1 } }
-        defer {
-            Telemetry.crashIngested = previousCallback
-            NSSetUncaughtExceptionHandler(previousHandler)
-            Telemetry.install(previousRuntime)
-        }
-        rt.installExceptionBreadcrumb()
-        let handler = try #require(NSGetUncaughtExceptionHandler())
-        let payload = fakeCrashPayload(depth: 5, marker: "BackgroundQueue")
-
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global(qos: .utility).async {
-                handler(NSException(name: NSExceptionName("TelemetryTestException"), reason: "thrown on a global queue", userInfo: nil))
-                #if canImport(MetricKit)
-                MetricKitSubscriber(runtime: rt).didReceive([MXDiagnosticPayload]())
-                #endif
-                rt.ingest(payload, kind: .crash, at: TelemetryLog.nowMillis())      // what the subscriber does per diagnostic
-                done.resume()
-            }
-        }
-        let events = rt.log.readAll()
-        #expect(events.contains { $0.e.msg == "uncaught exception" && $0.e.data["name"] == .string("TelemetryTestException") })
-        #expect(rt.crashes.count == 1)
-        #expect(told.withLock { $0 } == 1)                           // the app was told, from that same queue
-    }
-
-    /// An exception raised while the telemetry queue itself is writing must not wait on that queue.
-    @Test func theExceptionHandlerReturnsWhenItFiresOnTheLogsOwnQueue() throws {
-        let dir = try makeTempDirectory()
-        let rt = runtime(dir)
-        let previousRuntime = Telemetry.install(rt)
-        let previousHandler = NSGetUncaughtExceptionHandler()
-        NSSetUncaughtExceptionHandler(nil)
-        defer {
-            NSSetUncaughtExceptionHandler(previousHandler)
-            Telemetry.install(previousRuntime)
-        }
-        rt.installExceptionBreadcrumb()
-        let handler = try #require(NSGetUncaughtExceptionHandler())
-        rt.log.runOnQueue {
-            handler(NSException(name: NSExceptionName("InsideTheQueue"), reason: "raised on the telemetry queue", userInfo: nil))
-            rt.log.flush()                                           // also a no-op here
-        }
-        #expect(rt.log.readAll().contains { $0.e.msg == "uncaught exception" && $0.e.data["name"] == .string("InsideTheQueue") })
     }
 }

@@ -42,6 +42,21 @@ enum ShareCopy {
     static let quickOpenCobalt = "open cobalt"
     static let quickExpandA11y = "show the full sheet"
 
+    /// The instant share's one-line failure card (CONTRACT-SHARE-QUICK.md section 9). Lowercase, one line
+    /// each: what happened, and the card's button says what to do (open cobalt).
+    static func instantFailure(_ failure: InstantShare.Failure) -> String {
+        switch failure {
+        case .noKey: return "cobalt can't find your key from here"
+        case .noLink: return "there's no link here that cobalt can save"
+        case .couldNotStart: return "couldn't start the save"
+        case .rejected(let status) where status == 401 || status == 403: return "the server didn't accept your key"
+        case .rejected(let status) where status == 429: return "the server is busy, try again in a moment"
+        case .rejected(let status) where status >= 500: return "the server isn't available right now"
+        case .rejected: return "the server said no"
+        case .unreachable: return "couldn't reach the server"
+        }
+    }
+
     /// Why a save to photos failed, in one line. A server-side miss reads like the rest of the app;
     /// anything else is most often the photos permission.
     static func photosFailure(_ failure: PipelineFailure) -> String {

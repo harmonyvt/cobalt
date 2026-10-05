@@ -4,61 +4,29 @@ import SwiftUI
 import Synchronization
 import UIKit
 
-/// The share extension's principal class. It loads what the host app shared, builds the
-/// `ShareModel` (CobaltKit reads the input and starts the pipeline), hosts `ShareRootView`, and
-/// completes the request when the model says the sheet is done.
+/// The share extension's principal class (CONTRACT-SHARE-QUICK.md section 9).
+///
+/// By default it shows nothing that waits: `InstantShare.run` reads the shared link, queues
+/// `POST /studio` with a URLSession upload, posts a quiet "saving to cobalt" notification when the owner
+/// already allowed them, and the request completes at once. Only three things ever show a view:
+///  - the one-line failure card, when the save could not even be queued;
+///  - the full sheet, for a file (its upload runs in this process), and when the owner turned on
+///    "show the full share sheet";
+///  - nothing else. The quick card and its full-screen overlay are no longer presented (the host ignored
+///    `.overFullScreen` on the owner's device and drew the overlay's blur as a grey sheet).
+///
+/// The view itself is clear: the host's system sheet may flash for the moment the request takes.
 final class ShareViewController: UIViewController, UIAdaptivePresentationControllerDelegate {
     private var model: ShareModel?
     /// `complete` ran (the request is done) or a close is already under way: nothing left to save.
     private var closed = false
-    /// Sizes the presented sheet to the content (no empty space under the card).
+    /// Sizes the presented sheet to the content (no empty space around the card).
     private lazy var fitter = SheetFitter(anchor: self)
     private let openedAt = Date()
-    /// Card or sheet, and where the island is (CONTRACT-SHARE-QUICK.md section 2a).
+    /// Always the sheet: the overlay layout is never asked for (see the class comment).
     private let stage = ShareStage(overlay: false)
-    /// The quick card asked for the full-screen overlay; decided at init from the setting.
-    private var wantsOverlay = false
-
-    // MARK: - Presentation
-
-    /// As early as possible: the host reads the principal controller's presentation style when it
-    /// presents it. The quick card asks for `.overFullScreen` (clear, so the app you were in shows
-    /// under the blur); the full-sheet setting keeps the system sheet.
-    override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
-        super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
-        configurePresentation()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        configurePresentation()
-    }
-
-    private func configurePresentation() {
-        wantsOverlay = !Settings.shared().shareFullSheet
-        stage.overlay = wantsOverlay
-        if wantsOverlay {
-            modalPresentationStyle = .overFullScreen
-            modalTransitionStyle = .crossDissolve
-        }
-    }
-
-    /// The host honoured the overlay unless the extension still ended up in a sheet: then the compact
-    /// sheet card is used (the fallback, logged).
-    private func checkPresentation() {
-        guard wantsOverlay, stage.overlay else { return }
-        let sheet = sheetPresentationController ?? (presentationController as? UISheetPresentationController)
-        let style = presentationController.map { "\($0.presentationStyle.rawValue) \(type(of: $0))" } ?? "none"
-        Telemetry.log(.info, .share, "share presentation", data: ["overlay": .bool(sheet == nil), "style": .string(style)])
-        #if DEBUG
-        ShareDebug.log("presentation style=\(style) sheet=\(sheet != nil) frame=\(view.window?.frame ?? .zero) view=\(view.frame)")
-        #endif
-        if sheet != nil {
-            stage.overlay = false
-            model?.quickHoldSeconds = 0.6            // the sheet card's own beat (`ShareCore.quickHold`): no morph to wait for
-            fitter.attach()
-        }
-    }
+    /// Whether this process is showing the full sheet or the failure card (the fitter only matters then).
+    private var showsContent = false
 
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
@@ -69,35 +37,80 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
+        // While nothing is shown the sheet has nothing to hold: ask for the smallest one a host that
+        // sizes by this will give (the content, when there is any, replaces it).
+        preferredContentSize = CGSize(width: 0, height: 8)
         Telemetry.start(process: .share)
         Telemetry.log(.info, .share, "share opened", data: Telemetry.memoryData())
         CobaltFont.register()
-        Task { await load() }
+        Task { await start() }
     }
 
-    private func load() async {
+    // MARK: - What to do with the share
+
+    private func start() async {
         let items = (extensionContext?.inputItems as? [NSExtensionItem]) ?? []
+        #if DEBUG
+        if await startDebugScenario(items) { return }
+        #endif
+        guard !Settings.shared().shareFullSheet else { await showFullSheet(items); return }
+        switch await InstantShare.run(inputItems: items) {
+        case .saved:
+            finish()
+        case .needsSheet:
+            await showFullSheet(items)
+        case .failed(let failure):
+            showFailure(failure)
+        }
+    }
+
+    // MARK: - The failure card
+
+    private func showFailure(_ failure: InstantShare.Failure) {
+        let openApp: @MainActor () -> Void = { [weak self] in
+            Task { @MainActor in
+                _ = await self?.openHostApp(URL(string: "cobalt-apple://open")!)
+                self?.finish()
+            }
+        }
+        let close: @MainActor () -> Void = { [weak self] in self?.finish() }
+        host(InstantFailureView(failure: failure, openCobalt: { openApp() }, close: { close() }, onFit: { [weak self] height in
+            self?.fitter.update(contentHeight: height)
+        }))
+    }
+
+    // MARK: - The full sheet
+
+    private func showFullSheet(_ items: [NSExtensionItem]) async {
         let openApp: @MainActor (URL) async -> Bool = { [weak self] url in await self?.openHostApp(url) ?? false }
         let complete: @MainActor () -> Void = { [weak self] in self?.finish() }
-        #if DEBUG
-        let debugModel = await ShareDebug.model(inputItems: items, openApp: openApp, complete: complete)
-        let model: ShareModel
-        if let debugModel { model = debugModel } else { model = await ShareModel.live(inputItems: items, openApp: openApp, complete: complete) }
-        ShareDebug.probeLiveActivity()
-        #else
         let model = await ShareModel.live(inputItems: items, openApp: openApp, complete: complete)
-        #endif
-        // The overlay hands off when its island morph is over (it calls `finishQuickHold()`); until it
-        // does, the hold only has a ceiling. Set before the server can answer.
-        if stage.overlay { model.quickHoldSeconds = QuickOverlay.holdCeiling }
         self.model = model
         watchModality(model)
-        watchQuick(model)
-
-        let host = UIHostingController(rootView: ShareStageView(model: model, stage: stage, onFit: { [weak self] height in
-            guard let self, !self.stage.overlay else { return }
-            self.fitter.update(contentHeight: height)
+        host(ShareStageView(model: model, stage: stage, onFit: { [weak self] height in
+            self?.fitter.update(contentHeight: height)
         }))
+    }
+
+    #if DEBUG
+    /// Simulator evidence (`/tmp/cobalt-sq/share-debug.json`): the sheet over `PreviewClient`.
+    private func startDebugScenario(_ items: [NSExtensionItem]) async -> Bool {
+        let openApp: @MainActor (URL) async -> Bool = { [weak self] url in await self?.openHostApp(url) ?? false }
+        let complete: @MainActor () -> Void = { [weak self] in self?.finish() }
+        ShareDebug.probeLiveActivity()
+        guard let model = await ShareDebug.model(inputItems: items, openApp: openApp, complete: complete) else { return false }
+        self.model = model
+        watchModality(model)
+        host(ShareStageView(model: model, stage: stage, onFit: { [weak self] height in
+            self?.fitter.update(contentHeight: height)
+        }))
+        return true
+    }
+    #endif
+
+    /// Puts a SwiftUI view in the controller, pinned to every edge, and sizes the sheet to it.
+    private func host<Content: View>(_ content: Content) {
+        let host = UIHostingController(rootView: content)
         host.view.backgroundColor = .clear
         addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false
@@ -109,53 +122,31 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
             host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         host.didMove(toParent: self)
-    }
-
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        checkPresentation()
+        showsContent = true
+        fitter.attach()
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        checkPresentation()
         stage.safeTop = view.window?.safeAreaInsets.top ?? view.safeAreaInsets.top
         stage.safeBottom = view.window?.safeAreaInsets.bottom ?? view.safeAreaInsets.bottom
-        if !stage.overlay { fitter.attach() }
+        if showsContent { fitter.attach() }
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if !stage.overlay { fitter.attach() }
+        if showsContent { fitter.attach() }
     }
 
+    private var completed = false
+
     private func finish() {
-        #if DEBUG
-        ShareDebug.log("complete after \(String(format: "%.2f", Date().timeIntervalSince(openedAt))) s quick=\(String(describing: model?.quick))")
-        #endif
-        Telemetry.log(.info, .share, "share completed", data: Telemetry.memoryData())
+        guard !completed else { return }
+        completed = true
+        Telemetry.log(.info, .share, "share completed", data: ["ms": .int(Int(Date().timeIntervalSince(openedAt) * 1000))].merging(Telemetry.memoryData()) { a, _ in a })
         Telemetry.flush()
         closed = true
         extensionContext?.completeRequest(returningItems: nil)
-    }
-
-    // MARK: - Card or sheet
-
-    /// The quick card sits in a small, undimmed sheet with no grabber (the app underneath stays in view);
-    /// the full sheet is the usual dimmed one. Follows `model.quick` as the card hands off or expands.
-    private func watchQuick(_ model: ShareModel) {
-        fitter.compact = model.quick.showsCard
-        #if DEBUG
-        ShareDebug.log("quick \(String(describing: model.quick)) at \(String(format: "%.2f", Date().timeIntervalSince(openedAt))) s")
-        #endif
-        withObservationTracking {
-            _ = model.quick
-        } onChange: { [weak self, weak model] in
-            Task { @MainActor in
-                guard let self, let model else { return }
-                self.watchQuick(model)
-            }
-        }
     }
 
     // MARK: - Swiping the sheet away

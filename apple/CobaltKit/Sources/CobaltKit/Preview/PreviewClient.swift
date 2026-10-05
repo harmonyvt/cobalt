@@ -34,6 +34,8 @@ final class PreviewServer: Sendable {
         var webpCounter = 0
         var notifications: [String: NotifyOptIn] = [:]
         var notifyCalls: [String] = []         // "PUT <sid>" / "DELETE <sid>", in order
+        var titles: [String: String] = [:]     // post id -> custom title the "server" holds ("" = cleared)
+        var titleCalls: [String] = []          // "<item id> <title or ->" for every `setTitle`, in order
     }
 
     private let state = Mutex(State())
@@ -77,6 +79,18 @@ final class PreviewServer: Sendable {
     func cancelNotify(_ id: String) {
         state.withLock { s in s.notifications[id] = nil; s.notifyCalls.append("DELETE \(id)") }
     }
+
+    /// Custom titles the "server" holds (CONTRACT-LIBRARY2 6): a post id -> its title; "" is a clear.
+    var titles: [String: String] { state.withLock { $0.titles } }
+    var titleCalls: [String] { state.withLock { $0.titleCalls } }
+    /// Records the call and returns how many came in for `itemID` so far (this one included).
+    func recordTitleCall(_ itemID: String, title: String?) -> Int {
+        state.withLock { s in
+            s.titleCalls.append("\(itemID) \(title ?? "-")")
+            return s.titleCalls.filter { $0.hasPrefix("\(itemID) ") }.count
+        }
+    }
+    func setTitle(_ title: String?, post id: String) { state.withLock { $0.titles[id] = title ?? "" } }
 
     func markDeleted(_ name: String) { state.withLock { _ = $0.deleted.insert(name) } }
     func isDeleted(_ name: String?) -> Bool { name.map { n in state.withLock { $0.deleted.contains(n) } } ?? false }
@@ -262,7 +276,7 @@ public struct PreviewClient: CobaltClient {
         if request.notify { server.setNotify(id, NotifyOptIn(on: [.rendered, .failed], label: s.name ?? s.clip.title)) }
         return server.newRender(
             sessionID: id, request: request, clip: s.clip, at: clock.now(),
-            uniqueLink: scenario == .renditions || scenario == .renditionsLegacy)
+            uniqueLink: scenario == .renditions || scenario == .renditionsLegacy || scenario.failsRenames)
     }
 
     public func renderStatus(session id: String, job: String, wait: Int) async throws -> RenderStatus {
@@ -332,12 +346,32 @@ public struct PreviewClient: CobaltClient {
 
     public func library(cursor: String?, limit: Int) async throws -> LibraryPage {
         var page = PreviewData.libraryPage(now: clock.now())
+        let titles = server.titles
         page.posts = page.posts.map { post in
             var p = post
             p.files = post.files.filter { !server.isDeleted($0.mediaName) && !server.isFileDeleted($0.id) }
+            if let t = titles[post.id] { p.customTitle = t.isEmpty ? nil : t }
             return p
         }.filter { !$0.files.isEmpty }
         return page
+    }
+
+    /// Previews: the title goes into the "server"'s memory and the next `library` carries it. In
+    /// `.renameFails` the first call for item `PrEvIeWitem000008` answers 503 (the second works), so
+    /// the revert and the retry preview and test. An item no post lists is `error.library.not_found`.
+    public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult {
+        try await clock.sleep(seconds: 0.2)
+        let cleaned = title.flatMap(MediaTitle.clean)
+        let calls = server.recordTitleCall(itemID, title: cleaned)
+        if scenario.failsRenames, itemID == "PrEvIeWitem000008", calls == 1 {
+            throw CobaltError.api(code: "error.api.generic", httpStatus: 503)
+        }
+        let all = PreviewData.libraryPage(now: clock.now()).posts
+        guard let post = all.first(where: { $0.files.contains { $0.id == itemID } }) else {
+            throw PipelineFailure.server(code: "error.library.not_found")
+        }
+        server.setTitle(cleaned, post: post.id)
+        return PostTitleResult(post: post.id, title: cleaned)
     }
 
     /// Previews: the post of `itemID` goes. In `.renditions` the first call for a post answers partial

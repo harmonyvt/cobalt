@@ -25,7 +25,7 @@ import { cropToPixels, parseCrop } from "../helper/crop.js";
 import { STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "./gate";
 import { SERVICE_KEY_ID, insertMediaItem, mediaNameFromUrl, pageLink } from "./library";
 import { LIVE_PUSH_MS, type LiveHooks, type LiveRenderEvent } from "./live";
-import type { NotifyHooks, NotifyRenderEvent } from "./notify";
+import { NOTIFY_MAX_BODY_BYTES, parseOptIn, type NotifyHooks, type NotifyRenderEvent } from "./notify";
 import { PosterService, POSTER_BATCH, type MediaStore } from "./poster";
 import { publishStudio } from "./publish";
 
@@ -47,6 +47,24 @@ export const UNAVAILABLE_AFTER_MS = 30_000;
 export const MAX_FETCH_ATTEMPTS = 3;
 // POST /studio waits at most this long for the helper to accept the fetch.
 export const KICK_MS = 4000;
+// The same for a share-sheet save (`origin: "share"`, section 14): its client is a background
+// upload that must be answered before the extension goes, so the container's cold start
+// (several seconds) is left to the sweep, which is already scheduled.
+export const SHARE_KICK_MS = 1200;
+// `GET /studio/recent` (section 14): the sessions a key created from a share sheet are
+// remembered this long, and at most this many are listed.
+export const SHARE_KEEP_MS = 24 * 60 * 60 * 1000;
+export const RECENT_MAX = 25;
+const SHARE_PREFIX = "share:";
+type ShareRecord = { keyId: string; at: number };
+
+// What POST /studio needs of the Hark service: the very call `PUT /studio/<sid>/notify` makes
+// (NotifyService.put, notify.ts). A structural type so `NotifyHooks` stays as it is.
+type NotifyOptInCall = {
+    put(keyId: string, sid: string, raw: string): Promise<{ status: number; body: unknown }>;
+};
+const canOptIn = (n: unknown): n is NotifyOptInCall =>
+    typeof n === "object" && n !== null && typeof (n as { put?: unknown }).put === "function";
 export const MAX_SOURCE_BYTES = 200 * 1024 * 1024;
 export const MAX_BODY_BYTES = 8192;
 export const MAX_STUDIO_WAIT_SECONDS = 25;
@@ -685,12 +703,16 @@ export class StudioService {
     async create(keyId: string, rawBody: string): Promise<StudioReply> {
         let link: string | null = null;
         let publicFlag: unknown;
+        let originField: unknown;
+        let notifyField: unknown;
         try {
             if (rawBody.length <= MAX_BODY_BYTES) {
                 const parsed = JSON.parse(rawBody);
                 if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                     link = linkFrom((parsed as { url?: unknown }).url);
                     publicFlag = (parsed as { public?: unknown }).public;
+                    originField = (parsed as { origin?: unknown }).origin;
+                    notifyField = (parsed as { notify?: unknown }).notify;
                 }
             }
         } catch {
@@ -702,10 +724,28 @@ export class StudioService {
             return studioErr(400, "error.studio.invalid_params");
         }
         const wantsPublic = publicFlag === true;
+        // `origin: "share"` (section 14): a share sheet's background save. Nothing else is accepted.
+        if (originField !== undefined && originField !== null && originField !== "share") {
+            return studioErr(400, "error.studio.invalid_params");
+        }
+        const fromShare = originField === "share";
+        // `notify: {on, label}` (section 14): the opt-in of PUT /studio/<sid>/notify, validated by
+        // the same parser BEFORE anything is created.
+        let optIn: string | null = null;
+        if (notifyField !== undefined && notifyField !== null) {
+            const text = isPlainObject(notifyField) ? JSON.stringify(notifyField) : "";
+            if (text === "" || new TextEncoder().encode(text).length > NOTIFY_MAX_BODY_BYTES || !parseOptIn(text)) {
+                return studioErr(400, "error.notify.invalid");
+            }
+            optIn = text;
+        }
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.reapOrphans();
-        if ((await this.saveActive()) || this.encoding()) {
+        // A share sheet has no one to retry a refusal: its save queues behind the one running (a
+        // save waits for the helper up to BUSY_WAIT_MS, then fails with error.studio.busy, which
+        // the opt-in announces).
+        if (!fromShare && ((await this.saveActive()) || this.encoding())) {
             return studioErr(429, "error.studio.busy");
         }
 
@@ -727,19 +767,94 @@ export class StudioService {
         } catch {
             // advance() starts the save from the D1 row when there is no record
         }
+        if (fromShare) await this.rememberShare(keyId, sid, now);
+        // The opt-in goes in before the save can move, so even an instant save is announced.
+        const notifyBody = optIn === null ? undefined : await this.optInAtCreate(keyId, sid, optIn);
 
         // Nothing runs after this response: the save only moves while the
         // studio page polls GET /studio/<sid> (-> advance), or the job sweep
         // (scheduled below) runs. Try once now to have the helper accept the
         // fetch, but never hold the 201 for long.
         await this.scheduleSweep();
-        await this.kick(sid);
+        await this.kick(sid, fromShare ? SHARE_KICK_MS : undefined);
 
         const base = this.d.webBaseUrl.replace(/\/+$/, "");
         return {
             status: 201,
-            body: { status: "success", id: sid, url: `${base}/studio/${sid}` },
+            body: {
+                status: "success",
+                id: sid,
+                url: `${base}/studio/${sid}`,
+                ...(notifyBody ? { notify: notifyBody } : {}),
+            },
         };
+    }
+
+    // The session was made by a share sheet: `GET /studio/recent` lists it for its key. Records
+    // older than SHARE_KEEP_MS are dropped here. Never fails the create.
+    private async rememberShare(keyId: string, sid: string, now: number): Promise<void> {
+        try {
+            const all = await this.d.storage.list<ShareRecord>({ prefix: SHARE_PREFIX });
+            for (const [k, rec] of all) {
+                if (!rec || now - rec.at > SHARE_KEEP_MS) await this.d.storage.delete(k);
+            }
+            await this.d.storage.put(`${SHARE_PREFIX}${sid}`, { keyId, at: now } satisfies ShareRecord);
+        } catch (e) {
+            console.error("[studio] could not remember share", String(e instanceof Error ? e.name : "error"));
+        }
+    }
+
+    // The Hark opt-in of a session that was just created (the body of PUT /studio/<sid>/notify,
+    // answered by the same service). The save is not refused when it cannot be stored: the owner
+    // still has the app's own poll.
+    private async optInAtCreate(
+        keyId: string,
+        sid: string,
+        raw: string,
+    ): Promise<{ bridge: boolean; on: unknown; label: unknown; expires_at: unknown } | undefined> {
+        const notify = this.d.notify;
+        if (!canOptIn(notify)) return undefined;
+        let out: { bridge: boolean; on: unknown; label: unknown; expires_at: unknown } | undefined;
+        await this.notifyCall("create opt-in", async () => {
+            const r = await notify.put(keyId, sid, raw);
+            const b = r.body as { bridge?: unknown; on?: unknown; label?: unknown; expires_at?: unknown } | null;
+            if (r.status === 200 && b) out = { bridge: b.bridge === true, on: b.on ?? null, label: b.label ?? null, expires_at: b.expires_at ?? null };
+        });
+        return out;
+    }
+
+    // GET /studio/recent?since=<ms>&limit=<1..25> (keyed): the sessions this key created from a
+    // share sheet in the last 24 hours (newest first), as GET /studio/<sid> shows them. The
+    // app asks when it opens: a build with no app group cannot read what the extension left.
+    async recent(keyId: string, sinceRaw: string | null, limitRaw: string | null): Promise<StudioReply> {
+        const now = this.d.now();
+        const floor = now - SHARE_KEEP_MS;
+        const parsedSince = sinceRaw !== null && /^\d{1,15}$/.test(sinceRaw) ? Number(sinceRaw) : floor;
+        const since = Math.max(floor, parsedSince);
+        const parsedLimit = limitRaw !== null && /^\d{1,3}$/.test(limitRaw) ? Number(limitRaw) : RECENT_MAX;
+        const limit = Math.min(RECENT_MAX, Math.max(1, parsedLimit));
+        const mine: { sid: string; at: number }[] = [];
+        try {
+            for (const [k, rec] of await this.d.storage.list<ShareRecord>({ prefix: SHARE_PREFIX })) {
+                if (!rec) continue;
+                if (rec.keyId === keyId && rec.at >= since) mine.push({ sid: k.slice(SHARE_PREFIX.length), at: rec.at });
+            }
+        } catch {
+            return studioErr(503, "error.api.generic");
+        }
+        mine.sort((a, b) => b.at - a.at);
+        const sessions: unknown[] = [];
+        try {
+            for (const { sid } of mine.slice(0, limit)) {
+                const row = await getSession(this.d.db, sid);
+                // an expired session is gone for the app too; a row of another key never shows
+                if (!row || row.key_id !== keyId || row.expires_at <= now) continue;
+                sessions.push(sessionBody(row, [], this.progress.get(row.id)));
+            }
+        } catch {
+            return studioErr(503, "error.api.generic");
+        }
+        return { status: 200, body: { status: "success", now, sessions } };
     }
 
     // One advance step under the lock, bounded by KICK_MS. If it overruns, it
@@ -749,11 +864,12 @@ export class StudioService {
     // held, and every later poll just waited on it (live, 2026-10-01). Unlocked,
     // a hung kick blocks nothing; the helper treats a repeated /fetch for the
     // same id as the same job.
-    private async kick(sid: string): Promise<void> {
+    private async kick(sid: string, capMs?: number): Promise<void> {
         const p = this.step(sid).catch(() => POLL_INTERVAL_MS);
         let timer: ReturnType<typeof setTimeout> | undefined;
         const timeout = new Promise<void>((resolve) => {
-            timer = setTimeout(resolve, this.d.kickMs ?? KICK_MS);
+            // a share sheet's cap never exceeds the configured one (tests shorten it)
+            timer = setTimeout(resolve, Math.min(capMs ?? Infinity, this.d.kickMs ?? KICK_MS));
         });
         try {
             await Promise.race([p.then(() => {}), timeout]);
@@ -1794,6 +1910,15 @@ export async function handleStudioRoute(
         const keyId = request.headers.get(KEY_ID_HEADER);
         if (!keyId) return new Response(null, { status: 403 });
         return toResponse(await service.create(keyId, await request.text()));
+    }
+
+    // GET /studio/recent: the share sheet's saves, for the key the Worker verified (section 14).
+    if (request.method === "GET" && p === "/studio/recent") {
+        const keyId = request.headers.get(KEY_ID_HEADER);
+        if (!keyId) return new Response(null, { status: 403 });
+        const res = toResponse(await service.recent(keyId, url.searchParams.get("since"), url.searchParams.get("limit")));
+        res.headers.set("cache-control", "no-store");
+        return res;
     }
 
     // POST /studio/upload/adopt: the Worker's own call after PUT /studio/upload

@@ -317,6 +317,9 @@ struct FocusLayer: View {
                 }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // the warm-up instance (HomeScreen) is built and laid out but never drawn: at idle its glass rows were
+        // visible over the paste and file circles during the first second of every launch (owner, 2026-10-05)
+        .opacity(warm ? 0 : 1)
         .coordinateSpace(name: "focusLayer")
         .heroFullScreen(item: $fullScreen) { closedFullScreen(at: $0) }
         // the bar follows the focused planet's player (made when the video first shows, handed away on the return)
@@ -749,6 +752,12 @@ struct FocusLayer: View {
         }
         // on the wide tiers the rows do not stretch across the whole column
         .frame(maxWidth: Self.columnWidth)
+        // A glass pane inside a `GlassEffectContainer` is drawn by the container, so the per-control `appear`
+        // opacity above does not hide it: before the planet has lifted (the star's whole flight, and the
+        // warm-up instance) "save to photos" and "close" showed through, half faded, over the circles. The
+        // container itself is what is hidden until the lift.
+        .opacity(lifted && !warm ? 1 : 0)
+        .allowsHitTesting(lifted && !warm)
     }
 
     @ViewBuilder

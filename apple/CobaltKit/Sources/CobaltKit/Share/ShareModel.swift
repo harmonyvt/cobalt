@@ -120,8 +120,11 @@ public final class ShareModel {
             intake: SystemFileIntake(), isPreview: false)
         ctx.background.allowsDetach = false      // the sheet hands off through `ShareCore`, never `detach()`
         ctx.frameEdge = 160                      // ~120 MB in an extension: small frames
-        // The quick card unless the owner asked for the full sheet (CONTRACT-SHARE-QUICK.md).
-        let model = ShareModel(context: ctx, pipeline: Pipeline(context: ctx), quick: !settings.shareFullSheet)
+        // Always the full sheet: a link is saved by `InstantShare.run` before this is ever called (unless the
+        // owner turned "show the full share sheet" on), so what reaches here is a file (its upload runs in
+        // this process) or the owner's explicit choice (CONTRACT-SHARE-QUICK.md section 9). The quick card
+        // is kept for previews and tests only.
+        let model = ShareModel(context: ctx, pipeline: Pipeline(context: ctx), quick: false)
         // The original follows the sheet out through a background URLSession of its own (only one
         // process may use a background session at a time), recorded in the app group.
         ctx.photosLedger = .shared()
@@ -425,13 +428,13 @@ enum ShareInbox {
         return ext.isEmpty ? base : "\(base).\(ext)"
     }
 
-    private static func loadURL(_ provider: NSItemProvider) async -> URL? {
+    static func loadURL(_ provider: NSItemProvider) async -> URL? {
         await withCheckedContinuation { (continuation: CheckedContinuation<URL?, Never>) in
             _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
         }
     }
 
-    private static func loadString(_ provider: NSItemProvider) async -> String? {
+    static func loadString(_ provider: NSItemProvider) async -> String? {
         await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             _ = provider.loadObject(ofClass: String.self) { string, _ in continuation.resume(returning: string) }
         }

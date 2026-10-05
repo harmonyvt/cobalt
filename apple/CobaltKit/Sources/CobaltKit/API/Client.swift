@@ -30,6 +30,10 @@ public protocol CobaltClient: Sendable {
     /// `DELETE /library/items/<id>/post` (CONTRACT-MEDIA 6.1), only when `features.delete_post`: deletes
     /// the whole post the file `itemID` belongs to. A partial result is returned, not thrown.
     func deletePost(anchor itemID: String) async throws -> PostDeleteResult
+    /// `PATCH /library/items/<id>/post` (CONTRACT-LIBRARY2 4.2), only when `features.titles`: sets (or, with
+    /// nil, clears) the custom title of the post the file `itemID` belongs to. The caller sends a title
+    /// that `MediaTitle.clean` already accepted.
+    func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult
     // Live Activities (APP-API-CONTRACT section 8; keyed; the server never wakes its container for these)
     func registerLiveStartToken(_ token: String, environment: LiveEnvironment) async throws   // PUT /live/start-token
     func registerLiveRun(_ r: LiveRunRegistration) async throws -> LiveRunReply                // PUT /live/runs/<run>
@@ -49,4 +53,17 @@ extension CobaltClient {
     public func cancelNotify(session id: String) async throws {}
     /// A client that predates the route says the server cannot do it.
     public func deletePost(anchor itemID: String) async throws -> PostDeleteResult { throw PipelineFailure.unsupported }
+    /// Likewise: a client that predates titles says the server cannot do it.
+    public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult { throw PipelineFailure.unsupported }
+}
+
+/// What `PATCH /library/items/<id>/post` answers: `{"status":"success","post":"<post key>","title":"…"|null}`.
+public struct PostTitleResult: Sendable, Equatable, Decodable {
+    public var post: String
+    public var title: String?          // nil = the custom title is cleared
+
+    public init(post: String, title: String?) {
+        self.post = post
+        self.title = title
+    }
 }

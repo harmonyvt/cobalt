@@ -53,6 +53,14 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `features.telemetry`: `POST /telemetry` takes crash reports and logs. False when absent: the app
     /// then sends nothing and keeps its buffer on the device.
     public var telemetry: Bool = false
+    /// `features.create_notify`: `POST /studio` takes `notify` (the Hark opt-in, registered with the
+    /// session) and `origin: "share"`, and `GET /studio/recent` lists a key's share saves
+    /// (APP-API-CONTRACT section 14). False when absent: the share extension's instant save then still
+    /// works on the opt-in-less server, but nothing announces it.
+    public var createNotify: Bool = false
+    /// `features.titles`: `PATCH /library/items/<id>/post` exists and `GET /library` sends `custom_title`
+    /// (CONTRACT-LIBRARY2 decision 7). False when absent: no title sheet, rename is local-only.
+    public var titles: Bool = false
 
     public static let unknown = Capabilities(
         kind: .unreachable, cobaltVersion: nil, studio: false, upload: false, library: false,

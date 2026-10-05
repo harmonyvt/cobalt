@@ -7,6 +7,8 @@ import Foundation
 //   cobalt-apple://job/<uuid>?session=<sid>[&trim=1] the same, with the run's studio session
 //   cobalt-apple://session/<sid>                     a run known only by its session (Hark)
 //
+// A run whose original is already in the store opens as that media (`requestedMediaID`).
+//
 // The session matters on a build re-signed without the app group: the app then cannot read the
 // share sheet's job record, and follows the run from its session alone.
 
@@ -49,6 +51,8 @@ extension AppModel {
     /// Opens the run a link names. Returns false when `url` is not a run link (the caller passes it to
     /// `open(_:)`).
     ///
+    /// - The run has settled and its original is in the store (a finished save the share sheet handed
+    ///   off, the Hark "saved" tap): `requestedMediaID` asks the home screen to open that media.
     /// - The home pipeline already follows the run: the save tab, nothing else (it is on screen).
     /// - The app has the run's job record: `open(_:)` takes it as before (only over a quiet home screen).
     /// - No record, but the link carries the session: the home pipeline follows the session as a
@@ -57,10 +61,28 @@ extension AppModel {
     public func openRunLink(_ url: URL) -> Bool {
         guard let link = RunLink(url) else { return false }
         selectedTab = .save
-        if isFollowing(link) { return true }
         let all = jobs.all()
         let byRun = link.run.flatMap { id in all.first { $0.id == id } }
         let bySession = link.session.flatMap { sid in all.filter { $0.sessionID == sid }.max { $0.updatedAt < $1.updatedAt } }
+        // A run still on the home screen is left to it; a settled one (idle, failed, finished) whose
+        // original is already here is opened as the media itself. "Trim in cobalt" is the owner asking
+        // for the trim, which the home pipeline gives, so that stays.
+        let following = isFollowing(link)
+        let wantsTrim = link.trim || (byRun ?? bySession)?.wantsTrim == true
+        if !wantsTrim, !following || isQuietForRunLink,
+           let sid = link.session ?? byRun?.sessionID,
+           let media = store.media.first(where: { $0.original?.sessionID == sid }) {
+            // nothing left to follow: the record goes (as a settled run's does) so the next foreground
+            // does not resume it over the media
+            if let job = byRun ?? bySession {
+                jobs.remove(job.id)
+                if !ctx.isPreview { Notifications.clear(jobID: job.id) }
+            }
+            Telemetry.log(.info, .share, "run link opened media")
+            requestedMediaID = media.id
+            return true
+        }
+        if following { return true }
         if let job = byRun ?? bySession {
             open(URL(string: "cobalt-apple://job/\(job.id.uuidString)")!)
             return true

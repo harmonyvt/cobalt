@@ -18,6 +18,9 @@ public struct LibraryFile: Sendable, Codable, Equatable, Identifiable {
     public var createdAt: Date
     public var mediaName: String?
     public var deletable: Bool
+    /// `poster_url` (CONTRACT-LIBRARY2 decision 19): the server's still of a video file, a
+    /// `https://media.capybaraharmony.com/<10 base62>.jpg`; nil when the server sends none (a webp never has one).
+    public var posterURL: URL?
 
     /// private → privateCopy; public image/webp → webp; other public → hostedLink.
     public var role: Role {
@@ -31,6 +34,7 @@ extension LibraryFile {
     enum CodingKeys: String, CodingKey {
         case id, kind, source, name, url, contentType, bytes, width, height, duration
         case createdAt, mediaName, deletable
+        case posterURL = "posterUrl"           // `poster_url` after convertFromSnakeCase
     }
 
     public init(from decoder: Decoder) throws {
@@ -49,6 +53,7 @@ extension LibraryFile {
         // The upload response's `item` has neither of these; the library listing always does.
         mediaName = try c.decodeIfPresent(String.self, forKey: .mediaName)
         deletable = try c.decodeIfPresent(Bool.self, forKey: .deletable) ?? false
+        posterURL = try? c.decodeIfPresent(URL.self, forKey: .posterURL)      // a bad poster never loses the file
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -66,6 +71,7 @@ extension LibraryFile {
         try c.encode(createdAt, forKey: .createdAt)
         try c.encodeIfPresent(mediaName, forKey: .mediaName)
         try c.encode(deletable, forKey: .deletable)
+        try c.encodeIfPresent(posterURL, forKey: .posterURL)
     }
 }
 
@@ -94,6 +100,10 @@ public struct LibraryPost: Sendable, Codable, Equatable, Identifiable {
     public var createdAt: Date
     public var session: LibrarySession?
     public var files: [LibraryFile]
+    /// `custom_title` (CONTRACT-LIBRARY2 decision 1): the owner's title for this post; nil when none is set.
+    public var customTitle: String?
+    /// `poster_url` on the post: the original's poster, else any file's; nil when the server sends none.
+    public var posterURL: URL?
 
     /// `LinkInfo(link).ref`
     public var ref: String? { link.flatMap { LinkInfo($0)?.ref } }
@@ -112,6 +122,8 @@ public struct LibraryPost: Sendable, Codable, Equatable, Identifiable {
 extension LibraryPost {
     enum CodingKeys: String, CodingKey {
         case id, service, link, title, duration, width, height, createdAt, session, files
+        case customTitle
+        case posterURL = "posterUrl"           // `poster_url` after convertFromSnakeCase
     }
 
     public init(from decoder: Decoder) throws {
@@ -126,6 +138,8 @@ extension LibraryPost {
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         session = try c.decodeIfPresent(LibrarySession.self, forKey: .session)
         files = (try c.decodeIfPresent([Lossy<LibraryFile>].self, forKey: .files) ?? []).compactMap(\.value)
+        customTitle = try? c.decodeIfPresent(String.self, forKey: .customTitle)
+        posterURL = try? c.decodeIfPresent(URL.self, forKey: .posterURL)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -140,6 +154,8 @@ extension LibraryPost {
         try c.encode(createdAt, forKey: .createdAt)
         try c.encodeIfPresent(session, forKey: .session)
         try c.encode(files, forKey: .files)
+        try c.encodeIfPresent(customTitle, forKey: .customTitle)
+        try c.encodeIfPresent(posterURL, forKey: .posterURL)
     }
 }
 

@@ -115,9 +115,15 @@ struct SettingsScreen: View {
     private var shareSheetSection: some View {
         #if os(iOS)
         Section {
+            Toggle(isOn: Binding(get: { settings.shareFullSheet }, set: { settings.shareFullSheet = $0 })) {
+                Label(Copy.Sync.fullSheet, systemImage: "rectangle.expand.vertical")
+            }
+            // The countdown only runs on a sheet that opened as the full sheet (CONTRACT-SHARE-QUICK
+            // decision 7): with the quick card it has nothing to count down.
             Toggle(isOn: Binding(get: { settings.autoContinue }, set: { settings.autoContinue = $0 })) {
                 Label(Copy.Sync.autoContinue, systemImage: Symbol.Sync.autoContinue)
             }
+            .disabled(!settings.shareFullSheet)
             Picker(selection: Binding(get: { settings.autoContinueSeconds }, set: { settings.autoContinueSeconds = $0 })) {
                 ForEach(CobaltKit.Settings.autoContinueChoices, id: \.self) { seconds in
                     Text(Copy.Sync.seconds(seconds)).tag(seconds)
@@ -126,11 +132,11 @@ struct SettingsScreen: View {
                 Label(Copy.Sync.wait, systemImage: Symbol.Sync.wait)
             }
             .pickerStyle(.menu)
-            .disabled(!settings.autoContinue)
+            .disabled(!settings.shareFullSheet || !settings.autoContinue)
         } header: {
             header(Copy.Sync.shareGroup)
         } footer: {
-            footer(Copy.Sync.autoContinueFooter)
+            footer(settings.shareFullSheet ? Copy.Sync.autoContinueFooter : Copy.Sync.quickFooter)
         }
         #endif
     }

@@ -17,11 +17,14 @@ public struct Rendition: Sendable, Equatable, Identifiable {
     public var createdAt: Date
     public var clip: WebpClip?
     public var deletableName: String?   // the server's media_name when `DELETE /media/<name>` takes it
+    /// The server's poster (CONTRACT-LIBRARY2 decision 19): a webp's file poster (none today); the video's
+    /// hosted link's, else its private copy's. Nil when the server sends none.
+    public var posterURL: URL?
 
     public init(
         id: String, kind: Kind, local: StoredVideo? = nil, file: LibraryFile? = nil, hosted: LibraryFile? = nil,
         publicURL: URL? = nil, width: Int? = nil, height: Int? = nil, duration: Double? = nil, bytes: Int64? = nil,
-        createdAt: Date, clip: WebpClip? = nil, deletableName: String? = nil
+        createdAt: Date, clip: WebpClip? = nil, deletableName: String? = nil, posterURL: URL? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -36,6 +39,7 @@ public struct Rendition: Sendable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.clip = clip
         self.deletableName = deletableName
+        self.posterURL = posterURL
     }
 
     public var isWebp: Bool {
@@ -65,6 +69,9 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
     public var ref: String?
     public var link: URL?
     public var renditions: [Rendition]  // video first (when any), then webps oldest → newest
+    /// This device's copy of the media's custom title (CONTRACT-LIBRARY2 decision 8), set by whoever
+    /// builds the item from the store; `customTitle` prefers the server's.
+    public var localTitle: String?
 
     public init(
         id: String, local: StoredMedia?, post: LibraryPost?, service: String?, ref: String?, link: URL?,
@@ -131,7 +138,8 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
                 height: original?.height ?? privateFile?.height ?? hostedFile?.height ?? post?.height,
                 duration: original?.duration ?? privateFile?.duration ?? hostedFile?.duration ?? post?.duration,
                 bytes: original.map(\.bytes) ?? privateFile?.bytes ?? hostedFile?.bytes,
-                createdAt: privateFile?.createdAt ?? original?.createdAt ?? hostedFile?.createdAt ?? post?.createdAt ?? .distantPast))
+                createdAt: privateFile?.createdAt ?? original?.createdAt ?? hostedFile?.createdAt ?? post?.createdAt ?? .distantPast,
+                posterURL: hostedFile?.posterURL ?? privateFile?.posterURL))
         }
 
         struct WebpPair {
@@ -163,20 +171,26 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
                 id: rid, kind: .webp(number: n + 1), local: webp, file: file, publicURL: url,
                 width: webp?.width ?? file?.width, height: webp?.height ?? file?.height,
                 duration: webp?.duration ?? file?.duration, bytes: bytes,
-                createdAt: pair.at, clip: webp?.clip, deletableName: name))
+                createdAt: pair.at, clip: webp?.clip, deletableName: name, posterURL: file?.posterURL))
         }
 
         if renditions.isEmpty {
             // a post whose files are all unknown kinds: still one tab, from the post's own numbers
             renditions.append(Rendition(
                 id: "video", kind: .video, width: post?.width, height: post?.height, duration: post?.duration,
-                createdAt: post?.createdAt ?? .distantPast))
+                createdAt: post?.createdAt ?? .distantPast, posterURL: post?.posterURL))
         }
-        return MediaItem(
+        var item = MediaItem(
             id: local?.id ?? "post:\(post?.id ?? "")", local: local, post: post,
             service: post?.service ?? linkInfo?.service, ref: post?.ref ?? linkInfo?.ref, link: link,
             renditions: renditions)
+        item.localTitle = local.flatMap(Self.localTitle(of:))
+        return item
     }
+
+    /// This device's custom title of a media. Wave K2 reads `StoredVideo.title` here (decision 8); until
+    /// then the device keeps renames in `LibraryModel.localTitles` and `AppModel.mediaItem` overlays them.
+    static func localTitle(of local: StoredMedia) -> String? { nil }
 
     /// The server's media name of a public webp URL (`<10 letters or digits>.webp`), the name
     /// `DELETE /media/<name>` takes; nil for any other URL.

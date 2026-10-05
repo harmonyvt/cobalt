@@ -74,6 +74,85 @@ enum Notifications {
 
     static func identifier(_ kind: Kind, jobID: UUID) -> String { "job-\(jobID.uuidString)-\(kind.rawValue)" }
 
+    // MARK: Instant share (CONTRACT-SHARE-QUICK.md section 9)
+
+    /// There is a notification center only inside the app bundle: the test runner and previews have none
+    /// (touching it there traps), so everything below that reaches it checks this first.
+    static var runsInApp: Bool { Bundle.main.bundleURL.pathExtension == "app" }
+
+    static let instantPrefix = "instant-"
+    static func instantIdentifier(_ job: UUID) -> String { instantPrefix + job.uuidString.lowercased() }
+
+    /// "saving to cobalt" with the link's label under it: posted by the share extension the moment it has
+    /// queued the save. Quiet (passive, no sound): the real news is Hark's "saved". Opens cobalt.
+    static func instantSavingRequest(job: UUID, label: String) -> UNNotificationRequest {
+        let content = UNMutableNotificationContent()
+        content.title = "saving to cobalt"
+        content.body = label
+        content.threadIdentifier = "cobalt-saves"
+        content.interruptionLevel = .passive
+        content.userInfo = ["url": openURL]
+        return UNNotificationRequest(identifier: instantIdentifier(job), content: content, trigger: nil)
+    }
+
+    /// The save request was refused or never answered: this process is the only one that knows (no
+    /// session exists, so the server will not say). Opens cobalt.
+    static func instantFailedRequest(link: URL?, status: Int?) -> UNNotificationRequest {
+        let content = UNMutableNotificationContent()
+        content.title = "cobalt couldn't start that save"
+        var parts: [String] = []
+        if let link, let info = LinkInfo(link) { parts.append("\(info.service) · \(info.ref)") }
+        parts.append(instantFailedReason(status: status))
+        content.body = parts.joined(separator: " — ")
+        content.sound = .default
+        content.threadIdentifier = "cobalt-saves"
+        content.userInfo = ["url": openURL]
+        return UNNotificationRequest(identifier: "instant-failed-\(UUID().uuidString.lowercased())", content: content, trigger: nil)
+    }
+
+    static func instantFailedReason(status: Int?) -> String {
+        switch status {
+        case 401, 403: return "the key was not accepted"
+        case 429: return "the server was busy"
+        case .some(let s) where s >= 500: return "the server was not available"
+        case .some: return "the server said no"
+        case .none: return "the server could not be reached"
+        }
+    }
+
+    /// Only when the owner already allowed notifications: the extension never prompts.
+    static func postInstantSaving(job: UUID, label: String) async {
+        guard runsInApp || Bundle.main.bundleURL.pathExtension == "appex" else { return }
+        let center = UNUserNotificationCenter.current()
+        switch await center.notificationSettings().authorizationStatus {
+        case .authorized, .provisional, .ephemeral: break
+        default: return
+        }
+        try? await center.add(instantSavingRequest(job: job, label: label))
+    }
+
+    static func removeInstantSaving(job: UUID) {
+        guard runsInApp || Bundle.main.bundleURL.pathExtension == "appex" else { return }
+        let id = instantIdentifier(job)
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
+    }
+
+    /// The app is in front: every "saving to cobalt" the extension left has said what it had to say.
+    static func clearInstantSaving() {
+        guard runsInApp else { return }
+        let center = UNUserNotificationCenter.current()
+        Task {
+            let ids = await center.deliveredNotifications().map(\.request.identifier).filter { $0.hasPrefix(instantPrefix) && !$0.hasPrefix("instant-failed-") }
+            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+        }
+    }
+
+    static func postInstantFailed(link: URL?, status: Int?) async {
+        guard runsInApp else { return }
+        try? await UNUserNotificationCenter.current().add(instantFailedRequest(link: link, status: status))
+    }
+
     /// Asked in context, never at launch and never on a plain run: when the owner closes a run that
     /// still has work in flight, or the share sheet closes mid-render, which is when "your webp is
     /// ready" / "cobalt is still making your webp" have a reason to exist. Full alerts, not

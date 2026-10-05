@@ -75,6 +75,7 @@ enum PreviewData {
             mediaBaseURL: mediaBase, key: .valid, keyName: "iphone")
         caps.sourceWait = true
         caps.deletePost = true
+        caps.titles = true
         switch scenario {
         case .plainCobalt:
             caps.kind = .plainCobalt
@@ -84,6 +85,7 @@ enum PreviewData {
             caps.mediaBaseURL = nil
             caps.sourceWait = false
             caps.deletePost = false
+            caps.titles = false
             caps.key = .unknown; caps.keyName = nil
         case .legacyFork:
             caps.kind = .legacyFork
@@ -94,9 +96,11 @@ enum PreviewData {
             caps.mediaBaseURL = nil
             caps.sourceWait = false
             caps.deletePost = false
+            caps.titles = false
             caps.key = .unknown; caps.keyName = nil
         case .renditionsLegacy:
             caps.deletePost = false
+            caps.titles = false
         case .revokedKey:
             caps.key = .invalid; caps.keyName = nil
         default:
@@ -157,7 +161,8 @@ enum PreviewData {
         case .happy, .renditions, .renditionsLegacy:
             return (orbit(now: now) + renditionSeeds(now: now)).sorted { $0.createdAt > $1.createdAt }
         default:
-            return orbit(now: now)
+            // `.renameFails` is `.renditions` with a rename that fails once
+            return scenario.failsRenames ? (orbit(now: now) + renditionSeeds(now: now)).sorted { $0.createdAt > $1.createdAt } : orbit(now: now)
         }
     }
 
@@ -216,12 +221,12 @@ enum PreviewData {
         func file(
             _ id: String, _ kind: LibraryFile.Kind, _ source: LibraryFile.Source, name: String,
             url: String?, type: String, bytes: Int64, w: Int?, h: Int?, d: Double?, at when: Date,
-            media: String?, deletable: Bool
+            media: String?, deletable: Bool, poster: String? = nil
         ) -> LibraryFile {
             LibraryFile(
                 id: id, kind: kind, source: source, name: name, url: url.flatMap(URL.init(string:)),
                 contentType: type, bytes: bytes, width: w, height: h, duration: d, createdAt: when,
-                mediaName: media, deletable: deletable)
+                mediaName: media, deletable: deletable, posterURL: poster.flatMap(URL.init(string:)))
         }
 
         func session(_ id: String, daysLeft: Double, now: Date) -> LibrarySession {
@@ -232,11 +237,12 @@ enum PreviewData {
 
         func post(
             _ key: String, service: String, dur: Double, w: Int, h: Int, when: Date,
-            session: LibrarySession?, files: [LibraryFile]
+            session: LibrarySession?, files: [LibraryFile], custom: String? = nil, poster: String? = nil
         ) -> LibraryPost {
             LibraryPost(
                 id: key, service: service, link: link(forKey: key), title: name(forKey: key),
-                duration: dur, width: w, height: h, createdAt: when, session: session, files: files)
+                duration: dur, width: w, height: h, createdAt: when, session: session, files: files,
+                customTitle: custom, posterURL: poster.flatMap(URL.init(string:)))
         }
 
         let p1t = at(today, 12, 46), p2t = at(yesterday, 13, 59), p3t = at(yesterday, 13, 43)
@@ -247,10 +253,13 @@ enum PreviewData {
                  session: session("PrEvIeWsession0000000a1", daysLeft: 7, now: now), files: [
                     file("PrEvIeWitem000001", .public, .host, name: "instagram_Dd55fEyN1Yy.mp4",
                          url: "https://media.capybaraharmony.com/PrEvIeW011.mp4", type: "video/mp4",
-                         bytes: 8_300_000, w: 720, h: 1280, d: 37.43, at: p1t, media: "PrEvIeW011.mp4", deletable: false),
+                         bytes: 8_300_000, w: 720, h: 1280, d: 37.43, at: p1t, media: "PrEvIeW011.mp4", deletable: false,
+                         poster: "https://media.capybaraharmony.com/PrEvIeWp11.jpg"),
                     file("PrEvIeWitem000002", .private, .saved, name: "instagram_Dd55fEyN1Yy",
                          url: nil, type: "video/mp4", bytes: 8_300_000, w: 720, h: 1280, d: 37.43,
-                         at: p1t.addingTimeInterval(-10), media: nil, deletable: false)]),
+                         at: p1t.addingTimeInterval(-10), media: nil, deletable: false,
+                         poster: "https://media.capybaraharmony.com/PrEvIeWp11.jpg")],
+                 poster: "https://media.capybaraharmony.com/PrEvIeWp11.jpg"),
             post("Dd7P496wolG", service: "instagram", dur: 14.77, w: 720, h: 1280, when: p2t,
                  session: session("PrEvIeWsession0000000a2", daysLeft: 6, now: now), files: [
                     file("PrEvIeWitem000003", .public, .studio, name: "instagram_Dd7P496wolG.webp",
@@ -258,7 +267,8 @@ enum PreviewData {
                          bytes: 4_500_000, w: 480, h: 854, d: 10.1, at: p2t, media: "PrEvIeW001.webp", deletable: true),
                     file("PrEvIeWitem000004", .private, .saved, name: "instagram_Dd7P496wolG",
                          url: nil, type: "video/mp4", bytes: 4_331_778, w: 720, h: 1280, d: 14.77,
-                         at: p2t.addingTimeInterval(-10), media: nil, deletable: false),
+                         at: p2t.addingTimeInterval(-10), media: nil, deletable: false,
+                         poster: "https://media.capybaraharmony.com/PrEvIeWp22.jpg"),
                     // the two renders of `renditionSeeds` (CONTRACT-MEDIA 4.4): 1:1 and 4:5 crops
                     file("PrEvIeWitem000012", .public, .studio, name: "instagram_Dd7P496wolG.webp",
                          url: "https://media.capybaraharmony.com/PrEvIeW005.webp", type: "image/webp",
@@ -267,7 +277,8 @@ enum PreviewData {
                     file("PrEvIeWitem000013", .public, .studio, name: "instagram_Dd7P496wolG.webp",
                          url: "https://media.capybaraharmony.com/PrEvIeW006.webp", type: "image/webp",
                          bytes: 1_600_000, w: 480, h: 600, d: 5.4, at: p2t.addingTimeInterval(32 * 60),
-                         media: "PrEvIeW006.webp", deletable: true)]),
+                         media: "PrEvIeW006.webp", deletable: true)],
+                 poster: "https://media.capybaraharmony.com/PrEvIeWp22.jpg"),
             post("2105435404002562056", service: "x", dur: 5.46, w: 480, h: 568, when: p3t,
                  session: session("PrEvIeWsession0000000a3", daysLeft: 6, now: now), files: [
                     file("PrEvIeWitem000005", .public, .studio, name: "twitter_2105435404002562056.webp",
@@ -275,7 +286,8 @@ enum PreviewData {
                          bytes: 841_000, w: 480, h: 568, d: 5.4, at: p3t, media: "PrEvIeW002.webp", deletable: true),
                     file("PrEvIeWitem000006", .private, .saved, name: "twitter_2105435404002562056",
                          url: nil, type: "video/mp4", bytes: 256_000, w: 480, h: 568, d: 5.46,
-                         at: p3t.addingTimeInterval(-10), media: nil, deletable: false)]),
+                         at: p3t.addingTimeInterval(-10), media: nil, deletable: false)],
+                 custom: "kitchen timer loop"),
             post("2105432512428445875", service: "x", dur: 1.9, w: 498, h: 280, when: p4t,
                  session: nil, files: [
                     file("PrEvIeWitem000007", .private, .saved, name: "twitter_2105432512428445875",
@@ -302,4 +314,53 @@ enum PreviewData {
             posts: posts, postCount: 15, fileCount: 24,
             publicBytes: 17_000_000, privateBytes: 36_000_000, next: nil)
     }
+
+    /// The owner's uploads (service "upload", no link; public by default, so each has a hosted copy and a
+    /// poster; `crop-gestures.mov` carries a custom title). NOT part of `libraryPage`: three tests pin that
+    /// page at six posts. Tests (and a preview that wants them) append these to `library.posts`.
+    static func uploadPosts(now: Date) -> [LibraryPost] {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today) ?? today
+        func at(_ day: Date, _ h: Int, _ m: Int) -> Date { day.addingTimeInterval(Double(h * 3_600 + m * 60)) }
+        func file(
+            _ id: String, _ kind: LibraryFile.Kind, _ source: LibraryFile.Source, name: String,
+            url: String?, type: String, bytes: Int64, w: Int, h: Int, d: Double, at when: Date,
+            media: String?, poster: String
+        ) -> LibraryFile {
+            LibraryFile(
+                id: id, kind: kind, source: source, name: name, url: url.flatMap(URL.init(string:)),
+                contentType: type, bytes: bytes, width: w, height: h, duration: d, createdAt: when,
+                mediaName: media, deletable: false, posterURL: URL(string: poster))
+        }
+        func upload(
+            _ key: String, file name: String, type: String, bytes: Int64, w: Int, h: Int, d: Double, when: Date,
+            hosted: String, poster: String, custom: String? = nil
+        ) -> LibraryPost {
+            LibraryPost(
+                id: key, service: "upload", link: nil, title: name, duration: d, width: w, height: h,
+                createdAt: when, session: nil, files: [
+                    file("\(key)-pub", .public, .host, name: name,
+                         url: "https://media.capybaraharmony.com/\(hosted).mp4", type: "video/mp4", bytes: bytes,
+                         w: w, h: h, d: d, at: when, media: "\(hosted).mp4", poster: poster),
+                    file("\(key)-src", .private, .upload, name: name, url: nil, type: type, bytes: bytes,
+                         w: w, h: h, d: d, at: when.addingTimeInterval(-10), media: nil, poster: poster)],
+                customTitle: custom, posterURL: URL(string: poster))
+        }
+        return [
+            upload("PrEvIeWupost0001", file: "crop-gestures.mov", type: "video/quicktime", bytes: 8_979_061,
+                   w: 1206, h: 2622, d: 15.6, when: at(today, 10, 12), hosted: "PrEvIeW031",
+                   poster: "https://media.capybaraharmony.com/PrEvIeWp31.jpg", custom: "crop editor, pinch and drag"),
+            upload("PrEvIeWupost0002", file: "from photos · 4 oct.mp4", type: "video/mp4", bytes: 4_964_526,
+                   w: 1080, h: 1920, d: 6.0, when: at(yesterday, 22, 10), hosted: "PrEvIeW032",
+                   poster: "https://media.capybaraharmony.com/PrEvIeWp32.jpg"),
+        ]
+    }
+
+}
+
+extension PreviewScenario {
+    /// `.renameFails` (CONTRACT-LIBRARY2 4.2): `.renditions` data where the first `setTitle` for item
+    /// `PrEvIeWitem000008` fails. Matched by raw value so the preview layer needs no `AppModel.swift` edit.
+    var failsRenames: Bool { rawValue == "renameFails" }
 }

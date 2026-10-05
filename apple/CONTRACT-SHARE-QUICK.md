@@ -9,6 +9,11 @@ background original) and `deploy/cloudflare/APP-API-CONTRACT.md` sections 8 and 
 against the `apple-app` worktree. **(lane)** marks a call made here and open to review; **(owner)** what the
 owner asked for.
 
+> **Status (2026-10-05, evening): sections 1 to 7 describe the quick card and its overlay, which the extension no longer
+> presents. Section 9 is what ships: an INSTANT SHARE that shows nothing.** The card's logic (`ShareCore.quick`, `QuickCardView`,
+> `QuickOverlay`) is kept compiling and tested, reachable only from previews and the debug harness (`{"quick": true}`); deleting it is the
+> owner's call (section 9.9). The facts in section 0 (a share extension cannot start a Live Activity, APNs, the app group) still hold.
+
 ## 0. What is possible (sources in section 8)
 
 - **F1. A share extension cannot start a Live Activity.** Apple, `Activity.request`: "Use this function to
@@ -287,3 +292,134 @@ Not verified (and why):
 - Repo: `CobaltKit/Live/ShareLiveRelay.swift` (`eligible`), `Live/LiveEnvironment.swift`,
   `Models/AppModel.swift` (`pickUpSharedJobs`), `Store/Settings.swift` (`AppGroup.location`),
   `deploy/apple/README.md` ("Not verified here": entitlements re-mapped by Feather).
+
+## 9. Instant share (owner, 2026-10-05, evening: "maybe we remove the share screen entirely with a notification")
+
+Device facts that decided it (owner's iPhone, iOS 27.2, build 1.4, re-signed by Feather): the share host IGNORES the full-screen
+overlay request, so the quick card rendered inside a grey system sheet; the expand arrow then showed the full sheet with a huge empty
+grey area above the dark card. The app group is MISSING on that build (`AppGroup.location.kind == .fallback`), so the extension and the app
+share no files, no defaults and maybe no keychain group. The server's container cold-starts ("waking the server, 6 s"). **(lane)** marks a
+call made here and open to review; **(owner)** what the owner asked for.
+
+### 9.1 What the owner sees
+
+1. Share a link. The extension shows **nothing that waits**: no card, no countdown, no progress, no waiting for the save. The view is
+   clear; the host's system sheet may still flash for as long as the request takes (section 9.3 says how long).
+2. If notifications were already allowed (the extension never asks), a quiet local notification appears at once:
+   **"saving to cobalt"** with `instagram · Dc2QA4ng-US` under it (passive, no sound; tapping it opens cobalt).
+3. When the save is ready the server's Hark message says so (`APP-API-CONTRACT.md` section 9; tapping it opens cobalt on that run).
+4. The video lands in the orbit and, when the album sync is on, in Photos, without anyone opening the app (app group builds: the
+   system wakes the app) or the next time the app opens (every build).
+5. If the save could not even be queued, the sheet shows a **one-line card** with "open cobalt" and close instead of completing silently.
+
+The full sheet stays: the setting "show the full share sheet" (`Settings.shareFullSheet`, app-group defaults) turns the instant path
+off, and a file share always gets it (its upload runs inside the extension). **(lane)** The setting reaches the extension only when the
+app group exists; on the owner's current build the extension always takes the instant path.
+
+### 9.2 The extension (`CobaltShare/ShareViewController.swift`, `CobaltKit/Share/InstantShare.swift`)
+
+```
+viewDidLoad ─▶ InstantShare.run(inputItems)
+   │  read the link (URL attachment, URL in text, the item's own text; a link wins over a movie)
+   │  no key for this server ──▶ .failed(.noKey)          no link ──▶ .failed(.noLink)      a movie only ──▶ .needsSheet
+   │  POST /studio {url, public: true, origin: "share", notify: {on: [saved, failed], label: "<service> · <ref>"}}   (upload task, body from a file)
+   │  local notification "saving to cobalt" (only when already allowed)
+   ▼
+.saved ─▶ completeRequest        .needsSheet ─▶ the full sheet        .failed ─▶ the one-line card (open cobalt · close)
+```
+
+- **Which key.** The same lookup as the app (`Settings.apiKey(in:forServer:)`, keychain, shared access group when the build has one).
+  No key readable in the extension is `.failed(.noKey)` and the card says "cobalt can't find your key from here"; **nothing is queued**.
+  Unverified on the owner's build: whether its keychain group survived the re-sign (if not, the instant path cannot work there and the
+  owner has to use the full sheet setting or a build signed with their own team, section 6).
+- **Two transports, chosen by `AppGroup.location.kind`** (`Background/InstantSave.swift`):
+  - **background** (the app group exists): a background `URLSession` with `sharedContainerIdentifier`, identifier
+    `com.capybaraharmony.cobalt.bg.save.<job uuid>` (under the prefix the app's `.backgroundTask(.urlSession)` already matches). The extension
+    confirms the system holds the task (a round trip to the transfer daemon, at most 0.6 s) and completes. The task description is the
+    link, so the app's wake knows what it was.
+  - **foreground** (no app group): NSURLSession.h says a background session created in an extension without a valid shared container "is
+    invalidated upon creation", so none can exist on the owner's build. The request goes through an ephemeral session and the extension
+    waits for the server's answer (at most 10 s, then it completes anyway). The server keeps that short for a share (`SHARE_KICK_MS`,
+    `APP-API-CONTRACT.md` 14.1: 1.2 s plus Worker and D1). **(lane) This is the one place "shows nothing that waits" is approximate:** the
+    view is clear, but the host sheet can stay for about a second. A rejection (401, 5xx) or no connection is known here and shows the
+    failure card; the background transport cannot know.
+- **Time on screen.** Target under 300 ms on screen for the background transport (link read, one XPC round trip). Not measured on a
+  device (section 9.8).
+- **Sheet that hugs.** When the full sheet IS shown, `SheetFitter` now sets `preferredContentSize` as well as the detent, always, and
+  the controller never asks for `.overFullScreen` any more. The grey area above the card was the overlay's blur drawn inside a sheet
+  (the host ignored the overlay request and `sheetPresentationController` is not reachable from an extension's remote view, so the
+  fallback detection never fired).
+
+### 9.3 The server (`APP-API-CONTRACT.md` section 14; `features.create_notify`)
+
+`POST /studio` takes `notify` (registered atomically with the session, same parser and storage as `PUT /studio/<sid>/notify`) and
+`origin: "share"` (never refused as busy, answered within 1.2 s, remembered for 24 h). `GET /studio/recent` lists the key's share saves.
+All additive; an older server ignores the new fields.
+
+### 9.4 The app learns the session (`Photos/OriginalFetcher+Shares.swift`)
+
+Two ways, both ending in one hand-off to the app's background download (`?wait=90`, `PendingOriginals`, the existing store and album code):
+
+| way | when | needs |
+|---|---|---|
+| the system's wake | the extension's request finished while the app was not running (`.backgroundTask(.urlSession)` -> `handleBackgroundDownloads` -> `OriginalFetcher.handleWake`): the answer's session id | the app group; an app that was not force-quit |
+| `GET /studio/recent` | every foreground (`pickUpSharedJobs` -> `OriginalFetcher.reconcile`) | a key; a server with `create_notify`; iOS only |
+
+- **What is kept:** only with "keep videos on this iphone" on; one original per session (whatever the ledger or the store already has
+  is left alone, so the wake, the foreground and the home pipeline never download twice); a failed session is skipped (Hark said so).
+- **Name:** the session's title and size when the server has them (a ready session, or looked up when the file lands), else the link's last
+  path segment.
+- **A request that failed** (the wake saw a refusal or an error): a local notification, "cobalt couldn't start that save", with the link and
+  the reason. No session exists, so the server cannot say it. A build with no app group learns it only from the foreground transport's card.
+- **Housekeeping:** the request bodies the extension wrote (`Saves/*.json`) older than a day are deleted on foreground; the extension's
+  "saving to cobalt" notifications are cleared when the app comes to the front.
+
+### 9.5 Decisions
+
+1. **(owner, lane)** The extension shows no card, no countdown and no progress. Sections 1 to 3, 6, 7 and 2a are superseded for the extension.
+2. **(lane)** A link beats a movie when an app shares both (saving the link server-side is the point); a movie alone, or the setting, gets the
+   full sheet.
+3. **(lane)** `notify` is `saved` + `failed` and `public: true` always (the owner's "public by default"); a server without them ignores them.
+4. **(lane)** A share is never refused as busy: it queues behind the running save (the server waits for the helper up to two minutes). Two quick
+   shares both land.
+5. **(lane)** No `SharedJob`, no Live Activity from the extension: it does not know the session when it completes. Opening the notification
+   (`cobalt-apple://session/<sid>`) makes the app follow the run and start its activity, as before.
+6. **(lane)** The recent list is polled only on foreground, once per `reconcile` (one small GET); no polling in the background.
+
+### 9.6 Files
+
+`CobaltKit`: `Background/InstantSave.swift` (seams, engine, transports), `Share/InstantShare.swift` (intake, `InstantShare.run`),
+`Photos/OriginalFetcher+Shares.swift` (the app's half), `Photos/OriginalFetcher.swift` (seams, wake, reconcile), `Photos/BackgroundSessionID.swift`,
+`Share/Notifications.swift` (the two notifications), `Share/ShareModel.swift` (`live` builds the full sheet only), `API/HTTPCobaltClient.swift`
+(`shareSaveRequest`, `recentShares`, the flag), `Models/Server.swift` (`createNotify`). `CobaltShare`: `ShareViewController.swift`,
+`InstantFailure.swift`, `SheetFit.swift`, `ShareParts.swift` (copy), `ShareDebug.swift`. Tests: `InstantShareTests.swift` (27), api
+`test/instant-share.test.ts` (34).
+
+### 9.7 Copy (lowercase)
+
+`saving to cobalt` / `<service> · <ref>` (the notification); `cobalt couldn't start that save` + `<link> — <reason>` (the app's failure
+notification); the card: `cobalt can't find your key from here`, `there's no link here that cobalt can save`, `couldn't start the save`,
+`the server didn't accept your key`, `the server is busy, try again in a moment`, `the server isn't available right now`, `the server said
+no`, `couldn't reach the server`; button `open cobalt`.
+
+### 9.8 Verification (2026-10-05) and what is not verified
+
+Done: api tests (real SQL, the real `StudioService` and `NotifyService`); CobaltKit unit tests with fake transports, plus the real
+foreground transport against a loopback server (upload from a file, `Authorization`, JSON body, the answer read back); the app's wake and
+foreground discovery against the ledger and the store.
+
+Not verified (no device, and the simulator host was overloaded):
+- **Everything about the real extension in a real host:** the time on screen, whether the host's sheet flashes, `preferredContentSize` honoured
+  (or not) by the owner's iOS 27 host, the failure card's height in the host sheet.
+- **A background URLSession started from a share extension that then completes**, and the system waking the app for it
+  (`handleEventsForBackgroundURLSession`): only possible with the app group, which the owner's build lacks. Covered by the contract, not run.
+- **The keychain group on the owner's build** (if the key is not readable from the extension, every share shows the "can't find your key" card).
+- **The foreground transport after `completeRequest`:** the extension waits for the answer, so it does not depend on the process surviving
+  completion, but the 10 s ceiling means a very slow server completes with the request unconfirmed (the app finds the session on the next
+  foreground through `GET /studio/recent` if the server got it).
+- A share while the server is cold: the 1.2 s cap and the sweep that starts the save were tested with fakes, not through the edge.
+
+### 9.9 Left to the owner
+
+The quick card and the overlay are dormant code (about 750 lines: `QuickCard.swift`, `QuickOverlay.swift`, `ShareCore+Quick.swift`, their tests).
+They can be deleted, or kept for a future Live Activity route (section 6). A product call, not an engineering one.

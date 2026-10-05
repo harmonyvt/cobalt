@@ -13,6 +13,8 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// `.renditions` on an older deploy of this fork: no `features.delete_post`, so "delete everything"
     /// deletes the webps one by one (CONTRACT-MEDIA 1.12 (a)).
     case renditionsLegacy
+    /// `.renditions` where the first `setTitle` for item `PrEvIeWitem000008` fails (rename revert path).
+    case renameFails
 }
 
 public struct ServerSummary: Sendable, Equatable {
@@ -36,6 +38,11 @@ public final class AppModel {
     public internal(set) var isCheckingServer: Bool = false
     public internal(set) var pipeline: Pipeline           // the home pipeline
     public var selectedTab: AppTab = .save
+
+    /// A stored media a run link asks the home screen to open (CONTRACT-SHARE-QUICK.md R3): set by
+    /// `openRunLink` when the run it names has settled and its original is in the store; the home screen
+    /// opens that media's detail and sets this back to nil.
+    public var requestedMediaID: String?
 
     /// Live Activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
     @ObservationIgnored var liveManager: LiveActivityManager?
