@@ -42,6 +42,30 @@ export default defineConfig({
 			// container, never seen by clients. Uploaded with
 			// `cf deploy --secrets-file`, never in this repo.
 			COBALT_API_KEY: bindings.secret(),
+			// Live Activity push (APP-API-CONTRACT.md section 8): the APNs auth key
+			// (.p8, the whole PEM as one JSON string with \n escapes), its key id and
+			// the Apple team id. From ~/.config/cobalt/secrets.json through
+			// `--secrets-file` like COBALT_API_KEY. Read by the Worker (the
+			// capability flag) and the Durable Object (signing and sending); NONE of
+			// them goes into the container's envVars. Missing or empty: no pushes
+			// and `features.live_activity_push` is false (the app updates locally).
+			APNS_KEY_P8: bindings.secret(),
+			APNS_KEY_ID: bindings.secret(),
+			APNS_TEAM_ID: bindings.secret(),
+			APNS_BUNDLE_ID: bindings.text("com.capybaraharmony.cobalt"),
+			// Which way the DO reaches Apple: "worker" (fetch from the Durable
+			// Object, HTTP/2 negotiated by the runtime) or "helper" (the container's
+			// node:http2 relay, POST /apns; the DO still signs, no secret enters the
+			// container). Flip it and redeploy if GET /live/selftest shows a
+			// transport error. See ../README.md "Live Activities".
+			APNS_VIA: bindings.text("worker"),
+			// Hark notification bridge (APP-API-CONTRACT.md section 9): the owner's Hark
+			// webhook URL, a SECRET (from ~/.config/cobalt/secrets.json through
+			// `--secrets-file` like COBALT_API_KEY). Read by the Worker (the capability
+			// flag) and the Durable Object (sending); it does NOT go into the container's
+			// envVars. Missing, empty or not https: the bridge is off and
+			// `features.notify_bridge` is false.
+			HARK_WEBHOOK_URL: bindings.secret(),
 			// Per-owner client keys (SHA-256 hashes), managed by the web
 			// Worker. Schema: ../d1/migrations/0001_api_keys.sql
 			DB: bindings.d1({

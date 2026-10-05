@@ -1,0 +1,3 @@
+// Copy this file to Local.xcconfig (same folder; it is gitignored) and set your team.
+// Needed for device builds, the app group, keychain sharing and the share extension handoff.
+DEVELOPMENT_TEAM = ABCDE12345

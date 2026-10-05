@@ -1,8 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { KEY_ID_HEADER } from "../src/headers";
+import { LIVE_PUSH_MS, type LiveHooks } from "../src/live";
 import {
     BUSY_RETRY_MS,
     BUSY_WAIT_MS,
+    LOCK_STALE_MS,
+    SAVE_BUDGET_MS,
+    SWEEP_ITEM_MS,
+    SWEEP_RENDER_MS,
+    SWEEP_SAVE_SLACK_MS,
     SAVING_STUCK_MS,
     SESSION_TTL_MS,
     UNAVAILABLE_AFTER_MS,
@@ -26,7 +32,7 @@ const KEY_ID = "key-row-1";
 const SID = "aB3dE6gH9jK2mN5pQ8sTuV"; // 22
 const MEDIA = "https://media.capybaraharmony.com/";
 
-function setup() {
+function setup(scheduleSweep?: () => void | Promise<void>) {
     const db: FakeD1 = createFakeD1();
     const clock = new Clock();
     const kv = new MemoryKV();
@@ -41,6 +47,7 @@ function setup() {
         sleep: clock.sleep,
         ensureRunning: async () => {},
         helper: helper.helper,
+        scheduleSweep,
     });
     const make = (over: Partial<ConstructorParameters<typeof StudioService>[0]> = {}) =>
         new StudioService({
@@ -54,6 +61,7 @@ function setup() {
             ensureRunning: async () => {},
             helper: helper.helper,
             fixedLength,
+            scheduleSweep,
             ...over,
         });
     const studio = make();
@@ -781,7 +789,10 @@ describe("GET /studio/<sid>/render/<job> (render lifecycle)", () => {
         const s = setup();
         const job = await start(s);
         s.helper.jobPolls = 1;
-        expect(await s.studio.renderStatus(SID, job, 0)).toEqual({ status: 200, body: { status: "pending", job } });
+        expect(await s.studio.renderStatus(SID, job, 0)).toEqual({
+            status: 200,
+            body: { status: "pending", job, phase: null, frames_done: null, frames_total: null },
+        });
         s.clock.t += 5000;
         const done = await s.studio.renderStatus(SID, job, 0);
         expect(done.status).toBe(200);
@@ -824,7 +835,10 @@ describe("GET /studio/<sid>/render/<job> (render lifecycle)", () => {
         const s = setup();
         const job = await start(s);
         s.helper.jobPolls = 1e9;
-        expect(await s.studio.renderStatus(SID, job, 3)).toEqual({ status: 200, body: { status: "pending", job } });
+        expect(await s.studio.renderStatus(SID, job, 3)).toEqual({
+            status: 200,
+            body: { status: "pending", job, phase: null, frames_done: null, frames_total: null },
+        });
     });
 
     it("an encode error is recorded, answered 200 and stable", async () => {
@@ -939,5 +953,1030 @@ describe("handleStudioRoute (inside the Durable Object)", () => {
             expect((await handleStudioRoute(s.studio, req(m, p))).status).toBe(404);
         }
         expect(s.helper.calls).toEqual([]);
+    });
+});
+
+// ---------------------------------------------------------------------------------
+// APP-API-CONTRACT.md section 2: step / step_bytes / step_total / waking
+describe("save progress on the session body", () => {
+    const gated = () => {
+        let release!: () => void;
+        const gate = new Promise<void>((r) => (release = r));
+        return { gate, release };
+    };
+    const FIELDS = ["step", "step_bytes", "step_total", "waking"];
+    const progressOf = (r: { body: unknown }) => {
+        const b = asBody(r);
+        return { step: b.step, step_bytes: b.step_bytes, step_total: b.step_total, waking: b.waking };
+    };
+    const NONE = { step: null, step_bytes: null, step_total: null, waking: false };
+
+    it("sessionBody always carries the four fields: null / false unless the session is saving and progress is known", () => {
+        const row = {
+            id: SID, key_id: null, link: LINK, service: "x", title: null, status: "ready", error_code: null, r2_key: null,
+            content_type: null, bytes: null, duration: null, width: null, height: null, created_at: 1, expires_at: 2,
+        } as SessionRow;
+        const p = { step: "fetching" as const, bytes: 10, total: 20, waking: true };
+        for (const f of FIELDS) expect(sessionBody(row, [])).toHaveProperty(f);
+        expect(sessionBody({ ...row, status: "saving" }, [])).toMatchObject(NONE);
+        expect(sessionBody({ ...row, status: "saving" }, [], p)).toMatchObject({ step: "fetching", step_bytes: 10, step_total: 20, waking: true });
+        // a ready or failed session never shows stale progress
+        expect(sessionBody(row, [], p)).toMatchObject(NONE);
+        expect(sessionBody({ ...row, status: "error" }, [], p)).toMatchObject(NONE);
+    });
+
+    it("a link save: fetching (the helper's bytes and the content-length) -> reading (the probe) -> ready", async () => {
+        const s = setup();
+        s.helper.fetchPolls = 2;
+        const { id } = asBody(await create(s));
+
+        s.helper.fetchPendingFields = { stage: "downloading", bytes: 5000, total: 20000 };
+        expect(progressOf(await s.studio.advance(id, 0))).toEqual({ step: "fetching", step_bytes: 5000, step_total: 20000, waking: false });
+
+        // the helper is now probing: the bytes are what was downloaded, there is no total
+        s.helper.fetchPendingFields = { stage: "probing", bytes: 20000, total: null };
+        expect(progressOf(await s.studio.advance(id, 0))).toEqual({ step: "reading", step_bytes: 20000, step_total: null, waking: false });
+
+        const done = await s.studio.advance(id, 0);
+        expect(asBody(done).status).toBe("ready");
+        expect(progressOf(done)).toEqual(NONE);
+    });
+
+    it("the helper's bytes with no content-length: total stays null", async () => {
+        const s = setup();
+        s.helper.fetchPolls = 1;
+        s.helper.fetchPendingFields = { stage: "downloading", bytes: 123, total: null };
+        const { id } = asBody(await create(s));
+        expect(progressOf(await s.studio.advance(id, 0))).toEqual({ step: "fetching", step_bytes: 123, step_total: null, waking: false });
+    });
+
+    it("an old helper (no stage, bytes or total): step fetching, the numbers stay null", async () => {
+        const s = setup();
+        s.helper.fetchPolls = 1;
+        s.helper.fetchPendingFields = {};
+        const { id } = asBody(await create(s));
+        expect(progressOf(await s.studio.advance(id, 0))).toEqual({ step: "fetching", step_bytes: null, step_total: null, waking: false });
+    });
+
+    it("junk numbers from the helper are null, never passed through", async () => {
+        const s = setup();
+        s.helper.fetchPolls = 1;
+        s.helper.fetchPendingFields = { stage: "downloading", bytes: "lots", total: null };
+        const { id } = asBody(await create(s));
+        expect(progressOf(await s.studio.advance(id, 0))).toEqual({ step: "fetching", step_bytes: null, step_total: null, waking: false });
+    });
+
+    it("storing: bytes copied into R2 so far out of the helper's file size, counted chunk by chunk", async () => {
+        const s = setup();
+        const hold = gated();
+        const total = 4096;
+        // the helper's file arrives in three chunks, the last one after the test has looked
+        const st = s.make({
+            helper: async (path, init) => {
+                if (path.endsWith("/file")) {
+                    let sent = 0;
+                    return new Response(
+                        new ReadableStream<Uint8Array>(
+                            {
+                                async pull(c) {
+                                    if (sent === 2) await hold.gate;
+                                    const n = sent < 2 ? 1000 : total - 2000;
+                                    c.enqueue(new Uint8Array(n).fill(7));
+                                    sent++;
+                                    if (sent === 3) c.close();
+                                },
+                            },
+                            { highWaterMark: 0 },
+                        ),
+                        { headers: { "content-length": String(total) } },
+                    );
+                }
+                return s.helper.helper(path, init);
+            },
+        });
+        s.helper.videoBytes = new Uint8Array(total).fill(7);
+        const { id } = asBody(await st.create(KEY_ID, body({ url: LINK })));
+        const finishing = st.advance(id, 0); // takes the lock and copies into R2
+        await new Promise((r) => setTimeout(r, 30));
+        // a second poll does not wait for the copy: it answers with what the first has done
+        const mid = progressOf(await st.advance(id, 0));
+        expect(mid.step).toBe("storing");
+        expect(mid.step_total).toBe(total);
+        expect(mid.step_bytes).toBe(2000);
+        expect(mid.waking).toBe(false);
+        hold.release();
+        const done = await finishing;
+        expect(asBody(done)).toMatchObject({ status: "ready", bytes: total });
+        expect(progressOf(done)).toEqual(NONE);
+        expect(s.originals.objects.get(`originals/${id}.mp4`)!.bytes.length).toBe(total);
+    });
+
+    it("the onChunk contract the production copy loop follows: every chunk's size is reported, in order", async () => {
+        const seen: number[] = [];
+        const stream = new ReadableStream<Uint8Array>({
+            start(c) {
+                for (const n of [3, 5, 7]) c.enqueue(new Uint8Array(n));
+                c.close();
+            },
+        });
+        await new Response(fixedLength(stream, 15, (n) => seen.push(n))).arrayBuffer();
+        expect(seen).toEqual([3, 5, 7]);
+    });
+
+    it("waking is true while the save waits for the container to start, false once it is up", async () => {
+        const s = setup();
+        const hold = gated();
+        let running = false;
+        const st = s.make({
+            kickMs: 5,
+            isRunning: () => running,
+            ensureRunning: async () => {
+                await hold.gate;
+                running = true;
+            },
+        });
+        const { id } = asBody(await st.create(KEY_ID, body({ url: LINK })));
+        // the kick-off is stuck waking the container: a poll sees it
+        const poll = st.advance(id, 0);
+        await new Promise((r) => setTimeout(r, 20));
+        expect(progressOf(await st.advance(id, 0))).toEqual({ step: "fetching", step_bytes: null, step_total: null, waking: true });
+        hold.release();
+        await poll;
+        s.helper.fetchPolls = 1;
+        s.helper.fetchPendingFields = { stage: "downloading", bytes: 1, total: 2 };
+        // up now: the next step reports the helper, not waking
+        expect(progressOf(await st.advance(id, 0))).toMatchObject({ step: "fetching", waking: false });
+    });
+
+    it("waking is false when the container is already running", async () => {
+        const s = setup();
+        const hold = gated();
+        const st = s.make({ kickMs: 5, isRunning: () => true, ensureRunning: () => hold.gate });
+        const { id } = asBody(await st.create(KEY_ID, body({ url: LINK })));
+        const poll = st.advance(id, 0);
+        await new Promise((r) => setTimeout(r, 20));
+        expect(progressOf(await st.advance(id, 0))).toMatchObject({ step: "fetching", waking: false });
+        hold.release();
+        await poll;
+    });
+
+    it("an unreachable container ends the wait: waking goes back to false", async () => {
+        const s = setup();
+        const st = s.make({
+            isRunning: () => false,
+            ensureRunning: async () => {
+                throw new Error("no instance");
+            },
+        });
+        const { id } = asBody(await st.create(KEY_ID, body({ url: LINK })));
+        expect(progressOf(await st.advance(id, 0))).toMatchObject({ step: "fetching", waking: false });
+    });
+
+    it("an adopted upload: reading while the helper probes, then ready with no progress", async () => {
+        const s = setup();
+        const hold = gated();
+        const st = s.make({
+            helper: async (path, init) => {
+                if (path.startsWith("/probe")) await hold.gate;
+                return s.helper.helper(path, init);
+            },
+        });
+        s.originals.objects.set("uploads/Ab3dE6gH9jK2mN5p.mp4", { bytes: new Uint8Array(4096).fill(5), contentType: "video/mp4", meta: {} });
+        const created = await st.adopt(
+            "svc",
+            body({ r2_key: "uploads/Ab3dE6gH9jK2mN5p.mp4", name: "holiday.mp4", content_type: "video/mp4", bytes: 4096, item_id: "Ab3dE6gH9jK2mN5p" }),
+        );
+        const id = asBody(created).id;
+        const probing = st.advance(id, 0);
+        await new Promise((r) => setTimeout(r, 20));
+        expect(progressOf(await st.advance(id, 0))).toEqual({ step: "reading", step_bytes: null, step_total: null, waking: false });
+        hold.release();
+        const done = await probing;
+        expect(asBody(done).status).toBe("ready");
+        expect(progressOf(done)).toEqual(NONE);
+    });
+
+    it("a failed save has no progress left", async () => {
+        const s = setup();
+        s.helper.fetchError = "error.api.fetch.fail";
+        const { id } = asBody(await create(s));
+        const r = await s.studio.advance(id, 0);
+        expect(asBody(r)).toMatchObject({ status: "error", error: { code: "error.api.fetch.fail" } });
+        expect(progressOf(r)).toEqual(NONE);
+    });
+
+    it("progress is in memory only: a fresh Durable Object (after an eviction) starts from its next step", async () => {
+        const s = setup();
+        s.helper.fetchPolls = 1;
+        s.helper.fetchPendingFields = { stage: "downloading", bytes: 9, total: 90 };
+        const { id } = asBody(await create(s));
+        expect(progressOf(await s.studio.advance(id, 0)).step_bytes).toBe(9);
+        const reborn = s.make();
+        s.helper.fetchPendingFields = { stage: "downloading", bytes: 40, total: 90 };
+        s.helper.fetchPolls = 1;
+        expect(progressOf(await reborn.advance(id, 0))).toEqual({ step: "fetching", step_bytes: 40, step_total: 90, waking: false });
+    });
+});
+
+// ---------------------------------------------------------------------------------
+// APP-API-CONTRACT.md section 6: jobs finish with nobody polling
+describe("the job sweep", () => {
+    const renderRow = (s: Setup, job: string) =>
+        s.db.raw.prepare("SELECT status FROM studio_renders WHERE id = ?").get(job) as { status: string };
+    const mediaRows = (s: Setup) => s.db.raw.prepare("SELECT * FROM media_items").all() as any[];
+    const tick = () => new Promise((r) => setTimeout(r, 5));
+    const startRender = async (s: Setup, over: Record<string, unknown> = {}) => {
+        const res = await s.studio.render(SID, body({ start: 2, length: 5, ...over }));
+        expect(res.status).toBe(202);
+        return asBody(res).job as string;
+    };
+
+    describe("scheduleSweep is asked for when something starts", () => {
+        it("a link save, an adopt and a render each ask once", async () => {
+            let n = 0;
+            const s = setup(() => void n++);
+            await create(s);
+            expect(n).toBe(1);
+
+            const t = setup(() => void n++);
+            t.originals.objects.set("uploads/Ab3dE6gH9jK2mN5p.mp4", { bytes: new Uint8Array(10), contentType: "video/mp4", meta: {} });
+            await t.studio.adopt("svc", body({ r2_key: "uploads/Ab3dE6gH9jK2mN5p.mp4", name: "a.mp4", content_type: "video/mp4", bytes: 10, item_id: "Ab3dE6gH9jK2mN5p" }));
+            expect(n).toBe(2);
+
+            const u = setup(() => void n++);
+            u.seed();
+            await startRender(u);
+            expect(n).toBe(3);
+        });
+        it("the record the sweep will look for exists by the time it is asked", async () => {
+            let seenSave = false;
+            let s!: Setup;
+            s = setup(() => {
+                seenSave = [...s.kv.m.keys()].some((k) => k.startsWith("save:"));
+            });
+            await create(s);
+            expect(seenSave).toBe(true);
+        });
+        it("a refused create / adopt / render asks for nothing", async () => {
+            let n = 0;
+            const s = setup(() => void n++);
+            await s.studio.create(KEY_ID, body({ url: "nope" }));
+            await s.studio.adopt("svc", "nope");
+            s.seed();
+            await s.studio.render(SID, body({ start: 99, length: 2 }));
+            s.helper.uploadBusy = true;
+            await s.studio.render(SID, body({ start: 0, length: 2 }));
+            expect(n).toBe(0);
+        });
+        it("a failing scheduler never fails the request that asked", async () => {
+            const s = setup(() => {
+                throw new Error("scheduler down");
+            });
+            expect((await create(s)).status).toBe(201);
+            s.helper.fetchPolls = 1e9;
+            const t = setup(() => {
+                throw new Error("scheduler down");
+            });
+            t.seed();
+            expect((await t.studio.render(SID, body({ start: 0, length: 2 }))).status).toBe(202);
+        });
+    });
+
+    describe("renders", () => {
+        it("collects a render nobody polled: D1 success, the media_items row and the R2 object", async () => {
+            const s = setup();
+            s.seed();
+            const job = await startRender(s);
+            expect(renderRow(s, job).status).toBe("pending");
+            expect(s.media.objects.size).toBe(0);
+
+            s.clock.t += 5000;
+            expect(await s.studio.sweep()).toEqual({ pending: 0 });
+
+            expect(renderRow(s, job).status).toBe("success");
+            expect(s.media.objects.size).toBe(1);
+            const rows = mediaRows(s);
+            expect(rows).toHaveLength(1);
+            expect(rows[0]).toMatchObject({ source: "studio", kind: "public", bucket: "media", session_id: SID, link: LINK });
+            expect(rows[0].r2_key).toBe([...s.media.objects.keys()][0]);
+            // and the client's next poll just reads it
+            const polled = await s.studio.renderStatus(SID, job, 0);
+            expect(asBody(polled)).toMatchObject({ status: "success", job });
+            expect(mediaRows(s)).toHaveLength(1);
+        });
+        it("a render still encoding is counted pending and left alone", async () => {
+            const s = setup();
+            s.seed();
+            s.helper.jobPolls = 1e9;
+            s.helper.jobPendingFields = { phase: "decode", frames_done: 3, frames_total: 75 };
+            const job = await startRender(s);
+            expect(await s.studio.sweep()).toEqual({ pending: 1 });
+            expect(await s.studio.sweep()).toEqual({ pending: 1 });
+            expect(renderRow(s, job).status).toBe("pending");
+            // the sweep's polls feed the progress a later client poll reports
+            expect(asBody(await s.studio.renderStatus(SID, job, 0))).toMatchObject({ status: "pending", phase: "decode", frames_done: 3, frames_total: 75 });
+        });
+        it("an encode error is recorded too, once", async () => {
+            const s = setup();
+            s.seed();
+            s.helper.jobError = "error.webp.timeout";
+            const job = await startRender(s);
+            expect(await s.studio.sweep()).toEqual({ pending: 0 });
+            expect(s.db.raw.prepare("SELECT status, error_code FROM studio_renders WHERE id = ?").get(job)).toEqual({
+                status: "error",
+                error_code: "error.webp.timeout",
+            });
+            const n = s.helper.calls.length;
+            await s.studio.sweep();
+            expect(s.helper.calls.length).toBe(n); // a finished job is not polled again
+        });
+        it("a lost job (the container restarted) becomes job_lost", async () => {
+            const s = setup();
+            s.seed();
+            const job = await startRender(s);
+            s.helper.jobsGone = true;
+            await s.studio.sweep();
+            expect(s.db.raw.prepare("SELECT status, error_code FROM studio_renders WHERE id = ?").get(job)).toEqual({
+                status: "error",
+                error_code: "error.webp.job_lost",
+            });
+        });
+        it("a render that finished is not collected twice: a client poll after the sweep adds no second item", async () => {
+            const s = setup();
+            s.seed();
+            const job = await startRender(s);
+            await s.studio.sweep();
+            await s.studio.renderStatus(SID, job, 0);
+            await s.studio.sweep();
+            expect(mediaRows(s)).toHaveLength(1);
+            expect(s.media.puts).toHaveLength(1);
+        });
+        it("stops at SWEEP_RENDER_MS: an older job is no longer polled", async () => {
+            const s = setup();
+            s.seed();
+            s.helper.jobPolls = 1e9;
+            const job = await startRender(s);
+            s.clock.t += SWEEP_RENDER_MS;
+            expect(await s.studio.sweep()).toEqual({ pending: 1 }); // still inside the budget
+            s.clock.t += 1;
+            const n = s.helper.calls.length;
+            expect(await s.studio.sweep()).toEqual({ pending: 0 });
+            expect(s.helper.calls.length).toBe(n);
+            expect(renderRow(s, job).status).toBe("pending");
+        });
+        it("an unreachable helper keeps it pending (the container comes back, or the budget ends it)", async () => {
+            const s = setup();
+            s.seed();
+            const job = await startRender(s);
+            s.helper.unreachable = true;
+            expect(await s.studio.sweep()).toEqual({ pending: 1 });
+            expect(renderRow(s, job).status).toBe("pending");
+        });
+    });
+
+    describe("saves", () => {
+        it("advances a save nobody polled to ready, with the video in R2 and the library item", async () => {
+            const s = setup();
+            const { id } = asBody(await create(s));
+            expect(s.row(id).status).toBe("saving");
+            expect(await s.studio.sweep()).toEqual({ pending: 0 });
+            expect(s.row(id)).toMatchObject({ status: "ready", r2_key: `originals/${id}.mp4` });
+            expect(s.originals.objects.has(`originals/${id}.mp4`)).toBe(true);
+            expect(mediaRows(s)).toHaveLength(1);
+            expect(mediaRows(s)[0]).toMatchObject({ source: "saved", session_id: id, key_id: KEY_ID });
+            expect(await s.kv.list({ prefix: "save:" })).toEqual(new Map());
+        });
+        it("one step per pass: a download in progress is pending until the helper has it", async () => {
+            const s = setup();
+            s.helper.fetchPolls = 2;
+            const { id } = asBody(await create(s));
+            expect(await s.studio.sweep()).toEqual({ pending: 1 });
+            expect(await s.studio.sweep()).toEqual({ pending: 1 });
+            expect(s.row(id).status).toBe("saving");
+            expect(await s.studio.sweep()).toEqual({ pending: 0 });
+            expect(s.row(id).status).toBe("ready");
+        });
+        it("wakes the container for a save that never got going (phase starting)", async () => {
+            const s = setup();
+            s.helper.busyFetchStarts = 1;
+            const { id } = asBody(await create(s)); // refused at the kick-off: still starting
+            expect(await s.kv.get(`save:${id}`)).toMatchObject({ phase: "starting" });
+            s.clock.t += 3000;
+            expect(await s.studio.sweep()).toEqual({ pending: 1 }); // accepted now
+            expect(await s.studio.sweep()).toEqual({ pending: 0 });
+            expect(s.row(id).status).toBe("ready");
+        });
+        it("an adopted upload is probed by the sweep", async () => {
+            const s = setup();
+            s.originals.objects.set("uploads/Ab3dE6gH9jK2mN5p.mp4", { bytes: new Uint8Array(4096).fill(5), contentType: "video/mp4", meta: {} });
+            const created = await s.studio.adopt("svc", body({ r2_key: "uploads/Ab3dE6gH9jK2mN5p.mp4", name: "a.mp4", content_type: "video/mp4", bytes: 4096, item_id: "Ab3dE6gH9jK2mN5p" }));
+            const sid = asBody(created).id;
+            expect(await s.studio.sweep()).toEqual({ pending: 0 });
+            expect(s.row(sid)).toMatchObject({ status: "ready", width: 640, height: 360 });
+        });
+        it("a save a client poll is advancing right now is not advanced twice (counted pending, helper not called)", async () => {
+            const s = setup();
+            let release!: () => void;
+            const hold = new Promise<void>((r) => (release = r));
+            s.helper.fetchPolls = 1e9;
+            const st = s.make({
+                helper: async (path, init) => {
+                    if (path.startsWith("/fetch/") && !path.endsWith("/file") && init?.method !== "DELETE") await hold;
+                    return s.helper.helper(path, init);
+                },
+            });
+            const { id } = asBody(await st.create(KEY_ID, body({ url: LINK })));
+            const poll = st.advance(id, 0); // holds the lock inside the helper call
+            await new Promise((r) => setTimeout(r, 20));
+            const n = s.helper.calls.length;
+            expect(await st.sweep()).toEqual({ pending: 1 });
+            expect(s.helper.calls.length).toBe(n);
+            release();
+            await poll;
+        });
+        it("stops advancing a save whose helper fetch is older than SAVE_BUDGET_MS + 60 s (the sweep refreshes lastAdvance itself, so the budget hangs on startedAt)", async () => {
+            const s = setup();
+            const { id } = asBody(await create(s));
+            const record = (startedAt: number) =>
+                s.kv.put(`save:${id}`, { phase: "starting", startedAt, attempts: 0, lastAdvance: s.clock.t });
+            // exactly at the edge: still advanced (the helper accepts the fetch, so it stays pending)
+            await record(s.clock.t - SAVE_BUDGET_MS - SWEEP_SAVE_SLACK_MS);
+            s.helper.fetchPolls = 1e9;
+            expect(await s.studio.sweep()).toEqual({ pending: 1 });
+            expect(await s.kv.get(`save:${id}`)).toMatchObject({ phase: "fetching" });
+            // one ms over: skipped, the helper is not called, and it no longer counts as pending
+            await record(s.clock.t - SAVE_BUDGET_MS - SWEEP_SAVE_SLACK_MS - 1);
+            const n = s.helper.calls.length;
+            expect(await s.studio.sweep()).toEqual({ pending: 0 });
+            expect(s.helper.calls.length).toBe(n);
+            expect(s.row(id).status).toBe("saving");
+        });
+        it("a save that errors is finished and not pending", async () => {
+            const s = setup();
+            s.helper.fetchError = "error.api.fetch.fail";
+            const { id } = asBody(await create(s));
+            expect(await s.studio.sweep()).toEqual({ pending: 0 });
+            expect(s.row(id)).toMatchObject({ status: "error", error_code: "error.api.fetch.fail" });
+        });
+    });
+
+    describe("a client long-poll racing the sweep on one render (finding 1)", () => {
+        // a Studio + WebP pair whose sleeps are held until woken
+        const gatedStudio = (s: Setup) => {
+            const waiting: Array<() => void> = [];
+            const sleep = (ms: number) =>
+                new Promise<void>((r) => {
+                    s.clock.t += ms;
+                    waiting.push(r);
+                });
+            const webp = new WebpService({
+                storage: s.kv,
+                bucket: s.media,
+                mediaBaseUrl: MEDIA,
+                now: s.clock.now,
+                sleep,
+                ensureRunning: async () => {},
+                helper: s.helper.helper,
+                db: s.db,
+            });
+            const st = s.make({ webp, sleep });
+            return { st, waiting, wake: () => waiting.splice(0).forEach((r) => r()) };
+        };
+
+        it("the app's poll after the sweep collected the render gets the success, not one job_lost reply; D1 and the library stay success, once", async () => {
+            const s = setup();
+            s.seed();
+            s.helper.dropJobsOnDelete = true; // like the real helper: collecting deletes its job
+            const g = gatedStudio(s);
+            const made = await g.st.render(SID, body({ start: 2, length: 5 }));
+            const job = asBody(made).job as string;
+            s.helper.jobPolls = 1; // the first helper poll is still pending
+
+            const client = g.st.renderStatus(SID, job, 20); // long-poll: pending, then sleeps
+            await tick();
+            expect(g.waiting).toHaveLength(1);
+
+            expect(await g.st.sweep()).toEqual({ pending: 0 }); // the sweep collects it and drops the helper job
+            expect(renderRow(s, job).status).toBe("success");
+
+            g.wake();
+            const got = await client;
+            expect(got.status).toBe(200);
+            expect(asBody(got)).toMatchObject({ status: "success", job });
+            expect(renderRow(s, job).status).toBe("success");
+            expect(mediaRows(s)).toHaveLength(1);
+            expect(s.media.puts).toHaveLength(1);
+            // and a later poll still says success
+            expect(asBody(await g.st.renderStatus(SID, job, 0))).toMatchObject({ status: "success", job });
+        });
+        it("a lost-job answer for a row that was settled meanwhile is replaced by what is recorded (success stays success)", async () => {
+            const s = setup();
+            s.seed();
+            const real = await s.studio.render(SID, body({ start: 2, length: 5 }));
+            const job = asBody(real).job as string;
+            // a webp whose answer arrives after the sweep recorded the success in D1
+            const webp = {
+                status: async () => {
+                    s.db.raw
+                        .prepare("UPDATE studio_renders SET status = 'success', url = ?, bytes = 1500, out_width = 480, out_height = 560, seconds = 5 WHERE id = ?")
+                        .run(`${MEDIA}Done123456.webp`, job);
+                    return { status: 404, body: { status: "error", error: { code: "error.webp.not_found" } } };
+                },
+            } as unknown as WebpService;
+            const st = s.make({ webp });
+            const r = await st.renderStatus(SID, job, 0);
+            expect(r.status).toBe(200);
+            expect(asBody(r)).toMatchObject({ status: "success", job, url: `${MEDIA}Done123456.webp` });
+            expect(renderRow(s, job).status).toBe("success");
+        });
+        it("a genuinely lost job is still recorded and answered as job_lost", async () => {
+            const s = setup();
+            s.seed();
+            const job = await startRender(s);
+            s.helper.jobsGone = true;
+            const r = await s.studio.renderStatus(SID, job, 0);
+            expect(asBody(r)).toEqual({ status: "error", error: { code: "error.webp.job_lost" } });
+            expect(renderRow(s, job).status).toBe("error");
+        });
+    });
+
+    describe("a hung item cannot keep the sweep (and so the container) awake (finding 2)", () => {
+        const never = () => new Promise<Response>(() => {});
+        const timed = async <T>(p: Promise<T>) => {
+            const t0 = Date.now();
+            const v = await p;
+            return { v, ms: Date.now() - t0 };
+        };
+
+        it("the default item ceiling is 30 s", () => {
+            expect(SWEEP_ITEM_MS).toBe(30_000);
+        });
+        it("a render whose helper poll hangs: the item is cut at the ceiling, counted pending, the pass returns", async () => {
+            const s = setup();
+            s.seed();
+            const job = await startRender(s);
+            const webp = new WebpService({
+                storage: s.kv,
+                bucket: s.media,
+                mediaBaseUrl: MEDIA,
+                now: s.clock.now,
+                sleep: s.clock.sleep,
+                ensureRunning: async () => {},
+                helperTimeoutMs: 60_000, // the webp's own ceiling is out of the picture: this is the sweep's
+                helper: (path, init) => (path === `/jobs/${job}` ? never() : s.helper.helper(path, init)),
+                db: s.db,
+            });
+            const st = s.make({ webp, sweepItemMs: 30 });
+            const { v, ms } = await timed(st.sweep());
+            expect(v).toEqual({ pending: 1 });
+            expect(ms).toBeLessThan(2000);
+            expect(renderRow(s, job).status).toBe("pending");
+        });
+        it("the same render with the webp's own ceiling: the poll is a miss, the pass still returns promptly", async () => {
+            const s = setup();
+            s.seed();
+            const job = await startRender(s);
+            const webp = new WebpService({
+                storage: s.kv,
+                bucket: s.media,
+                mediaBaseUrl: MEDIA,
+                now: s.clock.now,
+                sleep: s.clock.sleep,
+                ensureRunning: async () => {},
+                helperTimeoutMs: 30,
+                helper: (path, init) => (path === `/jobs/${job}` ? never() : s.helper.helper(path, init)),
+                db: s.db,
+            });
+            const st = s.make({ webp });
+            const { v, ms } = await timed(st.sweep());
+            expect(v).toEqual({ pending: 1 });
+            expect(ms).toBeLessThan(2000);
+        });
+        it("a save whose step hangs: cut at the ceiling, counted pending", async () => {
+            const s = setup();
+            s.helper.fetchPolls = 1e9;
+            const st = s.make({
+                sweepItemMs: 30,
+                helperTimeoutMs: 60_000, // the helper-call ceiling is out of the picture: this is the sweep's
+                helper: (path, init) =>
+                    path.startsWith("/fetch/") && !path.endsWith("/file") && init?.method !== "DELETE" ? never() : s.helper.helper(path, init),
+            });
+            await s.kv.put("save:aB3dE6gH9jK2mN5pQ8sTuV", { phase: "fetching", startedAt: s.clock.t, attempts: 1, lastAdvance: s.clock.t });
+            s.db.raw
+                .prepare("INSERT INTO studio_sessions (id, key_id, link, service, status, created_at, expires_at) VALUES (?, ?, ?, 'x', 'saving', ?, ?)")
+                .run("aB3dE6gH9jK2mN5pQ8sTuV", KEY_ID, LINK, s.clock.t, s.clock.t + SESSION_TTL_MS);
+            const { v, ms } = await timed(st.sweep());
+            expect(v).toEqual({ pending: 1 });
+            expect(ms).toBeLessThan(2000);
+        });
+    });
+
+    describe("a save whose lock is held (finding 3)", () => {
+        // helper whose FIRST poll of the fetch hangs until released (a hung finalize / poll)
+        const hungFirstPoll = (s: Setup) => {
+            let release!: () => void;
+            const hold = new Promise<void>((r) => (release = r));
+            let hung = false;
+            const st = s.make({
+                helperTimeoutMs: 1e9,
+                helper: async (path, init) => {
+                    if (!hung && path.startsWith("/fetch/") && !path.endsWith("/file") && init?.method !== "DELETE") {
+                        hung = true;
+                        await hold;
+                    }
+                    return s.helper.helper(path, init);
+                },
+            });
+            return { st, release };
+        };
+
+        it("past its budget a save is neither advanced nor pending, even with a hung step still holding its lock (the sweep used to re-arm every 5 s for ever)", async () => {
+            const s = setup();
+            s.helper.fetchPolls = 1e9;
+            const h = hungFirstPoll(s);
+            const { id } = asBody(await h.st.create(KEY_ID, body({ url: LINK })));
+            const hung = h.st.advance(id, 0); // takes the lock and hangs inside the helper poll
+            await tick();
+            const rec = (await s.kv.get<Record<string, unknown>>(`save:${id}`))!;
+            await s.kv.put(`save:${id}`, { ...rec, startedAt: s.clock.t - SAVE_BUDGET_MS - SWEEP_SAVE_SLACK_MS - 1 });
+            const n = s.helper.calls.length;
+            expect(await h.st.sweep()).toEqual({ pending: 0 });
+            expect(s.helper.calls.length).toBe(n);
+            h.release();
+            await hung;
+        });
+        it("inside its budget a save a poll is advancing (fresh lock) is left alone and counted pending", async () => {
+            const s = setup();
+            s.helper.fetchPolls = 1e9;
+            const h = hungFirstPoll(s);
+            const { id } = asBody(await h.st.create(KEY_ID, body({ url: LINK })));
+            const hung = h.st.advance(id, 0);
+            await tick();
+            s.clock.t += LOCK_STALE_MS; // exactly the limit: still fresh
+            const n = s.helper.calls.length;
+            expect(await h.st.sweep()).toEqual({ pending: 1 });
+            expect(s.helper.calls.length).toBe(n);
+            h.release();
+            await hung;
+        });
+        it("a lock older than LOCK_STALE_MS is stale: the sweep drops it and advances the save", async () => {
+            const s = setup();
+            s.helper.fetchPolls = 1e9;
+            const h = hungFirstPoll(s);
+            const { id } = asBody(await h.st.create(KEY_ID, body({ url: LINK })));
+            const hung = h.st.advance(id, 0);
+            await tick();
+            s.clock.t += LOCK_STALE_MS + 1;
+            s.helper.fetchPolls = 0; // the next poll finds the file
+            expect(await h.st.sweep()).toEqual({ pending: 0 });
+            expect(s.row(id)).toMatchObject({ status: "ready", r2_key: `originals/${id}.mp4` });
+            h.release();
+            await hung;
+        });
+    });
+
+    it("does nothing when there is nothing; counts a render while one is encoding", async () => {
+        const s = setup();
+        expect(await s.studio.sweep()).toEqual({ pending: 0 });
+        expect(s.helper.calls).toEqual([]);
+
+        s.seed();
+        s.helper.jobPolls = 1e9;
+        await startRender(s);
+        expect(await s.studio.sweep()).toEqual({ pending: 1 });
+    });
+    it("never throws: storage that fails to list counts as nothing pending", async () => {
+        const s = setup();
+        s.kv.list = async () => {
+            throw new Error("storage down");
+        };
+        expect(await s.studio.sweep()).toEqual({ pending: 0 });
+    });
+});
+
+// ---- Live Activity hooks (APP-API-CONTRACT.md section 8.3) -----------------------------------------
+
+describe("live hooks (what the studio tells the live service)", () => {
+    type Seen = { at: "save"; sid: string; e: any } | { at: "render"; sid: string; job: string; e: any };
+    const fakeLive = (over: Partial<LiveHooks> = {}) => {
+        const seen: Seen[] = [];
+        const live: LiveHooks = {
+            onSave: async (sid, e) => void seen.push({ at: "save", sid, e }),
+            onRender: async (sid, job, e) => void seen.push({ at: "render", sid, job, e }),
+            hasActiveRuns: async () => false,
+            ...over,
+        };
+        return { live, seen };
+    };
+    const saves = (seen: Seen[]) => seen.filter((x) => x.at === "save").map((x) => (x as any).e);
+    const renders = (seen: Seen[]) => seen.filter((x) => x.at === "render").map((x) => (x as any).e);
+    const kinds = (seen: Seen[]) => seen.map((x) => `${x.at}:${(x as any).e.kind}${(x as any).e.progress ? `:${(x as any).e.progress.step}` : ""}`);
+
+    describe("saves", () => {
+        it("starting -> fetching -> storing -> ready: fetching, saving (bytes of the copy, the clip's title and length), then nothing for `ready`", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const st = s.make({ live });
+            s.helper.fetchPolls = 2;
+            s.helper.fetchPendingFields = { stage: "downloading", bytes: 5000, total: 20000 };
+            const { id } = asBody(await st.create(KEY_ID, body({ url: LINK })));
+            // create's kick: startFetch sets the progress twice (before and after the container is up)
+            expect(kinds(seen)).toEqual(["save:progress:fetching", "save:progress:fetching"]);
+            expect(seen.every((x) => x.at === "save" && x.sid === id)).toBe(true);
+
+            seen.length = 0;
+            await st.advance(id, 0); // pollFetch: downloading
+            expect(kinds(seen)).toEqual(["save:progress:fetching"]);
+            expect(saves(seen)[0].progress).toEqual({ step: "fetching", bytes: 5000, total: 20000, waking: false });
+
+            seen.length = 0;
+            s.helper.fetchPendingFields = { stage: "probing", bytes: 20000, total: null };
+            await st.advance(id, 0); // pollFetch: probing is `reading` on the wire
+            expect(saves(seen)[0].progress).toEqual({ step: "reading", bytes: 20000, total: null, waking: false });
+
+            seen.length = 0;
+            expect(asBody(await st.advance(id, 0)).status).toBe("ready"); // finalize
+            expect(kinds(seen)).toEqual(["save:progress:storing"]);
+            expect(saves(seen)[0]).toMatchObject({
+                kind: "progress",
+                progress: { step: "storing", total: 4096, waking: false },
+                title: "x_2105237035271258436",
+                duration: 9.6,
+            });
+
+            // the session is ready: nothing more is said (the device reads the video)
+            seen.length = 0;
+            await st.advance(id, 0);
+            await st.sweep();
+            expect(seen).toEqual([]);
+        });
+
+        it("`waking` follows the container: true while it starts, false after", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const st = s.make({ live, isRunning: () => false });
+            await st.create(KEY_ID, body({ url: LINK }));
+            expect(saves(seen).map((e) => e.progress.waking)).toEqual([true, false]);
+        });
+
+        it("the byte count of the copy into R2 is reported while it runs, at most once a second, without waiting on the hook", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const total = 5000;
+            // 5 chunks of 1000 bytes, the clock 1.5 s later at each one
+            const st = s.make({
+                live,
+                helper: async (path, init) => {
+                    if (path.endsWith("/file")) {
+                        let sent = 0;
+                        return new Response(
+                            new ReadableStream<Uint8Array>(
+                                {
+                                    pull(c) {
+                                        s.clock.t += 1500;
+                                        c.enqueue(new Uint8Array(1000).fill(7));
+                                        if (++sent === 5) c.close();
+                                    },
+                                },
+                                { highWaterMark: 0 },
+                            ),
+                            { headers: { "content-length": String(total) } },
+                        );
+                    }
+                    return s.helper.helper(path, init);
+                },
+            });
+            s.helper.videoBytes = new Uint8Array(total).fill(7);
+            const { id } = asBody(await st.create(KEY_ID, body({ url: LINK })));
+            expect(asBody(await st.advance(id, 0)).status).toBe("ready");
+            await new Promise((r) => setTimeout(r, 10)); // the un-awaited ones settle
+            const bytes = saves(seen).filter((e) => e.progress.step === "storing").map((e) => e.progress.bytes);
+            expect(bytes.length).toBeGreaterThanOrEqual(4); // 0 at the start, then one per 1.5 s chunk
+            expect(bytes).toEqual([...bytes].sort((a, b) => a - b));
+            expect(bytes.at(-1)).toBeGreaterThan(0);
+        });
+
+        it("a save that fails: `failed` with the code (from fail(), whoever called it)", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const st = s.make({ live });
+            s.helper.fetchPolls = 1;
+            s.helper.fetchError = "error.api.fetch.empty";
+            const { id } = asBody(await st.create(KEY_ID, body({ url: LINK })));
+            seen.length = 0;
+            await st.advance(id, 0);
+            await st.advance(id, 0);
+            expect(asBody(await st.advance(id, 0)).error).toEqual({ code: "error.api.fetch.empty" });
+            expect(saves(seen).at(-1)).toEqual({ kind: "failed", code: "error.api.fetch.empty" });
+            expect(saves(seen).filter((e) => e.kind === "failed")).toHaveLength(1);
+        });
+
+        it("an orphaned save reaped later fails through the same hook", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const st = s.make({ live });
+            const { id } = asBody(await st.create(KEY_ID, body({ url: LINK })));
+            seen.length = 0;
+            s.clock.t += SAVING_STUCK_MS + 1000;
+            await st.reapOrphans();
+            expect(saves(seen)).toEqual([{ kind: "failed", code: "error.studio.save_lost" }]);
+            expect(seen[0]).toMatchObject({ sid: id });
+        });
+
+        it("an adopted upload says nothing while the server measures it (the device is reading frames then); its failure does", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const st = s.make({ live });
+            s.originals.objects.set("uploads/Ab3dE6gH9jK2mN5p.mp4", { bytes: new Uint8Array(10), contentType: "video/mp4", meta: {} });
+            const adopted = await st.adopt("svc", body({ r2_key: "uploads/Ab3dE6gH9jK2mN5p.mp4", name: "a.mp4", content_type: "video/mp4", bytes: 10, item_id: "Ab3dE6gH9jK2mN5p" }));
+            const { id } = asBody(adopted);
+            expect(asBody(await st.advance(id, 0)).status).toBe("ready");
+            expect(seen).toEqual([]);
+
+            // a probe the helper refuses for good
+            s.originals.objects.set("uploads/Zz3dE6gH9jK2mN5p.mp4", { bytes: new Uint8Array(10), contentType: "video/mp4", meta: {} });
+            s.helper.probeError = { status: 400, code: "error.studio.not_video" };
+            const bad = await st.adopt("svc", body({ r2_key: "uploads/Zz3dE6gH9jK2mN5p.mp4", name: "b.mp4", content_type: "video/mp4", bytes: 10, item_id: "Zz3dE6gH9jK2mN5p" }));
+            await st.advance(asBody(bad).id, 0);
+            expect(saves(seen)).toEqual([{ kind: "failed", code: "error.studio.not_video" }]);
+        });
+
+        it("the sweep's own advance of a save fires the same hooks", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const st = s.make({ live });
+            s.helper.fetchPolls = 1;
+            s.helper.fetchPendingFields = { stage: "downloading", bytes: 1, total: 2 };
+            await st.create(KEY_ID, body({ url: LINK }));
+            seen.length = 0;
+            expect(await st.sweep()).toEqual({ pending: 1 });
+            expect(kinds(seen)).toEqual(["save:progress:fetching"]);
+            seen.length = 0;
+            expect(await st.sweep()).toEqual({ pending: 0 });
+            expect(kinds(seen)).toEqual(["save:progress:storing"]);
+        });
+    });
+
+    describe("renders", () => {
+        const start = async (st: StudioService, s: Setup, over: Record<string, unknown> = {}) => {
+            s.seed();
+            const res = await st.render(SID, body({ start: 2, length: 5, ...over }));
+            expect(res.status).toBe(202);
+            return asBody(res).job as string;
+        };
+
+        it("accepted carries the session's title and length; the job id is the one the client gets", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const st = s.make({ live });
+            const job = await start(st, s);
+            expect(seen).toEqual([{ at: "render", sid: SID, job, e: { kind: "accepted", title: "x_2105237035271258436", duration: 9.6 } }]);
+        });
+
+        it("a refused render (busy, not ready, bad params) says nothing", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const st = s.make({ live });
+            s.seed();
+            await st.render(SID, body({ start: 99, length: 2 }));
+            s.helper.uploadBusy = true;
+            await st.render(SID, body({ start: 0, length: 2 }));
+            expect(seen).toEqual([]);
+        });
+
+        it("pending decode, pending pack, then success (and success again on a repeated poll)", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const st = s.make({ live });
+            const job = await start(st, s);
+            seen.length = 0;
+
+            s.helper.jobPolls = 3;
+            s.helper.jobPendingFields = { phase: "decode", frames_done: 42, frames_total: 150 };
+            await st.renderStatus(SID, job, 0);
+            s.helper.jobPendingFields = { phase: "pack", frames_done: 150, frames_total: 150 };
+            await st.renderStatus(SID, job, 0);
+            s.helper.jobPendingFields = {};
+            await st.renderStatus(SID, job, 0);
+            expect(renders(seen)).toEqual([
+                { kind: "pending", phase: "decode", framesDone: 42, framesTotal: 150 },
+                { kind: "pending", phase: "pack", framesDone: 150, framesTotal: 150 },
+                { kind: "pending", phase: null, framesDone: null, framesTotal: null },
+            ]);
+            expect(seen.every((x) => x.at === "render" && x.sid === SID && x.job === job)).toBe(true);
+
+            seen.length = 0;
+            const done = asBody(await st.renderStatus(SID, job, 0));
+            expect(done.status).toBe("success");
+            const success = { kind: "success", url: done.url, bytes: 1500, width: 480, height: 560, seconds: 5 };
+            expect(renders(seen)).toEqual([success]);
+            // answered from D1 now, and still told to the live service (an equal state is never re-sent there; a lost push is)
+            await st.renderStatus(SID, job, 0);
+            expect(renders(seen)).toEqual([success, success]);
+        });
+
+        it("a recorded error, and a lost job, are `failed` with their codes (also when repeated from D1)", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const st = s.make({ live });
+            const a = await start(st, s);
+            s.helper.jobError = "error.webp.encode_failed";
+            seen.length = 0;
+            await st.renderStatus(SID, a, 0);
+            await st.renderStatus(SID, a, 0); // from D1
+            expect(renders(seen)).toEqual([
+                { kind: "failed", code: "error.webp.encode_failed" },
+                { kind: "failed", code: "error.webp.encode_failed" },
+            ]);
+
+            s.helper.jobError = null;
+            s.helper.jobsGone = true;
+            const b = asBody(await st.render(SID, body({ start: 2, length: 5 }))).job as string;
+            seen.length = 0;
+            await st.renderStatus(SID, b, 0);
+            expect(renders(seen)).toEqual([{ kind: "failed", code: "error.webp.job_lost" }]);
+        });
+
+        it("transient answers (a 502 from storage, an expired or unknown session) say nothing", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const st = s.make({ live });
+            const job = await start(st, s);
+            seen.length = 0;
+            expect((await st.renderStatus("aB3dE6gH9jK2mN5pQ8sTzz", job, 0)).status).toBe(404);
+            s.clock.t += SESSION_TTL_MS + 1000;
+            expect((await st.renderStatus(SID, job, 0)).status).toBe(410);
+            expect(seen).toEqual([]);
+        });
+
+        it("the sweep's collection of a render nobody polled fires them too", async () => {
+            const s = setup();
+            const { live, seen } = fakeLive();
+            const st = s.make({ live });
+            const job = await start(st, s);
+            seen.length = 0;
+            s.helper.jobPolls = 1;
+            s.helper.jobPendingFields = { phase: "decode", frames_done: 3, frames_total: 75 };
+            expect(await st.sweep()).toEqual({ pending: 1 });
+            expect(renders(seen)).toEqual([{ kind: "pending", phase: "decode", framesDone: 3, framesTotal: 75 }]);
+            seen.length = 0;
+            s.clock.t += 5000;
+            expect(await st.sweep()).toEqual({ pending: 0 });
+            expect(renders(seen)).toEqual([expect.objectContaining({ kind: "success" })]);
+            expect(seen[0]).toMatchObject({ job });
+        });
+    });
+
+    describe("a hook can never fail or stall the poll", () => {
+        let errors: unknown[][];
+        const quiet = () => {
+            errors = [];
+            return vi.spyOn(console, "error").mockImplementation((...a) => void errors.push(a));
+        };
+        afterEach(() => vi.restoreAllMocks());
+
+        it("a hook that throws: the save and the render go on, and the error is logged", async () => {
+            quiet();
+            const s = setup();
+            const boom = async () => {
+                throw new Error("live exploded");
+            };
+            const st = s.make({ live: { onSave: boom, onRender: boom, hasActiveRuns: async () => false } });
+            const { id } = asBody(await st.create(KEY_ID, body({ url: LINK })));
+            expect(asBody(await st.advance(id, 0)).status).toBe("ready");
+            s.seed({ id: "xY3dE6gH9jK2mN5pQ8sTuV" });
+            const res = await st.render("xY3dE6gH9jK2mN5pQ8sTuV", body({ start: 2, length: 5 }));
+            expect(res.status).toBe(202);
+            const job = asBody(res).job;
+            expect(asBody(await st.renderStatus("xY3dE6gH9jK2mN5pQ8sTuV", job, 0)).status).toBe("success");
+            expect(errors.some((a) => String(a.join(" ")).includes("live exploded"))).toBe(true);
+        });
+
+        it("a hook that hangs: the poll comes back after the ceiling (LIVE_PUSH_MS, 30 ms here) with its normal answer", async () => {
+            quiet();
+            const s = setup();
+            const hang = () => new Promise<void>(() => {});
+            const st = s.make({ live: { onSave: hang, onRender: hang, hasActiveRuns: async () => false }, livePushMs: 30 });
+            const t0 = Date.now();
+            const { id } = asBody(await st.create(KEY_ID, body({ url: LINK })));
+            expect(asBody(await st.advance(id, 0)).status).toBe("ready");
+            const job = await (async () => {
+                s.seed({ id: "xY3dE6gH9jK2mN5pQ8sTuV" });
+                return asBody(await st.render("xY3dE6gH9jK2mN5pQ8sTuV", body({ start: 2, length: 5 }))).job as string;
+            })();
+            expect(asBody(await st.renderStatus("xY3dE6gH9jK2mN5pQ8sTuV", job, 0)).status).toBe("success");
+            expect(Date.now() - t0).toBeLessThan(5000);
+            expect(errors.some((a) => String(a.join(" ")).includes("timed out"))).toBe(true);
+        });
+
+        it("the ceiling defaults to LIVE_PUSH_MS (3000 ms)", () => {
+            expect(LIVE_PUSH_MS).toBe(3000);
+        });
+
+        it("without a live service nothing changes (no hooks, no errors)", async () => {
+            const s = setup();
+            const { id } = asBody(await create(s));
+            expect(asBody(await s.studio.advance(id, 0)).status).toBe("ready");
+        });
     });
 });

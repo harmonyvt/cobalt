@@ -8,6 +8,7 @@ import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { fromWire } from "./crop.js";
 
 export const COBALT_ORIGIN = "http://127.0.0.1:9000";
 export const MAX_DOWNLOAD_BYTES = 300 * 1024 * 1024;
@@ -29,6 +30,9 @@ export const QUALITY = { low: 65, med: 75, high: 85 };
 export const KMIN = 3;
 export const KMAX = 5;
 export const ID_RE = /^[A-Za-z0-9]{16,32}$/;
+// downloadToFile reports progress at most once per this many bytes or ms.
+export const PROGRESS_BYTES = 256 * 1024;
+export const PROGRESS_MS = 250;
 
 // An error that carries the public error code the DO passes on to the client.
 export class JobError extends Error {
@@ -115,8 +119,13 @@ export function validateEncodeFields(b, o) {
     if (![320, 480, 640].includes(width)) return null;
     if (!(Number.isInteger(fps) && fps >= 10 && fps <= 25)) return null;
     if (typeof b.quality !== "string" || !Object.hasOwn(QUALITY, b.quality)) return null;
+    // optional spatial crop (normalized; section 10): a JSON object, or "x,y,w,h" from the
+    // upload's query string. Converted to pixels at encode time, from the probed size.
+    const crop = b.crop === undefined || b.crop === null || b.crop === "" ? { ok: true, crop: null } : fromWire(b.crop);
+    if (!crop.ok) return null;
     const out = { start, width, fps, quality: b.quality };
     if (hasLength) out.length = length;
+    if (crop.crop) out.crop = crop.crop;
     return out;
 }
 
@@ -264,8 +273,12 @@ const dec = (n) => String(+Number(n).toFixed(3));
  * ffmpeg on local files. Never upscales: the width is min(width, source width).
  * The output pattern is relative to `framesDir` (the caller runs ffmpeg with
  * that as cwd, but the absolute path is used here so cwd does not matter).
+ * `crop` (whole even pixels, in the DISPLAY orientation: ffmpeg applies the rotation
+ * metadata before the filter graph by default) is applied after `fps` and BEFORE the
+ * scale, so the output width is min(width, cropped width) and the height keeps the
+ * crop's aspect. Without it the filter is exactly what it always was.
  * @param {{input: string, framesDir: string, start: number, length?: number,
- *          width: number, fps: number}} j
+ *          width: number, fps: number, crop?: {x: number, y: number, w: number, h: number} | null}} j
  */
 export function buildFrameArgs(j) {
     return [
@@ -277,7 +290,8 @@ export function buildFrameArgs(j) {
         // omitted only when no length is given (the supervisor always passes one)
         ...(j.length === undefined ? [] : ["-t", dec(j.length)]),
         "-i", j.input,
-        "-vf", `fps=${j.fps},scale='min(${j.width},iw)':-2:flags=lanczos`,
+        "-vf",
+        `fps=${j.fps},${j.crop ? `crop=${j.crop.w}:${j.crop.h}:${j.crop.x}:${j.crop.y},` : ""}scale='min(${j.width},iw)':-2:flags=lanczos`,
         "-an", "-sn", "-dn",
         "-f", "image2",
         "-y",
@@ -373,8 +387,13 @@ export function runProcess(o) {
  * @param {{ffmpegBin: string, img2webpBin: string, input: string,
  *          output: string, framesDir: string, start: number, length?: number,
  *          width: number, fps: number, quality: "low"|"med"|"high",
- *          timeoutMs: number, spawnImpl?: typeof spawn,
- *          onChild?: (c: import("node:child_process").ChildProcess | undefined) => void}} o
+ *          crop?: {x: number, y: number, w: number, h: number} | null, timeoutMs: number, spawnImpl?: typeof spawn,
+ *          onChild?: (c: import("node:child_process").ChildProcess | undefined) => void,
+ *          onPhase?: (phase: "decode" | "pack", info: {total?: number | null, frames?: number}) => void}} o
+ *   `onPhase("decode", {total})` fires before ffmpeg starts (`total` = the
+ *   frame count expected, max(1, round(length * fps)), or null without a
+ *   length); `onPhase("pack", {frames})` fires after the frames are listed,
+ *   before img2webp, with the real count.
  * @returns {Promise<{frames: number, frameBytes: number}>}
  */
 export async function encodeAnimatedWebp(o) {
@@ -384,6 +403,9 @@ export async function encodeAnimatedWebp(o) {
         await rm(o.framesDir, { recursive: true, force: true });
         await mkdir(o.framesDir, { recursive: true });
 
+        o.onPhase?.("decode", {
+            total: o.length === undefined ? null : Math.max(1, Math.round(o.length * o.fps)),
+        });
         await runProcess({
             spawnImpl: o.spawnImpl,
             bin: o.ffmpegBin,
@@ -399,6 +421,7 @@ export async function encodeAnimatedWebp(o) {
         let frameBytes = 0;
         for (const f of frames) frameBytes += (await stat(path.join(o.framesDir, f))).size;
 
+        o.onPhase?.("pack", { frames: frames.length });
         await runProcess({
             spawnImpl: o.spawnImpl,
             bin: o.img2webpBin,
@@ -545,9 +568,13 @@ export async function resolveSource(o) {
 /**
  * Streams `url` to `dest`, refusing anything over `maxBytes`.
  * `onResponse` sees the response (headers) before the body is read.
+ * `onProgress(bytes, total)` reports how much has been written so far, throttled
+ * to once per PROGRESS_BYTES or PROGRESS_MS, and once more at the end; `total`
+ * is the response's content-length when it sent one, else null.
  * @param {{url: string, dest: string, maxBytes?: number,
  *          fetchImpl?: typeof fetch, signal?: AbortSignal,
- *          onResponse?: (res: Response) => void}} o
+ *          onResponse?: (res: Response) => void,
+ *          onProgress?: (bytes: number, total: number | null) => void}} o
  * @returns {Promise<number>} bytes written
  */
 export async function downloadToFile(o) {
@@ -572,12 +599,29 @@ export async function downloadToFile(o) {
         throw new JobError("error.webp.too_large");
     }
 
+    const total = Number.isFinite(declared) && declared > 0 ? declared : null;
     let n = 0;
+    let reportedBytes = 0;
+    let reportedAt = Date.now();
+    const report = (force) => {
+        if (!o.onProgress) return;
+        const now = Date.now();
+        if (force || n - reportedBytes >= PROGRESS_BYTES || now - reportedAt >= PROGRESS_MS) {
+            reportedBytes = n;
+            reportedAt = now;
+            try {
+                o.onProgress(n, total);
+            } catch {
+                // a progress callback must never fail the download
+            }
+        }
+    };
     const counter = new Transform({
         transform(chunk, _enc, cb) {
             n += chunk.length;
-            if (n > maxBytes) cb(new JobError("error.webp.too_large"));
-            else cb(null, chunk);
+            if (n > maxBytes) return cb(new JobError("error.webp.too_large"));
+            report(false);
+            cb(null, chunk);
         },
     });
 
@@ -592,6 +636,7 @@ export async function downloadToFile(o) {
         if (isAbort(e)) throw new JobError("error.webp.timeout");
         throw new JobError("error.webp.download_failed");
     }
+    report(true);
     return n;
 }
 

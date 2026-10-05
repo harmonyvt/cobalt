@@ -2,12 +2,14 @@
 // img2webp stubbed: argument handling, one-job-at-a-time, the 200 MB cap and
 // cleanup. The real ffmpeg/img2webp path is exercised in the docker run (README).
 import http from "node:http";
+import http2 from "node:http2";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createHelper } from "../helper/server.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { APNS_DEFAULT_TIMEOUT_MS, createHelper } from "../helper/server.js";
+import { APNS_CALL_MS } from "../src/apns";
 import {
     JobError,
     MAX_FETCH_BYTES,
@@ -182,7 +184,7 @@ describe("POST /fetch", () => {
         const res = await post("/fetch", { id: FID, url: LINK });
         expect(res.status).toBe(202);
         expect(await json(res)).toEqual({ status: "pending", id: FID });
-        expect(await json(await call(`/fetch/${FID}`))).toEqual({ status: "pending" });
+        expect(await json(await call(`/fetch/${FID}`))).toEqual({ status: "pending", stage: "downloading", bytes: 0, total: null });
         release();
         const done = await until(`/fetch/${FID}`);
         expect(done).toEqual({
@@ -506,6 +508,183 @@ describe("POST /jobs/upload", () => {
     });
 });
 
+describe("progress while pending (APP-API-CONTRACT.md sections 2 and 4)", () => {
+    const frames = async (dir: string, n: number) => {
+        await mkdir(dir, { recursive: true });
+        for (let i = 1; i <= n; i++) await writeFile(path.join(dir, `f${String(i).padStart(5, "0")}.png`), "x");
+    };
+    const pendingBody = (id: string) => json_(call(`/jobs/${id}`));
+    const json_ = async (p: Promise<Response>) => json(await p);
+
+    it("GET /fetch/:id: downloading with the helper's own byte count and the content-length as total", async () => {
+        const { gate, release } = gated();
+        ctl.download = async (o) => {
+            o.onProgress?.(500, 1000);
+            await gate;
+            o.onProgress?.(1234, 1234);
+            await writeFile(o.dest, Buffer.alloc(1234, 1));
+            return 1234;
+        };
+        await post("/fetch", { id: FID, url: LINK });
+        const first = await until(`/fetch/${FID}`, (b) => b.status !== "pending" || b.bytes === 500);
+        expect(first).toEqual({ status: "pending", stage: "downloading", bytes: 500, total: 1000 });
+        release();
+        expect(await until(`/fetch/${FID}`)).toMatchObject({ status: "done", bytes: 1234 });
+    });
+    it("GET /fetch/:id: total is null when the download had no content-length, and probing follows the download", async () => {
+        const probeGate = gated();
+        ctl.download = async (o) => {
+            o.onProgress?.(700, null);
+            await writeFile(o.dest, Buffer.alloc(1234, 1));
+            return 1234;
+        };
+        ctl.probe = async () => {
+            await probeGate.gate;
+            return { duration: 9.6, width: 480, height: 560 };
+        };
+        await post("/fetch", { id: FID, url: LINK });
+        const probing = await until(`/fetch/${FID}`, (b) => b.status !== "pending" || b.stage === "probing");
+        // the bytes are the finished download's size; the probe has no count
+        expect(probing).toEqual({ status: "pending", stage: "probing", bytes: 1234, total: null });
+        probeGate.release();
+        expect((await until(`/fetch/${FID}`)).status).toBe("done");
+    });
+    it("GET /fetch/:id: a fetch that has reported nothing yet is downloading, 0 bytes, no total", async () => {
+        const { gate, release } = gated();
+        ctl.resolve = async () => {
+            await gate;
+            return { url: "http://127.0.0.1:1/v", filename: "v.mp4" };
+        };
+        await post("/fetch", { id: FID, url: LINK });
+        expect(await json(await call(`/fetch/${FID}`))).toEqual({ status: "pending", stage: "downloading", bytes: 0, total: null });
+        release();
+        await until(`/fetch/${FID}`);
+    });
+
+    it("GET /jobs/:id during decode: frames_done is the PNG files on disk minus the newest, frames_total from the clip", async () => {
+        const { gate, release } = gated();
+        ctl.encode = async (o) => {
+            o.onPhase?.("decode", { total: 75 });
+            await frames(o.framesDir, 4);
+            await gate;
+            await writeFile(o.output, tinyWebp());
+            return { frames: 75, frameBytes: 1 };
+        };
+        // start 2, length 5 at 15 fps (the probe says 9.6 s): 75 frames expected
+        expect((await upload(JID)).status).toBe(202);
+        const b = await until(`/jobs/${JID}`, (x) => x.status !== "pending" || x.frames_done === 3);
+        expect(b).toEqual({ status: "pending", phase: "decode", frames_done: 3, frames_total: 75 });
+        release();
+        expect((await until(`/jobs/${JID}`)).status).toBe("done");
+    });
+    it("frames_done never exceeds frames_total, and is 0 while the frames dir does not exist or holds one file", async () => {
+        const { gate, release } = gated();
+        let writeNow!: () => void;
+        const ready = new Promise<void>((r) => (writeNow = r));
+        ctl.encode = async (o) => {
+            await ready;
+            await frames(o.framesDir, 80);
+            await gate;
+            await writeFile(o.output, tinyWebp());
+            return { frames: 80, frameBytes: 1 };
+        };
+        await upload(JID);
+        // no dir yet: nothing to count
+        expect(await pendingBody(JID)).toEqual({ status: "pending", phase: "decode", frames_done: 0, frames_total: 75 });
+        writeNow();
+        // frames() writes the 80 files one by one, so a poll can land mid-write: wait for the
+        // count to reach the cap (first poll > 0 raced the writer and saw e.g. 21)
+        const b = await until(`/jobs/${JID}`, (x) => x.status !== "pending" || x.frames_done >= 75);
+        expect(b).toEqual({ status: "pending", phase: "decode", frames_done: 75, frames_total: 75 }); // 79 on disk, capped
+        release();
+        await until(`/jobs/${JID}`);
+    });
+    it("only frame files count (f00001.png); other files in the dir do not", async () => {
+        const { gate, release } = gated();
+        ctl.encode = async (o) => {
+            await frames(o.framesDir, 3);
+            await writeFile(path.join(o.framesDir, "notes.txt"), "x");
+            await writeFile(path.join(o.framesDir, "f1.png"), "x");
+            await gate;
+            await writeFile(o.output, tinyWebp());
+            return { frames: 3, frameBytes: 1 };
+        };
+        await upload(JID);
+        const b = await until(`/jobs/${JID}`, (x) => x.status !== "pending" || x.frames_done === 2);
+        expect(b.frames_done).toBe(2);
+        release();
+        await until(`/jobs/${JID}`);
+    });
+    it("GET /jobs/:id during pack: no count exists, so frames_done = frames_total = the frames made", async () => {
+        const { gate, release } = gated();
+        ctl.encode = async (o) => {
+            o.onPhase?.("decode", { total: 75 });
+            await frames(o.framesDir, 77);
+            o.onPhase?.("pack", { frames: 77 });
+            await gate;
+            await writeFile(o.output, tinyWebp());
+            return { frames: 77, frameBytes: 1 };
+        };
+        await upload(JID);
+        const b = await until(`/jobs/${JID}`, (x) => x.status !== "pending" || x.phase === "pack");
+        expect(b).toEqual({ status: "pending", phase: "pack", frames_done: 77, frames_total: 77 });
+        release();
+        expect((await until(`/jobs/${JID}`)).status).toBe("done");
+    });
+    it("the real onPhase wiring: the encoder is handed an onPhase that moves the job through decode and pack", async () => {
+        const { gate, release } = gated();
+        let packNow!: () => void;
+        const packed = new Promise<void>((r) => (packNow = r));
+        ctl.encode = async (o) => {
+            expect(typeof o.onPhase).toBe("function");
+            await frames(o.framesDir, 10);
+            await packed;
+            o.onPhase("pack", { frames: 10 });
+            await gate;
+            await writeFile(o.output, tinyWebp());
+            return { frames: 10, frameBytes: 1 };
+        };
+        await upload(JID);
+        expect((await pendingBody(JID)).phase).toBe("decode");
+        packNow();
+        const b = await until(`/jobs/${JID}`, (x) => x.status !== "pending" || x.phase === "pack");
+        expect(b).toMatchObject({ phase: "pack", frames_done: 10, frames_total: 10 });
+        release();
+        await until(`/jobs/${JID}`);
+    });
+    it("a link job reports phase fetching through cobalt and the download, then decode", async () => {
+        const dl = gated();
+        const enc = gated();
+        ctl.download = async (o) => {
+            await dl.gate;
+            await writeFile(o.dest, Buffer.alloc(1234, 1));
+            return 1234;
+        };
+        ctl.encode = async (o) => {
+            await enc.gate;
+            await writeFile(o.output, tinyWebp());
+            return { frames: 5, frameBytes: 1 };
+        };
+        const res = await post("/jobs", { id: JID, url: LINK, start: 0, length: 6, width: 480, fps: 15, quality: "med" });
+        expect(res.status).toBe(202);
+        expect(await pendingBody(JID)).toEqual({ status: "pending", phase: "fetching", frames_done: null, frames_total: null });
+        dl.release();
+        const b = await until(`/jobs/${JID}`, (x) => x.status !== "pending" || x.phase === "decode");
+        expect(b).toEqual({ status: "pending", phase: "decode", frames_done: 0, frames_total: 90 }); // 6 s * 15 fps
+        enc.release();
+        expect((await until(`/jobs/${JID}`)).status).toBe("done");
+    });
+    it("done and error answers carry no progress fields", async () => {
+        await upload(JID);
+        expect(Object.keys(await until(`/jobs/${JID}`))).not.toContain("phase");
+        ctl.encode = async () => Promise.reject(new JobError("error.webp.timeout"));
+        const id2 = "bB3dE6gH9jK2mN5pQ8sT";
+        await upload(id2);
+        const err = await until(`/jobs/${id2}`);
+        expect(err).toEqual({ status: "error", error: { code: "error.webp.timeout" } });
+    });
+});
+
 describe("POST /jobs still works after the split (cobalt path)", () => {
     it("resolves, downloads, encodes", async () => {
         const res = await post("/jobs", { id: JID, url: LINK, start: 0, length: 6, width: 480, fps: 15, quality: "med" });
@@ -656,5 +835,228 @@ describe("POST /probe", () => {
         release();
         expect((await running).status).toBe(200);
         expect((await post("/fetch", { id: FID, url: LINK })).status).toBe(202);
+    });
+});
+
+
+// ---- POST /apns: the Live Activity push relay (APP-API-CONTRACT.md 8.4, APNS_VIA=helper) ----------
+// The HTTP/2 call itself goes to a local h2c server standing in for Apple (the helper's
+// `apnsOrigin` option); the hosts the relay accepts are still the two real ones.
+
+describe("POST /apns", () => {
+    const HOST = "api.sandbox.push.apple.com";
+    const TOKEN = "ab".repeat(32);
+    type Seen = { headers: http2.IncomingHttpHeaders; body: string };
+    let apple: http2.Http2Server;
+    let seen: Seen[];
+    let sessions: http2.ServerHttp2Session[];
+    let reply: (s: Seen) => { status: number; body?: unknown; headers?: Record<string, string>; hang?: boolean };
+    let appleOrigin: string;
+
+    beforeEach(async () => {
+        seen = [];
+        sessions = [];
+        reply = () => ({ status: 200, headers: { "apns-id": "A-1" } });
+        apple = http2.createServer();
+        apple.on("session", (s) => sessions.push(s));
+        apple.on("stream", (stream, headers) => {
+            const chunks: Buffer[] = [];
+            stream.on("data", (c) => chunks.push(Buffer.from(c)));
+            stream.on("end", () => {
+                const entry = { headers, body: Buffer.concat(chunks).toString("utf8") };
+                seen.push(entry);
+                const r = reply(entry);
+                if (r.hang) return;
+                stream.respond({ ":status": r.status, ...(r.headers ?? {}) });
+                stream.end(r.body === undefined ? undefined : JSON.stringify(r.body));
+            });
+        });
+        await new Promise<void>((r) => apple.listen(0, "127.0.0.1", () => r()));
+        appleOrigin = `http://127.0.0.1:${(apple.address() as any).port}`;
+        helper.close();
+        await startHelper({ apnsOrigin: () => appleOrigin, apnsTimeoutMs: 400 });
+    });
+    afterEach(async () => {
+        for (const s of sessions) s.destroy();
+        await new Promise<void>((r) => apple.close(() => r()));
+    });
+
+    const push = (over: Record<string, unknown> = {}) => ({
+        host: HOST,
+        path: `/3/device/${TOKEN}`,
+        headers: {
+            authorization: "bearer jwt.jwt.jwt",
+            "apns-topic": "com.capybaraharmony.cobalt.push-type.liveactivity",
+            "apns-push-type": "liveactivity",
+            "apns-priority": "10",
+            "apns-expiration": "1800003600",
+            "content-type": "application/json",
+        },
+        body: '{"aps":{"event":"update"}}',
+        ...over,
+    });
+
+    it("needs the internal key like every helper route", async () => {
+        const b = JSON.stringify(push());
+        expect((await call("/apns", { method: "POST", body: b }, null)).status).toBe(403);
+        expect((await call("/apns", { method: "POST", body: b }, "wrong")).status).toBe(403);
+        expect(seen).toHaveLength(0);
+    });
+
+    it("relays the bytes over HTTP/2 and answers Apple's status, reason and apns-id", async () => {
+        const res = await post("/apns", push());
+        expect(res.status).toBe(200);
+        expect(await json(res)).toEqual({ status: 200, reason: null, apns_id: "A-1" });
+        expect(seen).toHaveLength(1);
+        expect(seen[0]!.headers[":method"]).toBe("POST");
+        expect(seen[0]!.headers[":path"]).toBe(`/3/device/${TOKEN}`);
+        expect(seen[0]!.headers).toMatchObject({
+            authorization: "bearer jwt.jwt.jwt",
+            "apns-topic": "com.capybaraharmony.cobalt.push-type.liveactivity",
+            "apns-push-type": "liveactivity",
+            "apns-priority": "10",
+            "apns-expiration": "1800003600",
+            "content-type": "application/json",
+        });
+        expect(seen[0]!.body).toBe('{"aps":{"event":"update"}}');
+    });
+
+    it("an error from Apple is passed on with its reason (the Durable Object decides what it means)", async () => {
+        reply = () => ({ status: 400, body: { reason: "BadDeviceToken" }, headers: { "apns-id": "A-2" } });
+        expect(await json(await post("/apns", push()))).toEqual({ status: 400, reason: "BadDeviceToken", apns_id: "A-2" });
+        reply = () => ({ status: 410, body: { reason: "Unregistered", timestamp: 1 } });
+        expect(await json(await post("/apns", push()))).toEqual({ status: 410, reason: "Unregistered", apns_id: null });
+        reply = () => ({ status: 503 });
+        expect(await json(await post("/apns", push()))).toEqual({ status: 503, reason: null, apns_id: null });
+    });
+
+    it("works for the production host too", async () => {
+        const res = await post("/apns", push({ host: "api.push.apple.com" }));
+        expect((await json(res)).status).toBe(200);
+    });
+
+    it("refuses any host but the two APNs hosts (400), and never opens a connection for it", async () => {
+        for (const host of ["evil.example", "localhost", "127.0.0.1", "api.push.apple.com.evil.example", "api.push.apple.com:443", "API.PUSH.APPLE.COM", "", 5, null, undefined]) {
+            const res = await post("/apns", push({ host }));
+            expect(res.status, String(host)).toBe(400);
+            expect((await json(res)).status).toBe("error");
+        }
+        expect(sessions).toHaveLength(0);
+        expect(seen).toHaveLength(0);
+    });
+
+    it("refuses a path that is not a device push, a bad body, or the wrong method", async () => {
+        for (const path_ of ["/3/device/", "/3/device/%2e%2e/x", "/3/device/ab/cd", "/other", "/3/device/ab?x=1", 5, undefined]) {
+            expect((await post("/apns", push({ path: path_ }))).status, String(path_)).toBe(400);
+        }
+        expect((await post("/apns", push({ body: 5 }))).status).toBe(400);
+        expect((await post("/apns", push({ body: "x".repeat(9000) }))).status).toBe(400);
+        expect((await post("/apns", push({ headers: "nope" }))).status).toBe(400);
+        expect((await post("/apns", push({ headers: [] }))).status).toBe(400);
+        expect((await call("/apns", { method: "POST", body: "not json" })).status).toBe(400);
+        expect((await call("/apns", { method: "POST", body: "x".repeat(20_000) })).status).toBe(400);
+        expect((await call("/apns")).status).toBe(405);
+        expect(seen).toHaveLength(0);
+    });
+
+    it("forwards only the headers a push needs, whatever the caller sends", async () => {
+        await post("/apns", push({ headers: { ...push().headers, cookie: "x=1", "x-evil": "1", host: "evil.example", ":path": "/x", "APNS-ID": "11111111-1111-1111-1111-111111111111" } }));
+        expect(seen[0]!.headers.cookie).toBeUndefined();
+        expect(seen[0]!.headers["x-evil"]).toBeUndefined();
+        expect(seen[0]!.headers[":path"]).toBe(`/3/device/${TOKEN}`);
+        expect(seen[0]!.headers["apns-id"]).toBe("11111111-1111-1111-1111-111111111111");
+    });
+
+    it("keeps one session per host and reuses it", async () => {
+        await post("/apns", push());
+        await post("/apns", push());
+        await post("/apns", push());
+        expect(seen).toHaveLength(3);
+        expect(sessions).toHaveLength(1);
+        await post("/apns", push({ host: "api.push.apple.com" })); // another host: its own session (the same stand-in server here)
+        expect(sessions).toHaveLength(2);
+    });
+
+    it("reconnects after a GOAWAY", async () => {
+        await post("/apns", push());
+        sessions[0]!.goaway();
+        await new Promise((r) => setTimeout(r, 30));
+        const res = await post("/apns", push());
+        expect((await json(res)).status).toBe(200);
+        expect(sessions.length).toBeGreaterThanOrEqual(2);
+        expect(seen).toHaveLength(2);
+    });
+
+    it("recovers when Apple dropped the session without a GOAWAY (a stale session): one retry on a fresh one", async () => {
+        await post("/apns", push());
+        sessions[0]!.destroy();
+        const res = await post("/apns", push());
+        expect((await json(res)).status).toBe(200);
+        expect(seen).toHaveLength(2);
+        expect(sessions).toHaveLength(2);
+    });
+
+    it("times out when Apple never answers: 502 error.apns.transport (the helper's own 10 s, 400 ms in this test)", async () => {
+        reply = () => ({ status: 200, hang: true });
+        const t0 = Date.now();
+        const res = await post("/apns", push());
+        expect(Date.now() - t0).toBeLessThan(3000);
+        expect(res.status).toBe(502);
+        expect((await json(res)).error.code).toBe("error.apns.transport");
+    });
+
+    // finding 1 (review fixes, 2026-10-02): the relay must answer before the Durable Object
+    // gives up on it (APNS_CALL_MS), or the DO writes a push off that is then delivered anyway.
+    it("the relay's own budget is at most 2 s and stays under the Durable Object's per-attempt ceiling; a bigger configured value is capped", async () => {
+        expect(APNS_DEFAULT_TIMEOUT_MS).toBeLessThanOrEqual(2000);
+        expect(APNS_DEFAULT_TIMEOUT_MS).toBeLessThan(APNS_CALL_MS);
+        helper.close();
+        await startHelper({ apnsOrigin: () => appleOrigin, apnsTimeoutMs: 60_000 });
+        reply = () => ({ status: 200, hang: true });
+        const t0 = Date.now();
+        const res = await post("/apns", push());
+        const took = Date.now() - t0;
+        expect(res.status).toBe(502);
+        expect(took).toBeGreaterThanOrEqual(1800);
+        expect(took).toBeLessThan(APNS_CALL_MS);
+    });
+
+    it("the stale-session retry spends what is left of ONE budget, not a second full one", async () => {
+        await post("/apns", push()); // opens the session
+        let n = 0;
+        reply = () => {
+            // the first try: Apple takes the stream, then drops the session 250 ms in (no answer seen)
+            if (n++ === 0) setTimeout(() => sessions[0]!.destroy(), 250);
+            return { status: 200, hang: true }; // and the retry hangs
+        };
+        const t0 = Date.now();
+        const res = await post("/apns", push());
+        const took = Date.now() - t0;
+        expect(res.status).toBe(502);
+        expect(n).toBe(2); // it did retry on a fresh session
+        expect(took).toBeLessThan(550); // 250 + (400 - 250), not 250 + 400 = 650
+    });
+
+    it("an unreachable Apple is a 502 too", async () => {
+        helper.close();
+        await startHelper({ apnsOrigin: () => "http://127.0.0.1:1", apnsTimeoutMs: 400 });
+        const res = await post("/apns", push());
+        expect(res.status).toBe(502);
+        expect((await json(res)).error.code).toBe("error.apns.transport");
+    });
+
+    it("never logs the push: not the jwt, the token or the payload", async () => {
+        const spies = (["log", "info", "warn", "error"] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
+        await post("/apns", push());
+        reply = () => ({ status: 200, hang: true });
+        await post("/apns", push());
+        helper.close();
+        await startHelper({ apnsOrigin: () => "http://127.0.0.1:1", apnsTimeoutMs: 400 });
+        await post("/apns", push());
+        const out = spies.flatMap((s) => s.mock.calls.map((c) => c.map(String).join(" "))).join("\n");
+        vi.restoreAllMocks();
+        expect(out).not.toContain("jwt.jwt.jwt");
+        expect(out).not.toContain(TOKEN);
+        expect(out).not.toContain("aps");
     });
 });

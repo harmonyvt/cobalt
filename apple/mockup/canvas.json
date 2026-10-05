@@ -1,0 +1,224 @@
+{
+  "v": 3,
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-10-02T12:00:00Z"
+  },
+  "title": "cobalt for apple",
+  "launch": {
+    "view": "canvas"
+  },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 1440,
+      "h": 1040,
+      "title": "motion lab: orbit → paste → save → read → webp",
+      "is_interactive": true
+    },
+    "Fold.dc.html": {
+      "x": 2560,
+      "y": 0,
+      "w": 1240,
+      "h": 1080,
+      "title": "foldable iphone: one layout that opens up",
+      "is_interactive": true
+    },
+    "Picker.dc.html": {
+      "x": 0,
+      "y": 1440,
+      "w": 390,
+      "h": 844,
+      "title": "iphone · picker (carousel post)"
+    },
+    "Library.dc.html": {
+      "x": 470,
+      "y": 1440,
+      "w": 390,
+      "h": 844,
+      "title": "iphone · library: one card per post",
+      "is_interactive": true
+    },
+    "Settings.dc.html": {
+      "x": 940,
+      "y": 1440,
+      "w": 390,
+      "h": 844,
+      "title": "iphone · settings: server + key"
+    },
+    "IPad.dc.html": {
+      "x": 0,
+      "y": 2820,
+      "w": 1194,
+      "h": 834,
+      "title": "ipad · studio with inspector"
+    },
+    "Mac.dc.html": {
+      "x": 1274,
+      "y": 2820,
+      "w": 1280,
+      "h": 800,
+      "title": "mac · library: posts list + the post"
+    },
+    "Share.dc.html": {
+      "x": 1410,
+      "y": 1440,
+      "w": 1240,
+      "h": 980,
+      "title": "share sheet: cobalt from any app",
+      "is_interactive": true
+    },
+    "Orbit-A.dc.html": {
+      "x": 0,
+      "y": -1700,
+      "w": 1440,
+      "h": 1000,
+      "title": "option a · earth orbits (recommended)",
+      "is_interactive": true
+    },
+    "Orbit-B.dc.html": {
+      "x": 1520,
+      "y": -1700,
+      "w": 1440,
+      "h": 1000,
+      "title": "option b · spiral galaxy",
+      "is_interactive": true
+    },
+    "Orbit-C.dc.html": {
+      "x": 3040,
+      "y": -1700,
+      "w": 1440,
+      "h": 1000,
+      "title": "option c · tilted rings",
+      "is_interactive": true
+    },
+    "Orbit-D.dc.html": {
+      "x": 4560,
+      "y": -1700,
+      "w": 1440,
+      "h": 1000,
+      "title": "option d · gyroscope",
+      "is_interactive": true
+    },
+    "Orbit2-A.dc.html": {
+      "x": 0,
+      "y": -3300,
+      "w": 1440,
+      "h": 1000,
+      "title": "2d · option a · concentric orbits",
+      "is_interactive": true
+    },
+    "Orbit2-B.dc.html": {
+      "x": 1520,
+      "y": -3300,
+      "w": 1440,
+      "h": 1000,
+      "title": "2d · option b · flat spiral",
+      "is_interactive": true
+    },
+    "Orbit2-C.dc.html": {
+      "x": 3040,
+      "y": -3300,
+      "w": 1440,
+      "h": 1000,
+      "title": "2d · option c · rainbow arcs (recommended)",
+      "is_interactive": true
+    },
+    "Orbit2-D.dc.html": {
+      "x": 4560,
+      "y": -3300,
+      "w": 1440,
+      "h": 1000,
+      "title": "2d · option d · own orbits",
+      "is_interactive": true
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Fold.dc.html",
+    "Picker.dc.html",
+    "Library.dc.html",
+    "Settings.dc.html",
+    "Share.dc.html",
+    "IPad.dc.html",
+    "Mac.dc.html",
+    "Orbit-A.dc.html",
+    "Orbit-B.dc.html",
+    "Orbit-C.dc.html",
+    "Orbit-D.dc.html",
+    "Orbit2-A.dc.html",
+    "Orbit2-B.dc.html",
+    "Orbit2-C.dc.html",
+    "Orbit2-D.dc.html"
+  ],
+  "notes": {
+    "t1": {
+      "x": 0,
+      "y": -300,
+      "text": "one field, every step animated, any size of iphone",
+      "kind": "title1",
+      "maxW": 3800,
+      "w": 240
+    },
+    "t2": {
+      "x": 0,
+      "y": 1140,
+      "text": "iphone: the states the server really returns, and the share sheet",
+      "kind": "title1",
+      "maxW": 2650,
+      "w": 240
+    },
+    "t3": {
+      "x": 0,
+      "y": 2520,
+      "text": "ipad and mac: same app, more room",
+      "kind": "title1",
+      "maxW": 2554,
+      "w": 240
+    },
+    "api": {
+      "x": 1520,
+      "y": 0,
+      "w": 460,
+      "maxH": 1000,
+      "fill": "teal",
+      "text": "api changes this needs: all additive, upstream untouched\n\n• nothing in api/ changes. upstream's POST / and its responses (tunnel, redirect, picker, error) stay exactly as they are, so pulling from imputnet stays clean. every new route lives in the fork's worker and helper under deploy/cloudflare.\n• the app works on any cobalt server. it checks once whether /studio exists; on a plain cobalt instance the same field still saves through POST /, and webp, studio and library hide (settings shows which kind of server it is).\n• the pipeline already exists: POST /studio does save → read today. add `step` (fetching | storing | reading) and `bytes` to GET /studio while it saves.\n• uploads into the same pipeline with an api key: PUT /studio/upload?name=… (today's upload route only takes the web login).\n• render polls report frames decoded / total (the helper counts ffmpeg's frames). packing has no count and stays open-ended.\n• GET /library with an api key, returning posts with their files (media_items already has session_id and link to group by).\n• finish jobs without polls, so leaving the app can't lose a webp."
+    },
+    "caveats": {
+      "x": 2040,
+      "y": 0,
+      "w": 440,
+      "maxH": 1000,
+      "fill": "orange",
+      "text": "what this mockup does not prove\n\n• timings are compressed 5×: a live studio render took 23.5 s (one run). cold start is an estimate (\"a few seconds\"). upload speed is assumed at 8 MB/s.\n• the step names, byte counts and frame counts in the lab are the proposed api above, not what the server returns today (today: saving → ready, pending → done).\n• frames and thumbnails are grey placeholders. a file you attach stays in your browser; only its name, size, length and size in pixels are read.\n• the orbit is css here. in the app only the 3 thumbnails nearest the front play (a pool of 3 players, short local loops); the rest hold a still, and the orbit stops under reduce motion and low power mode. not measured on a phone yet.\n• \"13 videos · 54 MB\" is the real size of your saved originals today; keeping them on the phone by default means that space on the phone too.\n• the share sheet is drawn generically, not as apple draws it. share extensions have tight memory and time limits, so long work is handed to the app.\n• haptics can't play in a browser: the lab flashes a \"haptic\" pill where the phone would tick.\n• the foldable's unfolded size (1125×844 pt here) is a guess; i could not check a real device spec. the 600 pt switch point is a design choice.\n• delete with an api key only works on .webp files; hosted .mp4 files still delete from the web library.\n• the container sleeps after 45 s idle, so today an app backgrounded mid-render for ~45 s can lose the webp (error.webp.job_lost).\n• deferred: mac menu bar extra, app intents for shortcuts.\n• no swiftui code exists yet."
+    },
+    "reversal": {
+      "x": 3880,
+      "y": 0,
+      "w": 520,
+      "maxH": 1000,
+      "fill": "blue",
+      "text": "changes of mind\n\n1. after review, before building: dropped morph-everything, the verb fan-out, the flying copied pill, masonry autoplay and the fake scan-line progress. kept one ipad and one mac board because you asked for all three platforms.\n\n2. after your comment: the save / webp / studio switch is gone. one field takes a link or a file and every input runs the same save → read → webp steps, each with its own animation. a clip over 10 s is no longer an error. added: uploads, the step rail, frames that develop as the video is read, a real decoded-frame count, upstream compatibility, and the foldable board.\n\n3. after your library comment: the grid of storage rows is gone. your 24 files are only 15 posts (measured in the live database), so each post is now one card with pills for what exists (webp, mp4 link, private copy); tap to open it and act on each file. filters dropped. the web library would take the same list + post layout as the mac board.\n\n4. after your orbit comment: no text field at all. home is an orbit of your latest videos (kept on the phone) and two white circles, paste and file; the circle you tap opens into the work card, and the finished video drops into the orbit. added the share sheet board.\n\n5. after your planet idea: the orbit fills the whole screen behind glass chrome, your two circles are the planet at the bottom centre, offline media orbit it and autoplay (3 real players, the rest flipbooks), tapping a planet zooms into its detail, a star is born while fetching and implodes on failure. four layouts are up top to choose from."
+    },
+    "t0": {
+      "x": 0,
+      "y": -2000,
+      "text": "3d orbits: the first set, kept for comparison",
+      "kind": "title1",
+      "maxW": 5920,
+      "w": 240
+    },
+    "t00": {
+      "x": 0,
+      "y": -3600,
+      "text": "2d orbits: pick one (the 3d set is below for comparison)",
+      "kind": "title1",
+      "maxW": 5920,
+      "w": 240
+    }
+  },
+  "designSystems": [],
+  "attachments": {}
+}

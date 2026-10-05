@@ -19,7 +19,7 @@ that `cloudflare.config.ts` imports `cf/config` from).
 
 ## Secrets file (once)
 
-The only secret is `COBALT_API_KEY`, a UUID (the API rejects anything else). Since API keys became per-owner it is an
+The main secret is `COBALT_API_KEY`, a UUID (the API rejects anything else; the three optional APNs secrets of "Live Activities" below live in the same file). Since API keys became per-owner it is an
 INTERNAL key: the API Worker swaps it into every forwarded request and writes it into the container's key file. Clients
 never send or see it (their keys live, hashed, in D1). It lives in a JSON file outside the repo and is uploaded by
 `cf deploy --secrets-file`. It is declared in `api/cloudflare.config.ts` as `bindings.secret()`; it is never in the repo.
@@ -173,7 +173,13 @@ name is a 404. `/studio*` (no key except `POST /studio`, which needs a well-form
 `OPTIONS` from the web origin is answered by the Worker (else 403); `GET /studio/<22 alnum>`, `GET|HEAD .../source`,
 `POST .../render` and `GET .../render/<20 alnum>` are the id-as-credential routes; a malformed id or any other path or
 method is a 404 (see "cobalt studio"). `POST /studio/<sid>/publish` needs a key like `POST /studio`; `POST /library/adopt`
-needs the library service credential and nothing else (see "cobalt library"). A caller that sends the right
+needs the library service credential and nothing else (see "cobalt library"). The native app's routes (see "App routes"):
+`GET /capabilities` needs nothing (a missing, malformed or unknown key is reported in the body, never a 401);
+`PUT /studio/upload`, `GET /library`, `GET|HEAD /library/items/<16 alnum>/file`, `POST /library/items/<16 alnum>/publish|studio` and
+`DELETE /library/items/<16 alnum>/post` (deletes the whole post of any one of its files, D1 + R2 only; `APP-API-CONTRACT.md` section 12)
+need a well-formed key plus the D1 lookup, and are checked before the studio session-id rule (`/studio/upload` is the one
+`/studio/<x>` path whose second segment is not a session id); `/studio/upload/adopt` is internal to the Worker and a 404 from
+outside. A caller that sends the right
 `x-cobalt-service` header counts as a valid key (id `service:library`) on every keyed route. Everything else 404.
 None of the rejections wake the container. The container is single-instance because tunnel state is in memory.
 
@@ -282,10 +288,11 @@ report 60.03), then encode in two steps. (1) the image's ffmpeg-static decodes t
 - The output is buffered in the Durable Object (128 MB memory) on its way to R2, so `WEBP_MAX_BYTES` should stay well
   under about 60 MB. Helper calls from the DO time out after 15 s (60 s for the result download); jobs are async, so a
   long encode does not hold any call open.
-- The result is collected only when someone polls, and only polls (helper calls) renew `sleepAfter` (2 minutes): a job
-  with no polls for up to about 2 minutes since the last one is safe, so a 60 s encode is not killed by a client that
-  pauses; a client that stays away longer may lose the job (`error.webp.job_lost` on a later poll). Download (up to
-  120 s) plus encode (up to 240 s) can outlast that, so the Shortcut should poll until `success` or `error`.
+- The result is collected when someone polls, and (since the job sweep, see "App routes") also by the Durable Object
+  itself every 5 s while a job is pending, so a client that goes away no longer loses the job to `sleepAfter` (now 45 s).
+  The sweep is verified by fakes only until deployed; until you have seen it work live, treat "poll until `success` or
+  `error`" as the safe habit. Download (up to 120 s) plus encode (up to 240 s) fits the sweep's 6-minute budget; a job
+  older than that, or one whose container died, ends as `error.webp.job_lost`.
 - Media is PUBLIC by name (see accepted trade-offs). To delete: `DELETE /media/<name>.webp` with any client key, or
   remove the object in the R2 dashboard. There is no automatic expiry; add an R2 lifecycle rule on `cobalt-media` for one.
 - The first deploy after this change restarts the container once: its env gained `COBALT_INTERNAL_KEY`, which changes
@@ -312,7 +319,7 @@ exists (private, OC; it does; the deploy binds it as `ORIGINALS` and fails if it
 |-------|-------------|-----|-------|
 | `POST /studio` `{url}` | Worker (D1 key lookup) -> DO | yes | 201 `{status,id,url}` right away (the DO tries once to start the download first, at most 4 s) |
 | `GET /studio/<sid>[?wait=N]` | Worker reads D1; while `saving` it forwards to the DO | no | N <= 25. `ready` / `error` / expired come from D1; a `saving` session is advanced by the DO (below) and the DO holds the request for up to N s |
-| `GET`/`HEAD /studio/<sid>/source` | Worker, R2 only | no | `Range` -> 206; never wakes the container |
+| `GET`/`HEAD /studio/<sid>/source` | Worker, R2 only | no | `Range` -> 206; never wakes the container; `?wait=0..90` holds it while the save runs (APP-API-CONTRACT section 11) |
 | `POST /studio/<sid>/render` `{start,length,width?,quality?}` | Worker -> DO | no | 202 `{status:"pending",job}` |
 | `GET /studio/<sid>/render/<job>[?wait=N]` | Worker -> DO | no | pending, success (public WebP URL) or error |
 | `OPTIONS /studio*` | Worker | web origin only | 204; anyone else 403 |
@@ -498,3 +505,274 @@ through fakes; the backfill against a fake `cf` binary). A real container (`linu
 NOT verified before deploy: handing an R2 object body straight to another bucket's `put()` in the Worker (the documented copy
 pattern, but never run here), the service binding call from the web Worker, the adopt poll across a real Durable Object, and the
 backfill against the real `cf` output (its parser accepts the API envelope or the bare result; check `--dry-run` first).
+
+## App routes (the native app, `APP-API-CONTRACT.md`)
+
+The backend half of the Apple app. The contract file is the pinned reference for shapes; this is what exists and what is
+and is not verified. Everything is additive: no existing route changed its request or response (the pending answers of
+`GET /webp/<id>` and `GET /studio/<sid>/render/<job>` and every session body gained fields, none were renamed). No D1
+migration, no new binding, no web change. The Worker-side code is `api/src/app-routes.ts` (no Cloudflare imports, like
+`studio-edge.ts`); `worker.ts` dispatches it right after the key lookup, before anything that reads a request body.
+
+| route | auth | answered by |
+|---|---|---|
+| `GET /capabilities` | none (a key, if sent, is reported) | Worker (D1 for the key at most) |
+| `PUT /studio/upload?name=` | key | Worker (R2 + D1), then the DO's internal `POST /studio/upload/adopt` for a video |
+| `GET /library?limit=&cursor=` | key | Worker (D1) |
+| `GET\|HEAD /library/items/<id>/file` | key | Worker (D1 + R2) |
+| `POST /library/items/<id>/publish` | key | Worker (D1 + R2) |
+| `POST /library/items/<id>/studio` | key | Worker (D1), then the DO's internal adopt (or reopens a ready session) |
+
+- **`/capabilities`** reports `server: "cobalt-cloudflare"`, the upstream `cobalt.version` (the one `version` field of the
+  repo's `api/package.json`, bundled at build time; `null` if it were missing), the feature flags, the limits (imported from
+  the constants that enforce them: `MAX_RENDER_SECONDS`, `MIN_RENDER_SECONDS`, `RENDER_WIDTHS`, `RENDER_QUALITIES`, `RENDER_FPS`,
+  `MAX_UPLOAD_BYTES`, `MAX_SOURCE_BYTES`, `SESSION_TTL_MS`) and the key's state: `missing`, `invalid` (malformed, unknown or
+  revoked), `valid` (with `key_name`), or `unknown` (D1 failed). Never a 401, never the container, `cache-control: no-store`.
+- **`PUT /studio/upload`**: content type must be one of gif, webp, png, jpeg, mp4, quicktime, heic (415 otherwise),
+  `content-length` numeric (411), at most 100 000 000 bytes (413: Cloudflare's request body limit on this plan), non-zero (400).
+  All of that is decided from headers; a refused body is cancelled, never read. The body goes straight from the request to R2
+  (`uploads/<16 base62>.<ext>`, a known length, nothing buffered), the `media_items` row records the caller's key id, and a
+  video or gif continues into a studio session through the same adopt a library "open in studio" uses. A refused adopt (busy
+  helper) is still a 201 with `id: null` and `studio_error`: the file is stored, retry with `POST /library/items/<id>/studio`.
+  The request log gets one row (`PUT /studio/upload`, the declared size, `url_type: upload`) and never the body.
+  `/studio/upload/adopt` is a 404 from outside (the gate), `x-cobalt-key-id` is stripped from clients as everywhere, and the DO
+  refuses the call without it.
+- **`GET /library`**: posts, newest first. A post is `COALESCE(session_id, link, id)`, refined so an upload and the webps made
+  from it (whose adopted session's link is `upload:<item id>`) are one card. Paged by `MAX(created_at)` then the post key,
+  descending; `cursor` is base64url of `<ms>.<post key>`; `limit` 1..50 (default 20); `counts` and `usage` cover the whole
+  library. A *saved* original reopened in the studio after its session expired is adopted under a new session whose link is
+  `upload:<the saved row's session id>` (not its item id), so its new renders group under the same post key as the saved
+  original and the post stays one card; an uploaded original is adopted as `upload:<item id>` as before. Known gap (accepted,
+  no migration): an image hosted from an upload shows as a second post next to its private upload (its host row has no session
+  or link); a saved row with no session id (backfilled) still groups its reopened renders under its item id.
+- **`/library/items/<id>/file`** is `studioSource` for a private file without the 7-day session expiry (same `parseRange`
+  rules); **publish** is the web's `itemPublish` with the same reader/writer copy loop (no `pipeTo`); **studio** is the
+  web's `itemStudio`.
+- **Save progress** (`step`, `step_bytes`, `step_total`, `waking`) on every session body, from the DO's in-memory map: the
+  helper's `GET /fetch/<id>` pending answer now carries `stage` (`downloading` or `probing`), `bytes`, `total`; `storing` counts
+  the chunks of the R2 copy. After a DO eviction the fields are null / false until the next step.
+- **Render progress** (`phase`, `frames_done`, `frames_total`): the helper counts the PNG frames on disk during `decode`
+  (minus the newest, which may still be written, capped at the expected total), reports the real count at `pack`, and `fetching`
+  while a link job resolves and downloads. The DO keeps the last pending body per job in memory.
+
+### Jobs finish with nobody polling (the sweep)
+
+A result used to be collected into R2 only when someone polled, and the container sleeps 45 s after its last activity, so a
+client that went away mid-render lost the WebP. Now accepting a render job, a `/webp` job, a link save or an adopt calls
+`scheduleSweep`, which does `schedule(5, "sweepJobs")` on the Containers library's own scheduler (not `alarm()`, which the
+library owns), de-duplicated by the storage key `sweep:at` (`src/sweep.ts`). `CobaltContainer.sweepJobs()` runs
+`StudioService.sweep()`: every `job:<id>` without a result, accepted within 6 minutes, is collected exactly as a client poll
+would (D1, the library item, R2), and every `save:<sid>` that is not locked is advanced one step while its current helper
+fetch is younger than 8 minutes + 60 s. It re-arms itself in 5 s while anything is pending; each pass makes helper calls, which
+renew the container's activity timer, so the container stays awake exactly while something is pending and the 45 s sleep applies
+otherwise. The save budget hangs on `startedAt`, not `lastAdvance`, because the sweep refreshes `lastAdvance` itself, and it is
+checked before the lock: a save past it is never advanced and never counted pending, even with a hung step holding its lock; a
+lock older than `LOCK_STALE_MS` (60 s) is stale, so the sweep drops it and advances the save like a client poll would.
+
+The Containers library awaits `sweepJobs()` inside its own `alarm()` before it checks `sleepAfter`, so a hung helper call must
+not be able to hold the sweep: every `WebpService` helper call is raced against our own ceiling (`callHelper`; job calls 20 s,
+the result download 60 s, the studio upload 5 min; `AbortSignal.timeout` is not honoured for `containerFetch` in the DO), each
+sweep item is cut at 30 s (`SWEEP_ITEM_MS`, counted pending) and the whole pass at 60 s (`SWEEP_PASS_MS` in `sweep.ts`, counted as
+one pending thing). An abandoned call is not cancelled; its result is dropped.
+
+A client long-poll of `GET /webp/<id>` (or a studio render poll) and the sweep can collect the same job. Whoever finishes deletes
+the helper's job, so the other's next helper poll is a 404: `WebpService.status()` re-reads `result:<id>` at the top of every loop
+pass and on a 404, and `finish()` never overwrites a stored result, so a collected success is never turned into
+`error.webp.job_lost` (it was: the macOS Shortcut, `wait=20`, saw `job_lost` for a WebP that was in R2). `renderStatus` also
+answers the recorded success when its own D1 update finds the row already settled.
+
+`GET|HEAD /library/items/<id>/file` and `POST /library/items/<id>/studio` take the object's size from R2 (`head`), not the row:
+a stale or missing `bytes` no longer gives a 200 for a missing object, a wrong `Content-Range`, or an adopt refused for size 0.
+
+### Verified and unverified (app routes)
+
+Verified: `npm test` and `npm run typecheck` in `api/` and `web/` (the real SQL on every migration; the Worker, the DO's services
+and the helper's HTTP server wired through fakes; the 101 MB refusal, bad names, grouping, paging with ties, Range, the sweep's
+logic and its scheduling). NOT verified before deploy, all of it runtime behaviour that only exists on Cloudflare:
+**that `schedule()` callbacks fire on the deployed runtime while no request is in flight** (the tests prove the sweep logic and
+that it is scheduled; a live check is a render started, the client gone, and `studio_renders.status = 'success'` a minute later);
+that the container really stays awake across sweeps; a 100 MB upload through the Worker into R2; and `FixedLengthStream` in
+the library publish copy (the same loop the web Worker's publish uses).
+
+
+## Live Activities (APNs push for the Apple app, `APP-API-CONTRACT.md` section 8)
+
+The server half of `apple/CONTRACT-LIVE.md`: the Dynamic Island and Lock Screen activity of a pipeline run is kept current by
+ActivityKit pushes sent from the Durable Object, including push-to-start for share-sheet runs (an extension cannot call
+`Activity.request`). Only Live Activity pushes; no ordinary alert pushes. No D1 migration, no new binding, no web change: tokens
+and runs live in the DO's storage next to `job:`, `save:` and `sweep:at`. Code: `api/src/apns.ts` (JWT, request, answer
+table, the two transports), `api/src/live.ts` (store, merge/coalesce rule, payloads, the `/live/*` routes inside the DO),
+hooks in `studio.ts`, cadence in `sweep.ts`, `POST /apns` in `helper/server.js`.
+
+### Secrets and bindings
+
+Three secrets, from `~/.config/cobalt/secrets.json` through `cf deploy --secrets-file` like `COBALT_API_KEY` (declared in
+`api/cloudflare.config.ts` as `bindings.secret()`):
+
+| name | what |
+|---|---|
+| `APNS_KEY_P8` | the APNs auth key (`AuthKey_<id>.p8`), the whole PEM as ONE JSON string with `\n` escapes (a doubly escaped `\\n` is tolerated) |
+| `APNS_KEY_ID` | the 10-character key id |
+| `APNS_TEAM_ID` | the 10-character Apple team id |
+
+and two text bindings with defaults: `APNS_BUNDLE_ID` (`com.capybaraharmony.cobalt`; the topic is
+`<bundle id>.push-type.liveactivity`) and `APNS_VIA` (`"worker"`, or `"helper"`). They are read by the Worker (the capability flag)
+and the DO (signing, sending); **none** goes into the container's `envVars`, so the container never sees a secret and the env
+fingerprint (the restart-on-env-change check) does not change. Producing the JSON string:
+
+    node -e 'const fs=require("fs"),p=process.env.HOME+"/.config/cobalt/secrets.json",j=JSON.parse(fs.readFileSync(p));
+      j.APNS_KEY_P8=fs.readFileSync(process.argv[1],"utf8");j.APNS_KEY_ID="<key id>";j.APNS_TEAM_ID="<team id>";
+      fs.writeFileSync(p,JSON.stringify(j,null,2))' ~/Downloads/AuthKey_XXXXXXXXXX.p8
+
+Without all three (missing or empty) the server degrades cleanly: `features.live_activity_push` is `false` in `GET /capabilities`,
+`PUT /live/runs/<run>` answers `pushing: false, reason: "not_configured"` and stores nothing, no hook sends anything, and the app
+falls back to local updates. **Unverified: whether `cf` 1.0.0-beta.5 refuses a declared `bindings.secret()` that is missing from
+the secrets file.** `cf deploy --help` only says `--dry-run` skips "uploading the Worker", not that it pushes no container image, so
+no dry run was made; if the first deploy refuses, add the three names to the file first (the deploy note below does that anyway).
+
+### Routes (all keyed: `Authorization: Api-Key`; a library-service caller, wrong methods, bad run ids and unknown `/live/*` are 404)
+
+The Worker handles them right after the key lookup (before `describeBody` and `logRequest`: never in `request_log`), drops
+`Authorization`, sets `x-cobalt-key-id` and forwards to the DO, whose `handle()` answers `/live/*` first (before the env-fingerprint
+check and never through `super.fetch`: **a live route never wakes or restarts the container**) and refuses a request without the
+key id (403). Bodies are JSON, at most 4096 bytes (else 400). Errors: `error.live.bad_request` (400), `error.live.not_found`
+(404), `error.live.server_stage` (409), `error.live.too_many_runs` (429, the caps below).
+
+| route | answer |
+|---|---|
+| `PUT /live/start-token` `{token, environment}` | 204; one start token per key (`live:start:<key id>`) |
+| `DELETE /live/start-token` | 204 |
+| `PUT /live/runs/<run>` | 200 `{status, pushing, started, reason?}` (`reason`: `no_start_token`, `not_configured`, `start_unconfirmed`, `start_rate_limited`); upserts the run (`live:run:<run>`, small index entry `live:idx:<key id>:<run>`, index `live:sid:<sid>`); `start: true` with no update token, no earlier start and a run that has not ended sends the one push-to-start; a new update token while the state differs from what APNs accepted sends one catch-up update (priority 10); 429 `error.live.too_many_runs` past the caps |
+| `POST /live/runs/<run>/state` `{state}` | 202; only the device stages `uploading`, `reading`, `ready`, `failed` (409 `server_stage` otherwise); 404 for an unknown run or another key's |
+| `DELETE /live/runs/<run>` | 204, idempotent; with an update token and not ended: one `end` push with the stored state, dismissal now, no alert; then the record goes |
+| `GET /live/selftest` | the check below |
+
+`pushing` is false when APNs is not configured or the last non-token APNs failure for this key (`live:health:<key id>`) is under
+10 minutes old. Validation is strict where Swift would otherwise drop the whole update: the `Int` fields of the content state
+(`rail`, `bytes`, `total`, `framesDone`, `framesTotal`, `result*`) must be integers.
+
+### What is pushed, and when
+
+The triggers are the existing transitions, reached by a client poll or by the sweep (no new timers: work after a DO response does
+not survive). `StudioService` calls `LiveHooks` (`onSave`, `onRender`), each awaited but raced against `LIVE_PUSH_MS = 3000`
+(`raceCeiling`; a hook that throws or hangs never fails or stalls the poll beyond that): every save-progress change (one
+`setProgress`; not the adopted-upload probe), a failed save, render accepted, pending (`decode` frames, `pack`), success and
+failure (the recorded rows are repeated on every poll, so a lost push is retried). Session `ready` pushes nothing: the device
+reads the video then. The merge rule (reset counters and `since` on a stage change, `fetching` keeps the registered `since`,
+title and duration carry over) is `nextState()`; the parity test builds every server-written entry of
+`api/test/fixtures/live-states.json` from its event and sanitises every device-written one. Coalescing per run: an equal state is
+never re-sent; a stage change or a terminal state goes at once at priority 10 (expiration +1 h); a counter goes at most once a
+second at priority 5 (expiration +60 s); the latest value always goes with the next poll or sweep. `end`: done dismisses after
+15 min with the alert `webp ready` / `<service> · <size>`, failed after 5 min with `cobalt couldn't finish`; no sound anywhere.
+While a run with an update token waits on a server step, the sweep re-arms every 2 s instead of 5 (`hasActiveRuns()`), and the
+same pass runs `cleanup()` (runs older than 8 h or ended over 1 h ago, index entries without runs, start tokens not refreshed
+for 60 days). `cleanup()` and `hasActiveRuns()` read the small per-run index entries (`live:idx:`), never the run records.
+
+Limits (review fixes, 2026-10-02; `error.live.too_many_runs`, 429): a key may hold 16 runs that have not ended and 64 in all
+(ended ones are kept an hour), a session 16; at most one push-to-start per key per 10 s (`start_rate_limited`); nothing is ever
+pushed to a run that has ended; a counter is skipped while the key is unhealthy (an outage must not make every poll wait out a
+failing push), and with `APNS_VIA=helper` also outside the server stages `fetching`/`saving`/`rendering` (a relay would renew the
+container's `sleepAfter`; stage changes, the end and catch-up still go). A start whose outcome is unknown (the request left, no
+answer came back) is **never re-sent**: the run keeps `startAttemptedAt`, later `start: true` answers `start_unconfirmed`. The
+conservative choice: at worst that run's activity never appears; re-sending could make two. A failed `end` stays pending on the
+run and the sweep retries it (5 s, 15 s, 40 s after each failure: the first try plus 3 retries over about a minute; DO-only work,
+the container is not touched with the `worker` transport; with `helper` an `end` wakes it as always), re-arming for the retry
+even with no job pending; a client poll inside the backoff does not re-send; after the third retry only a poll retries.
+
+APNs answers: 200 records `sent`; 400 `BadDeviceToken` retries once on the other host and remembers the environment that took it
+(else the token is dropped); 410 and 400 `ExpiredToken` drop the token; 403 `ExpiredProviderToken` re-signs once and retries once
+(never a re-sign within 20 minutes of the last forced one; the JWT is otherwise reused for 50 minutes, **kept in DO storage
+(`live:jwt`) so a DO eviction does not re-sign it**); other 403, other 4xx, 5xx, a network error or the 2.5 s transport ceiling
+mark the key unhealthy for 10 minutes (`pushing: false`); 429 `TooManyProviderTokenUpdates` is such a failure too (logged with its
+reason; it used to be silent); any other 429 changes nothing.
+Logs: one line per attempt, `[live] apns <status> <reason|-> event=<start|update|end> pri=<5|10> run=<first 8> token=<first 8>
+apns-id=<id>`. Never the key, the JWT, a full token or a content state (tests spy on `console` to prove it).
+
+### The self-test, and how to read it
+
+After deploying with the secrets, call it with the device's own key:
+
+    curl -s -H "Authorization: Api-Key <the key>" https://api.capybaraharmony.com/live/selftest
+
+It signs a JWT and sends one update to the **sandbox** host for the device token of 64 zeros, through the configured transport,
+with the real topic, and answers `{"status":"success","configured":true,"transport":"worker","host":"api.sandbox.push.apple.com",
+"jwt":"ok","apns_status":400,"apns_reason":"BadDeviceToken"}`. Read `apns_reason`:
+
+- `BadDeviceToken`: HTTP/2, the JWT and the topic all work. Done.
+- `InvalidProviderToken`: wrong key id, team id or key (or a mangled PEM: `jwt` would say `error` if it could not even be read).
+- `TopicDisallowed` / `BadTopic`: the key is not allowed for this bundle id.
+- `transport: <message>`, or no `apns_status`: the transport failed. Set `APNS_VIA` to `helper` in `api/cloudflare.config.ts` and
+  redeploy, then call it again. `{"configured":false}`: a secret is missing.
+
+It never returns the JWT or the key. With `APNS_VIA=helper` it wakes the container (an explicit owner action).
+
+### The transport switch (`APNS_VIA`)
+
+`"worker"` (default): `fetch()` from the Durable Object to `https://api.push.apple.com` / `https://api.sandbox.push.apple.com`;
+HTTP/2 is negotiated by the Workers runtime (three independent reports of it working deployed; `apple/CONTRACT-LIVE.md` 3.1).
+`"helper"`: the DO still signs and builds every request and posts `{host, path, headers, body}` to the helper's `POST /apns`
+(behind `x-internal-key`), which relays the bytes over `node:http2` (one session per host, reconnected on GOAWAY, error or a
+stale session with one retry, all inside one 2 s budget: the helper always answers before the DO's 2.5 s per-attempt ceiling) and
+answers `{status, reason, apns_id}`; any host but the two Apple ones is a 400, and
+only the push headers are forwarded. The DO uses it only while the container is running, except for `start` and `end` pushes and
+the self-test, which wake it first (a counter while it sleeps is skipped; the next event sends the latest). The wake
+(`ensureRunning()`) happens before and outside the 2.5 s ceiling, under its own 30 s budget: it used to run inside it, so a cold
+container made the push time out (key unhealthy for 10 minutes, `started: false`) while the waking container delivered it anyway,
+and a retried `start: true` then made a second activity. A wake that fails or runs out is `unhealthy` and sent nothing, so a retry
+is safe; a `PUT` with `start: true` can therefore take up to about 30 s on a cold container. The signing key
+never enters the container either way; in `helper` mode the container does see each relayed request, i.e. the short-lived provider
+JWT (valid up to an hour) and the device token, in memory only and never logged.
+
+### Verified and unverified (Live Activities)
+
+Verified: `npm test` and `npm run typecheck` in `api/` and `web/`: the ES256 signature checked with WebCrypto against a generated
+P-256 key, the exact headers and payloads, the answer table, the coalescing with a virtual clock, the hooks at every studio
+transition (client poll and sweep), the real `StudioService` wired to the real `LiveService`, and the helper relay against a local
+`node:http2` server. NOT verified before deploy (only a live deploy can): **HTTP/2 from the Durable Object to Apple** (the
+self-test is the check), APNs throttling of priority-5 updates at one per second, that a push-started activity's update token
+reaches the app (`apple/CONTRACT-LIVE.md` section 6, Plan B: broadcast channels), whether `cf` refuses a declared secret that is
+missing from the secrets file, and the real Apple provider-token rules (the 20-minute re-sign floor is ours, from Apple's docs).
+Known costs: a brand-new run registered with an update token gets one redundant update push (the contract's literal "state
+differs from sent" rule; sent starts empty); a terminal state whose `end` push failed is retried by the sweep three times over about a
+minute and by a client poll after that (if Apple stays down longer the activity just goes stale); a start whose outcome is unknown
+is never re-sent (that run's activity may never appear); the hooks (`LIVE_PUSH_MS = 3000`) abandon a start or end that waits on a
+cold container's wake (up to 30 s), which then continues in the DO and records its result if the DO stays alive (the start's
+"attempted" marker is written first, so an eviction in between cannot allow a second start). Tested, not run live: the wake, the
+2 s relay budget and the sweep retries are all virtual-clock or local-server tests. Not covered: `cf` has not run any of this.
+
+### Deploy (owner; not run by the lane)
+
+Add the three APNs secrets to `~/.config/cobalt/secrets.json`, then the API deploy only (`prepare-git-info.sh`, then
+`cf deploy --secrets-file ~/.config/cobalt/secrets.json` from `deploy/cloudflare/api`). No D1 migration, no web deploy. The helper
+change ships in the image (the deploy id restarts the container once). Then `GET /live/selftest` with the device's key and read the
+answer as above.
+
+## Hark notifications (stand-in for APNs, `APP-API-CONTRACT.md` section 9)
+
+Until there is an APNs key, a job the owner walked away from (typically a share-sheet run) is announced through their Hark
+webhook: `POST <HARK_WEBHOOK_URL>` with `{"title","body"}`. Code: `api/src/notify.ts` (the opt-in, the exactly-once record, the
+send, the retries, the route inside the DO), hooks in `studio.ts`, retry re-arming in `sweep.ts`.
+
+- **Secret**: `HARK_WEBHOOK_URL` in `~/.config/cobalt/secrets.json`, declared in `api/cloudflare.config.ts` as `bindings.secret()`.
+  Missing, empty or not https = the bridge is off, `features.notify_bridge` is `false`, nothing is stored or sent. The URL is
+  never in `envVars`, never logged, never returned. `cf deploy --dry-run --secrets-file` accepts it (checked 2026-10-04).
+- **Opt-in** (nothing fires without one): `PUT|DELETE /studio/<sid>/notify` (key, the session's owner only) with
+  `{"on":["saved","rendered","failed"],"label"?}`, valid 24 h; or `"notify": true` on one `POST /studio/<sid>/render`.
+- **Fired from** the save becoming ready, a render finishing and either failing, by the poll or the sweep, whichever sees it first;
+  each event once (a record in DO storage). 3 s ceiling per send; 5xx/network/timeout retried twice by the sweep (5 s, 20 s); a
+  4xx is final. Logs: `[notify] hark sent|failed <status> sid=<8>` only.
+- **Verified**: `npm test` (`test/notify.test.ts`: opt-in auth and validation, TTL, every event once under a poll/sweep race, no
+  fire without opt-in, bridge off, payload limits, timeout and retry bounds, no secret in logs) and the dry run. **Not verified**:
+  the real Hark endpoint's behaviour, and a `fetch` from the DO to it, until deployed.
+- **Deploy**: API only, as for Live Activities; no migration, no web deploy.
+
+## Crop (`APP-API-CONTRACT.md` section 10)
+
+`POST /studio/<sid>/render` and `POST /webp` accept an optional `crop` `{x,y,w,h}` (normalized 0..1, in the displayed orientation).
+`helper/crop.js` (shared by the DO and the helper) converts it to even pixels from the probed, rotation-applied size, clamps it
+inside the frame and refuses under 64 px (`error.webp.invalid_params`); the helper's ffmpeg filter becomes
+`fps=<fps>,crop=<w>:<h>:<x>:<y>,scale='min(<width>,iw)':-2:...`. No crop = exactly the old behaviour. `features.crop: true` in
+`GET /capabilities`. Tests: `test/crop.test.ts`. Also run against a real local ffmpeg (Homebrew, 2026-10-04, not the container's): the exact `buildFrameArgs`
+filter on a 640x360 clip gave 320x180 frames for a half crop and 480x270 without one, and on the same clip tagged with a 90 degree
+rotation (probed as 360x640) a bottom-half crop gave 360x320 frames: the crop is read in the displayed orientation. Not run in the
+container image (Alpine's ffmpeg); the helper change ships in the image, so the deploy restarts the container once.

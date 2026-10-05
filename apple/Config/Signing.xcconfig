@@ -1,0 +1,7 @@
+// Nothing in git names a team. Copy Local.xcconfig.example to Local.xcconfig (gitignored)
+// and put your team id there for device builds. Simulator and macOS gate builds pass
+// CODE_SIGNING_ALLOWED=NO and need neither.
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"

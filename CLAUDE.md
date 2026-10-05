@@ -91,3 +91,26 @@ the files and a real run before anything is called done.
 - Tests: `npm test && npm run typecheck` in `deploy/cloudflare/api` and
   `deploy/cloudflare/web` (Worker tests run the real SQL on `node:sqlite`).
   Full runbook and accepted trade-offs: `deploy/cloudflare/README.md`.
+
+## Apple app (apple/)
+
+Native SwiftUI app for this fork: one multiplatform target (iPhone, iPad, Mac; not
+Catalyst) plus an iOS share extension. iOS 18 / macOS 15, Swift 6, no third-party
+dependencies. Contracts: `apple/CONTRACT.md` (app: layout, CobaltKit public API, screens,
+copy, motion, lanes, gates) and `deploy/cloudflare/APP-API-CONTRACT.md` (the additive
+backend routes it uses; nothing under `api/` changes). Design source: `apple/mockup/`.
+
+- `apple/project.yml`: XcodeGen spec; `Cobalt.xcodeproj` is generated and gitignored.
+- `apple/CobaltKit/`: local Swift package (models, API client, capability detection,
+  pipeline, stores, keychain, share inbox, preview data). `apple/Cobalt/`: app UI and
+  design system. `apple/CobaltShare/`: share extension. `apple/Config/`: signing,
+  entitlements, Info.plists. Team id only in the gitignored `apple/Config/Local.xcconfig`.
+- Bundle ids `com.capybaraharmony.cobalt` (+ `.share`), app group
+  `group.com.capybaraharmony.cobalt`, URL scheme `cobalt-apple`.
+- Build and test (from the repo root):
+  - `cd apple && xcodegen generate`
+  - `xcodebuild -project apple/Cobalt.xcodeproj -scheme Cobalt -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -derivedDataPath apple/.build/ios CODE_SIGNING_ALLOWED=NO build`
+  - the same with `-destination 'platform=macOS' -derivedDataPath apple/.build/mac`
+  - `cd apple/CobaltKit && swift test`
+- Previews and tests run on `PreviewClient` / `AppModel.preview(<scenario>)`, which replay
+  the mockup's real data and timings without network.

@@ -12,17 +12,33 @@
 //                      body = the video bytes (streamed to disk, at most 200 MB);
 //                      the same encode as /jobs, skipping cobalt and the download
 //                      -> 202 | 400 | 413 | 429 busy
-//   GET    /jobs/:id          -> {status:"pending"} | {status:"done",...} | {status:"error",error:{code}}
+//   GET    /jobs/:id          -> {status:"pending", phase, frames_done, frames_total} |
+//                      {status:"done",...} | {status:"error",error:{code}}
+//                      phase: "fetching" (link jobs: cobalt + download) | "decode" (ffmpeg
+//                      writing PNG frames, frames_done counts the files on disk) | "pack"
+//                      (img2webp, frames_done = frames_total) | null (not known yet)
 //   GET    /jobs/:id/file     -> image/webp bytes (once done)
 //   DELETE /jobs/:id          -> removes the job and its files
 //
 // cobalt studio (saving a source video for later renders):
 //   POST   /fetch {id,url}    -> 202 | 429 busy   (resolve via cobalt, download at
 //                      most 200 MB to /tmp/fetch/<id>/in, probe duration/size)
-//   GET    /fetch/:id         -> {status:"pending"} | {status:"done", bytes, contentType,
+//   GET    /fetch/:id         -> {status:"pending", stage:"downloading"|"probing", bytes, total} |
+//                      {status:"done", bytes, contentType,
 //                      ext, duration, width, height, title, service} | {status:"error",error:{code}}
 //   GET    /fetch/:id/file    -> the video bytes with content-length (once done)
 //   DELETE /fetch/:id         -> removes it and its file
+//
+// Live Activity push fallback (APP-API-CONTRACT.md section 8.4, text binding
+// APNS_VIA="helper"): a dumb HTTP/2 relay to Apple. The Durable Object signs the
+// JWT and builds the request; this only forwards bytes, so no APNs secret ever
+// enters the container.
+//   POST   /apns {host,path,headers,body}  -> 200 {status, reason, apns_id} (Apple's
+//                      answer; reason from its JSON body) | 400 (any host but
+//                      api.push.apple.com / api.sandbox.push.apple.com, a path that
+//                      is not /3/device/<token>, a bad body) | 502 transport failure
+//                      One node:http2 session per host, reconnected on goaway or
+//                      error, 2 s budget for the whole relay (both tries). The helper never logs headers or bodies.
 //
 // cobalt library (measuring a file that is already stored, see the Worker's
 // POST /library/adopt):
@@ -34,14 +50,17 @@
 
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import http from "node:http";
+import http2 from "node:http2";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { cropToPixels } from "./crop.js";
 import {
     COBALT_ORIGIN,
+    FRAME_RE,
     ID_RE,
     JobError,
     MAX_FETCH_BYTES,
@@ -63,10 +82,15 @@ import {
     videoExt,
 } from "./lib.js";
 
+// The relay's whole budget for one push (see APNS_TIMEOUT_MS inside createHelper).
+export const APNS_DEFAULT_TIMEOUT_MS = 2000;
+
 /**
  * @typedef {{id: string, status: "pending"|"done"|"error", createdAt: number,
  *   dir: string, error?: {code: string}, result?: any,
- *   proc?: import("node:child_process").ChildProcess}} Job
+ *   proc?: import("node:child_process").ChildProcess,
+ *   progress?: {phase: "fetching"|"decode"|"pack", total: number|null, frames?: number, framesDir?: string},
+ *   fetchProgress?: {stage: "downloading"|"probing", bytes: number, total: number|null}}} Job
  */
 
 /**
@@ -81,6 +105,8 @@ import {
  *   resolveSource?: typeof resolveSource,
  *   downloadToFile?: typeof downloadToFile,
  *   encodeAnimatedWebp?: typeof encodeAnimatedWebp,
+ *   apnsOrigin?: (host: string) => string,
+ *   apnsTimeoutMs?: number,
  * }} [opts] everything but the paths and the key defaults to the real thing;
  *   tests replace the pieces that need cobalt, the network or ffmpeg.
  */
@@ -103,6 +129,13 @@ export function createHelper(opts = {}) {
     const doResolve = opts.resolveSource ?? resolveSource;
     const doDownload = opts.downloadToFile ?? downloadToFile;
     const doEncode = opts.encodeAnimatedWebp ?? encodeAnimatedWebp;
+    // where the APNs hosts are reached (tests point this at a local h2c server)
+    const apnsOrigin = opts.apnsOrigin ?? ((host) => `https://${host}`);
+    // ONE budget for the whole relay (both tries on a stale session): at most 2 s, so the
+    // helper always answers before the Durable Object gives up on it (APNS_CALL_MS = 2500
+    // in src/apns.ts). A relay that outlived the DO's ceiling could still deliver a push
+    // the DO had already written off, and its retry would then duplicate it.
+    const APNS_TIMEOUT_MS = Math.min(opts.apnsTimeoutMs ?? APNS_DEFAULT_TIMEOUT_MS, APNS_DEFAULT_TIMEOUT_MS);
 
     /** @type {Map<string, Job>} insertion order = age */
     const jobs = new Map();
@@ -202,9 +235,23 @@ export function createHelper(opts = {}) {
     /** @param {Job} job @param {any} p @param {string} input @param {string | null} srcFilename @param {string} service */
     async function encodeJob(job, p, input, srcFilename, service) {
         const output = path.join(job.dir, "out.webp");
+        const framesDir = path.join(job.dir, "frames");
+        // the probe is part of "decode": the count is not known until it ends
+        job.progress = { phase: "decode", total: null, framesDir };
         const info = await probe(input);
         const plan = planClip({ start: p.start, length: p.length, duration: info.duration });
         if (!plan.ok) throw new JobError(plan.code);
+        // The crop (normalized, display orientation) becomes whole even pixels of the size
+        // probed here (rotation applied: what ffmpeg's filter graph sees). Too small, or a
+        // source whose size ffmpeg could not read, is no render.
+        /** @type {import("./crop.js").CropPx | null} */
+        let cropPx = null;
+        if (p.crop) {
+            if (info.width === null || info.height === null) throw new JobError("error.webp.encode_failed");
+            cropPx = cropToPixels(p.crop, info.width, info.height);
+            if (!cropPx) throw new JobError("error.webp.invalid_params");
+        }
+        job.progress = { phase: "decode", total: Math.max(1, Math.round(plan.seconds * p.fps)), framesDir };
         if (plan.truncated) {
             console.error(
                 `[webp-helper] duration unknown for ${p.id}: encoding at most ${plan.seconds}s`,
@@ -218,15 +265,23 @@ export function createHelper(opts = {}) {
             img2webpBin: img2webpPath(),
             input,
             output,
-            framesDir: path.join(job.dir, "frames"),
+            framesDir,
             start: p.start,
             length: plan.seconds,
             width: p.width,
             fps: p.fps,
             quality: p.quality,
+            crop: cropPx,
             timeoutMs: FFMPEG_TIMEOUT_MS,
             onChild: (c) => {
                 job.proc = c;
+            },
+            onPhase: (phase, info) => {
+                if (phase === "decode") {
+                    job.progress = { phase: "decode", total: info.total ?? job.progress?.total ?? null, framesDir };
+                } else {
+                    job.progress = { phase: "pack", total: info.frames ?? null, frames: info.frames, framesDir };
+                }
             },
         });
         console.error(
@@ -266,6 +321,7 @@ export function createHelper(opts = {}) {
     /** @param {Job} job @param {any} p */
     async function runJob(job, p) {
         const input = path.join(job.dir, "in");
+        job.progress = { phase: "fetching", total: null };
         try {
             await mkdir(job.dir, { recursive: true });
             await waitForCobalt();
@@ -295,6 +351,7 @@ export function createHelper(opts = {}) {
     /** @param {Job} job @param {{id: string, url: string}} p */
     async function runFetch(job, p) {
         const input = path.join(job.dir, "in");
+        job.fetchProgress = { stage: "downloading", bytes: 0, total: null };
         try {
             await mkdir(job.dir, { recursive: true });
             await waitForCobalt();
@@ -317,8 +374,12 @@ export function createHelper(opts = {}) {
                 onResponse: (res) => {
                     contentType = res.headers.get("content-type");
                 },
+                onProgress: (done, total) => {
+                    job.fetchProgress = { stage: "downloading", bytes: done, total };
+                },
             });
 
+            job.fetchProgress = { stage: "probing", bytes, total: null };
             const info = await probe(input);
             // no video stream: an image, audio or a broken file is no use here
             if (info.width === null || info.height === null) {
@@ -403,6 +464,7 @@ export function createHelper(opts = {}) {
                 width: q.get("width"),
                 fps: q.get("fps") ?? 15,
                 quality: q.get("quality"),
+                crop: q.get("crop"),
             },
             // the DO limits studio clips itself (0.5 s to 10 s)
             { minLength: 0.5 },
@@ -563,9 +625,212 @@ export function createHelper(opts = {}) {
             return void pipeline(createReadStream(src), res).catch(() => res.destroy());
         }
 
-        if (job.status === "pending") return send(res, 200, { status: "pending" });
+        if (job.status === "pending") {
+            return send(res, 200, {
+                status: "pending",
+                stage: job.fetchProgress?.stage ?? "downloading",
+                bytes: job.fetchProgress?.bytes ?? 0,
+                total: job.fetchProgress?.total ?? null,
+            });
+        }
         if (job.status === "error") return send(res, 200, { status: "error", error: job.error });
         return send(res, 200, { status: "done", ...job.result });
+    }
+
+    /**
+     * The progress fields of a pending WebP job. Honest by construction:
+     * during "decode" the count is the PNG frames on disk now, less one (the
+     * newest file may still be being written), capped at the expected total;
+     * during "pack" there is no count, so done = total = the frames made.
+     * @param {Job} job
+     */
+    async function jobProgress(job) {
+        const pr = job.progress;
+        if (!pr) return { phase: null, frames_done: null, frames_total: null };
+        if (pr.phase === "fetching") return { phase: "fetching", frames_done: null, frames_total: null };
+        if (pr.phase === "pack") {
+            const n = pr.frames ?? pr.total ?? null;
+            return { phase: "pack", frames_done: n, frames_total: n };
+        }
+        let done = 0;
+        try {
+            const names = await readdir(pr.framesDir ?? path.join(job.dir, "frames"));
+            done = Math.max(0, names.filter((n) => FRAME_RE.test(n)).length - 1);
+        } catch {
+            // the frames dir does not exist yet (probe, or ffmpeg not started)
+        }
+        if (pr.total !== null) done = Math.min(done, pr.total);
+        return { phase: "decode", frames_done: done, frames_total: pr.total };
+    }
+
+    // ---- POST /apns: the Live Activity push relay ---------------------------------
+
+    const APNS_HOSTS = new Set(["api.push.apple.com", "api.sandbox.push.apple.com"]);
+    const APNS_PATH = /^\/3\/device\/[0-9A-Za-z]{1,200}$/;
+    // only the headers a push needs are forwarded, whatever the caller sends
+    const APNS_HEADERS = new Set([
+        "authorization",
+        "apns-topic",
+        "apns-push-type",
+        "apns-priority",
+        "apns-expiration",
+        "apns-id",
+        "apns-collapse-id",
+        "content-type",
+    ]);
+    /** @type {Map<string, import("node:http2").ClientHttp2Session>} one session per host */
+    const apnsSessions = new Map();
+
+    /** @param {string} host */
+    function apnsSession(host) {
+        const have = apnsSessions.get(host);
+        if (have && !have.closed && !have.destroyed) return have;
+        const session = http2.connect(apnsOrigin(host));
+        const forget = () => {
+            if (apnsSessions.get(host) === session) apnsSessions.delete(host);
+        };
+        session.on("error", forget);
+        session.on("close", forget);
+        session.on("goaway", () => {
+            forget();
+            session.close();
+        });
+        // an idle session is closed; the next push opens a fresh one
+        session.setTimeout(5 * 60_000, () => session.close());
+        apnsSessions.set(host, session);
+        return session;
+    }
+
+    /**
+     * One relay attempt on the host's session. Rejects with {sessionError: true} when
+     * the session failed before any answer (a stale session: the caller retries once
+     * on a fresh one).
+     * @param {{host: string, path: string, headers: Record<string,string>, body: string}} p
+     * @returns {Promise<{status: number, reason: string|null, apns_id: string|null}>}
+     */
+    function apnsOnce(p, timeoutMs) {
+        return new Promise((resolve, reject) => {
+            let settled = false;
+            const done = (fn, v) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                session?.off("error", onSessionError);
+                fn(v);
+            };
+            const onSessionError = (e) => {
+                done(reject, Object.assign(new Error(String(e?.message ?? e)), { sessionError: !answered }));
+            };
+            let answered = false;
+            let session;
+            try {
+                session = apnsSession(p.host);
+            } catch (e) {
+                return reject(Object.assign(new Error(String(e?.message ?? e)), { sessionError: true }));
+            }
+            const timer = setTimeout(() => {
+                try {
+                    req.close(http2.constants.NGHTTP2_CANCEL);
+                } catch {}
+                done(reject, new Error(`apns ${p.host} timed out after ${timeoutMs} ms`));
+            }, timeoutMs);
+            /** @type {import("node:http2").ClientHttp2Stream} */
+            let req;
+            try {
+                req = session.request({
+                    ":method": "POST",
+                    ":path": p.path,
+                    ...p.headers,
+                });
+            } catch (e) {
+                return done(reject, Object.assign(new Error(String(e?.message ?? e)), { sessionError: true }));
+            }
+            let status = 0;
+            let apnsId = null;
+            const chunks = [];
+            req.on("response", (h) => {
+                answered = true;
+                status = Number(h[":status"]) || 0;
+                const id = h["apns-id"];
+                apnsId = typeof id === "string" ? id : null;
+            });
+            req.on("data", (c) => {
+                if (chunks.length < 64) chunks.push(c);
+            });
+            req.on("end", () => {
+                // a stream that ended with no response headers is a dead session, not an
+                // answer of status 0 (the caller would read that as "Apple said nothing")
+                if (!answered) {
+                    return done(reject, Object.assign(new Error("apns stream ended without a response"), { sessionError: true }));
+                }
+                let reason = null;
+                try {
+                    const j = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+                    if (typeof j?.reason === "string") reason = j.reason;
+                } catch {}
+                done(resolve, { status, reason, apns_id: apnsId });
+            });
+            req.on("error", (e) => {
+                done(reject, Object.assign(new Error(String(e?.message ?? e)), { sessionError: !answered }));
+            });
+            req.on("close", () => {
+                // closed without an end (a reset): an error unless already settled
+                done(reject, Object.assign(new Error("apns stream closed"), { sessionError: !answered }));
+            });
+            session.on("error", onSessionError);
+            req.end(p.body);
+        });
+    }
+
+    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res */
+    async function handleApns(req, res) {
+        if (req.method !== "POST") return fail(res, 405, "error.apns.bad_request");
+        // a declared size over the limit is answered without reading the body
+        if (Number(req.headers["content-length"]) > 16_384) return failAndClose(req, res, 400, "error.apns.bad_request");
+        let body;
+        try {
+            body = JSON.parse(await readBody(req, 16_384));
+        } catch {
+            return fail(res, 400, "error.apns.bad_request");
+        }
+        const host = body?.host;
+        const pathValue = body?.path;
+        const rawHeaders = body?.headers;
+        const payload = body?.body;
+        if (typeof host !== "string" || !APNS_HOSTS.has(host)) return fail(res, 400, "error.apns.bad_host");
+        if (typeof pathValue !== "string" || !APNS_PATH.test(pathValue)) return fail(res, 400, "error.apns.bad_request");
+        if (typeof payload !== "string" || payload.length > 8192) return fail(res, 400, "error.apns.bad_request");
+        if (!rawHeaders || typeof rawHeaders !== "object" || Array.isArray(rawHeaders)) {
+            return fail(res, 400, "error.apns.bad_request");
+        }
+        /** @type {Record<string,string>} */
+        const headers = {};
+        for (const [k, v] of Object.entries(rawHeaders)) {
+            const name = k.toLowerCase();
+            if (APNS_HEADERS.has(name) && typeof v === "string") headers[name] = v;
+        }
+        const job = { host, path: pathValue, headers, body: payload };
+        try {
+            const deadline = Date.now() + APNS_TIMEOUT_MS;
+            let out;
+            try {
+                out = await apnsOnce(job, APNS_TIMEOUT_MS);
+            } catch (e) {
+                if (!e?.sessionError) throw e;
+                // a stale session (Apple closed it): once more on a fresh one, inside
+                // what is left of the one budget
+                apnsSessions.get(host)?.destroy();
+                apnsSessions.delete(host);
+                const left = deadline - Date.now();
+                if (left < 50) throw e;
+                out = await apnsOnce(job, left);
+            }
+            return send(res, 200, out);
+        } catch (e) {
+            // the message can name the host but never carries the request
+            console.error("[webp-helper] apns relay failed:", String(e?.message ?? e).slice(0, 200));
+            return send(res, 502, { status: "error", error: { code: "error.apns.transport", message: String(e?.message ?? e).slice(0, 200) } });
+        }
     }
 
     const server = http.createServer(async (req, res) => {
@@ -576,6 +841,7 @@ export function createHelper(opts = {}) {
             const url = new URL(req.url || "/", "http://helper");
             const { pathname } = url;
 
+            if (pathname === "/apns") return await handleApns(req, res);
             if (pathname === "/jobs/upload") return await handleUpload(req, res, url);
             if (pathname === "/probe") return await handleProbe(req, res, url);
             if (pathname === "/fetch" || pathname.startsWith("/fetch/")) {
@@ -632,7 +898,9 @@ export function createHelper(opts = {}) {
                 return void createReadStream(out).pipe(res);
             }
 
-            if (job.status === "pending") return send(res, 200, { status: "pending" });
+            if (job.status === "pending") {
+                return send(res, 200, { status: "pending", ...(await jobProgress(job)) });
+            }
             if (job.status === "error") {
                 return send(res, 200, { status: "error", error: job.error });
             }
@@ -654,6 +922,8 @@ export function createHelper(opts = {}) {
         },
         close() {
             clearInterval(evictTimer);
+            for (const session of apnsSessions.values()) session.destroy();
+            apnsSessions.clear();
             server.close();
         },
     };

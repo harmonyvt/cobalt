@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cobalt picker sheet</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2f8af9}a:hover{color:#1f6fd6}
+.pk *{box-sizing:border-box}
+.pk button{font:inherit;color:inherit;cursor:pointer}
+.it{display:flex;flex-direction:column;gap:8px}
+.th{position:relative;aspect-ratio:1;border-radius:11px;background:linear-gradient(170deg,#4a4a4f,#232326);overflow:hidden}
+.th b{position:absolute;left:8px;top:8px;font-size:11px;font-weight:500;background:rgba(0,0,0,.7);border-radius:6px;padding:3px 7px}
+.btns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.b{height:44px;border:0;border-radius:11px;background:#282828;font-size:13px;font-weight:500}
+.b.p{background:#e1e1e1;color:#000 !important}
+</style>
+</helmet>
+<div class="pk" style="width: 390px; height: 844px; padding: 11px; border-radius: 58px; background: #161616; box-sizing: border-box; font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace">
+  <div style="position: relative; width: 368px; height: 822px; border-radius: 47px; background: #000; overflow: hidden; color: #e1e1e1">
+    <div style="position: absolute; inset: 0; padding: 58px 16px 0; display: flex; flex-direction: column; gap: 12px; opacity: 0.35">
+      <div style="height: 54px; border: 1px solid #383838; border-radius: 11px; display: flex; align-items: center; gap: 8px; padding: 0 14px"><b style="font-weight: 500; background: #282828; border-radius: 7px; padding: 5px 9px; font-size: 13px">x</b><span style="color: #8f8f8f; font-size: 13px">PopCrave · 1682176754792955905</span></div>
+      <div style="height: 47px; border-radius: 11px; background: #191919"></div>
+    </div>
+    <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 612px; background: #191919; border-radius: 26px 26px 47px 47px; padding: 10px 18px 28px; display: flex; flex-direction: column; gap: 16px">
+      <div style="width: 40px; height: 5px; border-radius: 3px; background: #383838; align-self: center"></div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <h2 style="margin: 0; font-size: 18px; font-weight: 600">select what to save</h2>
+        <p style="margin: 0; font-size: 12.5px; line-height: 1.5; color: #8f8f8f">this post has more than one thing in it. press an item to save it, or turn a video into a webp.</p>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+        <div class="it">
+          <div class="th"><b>video</b></div>
+          <div class="btns"><button class="b p" type="button">save</button><button class="b" type="button">webp</button></div>
+        </div>
+        <div class="it">
+          <div class="th" style="background: linear-gradient(170deg, #5b5b60, #2c2c30)"><b>photo</b></div>
+          <div class="btns" style="grid-template-columns: minmax(0, 1fr)"><button class="b p" type="button">save</button></div>
+        </div>
+      </div>
+      <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px">
+        <button type="button" style="height: 50px; border: 0; border-radius: 11px; background: #e1e1e1; color: #000; font-weight: 600; font-size: 14.5px">save both to photos</button>
+        <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #8f8f8f; text-align: center">webp only appears on videos and gifs. photos stay photos.</p>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

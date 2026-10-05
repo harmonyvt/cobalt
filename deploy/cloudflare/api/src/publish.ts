@@ -24,6 +24,7 @@ export interface PublishBucket {
             customMetadata: Record<string, string>;
         },
     ): Promise<{ size: number } | null>;
+    delete(key: string): Promise<void>;
 }
 
 export type PublishDeps = {

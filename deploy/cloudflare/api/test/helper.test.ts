@@ -204,6 +204,51 @@ describe("encodeAnimatedWebp (stubbed spawn)", () => {
         expect(existsSync(j.framesDir)).toBe(false);
         expect(existsSync(j.output)).toBe(true);
     });
+    it("onPhase: decode (with the expected count) fires before ffmpeg, pack (with the real count) after the frames are listed and before img2webp", async () => {
+        const j = { ...job("phases"), length: 2, fps: 15 };
+        const order: string[] = [];
+        const h = harness((c) => {
+            order.push(`spawn ${c.bin}`);
+            if (c.bin === "ffmpeg") writeFrames(c, 31); // ffmpeg made one more than 2 s * 15 fps
+            else writeFileSync(j.output, "webp");
+            return 0;
+        });
+        await encodeAnimatedWebp({
+            ...j,
+            spawnImpl: h.spawnImpl,
+            onPhase: (phase, info) => order.push(`${phase} ${JSON.stringify(info)}`),
+        });
+        expect(order).toEqual([
+            'decode {"total":30}',
+            "spawn ffmpeg",
+            'pack {"frames":31}',
+            "spawn img2webp",
+        ]);
+    });
+    it("onPhase: the expected count is at least 1, and null when no length is given", async () => {
+        const seen: unknown[] = [];
+        const run = async (name: string, extra: Record<string, unknown>) => {
+            const j = { ...job(name), ...extra } as ReturnType<typeof job> & { length?: number };
+            const h = harness((c) => {
+                if (c.bin === "ffmpeg") writeFrames(c, 1);
+                else writeFileSync(j.output, "webp");
+                return 0;
+            });
+            await encodeAnimatedWebp({ ...j, spawnImpl: h.spawnImpl, onPhase: (p, i) => p === "decode" && seen.push(i) });
+        };
+        await run("tiny", { length: 0.01, fps: 10 });
+        await run("nolen", { length: undefined });
+        expect(seen).toEqual([{ total: 1 }, { total: null }]);
+    });
+    it("onPhase: a failing ffmpeg reports decode but never pack", async () => {
+        const j = job("phasefail");
+        const phases: string[] = [];
+        const h = harness(() => 1);
+        await expect(
+            encodeAnimatedWebp({ ...j, spawnImpl: h.spawnImpl, onPhase: (p) => phases.push(p) }),
+        ).rejects.toMatchObject({ code: "error.webp.encode_failed" });
+        expect(phases).toEqual(["decode"]);
+    });
     it("img2webp exiting non-zero is encode_failed and the frames are still removed", async () => {
         const j = job("i2wfail");
         const h = harness((c) => {
@@ -498,6 +543,94 @@ describe("downloadToFile", () => {
         expect(n).toBe(5000);
         expect(Buffer.compare(readFileSync(dest), Buffer.from(data))).toBe(0);
     });
+    describe("onProgress", () => {
+        const chunks = (sizes: number[], init: ResponseInit = {}) => {
+            let i = 0;
+            const stream = new ReadableStream<Uint8Array>({
+                async pull(c) {
+                    if (i >= sizes.length) return c.close();
+                    // a tick between chunks, so the pipeline delivers them one by one
+                    await new Promise((r) => setTimeout(r, 1));
+                    c.enqueue(new Uint8Array(sizes[i++]));
+                },
+            });
+            return (async () => new Response(stream, init)) as unknown as typeof fetch;
+        };
+
+        it("reports bytes so far with the content-length as total, throttled to 256 KB, and a final report with the full size", async () => {
+            const seen: [number, number | null][] = [];
+            const sizes = Array.from({ length: 10 }, () => 100 * 1024); // ten 100 KB chunks = 1000 KB
+            const n = await downloadToFile({
+                url: "http://x/",
+                dest: join(dir, "prog"),
+                fetchImpl: chunks(sizes, { headers: { "content-length": String(1000 * 1024) } }),
+                onProgress: (b, t) => seen.push([b, t]),
+            });
+            expect(n).toBe(1000 * 1024);
+            // every report carries the total, bytes only grow, and the last one is the whole file
+            expect(seen.every(([, t]) => t === 1000 * 1024)).toBe(true);
+            expect(seen.map(([b]) => b)).toEqual([...seen.map(([b]) => b)].sort((a, b) => a - b));
+            expect(seen.at(-1)).toEqual([1000 * 1024, 1000 * 1024]);
+            // throttled: at least 256 KB between two reports (the final one aside), so far fewer than 10
+            const mid = seen.slice(0, -1).map(([b]) => b);
+            for (let i = 1; i < mid.length; i++) expect(mid[i] - mid[i - 1]).toBeGreaterThanOrEqual(256 * 1024);
+            expect(seen.length).toBeLessThanOrEqual(5);
+        });
+        it("total is null when the response has no content-length", async () => {
+            const seen: [number, number | null][] = [];
+            await downloadToFile({
+                url: "http://x/",
+                dest: join(dir, "prog2"),
+                fetchImpl: chunks([1000, 1000]),
+                onProgress: (b, t) => seen.push([b, t]),
+            });
+            expect(seen.length).toBeGreaterThanOrEqual(1);
+            expect(seen.every(([, t]) => t === null)).toBe(true);
+            expect(seen.at(-1)![0]).toBe(2000);
+        });
+        it("reports at least every 250 ms even for small chunks", async () => {
+            const seen: number[] = [];
+            const slow = (async () => {
+                let i = 0;
+                return new Response(
+                    new ReadableStream<Uint8Array>({
+                        async pull(c) {
+                            if (i++ >= 3) return c.close();
+                            await new Promise((r) => setTimeout(r, 300));
+                            c.enqueue(new Uint8Array(10));
+                        },
+                    }),
+                );
+            }) as unknown as typeof fetch;
+            await downloadToFile({ url: "http://x/", dest: join(dir, "prog3"), fetchImpl: slow, onProgress: (b) => seen.push(b) });
+            expect(seen.slice(0, 3)).toEqual([10, 20, 30]); // one per chunk, each 300 ms apart
+        });
+        it("a throwing callback never fails the download", async () => {
+            const n = await downloadToFile({
+                url: "http://x/",
+                dest: join(dir, "prog4"),
+                fetchImpl: respond(new Uint8Array(500)),
+                onProgress: () => {
+                    throw new Error("boom");
+                },
+            });
+            expect(n).toBe(500);
+        });
+        it("no report for a download that fails", async () => {
+            const seen: number[] = [];
+            await expect(
+                downloadToFile({
+                    url: "http://x/",
+                    dest: join(dir, "prog5"),
+                    maxBytes: 1000,
+                    fetchImpl: chunks([600, 600]),
+                    onProgress: (b) => seen.push(b),
+                }),
+            ).rejects.toMatchObject({ code: "error.webp.too_large" });
+            expect(seen.at(-1) ?? 0).toBeLessThanOrEqual(600);
+        });
+    });
+
     it("too_large when the body outgrows the cap (no content-length)", async () => {
         const dest = join(dir, "big");
         const stream = new ReadableStream({

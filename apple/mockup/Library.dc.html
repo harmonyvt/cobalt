@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cobalt library on iphone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#196bd4}a:hover{color:#1252a8}
+.lib *{box-sizing:border-box}
+.lib button{font:inherit;color:inherit;cursor:pointer}
+.lib button:focus-visible{outline:2px solid #2f8af9;outline-offset:2px}
+.scroll{position:absolute;inset:0 0 83px 0;overflow-y:auto;padding:58px 16px 24px;display:flex;flex-direction:column;gap:10px}
+.omni{height:54px;border:1px solid #adadb7;border-radius:11px;display:flex;align-items:center;gap:8px;padding:0 6px 0 14px;flex:none}
+.omni span{font-size:13.5px;color:#6e6e75;flex-grow:1}
+.ib{width:52px;height:52px;border:0;border-radius:50%;background:#000;color:#fff !important;display:grid;place-items:center}
+.card{background:#f4f4f4;border-radius:16px;box-shadow:0 0 0 1px rgba(0,0,0,.06) inset;overflow:hidden;flex:none;transition:box-shadow .3s}
+.card.open{box-shadow:0 0 0 1.5px #000 inset}
+.head{display:grid;grid-template-columns:64px minmax(0,1fr);gap:12px;align-items:center;width:100%;border:0;background:transparent;padding:10px;text-align:left;min-height:84px}
+.pv{width:64px;height:64px;border-radius:10px;background:#e3e3e3;display:grid;place-items:center;overflow:hidden;position:relative}
+.pv i{display:block;border-radius:6px;background:linear-gradient(170deg,#c9c9cf,#8e8e96)}
+.card.open .pv i{animation:play 1.2s ease-in-out infinite alternate}
+@keyframes play{from{filter:brightness(1)}to{filter:brightness(1.25)}}
+.t1{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.t1 span{font-weight:400;color:#6e6e75}
+.t2{font-size:11.5px;color:#6e6e75;margin-top:3px}
+.pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.pill{font-size:10.5px;font-weight:500;border-radius:99px;padding:3px 9px;display:inline-flex;align-items:center;gap:5px}
+.p-webp{background:#000;color:#fff}
+.p-link{color:#196bd4;box-shadow:0 0 0 1px currentColor inset}
+.p-priv{color:#646469;box-shadow:0 0 0 1px currentColor inset}
+.body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .5s cubic-bezier(.32,1.2,.6,1)}
+.card.open .body{grid-template-rows:1fr}
+.inner{overflow:hidden;min-height:0}
+.files{display:flex;flex-direction:column;gap:6px;padding:0 10px 10px}
+.file{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;background:#fff;border-radius:11px;padding:6px 6px 6px 12px;box-shadow:0 0 0 1px rgba(0,0,0,.05) inset;animation:rowIn .4s cubic-bezier(.34,1.4,.64,1) both}
+.file.gone{animation:dissolve .42s ease-in forwards}
+@keyframes rowIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+@keyframes dissolve{to{transform:scale(.9);opacity:0;filter:blur(5px)}}
+.fn{font-size:12px;font-weight:500}
+.fm{font-size:11px;color:#6e6e75;margin-top:2px}
+.fa{display:flex;gap:4px}
+.ab{height:44px;min-width:44px;padding:0 11px;border:0;border-radius:9px;background:#f4f4f4;font-size:11.5px;font-weight:500}
+.ab.red{color:#c4142a !important}
+.ab.ok{background:#000;color:#fff !important}
+.ab:disabled{color:#646469 !important;background:transparent;box-shadow:0 0 0 1px rgba(0,0,0,.1) inset;cursor:default}
+.cf{grid-column:1 / -1;font-size:11px;color:#c4142a;line-height:1.4;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.foot{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding:0 10px 12px}
+.big{height:44px;border:0;border-radius:11px;font-size:12.5px;font-weight:600;background:#000;color:#fff !important}
+.big.alt{background:#e3e3e3;color:#000 !important;font-weight:500}
+.tabs{position:absolute;left:0;right:0;bottom:0;height:83px;border-top:1px solid rgba(0,0,0,.06);display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:8px 18px 0;background:#fff}
+.tab{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;color:#6e6e75;border:0;background:transparent;height:52px;padding-top:4px;text-decoration:none}
+.tab.on{color:#000}
+</style>
+</helmet>
+<div class="lib" style="width: 390px; height: 844px; padding: 11px; border-radius: 58px; background: #d9d9de; font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace">
+  <div style="position: relative; width: 368px; height: 822px; border-radius: 47px; background: #fff; overflow: hidden; color: #000">
+    <div class="scroll">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px">
+        <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.02em">library</h1>
+        <span style="font-size: 12px; color: #6e6e75">15 posts · 24 files</span>
+      </div>
+      <div class="omni" style="border: 0; justify-content: center; gap: 16px; padding: 0">
+        <button class="ib" type="button" aria-label="paste a link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2"></path><path d="M9 3m0 2a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v0a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2z"></path></svg></button>
+        <button class="ib" type="button" aria-label="attach a file"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3l6.5 -6.5a3 3 0 0 0 -6 -6l-6.5 6.5a4.5 4.5 0 0 0 9 9l6.5 -6.5"></path></svg></button>
+      </div>
+      <sc-for list="{{posts}}" as="p" hint-placeholder-count="5">
+        <div class="{{p.cardCls}}">
+          <button class="head" type="button" aria-expanded="{{p.expanded}}" onClick="{{p.toggle}}">
+            <span class="pv"><i style="width: {{p.pw}}px; height: {{p.ph}}px"></i></span>
+            <span style="min-width: 0; display: block">
+              <span class="t1" style="display: block">{{p.service}} <span>· {{p.id}}</span></span>
+              <span class="t2" style="display: block">{{p.meta}}</span>
+              <span class="pills"><sc-for list="{{p.pills}}" as="q" hint-placeholder-count="2"><span class="{{q.cls}}">{{q.label}}</span></sc-for></span>
+            </span>
+          </button>
+          <div class="body"><div class="inner">
+            <sc-if value="{{p.expanded}}" hint-placeholder-val="{{ false }}">
+              <div class="files">
+                <sc-for list="{{p.files}}" as="f" hint-placeholder-count="2">
+                  <div class="{{f.rowCls}}">
+                    <div style="min-width: 0"><div class="fn">{{f.name}}</div><div class="fm">{{f.meta}}</div></div>
+                    <sc-if value="{{f.showActs}}" hint-placeholder-val="{{ true }}">
+                      <div class="fa">
+                        <button class="{{f.mainCls}}" type="button" onClick="{{f.main}}">{{f.mainLabel}}</button>
+                        <sc-if value="{{f.canDelete}}" hint-placeholder-val="{{ false }}"><button class="ab red" type="button" aria-label="delete {{f.name}}" onClick="{{f.ask}}">delete</button></sc-if>
+                        <sc-if value="{{f.webOnly}}" hint-placeholder-val="{{ false }}"><button class="ab" type="button" disabled="{{ true }}">delete on web</button></sc-if>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{f.confirming}}" hint-placeholder-val="{{ false }}">
+                      <div class="cf"><span>delete for everyone? discord embeds stop working.</span><span style="display: flex; gap: 4px"><button class="ab red" type="button" onClick="{{f.del}}">delete</button><button class="ab" type="button" onClick="{{f.cancel}}">keep</button></span></div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+              </div>
+              <div class="foot">
+                <button class="big" type="button">{{p.trimLabel}}</button>
+                <button class="big alt" type="button" onClick="{{p.toggle}}">close</button>
+              </div>
+            </sc-if>
+          </div></div>
+        </div>
+      </sc-for>
+      <p style="margin: 6px 0 0; font-size: 11.5px; line-height: 1.5; color: #a85a00">needs backend: GET /library with an api key (today only the web login can list these), and grouping by post on the server.</p>
+      <button type="button" onClick="{{reset}}" style="height: 44px; border: 0; border-radius: 11px; background: #f4f4f4; font-size: 12px; flex: none">reset demo</button>
+    </div>
+    <nav class="tabs" aria-label="tabs">
+      <a class="tab" href="Main.dc.html"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"></path><path d="M7 11l5 5l5 -5"></path><path d="M12 4l0 12"></path></svg>save</a>
+      <button class="tab on" type="button"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3m0 2.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z"></path><path d="M4.012 7.26a2.005 2.005 0 0 0 -1.012 1.737v10c0 1.1 .9 2 2 2h10c.75 0 1.158 -.385 1.5 -1"></path><path d="M17 7h.01"></path><path d="M7 13l3.644 -3.644a1.21 1.21 0 0 1 1.712 0l3.644 3.644"></path><path d="M15 12l1.644 -1.644a1.21 1.21 0 0 1 1.712 0l2.644 2.644"></path></svg>library</button>
+      <a class="tab" href="Settings.dc.html"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065z"></path><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"></path></svg>settings</a>
+    </nav>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = this.blank();
+  }
+  blank() { return { open: 'p2', confirm: null, gone: {}, leaving: null, flash: null }; }
+  // the six newest posts in the live library (24 files, 15 posts), grouped by studio session
+  data() {
+    return [
+      { id: 'p1', service: 'instagram', ref: 'Dd55fEyN1Yy', dur: '37.4 s', w: 720, h: 1280, when: 'today 12:46', files: [
+        { id: 'f1', type: 'link', name: 'mp4 link', meta: '8.3 MB · public' },
+        { id: 'f2', type: 'priv', name: 'private copy', meta: '8.3 MB · mp4' } ] },
+      { id: 'p2', service: 'instagram', ref: 'Dd7P496wolG', dur: '14.8 s', w: 720, h: 1280, when: 'yesterday 13:59', files: [
+        { id: 'f3', type: 'webp', name: 'webp 10.1 s', meta: '4.5 MB · 480×854 · public' },
+        { id: 'f4', type: 'priv', name: 'private copy', meta: '4.3 MB · mp4' } ] },
+      { id: 'p3', service: 'x', ref: '2105435404002562056', dur: '5.5 s', w: 480, h: 568, when: 'yesterday 13:43', files: [
+        { id: 'f5', type: 'webp', name: 'webp 5.4 s', meta: '841 KB · 480×568 · public' },
+        { id: 'f6', type: 'priv', name: 'private copy', meta: '256 KB · mp4' } ] },
+      { id: 'p4', service: 'x', ref: '2105432512428445875', dur: '1.9 s', w: 498, h: 280, when: 'yesterday 13:25', files: [
+        { id: 'f7', type: 'priv', name: 'private copy', meta: '1.0 MB · mp4' } ] },
+      { id: 'p5', service: 'instagram', ref: 'Dd5JFkMDt4N', dur: '10.8 s', w: 720, h: 720, when: 'yesterday 13:20', files: [
+        { id: 'f8', type: 'webp', name: 'webp 10.1 s', meta: '1.8 MB · 480×480 · public' },
+        { id: 'f9', type: 'priv', name: 'private copy', meta: '1.3 MB · mp4' } ] },
+      { id: 'p6', service: 'x', ref: '2105358343657427103', dur: '5.1 s', w: 1920, h: 1080, when: 'yesterday 09:31', files: [
+        { id: 'f10', type: 'webp', name: 'webp 5.0 s', meta: '933 KB · 480×270 · public' },
+        { id: 'f11', type: 'priv', name: 'private copy', meta: '3.9 MB · mp4' } ] }
+    ];
+  }
+  renderVals() {
+    var self = this, s = this.state;
+    var pillOf = { webp: ['pill p-webp', 'webp'], link: ['pill p-link', 'mp4 link'], priv: ['pill p-priv', 'private'] };
+    var posts = this.data().map(function (p) {
+      var files = p.files.filter(function (f) { return !s.gone[f.id]; });
+      var expanded = s.open === p.id;
+      var k = Math.min(56 / p.w, 56 / p.h);
+      var hasWebp = files.some(function (f) { return f.type === 'webp'; });
+      return {
+        service: p.service, id: p.ref,
+        meta: p.dur + ' · ' + p.w + '×' + p.h + ' · ' + p.when,
+        pw: Math.round(p.w * k), ph: Math.round(p.h * k),
+        expanded: expanded,
+        cardCls: 'card' + (expanded ? ' open' : ''),
+        pills: files.map(function (f) { return { cls: pillOf[f.type][0], label: pillOf[f.type][1] }; }),
+        trimLabel: hasWebp ? 'trim a new webp' : 'make a webp',
+        toggle: function () { self.setState({ open: expanded ? null : p.id, confirm: null }); },
+        files: files.map(function (f) {
+          var pub = f.type !== 'priv';
+          var flashing = s.flash === f.id;
+          return {
+            name: f.name, meta: f.meta,
+            rowCls: 'file' + (s.leaving === f.id ? ' gone' : ''),
+            confirming: s.confirm === f.id,
+            showActs: s.confirm !== f.id,
+            mainLabel: pub ? (flashing ? 'copied' : 'copy') : (flashing ? 'saved' : 'save'),
+            mainCls: 'ab' + (flashing ? ' ok' : ''),
+            canDelete: f.type === 'webp',
+            webOnly: f.type === 'link',
+            main: function () { self.setState({ flash: f.id }); },
+            ask: function () { self.setState({ confirm: f.id }); },
+            cancel: function () { self.setState({ confirm: null }); },
+            del: function () {
+              self.setState({ confirm: null, leaving: f.id });
+              setTimeout(function () { var g = Object.assign({}, self.state.gone); g[f.id] = true; self.setState({ gone: g, leaving: null }); }, 420);
+            }
+          };
+        })
+      };
+    });
+    return { posts: posts, reset: function () { self.setState(self.blank()); } };
+  }
+}
+</script>
+</body>
+</html>

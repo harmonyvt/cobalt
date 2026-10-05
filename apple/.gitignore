@@ -1,0 +1,6 @@
+Cobalt.xcodeproj/
+.build/
+Config/Local.xcconfig
+xcuserdata/
+*.xcuserstate
+.swiftpm/

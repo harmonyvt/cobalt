@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cobalt settings on iphone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2f8af9}a:hover{color:#5aa2fb}
+.st *{box-sizing:border-box}
+.st button{font:inherit;color:inherit;cursor:pointer}
+.grp{background:#191919;border-radius:11px;box-shadow:0 0 0 1px rgba(255,255,255,.05) inset;display:flex;flex-direction:column}
+.r{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:50px;padding:0 14px;font-size:13.5px}
+.r+.r{border-top:1px solid rgba(255,255,255,.06)}
+.v{color:#8f8f8f;font-size:12.5px;text-align:right}
+.h{font-size:12px;color:#8f8f8f;margin:0 4px}
+.foot{font-size:11.5px;line-height:1.5;color:#8f8f8f;margin:0 4px}
+.sw{width:38px;height:22px;border-radius:11px;background:#e1e1e1;position:relative;flex:none}
+.sw::after{content:"";position:absolute;top:3px;right:3px;width:16px;height:16px;border-radius:50%;background:#000}
+.mini{height:36px;padding:0 12px;border:0;border-radius:9px;background:#282828;font-size:12.5px}
+</style>
+</helmet>
+<div class="st" style="width: 390px; height: 844px; padding: 11px; border-radius: 58px; background: #161616; font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace">
+  <div style="position: relative; width: 368px; height: 822px; border-radius: 47px; background: #000; overflow: hidden; color: #e1e1e1; padding: 58px 16px 0; display: flex; flex-direction: column; gap: 10px">
+    <h1 style="margin: 0 0 6px; font-size: 26px; font-weight: 600; letter-spacing: -0.02em">settings</h1>
+    <span class="h">server</span>
+    <div class="grp">
+      <div class="r"><span>api</span><span class="v">api.capybaraharmony.com</span></div>
+      <div class="r"><span>this server</span><span class="v">cobalt 11.7 + studio, library</span></div>
+      <div class="r"><span>api key</span><span class="v">iphone · ••••••••</span></div>
+      <div class="r"><span style="color: #ff5c6c">this key was revoked</span><button class="mini" type="button">paste new key</button></div>
+    </div>
+    <p class="foot">make keys on the web: cobalt → settings → api keys. the app keeps it in the keychain and sends it as "Authorization: Api-Key …". revoking it on the web locks this phone out at once.</p>
+    <span class="h">making</span>
+    <div class="grp">
+      <div class="r"><span>webp quality</span><span class="v">medium</span></div>
+      <div class="r"><span>keep videos on this iphone</span><span class="sw" aria-hidden="true"></span></div>
+      <div class="r"><span>stored here</span><span class="v">13 videos · 54 MB</span></div>
+    </div>
+    <span class="h">feel</span>
+    <div class="grp">
+      <div class="r"><span>haptics</span><span class="sw" aria-hidden="true"></span></div>
+      <div class="r"><span>motion</span><span class="v">follows reduce motion</span></div>
+    </div>
+    <p class="foot">on a plain cobalt server (no studio routes) the same field still saves through cobalt's normal api; webp, studio and library just hide. your two shortcuts keep working. the app adds the same actions to the shortcuts app later.</p>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

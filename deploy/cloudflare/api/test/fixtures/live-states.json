@@ -1,0 +1,12 @@
+{
+  "fetching_waking": {"stage":"fetching","rail":0,"since":1790000000,"waking":true,"packing":false},
+  "uploading": {"stage":"uploading","rail":0,"since":1790000001,"waking":false,"packing":false,"bytes":1200000,"total":18200000,"title":"IMG_0412.mov"},
+  "saving_storing": {"stage":"saving","rail":1,"since":1790000003,"waking":false,"packing":false,"bytes":2100000,"total":4331778},
+  "reading": {"stage":"reading","rail":2,"since":1790000005,"waking":false,"packing":false,"framesDone":4,"framesTotal":9,"title":"instagram_Dd7P496wolG","duration":14.77},
+  "ready": {"stage":"ready","rail":2,"since":1790000007,"waking":false,"packing":false,"title":"instagram_Dd7P496wolG","duration":14.77},
+  "decoding": {"stage":"rendering","rail":3,"since":1790000020,"waking":false,"packing":false,"framesDone":42,"framesTotal":150,"title":"instagram_Dd7P496wolG","duration":14.77},
+  "packing": {"stage":"rendering","rail":3,"since":1790000020,"waking":false,"packing":true,"framesDone":150,"framesTotal":150,"title":"instagram_Dd7P496wolG","duration":14.77},
+  "done": {"stage":"done","rail":3,"since":1790000043,"waking":false,"packing":false,"title":"instagram_Dd7P496wolG","duration":14.77,"resultURL":"https://media.capybaraharmony.com/PrEvIeW001.webp","resultBytes":4500000,"resultWidth":480,"resultHeight":854,"resultSeconds":10.1},
+  "failed_render_lost": {"stage":"failed","rail":3,"since":1790000030,"waking":false,"packing":false,"title":"instagram_Dd7P496wolG","duration":14.77,"failure":"renderLost","code":"error.webp.job_lost"},
+  "failed_fetch": {"stage":"failed","rail":0,"since":1790000002,"waking":false,"packing":false,"failure":"fetchFailed","code":"error.api.fetch.empty"}
+}

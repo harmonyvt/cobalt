@@ -1,6 +1,19 @@
 // The Worker's request handling, separated from index.ts (which imports the
 // Containers library and so cannot load under plain node) so the whole flow,
 // gate -> D1 lookup -> Durable Object / container, is testable with fakes.
+import {
+    capabilities,
+    libraryFile,
+    libraryList,
+    libraryPostDelete,
+    libraryPublish,
+    libraryStudio,
+    studioUpload,
+    uploadLogInfo,
+    type AppDeps,
+} from "./app-routes";
+import { livePushConfigured } from "./apns";
+import { harkConfigured } from "./notify";
 import { decide, isStudioPath } from "./gate";
 import { KEY_ID_HEADER, SERVICE_HEADER, stripInternalHeaders } from "./headers";
 import { lookupKey } from "./keys";
@@ -9,6 +22,7 @@ import { publishStudio, type PublishBucket } from "./publish";
 import { serviceAuthorized } from "./service-auth";
 import {
     linkFrom,
+    parseSourceWait,
     parseStudioWait,
     studioErr,
     type OriginalsBucket,
@@ -35,6 +49,16 @@ export interface WorkerEnv {
     // an original here from the Worker itself.
     MEDIA: PublishBucket;
     MEDIA_BASE_URL: string;
+    // Live Activity push (section 8). Secrets: absent or empty means no pushes and
+    // `features.live_activity_push` false. The bundle id and transport have defaults.
+    APNS_KEY_P8?: string;
+    APNS_KEY_ID?: string;
+    APNS_TEAM_ID?: string;
+    APNS_BUNDLE_ID?: string;
+    APNS_VIA?: string;
+    // Hark notification bridge (section 9): the webhook URL, a secret. Absent, empty or not
+    // an https URL means the bridge is off and `features.notify_bridge` false.
+    HARK_WEBHOOK_URL?: string;
 }
 
 // The single "main" Container Durable Object (a stub in production).
@@ -73,6 +97,7 @@ export async function handleRequest(
     const res = await handleInner(incoming, env, container, {
         now: deps.now ?? (() => Date.now()),
         sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
+        fixedLength: deps.fixedLength,
     });
     // Every /studio* response, rejections included, carries the studio page's
     // origin (STUDIO-CONTRACT.md); the page is the only intended caller.
@@ -153,13 +178,31 @@ async function handleInner(
                     edge,
                 );
             case "source":
-                return studioSource(env.DB, env.ORIGINALS, sid!, request, edge);
+                return studioSource(env.DB, env.ORIGINALS, sid!, request, edge, {
+                    container,
+                    seconds: parseSourceWait(url.searchParams.get("wait")),
+                });
             default:
                 // render_create / render_status: the Durable Object owns the
                 // helper and the job records. The session id in the path is
                 // the credential, so there is no key and no key id here.
                 return container.fetch(request);
         }
+    }
+
+    // GET /capabilities: the key's state is reported, never refused.
+    if (decision.action === "capabilities") {
+        const r = await capabilities(
+            appDeps(env, container, edge),
+            decision.auth,
+            decision.key,
+            livePushConfigured(env),
+            harkConfigured(env),
+        );
+        return new Response(JSON.stringify(r.body), {
+            status: r.status,
+            headers: { "content-type": "application/json", "cache-control": "no-store" },
+        });
     }
 
     if (decision.action === "lookup" || decision.action === "service") {
@@ -204,6 +247,59 @@ async function handleInner(
                 keyId,
             );
             return json(r.status, r.body, allowOrigin);
+        }
+
+        // The app's routes: D1 + R2 only (the one Durable Object call is the
+        // internal adopt path). Handled before anything below, which reads
+        // request bodies: an upload body is never read, only streamed to R2, and
+        // never reaches the request log.
+        if (decision.then === "studio_upload") {
+            const r = await studioUpload(appDeps(env, container, edge), request, keyId, url.searchParams);
+            const res = json(r.status, r.body, allowOrigin);
+            await logRequest(env.DB, "PUT /studio/upload", keyId, request, uploadLogInfo(request), res);
+            return res;
+        }
+        if (decision.then === "library_list") {
+            const r = await libraryList(appDeps(env, container, edge), url.searchParams);
+            return json(r.status, r.body, allowOrigin);
+        }
+        if (decision.then === "library_file") {
+            return libraryFile(appDeps(env, container, edge), decision.params!.id, request);
+        }
+        if (decision.then === "library_publish") {
+            const r = await libraryPublish(appDeps(env, container, edge), decision.params!.id, keyId);
+            return json(r.status, r.body, allowOrigin);
+        }
+        if (decision.then === "library_studio") {
+            const r = await libraryStudio(appDeps(env, container, edge), decision.params!.id, keyId);
+            return json(r.status, r.body, allowOrigin);
+        }
+        // DELETE /library/items/<id>/post: D1 + R2 only, no CORS (the web page does not call it).
+        if (decision.then === "library_post_delete") {
+            const r = await libraryPostDelete(appDeps(env, container, edge), decision.params!.id);
+            return new Response(JSON.stringify(r.body), {
+                status: r.status,
+                headers: { "content-type": "application/json", "cache-control": "no-store" },
+            });
+        }
+
+        // Live Activity push: handled by the Durable Object (token and run store, APNs),
+        // which never wakes the container. Dispatched here, before anything that
+        // reads a body or writes the request log: a relay arrives about once a
+        // second and must never reach `request_log`. The caller's key is not
+        // passed on; only its id, which the Worker just verified.
+        if (
+            decision.then === "live_start_token" ||
+            decision.then === "live_run" ||
+            decision.then === "live_state" ||
+            decision.then === "live_selftest" ||
+            // the Hark opt-in (also DO-only: D1 ownership check and DO storage)
+            decision.then === "studio_notify"
+        ) {
+            const headers = new Headers(request.headers);
+            headers.delete("Authorization");
+            headers.set(KEY_ID_HEADER, keyId);
+            return container.fetch(new Request(request, { headers }));
         }
 
         // Clients (the macOS Shortcut) may send free text as `url`; take the
@@ -253,6 +349,39 @@ async function handleInner(
     // One named instance for everything: tunnels created by POST / live in
     // that process's memory and must be served by the same one.
     return container.fetch(request);
+}
+
+// What the app's routes need, wired to this request's bindings. The one call
+// into the Durable Object is the internal adopt path a stored video continues
+// into; the caller's key id (set here, after the D1 lookup) travels in the
+// header the Worker strips from every client request.
+function appDeps(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps): AppDeps {
+    return {
+        db: env.DB,
+        originals: env.ORIGINALS,
+        media: env.MEDIA,
+        mediaBaseUrl: env.MEDIA_BASE_URL,
+        apiUrl: env.API_URL,
+        webUrl: env.CORS_URL,
+        now: edge.now,
+        fixedLength: edge.fixedLength ?? ((n) => new FixedLengthStream(n)),
+        adopt: async (keyId, body) => {
+            const res = await container.fetch(
+                new Request("https://do.internal/studio/upload/adopt", {
+                    method: "POST",
+                    headers: { "content-type": "application/json", [KEY_ID_HEADER]: keyId },
+                    body: JSON.stringify(body),
+                }),
+            );
+            let parsed: unknown = null;
+            try {
+                parsed = await res.json();
+            } catch {
+                // not JSON: reported as a generic failure below
+            }
+            return { status: res.status, body: parsed ?? { status: "error", error: { code: "error.api.generic" } } };
+        },
+    };
 }
 
 // The normalised `url` of a JSON body, if it is one clean http(s) link.
@@ -305,7 +434,7 @@ export async function normalizeUrlField(request: Request): Promise<Request> {
 // Records what a keyed POST carried and what came back, never keys. Failures
 // here are swallowed: logging must not break a download.
 
-type BodyInfo = {
+export type BodyInfo = {
     contentType: string | null;
     bytes: number;
     keys: string;

@@ -52,6 +52,9 @@ export type GateDecision =
           then?: LookupThen;
           params?: Record<string, string>;
       }
+    // GET /capabilities: never a 401. The Worker answers it itself (D1 at most)
+    // and reports the key's state; `auth` is what the request carried.
+    | { action: "capabilities"; auth: "service" | "missing" | "invalid" | "key"; key?: string }
     | { action: "reject"; status: number; errorCode?: string };
 
 export type LookupThen =
@@ -60,7 +63,18 @@ export type LookupThen =
     | "media_delete"
     | "studio_create"
     | "studio_publish"
-    | "library_adopt";
+    | "studio_upload"
+    | "library_adopt"
+    | "library_list"
+    | "library_file"
+    | "library_publish"
+    | "library_studio"
+    | "library_post_delete"
+    | "live_start_token"
+    | "live_run"
+    | "live_state"
+    | "live_selftest"
+    | "studio_notify";
 
 export type StudioOp =
     | "preflight"
@@ -78,8 +92,13 @@ export const MEDIA_NAME_REGEX = /^[A-Za-z0-9]{10}\.webp$/;
 export const STUDIO_SID_REGEX = /^[A-Za-z0-9]{22}$/;
 export const STUDIO_JOB_REGEX = /^[A-Za-z0-9]{20}$/;
 
+// Library item id: 16 base62 chars (mintItemId, the web's base62(16)).
+export const ITEM_ID_REGEX = /^[A-Za-z0-9]{16}$/;
+
 export const isStudioPath = (pathname: string) =>
     pathname === "/studio" || pathname.startsWith("/studio/");
+
+export const isLivePath = (pathname: string) => pathname === "/live" || pathname.startsWith("/live/");
 
 export const TUNNEL_PARAMS = ["id", "exp", "sig", "sec", "iv"] as const;
 
@@ -128,6 +147,11 @@ function lookupThen(
 }
 
 export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
+    // Live Activity push (APP-API-CONTRACT.md section 8): keyed and nothing else.
+    // The app sends no Origin, so there is no preflight and no CORS; everything not
+    // listed (and the library service caller) is a 404.
+    if (isLivePath(req.pathname)) return decideLive(req);
+
     const originOk = req.origin !== null && req.origin === cfg.corsUrl;
 
     if (req.method === "OPTIONS") {
@@ -140,6 +164,17 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
 
     if (isStudioPath(req.pathname)) return decideStudio(req);
 
+    // App discovery: open to everyone, the key (if any) only changes the answer.
+    if (req.pathname === "/capabilities") {
+        if (req.method !== "GET") return reject(404);
+        if (req.service) return { action: "capabilities", auth: "service" };
+        if (req.authorization === null) return { action: "capabilities", auth: "missing" };
+        const parsed = parseAuthorization(req.authorization);
+        return "key" in parsed
+            ? { action: "capabilities", auth: "key", key: parsed.key }
+            : { action: "capabilities", auth: "invalid" };
+    }
+
     // Library adoption is for the web Worker's service credential only; an
     // Api-Key client never reaches it.
     if (req.pathname === "/library/adopt") {
@@ -147,6 +182,31 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         return req.service
             ? { action: "service", then: "library_adopt" }
             : reject(401, "error.api.auth.key.invalid");
+    }
+
+    // The app's library (keyed): GET /library, then per item /library/items/<id>/<sub>.
+    if (req.pathname === "/library") {
+        return req.method === "GET" ? lookupThen(req, "library_list") : reject(404);
+    }
+    if (req.pathname.startsWith("/library/items/")) {
+        const [id, sub, ...rest] = req.pathname.slice("/library/items/".length).split("/");
+        if (!ITEM_ID_REGEX.test(id ?? "") || rest.length > 0) return reject(404);
+        if (sub === "file") {
+            return req.method === "GET" || req.method === "HEAD"
+                ? lookupThen(req, "library_file", { id: id! })
+                : reject(404);
+        }
+        if (sub === "publish") {
+            return req.method === "POST" ? lookupThen(req, "library_publish", { id: id! }) : reject(404);
+        }
+        if (sub === "studio") {
+            return req.method === "POST" ? lookupThen(req, "library_studio", { id: id! }) : reject(404);
+        }
+        // Delete a whole post (APP-API-CONTRACT.md section 12): any file id of the post.
+        if (sub === "post") {
+            return req.method === "DELETE" ? lookupThen(req, "library_post_delete", { id: id! }) : reject(404);
+        }
+        return reject(404);
     }
 
     if (req.method === "POST" && req.pathname === "/") {
@@ -189,6 +249,28 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     return reject(404);
 }
 
+// PUT|DELETE /live/start-token, PUT|DELETE /live/runs/<run>, POST
+// /live/runs/<run>/state, GET /live/selftest. <run> is a lowercase UUID.
+const LIVE_RUN_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+function decideLive(req: GateRequest): GateDecision {
+    const m = req.method;
+    let then: LookupThen | null = null;
+    if (req.pathname === "/live/start-token") {
+        if (m === "PUT" || m === "DELETE") then = "live_start_token";
+    } else if (req.pathname === "/live/selftest") {
+        if (m === "GET") then = "live_selftest";
+    } else if (req.pathname.startsWith("/live/runs/")) {
+        const [run, sub, ...rest] = req.pathname.slice("/live/runs/".length).split("/");
+        if (LIVE_RUN_REGEX.test(run ?? "") && rest.length === 0) {
+            if (sub === undefined && (m === "PUT" || m === "DELETE")) then = "live_run";
+            else if (sub === "state" && m === "POST") then = "live_state";
+        }
+    }
+    // the library service credential never reaches these (one key per device)
+    if (then === null || req.service) return reject(404);
+    return lookupThen(req, then);
+}
+
 // /studio, /studio/<sid>, /studio/<sid>/source, /studio/<sid>/render and
 // /studio/<sid>/render/<job>. Ids are validated before anything is looked up;
 // every other path or method is a 404.
@@ -197,6 +279,13 @@ function decideStudio(req: GateRequest): GateDecision {
         return req.method === "POST"
             ? lookupThen(req, "studio_create")
             : reject(404);
+    }
+    // PUT /studio/upload (keyed) is the one public path whose second segment is
+    // not a session id; it must be checked before the id format. The internal
+    // /studio/upload/adopt (Worker -> Durable Object) is not public: it fails
+    // the session id check below and is a 404.
+    if (req.pathname === "/studio/upload") {
+        return req.method === "PUT" ? lookupThen(req, "studio_upload") : reject(404);
     }
     const parts = req.pathname.slice("/studio/".length).split("/");
     const [sid, sub, job, ...rest] = parts;
@@ -212,6 +301,15 @@ function decideStudio(req: GateRequest): GateDecision {
     if (sub === "publish" && job === undefined) {
         return req.method === "POST"
             ? lookupThen(req, "studio_publish", { sid })
+            : reject(404);
+    }
+    // Hark notification opt-in (APP-API-CONTRACT.md section 9): keyed, the session's owner
+    // only (the Durable Object checks the owner). The library service credential never
+    // reaches it.
+    if (sub === "notify" && job === undefined) {
+        if (req.service) return reject(404);
+        return req.method === "PUT" || req.method === "DELETE"
+            ? lookupThen(req, "studio_notify", { sid })
             : reject(404);
     }
     if (sub === "source" && job === undefined) {

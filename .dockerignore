@@ -19,3 +19,6 @@ docker-compose.yml
 
 # ide
 .vscode
+
+# fork: the native Apple app (apple/) and its GBs of build output never belong in an image
+apple

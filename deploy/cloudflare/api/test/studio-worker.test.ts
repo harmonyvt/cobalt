@@ -207,6 +207,11 @@ describe("GET /studio/<sid>", () => {
             width: 480,
             height: 560,
             bytes: SIZE,
+            // save progress is always present: nothing to report once ready
+            step: null,
+            step_bytes: null,
+            step_total: null,
+            waking: false,
             created_at: clock.t,
             expires_at: clock.t + SESSION_TTL_MS,
             error: null,
@@ -310,7 +315,22 @@ describe("GET /studio/<sid>", () => {
                     sleep: clock.sleep,
                 });
                 expect(res.status).toBe(200);
-                expect(await res.json()).toMatchObject({ status: "saving", id: SID, title: null, duration: null, width: null, height: null, bytes: null, renders: [], error: null });
+                expect(await res.json()).toMatchObject({
+                    status: "saving",
+                    id: SID,
+                    title: null,
+                    duration: null,
+                    width: null,
+                    height: null,
+                    bytes: null,
+                    // the Worker's own fallback knows no progress: null / false
+                    step: null,
+                    step_bytes: null,
+                    step_total: null,
+                    waking: false,
+                    renders: [],
+                    error: null,
+                });
             }
         });
         it("only saving sessions are forwarded: ready, errored and expired ones come from D1", async () => {
@@ -448,6 +468,256 @@ describe("GET /studio/<sid>/source", () => {
     it("POST and DELETE on /source are 404", async () => {
         expect((await call(`/studio/${SID}/source`, { method: "POST" })).status).toBe(404);
         expect((await call(`/studio/${SID}/source`, { method: "DELETE" })).status).toBe(404);
+    });
+});
+
+describe("GET /studio/<sid>/source?wait=N (APP-API-CONTRACT section 11)", () => {
+    const bytes = new Uint8Array(SIZE).map((_, i) => i % 251);
+    const key = `originals/${SID}.mp4`;
+    const saving = () => db.raw.prepare("UPDATE studio_sessions SET status='saving', r2_key=NULL, bytes=NULL, content_type=NULL").run();
+    const finish = () => {
+        db.raw.prepare("UPDATE studio_sessions SET status='ready', r2_key=?, bytes=?, content_type='video/mp4' WHERE status='saving'").run(key, SIZE);
+        originals.objects.set(key, { bytes, contentType: "video/mp4", meta: {} });
+    };
+    const fail = (code = "error.api.fetch.fail") =>
+        db.raw.prepare("UPDATE studio_sessions SET status='error', error_code=? WHERE status='saving'").run(code);
+    const get = (qs: string, headers: Record<string, string> = {}, method = "GET", c = container) =>
+        handleRequest(new Request(`https://api.capybaraharmony.com/studio/${SID}/source${qs}`, { method, headers }), env(), c, {
+            now: clock.now,
+            sleep: clock.sleep,
+        });
+    const body = async (r: Response) => new Uint8Array(await r.arrayBuffer());
+    const waits = () => seen.map((r) => new URL(r.url)).map((u) => `${u.pathname}${u.search}`);
+    // A DO whose advance takes `ms` of (injected) time and runs `onCall(n)` after it.
+    const slowDo = (ms: number, onCall: (n: number) => void = () => {}) => {
+        let n = 0;
+        return {
+            async fetch(r: Request) {
+                seen.push(r);
+                clock.t += ms;
+                onCall(++n);
+                return new Response('{"status":"ok"}');
+            },
+        };
+    };
+    beforeEach(() => seed());
+
+    it("wait=0, absent and junk behave exactly as before: a saving session is an immediate 409, the DO untouched", async () => {
+        saving();
+        for (const qs of ["", "?wait=0", "?wait=abc", "?wait=", "?wait=-5"]) {
+            const t0 = clock.t;
+            const res = await get(qs);
+            expect(res.status).toBe(409);
+            expect(await res.json()).toEqual({ status: "error", error: { code: "error.studio.not_ready" } });
+            expect(clock.t).toBe(t0);
+        }
+        expect(seen).toHaveLength(0);
+    });
+    it("a ready session with wait answers at once, no DO call, no sleep", async () => {
+        originals.objects.set(key, { bytes, contentType: "video/mp4", meta: {} });
+        const t0 = clock.t;
+        const res = await get("?wait=60");
+        expect(res.status).toBe(200);
+        expect(await body(res)).toEqual(bytes);
+        expect(seen).toHaveLength(0);
+        expect(clock.t).toBe(t0);
+    });
+    it("saving, then ready inside the wait: holds, advances the DO, then serves the whole video", async () => {
+        saving();
+        const c = slowDo(20_000, (n) => n === 2 && finish());
+        const res = await get("?wait=60", {}, "GET", c);
+        expect(res.status).toBe(200);
+        expect(await body(res)).toEqual(bytes);
+        expect(res.headers.get("content-length")).toBe(String(SIZE));
+        expect(res.headers.get("content-type")).toBe("video/mp4");
+        expect(res.headers.get("accept-ranges")).toBe("bytes");
+        expect(res.headers.has("content-range")).toBe(false);
+        expect(waits()).toEqual([`/studio/${SID}/advance?wait=25`, `/studio/${SID}/advance?wait=25`]);
+        expect(acao(res)).toBe(ORIGIN);
+    });
+    it("each advance asks the DO only for what is left of the wait (capped at 25)", async () => {
+        saving();
+        const c = slowDo(15_000, (n) => n === 3 && finish());
+        expect((await get("?wait=45", {}, "GET", c)).status).toBe(200);
+        expect(waits()).toEqual([
+            `/studio/${SID}/advance?wait=25`,
+            `/studio/${SID}/advance?wait=25`,
+            `/studio/${SID}/advance?wait=15`,
+        ]);
+    });
+    it("a DO that answers at once cannot make the hold spin: the Worker sleeps between advances and stops at the deadline", async () => {
+        saving();
+        const c = slowDo(0);
+        const t0 = clock.t;
+        const res = await get("?wait=5", {}, "GET", c);
+        expect(res.status).toBe(409);
+        expect(await res.json()).toEqual({ status: "error", error: { code: "error.studio.not_ready" } });
+        expect(clock.t - t0).toBe(5_000);
+        expect(seen.length).toBeLessThanOrEqual(10);
+        expect(seen.length).toBeGreaterThan(1);
+    });
+    it("a DO that throws is survived: the row is re-read and the hold continues until the deadline", async () => {
+        saving();
+        let n = 0;
+        const c = {
+            async fetch(r: Request): Promise<Response> {
+                seen.push(r);
+                if (++n === 3) finish();
+                throw new Error("DO down");
+            },
+        };
+        const res = await get("?wait=30", {}, "GET", c);
+        expect(res.status).toBe(200);
+        expect(await body(res)).toEqual(bytes);
+    });
+    it("still saving at the deadline: 409 error.studio.not_ready", async () => {
+        saving();
+        const res = await get("?wait=30", {}, "GET", slowDo(25_000));
+        expect(res.status).toBe(409);
+        expect(await res.json()).toEqual({ status: "error", error: { code: "error.studio.not_ready" } });
+        expect(acao(res)).toBe(ORIGIN);
+    });
+    it("the save fails during the wait: 422 with the session's error code", async () => {
+        saving();
+        const c = slowDo(3_000, (n) => n === 1 && fail("error.api.fetch.fail"));
+        const res = await get("?wait=60", {}, "GET", c);
+        expect(res.status).toBe(422);
+        expect(await res.json()).toEqual({ status: "error", error: { code: "error.api.fetch.fail" } });
+        expect(seen).toHaveLength(1);
+    });
+    it("an already failed session with wait is the 422 at once; without wait it stays the 409", async () => {
+        saving();
+        fail("error.api.content.video.unavailable");
+        const res = await get("?wait=30");
+        expect(res.status).toBe(422);
+        expect(await res.json()).toEqual({ status: "error", error: { code: "error.api.content.video.unavailable" } });
+        expect(seen).toHaveLength(0);
+        expect((await get("")).status).toBe(409);
+    });
+    it("a failed row without a code reports error.api.generic", async () => {
+        saving();
+        fail(null as unknown as string);
+        const res = await get("?wait=10");
+        expect(res.status).toBe(422);
+        expect(await res.json()).toEqual({ status: "error", error: { code: "error.api.generic" } });
+    });
+    it.each([
+        ["bytes=0-99", 0, 99],
+        ["bytes=900-", 900, 999],
+        ["bytes=-100", 900, 999],
+    ])("Range %s is honoured after the wait (206)", async (range, a, b) => {
+        saving();
+        const c = slowDo(5_000, (n) => n === 1 && finish());
+        const res = await get("?wait=60", { range }, "GET", c);
+        expect(res.status).toBe(206);
+        expect(res.headers.get("content-range")).toBe(`bytes ${a}-${b}/${SIZE}`);
+        expect(await body(res)).toEqual(bytes.slice(a, b + 1));
+        expect(originals.gets[0].range).toEqual({ offset: a, length: b - a + 1 });
+    });
+    it("an unsatisfiable Range after the wait is still the 416", async () => {
+        saving();
+        const c = slowDo(5_000, (n) => n === 1 && finish());
+        const res = await get("?wait=60", { range: "bytes=5000-" }, "GET", c);
+        expect(res.status).toBe(416);
+        expect(res.headers.get("content-range")).toBe(`bytes */${SIZE}`);
+    });
+    it("wait is clamped to 90 seconds", async () => {
+        saving();
+        const t0 = clock.t;
+        const res = await get("?wait=1000", {}, "GET", slowDo(0));
+        expect(res.status).toBe(409);
+        expect(clock.t - t0).toBe(90_000);
+        expect(waits()[0]).toBe(`/studio/${SID}/advance?wait=25`);
+    });
+    it("HEAD ignores wait: 409 at once while saving, no DO call", async () => {
+        saving();
+        const t0 = clock.t;
+        const res = await get("?wait=60", {}, "HEAD", slowDo(1_000));
+        expect(res.status).toBe(409);
+        expect(seen).toHaveLength(0);
+        expect(clock.t).toBe(t0);
+    });
+    it("HEAD with wait on a ready session is the normal HEAD", async () => {
+        const res = await get("?wait=60", { range: "bytes=0-9" }, "HEAD");
+        expect(res.status).toBe(206);
+        expect(res.headers.get("content-range")).toBe(`bytes 0-9/${SIZE}`);
+        expect(await res.text()).toBe("");
+    });
+    it("unknown session: the same 404 as today, with or without wait, and no DO call", async () => {
+        const other = "z".repeat(22);
+        for (const qs of ["", "?wait=30"]) {
+            const res = await handleRequest(new Request(`https://api.capybaraharmony.com/studio/${other}/source${qs}`), env(), slowDo(1_000), {
+                now: clock.now,
+                sleep: clock.sleep,
+            });
+            expect(res.status).toBe(404);
+            expect(await res.json()).toEqual({ status: "error", error: { code: "error.studio.not_found" } });
+        }
+        expect(seen).toHaveLength(0);
+    });
+    it("a bad or wrong Api-Key changes nothing: the route has no key, the session id is the credential", async () => {
+        saving();
+        const c = slowDo(5_000, (n) => n === 1 && finish());
+        const res = await get("?wait=60", { authorization: "Api-Key 00000000-0000-4000-8000-000000000000" }, "GET", c);
+        expect(res.status).toBe(200);
+        expect((await call(`/studio/${"y".repeat(21)}/source?wait=30`, { headers: auth })).status).toBe(404); // malformed id: gate 404
+    });
+    it("a session that expires during the hold is the 410", async () => {
+        saving();
+        const c = slowDo(SESSION_TTL_MS + 1);
+        const res = await get("?wait=60", {}, "GET", c);
+        expect(res.status).toBe(410);
+    });
+    it("D1 failing during the hold is the 503 as today", async () => {
+        saving();
+        const c = slowDo(1_000, () => db.breakIt());
+        expect((await get("?wait=60", {}, "GET", c)).status).toBe(503);
+    });
+    it("the container never sees the public query: only the internal advance path", async () => {
+        saving();
+        await get("?wait=2", {}, "GET", slowDo(0));
+        for (const r of seen) {
+            const u = new URL(r.url);
+            expect(u.host).toBe("do.internal");
+            expect(u.pathname).toBe(`/studio/${SID}/advance`);
+        }
+    });
+
+    describe("ready sessions are cached for range requests", () => {
+        it("the second range request skips the session lookup (same bytes, same headers)", async () => {
+            originals.objects.set(key, { bytes, contentType: "video/mp4", meta: {} });
+            let lookups = 0;
+            const realPrepare = db.prepare.bind(db);
+            (db as any).prepare = (sql: string) => {
+                if (/FROM studio_sessions/.test(sql)) lookups++;
+                return realPrepare(sql);
+            };
+            const a = await get("", { range: "bytes=0-9" });
+            const b = await get("", { range: "bytes=10-19" });
+            expect(a.status).toBe(206);
+            expect(await body(b)).toEqual(bytes.slice(10, 20));
+            expect(lookups).toBe(1);
+        });
+        it("a cached session still turns 410 once it expires", async () => {
+            originals.objects.set(key, { bytes, contentType: "video/mp4", meta: {} });
+            expect((await get("")).status).toBe(200);
+            clock.t += SESSION_TTL_MS + 1;
+            expect((await get("")).status).toBe(410);
+        });
+        it("a saving session is never cached", async () => {
+            saving();
+            expect((await get("")).status).toBe(409);
+            finish();
+            expect((await get("")).status).toBe(200);
+        });
+        it("the cache is dropped after a minute", async () => {
+            originals.objects.set(key, { bytes, contentType: "video/mp4", meta: {} });
+            expect((await get("")).status).toBe(200);
+            db.raw.prepare("DELETE FROM studio_sessions").run();
+            expect((await get("")).status).toBe(200); // still cached
+            clock.t += 61_000;
+            expect((await get("")).status).toBe(404);
+        });
     });
 });
 

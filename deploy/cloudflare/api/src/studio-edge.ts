@@ -6,7 +6,8 @@
 //                                 forwarded to the Durable Object, which
 //                                 advances the save and long-polls (a save only
 //                                 moves while polls go through the DO)
-//   GET|HEAD /studio/<sid>/source  the stored video, Range aware
+//   GET|HEAD /studio/<sid>/source[?wait=N]  the stored video, Range aware; with
+//                                 wait the request is held while the save runs
 // Response headers follow ../STUDIO-CONTRACT.md.
 
 import {
@@ -26,6 +27,12 @@ import {
 export type EdgeDeps = {
     now: () => number;
     sleep: (ms: number) => Promise<void>;
+    // Workers' FixedLengthStream (the library publish copy); injectable because
+    // Node has none. Defaults to the real one in the Worker.
+    fixedLength?: (n: number) => {
+        readable: ReadableStream<Uint8Array>;
+        writable: WritableStream<Uint8Array>;
+    };
 };
 
 // The one "main" Container Durable Object (a stub in production).
@@ -118,20 +125,92 @@ export async function studioStatus(
     }
 }
 
+// A ready session never changes again (the only writers are `WHERE status =
+// 'saving'`), so a range request, which the player repeats many times a second,
+// can skip the D1 round trip. Short TTL and a per-binding map, so a swept
+// session or a test's fresh database never sees a stale row; expiry is still
+// checked on every hit.
+const READY_CACHE_MS = 60_000;
+const READY_CACHE_MAX = 64;
+const readyCache = new WeakMap<object, Map<string, { row: SessionRow; at: number }>>();
+const servable = (row: SessionRow) =>
+    row.status === "ready" && !!row.r2_key && row.bytes !== null && row.bytes > 0;
+
+async function loadSourceSession(
+    db: D1Database,
+    sid: string,
+    now: number,
+): Promise<{ row: SessionRow } | { reply: StudioReply }> {
+    let cache = readyCache.get(db);
+    const hit = cache?.get(sid);
+    if (hit && now >= hit.at && now - hit.at < READY_CACHE_MS) {
+        if (now > hit.row.expires_at) return { reply: studioErr(410, "error.studio.expired") };
+        return { row: hit.row };
+    }
+    const found = await loadSession(db, sid, now);
+    if ("row" in found && servable(found.row)) {
+        if (!cache) readyCache.set(db, (cache = new Map()));
+        if (cache.size >= READY_CACHE_MAX) cache.clear();
+        cache.set(sid, { row: found.row, at: now });
+    }
+    return found;
+}
+
+// Hold-open options for ?wait=N (APP-API-CONTRACT.md section 11).
+export type SourceWait = { container: StudioContainer; seconds: number };
+
+// A held request pauses at least this long between advances, so a Durable Object
+// that answers at once (or fails) cannot turn the hold into a hot loop.
+const HOLD_MIN_STEP_MS = 500;
+const HOLD_MAX_POLLS = 400;
+
 export async function studioSource(
     db: D1Database,
     bucket: OriginalsBucket,
     sid: string,
     request: Request,
     deps: EdgeDeps,
+    wait?: SourceWait,
 ): Promise<Response> {
+    // HEAD ignores wait: it is a probe, answered from the row as it is.
+    const holding = !!wait && wait.seconds > 0 && request.method === "GET";
     let row: SessionRow;
     try {
-        const found = await loadSession(db, sid, deps.now());
+        let found = await loadSourceSession(db, sid, deps.now());
+        if (holding && "row" in found && found.row.status === "saving") {
+            // While the save runs the DO must be polled (it is the only thing that
+            // moves a save), so repeat its own long-poll until the row leaves
+            // "saving" or the deadline passes.
+            const deadline = deps.now() + wait.seconds * 1000;
+            for (let i = 0; i < HOLD_MAX_POLLS; i++) {
+                const remaining = deadline - deps.now();
+                if (remaining <= 0) break;
+                const started = deps.now();
+                try {
+                    await wait.container.fetch(
+                        new Request(
+                            `https://do.internal/studio/${sid}/advance?wait=${Math.min(25, Math.ceil(remaining / 1000))}`,
+                        ),
+                    );
+                } catch {
+                    // the row decides below; a DO that is down just costs the pause
+                }
+                if (deps.now() - started < HOLD_MIN_STEP_MS) {
+                    await deps.sleep(Math.max(0, Math.min(HOLD_MIN_STEP_MS, deadline - deps.now())));
+                }
+                found = await loadSourceSession(db, sid, deps.now());
+                if (!("row" in found) || found.row.status !== "saving") break;
+            }
+        }
         if ("reply" in found) return jsonResponse(found.reply);
         row = found.row;
     } catch {
         return jsonResponse(studioErr(503, "error.api.generic"));
+    }
+    // A held request reports a failed save as it is; without wait it stays the
+    // 409 it has always been.
+    if (holding && row.status === "error") {
+        return jsonResponse(studioErr(422, row.error_code ?? "error.api.generic"));
     }
     const size = row.bytes;
     if (row.status !== "ready" || !row.r2_key || size === null || !(size > 0)) {

@@ -1,0 +1,850 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cobalt orbit 2d · option d</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.board *{box-sizing:border-box}
+.board button{font:inherit;color:inherit;cursor:pointer}
+.board button:focus-visible{outline:2px solid #2f8af9;outline-offset:2px}
+.board button:disabled{cursor:default;opacity:.45}
+.dlabel{position:absolute;font-size:12px;color:#6e6e75;white-space:nowrap}
+.bezel{position:absolute;background:#161616}
+.scr{position:relative;overflow:hidden;background:var(--bg);color:var(--tx);isolation:isolate;transition:background .3s}
+.scr.dark{--bg:#000;--tx:#e1e1e1;--cap:#8f8f8f;--glass:rgba(28,28,30,.74);--glass2:rgba(25,25,25,.86);--clear:rgba(255,255,255,.13);--hi:rgba(255,255,255,.32);--rim:rgba(255,255,255,.14);--sh:rgba(0,0,0,.5);--red:#ff5c6c;--line:rgba(225,225,225,.17);--line2:rgba(225,225,225,.08);--star:#fff;--b1:rgba(255,255,255,.55);--b2:rgba(255,255,255,.13);--ring:rgba(255,255,255,.75);--fbA:rgba(255,255,255,.15);--scrim:rgba(0,0,0,.9);--veil:rgba(0,0,0,.42);--btn:#e1e1e1;--btnTx:#000;--btn2:#282828;--elev:rgba(255,255,255,.08);--frame:#3a3a3e}
+.scr.light{--bg:#fff;--tx:#000;--cap:#6e6e75;--glass:rgba(255,255,255,.78);--glass2:rgba(255,255,255,.88);--clear:rgba(255,255,255,.42);--hi:rgba(255,255,255,.95);--rim:rgba(0,0,0,.09);--sh:rgba(0,0,0,.16);--red:#c4142a;--line:rgba(0,0,0,.16);--line2:rgba(0,0,0,.07);--star:#111;--b1:rgba(0,0,0,.32);--b2:rgba(0,0,0,.07);--ring:rgba(0,0,0,.6);--fbA:rgba(255,255,255,.42);--scrim:rgba(255,255,255,.9);--veil:rgba(255,255,255,.46);--btn:#000;--btnTx:#fff;--btn2:#e3e3e3;--elev:rgba(0,0,0,.04);--frame:#c9c9cf}
+.glass,.glass2{-webkit-backdrop-filter:blur(22px) saturate(1.7);backdrop-filter:blur(22px) saturate(1.7);box-shadow:inset 0 1px 0 var(--hi),inset 0 0 0 .5px var(--rim),0 10px 30px var(--sh)}
+.glass{background:var(--glass)}.glass2{background:var(--glass2)}
+.field{position:absolute;inset:0}
+.guide{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+.guide path{fill:none;stroke:var(--line);stroke-width:1}
+.guide path.faint{stroke:var(--line2)}
+.guide path.dust{stroke:var(--line2);stroke-dasharray:1 7;stroke-linecap:round;stroke-width:2}
+.gcore{position:absolute;width:320px;height:150px;margin:-75px 0 0 -160px;border-radius:50%;background:radial-gradient(closest-side,var(--b2),transparent);pointer-events:none;display:none}
+.pl{position:absolute;left:0;top:0;padding:0;border:0;overflow:hidden;transition:transform 60ms linear,opacity .35s ease;will-change:transform}
+.pl.off{visibility:hidden}
+.pl .fb{position:absolute;top:0;bottom:0;left:0;width:300%;background:repeating-linear-gradient(100deg,transparent 0 22px,var(--fbA) 22px 34px,transparent 34px 60px);animation:flip 2.4s steps(6) infinite}
+.pl.live .fb{animation-timing-function:linear;animation-duration:2.2s}
+@keyframes flip{to{transform:translateX(-33.333%)}}
+.pl em{position:absolute;left:5px;bottom:5px;font-style:normal;font-size:10px;line-height:1;padding:3px 5px;border-radius:5px;background:rgba(0,0,0,.7);color:#fff;white-space:nowrap}
+.pl .glow{position:absolute;inset:0;background:radial-gradient(circle,var(--star) 0,var(--star) 30%,var(--b1) 65%,transparent 100%)}
+.pl.glassy{box-shadow:inset 0 0 0 1px rgba(255,255,255,.3),inset 0 1px 0 rgba(255,255,255,.6),0 8px 22px rgba(0,0,0,.35)}
+.scrim{position:absolute;left:0;right:0;bottom:0;height:250px;background:linear-gradient(to top,var(--scrim) 0,var(--scrim) 34%,transparent);pointer-events:none;z-index:1900}
+.pad .scrim{height:150px}
+.empty{position:absolute;width:250px;margin:0 0 0 -125px;font-size:12.5px;line-height:1.55;color:var(--cap);text-align:center;z-index:1950}
+.star{position:absolute;left:0;top:0;width:0;height:0;z-index:2000;pointer-events:none;transition:transform .35s cubic-bezier(.34,1.4,.64,1),opacity .55s ease}
+.star .core{position:absolute;left:-5px;top:-5px;width:10px;height:10px;border-radius:50%;background:var(--star);box-shadow:0 0 6px 2px var(--star),0 0 18px 6px var(--b1),0 0 46px 16px var(--b2);animation:pulse 1.1s ease-in-out infinite}
+.star .halo{position:absolute;left:-34px;top:-34px;width:68px;height:68px;border-radius:50%;background:radial-gradient(circle,var(--b1),transparent 68%);animation:pulse 1.1s ease-in-out infinite}
+.star.waking .core,.star.waking .halo{animation-duration:.48s}
+.star.waking .halo{background:radial-gradient(circle,var(--star),var(--b1) 30%,transparent 70%)}
+@keyframes pulse{0%,100%{transform:scale(.8);opacity:.72}50%{transform:scale(1.18);opacity:1}}
+.star.imp .core,.star.imp .halo{animation:implode .3s cubic-bezier(.7,0,.9,.5) forwards}
+@keyframes implode{0%{transform:scale(1.6);opacity:1}100%{transform:scale(0);opacity:0}}
+.star.imp .rg{opacity:0;transform:scale(.2)}
+.rgw{position:absolute;left:0;top:0;width:0;height:0}
+.rg{position:absolute;border-radius:50%;border:1px solid var(--ring);opacity:0;transform:scale(1.4);transition:opacity .3s ease,transform .45s cubic-bezier(.34,1.56,.64,1)}
+.rg.on{opacity:.8;transform:none}
+.shockw{position:absolute;left:0;top:0;width:0;height:0;z-index:2001;pointer-events:none}
+.shock{position:absolute;left:-30px;top:-30px;width:60px;height:60px;border-radius:50%;border:1px solid var(--star);animation:shock .75s cubic-bezier(.15,.7,.3,1) .12s both}
+@keyframes shock{0%{transform:scale(.25);opacity:.95}100%{transform:scale(5.2);opacity:0}}
+.veil{position:absolute;inset:0;background:var(--veil);-webkit-backdrop-filter:blur(9px);backdrop-filter:blur(9px);opacity:0;transition:opacity .45s ease;pointer-events:none;z-index:3000}
+.veil.on{opacity:1}
+.circles{position:absolute;display:flex;gap:24px;z-index:2950;transition:opacity .3s}
+.circles.busy{opacity:.55}
+.cb{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:11.5px;color:var(--tx);width:64px}
+.circ{width:64px;height:64px;border-radius:50%;border:0;display:grid;place-items:center;color:var(--tx);transition:transform .2s cubic-bezier(.34,1.56,.64,1)}
+.circ.glass{background:var(--clear)}
+.circ:active{transform:scale(.9)}
+.cap{position:absolute;height:52px;display:flex;align-items:center;gap:10px;padding:0 4px 0 18px;border-radius:26px;transform:translateX(-50%);z-index:3200;font-size:12.5px;white-space:nowrap;animation:capIn .4s cubic-bezier(.34,1.4,.64,1) both;transition:opacity .5s ease}
+.cap.out{opacity:0}
+@keyframes capIn{from{opacity:0;transform:translateX(-50%) translateY(10px) scale(.92)}}
+.cap .num{font-variant-numeric:tabular-nums;min-width:58px;text-align:right}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--tx);animation:breathe 1.1s ease-in-out infinite;flex:none}
+@keyframes breathe{0%,100%{opacity:.3;transform:scale(.7)}50%{opacity:1;transform:none}}
+.x{width:44px;height:44px;border-radius:50%;border:0;background:var(--elev);display:grid;place-items:center;flex:none}
+.card{position:absolute;border-radius:22px;padding:12px 14px 14px;display:flex;flex-direction:column;gap:10px;z-index:3200;animation:cardIn .5s cubic-bezier(.34,1.3,.64,1) both}
+@keyframes cardIn{from{opacity:0;transform:translateY(26px) scale(.94)}}
+.chead{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+.chead b{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.cread{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.big{font-size:24px;font-weight:500;font-variant-numeric:tabular-nums}
+.tc{font-size:12px;color:var(--cap);font-variant-numeric:tabular-nums}
+.strip{position:relative;height:64px;border-radius:10px;flex:none}
+.frames{position:absolute;inset:0;display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:2px;border-radius:10px;overflow:hidden}
+.frames i{display:block;background:var(--frame);transition:filter .25s,box-shadow .25s}
+.frames i:nth-child(3n){filter:brightness(1.18)}
+.frames i.enc{box-shadow:inset 0 -4px 0 var(--tx);filter:brightness(1.6)}
+.dimr{position:absolute;top:0;bottom:0;right:0;background:rgba(0,0,0,.6);border-radius:0 10px 10px 0}
+.br{position:absolute;top:-3px;bottom:-3px;left:0;border:3px solid var(--tx);border-radius:11px}
+.br.breathe{animation:brB 1.4s ease-in-out infinite}
+@keyframes brB{0%,100%{opacity:1}50%{opacity:.45}}
+.br i{position:absolute;top:50%;width:8px;height:30px;margin-top:-15px;border-radius:4px;background:var(--tx)}
+.br i.hl{left:-6px}.br i.hr{right:-6px}
+.scale{display:flex;justify-content:space-between;font-size:11px;color:var(--cap)}
+.sub{margin:0;font-size:12px;line-height:1.45;color:var(--cap)}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.make,.sec{height:48px;border:0;border-radius:11px;font-size:13px;display:flex;align-items:center;justify-content:center;gap:8px;padding:0 8px;white-space:nowrap}
+.make{background:var(--btn);color:var(--btnTx) !important;font-weight:600}
+.sec{background:var(--btn2)}
+.work{height:48px;border-radius:11px;background:var(--btn2);display:flex;align-items:center;gap:10px;padding:0 14px;font-size:13px}
+.work .num{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--cap)}
+.dres{display:flex;gap:12px;align-items:center}
+.thumb{width:52px;height:92px;border-radius:9px;flex:none;position:relative;overflow:hidden;background:linear-gradient(160deg,#6a6a70,#2a2a2e)}
+.thumb .fb{position:absolute;top:0;bottom:0;left:0;width:300%;background:repeating-linear-gradient(100deg,transparent 0 22px,rgba(255,255,255,.16) 22px 34px,transparent 34px 60px);animation:flip 2.2s linear infinite}
+.dmeta{display:flex;flex-direction:column;gap:6px;min-width:0;font-size:12px;line-height:1.4}
+.dmeta span{color:var(--cap);word-break:break-all}
+.errc{position:absolute;z-index:3200;border-radius:18px;padding:10px 10px 10px 14px;display:flex;gap:12px;align-items:center;animation:errIn .45s cubic-bezier(.34,1.4,.64,1) both}
+@keyframes errIn{from{opacity:0;transform:translateY(12px) scale(.95)}}
+.errc .ei{color:var(--red);flex:none}
+.errc p{margin:0;font-size:12.5px;line-height:1.45;flex:1;min-width:0}
+.okb{height:44px;min-width:60px;padding:0 16px;border:0;border-radius:22px;background:var(--btn);color:var(--btnTx) !important;font-weight:600;font-size:13px;flex:none}
+.stat{position:absolute;height:30px;padding:0 14px;border-radius:15px;display:flex;align-items:center;font-size:11.5px;white-space:nowrap;z-index:3300;transform:translateX(-50%)}
+.tabs{position:absolute;left:20px;right:20px;bottom:22px;height:62px;border-radius:31px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:5px;z-index:3300}
+.tab{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:10.5px;border:0;background:transparent;border-radius:26px}
+.tab.on{background:var(--elev)}
+.side{position:absolute;left:12px;top:12px;bottom:12px;width:188px;border-radius:22px;padding:16px 10px;display:flex;flex-direction:column;gap:4px;z-index:3300}
+.side h2{margin:0 8px 10px;font-size:15px;font-weight:600}
+.si{display:flex;align-items:center;gap:10px;height:44px;padding:0 12px;border-radius:12px;border:0;background:transparent;font-size:13px;text-align:left}
+.si.on{background:var(--elev)}
+.detail{position:absolute;top:0;bottom:0;z-index:5000;background:var(--bg);transform-origin:0 0;overflow:hidden;transition:transform .5s cubic-bezier(.3,1.1,.5,1),border-radius .5s ease,opacity .3s ease}
+.detail.notr{transition:none}
+.detail.faded{opacity:0}
+.dcon{position:absolute;inset:0;display:flex;flex-direction:column;gap:12px;padding:54px 16px 18px;transition:opacity .3s ease}
+.pad .dcon{flex-direction:row;padding:16px 20px;gap:20px}
+.dleft{display:flex;flex-direction:column;gap:12px;flex:none}
+.dcol{display:flex;flex-direction:column;gap:10px;min-width:0;flex:1}
+.back{align-self:flex-start;height:44px;padding:0 16px 0 10px;border-radius:22px;border:0;display:flex;align-items:center;gap:6px;font-size:13px}
+.dv{display:grid;place-items:center;border-radius:18px;background:var(--elev)}
+.dvid{position:relative;border-radius:14px;overflow:hidden}
+.dvid .fb{position:absolute;top:0;bottom:0;left:0;width:300%;background:repeating-linear-gradient(100deg,transparent 0 30px,var(--fbA) 30px 48px,transparent 48px 80px);animation:flip 3s linear infinite}
+.pbar{position:absolute;left:10px;right:10px;bottom:10px;height:3px;border-radius:2px;background:rgba(255,255,255,.3);overflow:hidden}
+.pbar i{display:block;height:100%;background:#fff;transform-origin:0 50%;animation:play 14.8s linear infinite}
+@keyframes play{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+.dt{font-size:15px;font-weight:600;margin:0}
+.dm{font-size:12px;color:var(--cap);margin:0;font-variant-numeric:tabular-nums}
+.drow{display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:16px;background:var(--elev)}
+.dh{display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap}
+.dh b{font-size:13px;font-weight:600}
+.dh span{font-size:11.5px;color:var(--cap)}
+.acts{display:flex;flex-wrap:wrap;gap:8px}
+.act{flex:1 1 140px;height:44px;border-radius:12px;border:0;background:var(--btn2);display:flex;align-items:center;justify-content:center;gap:8px;font-size:12.5px;padding:0 10px;white-space:nowrap}
+.act.red{color:var(--red) !important}
+.conf{margin:0;font-size:12px;line-height:1.45}
+/* control strip (board chrome, light) */
+.ctl{position:absolute;left:512px;top:612px;width:888px;display:flex;flex-direction:column;gap:12px;color:#000}
+.ctlhead{display:flex;align-items:baseline;justify-content:space-between;gap:16px}
+.ctlhead h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.now{font-size:12.5px;color:#6e6e75;font-variant-numeric:tabular-nums;text-align:right}
+.crow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.rl{width:64px;font-size:12px;color:#6e6e75;flex:none}
+.btns{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:0}
+.sb{height:44px;padding:0 13px;border-radius:11px;border:1px solid #d4d4d8;background:#fff;font-size:12.5px}
+.sb.on{background:#000;color:#fff !important;border-color:#000}
+.run{height:44px;padding:0 18px;border:0;border-radius:11px;background:#000;color:#fff !important;font-weight:600;font-size:13px;display:flex;align-items:center;gap:8px}
+.note{font-size:12px;color:#6e6e75}
+.seg{display:inline-flex;border-radius:12px;background:#e3e3e3;gap:2px}
+.seg button{height:44px;min-width:52px;padding:0 12px;border:0;background:transparent;border-radius:11px;font-size:12.5px}
+.seg button.on{background:#000;color:#fff !important}
+.tog{display:flex;align-items:center;gap:10px;font-size:12.5px;min-height:44px;cursor:pointer;position:relative;margin-right:18px}
+.tog input{position:absolute;opacity:0;width:1px;height:1px}
+.tog span{width:38px;height:22px;border-radius:11px;background:#8e8e96;position:relative;flex:none;transition:background .2s}
+.tog span::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .25s cubic-bezier(.34,1.56,.64,1)}
+.tog input:checked+span{background:#000}
+.tog input:checked+span::after{transform:translateX(16px)}
+.tog input:focus-visible+span{outline:2px solid #2f8af9;outline-offset:2px}
+/* reduce motion: no orbit motion, crossfades only */
+.reduce *,.reduce *::before,.reduce *::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;animation-delay:0s !important}
+.reduce .pl{transition:opacity .35s ease !important}
+.reduce .detail{transition:opacity .35s ease !important}
+.reduce .star{transition:opacity .45s ease !important}
+.reduce .rg{transition:opacity .3s ease !important}
+.reduce .shockw{display:none}
+.reduce .card,.reduce .errc{animation:rfade .3s ease both !important}
+.reduce .cap{animation:rfadeC .3s ease both !important}
+@keyframes rfade{from{opacity:0}}
+@keyframes rfadeC{from{opacity:0}}
+
+.optD .guide path.own{stroke:var(--line2)}
+</style>
+</helmet>
+<div class="board" style="position: relative; width: 1440px; height: 1000px; background: #f4f4f4; color: #000; font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace; overflow: hidden">
+  <sc-for list="{{devices}}" as="d" hint-placeholder-count="2">
+    <span class="dlabel" style="left: {{d.bx}}px; top: {{d.ly}}px">{{d.label}}</span>
+    <div class="bezel" style="left: {{d.bx}}px; top: {{d.by}}px; padding: {{d.pad}}px; border-radius: {{d.br}}px">
+      <div class="{{d.scrCls}}" style="width: {{d.W}}px; height: {{d.H}}px; border-radius: {{d.sr}}px">
+        <div class="field">
+          <div class="gcore" style="left: {{d.starX}}px; top: {{d.starY}}px"></div>
+          <sc-for list="{{d.guides}}" as="g" hint-placeholder-count="3"><svg class="guide" aria-hidden="true"><path class="{{g.cls}}" d="{{g.d}}"></path></svg></sc-for>
+          <sc-for list="{{d.items}}" as="p" hint-placeholder-count="16">
+            <button class="{{p.cls}}" type="button" aria-label="{{p.aria}}" onClick="{{p.open}}" style="width: {{p.w}}px; height: {{p.h}}px; transform: translate3d({{p.x}}px, {{p.y}}px, 0) scale({{p.s}}); z-index: {{p.z}}; opacity: {{p.o}}; border-radius: {{p.r}}px; background: {{p.bg}}">
+              <i class="fb" style="animation-delay: {{p.fbDelay}}s"></i>
+              <sc-if value="{{p.newborn}}" hint-placeholder-val="{{ false }}"><i class="glow" style="opacity: {{p.glowO}}"></i></sc-if>
+              <sc-if value="{{p.badge}}" hint-placeholder-val="{{ false }}"><em>{{p.badgeTxt}}</em></sc-if>
+            </button>
+          </sc-for>
+        </div>
+        <div class="scrim"></div>
+        <sc-if value="{{d.showEmpty}}" hint-placeholder-val="{{ false }}"><p class="empty" style="left: {{d.starX}}px; top: {{d.emptyY}}px">nothing is saved on this device yet. paste a link to start.</p></sc-if>
+        <sc-if value="{{d.showStar}}" hint-placeholder-val="{{ false }}">
+          <div class="{{d.starCls}}" style="transform: translate3d({{d.starX}}px, {{d.starY}}px, 0) scale({{d.ss}}); opacity: {{d.so}}">
+            <sc-for list="{{d.rings}}" as="r" hint-placeholder-count="9"><div class="rgw" style="transform: {{r.tf}}"><i class="{{r.cls}}" style="width: {{r.size}}px; height: {{r.size}}px; left: {{r.m}}px; top: {{r.m}}px"></i></div></sc-for>
+            <i class="halo"></i><i class="core"></i>
+          </div>
+        </sc-if>
+        <sc-if value="{{d.showShock}}" hint-placeholder-val="{{ false }}">
+          <div class="shockw" style="transform: translate3d({{d.starX}}px, {{d.starY}}px, 0) {{d.shockTf}}"><i class="shock"></i></div>
+        </sc-if>
+        <div class="{{d.veilCls}}"></div>
+        <div class="{{d.circCls}}" style="left: {{d.circX}}px; top: {{d.circY}}px">
+          <div class="cb"><button class="circ glass" type="button" aria-label="paste a link" disabled="{{d.circOff}}" onClick="{{d.paste}}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2"></path><path d="M9 3m0 2a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v0a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2z"></path></svg></button><span>paste</span></div>
+          <div class="cb"><button class="circ glass" type="button" aria-label="add a file" disabled="{{d.circOff}}" onClick="{{d.file}}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3l6.5 -6.5a3 3 0 0 0 -6 -6l-6.5 6.5a4.5 4.5 0 0 0 9 9l6.5 -6.5"></path></svg></button><span>file</span></div>
+        </div>
+        <sc-if value="{{d.showCap}}" hint-placeholder-val="{{ false }}">
+          <div class="{{d.capCls}}" role="status" style="left: {{d.starX}}px; top: {{d.capY}}px"><span class="dot"></span><span>{{d.capLbl}}</span><span class="num">{{d.capNum}}</span><button class="x" type="button" aria-label="cancel" onClick="{{d.cancel}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18 6l-12 12"></path><path d="M6 6l12 12"></path></svg></button></div>
+        </sc-if>
+        <sc-if value="{{d.showCard}}" hint-placeholder-val="{{ false }}">
+          <div class="card glass2" style="left: {{d.cardX}}px; top: {{d.cardY}}px; width: {{d.cardW}}px">
+            <sc-if value="{{d.isTrimish}}" hint-placeholder-val="{{ true }}">
+              <div class="chead"><b>{{d.cTitle}}</b><button class="x" type="button" aria-label="close" onClick="{{d.closeCard}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18 6l-12 12"></path><path d="M6 6l12 12"></path></svg></button></div>
+              <div class="cread"><span class="big">{{d.cLen}}</span><span class="tc">{{d.cTc}}</span></div>
+              <div class="strip">
+                <div class="frames"><sc-for list="{{d.frames}}" as="f" hint-placeholder-count="9"><i class="{{f.cls}}"></i></sc-for></div>
+                <div class="dimr" style="left: {{d.cOut}}%"></div>
+                <div class="{{d.brCls}}" style="width: {{d.cOut}}%"><i class="hl"></i><i class="hr"></i></div>
+              </div>
+              <div class="scale"><sc-for list="{{d.cScale}}" as="q" hint-placeholder-count="3"><span>{{q.t}}</span></sc-for></div>
+              <sc-if value="{{d.isTrim}}" hint-placeholder-val="{{ true }}">
+                <p class="sub">{{d.cNote}}</p>
+                <div class="two">
+                  <button class="make" type="button" onClick="{{d.make}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"></path><path d="M8 4v16"></path><path d="M16 4v16"></path><path d="M4 8h4"></path><path d="M4 16h4"></path><path d="M4 12h16"></path><path d="M16 8h4"></path><path d="M16 16h4"></path></svg>make webp</button>
+                  <button class="sec" type="button" onClick="{{d.savePhotos}}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"></path><path d="M7 11l5 5l5 -5"></path><path d="M5 20h14"></path></svg>{{d.photosLbl}}</button>
+                </div>
+              </sc-if>
+              <sc-if value="{{d.isRendering}}" hint-placeholder-val="{{ false }}">
+                <p class="sub">{{d.rNote}}</p>
+                <div class="work"><span class="dot"></span><span>{{d.rLbl}}</span><span class="num">{{d.rNum}}</span></div>
+              </sc-if>
+            </sc-if>
+            <sc-if value="{{d.isDone}}" hint-placeholder-val="{{ false }}">
+              <div class="chead"><b>webp ready</b><button class="x" type="button" aria-label="close" onClick="{{d.closeCard}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18 6l-12 12"></path><path d="M6 6l12 12"></path></svg></button></div>
+              <div class="dres"><div class="thumb"><i class="fb"></i></div><div class="dmeta">{{d.doneMeta}}<span>media.capybaraharmony.com/··········.webp</span></div></div>
+              <div class="two">
+                <button class="make" type="button" onClick="{{d.copy}}"><sc-if value="{{d.copied}}" hint-placeholder-val="{{ false }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5l10 -10"></path></svg></sc-if><sc-if value="{{d.notCopied}}" hint-placeholder-val="{{ true }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 15l6 -6"></path><path d="M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464"></path><path d="M13 18l-.397 .534a5.068 5.068 0 0 1 -7.127 0a4.972 4.972 0 0 1 0 -7.071l.524 -.463"></path></svg></sc-if>{{d.copyLbl}}</button>
+                <button class="sec" type="button" onClick="{{d.share}}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 9h-1a2 2 0 0 0 -2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-8a2 2 0 0 0 -2 -2h-1"></path><path d="M12 14v-11"></path><path d="M9 6l3 -3l3 3"></path></svg>{{d.shareLbl}}</button>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+        <sc-if value="{{d.isErr}}" hint-placeholder-val="{{ false }}">
+          <div class="errc glass2" role="alert" style="left: {{d.errX}}px; top: {{d.errY}}px; width: {{d.errW}}px"><svg class="ei" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4"></path><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0z"></path><path d="M12 16h.01"></path></svg><p>cobalt couldn't fetch this link. the post may be private or removed.</p><button class="okb" type="button" onClick="{{d.ok}}">ok</button></div>
+        </sc-if>
+        <div class="stat glass" style="left: {{d.statX}}px; top: {{d.statY}}px">{{d.statTxt}}</div>
+        <sc-if value="{{d.isPhone}}" hint-placeholder-val="{{ true }}">
+          <nav class="tabs glass" aria-label="tabs">
+            <button class="tab on" type="button" aria-current="page"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"></path><path d="M7 11l5 5l5 -5"></path><path d="M12 4l0 12"></path></svg>save</button>
+            <button class="tab" type="button"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3m0 2.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z"></path><path d="M4.012 7.26a2.005 2.005 0 0 0 -1.012 1.737v10c0 1.1 .9 2 2 2h10c.75 0 1.158 -.385 1.5 -1"></path><path d="M7 13l3.644 -3.644a1.21 1.21 0 0 1 1.712 0l3.644 3.644"></path></svg>library</button>
+            <button class="tab" type="button"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065z"></path><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"></path></svg>settings</button>
+          </nav>
+        </sc-if>
+        <sc-if value="{{d.isPad}}" hint-placeholder-val="{{ false }}">
+          <nav class="side glass" aria-label="sidebar">
+            <h2>cobalt</h2>
+            <button class="si on" type="button" aria-current="page"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"></path><path d="M7 11l5 5l5 -5"></path><path d="M12 4l0 12"></path></svg>save</button>
+            <button class="si" type="button"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3m0 2.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z"></path><path d="M4.012 7.26a2.005 2.005 0 0 0 -1.012 1.737v10c0 1.1 .9 2 2 2h10c.75 0 1.158 -.385 1.5 -1"></path><path d="M7 13l3.644 -3.644a1.21 1.21 0 0 1 1.712 0l3.644 3.644"></path></svg>library</button>
+            <button class="si" type="button"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065z"></path><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"></path></svg>settings</button>
+          </nav>
+        </sc-if>
+        <sc-if value="{{d.showDetail}}" hint-placeholder-val="{{ false }}">
+          <div class="{{d.detCls}}" style="left: {{d.detL}}px; width: {{d.detW}}px; transform: {{d.detTf}}; border-radius: {{d.detR}}px">
+            <div class="dcon" style="opacity: {{d.detO}}">
+              <div class="dleft">
+                <button class="back glass" type="button" onClick="{{d.back}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6l6 6"></path></svg>back</button>
+                <div class="dv" style="width: {{d.dvBoxW}}px; height: {{d.dvBoxH}}px"><div class="dvid" style="width: {{d.dvw}}px; height: {{d.dvh}}px; background: {{d.detBg}}"><i class="fb"></i><div class="pbar"><i></i></div></div></div>
+              </div>
+              <div class="dcol">
+                <h2 class="dt">{{d.detTitle}}</h2>
+                <p class="dm">{{d.detMeta}}</p>
+                <sc-for list="{{d.detRows}}" as="w" hint-placeholder-count="2">
+                  <div class="drow">
+                    <div class="dh"><b>{{w.name}}</b><span>{{w.meta}}</span></div>
+                    <sc-if value="{{w.confirm}}" hint-placeholder-val="{{ false }}">
+                      <p class="conf">{{w.confTxt}}</p>
+                      <div class="acts"><button class="act red" type="button" onClick="{{w.yes}}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7l16 0"></path><path d="M10 11l0 6"></path><path d="M14 11l0 6"></path><path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12"></path><path d="M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3"></path></svg>remove</button><button class="act" type="button" onClick="{{w.no}}">keep</button></div>
+                    </sc-if>
+                    <sc-if value="{{w.plain}}" hint-placeholder-val="{{ true }}">
+                      <div class="acts">
+                        <sc-for list="{{w.acts}}" as="a" hint-placeholder-count="2">
+                          <button class="{{a.cls}}" type="button" onClick="{{a.fn}}"><sc-if value="{{a.iLink}}" hint-placeholder-val="{{ false }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 15l6 -6"></path><path d="M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464"></path><path d="M13 18l-.397 .534a5.068 5.068 0 0 1 -7.127 0a4.972 4.972 0 0 1 0 -7.071l.524 -.463"></path></svg></sc-if><sc-if value="{{a.iShare}}" hint-placeholder-val="{{ false }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 9h-1a2 2 0 0 0 -2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-8a2 2 0 0 0 -2 -2h-1"></path><path d="M12 14v-11"></path><path d="M9 6l3 -3l3 3"></path></svg></sc-if><sc-if value="{{a.iDown}}" hint-placeholder-val="{{ false }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"></path><path d="M7 11l5 5l5 -5"></path><path d="M5 20h14"></path></svg></sc-if><sc-if value="{{a.iTrim}}" hint-placeholder-val="{{ false }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"></path><path d="M3 17a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"></path><path d="M8.6 8.6l10.4 10.4"></path><path d="M8.6 15.4l10.4 -10.4"></path></svg></sc-if><sc-if value="{{a.iTrash}}" hint-placeholder-val="{{ false }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7l16 0"></path><path d="M10 11l0 6"></path><path d="M14 11l0 6"></path><path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12"></path><path d="M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3"></path></svg></sc-if><sc-if value="{{a.iCheck}}" hint-placeholder-val="{{ false }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5l10 -10"></path></svg></sc-if>{{a.label}}</button>
+                        </sc-for>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </sc-for>
+  <section class="ctl" aria-label="controls for both frames">
+    <div class="ctlhead"><h1>2d · option d · own orbits</h1><span class="now" aria-live="polite">{{nowTxt}}</span></div>
+    <div class="crow"><span class="rl">state</span><div class="btns"><sc-for list="{{stateBtns}}" as="b" hint-placeholder-count="11"><button class="{{b.cls}}" type="button" aria-pressed="{{b.on}}" disabled="{{b.dis}}" onClick="{{b.fn}}">{{b.label}}</button></sc-for></div></div>
+    <div class="crow"><span class="rl">flow</span><button class="run" type="button" onClick="{{runFlow}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M7 4v16l13 -8z"></path></svg>run the whole flow</button><span class="note">fetch → save → read → morph → trim → render → done. times run 5× faster than live; a live studio render took 23.5 s (one run).</span></div>
+    <div class="crow"><span class="rl">media</span>
+      <div class="seg" role="group" aria-label="media count"><sc-for list="{{counts}}" as="c" hint-placeholder-count="5"><button class="{{c.cls}}" type="button" aria-pressed="{{c.on}}" onClick="{{c.fn}}">{{c.label}}</button></sc-for></div>
+      <span class="rl" style="width: auto; margin-left: 14px">look</span>
+      <div class="seg" role="group" aria-label="appearance"><button class="{{lightCls}}" type="button" aria-pressed="{{isLight}}" onClick="{{setLight}}">light</button><button class="{{darkCls}}" type="button" aria-pressed="{{isDark}}" onClick="{{setDark}}">dark</button></div>
+    </div>
+    <div class="crow"><span class="rl">toggles</span>
+      <label class="tog"><input type="checkbox" checked="{{reduce}}" onChange="{{tReduce}}"><span></span>reduce motion (static orbit, crossfades)</label>
+      <label class="tog"><input type="checkbox" checked="{{cold}}" onChange="{{tCold}}"><span></span>cold start (server asleep)</label>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.OPT = 'D';
+    this.slot = {};
+    this.iv = null;
+    this.last = 0;
+    this.state = this.fresh({ count: 16, dark: true, reduce: false, cold: false, clock: 0, t: 0 });
+  }
+  fresh(keep) {
+    return Object.assign({ stage: 'rest', stageT: 0, auto: 'none', src: 'link', added: [], removed: {},
+      subject: null, failAt: -9, copiedAt: -9, photos: false, shared: false, detail: null }, keep || {});
+  }
+  componentDidMount() {
+    var self = this;
+    this.last = Date.now();
+    try { if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) this.setState({ reduce: true }); } catch (x) {}
+    this.iv = setInterval(function () { self.tick(); }, 40);
+  }
+  componentWillUnmount() { if (this.iv) clearInterval(this.iv); this.iv = null; }
+
+  // the owner's library, newest first (real ids, sizes and lengths)
+  data() {
+    return [
+      { id: 'Dd55fEyN1Yy', svc: 'instagram', kind: 'video', w: 720, h: 1280, d: 37.4 },
+      { id: 'Dd7P496wolG', svc: 'instagram', kind: 'webp', w: 480, h: 854, d: 10.1, mb: '4.5 MB', when: 'yesterday 13:59' },
+      { id: 'Dd7P496wolG', svc: 'instagram', kind: 'video', w: 720, h: 1280, d: 14.8, mb: '4.3 MB', when: 'yesterday 13:59' },
+      { id: '2105435404002562056', svc: 'x', kind: 'webp', w: 480, h: 568, d: 5.4 },
+      { id: '2105435404002562056', svc: 'x', kind: 'video', w: 480, h: 568, d: 5.5 },
+      { id: '2105432512428445875', svc: 'x', kind: 'video', w: 498, h: 280, d: 1.9 },
+      { id: 'Dd5JFkMDt4N', svc: 'instagram', kind: 'webp', w: 480, h: 480, d: 10.1 },
+      { id: 'Dd5JFkMDt4N', svc: 'instagram', kind: 'video', w: 720, h: 720, d: 10.8 },
+      { id: 'Dd7RFsmT45H', svc: 'instagram', kind: 'video', w: 640, h: 1136, d: null },
+      { id: '2105358343657427103', svc: 'x', kind: 'webp', w: 480, h: 270, d: 5.0 },
+      { id: '2105358343657427103', svc: 'x', kind: 'video', w: 1920, h: 1080, d: 5.1 },
+      { id: 'programming and later league', svc: 'clip', kind: 'webp', w: 480, h: 270, d: 6.0 },
+      { id: 'programming and later league', svc: 'clip', kind: 'video', w: 1280, h: 720, d: 28 },
+      { id: '2105322791075533236', svc: 'x', kind: 'webp', w: 480, h: 296, d: 10.1 },
+      { id: '2104404736959209938', svc: 'x', kind: 'webp', w: 480, h: 270, d: 6.0 },
+      { id: '2105237035271258436', svc: 'x', kind: 'webp', w: 480, h: 560, d: 5.0 }
+    ];
+  }
+  base(n) {
+    var real = this.data(), out = [];
+    for (var i = 0; i < n; i++) {
+      // i >= 16: REPEAT of a real shape, only to reach the 35-item stress count (not real library items)
+      var src = real[i % real.length];
+      out.push(Object.assign({}, src, { key: (i < real.length ? 'b' : 'r') + i, bi: i, rep: i >= real.length }));
+    }
+    return out;
+  }
+  find(kind, id) { var r = this.data(); for (var i = 0; i < r.length; i++) if (r[i].id === (id || 'Dd7P496wolG') && r[i].kind === kind) return r[i]; return null; }
+  mk(key, born, from, subj) {
+    var v = subj || this.find('video');
+    if (key === 'nv') return Object.assign({}, v, { key: 'nv', born: born, from: from, isNew: true });
+    var w = v.id === 'Dd7P496wolG' ? this.find('webp') : null;
+    if (!w) w = { id: v.id, svc: v.svc, kind: 'webp', w: 480, h: Math.round(480 * v.h / v.w), d: Math.min(10, v.d || 10) };
+    return Object.assign({}, w, { key: 'nw', born: born, from: from, isNew: true });
+  }
+  // slot order: newest first; a re-saved post replaces its older offline copy
+  list(s) {
+    var added = s.added || [], removed = s.removed || {}, out = [], i, j;
+    for (i = 0; i < added.length; i++) if (!removed[added[i].key]) out.push(added[i]);
+    var base = this.base(s.count);
+    for (i = 0; i < base.length; i++) {
+      var b = base[i], dup = false;
+      for (j = 0; j < added.length; j++) if (added[j].id === b.id && added[j].kind === b.kind) dup = true;
+      if (!dup && !removed[b.key]) out.push(b);
+    }
+    return out;
+  }
+  // DOM order stays stable (base by index, then added in insertion order) so nodes are never reused for another item
+  renderOrder(s) { return this.base(s.count).concat((s.added || []).slice().reverse()); }
+
+  tick() {
+    var now = Date.now(), dt = Math.min(0.1, Math.max(0, (now - this.last) / 1000));
+    this.last = now;
+    var s = this.state;
+    var speed = s.reduce ? 0 : (s.stage === 'trim' || s.stage === 'rendering') ? 0.3 : 1;
+    var p = { clock: s.clock + dt, t: s.t + dt * speed, stageT: s.stageT + dt };
+    this.advance(p, s);
+    if (s.detail) {
+      var d = Object.assign({}, s.detail);
+      d.t += dt;
+      if (d.phase === 'pre' && d.t >= 0.05) { d.phase = 'open'; d.t = 0; }
+      else if ((d.phase === 'closing' && d.t >= 0.5) || (d.phase === 'fading' && d.t >= 0.4)) d = null;
+      p.detail = d;
+    }
+    var nx = Object.assign({}, s, p), tgt = this.gSpread(this.list(nx).length);
+    this.spr = this.spr == null || s.reduce ? tgt : this.spr + (tgt - this.spr) * Math.min(1, dt * 2.2);
+    this.moveSlots(dt, nx);
+    if (this.gTick) this.gTick(dt, nx);
+    this.setState(p);
+  }
+  advance(p, s) {
+    var st = s.stage, T = p.stageT, auto = s.auto !== 'none';
+    if (st === 'fetching' && auto && T >= (s.cold ? 4.2 : 1.5)) this.go(p, 'saving');
+    else if (st === 'saving' && auto && T >= 1.0) this.go(p, 'reading');
+    else if (st === 'reading' && auto && T >= 1.65) this.go(p, 'morphing');
+    else if (st === 'morphing' && auto && T >= 1.9) this.go(p, 'trim');
+    else if (st === 'trim' && s.auto === 'all' && T >= 1.8) this.go(p, 'rendering');
+    else if (st === 'rendering' && auto && T >= 4.7) this.go(p, 'done');
+    else if (st === 'imploding' && T >= 0.85) this.go(p, 'error');
+    else if (st === 'cancelling' && T >= 0.7) this.go(p, 'rest');
+  }
+  go(p, stage) {
+    var s = this.state;
+    p.stage = stage; p.stageT = 0;
+    if (stage === 'morphing') p.added = [this.mk('nv', p.clock, 'star', s.subject)].concat(s.added.filter(function (a) { return a.key !== 'nv'; }));
+    if (stage === 'done') { p.added = [this.mk('nw', p.clock, 'card', s.subject)].concat(s.added.filter(function (a) { return a.key !== 'nw'; })); p.copiedAt = -9; p.shared = false; }
+    if (stage === 'imploding') p.failAt = p.clock;
+    if (stage === 'rest') p.auto = 'none';
+  }
+  moveSlots(dt, st) {
+    var list = this.list(st), tg = this.gAssign(list), seen = {};
+    for (var i = 0; i < list.length; i++) {
+      var k = list[i].key, g = tg[i], cur = this.slot[k];
+      seen[k] = 1;
+      if (!cur || cur.lane !== g.lane || st.reduce) this.slot[k] = { lane: g.lane, idx: g.idx };
+      else {
+        var dl = g.idx - cur.idx;
+        cur.idx = Math.abs(dl) < 0.002 ? g.idx : cur.idx + dl * Math.min(1, dt * 3.2);
+      }
+    }
+    for (var key in this.slot) if (!seen[key]) delete this.slot[key];
+  }
+
+  // ---- controls ----
+  jump(name) {
+    var s = this.state, c = s.clock, settled = this.mk('nv', c - 10, 'star');
+    var m = {
+      rest: { stage: 'rest', added: [], removed: {} },
+      fetch: { stage: 'fetching', added: [] },
+      save: { stage: 'saving', added: [] },
+      read: { stage: 'reading', added: [] },
+      ready: { stage: 'morphing', added: [this.mk('nv', c, 'star')] },
+      trim: { stage: 'trim', added: [settled] },
+      render: { stage: 'rendering', added: [settled] },
+      done: { stage: 'done', added: [this.mk('nw', c, 'card'), settled] },
+      fail: { stage: 'imploding', added: [], failAt: c },
+      cancel: { stage: 'cancelling' }
+    }[name];
+    this.setState(Object.assign({ stageT: 0, auto: 'none', src: 'link', subject: null, detail: null, copiedAt: -9, photos: false, shared: false }, m));
+  }
+  runFlow() { this.setState({ stage: 'fetching', stageT: 0, auto: 'all', src: 'link', added: [], subject: null, detail: null, photos: false, shared: false }); }
+  idle() { var st = this.state.stage; return st === 'rest' || st === 'done' || st === 'error' || st === 'morphing' && this.state.stageT > 1.3; }
+  paste() { if (!this.idle()) return; this.setState({ stage: 'fetching', stageT: 0, auto: 'trim', src: 'link', added: [], subject: null, photos: false }); }
+  file() { if (!this.idle()) return; this.setState({ stage: 'saving', stageT: 0, auto: 'trim', src: 'file', added: [], subject: null, photos: false }); }
+  cancel() { this.setState({ stage: 'cancelling', stageT: 0, auto: 'none' }); }
+  make() { this.setState({ stage: 'rendering', stageT: 0, auto: 'all' }); }
+  closeCard() { this.setState({ stage: 'rest', stageT: 0, auto: 'none' }); }
+  ok() { this.setState({ stage: 'rest', stageT: 0, auto: 'none' }); }
+  findKey(key) { var l = this.list(this.state); for (var i = 0; i < l.length; i++) if (l[i].key === key) return l[i]; return null; }
+  dd7pKey() { var l = this.list(this.state); for (var i = 0; i < l.length; i++) if (l[i].id === 'Dd7P496wolG' && l[i].kind === 'video') return l[i].key; return null; }
+  openDetail(key) {
+    var it = this.findKey(key);
+    if (!it || this.state.detail) return;
+    this.setState({ detail: { key: key, item: it, phase: this.state.reduce ? 'pre' : 'pre', t: 0, copied: false, saved: false, shared: false, confirm: false } });
+  }
+  closeDetail() {
+    var d = this.state.detail;
+    if (!d || d.phase === 'closing' || d.phase === 'fading') return;
+    this.setState({ detail: Object.assign({}, d, { phase: this.findKey(d.key) ? 'closing' : 'fading', t: 0 }) });
+  }
+  detSet(o) { var d = this.state.detail; if (d) this.setState({ detail: Object.assign({}, d, o) }); }
+  removeCopy() {
+    var d = this.state.detail; if (!d) return;
+    var rm = Object.assign({}, this.state.removed); rm[d.key] = true;
+    this.setState({ removed: rm, detail: Object.assign({}, d, { phase: 'fading', t: 0, confirm: false }) });
+  }
+  trimFrom() {
+    var d = this.state.detail; if (!d) return;
+    var v = this.find('video', d.item.id) || d.item;
+    this.setState({ detail: Object.assign({}, d, { phase: 'closing', t: 0 }), stage: 'trim', stageT: 0, auto: 'none', subject: v, photos: false });
+  }
+  toggle(k) { var o = {}; o[k] = !this.state[k]; this.setState(o); }
+
+  // ---- helpers ----
+  clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+  ease(p) { return p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2; }
+  back(p) { var c1 = 1.5, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); }
+  mb(b) { return (b / 1e6).toFixed(1) + ' MB'; }
+  tc(s) { var m = Math.floor(s / 60), r = s - m * 60; return (m < 10 ? '0' : '') + m + ':' + (r < 10 ? '0' : '') + r.toFixed(1); }
+  r1(x) { return Math.round(x * 10) / 10; }
+  hash(str) { var h = 7; for (var i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 9973; return h; }
+  grey(v) { var x = Math.max(0, Math.min(255, Math.round(v))).toString(16); if (x.length < 2) x = '0' + x; return '#' + x + x + x; }
+  fill(it, dark) {
+    var h = this.hash(it.id + it.kind + (it.rep ? 'r' : ''));
+    var a = dark ? 34 + h % 22 : 196 + h % 26, b = dark ? 84 + (h * 7) % 34 : 150 + (h * 7) % 34;
+    return 'linear-gradient(' + (140 + h % 70) + 'deg, ' + this.grey(b) + ', ' + this.grey(a) + ')';
+  }
+  pushM(s) { var tau = s.clock - s.failAt; if (s.reduce || tau < 0 || tau > 2.5) return 1; return 1 + 0.26 * Math.exp(-3.2 * tau) * Math.sin(9 * tau); }
+  capsAt(caps, idx) {
+    var c = 0;
+    for (var i = 0; i < caps.length; i++) { if (idx < c + caps[i]) return { ring: i, j: idx - c, cap: caps[i] }; c += caps[i]; }
+    var L = caps.length - 1; return { ring: L, j: idx - c + caps[L], cap: caps[L] };
+  }
+  ringsUsed(caps, n) { var c = 0; for (var i = 0; i < caps.length; i++) { c += caps[i]; if (n <= c) return n > 0 ? i + 1 : 0; } return caps.length; }
+  lerpAng(a, b, f) { var d = b - a; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return a + d * f; }
+  sp() { return this.spr == null ? this.gSpread(16) : this.spr; }
+  ringAssign(list) { return list.map(function (it, i) { return { lane: 0, idx: i }; }); }
+  ringPlace(idx, t, push) {
+    var i0 = Math.floor(idx), fr = idx - i0, a = this.gPolar(i0, t);
+    if (fr < 0.001) return this.gPoint(a.ring, a.ang, 1, t, push);
+    var b = this.gPolar(i0 + 1, t);
+    if (a.ring === b.ring) return this.gPoint(a.ring, this.lerpAng(a.ang, b.ang, fr), 1, t, push);
+    var p = this.gPoint(a.ring, a.ang, 1, t, push), q = this.gPoint(b.ring, b.ang, 1, t, push);
+    return { u: p.u + (q.u - p.u) * fr, v: p.v + (q.v - p.v) * fr, s: p.s + (q.s - p.s) * fr, depth: p.depth + (q.depth - p.depth) * fr, near: p.near + (q.near - p.near) * fr };
+  }
+  ringMorph(idx, e, t, push) { var a = this.gPolar(Math.round(idx), t); return this.gPoint(a.ring, a.ang - (1 - e) * this.gConf().sweep, e, t, push); }
+  ringGuides(n, t, push, steps, rmuls, clsFor) {
+    var out = [], k = this.ringsUsed(this.gConf().caps, n);
+    for (var r = 0; r < k; r++) for (var m = 0; m < rmuls.length; m++) {
+      var pts = [];
+      for (var i = 0; i <= steps; i++) { var g = this.gPoint(r, i / steps * 2 * Math.PI, rmuls[m], t, push); pts.push([g.u, g.v]); }
+      out.push({ pts: pts, cls: clsFor(r, m) });
+    }
+    return out;
+  }
+
+  // ---- geometry for this option ----
+
+  // ---- 2D common: a flat, top-down diagram. Centre (0, 0) = the middle of the two glass circles. Every orbit is a
+  // true circle in the screen plane (x and y scale alike on both screens); only its upper part is on screen.
+  // Planet size and z depend on the ring only, never on where along the ring the planet is.
+  W2() { return { phone: { id: 'phone', hw: 160, edge: 184, bot: 44, top: 520, r0: 146, k: 1 }, pad: { id: 'pad', hw: 230, edge: 254, bot: 40, top: 364, r0: 122, k: 0.86 } }; }
+  devs() { var W = this.W2(); return this.devsBase().map(function (F) { return Object.assign({}, F, { sx: 1, sy: 1, oy: 0, k: W[F.id].k, w2: W[F.id] }); }); }
+  dv() { return (this.F2 && this.F2.w2) || this.W2().phone; }
+  // more media -> slightly smaller planets, so 35 still fit the phone at >= 36 px on the short side
+  bx(n) { return n <= 16 ? 78 : Math.round(78 - (Math.min(n, 35) - 16) * 8 / 19); }
+  // a centre at radius r is inside the window for angles [a, pi - a] (angle from the +x axis, counter-clockwise)
+  edgeA(r, hw, bot) { var a = Math.asin(Math.max(-1, Math.min(1, bot / r))); if (r > hw) a = Math.max(a, Math.acos(hw / r)); return a; }
+  pol(r, a) { return { u: r * Math.cos(a), v: -r * Math.sin(a) }; }
+  sm(x) { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); }
+  frac(x) { return x - Math.floor(x); }
+  memo(key, fn) { if (!this.c2 || this.c2n > 400) { this.c2 = {}; this.c2n = 0; } if (!(key in this.c2)) { this.c2n++; this.c2[key] = fn.call(this); } return this.c2[key]; }
+  lerpPos(a, b, f) { var o = {}; for (var k in a) o[k] = typeof a[k] === 'number' && typeof b[k] === 'number' ? a[k] + (b[k] - a[k]) * f : a[k]; return o; }
+  // an item gliding to its next slot (fractional index) moves in a straight blend of the two slots
+  slotAt(fn, idx, n) { var i0 = Math.max(0, Math.min(n - 1, Math.floor(idx))), fr = idx - i0, a = fn.call(this, i0); if (fr < 0.001 || i0 + 1 >= n) return a; return this.lerpPos(a, fn.call(this, i0 + 1), fr); }
+  // star -> slot on a gentle curve: starts exactly on the star, ends exactly on the slot
+  morph2(p, e) { var sy = this.gConf().coreV, dx = p.u, dy = p.v - sy, b = 0.2 * Math.sin(Math.PI * e); return { u: dx * e + dy * b, v: sy + dy * e - dx * b }; }
+  circ(r) { var F = this.F2, cx = F.cx, cy = F.cy, R = r.toFixed(1); return 'M' + (cx - r).toFixed(1) + ' ' + cy.toFixed(1) + 'A' + R + ' ' + R + ' 0 1 0 ' + (cx + r).toFixed(1) + ' ' + cy.toFixed(1) + 'A' + R + ' ' + R + ' 0 1 0 ' + (cx - r).toFixed(1) + ' ' + cy.toFixed(1); }
+  arc(r, a1, a2) { var F = this.F2, p = this.pol(r, a1), q = this.pol(r, a2), R = r.toFixed(1); return 'M' + (F.cx + p.u).toFixed(1) + ' ' + (F.cy + p.v).toFixed(1) + 'A' + R + ' ' + R + ' 0 ' + (a2 - a1 > Math.PI ? 1 : 0) + ' 0 ' + (F.cx + q.u).toFixed(1) + ' ' + (F.cy + q.v).toFixed(1); }
+  gAssign(list) { return this.ringAssign(list); }
+  gConf() { return { box: this.bx(this.N2 == null ? 16 : this.N2), coreV: -90, dim: 1, capDy: -120, itemCls: '' }; }
+  gMorph(lane, idx, e, t, push) { return this.morph2(this.gPlace(lane, Math.round(idx), t, this.N2 == null ? 16 : this.N2, push), e); }
+  gRingTf(k) { return 'scale(0.8)'; }
+  gShockTf() { return ''; }
+  // rings (A, C), per screen: the fewest rings whose capacity holds n, never closer than one planet apart.
+  // Fewer media -> fewer rings, spread up to the top of the screen. A planet keeps its age order on both screens.
+  ringR(i, k, D) { return k <= 1 ? D.r0 : D.r0 + i * (D.top - D.r0) / (k - 1); }
+  ringPlan(n) {
+    var D = this.dv();
+    return this.memo('rp' + D.id + n, function () {
+      var kmax = Math.min(6, 1 + Math.floor((D.top - D.r0) / (this.bx(n) * 0.92 * D.k + 4))), k, caps, sum, i;
+      for (k = 1; k <= kmax; k++) { caps = []; sum = 0; for (i = 0; i < k; i++) { caps.push(this.capFn(this.ringR(i, k, D), i, n, D)); sum += caps[i]; } if (sum >= n) break; }
+      if (k > kmax) k = kmax;
+      var m = [], left = n, rem = [];
+      for (i = 0; i < k; i++) { var q = sum ? n * caps[i] / sum : 0; m.push(Math.floor(q)); left -= m[i]; rem.push([q - m[i], i]); }
+      rem.sort(function (a, b) { return b[0] - a[0] || a[1] - b[1]; });
+      for (i = 0; i < left; i++) m[rem[i % k][1]]++;
+      return { k: k, caps: caps, sum: sum, m: m };
+    });
+  }
+  ringIdx(P, idx) { var c = 0; for (var i = 0; i < P.k; i++) { if (idx < c + P.m[i]) return { ring: i, j: idx - c }; c += P.m[i]; } return { ring: P.k - 1, j: idx - c + P.m[P.k - 1] }; }
+  // ring spacing eases when the count changes (smoothed on the phone's plan, applied to both screens)
+  gSpread(n) { var F = this.F2; this.F2 = null; var k = this.ringPlan(n).k; this.F2 = F; return k <= 1 ? 1 : 1 / (k - 1); }
+  ringRS(i, P, n) { var D = this.dv(); return P.k <= 1 ? D.r0 : D.r0 + i * (D.top - D.r0) / (P.k - 1) * (this.sp() / this.gSpread(n)); }
+  rpOf(r) { var D = this.dv(); return 146 + (r - D.r0) * 374 / (D.top - D.r0); }
+  off(ring) { return ring === 0 && this.off0 ? this.off0[this.dv().id] || 0 : 0; }
+  // the inner orbits make room while the star grows (eased; snaps under reduce motion). r' = r + R·e^(-(r - r0)/λ)
+  // keeps every orbit a circle and keeps the order of the radii.
+  roomR(r) { var R = (this.room || 1) - 1, D = this.dv(); return R <= 0 ? r : r + R * D.r0 * Math.exp(-(r - D.r0) / (0.53 * (D.top - D.r0))); }
+  gTick(dt, st) {
+    var T = st.stage === 'fetching' ? 1.14 : st.stage === 'saving' ? 1.14 + 0.18 * Math.min(1, st.stageT / 0.9) : st.stage === 'reading' ? 1.32 : 1;
+    this.room = st.reduce ? T : (this.room || 1) + (T - (this.room || 1)) * Math.min(1, dt * 3);
+    this.holdNew(dt, st);
+  }
+  // while a planet is being born, ring 0 is eased so the newest slot is in the open part of its orbit
+  holdNew(dt, st) {
+    var a = st.added || [], n = this.list(st).length, nb = false;
+    for (var i = 0; i < a.length; i++) if (st.clock - a[i].born < 1.4) nb = true;
+    if (!nb || !n || !this.ph0) return;
+    var F0 = this.F2, devs = this.devs();
+    this.off0 = this.off0 || {};
+    for (var di = 0; di < devs.length; di++) {
+      this.F2 = devs[di];
+      var ph = this.ph0(st.t, n), lo = this.okLo(n), hi = this.okHi(n);
+      if (ph >= lo && ph <= hi) continue;
+      var d1 = lo - ph, d2 = hi - ph; d1 -= Math.round(d1); d2 -= Math.round(d2);
+      var d = Math.abs(d1) < Math.abs(d2) ? d1 : d2, id = devs[di].id;
+      this.off0[id] = (this.off0[id] || 0) + (st.reduce ? d : d * Math.min(1, dt * 5));
+    }
+    this.F2 = F0;
+  }
+  // D · own orbits: every planet has its own circular orbit, like real planets. Radius is age (newest innermost),
+  // spaced so each orbit gets an equal share of the visible area; where along its orbit a planet sits starts from the
+  // golden angle and is then nudged along that same orbit until neighbours stop overlapping. Calm: each planet drifts a
+  // few px back and forth along its orbit (inner ones quicker) and never leaves the screen.
+  dPlan(n) {
+    var D = this.dv(), L = this.L2 || [], sig = '';
+    for (var i = 0; i < n; i++) sig += L[i] ? Math.round(100 * L[i].w / L[i].h) + ',' : '100,';
+    return this.memo('d' + D.id + n + '|' + sig, function () {
+      var N = 160, dr = (D.top - D.r0) / N, cum = [0], q, i, j, it;
+      for (q = 1; q <= N; q++) { var mid = D.r0 + (q - 0.5) * dr; cum.push(cum[q - 1] + mid * Math.max(0, Math.PI - 2 * this.edgeA(mid, D.hw, D.bot)) * dr); }
+      var tot = cum[N], box = this.bx(n) * D.k, P = [];
+      for (i = 0; i < n; i++) {
+        var want = tot * (i + 0.5) / n; q = 1; while (q < N && cum[q] < want) q++;
+        var r = D.r0 + (q - 1 + (want - cum[q - 1]) / Math.max(1e-9, cum[q] - cum[q - 1])) * dr;
+        var a1 = this.edgeA(r, D.hw, D.bot), s = 1 - 0.08 * (r - D.r0) / (D.top - D.r0), it2 = L[i] || { w: 1, h: 1 };
+        var fit = Math.min(box / it2.w, box / it2.h);
+        P.push({ r: r, a1: a1, a: a1 + this.frac(0.5 + i * 0.6180339887) * (Math.PI - 2 * a1), s: s, w: it2.w * fit * s, h: it2.h * fit * s });
+      }
+      // nudge overlapping neighbours apart: along their own orbit, and across orbits only as far as keeps the
+      // age order of the radii (an older planet never ends up inside a newer one's orbit)
+      var self = this, move = function (Q, k, px, py) {
+        Q.a += (px * -Math.sin(Q.a) + py * -Math.cos(Q.a)) / Q.r;
+        Q.r += 0.5 * (px * Math.cos(Q.a) - py * Math.sin(Q.a));
+        var lo = k ? P[k - 1].r + 1 : D.r0, hi = k < n - 1 ? P[k + 1].r - 1 : D.top;
+        Q.r = Math.max(lo, Math.min(hi, Q.r)); Q.a1 = self.edgeA(Q.r, D.hw, D.bot); Q.a = Math.max(Q.a1, Math.min(Math.PI - Q.a1, Q.a));
+      };
+      for (it = 0; it < 900; it++) {
+        var moved = 0, gap = it < 600 ? 8 : 4;
+        for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) {
+          var A = P[i], B = P[j], xa = A.r * Math.cos(A.a), ya = -A.r * Math.sin(A.a), xb = B.r * Math.cos(B.a), yb = -B.r * Math.sin(B.a);
+          var dx = xa - xb, dy = ya - yb, ox = (A.w + B.w) / 2 + gap - Math.abs(dx), oy = (A.h + B.h) / 2 + gap - Math.abs(dy);
+          if (ox <= 0 || oy <= 0) continue;
+          var px = 0, py = 0;
+          if (ox < oy) px = (dx < 0 ? -1 : 1) * ox * 0.5; else py = (dy < 0 ? -1 : 1) * oy * 0.5;
+          move(A, i, px, py); move(B, j, -px, -py);
+          moved++;
+        }
+        if (!moved) break;
+      }
+      return P;
+    });
+  }
+  gSpread(n) { return n; }
+  dSlot(idx, t, n, push) {
+    var P = this.dPlan(n), q = P[Math.max(0, Math.min(P.length - 1, idx))] || { r: this.dv().r0, a: Math.PI / 2, s: 1 };
+    var r = this.roomR(q.r) * (idx < 4 ? 1 + (push - 1) * (1 - idx / 4) : 1), T = 18 * Math.pow(q.r / this.dv().r0, 1.2);
+    var p = this.pol(r, q.a + (5 / q.r) * Math.sin(2 * Math.PI * t / T + idx * 2.1));
+    return { u: p.u, v: p.v, s: q.s, depth: -idx, near: idx < 3 ? 1 : 0.5, ring: idx, rr: r };
+  }
+  gPlace(lane, idx, t, n, push) { return this.slotAt(function (i) { return this.dSlot(i, t, n, push); }, idx, n); }
+  gGuides(n, t, push) {
+    if (!n) return [];
+    var P = this.dPlan(n), out = [];
+    for (var i = 0; i < P.length; i++) out.push({ cls: 'own', d: this.circ(this.roomR(P[i].r) * (i < 4 ? 1 + (push - 1) * (1 - i / 4) : 1)) });
+    return out;
+  }
+
+  devsBase() {
+    return [
+      { id: 'phone', W: 368, H: 822, L: 0, Wc: 368, cx: 184, cy: 652, sx: 1, sy: 1, oy: 0, k: 1, bx: 40, by: 78, ly: 52, pad: 11, br: 58, sr: 47, cardX: 16, cardY: 112, cardW: 336, statY: 58, label: 'iphone · 368×822 screen' },
+      { id: 'pad', W: 720, H: 520, L: 212, Wc: 508, cx: 466, cy: 446, sx: 1.3, sy: 0.62, oy: -24, k: 0.92, bx: 512, by: 40, ly: 16, pad: 14, br: 30, sr: 18, cardX: 270, cardY: 26, cardW: 392, statY: 16, label: 'ipad · landscape 720×520 screen' }
+    ];
+  }
+  pathOf(F, pts) {
+    var d = '';
+    for (var i = 0; i < pts.length; i++) d += (i ? 'L' : 'M') + (F.cx + pts[i][0] * F.sx).toFixed(1) + ' ' + (F.cy + pts[i][1] * F.sy + F.oy).toFixed(1);
+    return d;
+  }
+  device(F, s, list, info, n, push) {
+    this.F2 = F; this.N2 = n; this.L2 = list;
+    var self = this, conf = this.gConf(), dark = s.dark, st = s.stage, t = s.t;
+    var starX = F.cx, starY = F.cy + conf.coreV * F.sy + F.oy;
+    var BOX = conf.box * F.k;
+    // place every item
+    var pos = {}, vis = [];
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i], sl = info[i], g = this.gPlace(sl.lane, sl.idx, t, n, push);
+      var fit = Math.min(BOX / it.w, BOX / it.h), bw = it.w * fit, bh = it.h * fit;
+      var x = F.cx + g.u * F.sx, y = F.cy + g.v * F.sy + F.oy, sc = g.s, w = bw, h = bh, r = 9, o = (conf.dim + (1 - conf.dim) * g.near) * (g.o == null ? 1 : g.o), z = 0, newborn = false, glowO = 0, morph = false;
+      if (it.isNew) {
+        var dur = it.from === 'card' ? 1.1 : 1.3, p = this.clamp((s.clock - it.born) / dur, 0, 1);
+        if (s.reduce) { o *= this.clamp((s.clock - it.born) / 0.45, 0, 1); p = 1; }
+        if (p < 1) {
+          var e = this.ease(p), eb = Math.max(0, this.back(p)), fw = bw * sc, fh = bh * sc;
+          morph = true; z = 2000; o = 1; sc = 1;
+          if (it.from === 'card') {
+            var sx0 = F.cardX + 40, sy0 = F.cardY + 120;
+            x = sx0 + (x - sx0) * e; y = sy0 + (y - sy0) * e - 60 * Math.sin(Math.PI * e);
+            w = 52 + (fw - 52) * e; h = 92 + (fh - 92) * e;
+          } else {
+            var m = this.gMorph(sl.lane, sl.idx, e, t, push);
+            x = F.cx + m.u * F.sx; y = F.cy + m.v * F.sy + F.oy;
+            w = 22 + (fw - 22) * eb; h = 22 + (fh - 22) * eb; r = 11 - 2 * e;
+            newborn = true; glowO = this.r1(1 - e);
+          }
+        }
+      }
+      var vw = w * sc, vh = h * sc;
+      var off = x + vw / 2 < -30 || x - vw / 2 > F.W + 30 || y + vh / 2 < -30 || y - vh / 2 > F.H + 30 || (!morph && g.o != null && g.o < 0.04);
+      pos[it.key] = { x: x, y: y, w: w, h: h, sc: sc, o: o, r: r, z: z, depth: g.depth, near: g.near, newborn: newborn, glowO: glowO, morph: morph, off: off, it: it };
+      if (!off && !morph) vis.push(it.key);
+    }
+    vis.sort(function (a, b) { return pos[a].depth - pos[b].depth; });
+    var live = {};
+    for (var vi = 0; vi < vis.length; vi++) { pos[vis[vi]].z = 10 + vi; if (vi >= vis.length - 3) live[vis[vi]] = true; }
+    var det = s.detail, held = det && det.phase === 'open' ? det.key : null;
+    var order = this.renderOrder(s), items = [];
+    for (var oi = 0; oi < order.length; oi++) {
+      var key = order[oi].key, q = pos[key];
+      if (!q) { items.push({ cls: 'pl off', aria: 'removed', open: function () {}, w: 10, h: 10, x: 0, y: 0, s: 1, z: 0, o: 0, r: 9, bg: 'none', fbDelay: 0, newborn: false, glowO: 0, badge: false, badgeTxt: '' }); continue; }
+      var I2 = q.it, label = I2.kind === 'webp' ? 'webp · ' + I2.d.toFixed(1) + ' s' : (I2.d ? I2.d.toFixed(1) + ' s' : 'video');
+      items.push({
+        cls: 'pl' + (q.off ? ' off' : '') + (live[key] ? ' live' : '') + (conf.itemCls ? ' ' + conf.itemCls : ''),
+        aria: I2.svc + ' ' + I2.id + ', ' + I2.kind + (I2.d ? ', ' + I2.d.toFixed(1) + ' s' : '') + (live[key] ? ', playing' : ''),
+        open: (function (k) { return function () { self.openDetail(k); }; })(key),
+        w: this.r1(q.w), h: this.r1(q.h), x: this.r1(q.x - q.w / 2), y: this.r1(q.y - q.h / 2), s: q.sc.toFixed(3),
+        z: q.z, o: (held === key ? 0 : q.o).toFixed(2), r: this.r1(q.r), bg: this.fill(I2, dark),
+        fbDelay: (-(this.hash(key) % 24) / 10).toFixed(1), newborn: q.newborn, glowO: q.glowO,
+        badge: !q.morph && !q.off && q.near > 0.62 && q.w * q.sc >= 58, badgeTxt: label
+      });
+    }
+    var guides = this.gGuides(n, t, push, info).map(function (gd) { return { cls: gd.cls, d: gd.d || self.pathOf(F, gd.pts) }; });
+    // star
+    var frames = st === 'reading' ? Math.min(9, Math.floor(s.stageT / 0.15)) : 0;
+    var bytesTot = 4331778, bytes = st === 'saving' ? bytesTot * (1 - Math.pow(1 - this.clamp(s.stageT / 0.9, 0, 1), 3)) : 0;
+    var waking = st === 'fetching' && s.cold && s.stageT > 1.5;
+    var showStar = st === 'fetching' || st === 'saving' || st === 'reading' || st === 'imploding' || st === 'cancelling';
+    var ss = st === 'saving' ? 1 + 1.3 * bytes / bytesTot : st === 'reading' ? 2.3 : st === 'imploding' ? 1.6 : st === 'cancelling' ? 0.7 : (waking ? 1.15 : 1);
+    var rings = [];
+    for (var k = 0; k < 9; k++) { var size = 14 + k * 6; rings.push({ tf: this.gRingTf(k), cls: 'rg' + (st === 'reading' && k < frames ? ' on' : ''), size: size, m: -size / 2 }); }
+    // pipeline text
+    var capLbl = st === 'cancelling' ? 'cancelled' : st === 'fetching' ? (waking ? 'waking server' : 'fetching from instagram') : st === 'saving' ? (s.src === 'file' ? 'uploading' : 'saving privately') : 'reading the video';
+    var capNum = st === 'cancelling' ? '' : st === 'fetching' ? s.stageT.toFixed(1) + ' s' : st === 'saving' ? this.mb(bytes) + ' / 4.3 MB' : frames + ' / 9';
+    var subj = s.subject || this.find('video'), D = subj.d || 10, len = Math.min(10, D), total = Math.round(len * 15);
+    var decT = 2.82, decoded = st === 'rendering' ? Math.min(total, Math.floor(total * s.stageT / decT)) : 0, packing = st === 'rendering' && s.stageT >= decT;
+    var fr = [];
+    for (var fi = 0; fi < 9; fi++) { var f1 = (fi + 0.5) / 9 * D; fr.push({ cls: (st === 'rendering' || st === 'done') && f1 < len * (st === 'done' ? 1 : decoded / total) ? 'enc' : '' }); }
+    var webp = (s.added || []).filter(function (a) { return a.key === 'nw'; })[0] || this.mk('nw', 0, 'card', s.subject);
+    var copied = s.clock - s.copiedAt < 1.8;
+    var trimish = st === 'trim' || st === 'rendering';
+    // detail
+    var dOut = { showDetail: !!det };
+    if (det) {
+      var tgt = pos[det.key], pcx = tgt ? tgt.x : F.L + F.Wc / 2, pcy = tgt ? tgt.y : F.H / 2, pw = tgt ? tgt.w * tgt.sc : 60, ph = tgt ? tgt.h * tgt.sc : 60;
+      var kk = this.clamp(Math.max(pw / F.Wc, ph / F.H), 0.05, 1), small = det.phase === 'pre' || det.phase === 'closing';
+      var tf = 'none', rad = 0, cls = 'detail';
+      if (s.reduce) { cls += (det.phase === 'pre' ? ' notr faded' : det.phase === 'open' ? '' : ' faded'); }
+      else if (small) { tf = 'translate(' + this.r1(pcx - F.Wc * kk / 2 - F.L) + 'px, ' + this.r1(pcy - F.H * kk / 2) + 'px) scale(' + kk.toFixed(4) + ')'; rad = Math.min(400, Math.round(11 / kk)); cls += det.phase === 'pre' ? ' notr faded' : ' faded'; }
+      if (det.phase === 'fading') cls += ' faded';
+      var di = det.item, vid = this.find('video', di.id), wb = this.find('webp', di.id);
+      if (di.key === 'nw' || (s.added || []).some(function (a) { return a.key === 'nw' && a.id === di.id; })) wb = wb || webp;
+      var boxW = F.id === 'phone' ? 336 : 196, boxH = F.id === 'phone' ? 290 : 420, fit2 = Math.min((boxW - 24) / di.w, (boxH - 24) / di.h);
+      var where = F.id === 'phone' ? 'on this iphone' : 'on this ipad';
+      var rows = [];
+      if (wb) rows.push({ name: 'webp', meta: wb.w + '×' + wb.h + ' · ' + wb.d.toFixed(1) + ' s' + (wb.mb ? ' · ' + wb.mb : '') + ' · hosted', confirm: false, plain: true, confTxt: '', yes: function () {}, no: function () {},
+        acts: [
+          { label: det.copied ? 'copied' : 'copy link', cls: 'act', fn: function () { self.detSet({ copied: true }); }, iLink: !det.copied, iShare: false, iDown: false, iTrim: false, iTrash: false, iCheck: det.copied },
+          { label: det.shared ? 'shared' : 'share', cls: 'act', fn: function () { self.detSet({ shared: true }); }, iLink: false, iShare: !det.shared, iDown: false, iTrim: false, iTrash: false, iCheck: det.shared }
+        ] });
+      if (vid) {
+        var acts = [{ label: det.saved ? 'saved to photos' : 'save to photos', cls: 'act', fn: function () { self.detSet({ saved: true }); }, iLink: false, iShare: false, iDown: !det.saved, iTrim: false, iTrash: false, iCheck: det.saved }];
+        if (vid.d) acts.push({ label: 'trim a new webp', cls: 'act', fn: function () { self.trimFrom(); }, iLink: false, iShare: false, iDown: false, iTrim: true, iTrash: false, iCheck: false });
+        acts.push({ label: 'remove offline copy', cls: 'act red', fn: function () { self.detSet({ confirm: true }); }, iLink: false, iShare: false, iDown: false, iTrim: false, iTrash: true, iCheck: false });
+        rows.push({ name: 'private copy', meta: vid.w + '×' + vid.h + (vid.d ? ' · ' + vid.d.toFixed(1) + ' s' : '') + (vid.mb ? ' · ' + vid.mb : '') + ' · ' + where,
+          confirm: !!det.confirm, plain: !det.confirm, confTxt: 'remove the copy ' + where + '? it leaves the orbit. the webp link keeps working.',
+          yes: function () { self.removeCopy(); }, no: function () { self.detSet({ confirm: false }); }, acts: acts });
+      }
+      dOut = {
+        showDetail: true, detCls: cls, detL: F.L, detW: F.Wc, detTf: tf, detR: rad, detO: det.phase === 'open' ? 1 : 0,
+        back: function () { self.closeDetail(); },
+        dvBoxW: boxW, dvBoxH: boxH, dvw: Math.round(di.w * fit2), dvh: Math.round(di.h * fit2), detBg: this.fill(di, dark),
+        detTitle: di.svc + ' · ' + di.id,
+        detMeta: (di.d ? di.d.toFixed(1) + ' s · ' : '') + di.w + '×' + di.h + (di.when ? ' · ' + di.when : '') + (di.rep ? ' · repeat' : ''),
+        detRows: rows
+      };
+    }
+    var nTxt = n === 0 ? 'nothing offline yet' : (s.count === 16 && !(s.added || []).length ? '13 videos ' + (F.id === 'phone' ? 'on this iphone' : 'on this ipad') + ' · 54 MB' : n + ' items ' + (F.id === 'phone' ? 'on this iphone' : 'on this ipad'));
+    var out = {
+      label: F.label, bx: F.bx, by: F.by, ly: F.ly, pad: F.pad, br: F.br, sr: F.sr, W: F.W, H: F.H,
+      scrCls: 'scr ' + F.id + ' ' + (dark ? 'dark' : 'light') + ' opt' + this.OPT + (s.reduce ? ' reduce' : ''),
+      isPhone: F.id === 'phone', isPad: F.id === 'pad',
+      guides: guides, items: items,
+      starX: this.r1(starX), starY: this.r1(starY),
+      showEmpty: n === 0 && (st === 'rest' || st === 'error'), emptyY: this.r1(starY - 110),
+      showStar: showStar, starCls: 'star' + (waking ? ' waking' : '') + (st === 'imploding' && !s.reduce ? ' imp' : ''), ss: ss.toFixed(3), so: st === 'cancelling' || (st === 'imploding' && s.reduce) ? 0 : 1,
+      rings: rings, showShock: st === 'imploding', shockTf: this.gShockTf(),
+      veilCls: 'veil' + (trimish ? ' on' : ''),
+      circCls: 'circles' + (this.idle() ? '' : ' busy'), circOff: !this.idle(), circX: F.cx - 76, circY: F.cy - 32,
+      paste: function () { self.paste(); }, file: function () { self.file(); },
+      showCap: st === 'fetching' || st === 'saving' || st === 'reading' || st === 'cancelling', capCls: 'cap glass' + (st === 'cancelling' ? ' out' : ''),
+      capY: this.r1(starY + (conf.capDy || -82)), capLbl: capLbl, capNum: capNum, cancel: function () { self.cancel(); },
+      showCard: trimish || st === 'done', cardX: F.cardX, cardY: F.cardY, cardW: F.cardW,
+      isTrimish: trimish, isTrim: st === 'trim', isRendering: st === 'rendering', isDone: st === 'done',
+      cTitle: subj.svc + ' · ' + subj.id, cLen: len.toFixed(1) + ' s', cTc: this.tc(0) + ' → ' + this.tc(len) + ' of ' + this.tc(D),
+      frames: fr, cOut: (len / D * 100).toFixed(2), brCls: 'br' + (packing ? ' breathe' : ''),
+      cScale: [{ t: '0 s' }, { t: (D / 2).toFixed(1) + ' s' }, { t: D.toFixed(1) + ' s' }],
+      cNote: D > 10 ? 'webps stop at 10 s, so the first 10 s are picked.' : 'the whole clip fits in a webp.',
+      make: function () { self.make(); }, savePhotos: function () { self.setState({ photos: true }); }, photosLbl: s.photos ? 'saved' : 'save to photos',
+      rLbl: packing ? 'packing webp' : 'decoding frames', rNum: packing ? (s.stageT - decT).toFixed(1) + ' s' : decoded + ' / ' + total,
+      rNote: packing ? 'no count for this part, so it just breathes.' : 'each frame in the bracket lights up once decoded.',
+      closeCard: function () { self.closeCard(); },
+      doneMeta: webp.w + '×' + webp.h + ' · ' + webp.d.toFixed(1) + ' s' + (webp.mb ? ' · ' + webp.mb : ''),
+      copy: function () { self.setState({ copiedAt: self.state.clock }); }, copied: copied, notCopied: !copied, copyLbl: copied ? 'copied' : 'copy link',
+      share: function () { self.setState({ shared: true }); }, shareLbl: s.shared ? 'shared' : 'share',
+      isErr: st === 'error', errX: F.id === 'phone' ? 16 : F.cx - 200, errW: F.id === 'phone' ? 336 : 400, errY: F.cy - 32 - 14 - (F.id === 'phone' ? 104 : 88),
+      ok: function () { self.ok(); },
+      statX: F.L + F.Wc / 2, statY: F.statY, statTxt: nTxt
+    };
+    return Object.assign(out, dOut);
+  }
+
+  renderVals() {
+    var self = this, s = this.state, st = s.stage;
+    var list = this.list(s), tg = this.gAssign(list), n = list.length, info = [];
+    for (var i = 0; i < list.length; i++) { var cur = this.slot[list[i].key]; info.push(cur && cur.lane === tg[i].lane ? cur : tg[i]); }
+    var push = this.pushM(s);
+    if (this.spr == null) this.spr = this.gSpread(n);
+    var devices = this.devs().map(function (F) { return self.device(F, s, list, info, n, push); });
+    var map = { rest: 'rest', fetching: 'fetch', saving: 'save', reading: 'read', morphing: 'ready', trim: 'trim', rendering: 'render', done: 'done', imploding: 'fail', error: 'fail', cancelling: 'cancel' };
+    var on = map[st], ddk = this.dd7pKey();
+    var defs = [['rest', 'rest'], ['fetch', 'fetch'], ['save', 'save'], ['read', 'read'], ['ready', 'ready · morph'], ['trim', 'trim'], ['render', 'render'], ['done', 'done'], ['fail', 'fail · implode'], ['cancel', 'cancel']];
+    var stateBtns = defs.map(function (d) { return { label: d[1], on: on === d[0], cls: 'sb' + (on === d[0] ? ' on' : ''), dis: false, fn: function () { self.jump(d[0]); } }; });
+    stateBtns.push({ label: s.detail ? 'back' : 'open detail', on: !!s.detail, cls: 'sb' + (s.detail ? ' on' : ''), dis: !s.detail && !ddk,
+      fn: function () { if (self.state.detail) self.closeDetail(); else if (ddk) self.openDetail(ddk); } });
+    var names = { rest: 'rest', fetching: s.stageT > 1.5 && s.cold ? 'fetching · waking server' : 'fetching', saving: s.src === 'file' ? 'uploading' : 'saving', reading: 'reading', morphing: s.stageT < 1.3 ? 'ready · star morphing into the orbit' : 'ready · settled in the orbit',
+      trim: 'trim card', rendering: s.stageT < 2.82 ? 'rendering · decoding' : 'rendering · packing', done: 'done', imploding: 'failed · star imploding', error: 'failed · error shown', cancelling: 'cancelled · star fading' };
+    var nowTxt = 'now: ' + names[st] + ' · ' + s.stageT.toFixed(1) + ' s' + (s.auto === 'all' ? ' · running the whole flow' : '') + (s.detail ? ' · detail ' + s.detail.phase : '');
+    return {
+      devices: devices, stateBtns: stateBtns, nowTxt: nowTxt,
+      runFlow: function () { self.runFlow(); },
+      counts: [0, 3, 7, 16, 35].map(function (c) { return { label: String(c), on: s.count === c, cls: s.count === c ? 'on' : '', fn: function () { self.setState({ count: c }); } }; }),
+      isLight: !s.dark, isDark: s.dark, lightCls: s.dark ? '' : 'on', darkCls: s.dark ? 'on' : '',
+      setLight: function () { self.setState({ dark: false }); }, setDark: function () { self.setState({ dark: true }); },
+      reduce: s.reduce, cold: s.cold,
+      tReduce: function () { self.toggle('reduce'); }, tCold: function () { self.toggle('cold'); }
+    };
+  }
+}
+</script>
+</body>
+</html>

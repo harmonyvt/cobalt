@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cobalt on a foldable iphone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2f8af9}a:hover{color:#1f6fd6}
+.fd *{box-sizing:border-box}
+.fd button{font:inherit;color:inherit;cursor:pointer}
+.fd button:focus-visible,.fd input:focus-visible{outline:2px solid #2f8af9;outline-offset:2px}
+.dev{height:844px;padding:11px;border-radius:58px;background:#161616;flex:none}
+.dev.anim{transition:width .75s cubic-bezier(.32,1.12,.6,1)}
+.scr{position:relative;height:822px;border-radius:47px;background:#000;overflow:hidden;color:#e1e1e1;container-type:inline-size}
+.hinge{position:absolute;top:0;bottom:0;left:50%;width:1px;background:rgba(255,255,255,.05);opacity:0;transition:opacity .4s}
+/* one layout. narrow = phone, wide = unfolded. same elements, regrouped. */
+.app{position:absolute;inset:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) 83px}
+.side{grid-row:2;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:8px 18px 0;border-top:1px solid rgba(255,255,255,.06)}
+.tab{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;color:#8f8f8f;border:0;background:transparent;height:52px;padding-top:4px}
+.tab.on{color:#e1e1e1}
+.main{grid-row:1;padding:58px 16px 0;display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0}
+.omni{height:58px;border:1px solid #383838;border-radius:11px;display:flex;align-items:center;gap:8px;padding:0 6px 0 14px;flex:none}
+.omni b{font-weight:500;background:#282828;border-radius:7px;padding:5px 9px;font-size:13px}
+.omni span{color:#8f8f8f;font-size:13px}
+.rail{position:relative;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));height:30px;border-radius:15px;background:#0f0f0f;flex:none}
+.rail i{position:absolute;top:2px;bottom:2px;left:2px;width:calc((100% - 4px)/4);border-radius:13px;background:#e1e1e1;transform:translateX(300%)}
+.rail span{position:relative;z-index:1;display:grid;place-items:center;font-size:11.5px;color:#e1e1e1}
+.rail span.on{color:#000;font-weight:600}
+.body{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;background:#191919;border-radius:22px;padding:16px;min-height:0}
+.preview{display:none}
+.vid{border-radius:12px;background:linear-gradient(170deg,#5b5b60,#232326);aspect-ratio:9/16;height:100%;max-height:100%;position:relative}
+.vid em{position:absolute;left:10px;bottom:10px;font-style:normal;font-size:11px;background:rgba(0,0,0,.65);border-radius:6px;padding:3px 7px}
+.trim{display:flex;flex-direction:column;gap:10px;min-width:0}
+.ttl{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.ttl b{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.read{font-size:26px;font-weight:500;font-variant-numeric:tabular-nums;flex:none}
+.tc{font-size:12px;color:#8f8f8f}
+.strip{position:relative;height:76px;margin-top:6px}
+.frames{position:absolute;inset:0;display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:2px;border-radius:10px;overflow:hidden}
+.frames i{display:block;background:linear-gradient(170deg,#4a4a4f,#232326)}
+.frames i:nth-child(3n){background:linear-gradient(170deg,#5b5b60,#2c2c30)}
+.frames i:nth-child(4n+1){background:linear-gradient(170deg,#3d3d42,#1b1b1e)}
+.dim{position:absolute;top:0;bottom:0;left:67.7%;right:0;background:rgba(0,0,0,.62);border-radius:0 10px 10px 0}
+.br{position:absolute;top:-4px;bottom:-4px;left:0;width:67.7%;border:3px solid #e1e1e1;border-radius:11px}
+.br::before,.br::after{content:"";position:absolute;top:50%;width:12px;height:40px;margin-top:-20px;border-radius:5px;background:#e1e1e1}
+.br::before{left:-8px}.br::after{right:-8px}
+.scale{display:flex;justify-content:space-between;font-size:11px;color:#8f8f8f}
+.insp{display:flex;flex-direction:column;gap:10px}
+.sub{font-size:12px;color:#8f8f8f;line-height:1.45}
+.make{height:50px;border:0;border-radius:11px;background:#e1e1e1;color:#000 !important;font-weight:600;font-size:14.5px}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.gb{height:44px;border:1px solid #383838;background:transparent;border-radius:11px;font-size:12.5px}
+.extra{display:none}
+@container (min-width: 600px){
+  .hinge{opacity:1}
+  .app{grid-template-columns:80px minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+  .side{grid-row:1;grid-column:1;display:flex;flex-direction:column;gap:6px;padding:58px 4px 0;border-top:0;border-right:1px solid rgba(255,255,255,.04);background:#131313}
+  .tab{height:auto;padding:10px 0;border-radius:11px}
+  .tab.on{background:#e1e1e1;color:#000}
+  .main{grid-column:2;padding:28px 28px 28px 24px}
+  .body{grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);flex-grow:1;padding:20px;gap:20px 24px}
+  .preview{display:block;grid-row:1 / span 2;height:100%;min-height:0}
+  .insp .make{margin-top:auto}
+  .insp{flex-grow:1}
+  .extra{display:flex}
+}
+.ctl{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.seg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));background:#fff;border-radius:11px;padding:3.5px;box-shadow:0 0 0 1px rgba(0,0,0,.06) inset}
+.seg button{height:40px;border:0;border-radius:8px;background:transparent;font-size:13px;padding:0 16px}
+.seg button.on{background:#000;color:#fff}
+</style>
+</helmet>
+<div class="fd" style="width: 1240px; height: 1080px; background: #f4f4f4; color: #000; font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace; padding: 40px 40px 0; display: flex; flex-direction: column; gap: 22px">
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.02em">one layout that opens up</h1>
+    <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #6e6e75; max-width: 980px">the same screen at every width. folded it is the phone: tab bar at the bottom, everything in one card. past 600 points the tab bar becomes cobalt's 80 px sidebar, the video preview appears beside the trim, and make webp moves into a side column. nothing is added or renamed, only regrouped. drag the hinge or pick a state.</p>
+  </div>
+  <div class="ctl">
+    <div class="seg" role="group" aria-label="device state">
+      <button type="button" class="{{foldCls}}" onClick="{{fold}}">folded</button>
+      <button type="button" class="{{openCls}}" onClick="{{open}}">unfolded</button>
+    </div>
+    <label style="display: flex; align-items: center; gap: 10px; font-size: 13px">width
+      <input type="range" min="390" max="1125" step="1" value="{{w}}" onInput="{{drag}}" style="width: 260px; accent-color: #000">
+      <span style="font-variant-numeric: tabular-nums; min-width: 64px">{{w}} pt</span>
+    </label>
+    <span style="font-size: 12.5px; color: #6e6e75">{{layoutTxt}}</span>
+  </div>
+  <div class="dev {{animCls}}" style="width: {{w}}px">
+    <div class="scr">
+      <div class="hinge"></div>
+      <div class="app">
+        <nav class="side" aria-label="tabs">
+          <button class="tab on" type="button"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"></path><path d="M7 11l5 5l5 -5"></path><path d="M12 4l0 12"></path></svg>save</button>
+          <button class="tab" type="button"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3m0 2.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z"></path><path d="M4.012 7.26a2.005 2.005 0 0 0 -1.012 1.737v10c0 1.1 .9 2 2 2h10c.75 0 1.158 -.385 1.5 -1"></path><path d="M7 13l3.644 -3.644a1.21 1.21 0 0 1 1.712 0l3.644 3.644"></path></svg>library</button>
+          <button class="tab" type="button"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065z"></path><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"></path></svg>settings</button>
+        </nav>
+        <main class="main">
+          <div class="omni" style="border: 0; justify-content: center; gap: 10px; height: 74px" aria-label="your latest videos, pulled up"><i style="display: block; width: 30px; height: 53px; border-radius: 7px; background: linear-gradient(170deg, #4a4a4f, #232326); opacity: .6"></i><i style="display: block; width: 44px; height: 52px; border-radius: 7px; background: linear-gradient(170deg, #4a4a4f, #232326); opacity: .8"></i><i style="display: block; width: 40px; height: 71px; border-radius: 8px; background: linear-gradient(170deg, #5b5b60, #2c2c30); outline: 2px solid #e1e1e1; outline-offset: 2px"></i><i style="display: block; width: 56px; height: 56px; border-radius: 7px; background: linear-gradient(170deg, #4a4a4f, #232326); opacity: .8"></i><i style="display: block; width: 60px; height: 34px; border-radius: 7px; background: linear-gradient(170deg, #4a4a4f, #232326); opacity: .6"></i></div>
+          <div class="rail" aria-label="steps"><i></i><span>fetch</span><span>save</span><span>read</span><span class="on">webp</span></div>
+          <div class="body">
+            <div class="preview"><div class="vid"><em>00:04.1</em></div></div>
+            <div class="trim">
+              <div class="ttl"><b>instagram_Dd7P496wolG</b><span class="read">10.0 s</span></div>
+              <span class="tc">00:00.0 → 00:10.0 of 00:14.8</span>
+              <div class="strip" style="--n: {{frameCount}}">
+                <div class="frames"><sc-for list="{{frames}}" as="f" hint-placeholder-count="9"><i></i></sc-for></div>
+                <div class="dim"></div>
+                <div class="br"></div>
+              </div>
+              <div class="scale"><span>0 s</span><span>7.4 s</span><span>14.8 s</span></div>
+            </div>
+            <div class="insp">
+              <span class="sub">webps stop at 10 s, so the first 10 s are picked. drag to choose.</span>
+              <div class="extra" style="flex-direction: column; gap: 8px">
+                <span class="tc">quality</span>
+                <div class="two"><button class="gb" type="button">medium</button><button class="gb" type="button">480 px</button></div>
+              </div>
+              <button class="make" type="button">make webp</button>
+              <div class="two"><button class="gb" type="button">save to photos</button><button class="gb" type="button">host original</button></div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1240,"height":1080}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { w: 390, anim: false };
+  }
+  componentWillUnmount() { clearTimeout(this.t); }
+  setW(w, anim) {
+    var self = this;
+    clearTimeout(this.t);
+    this.setState({ w: w, anim: anim });
+    if (anim) this.t = setTimeout(function () { self.setState({ anim: false }); }, 800);
+  }
+  renderVals() {
+    var self = this, w = this.state.w;
+    var inner = w - 22, wide = inner >= 600;
+    var n = wide ? 14 : 9;
+    var frames = [];
+    for (var i = 0; i < n; i++) frames.push({ i: i });
+    return {
+      w: w,
+      animCls: this.state.anim ? 'anim' : '',
+      foldCls: wide ? '' : 'on',
+      openCls: wide ? 'on' : '',
+      layoutTxt: wide ? 'unfolded layout: sidebar + preview + side column' : 'phone layout: tab bar + one card',
+      frameCount: n,
+      frames: frames,
+      fold: function () { self.setW(390, true); },
+      open: function () { self.setW(1125, true); },
+      drag: function (e) { self.setW(parseInt(e.target.value, 10) || 390, false); }
+    };
+  }
+}
+</script>
+</body>
+</html>

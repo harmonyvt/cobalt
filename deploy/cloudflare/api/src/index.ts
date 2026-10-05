@@ -1,7 +1,11 @@
 import { Container, getContainer } from "@cloudflare/containers";
 import { PORT_HEADER, stripInternalHeaders, KEY_ID_HEADER, SERVICE_HEADER } from "./headers";
 import { handleWebpRoute, isWebpRoute, WebpService, type WebpDeps } from "./webp";
+import { ApnsClient, apnsConfigFrom, fetchTransport, helperTransport } from "./apns";
+import { handleLiveRoute, isLiveRoute, LiveService } from "./live";
+import { handleNotifyRoute, harkConfigFrom, isNotifyRoute, NotifyService } from "./notify";
 import { handleStudioRoute, isStudioRoute, StudioService } from "./studio";
+import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
 import { handleRequest, type WorkerEnv } from "./worker";
 
 export interface Env extends WorkerEnv {
@@ -32,6 +36,8 @@ export class CobaltContainer extends Container<Env> {
 
     private webp: WebpService;
     private studio: StudioService;
+    private live: LiveService;
+    private notify: NotifyService;
 
     constructor(ctx: DurableObjectState<{}>, env: Env) {
         super(ctx, env);
@@ -74,6 +80,7 @@ export class CobaltContainer extends Container<Env> {
                 this.startAndWaitForPorts([COBALT_PORT, HELPER_PORT]),
             // containerFetch renews the sleepAfter timer on every call, so each
             // poll of a running job counts as activity.
+            scheduleSweep: () => this.scheduleSweepSoon(),
             helper: (path, init) => {
                 const headers = new Headers(init?.headers);
                 headers.set("x-internal-key", this.env.COBALT_API_KEY);
@@ -99,6 +106,50 @@ export class CobaltContainer extends Container<Env> {
         };
         this.webp = new WebpService(webpDeps);
 
+        // Live Activity push (APP-API-CONTRACT.md section 8). The APNs secrets are read
+        // here and by the Worker (the capability flag); none of them goes into
+        // envVars above, so the container never sees them and the env fingerprint
+        // does not change. Without all three the service stores nothing and sends
+        // nothing (capability false). The DO signs and builds every request; with
+        // APNS_VIA=helper the helper only relays the bytes (POST /apns).
+        const apnsConfig = apnsConfigFrom(env);
+        this.live = new LiveService({
+            storage: this.ctx.storage,
+            db: env.DB,
+            now: webpDeps.now,
+            // a failed `end` push is retried by the sweep: arm it
+            scheduleSweep: () => this.scheduleSweepSoon(),
+            apns: apnsConfig
+                ? new ApnsClient({
+                      ...apnsConfig,
+                      now: webpDeps.now,
+                      // the provider token survives DO evictions (Apple: one per 20 minutes)
+                      storage: this.ctx.storage,
+                      transport:
+                          apnsConfig.via === "helper"
+                              ? helperTransport({
+                                    helper: webpDeps.helper,
+                                    isRunning: () => this.ctx.container?.running ?? false,
+                                    ensureRunning: webpDeps.ensureRunning,
+                                })
+                              : fetchTransport((url, init) => fetch(url, init)),
+                  })
+                : null,
+        });
+
+        // Hark notification bridge (APP-API-CONTRACT.md section 9). HARK_WEBHOOK_URL is a
+        // secret read only here (the Worker reads it for the capability flag); it never goes
+        // into envVars, so the container never sees it. Missing or empty: the bridge is off.
+        this.notify = new NotifyService({
+            storage: this.ctx.storage,
+            db: env.DB,
+            now: webpDeps.now,
+            webhookUrl: harkConfigFrom(env),
+            fetch: (url, init) => fetch(url, init),
+            // a failed send is retried by the sweep: arm it
+            scheduleSweep: () => this.scheduleSweepSoon(),
+        });
+
         // cobalt studio: saves a link into the private R2 bucket (advanced by
         // the studio page's polls, which reach this DO through the Worker) and
         // renders WebPs from the stored copy. The video moves helper -> R2 and
@@ -113,8 +164,10 @@ export class CobaltContainer extends Container<Env> {
             sleep: webpDeps.sleep,
             ensureRunning: webpDeps.ensureRunning,
             helper: webpDeps.helper,
+            scheduleSweep: webpDeps.scheduleSweep,
+            isRunning: () => this.ctx.container?.running ?? false,
             // R2 needs a known length for a stream body.
-            fixedLength: (stream, length) => {
+            fixedLength: (stream, length, onChunk) => {
                 const fls = new FixedLengthStream(length);
                 // Copy chunk by chunk. `stream.pipeTo(fls.writable)` threw
                 // "Inter-TransformStream ReadableStream.pipeTo() is not
@@ -130,6 +183,7 @@ export class CobaltContainer extends Container<Env> {
                             const { done, value } = await reader.read();
                             if (done) break;
                             await writer.write(value);
+                            onChunk?.(value.byteLength);
                         }
                         await writer.close();
                     } catch (e) {
@@ -141,7 +195,39 @@ export class CobaltContainer extends Container<Env> {
                 return fls.readable;
             },
             renew: () => this.renewActivityTimeout(),
+            live: this.live,
+            notify: this.notify,
         });
+    }
+
+    // ---- the job sweep (APP-API-CONTRACT.md section 6) ------------------------------
+    // A render's result is collected into R2 only when somebody polls, and the
+    // container sleeps 45 s after its last activity, so a client that went away
+    // mid-render lost its WebP. Instead the Containers library's own scheduler
+    // (schedule(), which runs inside the library's alarm loop; overriding
+    // alarm() would fight it) calls sweepJobs() every few seconds for as long as
+    // something is pending. Each pass makes helper calls, which renew the
+    // container's activity timer, so it stays awake exactly while a job or a
+    // save is pending (bounded by the budgets in StudioService.sweep()), and the
+    // 45 s sleep applies as usual when nothing is.
+    //
+    // The pass itself and its de-duplication (storage key `sweep:at`) live in
+    // sweep.ts, testable under plain node; these only wire them to the library.
+    private sweepScheduler(): SweepScheduler {
+        return {
+            storage: this.ctx.storage,
+            now: () => Date.now(),
+            schedule: (seconds) => this.schedule(seconds, "sweepJobs"),
+        };
+    }
+
+    async scheduleSweepSoon(): Promise<void> {
+        await scheduleSweepSoon(this.sweepScheduler());
+    }
+
+    // The schedule's callback (public: the library looks the method up by name).
+    async sweepJobs(): Promise<void> {
+        await runSweep(this.sweepScheduler(), () => this.studio.sweep(), undefined, this.live, this.notify);
     }
 
     // A container rollout restarts the running instance with the env it was
@@ -179,6 +265,19 @@ export class CobaltContainer extends Container<Env> {
     }
 
     private async handle(request: Request): Promise<Response> {
+        // Live Activity routes (token and run store, APNs) never touch the
+        // container: answered first, before the env-fingerprint restart below, and
+        // never through super.fetch. The key id header is the Worker's word.
+        if (isLiveRoute(new URL(request.url).pathname)) {
+            return handleLiveRoute(this.live, request);
+        }
+
+        // The Hark opt-in (PUT|DELETE /studio/<sid>/notify) is DO storage and D1 only, like
+        // the live routes: never wakes or restarts the container.
+        if (isNotifyRoute(new URL(request.url).pathname)) {
+            return handleNotifyRoute(this.notify, request);
+        }
+
         if (this.ctx.container?.running) {
             const started = await this.ctx.storage.get<string>("envFingerprint");
             if (started !== (await this.envFingerprint())) {

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { KEY_ID_HEADER } from "../src/headers";
+import { StudioService } from "../src/studio";
+import { createFakeD1 } from "../../test-support/d1-sqlite";
+import { MemoryOriginals, fixedLength } from "./studio-fakes";
 import {
     MAX_WAIT_SECONDS,
     RECORD_TTL_MS,
@@ -168,7 +171,7 @@ class MemKV implements KV {
     }
 }
 
-type HelperJob = { status: "pending" } | { status: "done"; bytes: number; width: number; height: number; seconds: number; service?: string } | { status: "error"; code: string };
+type HelperJob = { status: "pending"; phase?: unknown; frames_done?: unknown; frames_total?: unknown } | { status: "done"; bytes: number; width: number; height: number; seconds: number; service?: string } | { status: "error"; code: string };
 
 let kv: MemKV;
 let clock: number;
@@ -182,6 +185,7 @@ let putFails: boolean;
 let ensureFails: boolean;
 let fileBytes: Uint8Array;
 let svc: WebpService;
+let deps: WebpDeps;
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
 
@@ -198,7 +202,7 @@ beforeEach(() => {
     ensureFails = false;
     fileBytes = new Uint8Array(1234).fill(7);
 
-    const deps: WebpDeps = {
+    deps = {
         storage: kv,
         bucket: {
             async put(key, value, opts) {
@@ -292,11 +296,17 @@ describe("WebpService.status", () => {
     it("pending with wait=0 polls once; with wait=N it polls about once a second, then gives up pending", async () => {
         const { id } = await create();
         helperCalls.length = 0;
-        expect(await svc.status("k1", id, 0)).toEqual({ status: 200, body: { status: "pending", id } });
+        expect(await svc.status("k1", id, 0)).toEqual({
+            status: 200,
+            body: { status: "pending", id, phase: null, frames_done: null, frames_total: null },
+        });
         expect(helperCalls).toHaveLength(1);
         helperCalls.length = 0;
         const t0 = clock;
-        expect(await svc.status("k1", id, 5)).toEqual({ status: 200, body: { status: "pending", id } });
+        expect(await svc.status("k1", id, 5)).toEqual({
+            status: 200,
+            body: { status: "pending", id, phase: null, frames_done: null, frames_total: null },
+        });
         expect(helperCalls.length).toBe(6); // t = 0..5 s
         expect(clock - t0).toBe(5000);
     });
@@ -390,7 +400,300 @@ describe("WebpService.status", () => {
     it("an unreachable helper just keeps the job pending until the deadline", async () => {
         const { id } = await create();
         helperDown = true;
-        expect(await svc.status("k1", id, 2)).toEqual({ status: 200, body: { status: "pending", id } });
+        expect(await svc.status("k1", id, 2)).toEqual({
+            status: 200,
+            body: { status: "pending", id, phase: null, frames_done: null, frames_total: null },
+        });
+    });
+});
+
+describe("WebpService render progress (APP-API-CONTRACT.md section 4)", () => {
+    const pending = (id: string, extra: Record<string, unknown>) => helperJobs.set(id, { status: "pending", ...extra });
+
+    it("a pending answer carries the helper's phase and frame counts", async () => {
+        const { id } = await create();
+        pending(id, { phase: "decode", frames_done: 42, frames_total: 150 });
+        expect(await svc.status("k1", id, 0)).toEqual({
+            status: 200,
+            body: { status: "pending", id, phase: "decode", frames_done: 42, frames_total: 150 },
+        });
+        pending(id, { phase: "pack", frames_done: 148, frames_total: 148 });
+        expect((await svc.status("k1", id, 0)).body).toMatchObject({ phase: "pack", frames_done: 148, frames_total: 148 });
+        pending(id, { phase: "fetching", frames_done: null, frames_total: null });
+        expect((await svc.status("k1", id, 0)).body).toMatchObject({ phase: "fetching", frames_done: null, frames_total: null });
+    });
+    it("a wait that runs out answers with the latest progress it saw", async () => {
+        const { id } = await create();
+        pending(id, { phase: "decode", frames_done: 3, frames_total: 150 });
+        const r = await svc.status("k1", id, 3);
+        expect(r.body).toEqual({ status: "pending", id, phase: "decode", frames_done: 3, frames_total: 150 });
+    });
+    it("an unknown phase or junk counts are reported as unknown, never passed through", async () => {
+        const { id } = await create();
+        pending(id, { phase: "reticulating", frames_done: 5, frames_total: 10 });
+        expect((await svc.status("k1", id, 0)).body).toMatchObject({ phase: null, frames_done: null, frames_total: null });
+        pending(id, { phase: "decode", frames_done: -1, frames_total: 1.5 });
+        expect((await svc.status("k1", id, 0)).body).toMatchObject({ phase: "decode", frames_done: null, frames_total: null });
+        pending(id, { phase: "decode", frames_done: "7", frames_total: null });
+        expect((await svc.status("k1", id, 0)).body).toMatchObject({ phase: "decode", frames_done: null, frames_total: null });
+    });
+    it("progress is per job and forgotten once the job ends", async () => {
+        const a = await create();
+        const b = await create();
+        pending(a.id, { phase: "decode", frames_done: 9, frames_total: 10 });
+        pending(b.id, { phase: "pack", frames_done: 4, frames_total: 4 });
+        await svc.status("k1", a.id, 0);
+        await svc.status("k1", b.id, 0);
+        expect((await svc.status("k1", a.id, 0)).body).toMatchObject({ phase: "decode", frames_done: 9 });
+        expect((await svc.status("k1", b.id, 0)).body).toMatchObject({ phase: "pack", frames_done: 4 });
+        finishJob(a.id);
+        expect((await svc.status("k1", a.id, 0)).body).toMatchObject({ status: "success" });
+        // a stored result is final: no progress fields, and a later pending of
+        // the same id (it cannot happen) would start from unknown again
+        expect((await svc.status("k1", a.id, 0)).body).not.toHaveProperty("phase");
+    });
+    it("GET /webp/<id> shows it too", async () => {
+        const { id } = await create();
+        pending(id, { phase: "decode", frames_done: 1, frames_total: 2 });
+        const res = await handleWebpRoute(svc, new Request(`https://x.test/webp/${id}?wait=0`, { headers: { [KEY_ID_HEADER]: "k1" } }));
+        expect(await res.json()).toEqual({ status: "pending", id, phase: "decode", frames_done: 1, frames_total: 2 });
+    });
+});
+
+describe("WebpService scheduleSweep and the sweep of a /webp job", () => {
+    const pending = (id: string, extra: Record<string, unknown>) => helperJobs.set(id, { status: "pending", ...extra });
+    it("create asks for a sweep once the job is stored, and a failing scheduler never fails the create", async () => {
+        const calls: string[] = [];
+        const s = new WebpService({
+            ...deps,
+            scheduleSweep: async () => {
+                calls.push([...kv.m.keys()].some((k) => k.startsWith("job:")) ? "stored" : "before");
+                throw new Error("scheduler down");
+            },
+        });
+        const r = await s.create("k1", JSON.stringify({ url: URL_OK }));
+        expect(r.status).toBe(202);
+        expect(calls).toEqual(["stored"]);
+    });
+    it("a rejected create does not ask for a sweep", async () => {
+        let n = 0;
+        const s = new WebpService({ ...deps, scheduleSweep: () => void n++ });
+        expect((await s.create("k1", "{}")).status).toBe(400);
+        busy = true;
+        expect((await s.create("k1", JSON.stringify({ url: URL_OK }))).status).toBe(429);
+        expect(n).toBe(0);
+    });
+    it("createFromUpload asks for a sweep too", async () => {
+        let n = 0;
+        const s = new WebpService({
+            ...deps,
+            scheduleSweep: () => void n++,
+            helper: async (path, init) => {
+                if (path.startsWith("/jobs/upload")) {
+                    await new Response(init!.body as ReadableStream).arrayBuffer();
+                    return json(202, { status: "pending" });
+                }
+                return deps.helper(path, init);
+            },
+        });
+        const params = { url: URL_OK, start: 0, width: 480 as const, fps: 15, quality: "med" as const };
+        const r = await s.createFromUpload("studio:x", params, async () => ({ body: new Blob([new Uint8Array(10)]).stream(), size: 10 }));
+        expect(r.status).toBe(202);
+        expect(n).toBe(1);
+    });
+    it("sweep collects a /webp job nobody polls: the result is in R2 and the library, with the owner's key", async () => {
+        const db = createFakeD1();
+        const studio = new StudioService({
+            db,
+            storage: kv,
+            originals: new MemoryOriginals(),
+            webp: new WebpService({ ...deps, db }),
+            webBaseUrl: "https://cobalt.test",
+            now: () => clock,
+            sleep: deps.sleep,
+            ensureRunning: async () => {},
+            helper: deps.helper,
+            fixedLength,
+        });
+        const webp = (studio as unknown as { d: { webp: WebpService } }).d.webp;
+        const r = await webp.create("k1", JSON.stringify({ url: URL_OK }));
+        const id = (r.body as { id: string }).id;
+        pending(id, { phase: "decode", frames_done: 1, frames_total: 10 });
+        // still pending: counted, nothing stored
+        expect(await studio.sweep()).toEqual({ pending: 1 });
+        expect(puts).toHaveLength(0);
+        // the encode finishes with nobody polling: the next sweep collects it
+        finishJob(id);
+        expect(await studio.sweep()).toEqual({ pending: 0 });
+        expect(puts).toHaveLength(1);
+        expect(await kv.get(`result:${id}`)).toMatchObject({ status: "success", id });
+        const row = db.raw.prepare("SELECT * FROM media_items").get() as any;
+        expect(row).toMatchObject({ source: "webp", kind: "public", key_id: "k1", link: URL_OK });
+        // collected once: another sweep finds nothing to do
+        expect(await studio.sweep()).toEqual({ pending: 0 });
+        expect(puts).toHaveLength(1);
+    });
+});
+
+// A client long-poll of GET /webp/<id> concurrent with the no-poll sweep (which
+// calls status(owner, id, 0)) collecting the same job. Whoever collects deletes
+// the helper's job, so the other caller's next helper poll is a 404: it must
+// find the stored success, never overwrite it with job_lost. (Reproduced by the
+// review, 2026-10-02: the macOS Shortcut saw job_lost for a webp that was in R2.)
+describe("WebpService: a long-poll racing the sweep that collects the same job (finding 1)", () => {
+    // sleeps are held until released, so the test decides when the client loop wakes
+    const gated = () => {
+        const waiting: Array<() => void> = [];
+        const sleep = (ms: number) =>
+            new Promise<void>((r) => {
+                clock += ms;
+                waiting.push(r);
+            });
+        const wake = () => waiting.splice(0).forEach((r) => r());
+        return { sleep, wake, waiting };
+    };
+    const tick = () => new Promise((r) => setTimeout(r, 5));
+
+    it("the client's next poll returns the success the sweep stored (it used to store job_lost over it)", async () => {
+        const g = gated();
+        const s = new WebpService({ ...deps, sleep: g.sleep });
+        const id = ((await s.create("k1", JSON.stringify({ url: URL_OK }))).body as { id: string }).id;
+
+        const client = s.status("k1", id, 20); // pending: sleeps before its next poll
+        await tick();
+        expect(g.waiting).toHaveLength(1);
+
+        finishJob(id);
+        const swept = await s.status("k1", id, 0); // the sweep collects it and drops the helper job
+        expect(swept.body).toMatchObject({ status: "success", id });
+        expect(helperJobs.has(id)).toBe(false);
+
+        g.wake(); // the client's loop wakes and polls again
+        const got = await client;
+        expect(got).toEqual(swept);
+        expect(await kv.get(`result:${id}`)).toMatchObject({ status: "success", id });
+        expect(puts).toHaveLength(1); // collected once
+    });
+    it("a helper 404 that follows our own read of 'no result yet' returns the result stored in between", async () => {
+        const { id } = await create();
+        const orig = kv.get.bind(kv);
+        let armed = true;
+        kv.get = (async (k: string) => {
+            const v = await orig(k);
+            if (armed && k === `result:${id}`) {
+                // the sweep wins right after this read: stores the success, drops the helper's job
+                armed = false;
+                await kv.put(`result:${id}`, { status: "success", id, url: "https://media.test/Zz9.webp", bytes: 1, width: 1, height: 1, seconds: 1 });
+                helperJobs.delete(id);
+            }
+            return v;
+        }) as typeof kv.get;
+        const r = await svc.status("k1", id, 0);
+        expect(r.status).toBe(200);
+        expect(r.body).toMatchObject({ status: "success", id });
+        expect(await kv.get(`result:${id}`)).toMatchObject({ status: "success" });
+    });
+    it("finish() never replaces a stored result, whatever the helper then says", async () => {
+        const { id } = await create();
+        const orig = kv.get.bind(kv);
+        let armed = true;
+        kv.get = (async (k: string) => {
+            const v = await orig(k);
+            if (armed && k === `result:${id}`) {
+                armed = false;
+                await kv.put(`result:${id}`, { status: "success", id, url: "https://media.test/Zz9.webp", bytes: 1, width: 1, height: 1, seconds: 1 });
+            }
+            return v;
+        }) as typeof kv.get;
+        helperJobs.set(id, { status: "error", code: "error.webp.encode_failed" }); // a late helper error
+        const r = await svc.status("k1", id, 0);
+        expect(r.body).toMatchObject({ status: "success", id });
+        expect(await kv.get(`result:${id}`)).toMatchObject({ status: "success" });
+    });
+    it("a genuinely lost job (no result stored anywhere) is still job_lost, once, and then stable", async () => {
+        const { id } = await create();
+        helperJobs.delete(id); // the container restarted
+        const body = { status: "error", error: { code: "error.webp.job_lost" } };
+        expect((await svc.status("k1", id, 0)).body).toEqual(body);
+        expect((await svc.status("k1", id, 0)).body).toEqual(body);
+        expect(await kv.get(`result:${id}`)).toEqual(body);
+    });
+    it("the result file 404s because someone collected it first: the stored result, not a 502", async () => {
+        const { id } = await create();
+        finishJob(id);
+        let armed = true;
+        const s = new WebpService({
+            ...deps,
+            helper: async (path, init) => {
+                if (armed && path === `/jobs/${id}/file`) {
+                    armed = false;
+                    await kv.put(`result:${id}`, { status: "success", id, url: "https://media.test/Zz9.webp", bytes: 1, width: 1, height: 1, seconds: 1 });
+                    return json(404, { status: "error", error: { code: "error.webp.not_found" } });
+                }
+                return deps.helper(path, init);
+            },
+        });
+        const r = await s.status("k1", id, 0);
+        expect(r.status).toBe(200);
+        expect(r.body).toMatchObject({ status: "success", id });
+    });
+});
+
+// The Workers runtime does not honour AbortSignal timeouts on containerFetch, so
+// every helper call is raced against a ceiling of our own (finding 2): a hung
+// call must come back as an ordinary miss, never block a poll, a job start or
+// the sweep (whose alarm() the container library awaits before it may sleep).
+describe("WebpService: our own ceiling on every helper call (finding 2)", () => {
+    const never = () => new Promise<Response>(() => {});
+    const hanging = (match: (path: string, method: string) => boolean) =>
+        new WebpService({
+            ...deps,
+            helperTimeoutMs: 30,
+            helper: (path, init) => (match(path, init?.method ?? "GET") ? never() : deps.helper(path, init)),
+        });
+    const within = async <T>(p: Promise<T>, ms = 1500): Promise<T> => {
+        const t0 = Date.now();
+        const v = await p;
+        expect(Date.now() - t0).toBeLessThan(ms);
+        return v;
+    };
+
+    it("a hung poll of the job is a miss: status(wait=0) answers pending", async () => {
+        const { id } = await create();
+        const s = hanging((p) => p === `/jobs/${id}`);
+        const r = await within(s.status("k1", id, 0));
+        expect(r).toMatchObject({ status: 200, body: { status: "pending", id } });
+    });
+    it("a hung DELETE of the finished job does not hold the reply: the success is stored first and still returned", async () => {
+        const { id } = await create();
+        finishJob(id);
+        const s = hanging((_p, m) => m === "DELETE");
+        const r = await within(s.status("k1", id, 0));
+        expect(r.body).toMatchObject({ status: "success", id });
+        expect(await kv.get(`result:${id}`)).toMatchObject({ status: "success" });
+    });
+    it("a hung result download is 502 error.webp.upstream (the next poll retries)", async () => {
+        const { id } = await create();
+        finishJob(id);
+        const s = hanging((p) => p.endsWith("/file"));
+        const r = await within(s.status("k1", id, 0));
+        expect(r).toEqual({ status: 502, body: { status: "error", error: { code: "error.webp.upstream" } } });
+        expect(await kv.get(`result:${id}`)).toBeUndefined();
+    });
+    it("a hung job start is 502 error.webp.unavailable", async () => {
+        const s = hanging((p, m) => p === "/jobs" && m === "POST");
+        const r = await within(s.create("k1", JSON.stringify({ url: URL_OK })));
+        expect(r).toEqual({ status: 502, body: { status: "error", error: { code: "error.webp.unavailable" } } });
+    });
+    it("a hung studio upload start is 502 error.webp.unavailable", async () => {
+        const s = hanging((p) => p.startsWith("/jobs/upload"));
+        const params = { url: URL_OK, start: 0, width: 480 as const, fps: 15, quality: "med" as const };
+        const r = await within(s.createFromUpload("studio:x", params, async () => ({ body: new Blob([new Uint8Array(10)]).stream(), size: 10 })));
+        expect(r).toEqual({ status: 502, body: { status: "error", error: { code: "error.webp.unavailable" } } });
+    });
+    it("the defaults: job calls 20 s, the result download 60 s, the studio upload 5 min", async () => {
+        const { HELPER_CALL_MS, HELPER_FILE_MS, HELPER_UPLOAD_MS } = await import("../src/webp");
+        expect([HELPER_CALL_MS, HELPER_FILE_MS, HELPER_UPLOAD_MS]).toEqual([20_000, 60_000, 300_000]);
     });
 });
 
@@ -441,7 +744,7 @@ describe("handleWebpRoute", () => {
     it("GET /webp/:id honours ?wait and the owner check", async () => {
         const { id } = await create("k1");
         const mine = await handleWebpRoute(svc, req("GET", `/webp/${id}?wait=0`));
-        expect(await mine.json()).toEqual({ status: "pending", id });
+        expect(await mine.json()).toEqual({ status: "pending", id, phase: null, frames_done: null, frames_total: null });
         const theirs = await handleWebpRoute(svc, req("GET", `/webp/${id}?wait=0`, { [KEY_ID_HEADER]: "k2" }));
         expect(theirs.status).toBe(404);
     });

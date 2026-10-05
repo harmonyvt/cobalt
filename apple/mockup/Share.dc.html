@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cobalt in the share sheet</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2f8af9}a:hover{color:#1f6fd6}
+.sh *{box-sizing:border-box}
+.sh button{font:inherit;color:inherit;cursor:pointer}
+.sh button:focus-visible{outline:2px solid #2f8af9;outline-offset:2px}
+.screen{position:relative;width:368px;height:822px;border-radius:47px;background:#000;overflow:hidden;color:#e1e1e1}
+.host{position:absolute;inset:0;padding:64px 18px 0;display:flex;flex-direction:column;gap:12px;transition:transform .5s cubic-bezier(.32,1.1,.6,1),filter .5s}
+.host.back{transform:scale(.93);filter:brightness(.5)}
+.av{width:36px;height:36px;border-radius:50%;background:#3a3a3e}
+.ln{height:10px;border-radius:5px;background:#2c2c30}
+.post{border-radius:14px;background:linear-gradient(170deg,#4a4a4f,#232326)}
+.tag{font-size:11px;color:#8f8f8f}
+.share{position:absolute;right:18px;bottom:110px;height:44px;padding:0 16px;border-radius:22px;border:0;background:#2c2c30;font-size:13px}
+.sys{position:absolute;left:8px;right:8px;bottom:8px;height:300px;border-radius:30px 30px 40px 40px;background:#1c1c1e;padding:14px 16px;display:flex;flex-direction:column;gap:16px;animation:up .45s cubic-bezier(.32,1.1,.6,1) both}
+@keyframes up{from{transform:translateY(110%)}to{transform:none}}
+.apps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.app{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:10.5px;color:#a8a8ad;border:0;background:transparent;padding:0}
+.ico{width:58px;height:58px;border-radius:15px;background:#3a3a3e;display:grid;place-items:center}
+.ico.cb{background:#fff;color:#000;border-radius:50%}
+.sysrow{height:46px;border-radius:12px;background:#2c2c30;display:flex;align-items:center;padding:0 14px;font-size:13px}
+.ext{position:absolute;left:0;right:0;bottom:0;height:600px;border-radius:30px 30px 47px 47px;background:#000;box-shadow:0 -1px 0 rgba(255,255,255,.08);padding:10px 16px 20px;display:flex;flex-direction:column;gap:12px;animation:grow .55s cubic-bezier(.32,1.15,.6,1) both}
+@keyframes grow{from{clip-path:circle(29px at 43% 560px)}to{clip-path:circle(150% at 43% 560px)}}
+.grab{width:40px;height:5px;border-radius:3px;background:#383838;align-self:center}
+.hd{display:flex;align-items:center;justify-content:space-between}
+.x{width:44px;height:44px;border-radius:50%;border:0;background:#191919;display:grid;place-items:center}
+.chip{display:flex;align-items:center;gap:8px;font-size:13px}
+.chip b{font-weight:500;background:#282828;border-radius:7px;padding:5px 9px}
+.chip span{color:#8f8f8f}
+.rail{position:relative;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));height:30px;border-radius:15px;background:#0f0f0f}
+.rail .hl{position:absolute;top:2px;bottom:2px;left:2px;width:calc((100% - 4px)/4);border-radius:13px;background:#e1e1e1;transition:transform .5s cubic-bezier(.34,1.45,.64,1)}
+.rail span{position:relative;z-index:1;display:grid;place-items:center;font-size:11.5px;color:#8f8f8f}
+.rail span.past{color:#e1e1e1}.rail span.on{color:#000;font-weight:600}
+.card{background:#191919;border-radius:22px;padding:16px;display:flex;flex-direction:column;gap:10px;flex-grow:1}
+.strip{position:relative;height:72px}
+.frames{position:absolute;inset:0;display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:2px;border-radius:10px;overflow:hidden;background:#111}
+.frames i{display:block;background:linear-gradient(170deg,#4a4a4f,#232326);opacity:0;filter:blur(8px);transform:scale(1.12);transition:opacity .5s,filter .6s,transform .6s cubic-bezier(.34,1.4,.64,1),box-shadow .3s}
+.frames i:nth-child(3n){background:linear-gradient(170deg,#5b5b60,#2c2c30)}
+.frames i.dev{opacity:1;filter:none;transform:none}
+.frames i.enc{box-shadow:inset 0 -4px 0 #e1e1e1;filter:brightness(1.45)}
+.br{position:absolute;top:-4px;bottom:-4px;left:0;border:3px solid #e1e1e1;border-radius:11px;animation:fade .4s both}
+.dim{position:absolute;top:0;bottom:0;right:0;background:rgba(0,0,0,.62);border-radius:0 10px 10px 0}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.work{height:50px;border-radius:11px;background:#282828;display:flex;align-items:center;gap:12px;padding:0 16px}
+.dot{width:9px;height:9px;border-radius:50%;background:#e1e1e1;animation:breathe 1.1s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:.25;transform:scale(.7)}50%{opacity:1;transform:scale(1)}}
+.el{margin-left:auto;font-size:13px;color:#8f8f8f;font-variant-numeric:tabular-nums}
+.sub{font-size:12px;color:#8f8f8f;line-height:1.45}
+.make{height:50px;border:0;border-radius:11px;background:#e1e1e1;color:#000 !important;font-weight:600;font-size:14.5px;transition:background .25s}
+.make.ok{background:#30bd1b}
+.gb{height:44px;border:1px solid #383838;background:transparent;border-radius:11px;font-size:12.5px}
+.gb.ok{background:#e1e1e1;color:#000 !important;border-color:#e1e1e1}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.banner{position:absolute;left:10px;right:10px;top:12px;border-radius:22px;background:#2c2c30;padding:12px 14px;display:flex;align-items:center;gap:12px;font-size:12.5px;animation:drop .5s cubic-bezier(.34,1.4,.64,1) both;z-index:5}
+@keyframes drop{from{transform:translateY(-140%)}to{transform:none}}
+.appview{position:absolute;inset:0;background:#000;padding:50px 16px 16px;display:flex;flex-direction:column;gap:12px;animation:open .6s cubic-bezier(.32,1.1,.6,1) both}
+@keyframes open{from{clip-path:inset(30% 8% 30% 8% round 40px);opacity:.4}to{clip-path:inset(0 0 0 0 round 47px);opacity:1}}
+.mini{display:flex;justify-content:center;gap:10px;height:110px;align-items:center}
+.mini i{display:block;width:44px;height:64px;border-radius:9px;background:linear-gradient(170deg,#4a4a4f,#232326);opacity:.7}
+.mini i:nth-child(3){width:58px;height:86px;opacity:1}
+/* panel */
+.step{display:grid;grid-template-columns:28px minmax(0,1fr);gap:12px;padding:12px 14px;border-radius:11px;opacity:.5;transition:background .35s,opacity .35s}
+.step.on{background:#fff;opacity:1;box-shadow:0 0 0 1px rgba(0,0,0,.06) inset}
+.step.past{opacity:.8}
+.num{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:600;background:#e3e3e3}
+.step.on .num{background:#000;color:#fff}
+.sname{font-weight:600;font-size:13.5px;margin-bottom:3px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.nb{font-size:10px;font-weight:500;color:#a85a00;box-shadow:0 0 0 1px currentColor inset;border-radius:99px;padding:1px 7px}
+.sclaim{font-size:12.5px;line-height:1.5}
+.sui{font-size:11.5px;color:#6e6e75;margin-top:5px}
+.seg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));background:#fff;border-radius:11px;padding:3.5px;box-shadow:0 0 0 1px rgba(0,0,0,.06) inset}
+.seg button{height:44px;border:0;border-radius:8px;background:transparent;font-size:12.5px;padding:0 14px}
+.seg button.on{background:#000;color:#fff}
+.reset{height:44px;padding:0 18px;border-radius:11px;border:0;background:#000;color:#fff !important;font-weight:600;font-size:13.5px}
+</style>
+</helmet>
+<div class="sh" style="width: 1240px; height: 980px; background: #f4f4f4; color: #000; font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace; display: flex; gap: 52px; padding: 58px 44px 0 40px">
+  <div style="width: 390px; height: 844px; padding: 11px; border-radius: 58px; background: #161616; flex: none">
+    <div class="screen">
+      <div class="{{hostCls}}">
+        <span class="tag">another app · a post with a video</span>
+        <div style="display: flex; gap: 10px; align-items: center"><span class="av"></span><div style="display: flex; flex-direction: column; gap: 6px; flex-grow: 1"><span class="ln" style="width: 40%"></span><span class="ln" style="width: 25%"></span></div></div>
+        <span class="ln" style="width: 90%"></span><span class="ln" style="width: 70%"></span>
+        <div class="post" style="width: {{postW}}px; height: {{postH}}px"></div>
+      </div>
+      <sc-if value="{{isHost}}" hint-placeholder-val="{{ true }}">
+        <button class="share" type="button" onClick="{{openSys}}">share</button>
+      </sc-if>
+      <sc-if value="{{showBanner}}" hint-placeholder-val="{{ false }}">
+        <div class="banner"><span class="dot"></span><span style="flex-grow: 1">{{bannerTxt}}</span><button class="gb" type="button" style="height: 36px; padding: 0 12px" onClick="{{openApp}}">open</button></div>
+      </sc-if>
+      <sc-if value="{{isSys}}" hint-placeholder-val="{{ false }}">
+        <div class="sys" role="dialog" aria-label="share sheet">
+          <div class="sysrow" style="background: transparent; padding: 0; gap: 12px"><span class="post" style="width: 40px; height: 40px; border-radius: 9px; display: block"></span><span style="font-size: 12.5px; color: #a8a8ad">{{hostDomain}}</span></div>
+          <div class="apps">
+            <button class="app" type="button"><span class="ico"></span>messages</button>
+            <button class="app" type="button" onClick="{{openExt}}"><span class="ico cb"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"></path><path d="M7 11l5 5l5 -5"></path><path d="M12 4l0 12"></path></svg></span>cobalt</button>
+            <button class="app" type="button"><span class="ico"></span>notes</button>
+            <button class="app" type="button"><span class="ico"></span>more</button>
+          </div>
+          <div class="sysrow">copy link</div>
+        </div>
+      </sc-if>
+      <sc-if value="{{isExt}}" hint-placeholder-val="{{ false }}">
+        <div class="ext" role="dialog" aria-label="cobalt">
+          <span class="grab"></span>
+          <div class="hd"><b style="font-size: 16px; font-weight: 600">cobalt</b><button class="x" type="button" aria-label="close" onClick="{{close}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6l-12 12"></path><path d="M6 6l12 12"></path></svg></button></div>
+          <div class="chip"><b>{{service}}</b><span>{{ref}}</span></div>
+          <div class="rail"><div class="hl" style="transform: translateX({{railX}})"></div><sc-for list="{{rail}}" as="r" hint-placeholder-count="4"><span class="{{r.cls}}">{{r.label}}</span></sc-for></div>
+          <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: baseline"><b style="font-size: 13.5px; font-weight: 600">{{name}}</b><span style="font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums">{{lenTxt}}</span></div>
+            <div class="strip">
+              <div class="frames"><sc-for list="{{frames}}" as="f" hint-placeholder-count="9"><i class="{{f.cls}}"></i></sc-for></div>
+              <sc-if value="{{showBracket}}" hint-placeholder-val="{{ false }}"><div class="dim" style="left: {{outPct}}%"></div><div class="br" style="width: {{outPct}}%"></div></sc-if>
+            </div>
+            <sc-if value="{{isWorking}}" hint-placeholder-val="{{ false }}"><div class="work" style="margin-top: auto"><span class="dot"></span><span style="font-size: 13.5px">{{workLabel}}</span><span class="el">{{workMetric}}</span></div></sc-if>
+            <sc-if value="{{isShortReady}}" hint-placeholder-val="{{ false }}">
+              <span class="sub">the whole clip fits in a webp.</span>
+              <button class="make" type="button" style="margin-top: auto" onClick="{{make}}">make webp</button>
+              <button class="{{photosCls}}" type="button" onClick="{{savePhotos}}">{{photosLabel}}</button>
+            </sc-if>
+            <sc-if value="{{isLongReady}}" hint-placeholder-val="{{ false }}">
+              <span class="sub">14.8 s is over the 10 s webp limit. it's saved, so cobalt opens right on the trim.</span>
+              <button class="make" type="button" style="margin-top: auto" onClick="{{openApp}}">trim in cobalt</button>
+              <button class="{{photosCls}}" type="button" onClick="{{savePhotos}}">{{photosLabel}}</button>
+            </sc-if>
+            <sc-if value="{{isDone}}" hint-placeholder-val="{{ false }}">
+              <span class="sub">480×568 · 5.4 s · 841 KB · media.capybaraharmony.com/··········.webp</span>
+              <button class="{{copyCls}}" type="button" style="margin-top: auto" onClick="{{copy}}">{{copyLabel}}</button>
+              <button class="gb" type="button" onClick="{{close}}">done</button>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+      <sc-if value="{{isApp}}" hint-placeholder-val="{{ false }}">
+        <div class="appview">
+          <div class="mini"><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="rail"><div class="hl" style="transform: translateX(300%)"></div><span class="past">fetch</span><span class="past">save</span><span class="past">read</span><span class="on">webp</span></div>
+          <div class="card" style="flex-grow: 0">
+            <div style="display: flex; justify-content: space-between; align-items: baseline"><b style="font-size: 13.5px; font-weight: 600">{{name}}</b><span style="font-size: 22px; font-weight: 500">{{appLen}}</span></div>
+            <div class="strip"><div class="frames"><i class="dev"></i><i class="dev"></i><i class="dev"></i><i class="dev"></i><i class="dev"></i><i class="dev"></i><i class="dev"></i><i class="dev"></i><i class="dev"></i></div><div class="dim" style="left: {{appOut}}%"></div><div class="br" style="width: {{appOut}}%"></div></div>
+            <span class="sub">{{appNote}}</span>
+            <button class="make" type="button">{{appBtn}}</button>
+          </div>
+          <span class="sub" style="text-align: center">opened from the share sheet, straight on this post.</span>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 18px; min-width: 0; flex-grow: 1">
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.02em">share → cobalt, without leaving the app</h1>
+      <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #6e6e75">tap share on any post (or a video in photos), pick cobalt, and a small cobalt sheet runs the same save → read → webp steps over the app you were in. short clips finish right there; long ones open cobalt on the trim. the share sheet itself is drawn generically.</p>
+    </div>
+    <div style="display: flex; gap: 14px; align-items: center; flex-wrap: wrap">
+      <div class="seg" role="group" aria-label="which post"><button type="button" class="{{shortCls}}" onClick="{{pickShort}}">x clip · 5.5 s</button><button type="button" class="{{longCls}}" onClick="{{pickLong}}">instagram reel · 14.8 s</button></div>
+      <button class="reset" type="button" onClick="{{reset}}">reset</button>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <sc-for list="{{steps}}" as="s" hint-placeholder-count="5">
+        <div class="{{s.cls}}"><span class="num">{{s.n}}</span><div><div class="sname">{{s.name}}<sc-if value="{{s.nb}}" hint-placeholder-val="{{ false }}"><span class="nb">needs backend</span></sc-if></div><div class="sclaim">{{s.claim}}</div><div class="sui">swiftui: {{s.ui}}</div></div></div>
+      </sc-for>
+    </div>
+    <p style="margin: 0; font-size: 12px; line-height: 1.6; color: #6e6e75">real data: x 2105435404002562056 (5.46 s, 480×568, its webp 841 KB) and instagram Dd7P496wolG (14.77 s). times run 5× faster than live. try closing the cobalt sheet while it makes the webp.</p>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1240,"height":980}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.timers = [];
+    this.state = this.blank('short');
+  }
+  blank(post) { return { post: post, stage: 'host', frames: 0, elapsed: 0, decoded: 0, photos: false, copied: false, background: false, finished: false, waiting: false, handed: false }; }
+  componentWillUnmount() { this.clear(); }
+  clear() { this.timers.forEach(function (t) { clearTimeout(t); clearInterval(t); }); this.timers = []; }
+  later(fn, ms) { this.timers.push(setTimeout(fn, ms)); }
+  every(fn, ms) { var id = setInterval(fn, ms); this.timers.push(id); return id; }
+  post() {
+    return this.state.post === 'short'
+      ? { service: 'x', ref: '2105435404002562056', name: 'twitter_2105435404002562056', dur: 5.46, w: 480, h: 568, domain: 'x.com' }
+      : { service: 'instagram', ref: 'Dd7P496wolG', name: 'instagram_Dd7P496wolG', dur: 14.77, w: 720, h: 1280, domain: 'instagram.com' };
+  }
+  reset(post) { this.clear(); this.setState(this.blank(post || this.state.post)); }
+  openExt() {
+    var self = this;
+    this.setState({ stage: 'fetching', elapsed: 0 });
+    var t0 = Date.now();
+    var iv = this.every(function () { self.setState({ elapsed: (Date.now() - t0) / 1000 }); }, 100);
+    this.later(function () { clearInterval(iv); self.setState({ stage: 'storing' }); }, 1500);
+    this.later(function () {
+      self.setState({ stage: 'reading', frames: 0 });
+      var fv = self.every(function () {
+        var n = self.state.frames + 1;
+        self.setState({ frames: n });
+        if (n >= 9) { clearInterval(fv); self.later(function () { self.setState({ stage: 'ready' }); }, 250); }
+      }, 150);
+    }, 2400);
+  }
+  make() {
+    var self = this, total = Math.round(this.post().dur * 15), ms = 23.5 / 5 * 1000;
+    this.setState({ stage: 'rendering', decoded: 0 });
+    var t0 = Date.now();
+    var iv = this.every(function () { self.setState({ decoded: Math.min(total, Math.floor(total * (Date.now() - t0) / (ms * 0.6))) }); }, 100);
+    this.later(function () {
+      clearInterval(iv);
+      if (self.state.stage === 'rendering') self.setState({ stage: 'done' });
+      else self.setState({ finished: true });
+    }, ms);
+  }
+  close() {
+    if (this.state.stage === 'rendering') { this.setState({ stage: 'host', background: true }); return; }
+    this.reset();
+  }
+  openApp() { this.setState({ stage: 'app', waiting: this.state.background && !this.state.finished, handed: this.state.background }); }
+  renderVals() {
+    var self = this, s = this.state, st = s.stage, p = this.post();
+    var ext = ['fetching', 'storing', 'reading', 'ready', 'rendering', 'done'].indexOf(st) >= 0;
+    var railIdx = st === 'fetching' ? 0 : st === 'storing' ? 1 : st === 'reading' ? 2 : 3;
+    var total = Math.round(p.dur * 15);
+    var out = Math.min(p.dur, 10) / p.dur * 100;
+    var frames = [];
+    for (var i = 0; i < 9; i++) {
+      var dev = st !== 'reading' || i < s.frames;
+      var enc = (st === 'rendering' && i / 9 < s.decoded / total) || st === 'done';
+      frames.push({ cls: (dev ? 'dev' : '') + (enc ? ' enc' : '') });
+    }
+    var k = Math.min(330 / p.w, 330 / p.h);
+    var long = p.dur > 10;
+    var stepIdx = (s.background || s.handed) ? 4
+      : (st === 'app' || (st === 'ready' && long)) ? 3
+      : (st === 'ready' || st === 'rendering' || st === 'done') ? 2
+      : (st === 'fetching' || st === 'storing' || st === 'reading') ? 1 : 0;
+    var appMode = s.handed ? (s.finished ? 'finished' : 'waiting') : 'trim';
+    var stepData = [
+      ['cobalt in the share sheet', 'any app with a share button reaches cobalt: posts as links, videos from photos as files. no copying, no pasting.', 'a share extension that accepts one web url or one movie', false],
+      ['the same steps, smaller', 'the sheet runs the same fetch, save and read steps as the app: the same step strip, the same frames developing.', 'one shared swiftui view in the app and the extension', true],
+      ['short clips finish here', 'up to 10 s, make webp and copy the link without leaving the app you were in.', '.sensoryFeedback(.success) on copy', false],
+      ['long clips open cobalt on the trim', 'over 10 s, the sheet hands the saved post to cobalt, which opens straight on the trim with the first 10 s picked.', 'the studio id passes through an app group; the circle grows into the app', false],
+      ['closing early is safe', 'close the sheet mid-render and a banner says it is still going; cobalt picks the job up. today the server drops a job nobody polls for ~45 s.', 'background url session + the job id in the app group', true]
+    ];
+    var steps = stepData.map(function (d, i) { return { n: i + 1, name: d[0], claim: d[1], ui: d[2], nb: d[3], cls: 'step' + (i === stepIdx ? ' on' : i < stepIdx ? ' past' : '') }; });
+    return {
+      hostCls: 'host' + (st === 'host' ? '' : ' back'),
+      isHost: st === 'host', isSys: st === 'sys', isExt: ext, isApp: st === 'app',
+      showBanner: st === 'host' && s.background,
+      postW: Math.round(p.w * k), postH: Math.round(p.h * k), hostDomain: p.domain,
+      service: p.service, ref: p.ref, name: p.name,
+      railX: (railIdx * 100) + '%',
+      rail: ['fetch', 'save', 'read', 'webp'].map(function (l, i) { return { label: l, cls: i === railIdx ? 'on' : i < railIdx || st === 'done' ? 'past' : '' }; }),
+      frames: frames,
+      showBracket: st !== 'fetching' && st !== 'storing' && st !== 'reading',
+      outPct: out.toFixed(2),
+      lenTxt: st === 'reading' ? (p.dur * s.frames / 9).toFixed(1) + ' s' : (st === 'fetching' || st === 'storing') ? '' : Math.min(p.dur, 10).toFixed(1) + ' s',
+      isWorking: st === 'fetching' || st === 'storing' || st === 'reading' || st === 'rendering',
+      workLabel: st === 'fetching' ? 'fetching from ' + p.service : st === 'storing' ? 'saving privately' : st === 'reading' ? 'reading the video' : 'decoding frames',
+      workMetric: st === 'fetching' ? s.elapsed.toFixed(1) + ' s' : st === 'reading' ? s.frames + ' / 9' : st === 'rendering' ? s.decoded + ' / ' + total : '',
+      isShortReady: st === 'ready' && p.dur <= 10,
+      isLongReady: st === 'ready' && p.dur > 10,
+      isDone: st === 'done',
+      photosCls: 'gb' + (s.photos ? ' ok' : ''), photosLabel: s.photos ? 'saved to photos' : 'save to photos',
+      copyCls: 'make' + (s.copied ? ' ok' : ''), copyLabel: s.copied ? 'copied' : 'copy link',
+      appLen: Math.min(p.dur, 10).toFixed(1) + ' s',
+      appOut: out.toFixed(2),
+      appNote: appMode === 'finished' ? 'finished while the sheet was closed. 841 KB, link ready.'
+        : appMode === 'waiting' ? 'still making the webp you started in the share sheet…'
+        : 'webps stop at 10 s, so the first 10 s are picked. drag to choose.',
+      appBtn: appMode === 'finished' ? 'copy link' : appMode === 'waiting' ? 'making webp…' : 'make webp',
+      bannerTxt: s.finished ? 'your webp is ready' : 'cobalt is still making your webp',
+      shortCls: s.post === 'short' ? 'on' : '', longCls: s.post === 'long' ? 'on' : '',
+      steps: steps,
+      openSys: function () { self.setState({ stage: 'sys', background: false }); },
+      openExt: function () { self.openExt(); },
+      make: function () { self.make(); },
+      close: function () { self.close(); },
+      copy: function () { self.setState({ copied: true }); },
+      savePhotos: function () { self.setState({ photos: true }); },
+      openApp: function () { self.openApp(); },
+      pickShort: function () { self.reset('short'); },
+      pickLong: function () { self.reset('long'); },
+      reset: function () { self.reset(); }
+    };
+  }
+}
+</script>
+</body>
+</html>

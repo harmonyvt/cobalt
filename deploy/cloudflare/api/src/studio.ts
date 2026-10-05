@@ -18,10 +18,14 @@
 // Sessions live in D1 (studio_sessions / studio_renders, migration 0003). The
 // session id is a capability: the routes that use it need no API key.
 
-import { KV, Quality, WebpParams, WebpService, num, randomBase62, serviceFromUrl } from "./webp";
+import { raceCeiling } from "./ceiling";
+import { Crop, JobRecord, KV, Quality, WebpParams, WebpService, num, randomBase62, serviceFromUrl } from "./webp";
 import { KEY_ID_HEADER } from "./headers";
+import { cropToPixels, parseCrop } from "../helper/crop.js";
 import { STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "./gate";
 import { SERVICE_KEY_ID, insertMediaItem, mediaNameFromUrl, pageLink } from "./library";
+import { LIVE_PUSH_MS, type LiveHooks, type LiveRenderEvent } from "./live";
+import type { NotifyHooks, NotifyRenderEvent } from "./notify";
 
 export const SID_LENGTH = 22;
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -44,6 +48,8 @@ export const KICK_MS = 4000;
 export const MAX_SOURCE_BYTES = 200 * 1024 * 1024;
 export const MAX_BODY_BYTES = 8192;
 export const MAX_STUDIO_WAIT_SECONDS = 25;
+// GET /studio/<sid>/<name> with ?wait=N holds a request longer (APP-API-CONTRACT section 11).
+export const MAX_SOURCE_WAIT_SECONDS = 90;
 export const POLL_INTERVAL_MS = 1000;
 // A save lock held longer than this is assumed abandoned (see advancingSince).
 export const LOCK_STALE_MS = 60_000;
@@ -55,6 +61,22 @@ export const MAX_RENDER_SECONDS = 10;
 export const DURATION_SLACK = 0.05;
 export const RENDER_FPS = 15;
 export const RENDER_WIDTHS = [320, 480] as const;
+export const RENDER_QUALITIES = ["low", "med", "high"] as const;
+
+// The job sweep (StudioService.sweep): a render job is collected by the sweep for
+// this long after it was accepted (the helper's 240 s budget plus the upload
+// into R2); a save is advanced by it while its current helper fetch is younger
+// than SAVE_BUDGET_MS plus this slack.
+export const SWEEP_RENDER_MS = 6 * 60 * 1000;
+export const SWEEP_SAVE_SLACK_MS = 60_000;
+// Ceiling on one item of a sweep pass (one render poll or one save step): the
+// Containers library awaits the whole pass inside alarm() before it checks
+// sleepAfter, so one hung item must never be able to hold the container awake.
+// (The pass as a whole is capped again in sweep.ts: SWEEP_PASS_MS.)
+export const SWEEP_ITEM_MS = 30_000;
+
+// One notification call (the webhook call inside is capped at 3 s by notify.ts).
+export const NOTIFY_CALL_MS = 5000;
 
 export const CORS_METHODS = "GET, POST, OPTIONS";
 export const CORS_HEADERS = "content-type, range";
@@ -133,7 +155,20 @@ export async function getRender(db: D1Database, sid: string, job: string): Promi
     return res.results[0] ?? null;
 }
 
-export function sessionBody(row: SessionRow, renders: RenderRow[]) {
+// What a save in flight is doing right now (in memory on the Durable Object,
+// not persisted: after an eviction the next step repopulates it). APP-API-
+// CONTRACT.md section 2.
+export type SaveStep = "fetching" | "reading" | "storing";
+export type SaveProgress = {
+    step: SaveStep;
+    bytes: number | null;
+    total: number | null;
+    waking: boolean;
+};
+
+export function sessionBody(row: SessionRow, renders: RenderRow[], progress?: SaveProgress | null) {
+    // progress only means something while the session is saving
+    const p = row.status === "saving" ? (progress ?? null) : null;
     return {
         status: row.status,
         id: row.id,
@@ -144,6 +179,11 @@ export function sessionBody(row: SessionRow, renders: RenderRow[]) {
         width: row.width ?? null,
         height: row.height ?? null,
         bytes: row.bytes ?? null,
+        // save progress (null / false when the DO does not know)
+        step: p?.step ?? null,
+        step_bytes: p?.bytes ?? null,
+        step_total: p?.total ?? null,
+        waking: p?.waking ?? false,
         created_at: row.created_at,
         expires_at: row.expires_at,
         error: row.error_code ? { code: row.error_code } : null,
@@ -167,6 +207,15 @@ export function parseStudioWait(raw: string | null): number {
     const n = Number(raw);
     if (!Number.isFinite(n)) return 0;
     return Math.min(MAX_STUDIO_WAIT_SECONDS, Math.max(0, n));
+}
+
+// ?wait=N for the video route: absent or junk = 0 (today's behaviour),
+// clamped to 0..90.
+export function parseSourceWait(raw: string | null): number {
+    if (raw === null || raw.trim() === "") return 0;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return 0;
+    return Math.min(MAX_SOURCE_WAIT_SECONDS, Math.max(0, n));
 }
 
 // --- Range ---------------------------------------------------------------------
@@ -224,8 +273,10 @@ export type RenderParams = {
     // what the helper is asked for (320 | 480; it never upscales)
     width: 320 | 480;
     quality: Quality;
-    // what is recorded: the requested width, never above the source's
+    // what is recorded: the requested width, never above the source's (or the crop's)
     effectiveWidth: number;
+    // optional spatial crop, normalized (section 10); absent = the whole frame
+    crop?: Crop;
 };
 
 export type RenderCheck =
@@ -243,7 +294,7 @@ const invalid = (code = "error.webp.invalid_params"): RenderCheck => ({
 // (default med). Numbers may be numeric strings. `start` and `length` are required.
 export function validateRender(
     body: unknown,
-    source: { duration: number | null; width: number | null },
+    source: { duration: number | null; width: number | null; height?: number | null },
 ): RenderCheck {
     if (typeof body !== "object" || body === null || Array.isArray(body)) return invalid();
     const b = body as Record<string, unknown>;
@@ -265,12 +316,25 @@ export function validateRender(
 
     let quality: Quality = "med";
     if (b.quality !== undefined && b.quality !== null && b.quality !== "") {
-        if (b.quality !== "low" && b.quality !== "med" && b.quality !== "high") return invalid();
-        quality = b.quality;
+        if (!(RENDER_QUALITIES as readonly unknown[]).includes(b.quality)) return invalid();
+        quality = b.quality as Quality;
     }
 
-    const effectiveWidth = source.width ? Math.min(width, source.width) : width;
-    return { ok: true, params: { start, length, width, quality, effectiveWidth } };
+    // Optional crop (section 10): normalized in the display orientation. With the size
+    // probed at save time it is converted to pixels here too, so a crop under 64 px is a
+    // 400 before anything starts, and the recorded width is min(width, cropped width).
+    const parsedCrop = parseCrop(b.crop);
+    if (!parsedCrop.ok) return invalid();
+    let effectiveWidth = source.width ? Math.min(width, source.width) : width;
+    if (parsedCrop.crop && source.width && source.height) {
+        const px = cropToPixels(parsedCrop.crop, source.width, source.height);
+        if (!px) return invalid();
+        effectiveWidth = Math.min(width, px.w);
+    }
+    return {
+        ok: true,
+        params: { start, length, width, quality, effectiveWidth, ...(parsedCrop.crop ? { crop: parsedCrop.crop } : {}) },
+    };
 }
 
 /** First http(s) link of a normalised `url` field, or null (=> no_link). */
@@ -305,6 +369,11 @@ export interface OriginalsBucket {
         size: number;
         httpMetadata?: { contentType?: string };
     } | null>;
+    // Metadata only (no body): the object's real size, null when it is missing.
+    head(key: string): Promise<{
+        size: number;
+        httpMetadata?: { contentType?: string };
+    } | null>;
     delete(key: string): Promise<void>;
 }
 
@@ -322,18 +391,39 @@ export type StudioDeps = {
     ensureRunning: () => Promise<void>;
     helper: (path: string, init?: RequestInit) => Promise<Response>;
     // Wraps a stream so R2 accepts it (FixedLengthStream in production).
-    fixedLength: (stream: ReadableStream, length: number) => ReadableStream;
+    // `onChunk` is called with each chunk's byte length as it passes (the
+    // "storing" progress).
+    fixedLength: (
+        stream: ReadableStream,
+        length: number,
+        onChunk?: (n: number) => void,
+    ) => ReadableStream;
+    // Is the container running right now? (`waking` in the save progress.)
+    isRunning?: () => boolean;
+    // Asks the Durable Object to run the job sweep soon (see sweep()). Awaited,
+    // never allowed to fail the request that asked.
+    scheduleSweep?: () => void | Promise<void>;
     // How long POST /studio waits for the helper to accept the fetch (KICK_MS).
     kickMs?: number;
     // Our own ceiling on a helper call. The helper's AbortSignal.timeout is not
     // honoured for containerFetch inside the DO: a hung call stalled a poll for
     // 5.5 min live (2026-10-01).
     helperTimeoutMs?: number;
+    // Ceiling on one item of a sweep pass (default SWEEP_ITEM_MS).
+    sweepItemMs?: number;
     // The same for the probe of an adopted upload, whose call carries the whole
     // video into the helper (default 50 s, inside LOCK_STALE_MS).
     probeTimeoutMs?: number;
     // Renews the container's sleepAfter timer (long streams make no helper calls).
     renew?: () => void;
+    // Live Activity push (APP-API-CONTRACT.md section 8). Every call is awaited but
+    // raced against `livePushMs` (LIVE_PUSH_MS): it can never fail or stall a poll.
+    live?: LiveHooks;
+    livePushMs?: number;
+    // Hark notification bridge (APP-API-CONTRACT.md section 9). Every call is awaited but raced
+    // against `notifyMs` (default NOTIFY_CALL_MS): it can never fail or stall a poll for long.
+    notify?: NotifyHooks;
+    notifyMs?: number;
 };
 
 type FetchDone = {
@@ -346,6 +436,9 @@ type FetchDone = {
     height?: number | null;
     title?: string | null;
 };
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
 
 const finite = (v: unknown): number | null =>
     typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -390,8 +483,135 @@ export class StudioService {
     }
     // helper job id -> when this DO started it; used only for the busy answer.
     private encodes = new Map<string, number>();
+    // sid -> what the save is doing now (in memory only, see SaveProgress)
+    private progress = new Map<string, SaveProgress>();
+    // sid -> when the copy into R2 last told the live service its byte count
+    private lastStoringPush = new Map<string, number>();
 
     constructor(private d: StudioDeps) {}
+
+    private async scheduleSweep(): Promise<void> {
+        try {
+            await this.d.scheduleSweep?.();
+        } catch (e) {
+            console.error("[studio] scheduling the job sweep failed", String(e));
+        }
+    }
+
+    // ---- Live Activity hooks (section 8.3) ---------------------------------------
+
+    // Awaited, raced against LIVE_PUSH_MS, errors logged: a hook that throws or
+    // hangs never fails or stalls the poll beyond that.
+    private async liveCall(label: string, fn: (live: LiveHooks) => Promise<void>): Promise<void> {
+        const live = this.d.live;
+        if (!live) return;
+        try {
+            await raceCeiling(
+                Promise.resolve().then(() => fn(live)),
+                this.d.livePushMs ?? LIVE_PUSH_MS,
+                `live ${label}`,
+            );
+        } catch (e) {
+            console.error("[studio] live push failed:", label, String(e));
+        }
+    }
+
+    // The one place the save progress changes (APP-API-CONTRACT.md 8.3): set it and
+    // tell the live service. `probeStep` does not come through here (an upload's
+    // server read is not shown: the device is reading frames then).
+    private async setProgress(
+        sid: string,
+        p: SaveProgress,
+        extra: { title?: string | null; duration?: number | null } = {},
+    ): Promise<void> {
+        this.progress.set(sid, p);
+        await this.liveCall("save progress", (l) => l.onSave(sid, { kind: "progress", progress: p, ...extra }));
+    }
+
+    private async liveRender(sid: string, job: string, e: LiveRenderEvent): Promise<void> {
+        await this.liveCall("render", (l) => l.onRender(sid, job, e));
+    }
+
+    // The render events that follow from what renderStatus answered, so a client
+    // poll and the sweep reach the live service the same way (a repeated success
+    // is an event too: an equal state is never re-sent, a lost push is).
+    private async emitRender(sid: string, job: string, reply: StudioReply): Promise<void> {
+        if (!this.d.live || reply.status !== 200) return;
+        const b = reply.body as {
+            status?: unknown;
+            url?: unknown;
+            bytes?: unknown;
+            width?: unknown;
+            height?: unknown;
+            seconds?: unknown;
+            phase?: unknown;
+            frames_done?: unknown;
+            frames_total?: unknown;
+            error?: { code?: unknown };
+        };
+        if (b.status === "success" && typeof b.url === "string") {
+            await this.liveRender(sid, job, {
+                kind: "success",
+                url: b.url,
+                bytes: finite(b.bytes),
+                width: finite(b.width),
+                height: finite(b.height),
+                seconds: finite(b.seconds),
+            });
+        } else if (b.status === "error" && typeof b.error?.code === "string") {
+            await this.liveRender(sid, job, { kind: "failed", code: b.error.code });
+        } else if (b.status === "pending") {
+            await this.liveRender(sid, job, {
+                kind: "pending",
+                phase: b.phase === "fetching" || b.phase === "decode" || b.phase === "pack" ? b.phase : null,
+                framesDone: finite(b.frames_done),
+                framesTotal: finite(b.frames_total),
+            });
+        }
+    }
+
+    // ---- Hark notification hooks (section 9) ------------------------------------------
+
+    // Awaited, raced against NOTIFY_CALL_MS, errors logged by label only: a hook that
+    // throws or hangs never fails or stalls the poll beyond that. (No error text: nothing
+    // from the webhook call may reach a log.)
+    private async notifyCall(label: string, fn: (n: NotifyHooks) => Promise<void>): Promise<void> {
+        const notify = this.d.notify;
+        if (!notify) return;
+        try {
+            await raceCeiling(
+                Promise.resolve().then(() => fn(notify)),
+                this.d.notifyMs ?? NOTIFY_CALL_MS,
+                `notify ${label}`,
+            );
+        } catch (e) {
+            console.error("[studio] notify failed:", label, e instanceof Error ? e.name : "error");
+        }
+    }
+
+    // The notification that follows from what renderStatus answered: a poll and the sweep
+    // reach it the same way, and the event's own record makes a repeat a no-op.
+    private async notifyRender(sid: string, job: string, reply: StudioReply): Promise<void> {
+        if (!this.d.notify || reply.status !== 200) return;
+        const b = reply.body as {
+            status?: unknown;
+            url?: unknown;
+            bytes?: unknown;
+            width?: unknown;
+            height?: unknown;
+            error?: { code?: unknown };
+        };
+        let e: NotifyRenderEvent | null = null;
+        if (b.status === "success" && typeof b.url === "string") {
+            e = { kind: "success", url: b.url, bytes: finite(b.bytes), width: finite(b.width), height: finite(b.height) };
+        } else if (b.status === "error" && typeof b.error?.code === "string") {
+            e = { kind: "failed", code: b.error.code };
+        }
+        if (e) {
+            const ev = e;
+            await this.notifyCall("render", (n) => n.onRender(sid, job, ev));
+        }
+    }
 
     private async readJson(res: Response): Promise<any | null> {
         try {
@@ -450,8 +670,10 @@ export class StudioService {
         }
 
         // Nothing runs after this response: the save only moves while the
-        // studio page polls GET /studio/<sid> (-> advance). Try once now to have
-        // the helper accept the fetch, but never hold the 201 for long.
+        // studio page polls GET /studio/<sid> (-> advance), or the job sweep
+        // (scheduled below) runs. Try once now to have the helper accept the
+        // fetch, but never hold the 201 for long.
+        await this.scheduleSweep();
         await this.kick(sid);
 
         const base = this.d.webBaseUrl.replace(/\/+$/, "");
@@ -516,16 +738,19 @@ export class StudioService {
         }
     }
 
-    private async markError(sid: string, code: string): Promise<void> {
+    // Whether this call is the one that made the session an error.
+    private async markError(sid: string, code: string): Promise<boolean> {
         try {
-            await this.d.db
+            const res = await this.d.db
                 .prepare(
                     "UPDATE studio_sessions SET status = 'error', error_code = ?1 WHERE id = ?2 AND status = 'saving'",
                 )
                 .bind(code, sid)
                 .run();
+            return Number(res.meta?.changes ?? 0) > 0;
         } catch (e) {
             console.error("[studio] could not record save error", sid, String(e));
+            return false;
         }
     }
 
@@ -539,9 +764,13 @@ export class StudioService {
 
     // Ends the save with an error: the row, the helper copy and the record.
     private async fail(sid: string, code: string): Promise<number> {
-        await this.markError(sid, code);
+        const changed = await this.markError(sid, code);
         await this.dropHelperCopy(sid);
         await this.d.storage.delete(`save:${sid}`).catch(() => {});
+        this.progress.delete(sid);
+        this.lastStoringPush.delete(sid);
+        await this.liveCall("save failed", (l) => l.onSave(sid, { kind: "failed", code }));
+        if (changed) await this.notifyCall("save failed", (n) => n.onSaveFailed(sid, code));
         return POLL_INTERVAL_MS;
     }
 
@@ -550,7 +779,7 @@ export class StudioService {
     private async sessionReply(row: SessionRow): Promise<StudioReply> {
         try {
             const renders = row.status === "ready" ? await listSuccessfulRenders(this.d.db, row.id) : [];
-            return { status: 200, body: sessionBody(row, renders) };
+            return { status: 200, body: sessionBody(row, renders, this.progress.get(row.id)) };
         } catch {
             return studioErr(503, "error.api.generic");
         }
@@ -606,6 +835,7 @@ export class StudioService {
         }
         if (!row || row.status !== "saving") {
             await this.d.storage.delete(`save:${sid}`).catch(() => {});
+            this.progress.delete(sid);
             return POLL_INTERVAL_MS;
         }
 
@@ -652,11 +882,20 @@ export class StudioService {
     }
 
     private async startFetch(sid: string, row: SessionRow, rec: SaveRecord): Promise<number> {
+        // `waking`: this save is waiting for the container to start
+        await this.setProgress(sid, {
+            step: "fetching",
+            bytes: null,
+            total: null,
+            waking: this.d.isRunning ? !this.d.isRunning() : false,
+        });
         try {
             await this.d.ensureRunning();
         } catch {
+            await this.setProgress(sid, { step: "fetching", bytes: null, total: null, waking: false });
             return await this.miss(sid, rec);
         }
+        await this.setProgress(sid, { step: "fetching", bytes: null, total: null, waking: false });
         let res: Response;
         try {
             res = await this.callHelper("/fetch", {
@@ -726,6 +965,17 @@ export class StudioService {
         }
         if (body.status !== "done") {
             if (rec.missSince !== undefined) await this.d.storage.put(`save:${sid}`, { ...rec, missSince: undefined });
+            // what the helper says it is doing; an old helper says nothing
+            const bytes = finite(body.bytes);
+            const total = finite(body.total);
+            await this.setProgress(
+                sid,
+                body.stage === "probing"
+                    ? { step: "reading", bytes, total: null, waking: false }
+                    : body.stage === "downloading"
+                      ? { step: "fetching", bytes, total, waking: false }
+                      : { step: "fetching", bytes: null, total: null, waking: false },
+            );
             return POLL_INTERVAL_MS;
         }
         return await this.finalize(sid, row, body as FetchDone);
@@ -757,15 +1007,39 @@ export class StudioService {
                 await file.body?.cancel().catch(() => {});
                 return await this.fail(sid, "error.studio.storage");
             }
-            stored = await this.d.originals.put(key, this.d.fixedLength(file.body, bytes), {
-                httpMetadata: { contentType },
-                customMetadata: {
-                    keyId,
-                    source: link.slice(0, 1000),
-                    sessionId: sid,
-                    createdAt: String(this.d.now()),
+            // `storing`: bytes copied into R2 so far, out of the file's size
+            const progress: SaveProgress = { step: "storing", bytes: 0, total: bytes, waking: false };
+            const clip = {
+                title: typeof done.title === "string" && done.title.trim() ? done.title.trim().slice(0, 200) : null,
+                duration: finite(done.duration),
+            };
+            await this.setProgress(sid, progress, clip);
+            this.lastStoringPush.set(sid, this.d.now());
+            stored = await this.d.originals.put(
+                key,
+                this.d.fixedLength(file.body, bytes, (n) => {
+                    progress.bytes = (progress.bytes ?? 0) + n;
+                    // The copy can run for a minute inside this one request and
+                    // nothing else reports it (the sweep leaves a locked save
+                    // alone), so it tells the live service its byte count itself,
+                    // at most once a second. Not awaited: it is called from the
+                    // stream; liveCall swallows errors and is bounded.
+                    const at = this.d.now();
+                    if (at - (this.lastStoringPush.get(sid) ?? 0) >= 1000) {
+                        this.lastStoringPush.set(sid, at);
+                        void this.liveCall("save storing", (l) => l.onSave(sid, { kind: "progress", progress, ...clip }));
+                    }
+                }),
+                {
+                    httpMetadata: { contentType },
+                    customMetadata: {
+                        keyId,
+                        source: link.slice(0, 1000),
+                        sessionId: sid,
+                        createdAt: String(this.d.now()),
+                    },
                 },
-            });
+            );
         } catch (e) {
             console.error("[studio] R2 put failed", sid, String(e));
             return await this.fail(sid, "error.studio.storage");
@@ -812,9 +1086,13 @@ export class StudioService {
                 key_id: keyId || null,
                 created_at: this.d.now(),
             });
+            // the save is ready: the owner who walked away is told (once: the event's record)
+            await this.notifyCall("saved", (n) => n.onSaved(sid));
         }
         await this.dropHelperCopy(sid);
         await this.d.storage.delete(`save:${sid}`).catch(() => {});
+        this.progress.delete(sid);
+        this.lastStoringPush.delete(sid);
         return POLL_INTERVAL_MS;
     }
 
@@ -881,6 +1159,7 @@ export class StudioService {
         } catch {
             // step() recognises an upload session without a record
         }
+        await this.scheduleSweep();
 
         const base = this.d.webBaseUrl.replace(/\/+$/, "");
         return {
@@ -893,6 +1172,7 @@ export class StudioService {
     // helper, which measures it and answers {duration,width,height}.
     private async probeStep(sid: string, row: SessionRow, rec: SaveRecord): Promise<number> {
         const key = row.r2_key;
+        this.progress.set(sid, { step: "reading", bytes: null, total: null, waking: false });
         if (!key) return await this.fail(sid, "error.studio.storage");
         try {
             await this.d.ensureRunning();
@@ -962,6 +1242,7 @@ export class StudioService {
             .bind(finite(body?.duration), width, height, obj.size, sid)
             .run();
         await this.d.storage.delete(`save:${sid}`).catch(() => {});
+        this.progress.delete(sid);
         return POLL_INTERVAL_MS;
     }
 
@@ -997,7 +1278,10 @@ export class StudioService {
         } catch {
             return studioErr(400, "error.webp.invalid_params");
         }
-        const check = validateRender(parsed, { duration: row.duration, width: row.width });
+        // `"notify": true`: tell the owner about this render's result (section 9.3)
+        const notifyFlag = isPlainObject(parsed) ? parsed.notify : undefined;
+        if (notifyFlag !== undefined && typeof notifyFlag !== "boolean") return studioErr(400, "error.webp.invalid_params");
+        const check = validateRender(parsed, { duration: row.duration, width: row.width, height: row.height });
         if (!check.ok) return studioErr(check.status, check.code);
         const p = check.params;
 
@@ -1013,6 +1297,7 @@ export class StudioService {
             width: p.width,
             fps: RENDER_FPS,
             quality: p.quality,
+            ...(p.crop ? { crop: p.crop } : {}),
         };
         const keepAwake = this.d.renew ? setInterval(this.d.renew, 20_000) : undefined;
         let reply;
@@ -1041,10 +1326,20 @@ export class StudioService {
         } catch {
             return studioErr(503, "error.api.generic");
         }
+        // accepted: the run (if one is registered for this session) is now rendering
+        await this.liveRender(sid, job, { kind: "accepted", title: row.title, duration: row.duration });
+        if (notifyFlag === true) await this.notifyCall("render opt-in", (n) => n.optInJob(sid, job));
         return { status: 202, body: { status: "pending", job } };
     }
 
     async renderStatus(sid: string, job: string, waitSeconds: number): Promise<StudioReply> {
+        const reply = await this.renderStatusInner(sid, job, waitSeconds);
+        await this.emitRender(sid, job, reply);
+        await this.notifyRender(sid, job, reply);
+        return reply;
+    }
+
+    private async renderStatusInner(sid: string, job: string, waitSeconds: number): Promise<StudioReply> {
         const found = await this.lookup(sid);
         if ("reply" in found) return found.reply;
 
@@ -1118,21 +1413,125 @@ export class StudioService {
         const lost = r.status === 404;
         if ((r.status === 200 && body.status === "error") || lost) {
             const code = lost ? "error.webp.job_lost" : (body.error?.code ?? "error.webp.encode_failed");
-            await this.d.db
+            const upd = await this.d.db
                 .prepare(
                     "UPDATE studio_renders SET status = 'error', error_code = ?1 WHERE id = ?2 AND status = 'pending'",
                 )
                 .bind(code, job)
                 .run();
             this.encodes.delete(job);
+            if (Number(upd.meta?.changes ?? 0) === 0) {
+                // The row is no longer pending: another poll (or the sweep)
+                // settled it while this one was away. Answer what is recorded,
+                // so a collected success is never reported as an error.
+                try {
+                    const now = await getRender(this.d.db, sid, job);
+                    if (now?.status === "success") return { status: 200, body: this.successBody(now) };
+                    if (now?.status === "error") return studioErr(200, now.error_code ?? code);
+                } catch {
+                    // fall through to this poll's own answer
+                }
+            }
             return studioErr(200, code);
         }
 
         if (r.status === 200 && body.status === "pending") {
-            return { status: 200, body: { status: "pending", job } };
+            const p = body as { phase?: unknown; frames_done?: unknown; frames_total?: unknown };
+            return {
+                status: 200,
+                body: {
+                    status: "pending",
+                    job,
+                    phase: p.phase ?? null,
+                    frames_done: p.frames_done ?? null,
+                    frames_total: p.frames_total ?? null,
+                },
+            };
         }
         // transient (502 storage/upstream): not recorded, the client polls again
         return { status: r.status, body: r.body };
+    }
+
+    // ---- the job sweep ------------------------------------------------------------------
+
+    // One non-waiting pass over everything that only moves while somebody
+    // collects it, so a job finishes with nobody polling (APP-API-CONTRACT.md
+    // section 6; the Durable Object runs it from a Containers `schedule()`):
+    //  1. render jobs (`job:<id>` without a `result:<id>`, accepted within
+    //     SWEEP_RENDER_MS): collected exactly as a client poll would, which
+    //     records the D1 row, the library item and the R2 object. A studio
+    //     render ("studio:<sid>") goes through renderStatus, a /webp job through
+    //     the WebP service;
+    //  2. saves (`save:<sid>`) that are not being advanced right now and whose
+    //     current helper fetch is younger than SAVE_BUDGET_MS plus a minute: one
+    //     step each. (Their `lastAdvance` is refreshed by this very sweep, so
+    //     the budget is anchored on `startedAt`, the time the helper accepted
+    //     the fetch.)
+    // Returns how many things are still pending; the caller runs it again soon
+    // while that is above zero, so the container stays awake exactly while
+    // something is pending. Never rejects.
+    async sweep(): Promise<{ pending: number }> {
+        let pending = 0;
+        const now = this.d.now();
+        const itemMs = this.d.sweepItemMs ?? SWEEP_ITEM_MS;
+
+        let jobs: Map<string, JobRecord> = new Map();
+        try {
+            jobs = await this.d.storage.list<JobRecord>({ prefix: "job:" });
+        } catch (e) {
+            console.error("[studio] sweep: listing jobs failed", String(e));
+        }
+        for (const [key, rec] of jobs) {
+            const id = key.slice("job:".length);
+            try {
+                if (!rec || now - rec.createdAt > SWEEP_RENDER_MS) continue;
+                if (await this.d.storage.get(`result:${id}`)) continue;
+                const owner = rec.keyId;
+                const r = await raceCeiling(
+                    owner.startsWith("studio:")
+                        ? this.renderStatus(owner.slice("studio:".length), id, 0)
+                        : this.d.webp.status(owner, id, 0),
+                    itemMs,
+                    `sweep of job ${id}`,
+                );
+                const body = r.body as { status?: string };
+                if ((r.status === 200 && body.status === "pending") || r.status >= 500) pending++;
+            } catch (e) {
+                console.error("[studio] sweep: job failed", id, String(e));
+                pending++;
+            }
+        }
+
+        let saves: Map<string, SaveRecord> = new Map();
+        try {
+            saves = await this.d.storage.list<SaveRecord>({ prefix: "save:" });
+        } catch (e) {
+            console.error("[studio] sweep: listing saves failed", String(e));
+        }
+        for (const [key, rec] of saves) {
+            const sid = key.slice("save:".length);
+            try {
+                // The budget first: a save past it is never advanced and never
+                // counts as pending, even with a (hung) step still holding its
+                // lock, or the sweep would re-arm every 5 s for ever.
+                const started = rec?.startedAt ?? rec?.createdAt ?? 0;
+                if (now - started > SAVE_BUDGET_MS + SWEEP_SAVE_SLACK_MS) continue;
+                // A poll is advancing it right now: leave it be, unless that
+                // lock is stale (a hung helper call): then advance() drops it
+                // and starts a fresh step, exactly as a client poll would.
+                const lockedSince = this.advancing.has(sid) ? this.advancingSince.get(sid) : undefined;
+                if (this.advancing.has(sid) && !(lockedSince !== undefined && now - lockedSince > LOCK_STALE_MS)) {
+                    pending++;
+                    continue;
+                }
+                await raceCeiling(this.advance(sid, 0), itemMs, `sweep of save ${sid}`);
+                if (await this.d.storage.get(`save:${sid}`)) pending++;
+            } catch (e) {
+                console.error("[studio] sweep: save failed", sid, String(e));
+                pending++;
+            }
+        }
+        return { pending };
     }
 
     private successBody(row: RenderRow) {
@@ -1177,6 +1576,16 @@ export async function handleStudioRoute(
         const keyId = request.headers.get(KEY_ID_HEADER);
         if (!keyId) return new Response(null, { status: 403 });
         return toResponse(await service.create(keyId, await request.text()));
+    }
+
+    // POST /studio/upload/adopt: the Worker's own call after PUT /studio/upload
+    // stored a video (internal: the public gate answers 404 for this path, and
+    // the Worker strips the key id header from clients). The key id header is
+    // the caller's, set after the Worker's D1 lookup.
+    if (request.method === "POST" && p === "/studio/upload/adopt") {
+        const keyId = request.headers.get(KEY_ID_HEADER);
+        if (!keyId) return new Response(null, { status: 403 });
+        return toResponse(await service.adopt(keyId, await request.text()));
     }
 
     // POST /library/adopt: the web Worker's service call. The Worker only

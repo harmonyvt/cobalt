@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cobalt studio on ipad</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2f8af9}a:hover{color:#5aa2fb}
+.ip *{box-sizing:border-box}
+.ip button{font:inherit;color:inherit;cursor:pointer}
+.nav{display:flex;align-items:center;gap:12px;height:48px;padding:0 12px;border-radius:11px;font-size:14px;color:#8f8f8f;border:0;background:transparent;width:100%;text-align:left}
+.nav.on{background:#e1e1e1;color:#000}
+.tb{height:44px;min-width:44px;padding:0 14px;border:0;border-radius:11px;background:#191919;font-size:12.5px;box-shadow:0 0 0 1px rgba(255,255,255,.05) inset}
+kbd{font:inherit;font-size:11px;color:#8f8f8f;margin-left:6px}
+.frames{position:absolute;inset:0;display:grid;grid-template-columns:repeat(14,minmax(0,1fr));gap:2px;border-radius:10px;overflow:hidden}
+.frames i{display:block;background:linear-gradient(170deg,#4a4a4f,#232326)}
+.frames i:nth-child(3n){background:linear-gradient(170deg,#5b5b60,#2c2c30)}
+.frames i:nth-child(4n+1){background:linear-gradient(170deg,#3d3d42,#1b1b1e)}
+.k{font-size:12px;color:#8f8f8f}
+.card{background:#191919;border-radius:11px;padding:14px;display:flex;flex-direction:column;gap:10px;box-shadow:0 0 0 1px rgba(255,255,255,.05) inset}
+.seg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:#000;border-radius:11px;padding:3.5px;gap:0}
+.seg button{height:38px;border:0;border-radius:8px;background:transparent;font-size:12.5px}
+.seg button.on{background:#e1e1e1;color:#000}
+</style>
+</helmet>
+<div class="ip" style="width: 1194px; height: 834px; border-radius: 18px; background: #000; color: #e1e1e1; font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace; display: grid; grid-template-columns: 236px minmax(0, 1fr) 320px; overflow: hidden">
+  <nav aria-label="sections" style="background: #131313; padding: 28px 12px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid rgba(255,255,255,.04)">
+    <span style="font-size: 20px; font-weight: 600; padding: 0 12px 14px">cobalt</span>
+    <button class="nav" type="button">save</button>
+    <button class="nav on" type="button">library</button>
+    <button class="nav" type="button">settings</button>
+    <span class="k" style="margin-top: auto; padding: 0 12px; line-height: 1.5">ipad's own tab bar, shown as a sidebar. same tabs and order as the web; studio opens from the library, as it does there.</span>
+  </nav>
+  <main style="padding: 28px 28px 24px; display: flex; flex-direction: column; gap: 16px; min-width: 0">
+    <div style="display: flex; align-items: baseline; gap: 12px">
+      <h1 style="margin: 0; font-size: 20px; font-weight: 600"><span style="color: #8f8f8f; font-weight: 400">library ›</span> studio</h1>
+      <span class="k">instagram_Dd7P496wolG · 720×1280 · 14.8 s · open for 6 more days</span>
+    </div>
+    <div style="flex-grow: 1; display: grid; place-items: center; background: #0b0b0b; border-radius: 11px; min-height: 0">
+      <div style="width: 236px; height: 420px; border-radius: 12px; background: linear-gradient(170deg, #5b5b60, #232326); position: relative">
+        <span style="position: absolute; left: 10px; bottom: 10px; font-size: 11px; background: rgba(0,0,0,.65); border-radius: 6px; padding: 3px 7px">00:07.4</span>
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap">
+      <button class="tb" type="button" style="background: #e1e1e1; color: #000">play selection</button>
+      <button class="tb" type="button" aria-label="back one frame">◀ frame</button>
+      <button class="tb" type="button" aria-label="forward one frame">frame ▶</button>
+      <button class="tb" type="button">set in<kbd>I</kbd></button>
+      <button class="tb" type="button">set out<kbd>O</kbd></button>
+    </div>
+    <div style="position: relative; height: 84px; margin: 4px 14px 0">
+      <div class="frames"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div style="position: absolute; top: 0; bottom: 0; left: 0; width: 21.67%; background: rgba(0,0,0,.62); border-radius: 10px 0 0 10px"></div>
+      <div style="position: absolute; top: 0; bottom: 0; left: 89.37%; right: 0; background: rgba(0,0,0,.62); border-radius: 0 10px 10px 0"></div>
+      <div style="position: absolute; top: -4px; bottom: -4px; left: 21.67%; width: 67.7%; border: 3px solid #e1e1e1; border-radius: 11px"></div>
+      <div style="position: absolute; top: -10px; bottom: -10px; left: 50.1%; width: 2px; background: #2f8af9"></div>
+    </div>
+    <div class="k" style="display: flex; justify-content: space-between; margin: 0 14px"><span>0 s</span><span>5 s</span><span>10 s</span><span>14.8 s</span></div>
+  </main>
+  <aside aria-label="inspector" style="background: #0b0b0b; border-left: 1px solid rgba(255,255,255,.04); padding: 28px 20px 24px; display: flex; flex-direction: column; gap: 14px">
+    <div class="card">
+      <span class="k">selection</span>
+      <span style="font-size: 34px; font-weight: 500; font-variant-numeric: tabular-nums">10.0 s</span>
+      <span class="k">00:03.2 → 00:13.2</span>
+    </div>
+    <div class="card">
+      <span class="k">quality</span>
+      <div class="seg" role="group" aria-label="quality"><button type="button">low</button><button class="on" type="button">medium</button><button type="button">high</button></div>
+      <div style="display: flex; justify-content: space-between; font-size: 13px"><span class="k">width</span><span>480 px</span></div>
+    </div>
+    <button type="button" style="height: 52px; border: 0; border-radius: 11px; background: #e1e1e1; color: #000; font-weight: 600; font-size: 15px">make webp</button>
+    <div class="card" style="gap: 8px">
+      <span class="k">made from this video</span>
+      <div style="display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center">
+        <div style="width: 44px; height: 78px; border-radius: 7px; background: linear-gradient(170deg, #5b5b60, #232326)"></div>
+        <div style="display: flex; flex-direction: column; gap: 3px; min-width: 0">
+          <span style="font-size: 12.5px">480×854 · 10.1 s</span>
+          <span class="k">4.5 MB · public link</span>
+          <button class="tb" type="button" style="height: 36px; align-self: flex-start; margin-top: 4px">copy link</button>
+        </div>
+      </div>
+    </div>
+    <span class="k" style="margin-top: auto; line-height: 1.5">the inspector only exists in studio. with a keyboard attached, I and O set the in and out points, like the web studio.</span>
+  </aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1194,"height":834}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

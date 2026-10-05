@@ -1,0 +1,164 @@
+name: Cobalt
+
+# One multiplatform SwiftUI app (iPhone, iPad, Mac) plus an iOS share extension and an iOS widget
+# extension (the Live Activity).
+# Generated project is gitignored: `cd apple && xcodegen generate`.
+# Info.plists in Config/ are generated from this file and committed; the entitlements are hand-written.
+
+options:
+  bundleIdPrefix: com.capybaraharmony
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "26.0"
+    macOS: "26.0"
+
+configFiles:
+  Debug: Config/Signing.xcconfig
+  Release: Config/Signing.xcconfig
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: "1.1"
+    CURRENT_PROJECT_VERSION: "2"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+packages:
+  CobaltKit:
+    path: CobaltKit
+
+targets:
+  Cobalt:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - path: Cobalt
+    dependencies:
+      - package: CobaltKit
+      - target: CobaltShare
+        embed: true
+        platformFilter: iOS
+      - target: CobaltWidgets
+        embed: true
+        platformFilter: iOS
+    info:
+      path: Config/Cobalt-Info.plist
+      properties:
+        CFBundleDisplayName: cobalt
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleURLTypes:
+          - CFBundleURLName: com.capybaraharmony.cobalt
+            CFBundleURLSchemes: [cobalt-apple]
+        LSApplicationCategoryType: public.app-category.utilities
+        NSPhotoLibraryAddUsageDescription: cobalt saves videos you choose to your photos.
+        # The photos album (CONTRACT-SYNC.md decision 7): putting an asset in an album needs full
+        # read-write access. The app target only; the share extension stays add-only.
+        NSPhotoLibraryUsageDescription: cobalt keeps the videos it saves together in a “cobalt” album. it doesn't look through your other photos.
+        # cobalt never needs a selection, so the system's once-per-launch "select more photos" alert is noise.
+        PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        ITSAppUsesNonExemptEncryption: false
+        # Live Activities (CONTRACT-LIVE.md 2.7); ignored on the Mac.
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
+        # iOS 26 continued processing: a run goes on after the owner leaves the app. The identifier
+        # is `<bundle id>.run.*`; the launch handler registers the wildcard (ContinuedProcessing.swift).
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.capybaraharmony.cobalt.run.*
+    settings:
+      base:
+        PRODUCT_NAME: cobalt
+        PRODUCT_MODULE_NAME: Cobalt
+        PRODUCT_BUNDLE_IDENTIFIER: com.capybaraharmony.cobalt
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_PREVIEWS: YES
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphone*]": Config/Cobalt-iOS.entitlements
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Config/Cobalt-macOS.entitlements
+
+  CobaltShare:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: CobaltShare
+      - path: Cobalt/Design
+      - path: Cobalt/Shared
+      # The share sheet draws with the same typeface; CobaltFont registers it from the bundle at
+      # launch (the app target picks the same files up through `Cobalt`).
+      - path: Cobalt/Resources/Fonts
+        buildPhase: resources
+    dependencies:
+      - package: CobaltKit
+    info:
+      path: Config/CobaltShare-Info.plist
+      properties:
+        CFBundleDisplayName: cobalt
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSPhotoLibraryAddUsageDescription: cobalt saves videos you choose to your photos.
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsMovieWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
+    settings:
+      base:
+        PRODUCT_NAME: CobaltShare
+        PRODUCT_BUNDLE_IDENTIFIER: com.capybaraharmony.cobalt.share
+        TARGETED_DEVICE_FAMILY: "1,2"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        CODE_SIGN_ENTITLEMENTS: Config/CobaltShare.entitlements
+
+  # The Live Activity (Dynamic Island and Lock Screen). Lane UI owns the views in CobaltWidgets/;
+  # the target, plist and settings are CORE's (CONTRACT-LIVE.md 2.7).
+  CobaltWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: CobaltWidgets
+      - path: Cobalt/Design
+      # Plex Mono: registered through UIAppFonts below; the views fall back to the system
+      # monospaced font when the files are missing.
+      - path: Cobalt/Resources/Fonts
+        buildPhase: resources
+    dependencies:
+      - package: CobaltKit
+    info:
+      path: Config/CobaltWidgets-Info.plist
+      properties:
+        CFBundleDisplayName: cobalt
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UIAppFonts:
+          - IBMPlexMono-Regular.ttf
+          - IBMPlexMono-Medium.ttf
+          - IBMPlexMono-SemiBold.ttf
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_NAME: CobaltWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: com.capybaraharmony.cobalt.widgets
+        TARGETED_DEVICE_FAMILY: "1,2"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES

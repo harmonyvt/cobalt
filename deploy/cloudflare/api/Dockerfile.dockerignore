@@ -16,3 +16,5 @@ mobile
 deploy
 !deploy/cloudflare/api/.gitinfo
 !deploy/cloudflare/api/helper
+# the native Apple app and its build output (GBs of DerivedData) never belong in the API image
+apple

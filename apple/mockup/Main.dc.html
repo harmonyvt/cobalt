@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cobalt motion lab</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2f8af9}a:hover{color:#1f6fd6}
+.lab *{box-sizing:border-box}
+.lab button{font:inherit;color:inherit;cursor:pointer}
+.lab button:focus-visible,.lab input:focus-visible+span,.ib:focus-within{outline:2px solid #2f8af9;outline-offset:2px}
+/* phone */
+.screen{position:relative;width:368px;height:822px;border-radius:47px;background:#000;overflow:hidden;color:#e1e1e1}
+.content{position:absolute;inset:0 0 83px 0;padding:50px 16px 16px;display:flex;flex-direction:column;gap:12px}
+.grow{flex-grow:1;min-height:0}
+/* the orbit: latest videos circling; stored on the phone */
+.orb{position:relative;flex:none;transition:height .7s cubic-bezier(.32,1.18,.6,1)}
+.orb.big{height:470px}.orb.small{height:132px}
+.stage{position:absolute;left:50%;top:50%;width:0;height:0;transition:transform .7s cubic-bezier(.32,1.18,.6,1)}
+.orb.small .stage{transform:scale(.46)}
+.tilt{position:absolute;left:0;top:0;transform:scaleY(.42)}
+.ring{position:absolute;left:0;top:0;animation:ring 48s linear infinite}
+@keyframes ring{to{transform:rotate(360deg)}}
+.slot{position:absolute;left:0;top:0;transition:transform .8s cubic-bezier(.34,1.3,.64,1);animation:zz 48s linear infinite}
+@keyframes zz{0%,50%,100%{z-index:15}25%{z-index:30}75%{z-index:1}}
+.face{position:absolute;left:0;top:0;animation:counter 48s linear infinite}
+@keyframes counter{to{transform:rotate(-360deg)}}
+.up{position:absolute;left:0;top:0;transform:scaleY(2.381)}
+.th{position:absolute;border-radius:12px;background:linear-gradient(170deg,#5b5b60,#232326);overflow:hidden;animation:depth 48s linear infinite;box-shadow:0 10px 30px rgba(0,0,0,.55)}
+.th::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);animation:sheen2 2.6s ease-in-out infinite}
+.th em{position:absolute;left:6px;bottom:6px;font-style:normal;font-size:10px;background:rgba(0,0,0,.65);border-radius:5px;padding:2px 5px;z-index:1}
+.th.fresh{outline:2px solid #e1e1e1;outline-offset:2px}
+.pop{animation:popIn .8s cubic-bezier(.34,1.56,.64,1) both}
+@keyframes popIn{from{opacity:0;transform:scale(.2)}to{opacity:1;transform:none}}
+@keyframes depth{0%,50%,100%{transform:scale(.8);filter:brightness(.72)}25%{transform:scale(1);filter:brightness(1)}75%{transform:scale(.6);filter:brightness(.45)}}
+.offline{position:absolute;left:0;right:0;bottom:0;text-align:center;font-size:11.5px;color:#8f8f8f;transition:opacity .3s}
+.orb.small .offline{opacity:0}
+.circles{display:flex;justify-content:center;gap:28px;flex:none;padding-bottom:4px}
+.cb{display:flex;flex-direction:column;align-items:center;gap:8px;font-size:11.5px;color:#8f8f8f}
+.circ{width:72px;height:72px;border-radius:50%;border:0;background:#fff;color:#000 !important;display:grid;place-items:center;position:relative;cursor:pointer;transition:transform .2s cubic-bezier(.34,1.56,.64,1)}
+.circ:active{transform:scale(.9)}
+.circ input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;border-radius:50%}
+.circ:focus-within{outline:2px solid #2f8af9;outline-offset:3px}
+.rv-l{animation:revL .62s cubic-bezier(.32,1.1,.6,1) both}
+.rv-r{animation:revR .62s cubic-bezier(.32,1.1,.6,1) both}
+@keyframes revL{from{clip-path:circle(36px at 35% calc(100% - 36px));background-color:#fff}to{clip-path:circle(150% at 35% calc(100% - 36px));background-color:#191919}}
+@keyframes revR{from{clip-path:circle(36px at 65% calc(100% - 36px));background-color:#fff}to{clip-path:circle(150% at 65% calc(100% - 36px));background-color:#191919}}
+.sp{flex:none;transition:height .6s cubic-bezier(.32,1.18,.6,1)}
+.sp-rest{height:250px}.sp-up{height:4px}
+.omni{position:relative;height:58px;border:1px solid #383838;border-radius:11px;display:flex;align-items:center;gap:8px;padding:0 6px 0 14px;overflow:hidden;flex:none}
+.ph{color:#8f8f8f;font-size:14px;flex-grow:1}
+.ib{width:44px;height:44px;border:0;border-radius:9px;background:#191919;display:grid;place-items:center;color:#e1e1e1;flex:none;position:relative;cursor:pointer}
+.ib input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
+.chip{display:flex;align-items:center;gap:8px;min-width:0;flex-grow:1;animation:chipIn .55s cubic-bezier(.34,1.56,.64,1) both}
+.chip b{font-weight:500;background:#282828;border-radius:7px;padding:5px 9px;font-size:13px;flex:none}
+.chip span{color:#8f8f8f;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ghost{position:absolute;left:14px;right:60px;font-size:14px;color:#e1e1e1;white-space:nowrap;overflow:hidden;animation:urlOut .5s ease-in both;pointer-events:none}
+@keyframes chipIn{from{opacity:0;transform:scale(1.35) translateX(30px);filter:blur(5px)}to{opacity:1;transform:none;filter:none}}
+@keyframes urlOut{0%{opacity:1;letter-spacing:0}100%{opacity:0;letter-spacing:-.4em;transform:translateX(-12px)}}
+.hint{font-size:12px;color:#8f8f8f;text-align:center;line-height:1.55;margin:0}
+/* the step rail */
+.rail{position:relative;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));height:30px;border-radius:15px;background:#0f0f0f;flex:none;animation:fadeIn .35s ease both}
+.rail .hl{position:absolute;top:2px;bottom:2px;left:2px;width:calc((100% - 4px)/4);border-radius:13px;background:#e1e1e1;transition:transform .5s cubic-bezier(.34,1.45,.64,1)}
+.rail span{position:relative;z-index:1;display:grid;place-items:center;font-size:11.5px;color:#8f8f8f;transition:color .3s}
+.rail span.past{color:#e1e1e1}
+.rail span.on{color:#000;font-weight:600}
+/* the morph */
+.morph{flex:none;position:relative;background:#191919;overflow:hidden;transition:height .62s cubic-bezier(.32,1.22,.6,1),border-radius .5s ease,box-shadow .3s,opacity .3s}
+.m-hidden{height:0;border-radius:32px;opacity:0}
+.m-cap{height:64px;border-radius:32px}
+.m-cap2{height:84px;border-radius:30px}
+.m-image{height:190px;border-radius:22px}
+.m-studio{height:432px;border-radius:22px}
+.m-done{height:470px;border-radius:22px}
+.m-err{box-shadow:inset 0 0 0 1px #ed2236;animation:shake .42s ease both}
+@keyframes shake{20%{transform:translateX(-6px)}45%{transform:translateX(5px)}70%{transform:translateX(-3px)}100%{transform:none}}
+.row{position:absolute;inset:0;display:flex;align-items:center;gap:12px;padding:0 10px 0 22px;animation:fadeIn .3s ease both}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.dot{width:9px;height:9px;border-radius:50%;background:#e1e1e1;animation:breathe 1.1s ease-in-out infinite;flex:none}
+@keyframes breathe{0%,100%{opacity:.25;transform:scale(.7)}50%{opacity:1;transform:scale(1)}}
+.lbl{font-size:13.5px}
+.el{margin-left:auto;font-size:13px;color:#8f8f8f;font-variant-numeric:tabular-nums;padding-right:12px;white-space:nowrap}
+.bar{position:absolute;left:22px;right:22px;bottom:12px;height:3px;border-radius:2px;background:#2a2a2a;overflow:hidden}
+.bar i{display:block;height:100%;background:#e1e1e1;transition:width .12s linear}
+.err{color:#ff5c6c;font-size:13px;line-height:1.35}
+.pill{border:0;border-radius:24px;background:#e1e1e1;color:#000 !important;font-weight:600;font-size:13.5px;height:44px;padding:0 18px;margin-left:auto;flex:none}
+.pane{position:absolute;inset:0;padding:16px 16px 14px;display:flex;flex-direction:column;gap:10px;animation:fadeIn .35s .12s ease both}
+.ttl{display:flex;align-items:baseline;justify-content:space-between;gap:10px;min-width:0}
+.ttl b{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.read{font-size:26px;font-weight:500;font-variant-numeric:tabular-nums;display:inline-block;flex:none}
+.read.over{color:#ff5c6c}
+.rollA{animation:rollA .18s ease-out}.rollB{animation:rollB .18s ease-out}
+@keyframes rollA{from{transform:translateY(40%);opacity:.3}to{transform:none;opacity:1}}
+@keyframes rollB{from{transform:translateY(40%);opacity:.3}to{transform:none;opacity:1}}
+.tc{font-size:12px;color:#8f8f8f;font-variant-numeric:tabular-nums}
+.strip{position:relative;height:76px;border-radius:10px;touch-action:none;user-select:none;-webkit-user-select:none;flex:none}
+.frames{position:absolute;inset:0;display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:2px;border-radius:10px;overflow:hidden;background:#111}
+.frames i{display:block;background:linear-gradient(170deg,#4a4a4f,#232326);opacity:0;filter:blur(8px);transform:scale(1.12);transition:opacity .5s ease,filter .6s ease,transform .6s cubic-bezier(.34,1.4,.64,1),box-shadow .3s}
+.frames i:nth-child(3n){background:linear-gradient(170deg,#5b5b60,#2c2c30)}
+.frames i:nth-child(4n+1){background:linear-gradient(170deg,#3d3d42,#1b1b1e)}
+.frames i.dev{opacity:1;filter:none;transform:none}
+.frames i.enc{box-shadow:inset 0 -4px 0 #e1e1e1;filter:brightness(1.45)}
+.dim{position:absolute;top:0;bottom:0;background:rgba(0,0,0,.62);animation:fadeIn .4s ease both}
+.br{position:absolute;top:-4px;bottom:-4px;border:3px solid #e1e1e1;border-radius:11px;cursor:grab;animation:brIn .55s cubic-bezier(.34,1.56,.64,1) both}
+@keyframes brIn{from{opacity:0;transform:scaleY(1.4)}to{opacity:1;transform:none}}
+.br.snap{transition:left .5s cubic-bezier(.34,1.56,.64,1),width .5s cubic-bezier(.34,1.56,.64,1)}
+.br.over{border-color:#ed2236}
+.br.breathe{animation:brBreathe 1.4s ease-in-out infinite;cursor:default}
+@keyframes brBreathe{0%,100%{box-shadow:0 0 0 0 rgba(225,225,225,0)}50%{box-shadow:0 0 0 6px rgba(225,225,225,.18)}}
+.h{position:absolute;top:50%;width:44px;height:84px;margin-top:-42px;border:0;background:transparent;display:grid;place-items:center;cursor:ew-resize;touch-action:none}
+.h i{display:block;width:12px;height:40px;border-radius:5px;background:#e1e1e1}
+.br.over .h i{background:#ed2236}
+.hin{left:-28px}.hout{right:-28px}
+.scale{display:flex;justify-content:space-between;font-size:11px;color:#8f8f8f}
+.make{height:50px;border:0;border-radius:11px;background:#e1e1e1;color:#000 !important;font-weight:600;font-size:14.5px;flex:none}
+.sub{font-size:12px;color:#8f8f8f;line-height:1.45}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.ghostbtn{height:44px;border:1px solid #383838;background:transparent;border-radius:11px;font-size:12.5px;transition:background .25s,color .25s}
+.ghostbtn.ok{background:#e1e1e1;color:#000 !important;border-color:#e1e1e1}
+.work{height:50px;border-radius:11px;background:#282828;display:flex;align-items:center;gap:12px;padding:0 16px;flex:none}
+.tile{width:146px;height:260px;border-radius:12px;align-self:center;background:linear-gradient(170deg,#5b5b60,#232326);position:relative;overflow:hidden;animation:lift .75s cubic-bezier(.34,1.56,.64,1) both;flex:none}
+.tile::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.12),transparent);animation:sheen2 2.4s ease-in-out infinite}
+@keyframes sheen2{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+@keyframes lift{0%{transform:translateY(-150px) scaleX(2.05) scaleY(.29);border-radius:4px;opacity:.7}100%{transform:none;opacity:1}}
+.tile em{position:absolute;left:8px;bottom:8px;font-style:normal;font-size:11px;background:rgba(0,0,0,.65);border-radius:6px;padding:3px 6px}
+.meta{font-size:12.5px;color:#8f8f8f;text-align:center;font-variant-numeric:tabular-nums}
+.url{font-size:12.5px;text-align:center;word-break:break-all}
+.copy{height:48px;border:0;border-radius:11px;background:#e1e1e1;color:#000 !important;font-weight:600;font-size:14px;transition:background .25s}
+.copy.done{background:#30bd1b}
+.tabs{position:absolute;left:0;right:0;bottom:0;height:83px;border-top:1px solid rgba(255,255,255,.06);display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:8px 18px 0;background:#000}
+.tab{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;color:#8f8f8f;border:0;background:transparent;height:52px;justify-content:flex-start;padding-top:4px;text-decoration:none}
+.tab.on{color:#e1e1e1}
+/* lab panel */
+.step{display:grid;grid-template-columns:28px minmax(0,1fr);gap:12px;padding:12px 14px;border-radius:11px;transition:background .35s,opacity .35s;opacity:.5}
+.step.on{background:#fff;opacity:1;box-shadow:0 0 0 1px rgba(0,0,0,.06) inset}
+.step.past{opacity:.8}
+.num{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:600;background:#e3e3e3;color:#000}
+.step.on .num{background:#000;color:#fff}
+.sname{font-weight:600;font-size:13.5px;margin-bottom:3px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.nb{font-size:10px;font-weight:500;color:#a85a00;box-shadow:0 0 0 1px currentColor inset;border-radius:99px;padding:1px 7px}
+.sclaim{font-size:12.5px;line-height:1.5;color:#000}
+.sui{font-size:11.5px;color:#6e6e75;margin-top:5px}
+.tog{display:flex;align-items:center;gap:10px;font-size:12.5px;min-height:44px;cursor:pointer;line-height:1.35}
+.tog input{position:absolute;opacity:0;width:1px;height:1px}
+.tog span{width:38px;height:22px;border-radius:11px;background:#adadb7;position:relative;flex:none;transition:background .2s}
+.tog span::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .25s cubic-bezier(.34,1.56,.64,1)}
+.tog input:checked+span{background:#000}
+.tog input:checked+span::after{transform:translateX(16px)}
+.hap{display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 12px;border-radius:15px;background:#e3e3e3;font-size:12px;color:#6e6e75}
+.tickA,.tickB{background:#000;color:#fff}
+.tickA{animation:hapA .5s ease-out}.tickB{animation:hapB .5s ease-out}
+@keyframes hapA{0%{transform:scale(1.25)}100%{transform:none}}
+@keyframes hapB{0%{transform:scale(1.25)}100%{transform:none}}
+.reset{height:44px;padding:0 18px;border-radius:11px;border:0;background:#000;color:#fff !important;font-weight:600;font-size:13.5px}
+/* reduce motion: crossfades only */
+.reduce *,.reduce *::before,.reduce *::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+.reduce .morph,.reduce .frames i{transition:opacity .2s !important}
+.reduce .ring,.reduce .face,.reduce .slot,.reduce .th{animation:none !important}
+@media (prefers-reduced-motion: reduce){.screen *,.screen *::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}}
+</style>
+</helmet>
+<div class="lab" style="width: 1440px; height: 1040px; background: #f4f4f4; color: #000; font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace; display: flex; gap: 52px; padding: 58px 44px 0 40px">
+  <div style="display: flex; flex-direction: column; align-items: center; gap: 14px; flex: none">
+    <div style="width: 390px; height: 844px; padding: 11px; border-radius: 58px; background: #161616; flex: none">
+      <div class="screen {{reduceCls}}">
+        <sc-if value="{{hasFileUrl}}" hint-placeholder-val="{{ false }}">
+          <video src="{{fileUrl}}" preload="metadata" muted="{{ true }}" playsInline="{{ true }}" onLoadedMetadata="{{onMeta}}" onError="{{onMetaErr}}" style="display: none"></video>
+        </sc-if>
+        <div class="content">
+          <div class="orb {{orbCls}}">
+            <div class="stage"><div class="tilt"><div class="ring">
+              <sc-for list="{{orbit}}" as="o" hint-placeholder-count="7">
+                <div class="slot" style="transform: {{o.slotT}}; animation-delay: {{o.delay}}">
+                  <div class="face"><div class="up">
+                    <div class="{{o.popCls}}"><div class="{{o.thCls}}" style="width: {{o.w}}px; height: {{o.h}}px; left: {{o.l}}px; top: {{o.t}}px; animation-delay: {{o.delay}}"><em>{{o.label}}</em></div></div>
+                  </div></div>
+                </div>
+              </sc-for>
+            </div></div></div>
+            <span class="offline">{{offlineTxt}}</span>
+          </div>
+          <div class="grow"></div>
+          <sc-if value="{{showRail}}" hint-placeholder-val="{{ false }}">
+            <div class="rail" aria-label="steps">
+              <div class="hl" style="transform: translateX({{railX}})"></div>
+              <sc-for list="{{rail}}" as="r" hint-placeholder-count="4"><span class="{{r.cls}}">{{r.label}}</span></sc-for>
+            </div>
+          </sc-if>
+          <div class="morph {{morphCls}} {{revealCls}}">
+            <sc-if value="{{isErr}}" hint-placeholder-val="{{ false }}">
+              <div class="row"><span class="err">{{errTxt}}</span><button class="pill" type="button" onClick="{{reset}}">ok</button></div>
+            </sc-if>
+            <sc-if value="{{isCapWork}}" hint-placeholder-val="{{ false }}">
+              <div class="row"><span class="dot"></span><span class="lbl">{{workLabel}}</span><span class="el">{{workMetric}}</span></div>
+              <sc-if value="{{showBar}}" hint-placeholder-val="{{ false }}"><div class="bar"><i style="width: {{barPct}}%"></i></div></sc-if>
+            </sc-if>
+            <sc-if value="{{isImage}}" hint-placeholder-val="{{ false }}">
+              <div class="pane">
+                <div class="ttl"><b>{{mediaName}}</b><span class="tc">{{mediaSize}}</span></div>
+                <span class="sub">this is an image, so there is nothing to trim. it can be hosted as it is.</span>
+                <button class="ghostbtn {{hostCls}}" type="button" onClick="{{host}}" style="margin-top: auto">{{hostLabel}}</button>
+              </div>
+            </sc-if>
+            <sc-if value="{{isStudioish}}" hint-placeholder-val="{{ false }}">
+              <div class="pane">
+                <div class="ttl"><b>{{mediaName}}</b><span class="read {{overCls}} {{rollCls}}">{{lenTxt}}</span></div>
+                <span class="tc">{{tcLine}}</span>
+                <div class="strip" data-strip="1" style="margin-top: 6px">
+                  <div class="frames"><sc-for list="{{frames}}" as="f" hint-placeholder-count="9"><i class="{{f.cls}}"></i></sc-for></div>
+                  <sc-if value="{{showBracket}}" hint-placeholder-val="{{ false }}">
+                    <div class="dim" style="left: 0; width: {{inPct}}%; border-radius: 10px 0 0 10px"></div>
+                    <div class="dim" style="left: {{outPct}}%; right: 0; border-radius: 0 10px 10px 0"></div>
+                    <div class="br {{brCls}}" style="left: {{inPct}}%; width: {{wPct}}%" onPointerDown="{{downBody}}" onPointerMove="{{move}}" onPointerUp="{{up}}" onPointerCancel="{{up}}">
+                      <button class="h hin" type="button" aria-label="in point, arrow keys move 0.1 s" onPointerDown="{{downIn}}" onPointerMove="{{move}}" onPointerUp="{{up}}" onPointerCancel="{{up}}" onKeyDown="{{keyIn}}"><i></i></button>
+                      <button class="h hout" type="button" aria-label="out point, arrow keys move 0.1 s" onPointerDown="{{downOut}}" onPointerMove="{{move}}" onPointerUp="{{up}}" onPointerCancel="{{up}}" onKeyDown="{{keyOut}}"><i></i></button>
+                    </div>
+                  </sc-if>
+                </div>
+                <div class="scale"><sc-for list="{{scale}}" as="t" hint-placeholder-count="3"><span>{{t}}</span></sc-for></div>
+                <sc-if value="{{isReading}}" hint-placeholder-val="{{ false }}">
+                  <div class="work" style="margin-top: auto"><span class="dot"></span><span class="lbl">reading the video</span><span class="el" style="padding-right: 0">{{framesTxt}}</span></div>
+                  <span class="sub" style="text-align: center">frames appear as the server reads them.</span>
+                </sc-if>
+                <sc-if value="{{isReady}}" hint-placeholder-val="{{ false }}">
+                  <span class="sub">{{fitNote}}</span>
+                  <button class="make" type="button" onClick="{{make}}" style="margin-top: auto">make webp</button>
+                  <div class="two">
+                    <button class="ghostbtn {{photosCls}}" type="button" onClick="{{savePhotos}}">{{photosLabel}}</button>
+                    <button class="ghostbtn {{hostCls}}" type="button" onClick="{{host}}">{{hostLabel}}</button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{isRendering}}" hint-placeholder-val="{{ false }}">
+                  <div class="work" style="margin-top: auto"><span class="dot"></span><span class="lbl">{{renderLabel}}</span><span class="el" style="padding-right: 0">{{renderMetric}}</span></div>
+                  <span class="sub" style="text-align: center">{{renderNote}}</span>
+                </sc-if>
+                <sc-if value="{{isBusy}}" hint-placeholder-val="{{ false }}">
+                  <span class="err" style="margin-top: auto">another webp is being made right now.</span>
+                  <button class="make" type="button" onClick="{{make}}">try again</button>
+                </sc-if>
+                <sc-if value="{{isLost}}" hint-placeholder-val="{{ false }}">
+                  <span class="err" style="margin-top: auto">the webp was lost while cobalt was in the background. your trim is kept.</span>
+                  <button class="make" type="button" onClick="{{make}}">make it again</button>
+                </sc-if>
+              </div>
+            </sc-if>
+            <sc-if value="{{isDone}}" hint-placeholder-val="{{ false }}">
+              <div class="pane" style="gap: 10px">
+                <div class="ttl"><b>webp ready</b><button class="ghostbtn" type="button" style="height: 36px; padding: 0 12px; flex: none" onClick="{{backToTrim}}">back to trim</button></div>
+                <div class="tile"><em>{{lenTxt}}</em></div>
+                <span class="meta">{{doneMeta}}</span>
+                <span class="url">media.capybaraharmony.com/<span style="color: #8f8f8f">··········</span>.webp</span>
+                <div class="two">
+                  <button class="copy {{copyCls}}" type="button" onClick="{{copy}}">{{copyLabel}}</button>
+                  <button class="ghostbtn" type="button" style="height: 48px">share</button>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+          <sc-if value="{{showCircles}}" hint-placeholder-val="{{ true }}">
+            <div class="circles">
+              <div class="cb"><button class="circ" type="button" aria-label="paste a link" onClick="{{paste}}"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2"></path><path d="M9 3m0 2a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v0a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2z"></path></svg></button>paste</div>
+              <div class="cb"><label class="circ" aria-label="add a file"><input type="file" accept="video/*,image/gif,image/webp,image/png,image/jpeg" onChange="{{attach}}"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3l6.5 -6.5a3 3 0 0 0 -6 -6l-6.5 6.5a4.5 4.5 0 0 0 9 9l6.5 -6.5"></path></svg></label>file</div>
+            </div>
+          </sc-if>
+        </div>
+        <nav class="tabs" aria-label="tabs">
+          <button class="tab on" type="button"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"></path><path d="M7 11l5 5l5 -5"></path><path d="M12 4l0 12"></path></svg>save</button>
+          <a class="tab" href="Library.dc.html"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3m0 2.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z"></path><path d="M4.012 7.26a2.005 2.005 0 0 0 -1.012 1.737v10c0 1.1 .9 2 2 2h10c.75 0 1.158 -.385 1.5 -1"></path><path d="M17 7h.01"></path><path d="M7 13l3.644 -3.644a1.21 1.21 0 0 1 1.712 0l3.644 3.644"></path><path d="M15 12l1.644 -1.644a1.21 1.21 0 0 1 1.712 0l2.644 2.644"></path></svg>library</a>
+          <a class="tab" href="Settings.dc.html"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065z"></path><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"></path></svg>settings</a>
+        </nav>
+      </div>
+    </div>
+    <span class="hap {{tickCls}}">haptic · light impact {{tickTxt}}</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 18px; min-width: 0; flex-grow: 1">
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <h1 style="margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.02em">orbit → paste → save → read → webp</h1>
+      <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #6e6e75; max-width: 800px">home is your latest videos, kept on the phone, circling slowly. there is no text field: two white circles, paste and file. the one you tap opens into the work card from where it sits, the orbit pulls up out of the way, and the finished video drops into the orbit. every input takes the same save → read → webp steps the server's studio already takes. try your own file; it never leaves your browser.</p>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px">
+      <sc-for list="{{steps}}" as="s" hint-placeholder-count="7">
+        <div class="{{s.cls}}">
+          <span class="num">{{s.n}}</span>
+          <div>
+            <div class="sname">{{s.name}}<sc-if value="{{s.nb}}" hint-placeholder-val="{{ false }}"><span class="nb">needs backend</span></sc-if></div>
+            <div class="sclaim">{{s.claim}}</div>
+            <div class="sui">swiftui: {{s.ui}}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+    <fieldset style="border: 0; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 20px">
+      <legend style="font-weight: 600; font-size: 14px; margin-bottom: 4px; padding: 0">make it fail</legend>
+      <label class="tog"><input type="checkbox" checked="{{nolink}}" onChange="{{tNolink}}"><span></span>clipboard has no link</label>
+      <label class="tog"><input type="checkbox" checked="{{priv}}" onChange="{{tPriv}}"><span></span>the post is private or removed</label>
+      <label class="tog"><input type="checkbox" checked="{{cold}}" onChange="{{tCold}}"><span></span>server is asleep (cold start)</label>
+      <label class="tog"><input type="checkbox" checked="{{big}}" onChange="{{tBig}}"><span></span>the file is over 100 MB</label>
+      <label class="tog"><input type="checkbox" checked="{{busy}}" onChange="{{tBusy}}"><span></span>another webp is encoding</label>
+      <label class="tog"><input type="checkbox" checked="{{lost}}" onChange="{{tLost}}"><span></span>leave the app mid-render</label>
+      <label class="tog"><input type="checkbox" checked="{{reduce}}" onChange="{{tReduce}}"><span></span>reduce motion (fades only)</label>
+      <div style="display: flex; align-items: center"><button class="reset" type="button" onClick="{{reset}}">reset the phone</button></div>
+    </fieldset>
+    <p style="margin: 0; font-size: 12px; line-height: 1.6; color: #6e6e75">real data: the link is instagram_Dd7P496wolG from your library (14.77 s, 720×1280, 4.3 MB; its studio webp is 480×854, 10.1 s, 4.5 MB). offline: your 13 saved originals take 54 MB. times run 5× faster than live; a live studio render took 23.5 s (one run). upload speed is assumed at 8 MB/s.</p>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.LIMIT = 10;
+    this.FPS = 15;
+    this.LINK = { name: 'instagram_Dd7P496wolG', dur: 14.77, w: 720, h: 1280, bytes: 4331778 };
+    this.timers = [];
+    this.drag = null;
+    this.state = Object.assign(this.blank(), { reduce: false, nolink: false, priv: false, cold: false, big: false, busy: false, lost: false });
+  }
+  orbitBase() {
+    // the newest saved videos in the live library (Dd7P496wolG is left out: the lab pastes it)
+    return [
+      { k: 'Dd55fEyN1Yy', w: 720, h: 1280, d: 37.43 }, { k: '2105435404002562056', w: 480, h: 568, d: 5.46 },
+      { k: '2105432512428445875', w: 498, h: 280, d: 1.9 }, { k: 'Dd5JFkMDt4N', w: 720, h: 720, d: 10.77 },
+      { k: 'Dd7RFsmT45H', w: 640, h: 1136, d: null }, { k: '2105358343657427103', w: 1920, h: 1080, d: 5.06 },
+      { k: 'clip', w: 1280, h: 720, d: 28 }
+    ];
+  }
+  blank() {
+    return { stage: 'rest', added: null, src: null, file: null, media: null, kind: null, err: null,
+      inS: 0, outS: 10, dragging: null, over: false, tick: 0, roll: 0, snap: false,
+      elapsed: 0, waking: false, sent: 0, stored: 0, frames: 0, decoded: 0, total: 0, phase: null,
+      copied: false, photos: false, hosted: false };
+  }
+  componentWillUnmount() { this.clear(); }
+  clear() { this.timers.forEach(function (t) { clearTimeout(t); clearInterval(t); }); this.timers = []; }
+  later(fn, ms) { this.timers.push(setTimeout(fn, ms)); }
+  every(fn, ms) { var id = setInterval(fn, ms); this.timers.push(id); return id; }
+  dur() { return this.state.media ? this.state.media.dur : this.LINK.dur; }
+  mb(b) { return b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1e3)) + ' KB'; }
+
+  reset() {
+    this.clear(); this.drag = null;
+    if (this.state.file && this.state.file.url) { try { URL.revokeObjectURL(this.state.file.url); } catch (x) {} }
+    this.setState(this.blank());
+  }
+  fail(code) { this.clear(); this.setState({ stage: 'error', err: code }); }
+
+  // 1. input: a link from the clipboard
+  paste() {
+    var self = this;
+    if (this.state.nolink) { this.setState({ stage: 'error', err: 'nolink', src: null }); return; }
+    var cold = this.state.cold, priv = this.state.priv;
+    this.setState({ stage: 'fetching', src: 'link', media: this.LINK, kind: 'video', elapsed: 0, waking: false });
+    var t0 = Date.now();
+    var iv = this.every(function () {
+      var e = (Date.now() - t0) / 1000;
+      self.setState({ elapsed: e, waking: cold && e > 1.5 });
+    }, 100);
+    this.later(function () {
+      clearInterval(iv);
+      if (priv) self.fail('fetch'); else self.store(self.LINK.bytes);
+    }, cold ? 4200 : 1500);
+  }
+  // 1. input: a file the viewer picks (it stays in the browser)
+  attach(e) {
+    var self = this, input = e.target, f = input.files && input.files[0];
+    if (!f) return;
+    try { input.value = ''; } catch (x) {}
+    if (this.state.big || f.size > 100000000) { this.setState({ stage: 'error', err: 'big', src: 'file', file: { name: f.name, size: f.size } }); return; }
+    var url = null;
+    try { url = URL.createObjectURL(f); } catch (x) {}
+    var isVideo = /^video\//.test(f.type);
+    this.setState({ stage: 'uploading', src: 'file', file: { name: f.name, size: f.size, url: url }, media: null, kind: isVideo && url ? null : 'image', sent: 0 });
+    var iv = this.every(function () {
+      var sent = Math.min(f.size, self.state.sent + 8e6 * 0.1);
+      self.setState({ sent: sent });
+      if (sent >= f.size) { clearInterval(iv); self.store(f.size); }
+    }, 100);
+  }
+  onMeta(e) {
+    var v = e.currentTarget, f = this.state.file;
+    if (!f) return;
+    if (!isFinite(v.duration) || !v.videoWidth) { this.setState({ kind: 'image' }); return; }
+    this.setState({ kind: 'video', media: { name: f.name, dur: v.duration, w: v.videoWidth, h: v.videoHeight, bytes: f.size } });
+  }
+  onMetaErr() { this.setState({ kind: 'image' }); }
+  // 2. save: bytes land in private storage
+  store(bytes) {
+    var self = this;
+    this.setState({ stage: 'storing', stored: 0 });
+    var t0 = Date.now();
+    var iv = this.every(function () {
+      var k = Math.min(1, (Date.now() - t0) / 900);
+      self.setState({ stored: bytes * (1 - Math.pow(1 - k, 3)) });
+      if (k >= 1) { clearInterval(iv); self.readMedia(0); }
+    }, 60);
+  }
+  // 3. read: the server probes the video; frames develop as it goes
+  readMedia(waited) {
+    var self = this, s = this.state;
+    if (s.kind === 'image') { this.setState({ stage: 'image' }); return; }
+    if (!s.media) {
+      if (waited > 3000) { this.setState({ stage: 'image', kind: 'image' }); return; }
+      this.later(function () { self.readMedia(waited + 100); }, 100);
+      return;
+    }
+    this.setState({ stage: 'reading', frames: 0 });
+    var iv = this.every(function () {
+      var n = self.state.frames + 1;
+      self.setState({ frames: n, roll: self.state.roll + 1 });
+      if (n >= 9) {
+        clearInterval(iv);
+        var d = self.dur();
+        self.later(function () { self.setState({ stage: 'ready', inS: 0, outS: Math.min(d, self.LIMIT), snap: false }); }, 250);
+      }
+    }, 150);
+  }
+  backToTrim() { this.setState({ stage: 'ready', copied: false }); }
+
+  startDrag(which, e) {
+    if (this.state.stage !== 'ready') return;
+    var strip = e.currentTarget.closest('[data-strip]');
+    if (!strip) return;
+    e.stopPropagation();
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (x) {}
+    this.drag = { which: which, x: e.clientX, w: strip.getBoundingClientRect().width, a: this.state.inS, b: this.state.outS };
+    this.setState({ dragging: which, snap: false });
+  }
+  moveDrag(e) {
+    var d = this.drag;
+    if (!d) return;
+    e.stopPropagation();
+    var D = this.dur(), L = this.LIMIT;
+    var dt = (e.clientX - d.x) / d.w * D;
+    var a = d.a, b = d.b, over = false, ex;
+    if (d.which === 'in') {
+      a = Math.max(0, Math.min(d.a + dt, b - 0.5));
+      if (b - a > L) { ex = (b - a) - L; a = b - L - ex * 0.25; over = true; }
+    } else if (d.which === 'out') {
+      b = Math.min(D, Math.max(d.b + dt, a + 0.5));
+      if (b - a > L) { ex = (b - a) - L; b = a + L + ex * 0.25; over = true; }
+    } else {
+      var len = d.b - d.a;
+      a = Math.max(0, Math.min(d.a + dt, D - len));
+      b = a + len;
+    }
+    var prevLen = Math.round((this.state.outS - this.state.inS) * 10);
+    var st = { inS: a, outS: b, over: over };
+    if (Math.round((b - a) * 10) !== prevLen) st.roll = this.state.roll + 1;
+    if (over && !this.state.over) st.tick = this.state.tick + 1;
+    this.setState(st);
+  }
+  endDrag(e) {
+    var d = this.drag;
+    if (!d) return;
+    if (e) e.stopPropagation();
+    this.drag = null;
+    var a = this.state.inS, b = this.state.outS, L = this.LIMIT;
+    if (b - a > L) { if (d.which === 'in') a = b - L; else b = a + L; }
+    this.setState({ dragging: null, over: false, snap: true, inS: a, outS: b, roll: this.state.roll + 1 });
+  }
+  nudge(which, e) {
+    if (this.state.stage !== 'ready') return;
+    var k = e.key, step = k === 'ArrowLeft' ? -0.1 : k === 'ArrowRight' ? 0.1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    var a = this.state.inS, b = this.state.outS, L = this.LIMIT, D = this.dur(), hit = false;
+    if (which === 'in') { a = Math.max(0, Math.min(a + step, b - 0.5)); if (b - a > L) { a = b - L; hit = true; } }
+    else { b = Math.min(D, Math.max(b + step, a + 0.5)); if (b - a > L) { b = a + L; hit = true; } }
+    var st = { inS: a, outS: b, snap: true, roll: this.state.roll + 1 };
+    if (hit) st.tick = this.state.tick + 1;
+    this.setState(st);
+  }
+  // 4. render: decode frames (countable) then pack the webp (open-ended)
+  make() {
+    var self = this;
+    if (this.state.busy) { this.setState({ stage: 'busy' }); return; }
+    var total = Math.max(1, Math.round((this.state.outS - this.state.inS) * this.FPS));
+    var ms = 23.5 / 5 * 1000, decodeMs = ms * 0.6;
+    this.setState({ stage: 'rendering', phase: 'decode', decoded: 0, total: total, elapsed: 0 });
+    var t0 = Date.now(), lost = this.state.lost;
+    var iv = this.every(function () {
+      var t = Date.now() - t0;
+      if (t < decodeMs) self.setState({ decoded: Math.floor(total * t / decodeMs), elapsed: t / 1000 * 5 });
+      else self.setState({ phase: 'pack', decoded: total, elapsed: t / 1000 * 5 });
+    }, 100);
+    this.later(function () {
+      clearInterval(iv);
+      var m = self.state.media || self.LINK;
+      self.setState(lost ? { stage: 'lost' } : { stage: 'done', copied: false, added: { k: 'new', w: m.w || 720, h: m.h || 1280, d: self.state.outS - self.state.inS } });
+    }, lost ? ms * 0.55 : ms);
+  }
+  copy() { var self = this; this.setState({ copied: true }); this.later(function () { self.setState({ copied: false }); }, 1800); }
+  toggle(k) { var o = {}; o[k] = !this.state[k]; this.setState(o); }
+  tc(s) { var m = Math.floor(s / 60), r = s - m * 60; return (m < 10 ? '0' : '') + m + ':' + (r < 10 ? '0' : '') + r.toFixed(1); }
+
+  renderVals() {
+    var self = this, s = this.state, st = s.stage, D = this.dur(), L = this.LIMIT;
+    var media = s.media || this.LINK;
+    var studioish = st === 'reading' || st === 'ready' || st === 'rendering' || st === 'busy' || st === 'lost';
+    var errLong = s.err === 'fetch';
+    var morph = st === 'rest' ? 'm-hidden'
+      : st === 'error' ? (errLong ? 'm-cap2 m-err' : 'm-cap m-err')
+      : studioish ? 'm-studio'
+      : st === 'done' ? 'm-done'
+      : st === 'image' ? 'm-image' : 'm-cap';
+    var len = s.outS - s.inS;
+    var railIdx = (st === 'fetching' || st === 'uploading') ? 0 : st === 'storing' ? 1 : st === 'reading' ? 2 : 3;
+    var railLabels = [s.src === 'file' ? 'upload' : 'fetch', 'save', 'read', st === 'image' ? 'host' : 'webp'];
+    var stepIdx = (st === 'rest' || (st === 'error' && s.err !== 'fetch')) ? 0
+      : (st === 'fetching' || st === 'uploading' || st === 'error') ? 1
+      : st === 'storing' ? 2 : st === 'reading' ? 3
+      : st === 'ready' || st === 'image' ? 4
+      : st === 'done' ? 6 : 5;
+    var stepData = [
+      ['orbit + two circles', 'your latest videos circle and play from the phone\'s own storage; paste and file are the only controls. you never type a link.', 'only the 3 thumbnails nearest the front play (a pool of 3 players); the rest hold a still frame', false],
+      ['fetch or upload', 'the circle you tapped opens into the capsule from the same spot. a link counts seconds ("waking server" only after 1.5 s); a file shows real upload progress.', 'matchedGeometryEffect(id: "input") from circle to capsule', true],
+      ['save', 'the capsule shows bytes landing in private storage, so a big file never looks stuck.', '.contentTransition(.numericText()) on the byte count', true],
+      ['read: the video develops', 'frames fade in from a blur, left to right, as the server reads the file. the length rolls in when it is known.', 'staggered .transition(.blurReplace) per frame', true],
+      ['trim, only if needed', 'under 10 s the bracket covers the whole clip. over 10 s it starts on the first 10 s; drag past and it stretches, ticks, and springs back. save to photos and host original sit right here too.', '.sensoryFeedback(.impact(weight: .light), trigger: hitLimit)', false],
+      ['make the webp', 'two honest phases: decoding counts real frames (the server knows 15 per second), each frame in the bracket lights up as it is decoded; packing has no count, so it just breathes.', 'PhaseAnimator for packing; frame count from the poll', true],
+      ['the result joins the orbit', 'the span lifts off the strip into the tile, and the video drops into the orbit at the front. copy turns into "copied" in place.', 'matchedGeometryEffect(id: "span") into the orbit + .sensoryFeedback(.success)', false]
+    ];
+    var steps = stepData.map(function (d, i) {
+      return { n: i + 1, name: d[0], claim: d[1], ui: d[2], nb: d[3], cls: 'step' + (i === stepIdx ? ' on' : i < stepIdx ? ' past' : '') };
+    });
+    var frames = [];
+    for (var i = 0; i < 9; i++) {
+      var dev = st !== 'reading' || i < s.frames;
+      var f0 = i / 9 * D, f1 = (i + 1) / 9 * D;
+      var doneTo = s.inS + (s.total ? s.decoded / s.total : 0) * len;
+      var enc = (st === 'rendering' || st === 'done') && f1 > s.inS && f0 < s.outS && f0 < doneTo;
+      frames.push({ cls: (dev ? 'dev' : '') + (enc ? ' enc' : '') });
+    }
+    var workLabel = st === 'uploading' ? 'uploading'
+      : st === 'storing' ? 'saving privately'
+      : s.waking ? 'waking server' : 'fetching from instagram';
+    var fileSize = s.file ? s.file.size : 0;
+    var workMetric = st === 'uploading' ? this.mb(s.sent) + ' / ' + this.mb(fileSize)
+      : st === 'storing' ? this.mb(s.stored)
+      : s.elapsed.toFixed(1) + ' s';
+    var errTxt = s.err === 'nolink' ? 'no link found in that text.'
+      : s.err === 'big' ? 'that file is over the 100 MB limit.'
+      : 'cobalt couldn\'t fetch this link. the post may be private or removed.';
+    var outW = Math.min(480, media.w || 480);
+    var outH = media.w ? Math.round(media.h * outW / media.w) : 0;
+    var doneMeta = s.src === 'link' ? '480×854 · 10.1 s · 4.5 MB'
+      : outW + '×' + outH + ' · ' + len.toFixed(1) + ' s';
+    var brCls = (s.over ? 'over ' : '') + (s.snap && !s.dragging ? 'snap ' : '') + (st === 'rendering' && s.phase === 'pack' ? 'breathe' : '');
+    var chipKind = s.src === 'file' ? 'file' : 'instagram';
+    var chipName = s.src === 'file' ? (s.file ? s.file.name : '') : 'Dd7P496wolG';
+    var scale = st === 'reading' && s.frames < 9 ? ['0 s', '…', '…'] : ['0 s', (D / 2).toFixed(1) + ' s', D.toFixed(1) + ' s'];
+    var items = this.orbitBase();
+    if (s.added) items = [s.added].concat(items);
+    var n = items.length, T = 48;
+    var orbit = items.map(function (it, i) {
+      var a = 90 - i * 360 / n;
+      var k = Math.min(92 / it.w, 92 / it.h), w = Math.round(it.w * k), h = Math.round(it.h * k);
+      return { slotT: 'rotate(' + a + 'deg) translateX(132px) rotate(' + (-a) + 'deg)', delay: (-((a % 360 + 360) % 360) / 360 * T).toFixed(2) + 's',
+        w: w, h: h, l: -Math.round(w / 2), t: -Math.round(h / 2), label: it.d ? it.d.toFixed(1) + ' s' : 'video',
+        thCls: 'th' + (it.k === 'new' ? ' fresh' : ''), popCls: it.k === 'new' ? 'pop' : '' };
+    });
+    return {
+      orbit: orbit, orbitCount: n,
+      orbCls: st === 'rest' ? 'big' : 'small',
+      offlineTxt: '13 videos on this iphone · 54 MB',
+      showCircles: st === 'rest',
+      revealCls: st === 'rest' ? '' : (s.src === 'file' ? 'rv-r' : 'rv-l'),
+      reduceCls: s.reduce ? 'reduce' : '',
+      showRail: st !== 'rest' && st !== 'error',
+      hasFileUrl: !!(s.file && s.file.url && s.kind !== 'image'),
+      fileUrl: s.file && s.file.url ? s.file.url : '',
+      railX: (railIdx * 100) + '%',
+      rail: railLabels.map(function (l, i) { return { label: l, cls: i === railIdx ? 'on' : i < railIdx || st === 'done' ? 'past' : '' }; }),
+      morphCls: morph,
+      isErr: st === 'error', errTxt: errTxt,
+      isCapWork: st === 'fetching' || st === 'uploading' || st === 'storing',
+      showBar: st === 'uploading',
+      barPct: fileSize ? (s.sent / fileSize * 100).toFixed(1) : '0',
+      workLabel: workLabel, workMetric: workMetric,
+      isImage: st === 'image',
+      mediaName: s.src === 'file' && s.file ? s.file.name : media.name,
+      mediaSize: this.mb(s.src === 'file' ? fileSize : media.bytes),
+      isStudioish: studioish,
+      isReading: st === 'reading',
+      isReady: st === 'ready',
+      isRendering: st === 'rendering',
+      isBusy: st === 'busy',
+      isLost: st === 'lost',
+      isDone: st === 'done',
+      showBracket: st !== 'reading',
+      frames: frames,
+      framesTxt: s.frames + ' / 9',
+      scale: scale,
+      fitNote: D > L ? 'webps stop at 10 s, so the first 10 s are picked. drag to choose.' : 'the whole clip fits in a webp.',
+      lenTxt: (st === 'reading' ? (D * s.frames / 9) : len).toFixed(1) + ' s',
+      tcLine: st === 'reading' ? media.w + '×' + media.h + ' · ' + this.mb(media.bytes) : this.tc(s.inS) + ' → ' + this.tc(s.outS) + ' of ' + this.tc(D),
+      overCls: s.over ? 'over' : '',
+      rollCls: s.roll % 2 ? 'rollA' : 'rollB',
+      inPct: (s.inS / D * 100).toFixed(3),
+      outPct: (s.outS / D * 100).toFixed(3),
+      wPct: (len / D * 100).toFixed(3),
+      brCls: brCls,
+      renderLabel: s.phase === 'pack' ? 'packing webp' : 'decoding frames',
+      renderMetric: s.phase === 'pack' ? s.elapsed.toFixed(1) + ' s' : s.decoded + ' / ' + s.total,
+      renderNote: s.phase === 'pack' ? 'no count for this part, so it just breathes.' : 'every frame in the bracket lights up once decoded.',
+      doneMeta: doneMeta,
+      tickCls: s.tick === 0 ? '' : s.tick % 2 ? 'tickA' : 'tickB',
+      tickTxt: s.tick > 0 ? '× ' + s.tick : '',
+      copyCls: s.copied ? 'done' : '',
+      copyLabel: s.copied ? 'copied' : 'copy link',
+      photosCls: s.photos ? 'ok' : '', photosLabel: s.photos ? 'saved to photos' : 'save to photos',
+      hostCls: s.hosted ? 'ok' : '', hostLabel: s.hosted ? 'link copied' : (st === 'image' ? 'host as-is' : 'host original'),
+      steps: steps,
+      nolink: s.nolink, priv: s.priv, cold: s.cold, big: s.big, busy: s.busy, lost: s.lost, reduce: s.reduce,
+      tNolink: function () { self.toggle('nolink'); },
+      tPriv: function () { self.toggle('priv'); },
+      tCold: function () { self.toggle('cold'); },
+      tBig: function () { self.toggle('big'); },
+      tBusy: function () { self.toggle('busy'); },
+      tLost: function () { self.toggle('lost'); },
+      tReduce: function () { self.toggle('reduce'); },
+      paste: function () { self.paste(); },
+      attach: function (e) { self.attach(e); },
+      onMeta: function (e) { self.onMeta(e); },
+      onMetaErr: function () { self.onMetaErr(); },
+      reset: function () { self.reset(); },
+      backToTrim: function () { self.backToTrim(); },
+      make: function () { self.make(); },
+      copy: function () { self.copy(); },
+      savePhotos: function () { self.setState({ photos: true }); },
+      host: function () { self.setState({ hosted: true }); },
+      downIn: function (e) { self.startDrag('in', e); },
+      downOut: function (e) { self.startDrag('out', e); },
+      downBody: function (e) { self.startDrag('body', e); },
+      move: function (e) { self.moveDrag(e); },
+      up: function (e) { self.endDrag(e); },
+      keyIn: function (e) { self.nudge('in', e); },
+      keyOut: function (e) { self.nudge('out', e); }
+    };
+  }
+}
+</script>
+</body>
+</html>

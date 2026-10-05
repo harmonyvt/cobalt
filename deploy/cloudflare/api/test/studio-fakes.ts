@@ -67,6 +67,14 @@ export class MemoryOriginals implements OriginalsBucket {
             httpMetadata: { contentType: o.contentType },
         };
     }
+    heads: string[] = [];
+    failHead = false;
+    async head(key: string) {
+        this.heads.push(key);
+        if (this.failHead) throw new Error("R2 head down");
+        const o = this.objects.get(key);
+        return o ? { size: o.bytes.length, httpMetadata: { contentType: o.contentType } } : null;
+    }
     async delete(key: string) {
         this.objects.delete(key);
     }
@@ -133,12 +141,18 @@ export class MemoryMedia implements MediaBucket, PublishBucket {
 }
 
 // R2 stream wrapper for tests: checks the byte count like FixedLengthStream does.
-export const fixedLength = (stream: ReadableStream, length: number): ReadableStream => {
+// `onChunk` sees each chunk's size as it passes (the "storing" progress).
+export const fixedLength = (
+    stream: ReadableStream,
+    length: number,
+    onChunk?: (n: number) => void,
+): ReadableStream => {
     let n = 0;
     return stream.pipeThrough(
         new TransformStream({
             transform(chunk, c) {
                 n += chunk.length;
+                onChunk?.(chunk.length);
                 c.enqueue(chunk);
             },
             flush() {
@@ -146,6 +160,23 @@ export const fixedLength = (stream: ReadableStream, length: number): ReadableStr
             },
         }),
     );
+};
+
+// The Worker's FixedLengthStream, for the library publish copy (Node has none):
+// a pass-through pair that fails the stream when the bytes written do not add
+// up to `n`, like the real one.
+export const fixedLengthPair = (n: number) => {
+    let seen = 0;
+    const ts = new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, c) {
+            seen += chunk.length;
+            c.enqueue(chunk);
+        },
+        flush() {
+            if (seen !== n) throw new Error(`FixedLengthStream: expected ${n}, got ${seen}`);
+        },
+    });
+    return { readable: ts.readable, writable: ts.writable };
 };
 
 export class Clock {
@@ -167,6 +198,8 @@ export class FakeHelper {
     videoBytes = new Uint8Array(4096).fill(7);
     busyFetchStarts = 0; // this many POST /fetch answer 429 first
     fetchPolls = 0; // this many GET /fetch/:id answer pending first
+    fetchPendingFields: Record<string, unknown> = {}; // merged into those pending answers (stage, bytes, total)
+    jobPendingFields: Record<string, unknown> = {}; // the same for GET /jobs/:id (phase, frames_done, frames_total)
     fetchDone: Record<string, unknown> | null = null; // overrides the done body
     fetchError: string | null = null;
     fetchFileLength: number | null = null; // content-length to lie with
@@ -185,6 +218,11 @@ export class FakeHelper {
     probeHang = false; // never answers (a hung helper call)
     probedBytes: number[] = [];
     jobPolls = 0;
+    jobsGone = false; // GET /jobs/:id -> 404 (the container restarted and forgot every job)
+    // DELETE /jobs/:id really drops the job (like the real helper): a later GET
+    // /jobs/:id and /jobs/:id/file answer 404.
+    dropJobsOnDelete = false;
+    droppedJobs = new Set<string>();
     jobError: string | null = null;
     webp = new Uint8Array(1500).fill(9);
     unreachable = false;
@@ -217,7 +255,7 @@ export class FakeHelper {
             }
             if (this.fetchPolls > 0) {
                 this.fetchPolls--;
-                return json(200, { status: "pending" });
+                return json(200, { status: "pending", ...this.fetchPendingFields });
             }
             if (this.fetchError) return json(200, { status: "error", error: { code: this.fetchError } });
             return json(200, {
@@ -239,8 +277,15 @@ export class FakeHelper {
             });
         }
         if (method === "DELETE") {
+            if (p.startsWith("/jobs/")) {
+                if (this.dropJobsOnDelete) this.droppedJobs.add(p.slice("/jobs/".length));
+                return json(200, { status: "success" });
+            }
             this.fetchStarted.delete(p.slice("/fetch/".length));
             return json(200, { status: "success" });
+        }
+        if (method === "GET" && /^\/jobs\/[A-Za-z0-9]+(\/file)?$/.test(p) && this.droppedJobs.has(p.split("/")[2]!)) {
+            return json(404, { status: "error", error: { code: "error.webp.not_found" } });
         }
 
         if (method === "POST" && p === "/probe") {
@@ -264,9 +309,10 @@ export class FakeHelper {
             return json(202, { status: "pending", id: u.searchParams.get("id") });
         }
         if (method === "GET" && /^\/jobs\/[A-Za-z0-9]+$/.test(p)) {
+            if (this.jobsGone) return json(404, { status: "error", error: { code: "error.webp.not_found" } });
             if (this.jobPolls > 0) {
                 this.jobPolls--;
-                return json(200, { status: "pending" });
+                return json(200, { status: "pending", ...this.jobPendingFields });
             }
             if (this.jobError) return json(200, { status: "error", error: { code: this.jobError } });
             return json(200, { status: "done", bytes: this.webp.length, width: 480, height: 560, seconds: 5, service: "studio" });

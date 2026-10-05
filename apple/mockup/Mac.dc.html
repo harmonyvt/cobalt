@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cobalt library on mac</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#196bd4}a:hover{color:#1252a8}
+.mc *{box-sizing:border-box}
+.mc button{font:inherit;color:inherit;cursor:pointer}
+.nav{display:flex;align-items:center;height:32px;padding:0 10px;border-radius:7px;font-size:13px;border:0;background:transparent;width:100%;text-align:left;color:#000}
+.nav.on{background:#000;color:#fff}
+.k{font-size:11.5px;color:#6e6e75}
+.row{display:grid;grid-template-columns:52px minmax(0,1fr);gap:12px;align-items:center;padding:8px 10px;border-radius:12px;border:0;background:transparent;width:100%;text-align:left}
+.row.sel{background:#f4f4f4;box-shadow:0 0 0 1.5px #000 inset}
+.pv{width:52px;height:52px;border-radius:9px;background:#e3e3e3;display:grid;place-items:center}
+.pv i{display:block;border-radius:5px;background:linear-gradient(170deg,#c9c9cf,#8e8e96)}
+.t1{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.t1 span{font-weight:400;color:#6e6e75}
+.pills{display:flex;gap:5px;margin-top:5px}
+.pill{font-size:10px;font-weight:500;border-radius:99px;padding:2px 8px}
+.p-webp{background:#000;color:#fff}.p-link{color:#196bd4;box-shadow:0 0 0 1px currentColor inset}.p-priv{color:#646469;box-shadow:0 0 0 1px currentColor inset}
+.file{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 10px 10px 14px;border-radius:11px;background:#f4f4f4;box-shadow:0 0 0 1px rgba(0,0,0,.05) inset}
+.ab{height:32px;padding:0 12px;border:0;border-radius:8px;background:#fff;font-size:12px;box-shadow:0 0 0 1px rgba(0,0,0,.08) inset;display:inline-flex;align-items:center;gap:8px}
+kbd{font:inherit;font-size:10.5px;color:#6e6e75}
+.omni{height:40px;border:1px solid #adadb7;border-radius:10px;display:flex;align-items:center;padding:0 12px;font-size:12.5px;color:#6e6e75;gap:10px}
+</style>
+</helmet>
+<div class="mc" style="width: 1280px; height: 800px; border-radius: 12px; background: #fff; color: #000; font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace; overflow: hidden; display: grid; grid-template-columns: 190px 380px minmax(0, 1fr); box-shadow: 0 0 0 1px rgba(0,0,0,.12)">
+  <nav aria-label="sections" style="background: #f4f4f4; padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; border-right: 1px solid rgba(0,0,0,.06)">
+    <div style="display: flex; gap: 8px; padding: 2px 4px 22px" aria-hidden="true"><i style="width: 12px; height: 12px; border-radius: 50%; background: #d4d4d8; display: block"></i><i style="width: 12px; height: 12px; border-radius: 50%; background: #d4d4d8; display: block"></i><i style="width: 12px; height: 12px; border-radius: 50%; background: #d4d4d8; display: block"></i></div>
+    <button class="nav" type="button">save</button>
+    <button class="nav on" type="button">library</button>
+    <button class="nav" type="button">settings</button>
+  </nav>
+  <section aria-label="posts" style="border-right: 1px solid rgba(0,0,0,.06); padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; min-width: 0">
+    <div style="display: flex; align-items: baseline; justify-content: space-between; padding: 0 6px 8px"><h1 style="margin: 0; font-size: 18px; font-weight: 600">library</h1><span class="k">15 posts · 24 files</span></div>
+    <div class="omni" style="margin: 0 4px 8px; border: 0; padding: 0; gap: 8px"><span style="width: 40px; height: 40px; border-radius: 50%; background: #000; display: block" aria-hidden="true"></span><span style="width: 40px; height: 40px; border-radius: 50%; background: #000; display: block" aria-hidden="true"></span><span style="flex-grow: 1">paste <kbd>⌘V</kbd> · or drop a file anywhere</span></div>
+    <button class="row" type="button"><span class="pv"><i style="width: 25px; height: 45px"></i></span><span style="min-width: 0"><span class="t1" style="display: block">instagram <span>· Dd55fEyN1Yy</span></span><span class="k" style="display: block; margin-top: 2px">37.4 s · today 12:46</span><span class="pills"><span class="pill p-link">mp4 link</span><span class="pill p-priv">private</span></span></span></button>
+    <button class="row sel" type="button"><span class="pv"><i style="width: 25px; height: 45px"></i></span><span style="min-width: 0"><span class="t1" style="display: block">instagram <span>· Dd7P496wolG</span></span><span class="k" style="display: block; margin-top: 2px">14.8 s · yesterday 13:59</span><span class="pills"><span class="pill p-webp">webp</span><span class="pill p-priv">private</span></span></span></button>
+    <button class="row" type="button"><span class="pv"><i style="width: 38px; height: 45px"></i></span><span style="min-width: 0"><span class="t1" style="display: block">x <span>· 2105435404002562056</span></span><span class="k" style="display: block; margin-top: 2px">5.5 s · yesterday 13:43</span><span class="pills"><span class="pill p-webp">webp</span><span class="pill p-priv">private</span></span></span></button>
+    <button class="row" type="button"><span class="pv"><i style="width: 45px; height: 25px"></i></span><span style="min-width: 0"><span class="t1" style="display: block">x <span>· 2105432512428445875</span></span><span class="k" style="display: block; margin-top: 2px">1.9 s · yesterday 13:25</span><span class="pills"><span class="pill p-priv">private</span></span></span></button>
+    <button class="row" type="button"><span class="pv"><i style="width: 45px; height: 45px"></i></span><span style="min-width: 0"><span class="t1" style="display: block">instagram <span>· Dd5JFkMDt4N</span></span><span class="k" style="display: block; margin-top: 2px">10.8 s · yesterday 13:20</span><span class="pills"><span class="pill p-webp">webp</span><span class="pill p-priv">private</span></span></span></button>
+    <button class="row" type="button"><span class="pv"><i style="width: 45px; height: 25px"></i></span><span style="min-width: 0"><span class="t1" style="display: block">x <span>· 2105358343657427103</span></span><span class="k" style="display: block; margin-top: 2px">5.1 s · yesterday 09:31</span><span class="pills"><span class="pill p-webp">webp</span><span class="pill p-priv">private</span></span></span></button>
+  </section>
+  <main style="padding: 22px 28px; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 28px; align-content: start">
+    <div style="width: 220px; height: 391px; border-radius: 14px; background: linear-gradient(170deg, #c9c9cf, #8e8e96)"></div>
+    <div style="display: flex; flex-direction: column; gap: 14px; min-width: 0">
+      <div>
+        <h2 style="margin: 0; font-size: 18px; font-weight: 600">instagram <span style="font-weight: 400; color: #6e6e75">· Dd7P496wolG</span></h2>
+        <span class="k">14.8 s · 720×1280 · saved yesterday 13:59 · studio open 6 more days</span>
+      </div>
+      <span class="k" style="margin-top: 4px">what exists for this post</span>
+      <div class="file"><div><div style="font-size: 13px; font-weight: 500">webp 10.1 s</div><div class="k">4.5 MB · 480×854 · public link</div></div><div style="display: flex; gap: 6px"><button class="ab" type="button">copy link <kbd>⌘C</kbd></button><button class="ab" type="button" style="color: #c4142a">delete <kbd>⌘⌫</kbd></button></div></div>
+      <div class="file"><div><div style="font-size: 13px; font-weight: 500">private copy</div><div class="k">4.3 MB · mp4 · only you</div></div><div style="display: flex; gap: 6px"><button class="ab" type="button">save as… <kbd>⌘S</kbd></button><button class="ab" type="button">host it</button></div></div>
+      <div style="display: flex; gap: 8px; margin-top: 6px">
+        <button type="button" style="height: 40px; padding: 0 18px; border: 0; border-radius: 10px; background: #000; color: #fff; font-weight: 600; font-size: 13px">trim a new webp <kbd style="color: #b8b8be">⌘T</kbd></button>
+      </div>
+      <span class="k" style="line-height: 1.5; margin-top: 8px">same cards as the iphone, and the same layout the web library would use: list on the left, the post on the right.</span>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

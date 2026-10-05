@@ -130,3 +130,75 @@ describe("OPTIONS preflight", () => {
         expect(d({ method: "OPTIONS", pathname: "/webp", origin: ORIGIN })).toEqual({ action: "forward" });
     });
 });
+
+describe("PUT /studio/upload (keyed) and the internal adopt path", () => {
+    const put = (o: Partial<GateRequest> = {}) =>
+        d({ method: "PUT", pathname: "/studio/upload", authorization: `Api-Key ${KEY}`, ...o });
+
+    it("PUT looks the key up, then uploads: checked before the session id format", () => {
+        expect(put()).toEqual({ action: "lookup", key: KEY, then: "studio_upload" });
+        expect(put({ service: true, authorization: null })).toEqual({ action: "service", then: "studio_upload" });
+    });
+    it("401s like the other keyed routes without a well-formed key", () => {
+        expect(put({ authorization: null })).toMatchObject({ status: 401, errorCode: "error.api.auth.key.missing" });
+        expect(put({ authorization: "Bearer x" })).toMatchObject({ status: 401, errorCode: "error.api.auth.key.not_api_key" });
+        expect(put({ authorization: "Api-Key nope" })).toMatchObject({ status: 401, errorCode: "error.api.auth.key.invalid" });
+        expect(put({ authorization: null, origin: ORIGIN })).toMatchObject({ status: 401 });
+    });
+    it("any other method is 404 (GET, POST, DELETE, HEAD)", () => {
+        for (const method of ["GET", "POST", "DELETE", "HEAD"]) {
+            expect(put({ method })).toMatchObject(notFound);
+        }
+    });
+    it("/studio/upload/adopt is internal: 404 for every method and credential from outside", () => {
+        for (const method of ["GET", "POST", "PUT", "DELETE"]) {
+            for (const o of [{}, { authorization: `Api-Key ${KEY}` }, { service: true }, { origin: ORIGIN }]) {
+                expect(d({ method, pathname: "/studio/upload/adopt", ...o })).toMatchObject(notFound);
+            }
+        }
+    });
+    it("other shapes under /studio/upload stay 404", () => {
+        expect(put({ pathname: "/studio/upload/" })).toMatchObject(notFound);
+        expect(put({ pathname: "/studio/upload/x" })).toMatchObject(notFound);
+        expect(put({ pathname: "/studio/uploads" })).toMatchObject(notFound);
+    });
+    it("an upload does not open the session routes: a 22-char sid still works exactly as before", () => {
+        expect(d({ pathname: `/studio/${SID}` })).toEqual({ action: "studio", op: "status", sid: SID });
+        expect(d({ method: "PUT", pathname: `/studio/${SID}`, authorization: `Api-Key ${KEY}` })).toMatchObject(notFound);
+    });
+    it("OPTIONS /studio/upload is a studio preflight (harmless: the Worker answers it)", () => {
+        expect(d({ method: "OPTIONS", pathname: "/studio/upload", origin: ORIGIN })).toEqual({ action: "studio", op: "preflight" });
+        expect(d({ method: "OPTIONS", pathname: "/studio/upload" })).toMatchObject({ status: 403 });
+    });
+});
+
+// ---- Hark notification opt-in (APP-API-CONTRACT.md section 9) ------------------------------
+
+describe("PUT|DELETE /studio/<sid>/notify (keyed, owner checked by the Durable Object)", () => {
+    const keyed = { authorization: `Api-Key ${KEY}` };
+    const pathname = `/studio/${SID}/notify`;
+
+    it.each(["PUT", "DELETE"])("%s with a key is a lookup for studio_notify carrying the sid", (method) => {
+        expect(d({ method, pathname, ...keyed })).toEqual({ action: "lookup", key: KEY, then: "studio_notify", params: { sid: SID } });
+    });
+    it.each(["PUT", "DELETE"])("%s without a key, or a malformed one, is a 401", (method) => {
+        expect(d({ method, pathname })).toEqual({ action: "reject", status: 401, errorCode: "error.api.auth.key.missing" });
+        expect(d({ method, pathname, authorization: "Api-Key nope" })).toEqual({ action: "reject", status: 401, errorCode: "error.api.auth.key.invalid" });
+    });
+    it.each(["PUT", "DELETE"])("%s from the library service credential is a 404 (the owner's key only)", (method) => {
+        expect(d({ method, pathname, service: true })).toMatchObject(notFound);
+        expect(d({ method, pathname, service: true, ...keyed })).toMatchObject(notFound);
+    });
+    it("other methods, extra segments and bad session ids are 404s", () => {
+        for (const method of ["GET", "POST", "PATCH", "HEAD"]) {
+            expect(d({ method, pathname, ...keyed }), method).toMatchObject(notFound);
+        }
+        expect(d({ method: "PUT", pathname: `${pathname}/x`, ...keyed })).toMatchObject(notFound);
+        expect(d({ method: "PUT", pathname: `${pathname}/${JOB}`, ...keyed })).toMatchObject(notFound);
+        expect(d({ method: "PUT", pathname: "/studio/short/notify", ...keyed })).toMatchObject(notFound);
+        expect(d({ method: "PUT", pathname: `/studio/${SID}x/notify`, ...keyed })).toMatchObject(notFound);
+    });
+    it("the render route is untouched: still the capability URL, no key", () => {
+        expect(d({ method: "POST", pathname: `/studio/${SID}/render` })).toEqual({ action: "studio", op: "render_create", sid: SID });
+    });
+});

@@ -8,10 +8,12 @@
 // is done the DO copies the file into R2 under an unguessable name and answers
 // with its public URL. Nothing else touches R2 except DELETE /media/:name.
 
+import { raceCeiling } from "./ceiling";
 import { MEDIA_NAME_REGEX, WEBP_ID_REGEX } from "./gate";
 import { KEY_ID_HEADER } from "./headers";
 import { randomBase62 } from "./ids";
 import { insertMediaItem, markMediaDeleted } from "./library";
+import { cropToWire, parseCrop } from "../helper/crop.js";
 
 export const WEBP_ID_LENGTH = 20;
 export const MEDIA_NAME_LENGTH = 10;
@@ -21,6 +23,13 @@ export const POLL_INTERVAL_MS = 1000;
 // A job or result record older than this is dropped the next time a job starts.
 export const RECORD_TTL_MS = 24 * 60 * 60 * 1000;
 export const MAX_BODY_BYTES = 8192;
+// Our own ceiling on one helper call (see ceiling.ts: AbortSignal.timeout is not
+// honoured for containerFetch inside the Durable Object). Roughly the budgets
+// index.ts passes as the abort signal: job calls are quick, the result download
+// is bigger, the studio upload moves a whole video.
+export const HELPER_CALL_MS = 20_000;
+export const HELPER_FILE_MS = 60_000;
+export const HELPER_UPLOAD_MS = 300_000;
 
 export type Quality = "low" | "med" | "high";
 
@@ -33,10 +42,24 @@ export type WebpParams = {
     width: 320 | 480 | 640;
     fps: number;
     quality: Quality;
+    // Optional spatial crop, normalized 0..1 in the source's display orientation
+    // (APP-API-CONTRACT.md section 10). Absent = the whole frame; the key is then
+    // not present at all, so every record and helper call is what it always was.
+    crop?: Crop;
 };
 
+export type Crop = { x: number; y: number; w: number; h: number };
+
 export type ErrorBody = { status: "error"; error: { code: string } };
-export type PendingBody = { status: "pending"; id: string };
+// Render progress (APP-API-CONTRACT.md section 4). `phase` null = not known (an
+// old helper, or this Durable Object lost its in-memory copy).
+export type RenderPhase = "fetching" | "decode" | "pack";
+export type Progress = {
+    phase: RenderPhase | null;
+    frames_done: number | null;
+    frames_total: number | null;
+};
+export type PendingBody = { status: "pending"; id: string } & Partial<Progress>;
 export type SuccessBody = {
     status: "success";
     id: string;
@@ -124,6 +147,11 @@ export function validateParams(body: unknown): ParseResult {
 
     const params: WebpParams = { url: b.url, start, width, fps, quality };
     if (length !== undefined) params.length = length;
+    // The URL source's size is only known to the helper, which converts the crop to
+    // pixels (and refuses one under 64 px with error.webp.invalid_params) at encode time.
+    const crop = parseCrop(b.crop);
+    if (!crop.ok) return bad;
+    if (crop.crop) params.crop = crop.crop;
     return { ok: true, params };
 }
 
@@ -213,9 +241,26 @@ export type WebpDeps = {
     ensureRunning: () => Promise<void>;
     // Calls the helper on port 9100 (adds the internal key); path like "/jobs".
     helper: (path: string, init?: RequestInit) => Promise<Response>;
+    // Overrides the ceiling on every helper call (tests); default by path.
+    helperTimeoutMs?: number;
     // D1 database for the library's media_items rows (omitted: no rows).
     db?: D1Database;
+    // Asks the Durable Object to run the job sweep soon, so a job nobody polls
+    // still gets collected. Awaited, never allowed to fail the request.
+    scheduleSweep?: () => void | Promise<void>;
 };
+
+const NO_PROGRESS: Progress = { phase: null, frames_done: null, frames_total: null };
+
+const count = (v: unknown): number | null =>
+    typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
+
+// The progress fields of a helper's pending body; anything odd is "unknown".
+function progressOf(body: any): Progress {
+    const phase = body?.phase;
+    if (phase !== "fetching" && phase !== "decode" && phase !== "pack") return NO_PROGRESS;
+    return { phase, frames_done: count(body.frames_done), frames_total: count(body.frames_total) };
+}
 
 async function readJson(res: Response): Promise<any | null> {
     try {
@@ -228,8 +273,37 @@ async function readJson(res: Response): Promise<any | null> {
 export class WebpService {
     // id -> upload in progress, so concurrent polls of one id upload once.
     private inflight = new Map<string, Promise<Reply>>();
+    // id -> the progress of the last pending helper poll (in memory only)
+    private progress = new Map<string, Progress>();
 
     constructor(private d: WebpDeps) {}
+
+    // Every helper call goes through here: it rejects once its ceiling passes,
+    // so a hung call becomes an ordinary miss instead of freezing the poll, the
+    // sweep (whose alarm() the container library awaits before it may sleep) or
+    // a job start.
+    private callHelper(path: string, init?: RequestInit): Promise<Response> {
+        const ms =
+            this.d.helperTimeoutMs ??
+            (path.startsWith("/jobs/upload")
+                ? HELPER_UPLOAD_MS
+                : path.endsWith("/file")
+                  ? HELPER_FILE_MS
+                  : HELPER_CALL_MS);
+        return raceCeiling(
+            Promise.resolve().then(() => this.d.helper(path, init)),
+            ms,
+            `helper ${path.split("?")[0]}`,
+        );
+    }
+
+    private async scheduleSweep(): Promise<void> {
+        try {
+            await this.d.scheduleSweep?.();
+        } catch (e) {
+            console.error("[webp] scheduling the job sweep failed", String(e));
+        }
+    }
 
     async create(keyId: string, rawBody: string): Promise<Reply> {
         let parsed: unknown;
@@ -253,7 +327,7 @@ export class WebpService {
         const id = mintId(this.d.randomBytes);
         let res: Response;
         try {
-            res = await this.d.helper("/jobs", {
+            res = await this.callHelper("/jobs", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify({ id, ...v.params }),
@@ -274,6 +348,7 @@ export class WebpService {
             params: v.params,
         };
         await this.d.storage.put(`job:${id}`, record);
+        await this.scheduleSweep();
         return { status: 202, body: { status: "pending", id } };
     }
 
@@ -314,10 +389,11 @@ export class WebpService {
             quality: params.quality,
         });
         if (params.length !== undefined) q.set("length", String(params.length));
+        if (params.crop) q.set("crop", cropToWire(params.crop));
 
         let res: Response;
         try {
-            res = await this.d.helper(`/jobs/upload?${q}`, {
+            res = await this.callHelper(`/jobs/upload?${q}`, {
                 method: "POST",
                 headers: {
                     "content-type": "application/octet-stream",
@@ -339,6 +415,7 @@ export class WebpService {
 
         const record: JobRecord = { keyId, createdAt: this.d.now(), params };
         await this.d.storage.put(`job:${id}`, record);
+        await this.scheduleSweep();
         return { status: 202, body: { status: "pending", id } };
     }
 
@@ -348,15 +425,19 @@ export class WebpService {
         // A job that belongs to another key looks exactly like an unknown one.
         if (!job || job.keyId !== keyId) return notFound();
 
-        const stored = await this.d.storage.get<ResultBody>(`result:${id}`);
-        if (stored) return { status: 200, body: stored };
-
         const deadline = this.d.now() + waitSeconds * 1000;
         for (;;) {
+            // Re-read at the top of every pass: the job sweep (or another poll)
+            // may have collected it while this long-poll slept. Whoever
+            // collects deletes the helper's job, so polling the helper again
+            // would only find a 404.
+            const stored = await this.d.storage.get<ResultBody>(`result:${id}`);
+            if (stored) return { status: 200, body: stored };
+
             const reply = await this.pollOnce(id, job);
             if (reply) return reply;
             if (this.d.now() >= deadline) {
-                return { status: 200, body: { status: "pending", id } };
+                return { status: 200, body: { status: "pending", id, ...(this.progress.get(id) ?? NO_PROGRESS) } };
             }
             await this.d.sleep(POLL_INTERVAL_MS);
         }
@@ -367,12 +448,17 @@ export class WebpService {
     private async pollOnce(id: string, job: JobRecord): Promise<Reply | null> {
         let res: Response;
         try {
-            res = await this.d.helper(`/jobs/${id}`);
+            res = await this.callHelper(`/jobs/${id}`);
         } catch {
             return null;
         }
         if (res.status === 404) {
-            // The container restarted since the job was accepted: it is gone.
+            // Either the container restarted since the job was accepted (it is
+            // gone), or somebody else collected it between our last read and
+            // this poll and dropped the helper's copy: then the result is
+            // stored and is what to answer.
+            const stored = await this.d.storage.get<ResultBody>(`result:${id}`);
+            if (stored) return { status: 200, body: stored };
             return this.finish(id, {
                 status: "error",
                 error: { code: "error.webp.job_lost" },
@@ -381,7 +467,10 @@ export class WebpService {
         const body = await readJson(res);
         if (!body || typeof body.status !== "string") return null;
 
-        if (body.status === "pending") return null;
+        if (body.status === "pending") {
+            this.progress.set(id, progressOf(body));
+            return null;
+        }
         if (body.status === "error") {
             const code = body.error?.code;
             return this.finish(id, {
@@ -402,7 +491,12 @@ export class WebpService {
     }
 
     // Persist a terminal error (so polling again is stable) and free the helper.
+    // A stored result is final: finish() never replaces it (a poll that lost the
+    // race to the sweep would otherwise turn a collected success into job_lost).
     private async finish(id: string, result: ErrorBody): Promise<Reply> {
+        const stored = await this.d.storage.get<ResultBody>(`result:${id}`);
+        if (stored) return { status: 200, body: stored };
+        this.progress.delete(id);
         await this.d.storage.put(`result:${id}`, result);
         await this.dropHelperJob(id);
         return { status: 200, body: result };
@@ -415,8 +509,12 @@ export class WebpService {
 
         let buf: ArrayBuffer;
         try {
-            const res = await this.d.helper(`/jobs/${id}/file`);
-            if (!res.ok) return err(502, "error.webp.upstream");
+            const res = await this.callHelper(`/jobs/${id}/file`);
+            if (!res.ok) {
+                // 404: collected (and dropped) by someone else since we looked
+                const gone = res.status === 404 ? await this.d.storage.get<ResultBody>(`result:${id}`) : undefined;
+                return gone ? { status: 200, body: gone } : err(502, "error.webp.upstream");
+            }
             buf = await res.arrayBuffer();
         } catch {
             return err(502, "error.webp.upstream");
@@ -447,6 +545,7 @@ export class WebpService {
             bytes: buf.byteLength,
         });
         await this.d.storage.put(`result:${id}`, result);
+        this.progress.delete(id);
         // Library bookkeeping. A studio render (owner label "studio:<sid>") is
         // recorded by the studio when the render is collected, with its session.
         if (!job.keyId.startsWith("studio:")) {
@@ -473,7 +572,7 @@ export class WebpService {
 
     private async dropHelperJob(id: string): Promise<void> {
         try {
-            await this.d.helper(`/jobs/${id}`, { method: "DELETE" });
+            await this.callHelper(`/jobs/${id}`, { method: "DELETE" });
         } catch {
             // best effort: the helper expires jobs on its own
         }
