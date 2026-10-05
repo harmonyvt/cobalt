@@ -21,8 +21,12 @@ extension Symbol {
         static let deleteEverything = "trash"
         /// A tile whose picture did not load.
         static let pictureFailed = "photo.badge.exclamationmark"
-        static let isPublic = "link"
-        static let isPrivate = "lock"
+        /// A tile's and a row's badge, and the table's `public` column: the video's switch (CONTRACT-VISIBILITY 6.2).
+        static let isPublic = "globe"
+        static let isPrivate = "lock.fill"
+        /// "make public" and "make private…" in the context menu.
+        static let makePublic = "globe"
+        static let makePrivate = "lock.fill"
         /// The inspector toggle (iPad, Mac).
         static let inspector = "sidebar.trailing"
         static let refresh = "arrow.clockwise"

@@ -31,9 +31,14 @@ protocol MediaTools: Sendable {
     /// the decoded frames of an animated image when `animatedImage`; in order. Empty when the file
     /// has no such frames (a still image, an unreadable file).
     func previewFrames(of file: URL, animatedImage: Bool, count: Int, maxEdge: CGFloat) async -> [CGImage]
+    /// AVFoundation cannot open a GIF, so every player and frame reader in the app would fail on one:
+    /// writes an mp4 of its frames to `destination` and returns true. False when `file` is not a GIF
+    /// (nothing is written) or the conversion failed; the caller then keeps the file it has.
+    func playableCopy(of file: URL, to destination: URL) async -> Bool
 }
 
 extension MediaTools {
+    func playableCopy(of file: URL, to destination: URL) async -> Bool { false }
     func frames(of input: FrameInput, duration: Double?, count: Int, maxEdge: CGFloat) -> AsyncThrowingStream<Frame, Error> {
         frames(of: input, duration: duration, count: count)
     }
@@ -73,7 +78,11 @@ enum PreviewSize {
     }
 }
 
-enum MediaError: Error, Sendable { case unreadable, noFrames }
+enum MediaError: Error, Sendable {
+    case unreadable, noFrames
+    /// The remote file is a GIF: AVFoundation will never open it, so retrying is pointless.
+    case animatedImage
+}
 
 /// The real implementation. Memory-conscious on purpose (the share extension has ~120 MB):
 /// frames come from `AVAssetImageGenerator` capped at 360 pt, never a whole-video decode.
@@ -99,6 +108,11 @@ struct SystemMediaTools: MediaTools {
             do { return try await openAssetOnce(url) }
             catch is CancellationError { throw CancellationError() }
             catch { lastError = error }
+            // A GIF stored as a video (an old server labelled one `video/mp4`) never opens: say so at once
+            // instead of retrying it.
+            if delay == 0, url.isFileURL ? MediaSniff.isGIF(file: url) : await MediaSniff.isGIF(remote: url) {
+                throw MediaError.animatedImage
+            }
         }
         throw lastError
     }
@@ -142,7 +156,7 @@ struct SystemMediaTools: MediaTools {
         guard let duration = try? await asset.load(.duration), duration.isNumeric, duration.seconds > 0,
               let track = try? await asset.loadTracks(withMediaType: .video).first,
               let natural = try? await track.load(.naturalSize)
-        else { return nil }
+        else { return Self.probeGIF(file) }
         let transform = (try? await track.load(.preferredTransform)) ?? .identity
         let size = natural.applying(transform)
         let bytes = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int64) ?? nil
@@ -150,6 +164,25 @@ struct SystemMediaTools: MediaTools {
             name: file.deletingPathExtension().lastPathComponent, duration: duration.seconds,
             width: Int(abs(size.width).rounded()), height: Int(abs(size.height).rounded()),
             bytes: bytes, isImage: false)
+    }
+
+    /// A GIF is a clip, not a still: its length is the sum of its frame delays, `isImage` stays false.
+    static func probeGIF(_ file: URL) -> MediaInfo? {
+        guard let timeline = GIFTimeline(file: file), timeline.duration > 0 else { return nil }
+        let bytes = ((try? FileManager.default.attributesOfItem(atPath: file.path)[.size]) as? NSNumber)?.int64Value
+        return MediaInfo(
+            name: file.deletingPathExtension().lastPathComponent, duration: timeline.duration,
+            width: timeline.width, height: timeline.height, bytes: bytes, isImage: false)
+    }
+
+    func playableCopy(of file: URL, to destination: URL) async -> Bool {
+        guard MediaSniff.isGIF(file: file) else { return false }
+        do {
+            try await GIFTranscoder.writeMP4(from: file, to: destination)
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// ImageIO: pixel size from the first frame (orientation applied), and for an animated image
@@ -211,7 +244,24 @@ struct SystemMediaTools: MediaTools {
                     switch input {
                     case .remote(let u), .local(let u): url = u
                     }
-                    let asset = try await Self.openAsset(url)
+                    // A GIF is read with ImageIO (a remote one is fetched whole first: it is small, and
+                    // ImageIO cannot read ranges).
+                    if url.isFileURL, let gif = GIFTimeline(file: url) {
+                        for frame in gif.filmstrip(count: count, maxEdge: maxEdge) { continuation.yield(frame) }
+                        continuation.finish()
+                        return
+                    }
+                    let asset: AVURLAsset
+                    do { asset = try await Self.openAsset(url) } catch MediaError.animatedImage {
+                        let local = try await Self.fetchWhole(url)
+                        defer { try? FileManager.default.removeItem(at: local) }
+                        guard let gif = GIFTimeline(file: local) else { throw MediaError.noFrames }
+                        let frames = gif.filmstrip(count: count, maxEdge: maxEdge)
+                        if frames.isEmpty { throw MediaError.noFrames }
+                        for frame in frames { continuation.yield(frame) }
+                        continuation.finish()
+                        return
+                    }
                     // The clip's own length wins over the caller's: a stated duration longer than the
                     // media (a short gif-converted mp4) would ask for frames past the last one.
                     let total = await Self.playableDuration(of: asset, hint: duration)
@@ -261,10 +311,28 @@ struct SystemMediaTools: MediaTools {
         }
     }
 
+    /// The most a remote GIF fetched for its frames may weigh.
+    static let remoteGIFLimit: Int64 = 64 * 1024 * 1024
+
+    /// A remote file saved to a temporary file (`GET /studio/<sid>/source` needs no key). Refuses a
+    /// file over `remoteGIFLimit`.
+    static func fetchWhole(_ url: URL) async throws -> URL {
+        let (temp, response) = try await URLSession.shared.download(from: url)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 || http.statusCode == 206 else {
+            throw MediaError.unreadable
+        }
+        let size = ((try? FileManager.default.attributesOfItem(atPath: temp.path)[.size]) as? NSNumber)?.int64Value ?? 0
+        guard size > 0, size <= remoteGIFLimit else { throw MediaError.unreadable }
+        let keep = FileManager.default.temporaryDirectory.appendingPathComponent("gif-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.moveItem(at: temp, to: keep)
+        return keep
+    }
+
     // MARK: Posters
 
     func poster(for file: URL, isImage: Bool, to destination: URL) async -> Bool {
-        if isImage || UTType(filenameExtension: file.pathExtension)?.conforms(to: .image) == true {
+        if isImage || UTType(filenameExtension: file.pathExtension)?.conforms(to: .image) == true || MediaSniff.isGIF(file: file) {
             guard let image = Self.thumbnail(of: file) else { return false }
             return Self.writeJPEG(image, to: destination)
         }
@@ -316,7 +384,7 @@ struct SystemMediaTools: MediaTools {
 
     func previewFrames(of file: URL, animatedImage: Bool, count: Int, maxEdge: CGFloat) async -> [CGImage] {
         guard count > 0 else { return [] }
-        if animatedImage { return Self.animatedFrames(of: file, count: count, maxEdge: maxEdge) }
+        if animatedImage || MediaSniff.isGIF(file: file) { return Self.animatedFrames(of: file, count: count, maxEdge: maxEdge) }
         guard let asset = try? await Self.openAsset(file) else { return [] }
         let total = await Self.playableDuration(of: asset, hint: nil)
         guard total.isFinite, total > 0 else { return [] }

@@ -133,6 +133,15 @@ private struct LibraryContent: View {
             } message: { item in
                 Text(controller.deleteMessage(item))
             }
+            .confirmationDialog(
+                Copy.Media.makePrivateTitle, isPresented: makingPrivatePresented, titleVisibility: .visible,
+                presenting: controller.makingPrivate
+            ) { item in
+                Button(Copy.Media.makePrivate, role: .destructive) { controller.setVisibility(item, public: false) }
+                Button(Copy.Media.keepPublic, role: .cancel) {}
+            } message: { _ in
+                Text(Copy.Media.makePrivateMessage)
+            }
             #if os(macOS)
             .background { macShortcuts }
             #endif
@@ -219,6 +228,10 @@ private struct LibraryContent: View {
 
     private var deletingPresented: Binding<Bool> {
         Binding(get: { controller.deleting != nil }, set: { if !$0 { controller.deleting = nil } })
+    }
+
+    private var makingPrivatePresented: Binding<Bool> {
+        Binding(get: { controller.makingPrivate != nil }, set: { if !$0 { controller.makingPrivate = nil } })
     }
 
     // MARK: "open in library"

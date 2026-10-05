@@ -67,7 +67,8 @@ extension InstantShare {
         }
         let client = HTTPCobaltClient(baseURL: server, apiKey: { Settings.apiKey(in: keychain, forServer: server) })
         let transport = URLSessionSaveTransport.current
-        let engine = InstantShareEngine(transport: transport, directory: AppGroup.directory("Saves"))
+        var engine = InstantShareEngine(transport: transport, directory: AppGroup.directory("Saves"))
+        engine.makePublic = settings.newSavesPublic
         let job = UUID()
         let label = InstantShareEngine.label(for: link)
         // The notification is a local write; it runs beside the request, never in front of it.

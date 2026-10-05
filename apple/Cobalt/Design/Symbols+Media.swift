@@ -15,6 +15,9 @@ extension Symbol {
         static let hosted = "link"
         /// A private copy only (the chip's glyph).
         static let privateCopy = "lock"
+        /// The public/private switch's glyph (CONTRACT-VISIBILITY 6.2): a public link, and a file only the owner sees.
+        static let isPublic = "globe"
+        static let isPrivate = "lock.fill"
         /// The detail's `more` menu.
         static let more = "ellipsis.circle"
         static let deleteWebp = "trash"

@@ -24,6 +24,7 @@ struct SettingsScreen: View {
         Form {
             serverSection
             makingSection
+            SharingSettingsSection(model: model)
             shareSheetSection
             storageSection
             PhotosSettingsSection(model: model)

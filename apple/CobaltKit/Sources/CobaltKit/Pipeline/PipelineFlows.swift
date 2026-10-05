@@ -61,15 +61,20 @@ extension Pipeline {
         }
     }
 
+    /// What a new save asks for: `public: true` when the owner keeps "make new saves public" on and the server takes
+    /// the field (`features.public_default`), else nothing at all (CONTRACT-VISIBILITY decision 3).
+    var publicFlag: Bool? { ctx.capabilities.publicDefault && ctx.settings.newSavesPublic ? true : nil }
+
     /// `POST /studio` (or the library's reopen) with the 3 s / 60 s busy retry.
     func openStudioRetrying(_ client: any CobaltClient, link: URL?, item: String?) async throws -> StudioCreated {
         let deadline = ctx.clock.now().addingTimeInterval(60)
+        let makePublic = publicFlag                              // read here: the closure below is not on the main actor
         while true {
             do {
                 return try await watched {
                     if let item { return try await client.openStudio(item: item) }
                     guard let link else { throw PipelineFailure.noLink }
-                    return try await client.createStudio(link: link)
+                    return try await client.createStudio(link: link, public: makePublic)
                 }
             } catch CobaltError.api(let code, _) where code == "error.studio.busy" {
                 if ctx.clock.now().addingTimeInterval(3) > deadline { throw PipelineFailure.serverBusy }
@@ -548,7 +553,9 @@ extension Pipeline {
         setState(.uploading(TransferProgress(bytes: 0, total: file.bytes)))
         let relay = MainActorRelay<TransferProgress> { [weak self] p in self?.uploadProgress(p, token: token) }
         Telemetry.log(.info, .upload, "upload start", data: ["bytes": .bytes(file.bytes), "type": .string(file.contentType)])
-        let uploaded = try await client.upload(file: file.url, name: file.name, contentType: file.contentType) { relay.push($0) }
+        let uploaded = try await client.upload(
+            file: file.url, name: file.name, contentType: file.contentType, public: publicFlag
+        ) { relay.push($0) }
         Telemetry.log(.info, .upload, "upload finished", data: ["bytes": .bytes(file.bytes), "session": .bool(uploaded.sessionID != nil), "studioError": .string(uploaded.studioErrorCode ?? "")])
         try Task.checkCancellation()
         guard token == runToken else { throw CancellationError() }
@@ -656,7 +663,7 @@ extension Pipeline {
                     let local = try await client.download(.open(item.url), to: dest, progress: { _ in })
                     try Task.checkCancellation()
                     try await p.ctx.savePhoto(
-                        fileURL: local, isImage: item.type == .photo, key: item.type == .photo ? nil : PhotosKey.picker(url: item.url))
+                        fileURL: local, isImage: item.type != .video, key: item.type == .photo ? nil : PhotosKey.picker(url: item.url))
                     if item.type != .photo, p.ctx.settings.keepVideosOnDevice {
                         let probed = await p.ctx.tools.probe(file: local)
                         let m = MediaInfo(

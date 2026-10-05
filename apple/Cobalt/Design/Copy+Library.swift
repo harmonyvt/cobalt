@@ -56,6 +56,13 @@ extension Copy {
         static let saveToPhotos = "save to photos"
         static let rename = "rename"
         static let deleteEverything = "delete everything…"                    // confirm: Copy.Media (CONTRACT-MEDIA 3)
+        static let makePublic = "make public"                                  // the video's switch (CONTRACT-VISIBILITY 6.2)
+        static let makePrivate = "make private…"                               // asks first: Copy.Media.makePrivateTitle
+        static let nowPublic = "public now."
+        static let nowPrivate = "private now."
+        static let makingPublic = "making the link…"
+        static let publicBadgeA11y = "public link"                              // VoiceOver on a tile's globe
+        static let privateBadgeA11y = "private"                                 // ... and its lock
 
         // titles
         static let nameIt = "name it"

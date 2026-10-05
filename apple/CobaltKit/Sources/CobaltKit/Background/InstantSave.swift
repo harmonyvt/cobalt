@@ -79,11 +79,13 @@ struct InstantShareEngine: Sendable {
     var foregroundWait: Double = 10
     /// How long the background transport waits for the system to confirm it holds the task.
     var registerWait: Double = 0.6
+    /// Settings "make new saves public": the request carries `public: true` (on by default).
+    var makePublic = true
 
     func enqueue(link: LinkInfo, client: HTTPCobaltClient, job: UUID) async -> InstantShare.Result {
         let built: (request: URLRequest, body: Data)
         do {
-            built = try client.shareSaveRequest(link: link.url, label: Self.label(for: link))
+            built = try client.shareSaveRequest(link: link.url, label: Self.label(for: link), public: makePublic)
         } catch CobaltError.noAPIKey {
             return .failed(.noKey)
         } catch {

@@ -26,6 +26,18 @@ public protocol CobaltClient: Sendable {
     func publish(item id: String) async throws -> HostedFile                     // POST /library/items/<id>/publish
     func openStudio(item id: String) async throws -> StudioCreated               // POST /library/items/<id>/studio
     func library(cursor: String?, limit: Int) async throws -> LibraryPage        // GET /library
+    // One file per rendition, public or private (CONTRACT-VISIBILITY.md 6.1; APP-API-CONTRACT 16). The defaults
+    // below forward to the calls above (or say the server cannot), so a client that predates them still compiles.
+    /// `POST /studio` with `public` next to `url` (only when the server has `public_default`); nil omits the field.
+    func createStudio(link: URL, public makePublic: Bool?) async throws -> StudioCreated
+    /// `PUT /studio/upload` with `?public=1` when `makePublic` is true.
+    func upload(file: URL, name: String, contentType: String, public makePublic: Bool?,
+                progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> UploadResult
+    /// `GET /library` with `v=2` when `v2` (only when the server has `features.visibility`): one entry per file.
+    func library(cursor: String?, limit: Int, v2: Bool) async throws -> LibraryPage
+    /// `PATCH /library/items/<id>/visibility {"public"}` (keyed): the file as it is now, and whether the edge cache
+    /// was cleared. Idempotent. Throws `.unsupported` on a client or server that cannot.
+    func setVisibility(item id: String, public makePublic: Bool) async throws -> VisibilityChange
     func deleteMedia(name: String) async throws                                   // DELETE /media/<name>
     /// `DELETE /library/items/<id>/post` (CONTRACT-MEDIA 6.1), only when `features.delete_post`: deletes
     /// the whole post the file `itemID` belongs to. A partial result is returned, not thrown.
@@ -49,6 +61,21 @@ public protocol CobaltClient: Sendable {
 }
 
 extension CobaltClient {
+    public func createStudio(link: URL, public makePublic: Bool?) async throws -> StudioCreated {
+        try await createStudio(link: link)
+    }
+    public func upload(
+        file: URL, name: String, contentType: String, public makePublic: Bool?,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> UploadResult {
+        try await upload(file: file, name: name, contentType: contentType, progress: progress)
+    }
+    public func library(cursor: String?, limit: Int, v2: Bool) async throws -> LibraryPage {
+        try await library(cursor: cursor, limit: limit)
+    }
+    public func setVisibility(item id: String, public makePublic: Bool) async throws -> VisibilityChange {
+        throw PipelineFailure.unsupported
+    }
     public func setNotify(session id: String, _ optIn: NotifyOptIn) async throws {}
     public func cancelNotify(session id: String) async throws {}
     /// A client that predates the route says the server cannot do it.

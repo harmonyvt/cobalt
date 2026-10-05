@@ -53,7 +53,7 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
     public let webps: Int
     public let fileCount: Int            // renditions
     public let bytes: Int64              // all of the post's files
-    public let isPublic: Bool            // any public file
+    public let isPublic: Bool            // the video's link is public (a media with no video: any public file)
     public let visibilityRank: Int       // 1 public, 0 private (sort)
     public let date: Date                // item.latestAt
     public let faceAspect: Double        // h / w of the face, 16:9 (landscape) when unknown
@@ -81,10 +81,15 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
 
         if let files = item.post?.files, !files.isEmpty {
             bytes = files.reduce(0) { $0 + ($1.bytes ?? 0) }
-            isPublic = files.contains { $0.kind == .public }
         } else {
             bytes = item.renditions.reduce(0) { $0 + ($1.bytes ?? 0) }
-            isPublic = item.renditions.contains { $0.publicURL != nil }
+        }
+        // CONTRACT-VISIBILITY decision 13: the badge is the video's switch, not "some file is public" (a private
+        // video with public webps is private). A media with no video is as public as its newest link.
+        if let video = item.video {
+            isPublic = video.visibility == .public
+        } else {
+            isPublic = item.renditions.contains { $0.visibility == .public }
         }
         visibilityRank = isPublic ? 1 : 0
         date = item.latestAt

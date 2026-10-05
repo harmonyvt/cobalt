@@ -135,3 +135,32 @@ extension Copy {
         static func webpViewerA11y(_ name: String) -> String { "\(name), full screen. tap to close" }
     }
 }
+
+/// The public/private switch (CONTRACT-VISIBILITY 6.2) and the setting that decides what a new save starts as.
+/// One file per rendition on the server, public or private; a webp has the same switch as the video. Lowercase.
+extension Copy.Media {
+    /// The switch's label, and what it says under it.
+    static let publicLink = "public link"
+    static let publicOn = "anyone with the link can see it."
+    static let publicOff = "only you can see it."
+    /// While the request runs.
+    static let makingLink = "making the link…"
+    static let turningOff = "turning it off…"
+    /// A failed switch, inline (the file is back where it was).
+    static let makeLinkFailed = "couldn't make the link. it's still private."
+    static let turnOffFailed = "couldn't turn it off. it's still public."
+    /// Turning a link off asks first, because it stops working for everyone.
+    static let makePrivateTitle = "make it private?"
+    static let makePrivateMessage = "its link stops working for everyone. making it public again brings back the same link."
+    static let makePrivate = "make private"
+    static let keepPublic = "keep it public"
+    /// After a switch off whose public link the server could not clear from its cache.
+    static let cacheNote = "it may keep loading for a little while where it was already opened."
+    /// A private webp that this device does not hold shows a lock where its picture would be.
+    static let privateWebpA11y = "private. turn on the public link to see it from anywhere."
+
+    // Settings › saving
+    static let saveGroup = "saving"
+    static let newSavesPublic = "make new saves public"
+    static let newSavesPublicFooter = "new saves, uploads and shares get a public link right away. you can turn it off for each one."
+}

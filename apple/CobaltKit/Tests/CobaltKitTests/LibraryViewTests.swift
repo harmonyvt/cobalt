@@ -22,13 +22,20 @@ private func file(
         mediaName: kind == .public ? "\(id).\(isWebp ? "webp" : "mp4")" : nil, deletable: isWebp)
 }
 
-/// A link post (`ref` -> an instagram reel) with a private original of `privateBytes` and `webps` public
-/// webps of 10 bytes each: size = `privateBytes + 10 × webps`.
+/// A link post (`ref` -> an instagram reel) with an original of `privateBytes` and `webps` public webps of 10
+/// bytes each: size = `privateBytes + 10 × webps`. The original is private unless `publicVideo` (CONTRACT-VISIBILITY
+/// decision 13: a row's badge is the video's switch, not whether some webp is public).
 private func post(
     _ id: String, service: String? = "instagram", ref: String? = nil, custom: String? = nil, title: String? = nil,
-    dur: Double = 1, w: Int = 100, h: Int = 100, at: Date = t0, privateBytes: Int64 = 100, webps: Int = 0
+    dur: Double = 1, w: Int = 100, h: Int = 100, at: Date = t0, privateBytes: Int64 = 100, webps: Int = 0,
+    publicVideo: Bool = false
 ) -> LibraryPost {
-    var files = [file("\(id)-src", .private, bytes: privateBytes, w: w, h: h, d: dur, at: at, name: "\(id)-src")]
+    var original = file("\(id)-src", .private, bytes: privateBytes, w: w, h: h, d: dur, at: at, name: "\(id)-src")
+    if publicVideo {
+        original.wireVisibility = .public
+        original.url = URL(string: "https://media.capybaraharmony.com/\(id)-src.mp4")
+    }
+    var files = [original]
     for n in 0..<webps {
         files.append(file("\(id)-w\(n)", .public, bytes: 10, w: 480, h: 480, d: 1, at: at, type: "image/webp"))
     }
@@ -41,10 +48,10 @@ private func post(
 /// Four posts with a distinct value on every sort key (see the tables in each test).
 private func four() -> [LibraryPost] {
     [
-        post("a", custom: "Banana", dur: 10, w: 300, h: 100, at: t0.addingTimeInterval(100), privateBytes: 390, webps: 1),
+        post("a", custom: "Banana", dur: 10, w: 300, h: 100, at: t0.addingTimeInterval(100), privateBytes: 390, webps: 1, publicVideo: true),
         post("b", custom: "apple", dur: 40, w: 100, h: 100, at: t0.addingTimeInterval(300), privateBytes: 100, webps: 0),
-        post("c", custom: "Cherry", dur: 20, w: 400, h: 100, at: t0.addingTimeInterval(200), privateBytes: 270, webps: 3),
-        post("d", custom: "date", dur: 30, w: 200, h: 100, at: t0.addingTimeInterval(400), privateBytes: 180, webps: 2),
+        post("c", custom: "Cherry", dur: 20, w: 400, h: 100, at: t0.addingTimeInterval(200), privateBytes: 270, webps: 3, publicVideo: true),
+        post("d", custom: "date", dur: 30, w: 200, h: 100, at: t0.addingTimeInterval(400), privateBytes: 180, webps: 2, publicVideo: true),
     ]
 }
 
@@ -71,7 +78,10 @@ struct LibraryRowTests {
         #expect(dd7p.title == "instagram · Dd7P496wolG" && dd7p.service == "instagram" && !dd7p.isUpload)
         #expect(dd7p.bytes == 4_500_000 + 4_331_778 + 2_371_210 + 1_600_000)          // all of the post's files
         #expect(dd7p.webps == 3 && dd7p.fileCount == 4 && dd7p.hasVideo && !dd7p.originalIsImage)
-        #expect(dd7p.isPublic && dd7p.visibilityRank == 1)
+        // its video is private (its webps are public): the badge is the video's switch (CONTRACT-VISIBILITY 13)
+        #expect(!dd7p.isPublic && dd7p.visibilityRank == 0)
+        let hosted = try #require(rows.first { $0.id == "Dd55fEyN1Yy" })                 // the video has its hosted link
+        #expect(hosted.isPublic && hosted.visibilityRank == 1)
         #expect(dd7p.length == 14.77 && dd7p.width == 720 && dd7p.height == 1280 && dd7p.pixels == 720 * 1280)
         #expect(dd7p.faceAspect == 600.0 / 480.0)                                      // the newest webp, 480×600
         #expect(dd7p.id == dd7p.item.post?.id && dd7p.item.local != nil)               // joined with the device's media
@@ -165,6 +175,14 @@ struct LibraryRowTests {
         #expect(ids(app) == ["b", "u"])
         app.library.show = .uploads
         #expect(ids(app) == ["u"])
+    }
+
+    @Test func aPrivateVideoWithPublicWebpsIsPrivate() {
+        let app = emptyApp(posts: [post("p", webps: 2), post("q", webps: 2, publicVideo: true)])
+        app.library.show = .publicOnly
+        #expect(ids(app) == ["q"])
+        app.library.show = .privateOnly
+        #expect(ids(app) == ["p"])
     }
 
     @Test func searchFoldsCaseAndDiacriticsAndMatchesRefServiceAndFileNames() {

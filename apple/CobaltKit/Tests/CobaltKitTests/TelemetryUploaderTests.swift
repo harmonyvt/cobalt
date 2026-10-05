@@ -365,6 +365,59 @@ struct TelemetryUploaderTests {
         #expect(UncleanExit.leftover(in: rt.directory) == nil)              // a clean end
     }
 
+    /// The owner's phone sent nothing after build 1.4 although 1.5 to 1.7 were installed over it: only the app
+    /// uploads (the share sheet just writes), and only on becoming active, going to the background, a server
+    /// refresh or a crash record. A new build over an existing install must pick up where the old one stopped.
+    @MainActor
+    @Test func aNewBuildOverAnExistingInstallUploadsOnlyWhatIsNewOnceTheServerIsKnown() async throws {
+        let dir = try makeTempDirectory()
+        let settings = Settings(defaults: UserDefaults(suiteName: "cobaltkit.tests.\(UUID().uuidString)")!, keychain: .memory())
+        try settings.setAPIKey(pasted: Self.key)
+        var fork = Capabilities.unknown
+        fork.kind = .fork
+        fork.telemetry = true
+
+        // build 1.4: logs five lines and uploads them
+        let old = TelemetryRuntime(directory: dir, process: .app, mirrorToOSLog: false)
+        for i in 0..<5 { old.log.log(.info, .pipeline, "from 1.4 #\(i)") }
+        old.log.flush()
+        let oldTransport = FakeTelemetryTransport()
+        let oldService = TelemetryService(
+            runtime: old, settings: settings, capabilities: { fork }, makeTransport: { _, _ in oldTransport }, app: Self.info, install: { "i" })
+        #expect(await oldService.sendNow().outcome == .done)
+
+        // the owner then uses the share sheet (the extension writes lines the app never uploads)
+        let share = TelemetryRuntime(directory: dir, process: .share, mirrorToOSLog: false)
+        share.log.log(.info, .pipeline, "from the share sheet")
+        share.log.flush()
+
+        // build 1.7 launches over the same folder. The server's capabilities are not known yet (a cold start):
+        // becoming active must not send, and must not wedge anything either
+        let fresh = TelemetryRuntime(directory: dir, process: .app, mirrorToOSLog: false)
+        fresh.log.log(.info, .app, "launch 1.7")
+        fresh.log.flush()
+        let caps = LockedBox(Capabilities.unknown)
+        let transport = FakeTelemetryTransport()
+        let service = TelemetryService(
+            runtime: fresh, settings: settings, capabilities: { caps.withLock { $0 } }, makeTransport: { _, _ in transport },
+            app: Self.info, install: { "i" })
+        service.becameActive()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(transport.calls == 0)
+        #expect(await service.pendingCounts().events >= 2)                    // still waiting, not lost
+
+        // the server check lands (`AppModel.refreshServer` applies the capabilities, then asks for an upload)
+        caps.withLock { $0 = fork }
+        service.uploadSoon()
+        for _ in 0..<200 where transport.calls == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(transport.calls >= 1)
+        let text = transport.bodies.map { String(decoding: $0, as: UTF8.self) }.joined()
+        #expect(text.contains("launch 1.7"))
+        #expect(text.contains("from the share sheet"))                          // the extension's lines go out too
+        #expect(!text.contains("from 1.4"))                                     // what 1.4 sent is not sent again
+        #expect(await service.pendingCounts().events == 0)
+    }
+
     // MARK: privacy
 
     @Test func theKeyNeverLeavesInAPayloadEvenWhenSomethingLoggedIt() async throws {

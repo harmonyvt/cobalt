@@ -9,7 +9,7 @@ private struct TilePress: ButtonStyle {
 }
 
 /// One mosaic tile (CONTRACT-LIBRARY2 decision 12): the face's picture at its real aspect, filling the slot
-/// `MasonryPlan` gave it, with badges (the face's type top right, a `link` dot when anything is public top left,
+/// `MasonryPlan` gave it, with badges (the face's type top right, a `globe` (public) or `lock.fill` (private) dot top left,
 /// the length bottom left on a video face tall enough to hold it) and a one-line title on a soft dark scrim.
 /// A webp face moves while the budget lets it. A tile whose picture failed keeps its frame, badges and caption
 /// with a glyph, and still opens. Tap opens; the context menu is the row's.
@@ -55,6 +55,13 @@ struct LibraryTile: View, Equatable {
 
     private var isRemote: Bool { face.local?.fileURL == nil }
 
+    /// The meta line, whether the link is public, and (when it is true) that the picture did not load.
+    private var accessibilityValue: String {
+        var parts = [LibraryRowCopy.meta(row, now: Date()), row.isPublic ? Copy.Library2.publicBadgeA11y : Copy.Library2.privateBadgeA11y]
+        if failed { parts.append(Copy.Library2.pictureFailed) }
+        return parts.joined(separator: ", ")
+    }
+
     var body: some View {
         Button { controller.open(row) } label: { tile }
             .buttonStyle(TilePress())
@@ -73,7 +80,7 @@ struct LibraryTile: View, Equatable {
             .onAppear { if nearEnd { controller.loadMoreIfNeeded() } }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Copy.Media.planetA11y(title: LibraryRowCopy.spoken(row), webps: row.webps, hasVideo: row.hasVideo))
-            .accessibilityValue(failed ? "\(LibraryRowCopy.meta(row, now: Date())), \(Copy.Library2.pictureFailed)" : LibraryRowCopy.meta(row, now: Date()))
+            .accessibilityValue(accessibilityValue)
             .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
             // date order for VoiceOver, not column order
             .accessibilitySortPriority(Double(-index))
@@ -106,17 +113,16 @@ struct LibraryTile: View, Equatable {
 
     private var overlays: some View {
         ZStack {
-            // top left: a link dot when anything of the media is public
-            if row.isPublic {
-                Image(systemName: Symbol.Library.isPublic)
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(CobaltColor.badgeInk)
-                    .frame(width: 20, height: 20)
-                    .background(CobaltColor.badgeBack, in: Circle())
-                    .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
-                    .padding(5)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
+            // top left: the video's switch (CONTRACT-VISIBILITY decision 13): a globe while its link is public, a lock
+            // while it is private; never "some webp is public"
+            Image(systemName: row.isPublic ? Symbol.Library.isPublic : Symbol.Library.isPrivate)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(CobaltColor.badgeInk)
+                .frame(width: 20, height: 20)
+                .background(CobaltColor.badgeBack, in: Circle())
+                .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+                .padding(5)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             // top right: the face's type
             typeBadge
                 .padding(5)

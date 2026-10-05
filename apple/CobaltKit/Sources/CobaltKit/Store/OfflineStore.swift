@@ -295,13 +295,17 @@ public final class OfflineStore {
         let fm = FileManager.default
         let id = UUID().uuidString.lowercased()
         let ext = file.pathExtension.isEmpty ? (kind == .webp ? "webp" : "mp4") : file.pathExtension.lowercased()
-        let fileName = "\(id).\(ext)"
-        let destination: URL
+        var fileName = "\(id).\(ext)"
+        var destination: URL
         do {
             destination = try await place(file, as: fileName, move: move)
         } catch {
             Telemetry.log(.error, .store, "store add failed", data: Self.failureData(step: "place", error))
             throw error
+        }
+        if kind == .original, !media.isImage, let proxy = await playableProxy(of: destination, named: "\(id)-play.mp4") {
+            fileName = proxy.lastPathComponent
+            destination = proxy
         }
 
         let size = ((try? fm.attributesOfItem(atPath: destination.path)[.size]) as? NSNumber)?.int64Value ?? media.bytes ?? 0
@@ -440,13 +444,18 @@ public final class OfflineStore {
         }
         let ext = file.pathExtension.isEmpty
             ? (existing.kind == .webp ? "webp" : "mp4") : file.pathExtension.lowercased()
-        let fileName = "\(id)-\(UUID().uuidString.prefix(6).lowercased()).\(ext)"
-        let destination: URL
+        var fileName = "\(id)-\(UUID().uuidString.prefix(6).lowercased()).\(ext)"
+        var destination: URL
         do {
             destination = try await place(file, as: fileName, move: move)
         } catch {
             Telemetry.log(.error, .store, "store attach failed", data: Self.failureData(step: "place", error))
             throw error
+        }
+        if existing.kind == .original,
+           let proxy = await playableProxy(of: destination, named: "\((fileName as NSString).deletingPathExtension)-play.mp4") {
+            fileName = proxy.lastPathComponent
+            destination = proxy
         }
         let size = Self.fileSize(destination) ?? 0
 
@@ -502,6 +511,16 @@ public final class OfflineStore {
         Telemetry.log(.info, .store, "store attach", data: ["kind": .string(existing.kind.rawValue), "bytes": .bytes(size)])
         onAdd?(refilled)
         return refilled
+    }
+
+    /// A GIF original is stored as an mp4 of its frames: AVFoundation (the planet, the trim's preview, full
+    /// screen, the filmstrip, the flipbook) cannot open a GIF, and the server keeps the GIF itself for the
+    /// render. Returns the mp4 (the GIF is deleted) or nil when `file` is not a GIF or could not be converted.
+    private func playableProxy(of file: URL, named name: String) async -> URL? {
+        let out = file.deletingLastPathComponent().appendingPathComponent(name)
+        guard out != file, await tools.playableCopy(of: file, to: out) else { return nil }
+        try? FileManager.default.removeItem(at: file)
+        return out
     }
 
     /// Moves or copies `file` to `root/files/<name>` off the main actor: a 200 MB copy must not
@@ -604,9 +623,9 @@ public final class OfflineStore {
     /// Records the public link of a hosted original on the entries it belongs to: the originals
     /// of `sessionID`, or just `id` when given. One coordinated index write (the share extension
     /// may write too); `videos` updates. Returns how many entries took it (0: the original is not
-    /// kept on this device, so there is nothing to badge).
+    /// kept on this device, so there is nothing to badge). Nil clears it (the owner switched the link off).
     @discardableResult
-    public func setPublicURL(_ url: URL, forSession sessionID: String?, orEntry id: String? = nil) -> Int {
+    public func setPublicURL(_ url: URL?, forSession sessionID: String?, orEntry id: String? = nil) -> Int {
         var touched = 0
         func matches(_ r: Record) -> Bool {
             if let id, r.id == id { return true }

@@ -172,6 +172,8 @@ public struct HTTPCobaltClient: CobaltClient {
                 var telemetry: Bool?
                 var createNotify: Bool?
                 var titles: Bool?
+                var publicDefault: Bool?
+                var visibility: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -220,7 +222,9 @@ public struct HTTPCobaltClient: CobaltClient {
             deletePost: f?.deletePost ?? false,
             telemetry: f?.telemetry ?? false,
             createNotify: f?.createNotify ?? false,
-            titles: f?.titles ?? false)
+            titles: f?.titles ?? false,
+            publicDefault: f?.publicDefault ?? false,
+            visibility: f?.visibility ?? false)
     }
 
     // MARK: - Resolve and studio
@@ -250,8 +254,15 @@ public struct HTTPCobaltClient: CobaltClient {
     }
 
     public func createStudio(link: URL) async throws -> StudioCreated {
+        try await createStudio(link: link, public: nil)
+    }
+
+    /// `public` rides next to `url` (APP-API-CONTRACT 13.2); nil leaves it out, which is "private" for the server.
+    public func createStudio(link: URL, public makePublic: Bool?) async throws -> StudioCreated {
         let req = try makeRequest("POST", "/studio", keyed: true)
-        let wire = try await sendJSON(IDWire.self, req, body: Self.jsonBody(["url": link.absoluteString]))
+        var fields: [String: Any] = ["url": link.absoluteString]
+        if let makePublic { fields["public"] = makePublic }
+        let wire = try await sendJSON(IDWire.self, req, body: Self.jsonBody(fields))
         return StudioCreated(id: wire.id, pageURL: wire.url.flatMap(URL.init(string:)))
     }
 
@@ -261,13 +272,17 @@ public struct HTTPCobaltClient: CobaltClient {
     /// and the Hark opt-in for `saved` and `failed`, in one call. The body is returned apart from the
     /// request because a background `URLSession` uploads from a file. Throws `.noAPIKey` without a key
     /// for this server (the extension then shows its one-line card instead of queueing anything).
-    public func shareSaveRequest(link: URL, label: String) throws -> (request: URLRequest, body: Data) {
+    ///
+    /// `public` is sent when `makePublic` (Settings "make new saves public", on by default); off leaves the
+    /// field out and the save stays private.
+    public func shareSaveRequest(link: URL, label: String, public makePublic: Bool = true) throws -> (request: URLRequest, body: Data) {
         var req = try makeRequest("POST", "/studio", keyed: true, timeout: 60)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let fields: [String: Any] = [
-            "url": link.absoluteString, "public": true, "origin": "share",
+        var fields: [String: Any] = [
+            "url": link.absoluteString, "origin": "share",
             "notify": ["on": ["saved", "failed"], "label": label] as [String: Any],
         ]
+        if makePublic { fields["public"] = true }
         guard let body = Self.jsonBody(fields) else { throw CobaltError.invalidResponse(httpStatus: 0) }
         return (req, body)
     }
@@ -287,7 +302,17 @@ public struct HTTPCobaltClient: CobaltClient {
         file: URL, name: String, contentType: String,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> UploadResult {
-        var req = try makeRequest("PUT", "/studio/upload", query: [("name", name)], keyed: true, timeout: 120)
+        try await upload(file: file, name: name, contentType: contentType, public: nil, progress: progress)
+    }
+
+    /// `?public=1` asks for a public link as soon as the file is stored (APP-API-CONTRACT 13.2).
+    public func upload(
+        file: URL, name: String, contentType: String, public makePublic: Bool?,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> UploadResult {
+        var query = [("name", name)]
+        if makePublic == true { query.append(("public", "1")) }
+        var req = try makeRequest("PUT", "/studio/upload", query: query, keyed: true, timeout: 120)
         req.setValue(contentType, forHTTPHeaderField: "Content-Type")
         let delegate = ProgressDelegate(progress)
         defer { delegate.finish() }
@@ -375,8 +400,15 @@ public struct HTTPCobaltClient: CobaltClient {
     }
 
     public func library(cursor: String?, limit: Int) async throws -> LibraryPage {
+        try await library(cursor: cursor, limit: limit, v2: false)
+    }
+
+    /// `v=2`: one entry per file, each with its `visibility` (APP-API-CONTRACT 16.5). Without it the server answers
+    /// the shape older apps know (an original, and a synthesized hosted copy after a public one).
+    public func library(cursor: String?, limit: Int, v2: Bool) async throws -> LibraryPage {
         var query = [("limit", String(max(1, min(50, limit))))]
         if let cursor { query.append(("cursor", cursor)) }
+        if v2 { query.append(("v", "2")) }
         let req = try makeRequest("GET", "/library", query: query, keyed: true)
         let wire = try await sendJSON(LibraryWire.self, req)
         let posts = wire.posts.compactMap(\.value)
@@ -385,6 +417,14 @@ public struct HTTPCobaltClient: CobaltClient {
             fileCount: wire.counts?.files ?? posts.reduce(0) { $0 + $1.files.count },
             publicBytes: wire.usage?.publicBytes ?? 0, privateBytes: wire.usage?.privateBytes ?? 0,
             next: wire.next)
+    }
+
+    /// `PATCH /library/items/<id>/visibility` (keyed): 200 → the file as it is now and `cache_cleared`;
+    /// `409 error.library.not_toggleable` → `.unsupported`; any other error as the keyed calls throw it.
+    public func setVisibility(item id: String, public makePublic: Bool) async throws -> VisibilityChange {
+        let req = try makeRequest("PATCH", "/library/items/\(Self.encode(id))/visibility", keyed: true, timeout: 60)
+        let wire = try await sendJSON(VisibilityWire.self, req, body: Self.jsonBody(["public": makePublic]))
+        return VisibilityChange(file: wire.item, cacheCleared: wire.cacheCleared)
     }
 
     public func deleteMedia(name: String) async throws {
@@ -574,6 +614,11 @@ private struct PublishWire: Decodable {
     var bytes: Int64?
     var contentType: String?
     var itemId: String?
+}
+
+private struct VisibilityWire: Decodable {
+    var item: LibraryFile
+    var cacheCleared: Bool?
 }
 
 private struct LibraryWire: Decodable {

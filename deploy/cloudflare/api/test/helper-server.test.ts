@@ -14,6 +14,7 @@ import {
     JobError,
     MAX_FETCH_BYTES,
     downloadToFile,
+    isGifHead,
     parseVideoInfo,
     studioCode,
     titleFromFilename,
@@ -241,6 +242,18 @@ describe("POST /fetch", () => {
         };
         await post("/fetch", { id: FID, url: LINK });
         expect(await until(`/fetch/${FID}`)).toMatchObject({ status: "done", ext: "webm", contentType: "video/webm" });
+    });
+
+    it("labels a real GIF as image/gif (ext gif), whatever name or type cobalt gave it", async () => {
+        ctl.download = async (o) => {
+            await writeFile(o.dest, Buffer.concat([Buffer.from("GIF89a"), Buffer.alloc(40)]));
+            o.onResponse(new Response(null, { headers: { "content-type": "video/mp4" } }));
+            return 46;
+        };
+        ctl.resolve = async () => ({ url: "http://127.0.0.1:1/v", filename: "twitter_1.mp4" });
+        await post("/fetch", { id: FID, url: LINK });
+        expect(await until(`/fetch/${FID}`)).toMatchObject({ status: "done", ext: "gif", contentType: "image/gif" });
+        expect((await call(`/fetch/${FID}/file`)).headers.get("content-type")).toBe("image/gif");
     });
 
     it("keeps a null duration (unknown) and a null title", async () => {
@@ -723,6 +736,12 @@ ${extra}`;
         expect(videoExt({ contentType: "text/html", filename: "a.exe" })).toBe("mp4");
         expect(videoExt({ contentType: null, filename: null })).toBe("mp4");
         expect(videoExt({ contentType: "video/x-matroska" })).toBe("mkv");
+    });
+    it("isGifHead reads the signature, not a name", () => {
+        expect(isGifHead(Buffer.from("GIF89a\x01\x02"))).toBe(true);
+        expect(isGifHead(Buffer.from("GIF87a"))).toBe(true);
+        expect(isGifHead(Buffer.from("GIF8"))).toBe(false);
+        expect(isGifHead(Buffer.from("\x00\x00\x00\x18ftypiso5"))).toBe(false);
     });
     it("titleFromFilename", () => {
         expect(titleFromFilename("twitter_123.mp4")).toBe("twitter_123");

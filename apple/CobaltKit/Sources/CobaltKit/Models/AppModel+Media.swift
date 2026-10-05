@@ -72,6 +72,49 @@ extension AppModel {
         }
     }
 
+    // MARK: - Public or private (CONTRACT-VISIBILITY.md)
+
+    /// Library file ids with a switch on its way to the server.
+    public var visibilityInFlight: Set<String> { library.visibilityInFlight }
+
+    /// The switch of this rendition is on its way to the server.
+    public func isChangingVisibility(_ rendition: Rendition) -> Bool {
+        rendition.file.map { library.visibilityInFlight.contains($0.id) } ?? false
+    }
+
+    /// Turns a rendition's public link on or off. Optimistic like `rename`: the library's file flips at once (off
+    /// drops its link; on has none to show until the server's answer, which carries the same link every time),
+    /// then `PATCH /library/items/<id>/visibility`; a failure puts the file back and throws the mapped failure.
+    /// On success the server's file replaces ours and this device's record of the original follows (the link is
+    /// kept or cleared). One request per file at a time: a second call while one runs changes nothing.
+    /// Throws `.unsupported` without the capability, or for a rendition the server does not take.
+    @discardableResult
+    public func setVisibility(_ rendition: Rendition, public makePublic: Bool) async throws -> VisibilityChange {
+        guard capabilities.visibility, let listed = rendition.file, listed.canToggleVisibility else {
+            throw PipelineFailure.unsupported
+        }
+        guard !library.visibilityInFlight.contains(listed.id) else { return VisibilityChange(file: listed, cacheCleared: nil) }
+        let previous = library.file(id: listed.id) ?? listed
+        library.visibilityInFlight.insert(listed.id)
+        defer { library.visibilityInFlight.remove(listed.id) }
+
+        var optimistic = previous
+        optimistic.wireVisibility = makePublic ? .public : .private
+        if !makePublic { optimistic.url = nil }
+        library.replace(file: optimistic)
+        do {
+            let change = try await ctx.client.setVisibility(item: listed.id, public: makePublic)
+            library.replace(file: change.file)
+            if !rendition.isWebp, let local = rendition.local {
+                ctx.store.setPublicURL(change.file.isPublic ? change.file.url : nil, forSession: local.sessionID, orEntry: local.id)
+            }
+            return change
+        } catch {
+            library.replace(file: previous)
+            throw failure(from: error)
+        }
+    }
+
     // MARK: - Another webp
 
     /// "another webp" / "make a webp": the home tab, the focus on this media with the trim open; the

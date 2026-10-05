@@ -35,7 +35,8 @@ func mapFailure(code: String, during phase: ErrorPhase, limits: Capabilities.Lim
         return .tooLarge(limit: limits.maxUploadBytes)
     case "error.studio.too_large", "error.webp.too_large":
         return .tooLarge(limit: limits.maxSourceBytes)
-    case "error.webp.unsupported", "error.library.unsupported", "error.studio.not_video":
+    case "error.webp.unsupported", "error.library.unsupported", "error.studio.not_video",
+         "error.library.not_toggleable":
         return .unsupported
     default:
         return serverFailure(code, during: phase)

@@ -45,6 +45,9 @@ struct HeroRemote: Equatable {
     /// The picture under (or instead of) the playing file: the server's poster for a video, else the first frame of
     /// a public file, for the poster while it loads (and for good when it cannot play).
     var still: RemotePoster?
+    /// A webp the owner made private, with no copy on this device: nothing of it can show, so the frame holds a
+    /// lock instead of looking broken.
+    var lockedWebp = false
 
     init() {}
 
@@ -56,6 +59,8 @@ struct HeroRemote: Equatable {
             if let url = r.publicURL ?? r.file?.url {
                 animatedWebp = url
                 still = RemotePoster(url: url, isVideo: false)
+            } else if r.visibility == .private {
+                lockedWebp = true
             }
         } else if let url = r.hosted?.url ?? r.publicURL, r.hosted?.contentType?.lowercased().hasPrefix("image/") != true {
             playableVideo = url
@@ -149,6 +154,11 @@ struct RemoteHeroPicture: View {
                 AnimatedImageView(source: HeroSource.animated(webp))
             } else if let video = remote.playableVideo {
                 RemoteVideo(url: HeroSource.resolve(video))
+            } else if remote.lockedWebp, poster == nil, remote.still == nil {
+                Image(systemName: Symbol.Media.isPrivate)
+                    .font(.system(size: 28, weight: .regular))
+                    .foregroundStyle(CobaltColor.badgeInk.opacity(0.7))
+                    .accessibilityLabel(Copy.Media.privateWebpA11y)
             }
         }
         .overlay(alignment: .bottomLeading) {

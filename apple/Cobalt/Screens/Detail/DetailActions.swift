@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The buttons under the hero (CONTRACT-MEDIA 1.10, CONTRACT-ORBIT 2b): EXACTLY ONE prominent button for the
 /// tab, then the secondary row (icon over word, 52 pt, like the focus's choices), then the state of whatever is
-/// running or failed. What does not apply is not shown (plain cobalt has no webp, no link, no public share).
+/// running or failed. What does not apply is not shown (plain cobalt has no webp, no link, no public share; a
+/// private file has no link to copy). The public/private switch is `VisibilitySection`, next to this.
 struct DetailActions: View {
     let controller: DetailController
     let item: MediaItem
@@ -29,8 +30,11 @@ struct DetailActions: View {
     }
     private var videoLink: URL? { rendition.hosted?.url ?? rendition.publicURL }
     private var canSave: Bool { RenditionPhotos.canSave(rendition) }
+    /// The old "public share" button: only on a server without the switch (with it, the switch under the actions
+    /// is the one way to make a link).
     private var canHost: Bool {
         rendition.file != nil && rendition.hosted == nil && rendition.publicURL == nil && model.capabilities.studio
+            && !model.capabilities.visibility
     }
     private var placed: Bool { controller.placement(of: rendition) != .none }
 

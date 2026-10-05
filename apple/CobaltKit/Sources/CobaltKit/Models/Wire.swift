@@ -91,12 +91,19 @@ public struct StudioSession: Sendable, Codable, Equatable, Identifiable {
     public var stepBytes: Int64?
     public var stepTotal: Int64?
     public var waking: Bool?
+    /// `item_id` (APP-API-CONTRACT 16.3): the library row of this session's original; nil from an older server
+    /// or while the save has no row yet.
+    public var itemID: String?
+    /// `visibility`: that row's; nil when the server does not say.
+    public var visibility: Visibility?
 }
 
 extension StudioSession {
     enum CodingKeys: String, CodingKey {
         case id, status, link, service, title, duration, width, height, bytes
         case createdAt, expiresAt, error, renders, step, stepBytes, stepTotal, waking
+        case itemID = "itemId"                // `item_id` after convertFromSnakeCase
+        case visibility
     }
 
     struct ErrorBody: Codable, Equatable { var code: String? }
@@ -121,6 +128,8 @@ extension StudioSession {
         stepBytes = try c.decodeIfPresent(Int64.self, forKey: .stepBytes)
         stepTotal = try c.decodeIfPresent(Int64.self, forKey: .stepTotal)
         waking = try c.decodeIfPresent(Bool.self, forKey: .waking)
+        itemID = (try? c.decodeIfPresent(String.self, forKey: .itemID)) ?? nil
+        visibility = (try? c.decodeIfPresent(Visibility.self, forKey: .visibility)) ?? nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -142,6 +151,8 @@ extension StudioSession {
         try c.encodeIfPresent(stepBytes, forKey: .stepBytes)
         try c.encodeIfPresent(stepTotal, forKey: .stepTotal)
         try c.encodeIfPresent(waking, forKey: .waking)
+        try c.encodeIfPresent(itemID, forKey: .itemID)
+        try c.encodeIfPresent(visibility, forKey: .visibility)
     }
 }
 

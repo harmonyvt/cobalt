@@ -116,6 +116,10 @@ public struct PreviewClient: CobaltClient {
     let timeScale: Double
     let clock: any PipelineClock
     let server = PreviewServer()
+    /// The server of `AppModel.previewVisibility(_:)`: lists one file per rendition on `v=2` and takes the switch.
+    /// `.off` (every other preview) is a server without `features.visibility`.
+    let visibility: VisibilityPreviewMode
+    let visibilityState = PreviewVisibilityState()
 
     public var baseURL: URL { PreviewData.base }
 
@@ -123,10 +127,11 @@ public struct PreviewClient: CobaltClient {
         self.init(scenario: scenario, timeScale: timeScale, clock: SystemClock())
     }
 
-    init(scenario: PreviewScenario, timeScale: Double, clock: any PipelineClock) {
+    init(scenario: PreviewScenario, timeScale: Double, clock: any PipelineClock, visibility: VisibilityPreviewMode = .off) {
         self.scenario = scenario
         self.timeScale = max(0.01, timeScale)
         self.clock = clock
+        self.visibility = visibility
     }
 
     var clip: PreviewData.Clip { PreviewData.clip(for: scenario) }
@@ -155,6 +160,13 @@ public struct PreviewClient: CobaltClient {
     }
 
     public func createStudio(link: URL) async throws -> StudioCreated {
+        try await createStudio(link: link, public: nil)
+    }
+
+    /// Records what the app asked for (`visibilityState.saveCalls`: "create public" / "create -"), so tests can
+    /// see the default-public flag go out, or not.
+    public func createStudio(link: URL, public makePublic: Bool?) async throws -> StudioCreated {
+        visibilityState.recordSave("create", public: makePublic)
         let id = server.newSession(isUpload: false, clip: clip, name: nil, bytes: clip.bytes, at: clock.now())
         return StudioCreated(id: id, pageURL: nil)
     }
@@ -165,6 +177,14 @@ public struct PreviewClient: CobaltClient {
         file: URL, name: String, contentType: String,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> UploadResult {
+        try await upload(file: file, name: name, contentType: contentType, public: nil, progress: progress)
+    }
+
+    public func upload(
+        file: URL, name: String, contentType: String, public makePublic: Bool?,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> UploadResult {
+        visibilityState.recordSave("upload", public: makePublic)
         let onDisk = ((try? FileManager.default.attributesOfItem(atPath: file.path)[.size]) as? NSNumber)?.int64Value
         let size = PreviewData.uploadBytes(forFileSize: onDisk, scenario: scenario)
         let step = PreviewData.uploadBytesPerSecond / timeScale * 0.1
@@ -345,7 +365,26 @@ public struct PreviewClient: CobaltClient {
     }
 
     public func library(cursor: String?, limit: Int) async throws -> LibraryPage {
-        var page = PreviewData.libraryPage(now: clock.now())
+        shown(PreviewData.libraryPage(now: clock.now()))
+    }
+
+    /// `v=2` on a server that has the switch: one file per rendition with its visibility (and the switches made
+    /// so far); anything else is the page older apps know.
+    public func library(cursor: String?, limit: Int, v2: Bool) async throws -> LibraryPage {
+        guard v2, visibility != .off else { return try await library(cursor: cursor, limit: limit) }
+        var page = PreviewData.libraryPageV2(now: clock.now())
+        page.posts = page.posts.map { post in
+            var p = post
+            p.files = post.files.map { visibilityState.applying(to: $0) }
+            p.visibility = p.files.first { $0.role == .privateCopy }?.visibility ?? (p.files.contains { $0.isPublic } ? .public : .private)
+            return p
+        }
+        return shown(page)
+    }
+
+    /// What the "server" has deleted or retitled so far, applied to a fixture page.
+    private func shown(_ fixture: LibraryPage) -> LibraryPage {
+        var page = fixture
         let titles = server.titles
         page.posts = page.posts.map { post in
             var p = post
@@ -354,6 +393,24 @@ public struct PreviewClient: CobaltClient {
             return p
         }.filter { !$0.files.isEmpty }
         return page
+    }
+
+    /// Previews: `.working` switches the file after a short wait (the same link every time, like the server);
+    /// `.failsOnce` answers 502 to the first call for each file (the revert, then the retry); `.failing` always
+    /// does. A file no post lists is `error.library.not_found`.
+    public func setVisibility(item id: String, public makePublic: Bool) async throws -> VisibilityChange {
+        guard visibility != .off else { throw PipelineFailure.unsupported }
+        let calls = visibilityState.recordCall(id, public: makePublic)         // the server hears it at once
+        try await clock.sleep(seconds: 0.4)
+        if visibility == .failing || (visibility == .failsOnce && calls == 1) {
+            throw CobaltError.api(code: "error.library.storage", httpStatus: 502)
+        }
+        guard let base = PreviewData.libraryPageV2(now: clock.now()).posts.flatMap(\.files).first(where: { $0.id == id }) else {
+            throw PipelineFailure.server(code: "error.library.not_found")
+        }
+        guard base.canToggleVisibility else { throw PipelineFailure.unsupported }
+        let file = visibilityState.set(base, public: makePublic)
+        return VisibilityChange(file: file, cacheCleared: makePublic ? nil : true)
     }
 
     /// Previews: the title goes into the "server"'s memory and the next `library` carries it. In

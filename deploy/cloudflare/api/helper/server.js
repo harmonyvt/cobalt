@@ -59,7 +59,7 @@
 
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rm, stat } from "node:fs/promises";
 import http from "node:http";
 import http2 from "node:http2";
 import { createRequire } from "node:module";
@@ -78,6 +78,7 @@ import {
     VIDEO_TYPES,
     downloadToFile,
     encodeAnimatedWebp,
+    isGifHead,
     keyMatches,
     parseVideoInfo,
     buildPosterArgs,
@@ -94,6 +95,18 @@ import {
     validateJobInput,
     videoExt,
 } from "./lib.js";
+
+/** The first `n` bytes of a file (fewer when it is shorter). */
+async function readHead(file, n) {
+    const fh = await open(file, "r");
+    try {
+        const buf = Buffer.alloc(n);
+        const { bytesRead } = await fh.read(buf, 0, n, 0);
+        return buf.subarray(0, bytesRead);
+    } finally {
+        await fh.close();
+    }
+}
 
 // The relay's whole budget for one push (see APNS_TIMEOUT_MS inside createHelper).
 export const APNS_DEFAULT_TIMEOUT_MS = 2000;
@@ -402,10 +415,13 @@ export function createHelper(opts = {}) {
             if (info.width === null || info.height === null) {
                 throw new JobError("error.webp.bad_source");
             }
-            const ext = videoExt({ contentType, filename: src.filename });
+            // a real GIF is labelled as one (the studio already takes `image/gif` from uploads),
+            // not as an mp4 that no video player can open
+            const gif = isGifHead(await readHead(input, 6));
+            const ext = gif ? "gif" : videoExt({ contentType, filename: src.filename });
             job.result = {
                 bytes,
-                contentType: VIDEO_TYPES[ext],
+                contentType: gif ? "image/gif" : VIDEO_TYPES[ext],
                 ext,
                 duration: info.duration,
                 width: info.width,

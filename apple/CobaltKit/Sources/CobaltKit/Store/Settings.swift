@@ -240,6 +240,22 @@ public final class Settings {
         set { withMutation(keyPath: \.haptics) { defaults.set(newValue, forKey: "haptics") } }
     }
 
+    // MARK: sharing (CONTRACT-VISIBILITY.md decision 3)
+
+    /// "make new saves public": a link save, an upload and the share sheet ask the server for a public link
+    /// right away (`public: true`); off, they stay private until the owner switches one on. ON by default
+    /// (the owner's call, 2026-10-05). App-group defaults, key `save.newSavesPublic`, so the extension reads
+    /// what the app's settings wrote. Only the saves made after the switch are affected.
+    public var newSavesPublic: Bool {
+        get {
+            access(keyPath: \.newSavesPublic)
+            return defaults.object(forKey: Settings.newSavesPublicKey) as? Bool ?? true
+        }
+        set { withMutation(keyPath: \.newSavesPublic) { defaults.set(newValue, forKey: Settings.newSavesPublicKey) } }
+    }
+
+    nonisolated static let newSavesPublicKey = "save.newSavesPublic"
+
     // MARK: share sheet and photos album (CONTRACT-SYNC.md section 4)
 
     /// "continue in background automatically": a link shared into the sheet closes it by itself after

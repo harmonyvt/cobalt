@@ -473,7 +473,7 @@ describe("resolveSource (stubbed cobalt)", () => {
             accept: "application/json",
             "content-type": "application/json",
         });
-        expect(JSON.parse(String(s.calls[0].init.body))).toEqual({ url: good.url, alwaysProxy: true, videoQuality: "720" });
+        expect(JSON.parse(String(s.calls[0].init.body))).toEqual({ url: good.url, alwaysProxy: true, videoQuality: "720", convertGif: false });
     });
     it("tunnel: rewrites to the local origin and keeps the filename", async () => {
         const { p } = run({ status: "tunnel", url: `${api}/tunnel?id=1&exp=2`, filename: "clip.mp4" });

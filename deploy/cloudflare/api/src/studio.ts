@@ -1178,7 +1178,8 @@ export class StudioService {
         if (bytes > MAX_SOURCE_BYTES) return await this.fail(sid, "error.studio.too_large");
         const ext = typeof done.ext === "string" && /^[a-z0-9]{2,4}$/.test(done.ext) ? done.ext : "mp4";
         const contentType =
-            typeof done.contentType === "string" && /^video\/[a-z0-9.+-]+$/i.test(done.contentType)
+            typeof done.contentType === "string" &&
+            (/^video\/[a-z0-9.+-]+$/i.test(done.contentType) || done.contentType === "image/gif")
                 ? done.contentType
                 : "video/mp4";
         const key = `originals/${sid}.${ext}`;

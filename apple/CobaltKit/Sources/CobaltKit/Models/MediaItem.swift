@@ -20,11 +20,18 @@ public struct Rendition: Sendable, Equatable, Identifiable {
     /// The server's poster (CONTRACT-LIBRARY2 decision 19): a webp's file poster (none today); the video's
     /// hosted link's, else its private copy's. Nil when the server sends none.
     public var posterURL: URL?
+    /// Whether this rendition has a public link (CONTRACT-VISIBILITY 6.1). `.video`: the server original's
+    /// visibility when the library lists it; `.public` when only a hosted link or a link this device recorded
+    /// is known; nil when only this device has it. `.webp`: the file's, else `.public` for a link, nil with none.
+    public var visibility: Visibility?
+    /// The server takes `PATCH …/visibility` for this rendition: its file says `visibility_toggle`.
+    public var canToggleVisibility: Bool
 
     public init(
         id: String, kind: Kind, local: StoredVideo? = nil, file: LibraryFile? = nil, hosted: LibraryFile? = nil,
         publicURL: URL? = nil, width: Int? = nil, height: Int? = nil, duration: Double? = nil, bytes: Int64? = nil,
-        createdAt: Date, clip: WebpClip? = nil, deletableName: String? = nil, posterURL: URL? = nil
+        createdAt: Date, clip: WebpClip? = nil, deletableName: String? = nil, posterURL: URL? = nil,
+        visibility: Visibility? = nil, canToggleVisibility: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -40,7 +47,12 @@ public struct Rendition: Sendable, Equatable, Identifiable {
         self.clip = clip
         self.deletableName = deletableName
         self.posterURL = posterURL
+        self.visibility = visibility
+        self.canToggleVisibility = canToggleVisibility
     }
+
+    /// The link is public right now.
+    public var isPublic: Bool { visibility == .public }
 
     public var isWebp: Bool {
         if case .webp = kind { return true }
@@ -112,8 +124,15 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
     public static func joins(_ local: StoredMedia, _ post: LibraryPost) -> Bool {
         let sessions = Set([post.id, post.session?.id].compactMap { $0 })
         if !local.sessionIDs.isDisjoint(with: sessions) { return true }
-        let urls = Set(post.files.compactMap(\.url))
-        return local.webps.contains { $0.remoteURL.map(urls.contains) ?? false }
+        return local.webps.contains { webp in webp.remoteURL.map { url in post.files.contains { isSameWebp($0, url) } } ?? false }
+    }
+
+    /// A post file is the webp behind `url` when it lists that link, or (a webp switched private lists none)
+    /// when its `media_name`, the name the link ends in, is the link's own.
+    static func isSameWebp(_ file: LibraryFile, _ url: URL) -> Bool {
+        if file.url == url { return true }
+        guard file.url == nil, file.role == .webp, let name = file.mediaName else { return false }
+        return mediaName(of: url) == name
     }
 
     /// Merges the two sides (the caller decides they belong together, see `joins`). A local webp and a
@@ -131,15 +150,32 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
         let privateFile = post?.files.first { $0.role == .privateCopy }
         let hostedFile = post?.files.first { $0.role == .hostedLink }
         if original != nil || privateFile != nil || hostedFile != nil {
+            // The server's word on the original beats whatever this device recorded (a stale `publicURL` never
+            // wins). A legacy listing carries the visibility on the original too, but its link on the separate
+            // hosted file; a server that says nothing keeps the old rule.
+            let visibility: Visibility?
+            let publicURL: URL?
+            switch privateFile?.wireVisibility {
+            case .private?:
+                visibility = .private
+                publicURL = nil
+            case .public?:
+                visibility = .public
+                publicURL = privateFile?.url ?? hostedFile?.url ?? original?.publicURL
+            case nil:
+                publicURL = hostedFile?.url ?? original?.publicURL
+                visibility = publicURL == nil ? nil : .public
+            }
             renditions.append(Rendition(
                 id: "video", kind: .video, local: original, file: privateFile, hosted: hostedFile,
-                publicURL: hostedFile?.url ?? original?.publicURL,
+                publicURL: publicURL,
                 width: original?.width ?? privateFile?.width ?? hostedFile?.width ?? post?.width,
                 height: original?.height ?? privateFile?.height ?? hostedFile?.height ?? post?.height,
                 duration: original?.duration ?? privateFile?.duration ?? hostedFile?.duration ?? post?.duration,
                 bytes: original.map(\.bytes) ?? privateFile?.bytes ?? hostedFile?.bytes,
                 createdAt: privateFile?.createdAt ?? original?.createdAt ?? hostedFile?.createdAt ?? post?.createdAt ?? .distantPast,
-                posterURL: hostedFile?.posterURL ?? privateFile?.posterURL))
+                posterURL: hostedFile?.posterURL ?? privateFile?.posterURL,
+                visibility: visibility, canToggleVisibility: privateFile?.canToggleVisibility ?? false))
         }
 
         struct WebpPair {
@@ -152,7 +188,7 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
         var unmatched = (post?.files ?? []).filter { $0.role == .webp }
         for webp in local?.webps ?? [] {
             var file: LibraryFile?
-            if let url = webp.remoteURL, let i = unmatched.firstIndex(where: { $0.url == url }) {
+            if let url = webp.remoteURL, let i = unmatched.firstIndex(where: { Self.isSameWebp($0, url) }) {
                 file = unmatched.remove(at: i)
             }
             pairs.append(WebpPair(order: pairs.count, local: webp, file: file))
@@ -162,7 +198,8 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
         for (n, pair) in pairs.enumerated() {
             let webp = pair.local
             let file = pair.file
-            let url: URL? = file?.url ?? webp?.remoteURL
+            // a webp the server holds private has no link, whatever this device recorded for it before
+            let url: URL? = file.map { $0.url ?? ($0.wireVisibility == .private ? nil : webp?.remoteURL) } ?? webp?.remoteURL
             var name: String?
             if let file { name = file.deletable ? file.mediaName : nil } else if let url { name = Self.mediaName(of: url) }
             let rid: String = webp?.id ?? "f:\(file?.id ?? "")"
@@ -171,7 +208,9 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
                 id: rid, kind: .webp(number: n + 1), local: webp, file: file, publicURL: url,
                 width: webp?.width ?? file?.width, height: webp?.height ?? file?.height,
                 duration: webp?.duration ?? file?.duration, bytes: bytes,
-                createdAt: pair.at, clip: webp?.clip, deletableName: name, posterURL: file?.posterURL))
+                createdAt: pair.at, clip: webp?.clip, deletableName: name, posterURL: file?.posterURL,
+                visibility: file?.wireVisibility ?? (url == nil ? nil : .public),
+                canToggleVisibility: file?.canToggleVisibility ?? false))
         }
 
         if renditions.isEmpty {

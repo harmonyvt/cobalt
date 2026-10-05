@@ -61,6 +61,13 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `features.titles`: `PATCH /library/items/<id>/post` exists and `GET /library` sends `custom_title`
     /// (CONTRACT-LIBRARY2 decision 7). False when absent: no title sheet, rename is local-only.
     public var titles: Bool = false
+    /// `features.public_default`: `POST /studio` and `PUT /studio/upload` take `public` (APP-API-CONTRACT 13.2),
+    /// so a save can be public from the start. False when absent: the app then never sends it.
+    public var publicDefault: Bool = false
+    /// `features.visibility`: `PATCH /library/items/<id>/visibility` and `GET /library?v=2` (APP-API-CONTRACT
+    /// 16, CONTRACT-VISIBILITY.md). One file per rendition, public or private. False when absent: the app then
+    /// keeps its "public share" flow and asks for the old library shape.
+    public var visibility: Bool = false
 
     public static let unknown = Capabilities(
         kind: .unreachable, cobaltVersion: nil, studio: false, upload: false, library: false,

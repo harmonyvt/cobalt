@@ -69,6 +69,9 @@ struct CompactDetail: View {
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                 .listRowBackground(Color.clear)
             }
+            if c.controller.canSwitchVisibility(c.rendition) {
+                VisibilitySection(controller: c.controller, rendition: c.rendition)
+            }
             Section {
                 DetailActions(controller: c.controller, item: c.item, rendition: c.rendition, leave: c.leave)
                     .listRowInsets(EdgeInsets())
@@ -121,6 +124,9 @@ struct WideDetail: View {
                                 .font(CobaltType.body)
                         }
                         if let url = c.rendition.publicURL { linkRow(url) }
+                    }
+                    if c.controller.canSwitchVisibility(c.rendition) {
+                        VisibilitySection(controller: c.controller, rendition: c.rendition)
                     }
                     Section {
                         DetailActions(controller: c.controller, item: c.item, rendition: c.rendition, leave: c.leave)

@@ -50,6 +50,10 @@ final class DetailController {
     var copiedID: String?
     var photos: [Rendition.ID: Step] = [:]
     var hosting: Step = .idle
+    /// A switch that failed, in words, by rendition: shown under the public link row until the next try.
+    var visibilityFailed: [Rendition.ID: String] = [:]
+    /// Renditions whose last switch off could not clear the public link from the server's cache.
+    var visibilityCacheNote: Set<Rendition.ID> = []
     /// Shown on the screen underneath once the whole media is gone (`deleted.`); nil for a removal that
     /// only freed space.
     var exitStatus: String?
@@ -152,6 +156,32 @@ final class DetailController {
         } catch {
             photos[r.id] = .idle
             notice = Self.words(error)
+        }
+    }
+
+    // MARK: - public or private (CONTRACT-VISIBILITY 6.2)
+
+    /// The rendition has a public/private switch: the server takes it (`features.visibility`, and the file says it
+    /// can be switched). Without it the old "public share" button stays.
+    func canSwitchVisibility(_ r: Rendition) -> Bool {
+        model.capabilities.visibility && r.canToggleVisibility
+    }
+
+    /// Turns the rendition's link on or off. The model flips the file at once and puts it back when the server
+    /// says no; here the answer becomes words under the row.
+    func setVisibility(_ r: Rendition, public makePublic: Bool) async {
+        guard !model.isChangingVisibility(r) else { return }
+        visibilityFailed[r.id] = nil
+        visibilityCacheNote.remove(r.id)
+        do {
+            let change = try await model.setVisibility(r, public: makePublic)
+            if !makePublic, change.cacheCleared == false { visibilityCacheNote.insert(r.id) }
+        } catch {
+            if let failure = error as? PipelineFailure, [.keyInvalid, .keyMissing, .unreachable].contains(failure) {
+                visibilityFailed[r.id] = Copy.failure(failure)
+            } else {
+                visibilityFailed[r.id] = makePublic ? Copy.Media.makeLinkFailed : Copy.Media.turnOffFailed
+            }
         }
     }
 

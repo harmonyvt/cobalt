@@ -5,7 +5,7 @@ import SwiftUI
 // switcher.
 
 /// The context menu (long press; right click on the Mac), in this order: open, copy webp link, copy video
-/// link, share, save to photos, rename, then `delete everything…` last and destructive. What the media cannot
+/// link, share, save to photos, make public / make private…, rename, then `delete everything…` last and destructive. What the media cannot
 /// do is not shown (plain cobalt has no links; a media with nothing on the server cannot be deleted
 /// there). `delete everything…` asks the CONTRACT-MEDIA 1.12 confirm, and is off while this device runs
 /// something for the media.
@@ -33,6 +33,13 @@ struct LibraryMenuItems: View {
             #else
             Button(Copy.Library2.saveToPhotos, systemImage: Symbol.Library.savePhotos) { controller.save(item) }
             #endif
+        }
+        if controller.canSwitchVisibility(item) {
+            if row.isPublic {
+                Button(Copy.Library2.makePrivate, systemImage: Symbol.Library.makePrivate) { controller.makingPrivate = item }
+            } else {
+                Button(Copy.Library2.makePublic, systemImage: Symbol.Library.makePublic) { controller.setVisibility(item, public: true) }
+            }
         }
         Button(Copy.Library2.rename, systemImage: Symbol.Library.rename) { controller.renaming = item }
         if controller.canDelete(item) {

@@ -338,6 +338,14 @@ describe("GET /studio/<sid>/advance (the poll-driven save)", () => {
         expect(t.row(id2)).toMatchObject({ r2_key: `originals/${id2}.mp4`, content_type: "video/mp4", title: null });
     });
 
+    it("a GIF the helper labels image/gif is stored as one (originals/<sid>.gif), not forced to video/mp4", async () => {
+        const s = setup();
+        s.helper.fetchDone = { ext: "gif", contentType: "image/gif" };
+        const { id } = asBody(await create(s));
+        await s.studio.advance(id, 30);
+        expect(s.row(id)).toMatchObject({ r2_key: `originals/${id}.gif`, content_type: "image/gif" });
+    });
+
     it("404 unknown, 410 expired; ready and errored sessions are answered from D1", async () => {
         const s = setup();
         expect(await s.studio.advance(SID, 0)).toEqual({ status: 404, body: { status: "error", error: { code: "error.studio.not_found" } } });

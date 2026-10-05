@@ -14,6 +14,9 @@ public final class LibraryModel {
     /// Evicted items being fetched again (`redownload(_:)`), by `StoredVideo.id`, with the bytes so
     /// far. An entry exists exactly while its download runs, so a card can show a ring from it.
     public internal(set) var redownloads: [String: TransferProgress] = [:]
+    /// Library file ids whose public/private switch is on its way to the server (`AppModel.setVisibility`): an
+    /// entry exists exactly while the request runs, so the detail can disable the switch and say "making the link…".
+    public internal(set) var visibilityInFlight: Set<String> = []
 
     // MARK: - View state (CONTRACT-LIBRARY2 decisions 10, 14; persisted per device except `query`)
 
@@ -103,7 +106,7 @@ public final class LibraryModel {
         do {
             let client = ctx.client
             if ctx.capabilities.titles { await ctx.titles.flush(client: client) }       // titles that failed to send, before the page reads them
-            let page = try await client.library(cursor: nil, limit: Self.pageSize)
+            let page = try await client.library(cursor: nil, limit: Self.pageSize, v2: ctx.capabilities.visibility)
             apply(page, replacing: true)
             failure = nil
         } catch {
@@ -117,7 +120,7 @@ public final class LibraryModel {
         defer { isLoading = false }
         do {
             let client = ctx.client
-            let page = try await client.library(cursor: cursor, limit: Self.pageSize)
+            let page = try await client.library(cursor: cursor, limit: Self.pageSize, v2: ctx.capabilities.visibility)
             apply(page, replacing: false)
             failure = nil
         } catch {
@@ -163,7 +166,7 @@ public final class LibraryModel {
             var next = posts.isEmpty ? nil : cursor
             while posts.count < cap {
                 let limit = min(Self.wholePageSize, cap - posts.count)
-                let page = try await client.library(cursor: next, limit: limit)
+                let page = try await client.library(cursor: next, limit: limit, v2: ctx.capabilities.visibility)
                 apply(page, replacing: next == nil && posts.isEmpty)
                 failure = nil
                 if progress { loadingAll = (loaded: posts.count, total: max(postCount, posts.count)) }
@@ -187,6 +190,29 @@ public final class LibraryModel {
     /// This device's own copy of a media's title (nil clears), by local media id.
     func setLocalTitle(_ title: String?, media id: String) {
         if let title { localTitles[id] = title } else { localTitles[id] = nil }
+    }
+
+    // MARK: - Visibility
+
+    /// The library's current copy of a file (a value a view holds may be older).
+    func file(id: String) -> LibraryFile? {
+        for post in posts { if let file = post.files.first(where: { $0.id == id }) { return file } }
+        return nil
+    }
+
+    /// Puts `file` in place of the one with its id, and keeps its post's `visibility` honest (the original's,
+    /// else public when any file is; only when the post carried one). A file the library does not list is ignored.
+    func replace(file: LibraryFile) {
+        for index in posts.indices {
+            guard let at = posts[index].files.firstIndex(where: { $0.id == file.id }) else { continue }
+            posts[index].files[at] = file
+            if posts[index].visibility != nil {
+                let files = posts[index].files
+                posts[index].visibility = files.first { $0.role == .privateCopy }?.visibility
+                    ?? (files.contains { $0.isPublic } ? .public : .private)
+            }
+            return
+        }
     }
 
     public func copyLink(_ file: LibraryFile) {
@@ -294,6 +320,8 @@ public final class LibraryModel {
             remote = .libraryItem(id: file.id)
         } else if let url = file.url {
             remote = .open(url)
+        } else if file.canToggleVisibility {
+            remote = .libraryItem(id: file.id)         // a webp switched private: only the key reaches its private copy
         } else {
             throw PipelineFailure.unsupported
         }

@@ -208,6 +208,18 @@ export function videoExt(o) {
 }
 
 /**
+ * Whether a file's first bytes are a GIF (`GIF87a` / `GIF89a`). A "gif" from a
+ * service that makes real GIFs (Reddit, Bluesky, Pinterest) arrives as one under
+ * whatever name cobalt gave it, so the type is read from the bytes, never the name.
+ * @param {Uint8Array | Buffer} head at least the first 6 bytes
+ */
+export function isGifHead(head) {
+    if (head.length < 6) return false;
+    const sig = String.fromCharCode(...head.subarray(0, 6));
+    return sig === "GIF87a" || sig === "GIF89a";
+}
+
+/**
  * A title from cobalt's filename (no extension), or null when it gave none.
  * @param {string | null | undefined} filename
  */
@@ -572,6 +584,11 @@ export async function resolveSource(o) {
                 url: o.url,
                 alwaysProxy: true,
                 videoQuality: "720",
+                // cobalt turns an X/Twitter "gif" (really an mp4) into a real .gif by
+                // default. Every consumer here (the studio's player, the posters, the
+                // webp encoder) wants the mp4: a GIF stored under a video type is a file
+                // AVFoundation cannot open.
+                convertGif: false,
             }),
             signal: o.signal,
         });

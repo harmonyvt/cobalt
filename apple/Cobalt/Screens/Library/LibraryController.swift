@@ -40,6 +40,8 @@ final class LibraryController {
     var reload = 0
     var renaming: MediaItem?
     var deleting: MediaItem?
+    /// The media whose video the owner is turning private (the confirm: its link stops working for everyone).
+    var makingPrivate: MediaItem?
 
     /// True on the phone layout (a push); false where the detail is an inspector.
     @ObservationIgnored var compact = true
@@ -115,6 +117,12 @@ final class LibraryController {
 
     func canSave(_ item: MediaItem) -> Bool { RenditionPhotos.canSave(item.face) }
 
+    /// "make public" / "make private…": the server takes the switch for this media's video (the same switch the
+    /// detail has; a webp's is on its tab there).
+    func canSwitchVisibility(_ item: MediaItem) -> Bool {
+        model.capabilities.visibility && (item.video?.canToggleVisibility ?? false)
+    }
+
     /// `delete everything` is offered when the media has something on the server and a way to delete it
     /// (the keyed post route, or a webp the older route can take); plain cobalt has neither.
     func canDelete(_ item: MediaItem) -> Bool {
@@ -146,6 +154,25 @@ final class LibraryController {
     func copy(_ url: URL) {
         Pasteboard.copy(url.absoluteString)
         showStatus(Copy.Media.copied)
+    }
+
+    /// The video's link on or off, said in the shell's status line. Off asks first (`makingPrivate`); the library's
+    /// file flips at once and goes back when the server says no (`AppModel.setVisibility`).
+    func setVisibility(_ item: MediaItem, public makePublic: Bool) {
+        guard let video = item.video else { return }
+        Task {
+            if makePublic { showStatus(Copy.Library2.makingPublic) }
+            do {
+                let change = try await model.setVisibility(video, public: makePublic)
+                if makePublic {
+                    showStatus(Copy.Library2.nowPublic)
+                } else {
+                    showStatus(change.cacheCleared == false ? "\(Copy.Library2.nowPrivate) \(Copy.Media.cacheNote)" : Copy.Library2.nowPrivate)
+                }
+            } catch {
+                showStatus(makePublic ? Copy.Media.makeLinkFailed : Copy.Media.turnOffFailed)
+            }
+        }
     }
 
     func save(_ item: MediaItem) {
