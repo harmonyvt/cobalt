@@ -28,6 +28,7 @@ struct SettingsScreen: View {
             storageSection
             PhotosSettingsSection(model: model)
             liveSection
+            TelemetrySettingsSection(model: model)
             feelSection
         }
         .formStyle(.grouped)

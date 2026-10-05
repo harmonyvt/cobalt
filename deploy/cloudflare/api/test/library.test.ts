@@ -948,6 +948,7 @@ describe("GET /capabilities", () => {
                 crop: true,
                 source_wait: true,
                 delete_post: true,
+                telemetry: true,
             },
             limits: {
                 max_webp_seconds: 10,

@@ -355,7 +355,8 @@ export function linkFrom(u: unknown): string | null {
 export interface OriginalsBucket {
     put(
         key: string,
-        value: ReadableStream,
+        // a stream (stored files) or a string (telemetry crash JSON, telemetry.ts)
+        value: ReadableStream | string,
         options: {
             httpMetadata: { contentType: string };
             customMetadata: Record<string, string>;

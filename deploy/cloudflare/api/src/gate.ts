@@ -74,7 +74,8 @@ export type LookupThen =
     | "live_run"
     | "live_state"
     | "live_selftest"
-    | "studio_notify";
+    | "studio_notify"
+    | "telemetry_ingest";
 
 export type StudioOp =
     | "preflight"
@@ -151,6 +152,13 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     // The app sends no Origin, so there is no preflight and no CORS; everything not
     // listed (and the library service caller) is a 404.
     if (isLivePath(req.pathname)) return decideLive(req);
+
+    // Crash and log telemetry (TELEMETRY-CONTRACT.md): keyed POST only, answered by
+    // the Worker from D1 and R2. No CORS, so an OPTIONS (or anything else) is a 404,
+    // and the library service credential never reaches it (one key per device).
+    if (req.pathname === "/telemetry") {
+        return req.method === "POST" && !req.service ? lookupThen(req, "telemetry_ingest") : reject(404);
+    }
 
     const originOk = req.origin !== null && req.origin === cfg.corsUrl;
 

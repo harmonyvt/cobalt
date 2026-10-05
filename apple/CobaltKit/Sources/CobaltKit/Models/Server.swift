@@ -50,6 +50,9 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `features.delete_post`: `DELETE /library/items/<id>/post` deletes a whole post (CONTRACT-MEDIA 6.1).
     /// False when absent: "delete everything" then falls back to deleting the webps one by one.
     public var deletePost: Bool = false
+    /// `features.telemetry`: `POST /telemetry` takes crash reports and logs. False when absent: the app
+    /// then sends nothing and keeps its buffer on the device.
+    public var telemetry: Bool = false
 
     public static let unknown = Capabilities(
         kind: .unreachable, cobaltVersion: nil, studio: false, upload: false, library: false,

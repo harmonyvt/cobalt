@@ -17,6 +17,8 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
+        Telemetry.start(process: .share)
+        Telemetry.log(.info, .share, "share opened", data: Telemetry.memoryData())
         CobaltFont.register()
         Task { await load() }
     }
@@ -55,6 +57,8 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
     }
 
     private func finish() {
+        Telemetry.log(.info, .share, "share completed", data: Telemetry.memoryData())
+        Telemetry.flush()
         closed = true
         extensionContext?.completeRequest(returningItems: nil)
     }
@@ -93,6 +97,7 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
 
     private func closeSheet() {
         guard !closed, let model else { return }
+        Telemetry.log(.info, .share, "share close requested")
         closed = true
         // The opt-in is a network call and the process goes soon after the sheet does: ask the
         // system to keep it until `close()` has finished (`ProcessInfo.performExpiringActivity` is

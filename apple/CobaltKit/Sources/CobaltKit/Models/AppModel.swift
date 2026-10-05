@@ -40,6 +40,9 @@ public final class AppModel {
     /// Live Activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
     @ObservationIgnored var liveManager: LiveActivityManager?
 
+    /// Crash reports and logs to the owner's server; nil in previews and tests.
+    @ObservationIgnored public internal(set) var telemetry: TelemetryService?
+
     /// Keeps a run going after the app leaves the screen (iOS 26 continued processing); nil on the
     /// Mac, in previews and in tests unless one is injected.
     @ObservationIgnored var continuedProcessing: ContinuedProcessing?
@@ -69,6 +72,7 @@ public final class AppModel {
 
     /// The real app: app-group stores, the keychain, the configured server.
     public static func live() -> AppModel {
+        Telemetry.start(process: .app)
         let settings = Settings.shared()
         let keychain = settings.keychain
         let factory: @MainActor (Settings) -> any CobaltClient = { settings in
@@ -76,6 +80,7 @@ public final class AppModel {
             return HTTPCobaltClient(baseURL: server, apiKey: { Settings.apiKey(in: keychain, forServer: server) })
         }
         let store = OfflineStore.shared()
+        Telemetry.log(.info, .store, "store opened", data: ["media": .int(store.media.count), "videos": .int(store.videos.count)])
         let ctx = PipelineContext(
             client: factory(settings), capabilities: .unknown, settings: settings, store: store,
             jobs: .shared(), tools: SystemMediaTools(), clock: SystemClock(), photos: SystemPhotosSaver(),
@@ -94,6 +99,7 @@ public final class AppModel {
             store: store, clock: ctx.clock)
         ctx.originals = fetcher
         let model = AppModel(context: ctx, library: LibraryModel(context: ctx), photosSync: sync, makeClient: factory)
+        model.telemetry = TelemetryService.live(settings: settings, capabilities: { [unowned model] in model.capabilities })
         fetcher.isActive = { [unowned ctx] in ctx.background.activity.isActive }
         fetcher.serverHoldsRequests = { [unowned model] in model.capabilities.sourceWait }
         #if os(iOS) && canImport(ActivityKit)
@@ -150,6 +156,8 @@ public final class AppModel {
         // Offline: keep what we knew about this server (the circles must not vanish on a bad train).
         if fresh.kind == .unreachable, [.fork, .legacyFork, .plainCobalt].contains(previous.kind) { fresh = previous }
         apply(fresh)
+        Telemetry.log(.info, .net, "server checked", data: ["kind": .string(fresh.kind.rawValue), "telemetry": .bool(fresh.telemetry), "key": .string(fresh.key.rawValue)])
+        telemetry?.uploadSoon()
     }
 
     func apply(_ caps: Capabilities) {
@@ -223,6 +231,7 @@ public final class AppModel {
     public func pickUpSharedJobs() async {
         defer { liveManager?.foreground() }       // start token, push-started activities, orphans (after a handoff took its run)
         await store.reload()
+        Telemetry.log(.info, .store, "store reloaded", data: ["media": .int(store.media.count), "videos": .int(store.videos.count)])
         takePendingJobs()
         // Then what the share sheet handed to the background download, then the photos album
         // (CONTRACT-SYNC.md): in this order, so a clip that just landed goes into Photos at once.

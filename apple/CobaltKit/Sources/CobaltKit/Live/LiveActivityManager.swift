@@ -203,6 +203,7 @@ final class LiveActivityManager: LiveSink {
         network.enqueue { [weak self] in
             do { try await client.registerLiveStartToken(token, environment: env) }
             catch {
+                Telemetry.log(.warn, .live, "start token not registered", data: Telemetry.errorData(error))
                 if self?.sentStartSignature == signature { self?.sentStartSignature = nil }   // next foreground tries again
             }
         }
@@ -349,7 +350,9 @@ final class LiveActivityManager: LiveSink {
                 r.handle = try adapter.request(r.attributes, state: content, staleDate: stale, push: pushAvailable)
                 r.sent = content
                 r.sentAt = now.timeIntervalSince1970
+                Telemetry.log(.info, .live, "live activity started", data: ["run": .string(String(id.prefix(8))), "push": .bool(pushAvailable)])
             } catch {
+                Telemetry.log(.error, .live, "live activity request failed", data: Telemetry.errorData(error))
                 Self.log.notice("activity request failed: \(String(describing: error), privacy: .public)")
                 return
             }
@@ -433,6 +436,7 @@ final class LiveActivityManager: LiveSink {
         r.pending = nil
         updateGrace()
         guard let handle = r.handle else { return }       // never shown: nothing to end
+        Telemetry.log(.info, .live, "live activity ended", data: ["run": .string(String(r.idString.prefix(8))), "stage": .string(String(describing: content.stage))])
         r.sent = content
         let dismiss = now.addingTimeInterval(content.stage == .failed ? Self.failedDismissSeconds : Self.doneDismissSeconds)
         writes.enqueue { await handle.end(content, dismissAt: dismiss) }
@@ -487,6 +491,7 @@ final class LiveActivityManager: LiveSink {
         } catch {
             // No push for this run: it carries on in local mode, quietly. A 429 (too many runs)
             // is final for the run; anything else may be tried again by the next token or session.
+            Telemetry.log(.warn, .live, "live run not registered", data: Telemetry.errorData(error))
             r.pushing = false
             if error.isTooManyLiveRuns { r.disabled = true }
         }

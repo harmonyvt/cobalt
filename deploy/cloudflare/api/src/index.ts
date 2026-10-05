@@ -6,6 +6,7 @@ import { handleLiveRoute, isLiveRoute, LiveService } from "./live";
 import { handleNotifyRoute, harkConfigFrom, isNotifyRoute, NotifyService } from "./notify";
 import { handleStudioRoute, isStudioRoute, StudioService } from "./studio";
 import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
+import { runTelemetryRetention } from "./telemetry";
 import { handleRequest, type WorkerEnv } from "./worker";
 
 export interface Env extends WorkerEnv {
@@ -321,5 +322,15 @@ export class CobaltContainer extends Container<Env> {
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         return handleRequest(request, env, getContainer(env.COBALT, "main"));
+    },
+    // Daily cron (cloudflare.config.ts triggers): telemetry retention, 30 days.
+    // D1 and R2 only; the container and the Durable Object are not touched.
+    async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+        ctx.waitUntil(
+            runTelemetryRetention({ db: env.DB, originals: env.ORIGINALS, now: () => Date.now() }).then(
+                (r) => console.log("[telemetry] retention", JSON.stringify(r)),
+                (e) => console.error("[telemetry] retention failed", e instanceof Error ? e.name : "error"),
+            ),
+        );
     },
 } satisfies ExportedHandler<Env>;

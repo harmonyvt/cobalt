@@ -3,6 +3,7 @@ import {
 	defineConfig,
 	defineContainer,
 	exports,
+	triggers,
 } from "cf/config";
 
 // Container application. Paths resolve relative to this file.
@@ -35,6 +36,9 @@ export default defineConfig({
 		observability: { enabled: true, logs: { enabled: true, invocationLogs: true } },
 		previewUrls: false,
 		domains: ["api.capybaraharmony.com"],
+		// Daily 03:23 UTC: delete telemetry rows and crash objects older than 30
+		// days (src/telemetry.ts runTelemetryRetention, called from `scheduled`).
+		triggers: [triggers.scheduled({ schedule: "23 3 * * *" })],
 		env: {
 			API_URL: bindings.text("https://api.capybaraharmony.com/"),
 			CORS_URL: bindings.text("https://cobalt.capybaraharmony.com"),

@@ -7,6 +7,8 @@
   served from https://media.capybaraharmony.com/; also hosts cobalt studio (`/studio*`, see "cobalt studio"), which keeps
   private copies of saved videos in the R2 bucket `cobalt-originals`
 - `d1/`   -> migrations for the `cobalt-keys` D1 database shared by both Workers
+- the native app's crash and log telemetry: `POST /telemetry` on the API Worker, read at https://cobalt.capybaraharmony.com/logs
+  (see "Telemetry" below)
 
 Everything here is fork-only; nothing under `api/`, `web/` or the root `Dockerfile` is modified.
 The deploy tool is the Cloudflare `cf` CLI (v1.0.0-beta.5), not Wrangler. Each of `api/` and `web/` has a
@@ -43,7 +45,7 @@ bind it as `DB`. Create the table (this touches the remote database; run it your
 Use the globally installed `cf`, not `npx cf`: on 2026-09-29 the project-pinned copy failed the remote apply with
 `[7403] account is not valid or is not authorized`, while the global one applied `0001` fine with the same login.
 (`cf d1 migrations` takes the database ID, not its name; `--dir` defaults to `./migrations`. Applied files are recorded
-in the `d1_migrations` table, so re-running only applies new ones. Add future schema changes as new numbered files (`0001` api_keys, `0002` request_log, `0003` studio, `0004` library); never edit an applied one.) Deploy the web and API Workers after the table exists; until then `/api/keys` answers 500 and `POST /` answers
+in the `d1_migrations` table, so re-running only applies new ones. Add future schema changes as new numbered files (`0001` api_keys, `0002` request_log, `0003` studio, `0004` library, `0005` telemetry); never edit an applied one.) Deploy the web and API Workers after the table exists; until then `/api/keys` answers 500 and `POST /` answers
 503, and nothing is forwarded to the container.
 
 ## 1. Deploy the API
@@ -154,6 +156,31 @@ the container still holds the old one); wait for the instance to sleep, or redep
   expire (about 90 s): `GET /tunnel` is authenticated by its signed query, not by a key.
 - The web app's settings export includes the browser's stored key, so treat an export file like the key itself.
 - Every accepted API request costs one D1 write (`last_used_at`); at this scale that is far inside D1's limits.
+
+## Telemetry (crash and log reports from the app)
+
+Contract as built: `TELEMETRY-CONTRACT.md`. The app posts batches of events and crash/diagnostic reports to
+`POST /telemetry` (keyed, no CORS, 256 KB, 60 batches/min per key from an in-isolate counter); the Worker writes them to D1
+(`telemetry_events`, `telemetry_crashes`, migration `0005_telemetry.sql`) and a crash's MetricKit payload to the private R2
+bucket `cobalt-originals` under `telemetry/crashes/<day>/<id>.json`. The container and Durable Object are never involved. The owner reads
+them at `/logs` (page) and `/api/logs`, `/api/logs/crashes`, `/api/logs/crashes/<id>` on the web origin (Access JWT required, same
+check as `/api/keys`); the library page's header links to it. `GET /capabilities` reports `features.telemetry`.
+
+Retention is 30 days, run by a new daily cron trigger on the API Worker (`triggers.scheduled`, 03:23 UTC, in
+`api/cloudflare.config.ts`; the Worker's `scheduled` handler deletes old rows and their R2 objects). Deploy order for this change:
+
+    cd deploy/cloudflare/web
+    cf d1 migrations apply 42f18bb0-837a-47f7-b1e2-606eb705ab6c --dir ../d1/migrations   # the global cf, applies 0005
+    cd ../../..
+    deploy/cloudflare/api/prepare-git-info.sh
+    cd deploy/cloudflare/api && cf deploy --secrets-file ~/.config/cobalt/secrets.json   # --containers-rollout none: only Worker code changed
+    cd ../../.. && deploy/cloudflare/build-web.sh
+    cd deploy/cloudflare/web && cf deploy --secrets-file ~/.config/cobalt/secrets.json
+
+Until the migration is applied `POST /telemetry` answers 503 `error.telemetry.unavailable` and `/api/logs` 500; deploy the API after it
+so the app never sees a capability it cannot serve. Telemetry stays out of `request_log`. Accepted trade-offs: the rate limiter is
+per isolate, not global; an R2 object whose D1 insert failed and was never retried is not swept; there is no way to delete a single
+report from the UI (age-out only).
 
 ## After pulling upstream
 

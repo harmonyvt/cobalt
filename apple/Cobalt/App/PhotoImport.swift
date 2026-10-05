@@ -113,6 +113,7 @@ final class PhotoImport {
         model.selectedTab = .save
         model.pipeline.reset()
         phase = .loading(fraction: nil)
+        Telemetry.log(.info, .photos, "picker copy start", data: ["type": .string(item.supportedContentTypes.first?.identifier ?? "unknown")])
         PickedMedia.byteLimit = model.capabilities.limits.maxUploadBytes
         PickedMedia.refusedLimit = nil
         let handle = LoadHandle()
@@ -179,6 +180,7 @@ final class PhotoImport {
         handle = nil
         switch outcome {
         case .failure(let error):
+            Telemetry.log(.error, .photos, "picker copy failed", data: Telemetry.errorData(error))
             if Task.isCancelled || (error as? CancellationError) != nil || Self.isCancel(error) {
                 phase = .idle
             } else if let limit = PickedMedia.refusedLimit {
@@ -194,9 +196,11 @@ final class PhotoImport {
                 return
             }
             guard let inbox = Self.moveToInbox(picked.url, item: item, store: model.store) else {
+                Telemetry.log(.error, .photos, "picker copy could not reach the inbox")
                 phase = .failed(.server(code: "error.app.file_unreadable"))
                 return
             }
+            Telemetry.log(.info, .photos, "picker copy finished", data: ["bytes": Telemetry.fileSize(inbox), "ext": .string(inbox.pathExtension.lowercased())])
             phase = .idle
             // from here it is a file like any other: the pipeline measures it, checks the limit, uploads
             model.importFile(inbox)

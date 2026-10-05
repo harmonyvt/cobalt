@@ -20,6 +20,7 @@ import { lookupKey } from "./keys";
 import { SERVICE_KEY_ID } from "./library";
 import { publishStudio, type PublishBucket } from "./publish";
 import { serviceAuthorized } from "./service-auth";
+import { ingestTelemetry } from "./telemetry";
 import {
     linkFrom,
     parseSourceWait,
@@ -247,6 +248,16 @@ async function handleInner(
                 keyId,
             );
             return json(r.status, r.body, allowOrigin);
+        }
+
+        // POST /telemetry: D1 + R2 only, no CORS. Dispatched here, before anything that
+        // reads a body or writes the request log: a batch never reaches `request_log`.
+        if (decision.then === "telemetry_ingest") {
+            const r = await ingestTelemetry({ db: env.DB, originals: env.ORIGINALS, now: edge.now }, request, keyId);
+            return new Response(JSON.stringify(r.body), {
+                status: r.status,
+                headers: { "content-type": "application/json", "cache-control": "no-store", ...r.headers },
+            });
         }
 
         // The app's routes: D1 + R2 only (the one Durable Object call is the

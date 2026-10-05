@@ -245,7 +245,7 @@ describe("routing config", () => {
     it("runs the Worker first for the library page and API, and keeps the rest", () => {
         const rwf = (config as any).worker.assets.runWorkerFirst as string[];
         expect(rwf).toEqual(expect.arrayContaining(["/library", "/library/*", "/api/library", "/api/library/*", "/api/keys", "/api/keys/*", "/studio", "/studio/*"]));
-        expect(rwf).toHaveLength(8);
+        expect(rwf).toHaveLength(11); // keys 2, studio 2, library 4, logs 3 (logs.test.ts)
     });
     it("binds the buckets, the API service and the internal key", () => {
         const e = (config as any).worker.env;

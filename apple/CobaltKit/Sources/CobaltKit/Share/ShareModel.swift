@@ -99,7 +99,9 @@ public final class ShareModel {
             pending: .shared(), store: store, clock: ctx.clock)
         model.core.openApp = openApp
         model.core.complete = complete
-        switch await ShareInbox.load(inputItems, store: store) {
+        let input = await ShareInbox.load(inputItems, store: store)
+        Telemetry.log(.info, .share, "share input", data: input.telemetryData.merging(Telemetry.memoryData()) { a, _ in a })
+        switch input {
         case .link(let url): model.pipeline.start(link: url)
         case .file(let url): model.pipeline.start(file: url)
         case .none: model.pipeline.start(pastedText: nil)
@@ -219,6 +221,7 @@ final class ShareCore {
         defer { complete?() }
         noteClosing()
         let rendering = isRendering
+        Telemetry.log(.info, .share, "share continue in background", data: ["rendering": .bool(rendering), "state": .string(pipeline.state.telemetryName)].merging(Telemetry.memoryData()) { a, _ in a })
         let stage: SharedJob.Stage
         if rendering, let renderJob = pipeline.renderJobID { stage = .rendering(job: renderJob) } else { stage = .saving }
         ctx.jobs.upsert(makeJob(stage: stage, wantsTrim: false))
@@ -240,6 +243,7 @@ final class ShareCore {
     private func dismiss() async -> Outcome {
         defer { complete?() }
         noteClosing()
+        Telemetry.log(.info, .share, "share dismissed", data: ["state": .string(pipeline.state.telemetryName)].merging(Telemetry.memoryData()) { a, _ in a })
         handOffOriginal()                           // closing at "ready" must not throw the keep download away
         pipeline.cancel()
         pipeline.removeTemporaryFiles()
@@ -258,6 +262,7 @@ final class ShareCore {
         pipeline.cancel()
         let url = URL(string: Notifications.url(forJob: jobID))!
         let opened = await openApp?(url) ?? false
+        Telemetry.log(.info, .share, "share hand off to app", data: ["opened": .bool(opened)])
         if !opened {
             // the notification is the only way back to the clip: make sure it can be shown (asked once,
             // in context; a no-op once answered)
@@ -283,6 +288,15 @@ enum ShareInput: Sendable, Equatable {
     case link(URL)
     case file(URL)       // already copied into the store's inbox
     case none
+
+    /// For the log: the kind of input, and its size or host.
+    var telemetryData: [String: TelemetryValue] {
+        switch self {
+        case .link(let url): return ["kind": "link", "host": .string(Telemetry.linkSummary(url))]
+        case .file(let url): return ["kind": "file", "type": .string(url.pathExtension.lowercased()), "bytes": Telemetry.fileSize(url)]
+        case .none: return ["kind": "none"]
+        }
+    }
 }
 
 @MainActor

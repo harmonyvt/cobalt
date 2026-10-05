@@ -197,6 +197,7 @@ public final class Pipeline: Identifiable {
             new = .fetching(since: since, waking: true)
         }
         guard new != state else { return }
+        logTransition(to: new)
         state = new
         stateLog.append(new)
         defer { ctx.continued?.pipelineChanged(self) }
@@ -264,6 +265,7 @@ public final class Pipeline: Identifiable {
     /// Anything a flow throws ends up here. Cancellation says nothing.
     func handle(_ error: Error) {
         guard let f = pipelineFailure(from: error, during: errorPhase, limits: ctx.capabilities.limits) else { return }
+        logPipelineError(error, failure: f)
         fail(f)
     }
 

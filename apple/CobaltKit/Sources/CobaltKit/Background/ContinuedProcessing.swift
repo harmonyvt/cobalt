@@ -438,7 +438,11 @@ private final class SystemContinuedHandle: ContinuedTaskHandle {
     func update(title: String, subtitle: String) { task.updateTitle(title, subtitle: subtitle) }
 
     func setExpirationHandler(_ handler: @escaping @MainActor () -> Void) {
-        task.expirationHandler = { Task { @MainActor in handler() } }
+        // The system calls this on its own queue. `expirationHandler` is a plain (non-`@Sendable`) block, so
+        // without the annotation the closure is inferred `@MainActor` from this class: a property assignment
+        // gets no executor check (no trap), but anything main-actor it touched would race. `@Sendable` makes
+        // the compiler keep it to the hop.
+        task.expirationHandler = { @Sendable in Task { @MainActor in handler() } }
     }
 
     func complete(success: Bool) { task.setTaskCompleted(success: success) }
@@ -448,7 +452,10 @@ private final class SystemContinuedHandle: ContinuedTaskHandle {
 @MainActor
 private final class SystemBackgroundTasks: BackgroundTaskBacking {
     func register(identifier: String, launch: @escaping @MainActor (any ContinuedTaskHandle, String) -> Void) -> Bool {
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: nil) { task in
+        // The system calls this on its own background queue (`using: nil`). The SDK's `launchHandler` block is
+        // not `@Sendable`, so without the annotation Swift 6 infers `@MainActor` from this class and traps
+        // (`dispatch_assert_queue_fail`) the moment the system launches the task: the 1.2 upload crash.
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: nil) { @Sendable task in
             guard let continued = task as? BGContinuedProcessingTask else {
                 task.setTaskCompleted(success: false)
                 return

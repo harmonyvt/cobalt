@@ -170,6 +170,18 @@ public final class Settings {
         set { withMutation(keyPath: \.photosSyncWebps) { defaults.set(newValue, forKey: "photosSyncWebps") } }
     }
 
+    // MARK: diagnostics
+
+    /// "send crash reports and logs to your server": on by default (it is the owner's own server). Off
+    /// keeps the log on the device and sends nothing. App-group defaults.
+    public var sendTelemetry: Bool {
+        get {
+            access(keyPath: \.sendTelemetry)
+            return defaults.object(forKey: "sendTelemetry") as? Bool ?? true
+        }
+        set { withMutation(keyPath: \.sendTelemetry) { defaults.set(newValue, forKey: "sendTelemetry") } }
+    }
+
     // MARK: key and server
 
     /// The stored key, only while it belongs to the current server (see `hasAPIKey`).

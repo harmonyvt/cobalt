@@ -341,6 +341,7 @@ public final class PhotosSync {
         }
         let ns = error as NSError
         let code = photosErrorCode(error) ?? ns.code
+        Telemetry.log(.warn, .photos, "album add failed", data: ["code": .int(code), "domain": .string(ns.domain)])
         if code == 3305 || (ns.domain == NSPOSIXErrorDomain && code == 28) {          // not enough space
             engine.ledger.release(key)
             return .stop(.outOfSpace)
@@ -423,6 +424,7 @@ public final class PhotosSync {
             } catch let e as PhotosError {
                 throw e
             } catch {
+                Telemetry.log(.error, .photos, "manual album save failed", data: Telemetry.errorData(error))
                 throw PhotosError.failed(code: photosErrorCode(error) ?? (error as NSError).code)
             }
         }

@@ -69,6 +69,8 @@ a { color: inherit; }
 .bar { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; align-items: center; padding: 6px 14px; background: var(--button); border-radius: 14px; box-shadow: 0 0 0 1px var(--button-stroke) inset; font-size: 12px; }
 .bar b { font-size: 13px; }
 .bar a.back { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; padding-right: 8px; }
+.bar .right { display: inline-flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-left: auto; }
+.bar a.nav { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; }
 .lock { display: inline-flex; gap: 6px; align-items: center; color: var(--gray); }
 .lock::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
 .banner { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 8px 14px; border-radius: var(--radius); background: var(--button); color: var(--red); box-shadow: 0 0 0 1px currentColor inset; font-weight: 500; }
@@ -150,7 +152,7 @@ a { color: inherit; }
   <header class="bar">
     <a class="back" href="/">&larr; cobalt</a>
     <b>library</b>
-    <span class="lock">signed in &middot; only you</span>
+    <span class="right"><a class="nav" href="/logs">logs</a><span class="lock">signed in &middot; only you</span></span>
   </header>
 
   <div class="banner" id="banner" role="alert" hidden>

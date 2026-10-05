@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>cobalt logs</title>
+<link rel="icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">
+<style>
+/* Tokens: cobalt's own (web/src/app.css), light and dark by prefers-color-scheme; same as the library page. */
+:root {
+  --primary: #ffffff; --secondary: #000000; --gray: #6b6b74;
+  --red: #c8182a; --green: #1f7a12; --blue: #1f6fd6; --orange: #a65b08;
+  --button: #f4f4f4; --button-hover: #ededed; --button-stroke: rgba(0,0,0,0.06);
+  --button-text: #282828; --input-border: #adadb7;
+  --page: #ffffff; --track: #e9e9ee;
+  --radius: 11px;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #000000; --secondary: #e1e1e1; --gray: #9a9aa2;
+    --red: #ff6b6b; --green: #5fd35a; --blue: #5aa2ff; --orange: #f5ad5b;
+    --button: #191919; --button-hover: #242424; --button-stroke: rgba(255,255,255,0.05);
+    --button-text: #e1e1e1; --input-border: #383838;
+    --page: #000000; --track: #1c1c20;
+    color-scheme: dark;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { margin: 0; background: var(--page); color: var(--secondary); font: 14px/1.5 var(--f-mono); overflow-wrap: anywhere; }
+h1, h2, h3, p { margin: 0; font-weight: 600; }
+p { font-weight: 400; }
+h2 { font-size: 15px; }
+h3 { font-size: 13px; }
+button, input, select { font: inherit; color: inherit; }
+button, .btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-align: center;
+  background: var(--button); color: var(--button-text); border: 0; box-shadow: 0 0 0 1px var(--button-stroke) inset;
+  border-radius: var(--radius); padding: 0 12px; min-height: 40px; cursor: pointer; font-weight: 500; text-decoration: none;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+button:hover, .btn:hover { background: var(--button-hover); }
+button.primary { background: var(--secondary); color: var(--primary); }
+button.primary:hover { opacity: .88; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:focus-visible, a:focus-visible, summary:focus-visible, .btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+a { color: inherit; }
+.muted { color: var(--gray); }
+.small { font-size: 12px; }
+[hidden] { display: none !important; }
+@media (pointer: coarse), (max-width: 640px) { button, .btn { min-height: 44px; } }
+
+.page {
+  max-width: 1120px; margin: 0 auto; display: grid; gap: 16px;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+}
+.bar { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; align-items: center; padding: 6px 14px; background: var(--button); border-radius: 14px; box-shadow: 0 0 0 1px var(--button-stroke) inset; font-size: 12px; }
+.bar b { font-size: 13px; }
+.bar a.nav { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; padding-right: 8px; }
+.bar .right { display: inline-flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-left: auto; }
+.lock { display: inline-flex; gap: 6px; align-items: center; color: var(--gray); }
+.lock::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+.banner { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 8px 14px; border-radius: var(--radius); background: var(--button); color: var(--red); box-shadow: 0 0 0 1px currentColor inset; font-weight: 500; }
+
+.card { background: var(--button); border-radius: var(--radius); padding: 14px; box-shadow: 0 0 0 1px var(--button-stroke) inset; display: grid; gap: 12px; min-width: 0; align-content: start; }
+.head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; }
+.head .count { color: var(--gray); font-weight: 400; margin-left: 6px; }
+.empty { color: var(--gray); font-size: 13px; padding: 6px 0; }
+.status { font-size: 12.5px; }
+.status:empty { display: none; }
+.status.bad { color: var(--red); }
+
+.badge { font-size: 10.5px; padding: 1px 7px; border-radius: 99px; box-shadow: 0 0 0 1px currentColor inset; white-space: nowrap; }
+.k-crash { color: var(--red); } .k-hang, .k-cpu, .k-disk { color: var(--orange); } .k-launch, .k-unclean_exit { color: var(--blue); }
+
+/* crash list */
+.crashes { display: grid; gap: 8px; }
+.crow { display: grid; gap: 4px; text-align: left; justify-items: start; justify-content: start; align-content: center; width: 100%; padding: 10px 12px; min-height: 56px; background: var(--page); font-weight: 400; }
+.crow:hover { background: var(--button-hover); }
+.crow .l1 { display: flex; gap: 8px; align-items: baseline; min-width: 0; flex-wrap: wrap; }
+.crow .sum { font-weight: 500; font-size: 13px; }
+.crow .meta { font-size: 11.5px; color: var(--gray); display: flex; gap: 4px 10px; flex-wrap: wrap; }
+
+/* crash detail */
+.back { justify-self: start; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 14px; font-size: 12.5px; }
+.kv dt { color: var(--gray); } .kv dd { margin: 0; }
+.stack { display: grid; gap: 8px; }
+details.thread { background: var(--page); border-radius: 10px; box-shadow: 0 0 0 1px var(--button-stroke) inset; }
+details.thread > summary { cursor: pointer; padding: 8px 12px; min-height: 40px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-weight: 500; font-size: 12.5px; list-style: none; }
+details.thread > summary::-webkit-details-marker { display: none; }
+details.thread > summary::before { content: "+"; color: var(--gray); width: 1ch; }
+details.thread[open] > summary::before { content: "-"; }
+.frames { padding: 2px 12px 10px; display: grid; gap: 1px; font-size: 12px; overflow-x: auto; }
+.frame { display: flex; gap: 8px; align-items: baseline; white-space: nowrap; line-height: 1.7; }
+.frame .fi { color: var(--gray); min-width: 3.2ch; text-align: right; }
+.frame .fb { font-weight: 600; }
+.frame .fo { color: var(--blue); }
+.frame .fa { color: var(--gray); }
+.frame .fs { color: var(--orange); }
+.tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.tools button { font-size: 12px; min-height: 36px; }
+@media (pointer: coarse), (max-width: 640px) { .tools button { min-height: 44px; } }
+pre.raw { margin: 0; padding: 10px 12px; background: var(--page); border-radius: 10px; box-shadow: 0 0 0 1px var(--button-stroke) inset; font: 11.5px/1.5 var(--f-mono); max-height: 360px; overflow: auto; white-space: pre; overflow-wrap: normal; }
+details.rawbox > summary { cursor: pointer; font-size: 12.5px; padding: 6px 0; min-height: 36px; display: flex; align-items: center; }
+
+/* chips */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chips .lbl { font-size: 11.5px; color: var(--gray); min-width: 4.5ch; }
+.chip { min-height: 34px; padding: 0 11px; font-size: 12px; background: var(--page); }
+.chip[aria-pressed="true"] { background: var(--secondary); color: var(--primary); }
+@media (pointer: coarse) { .chip { min-height: 44px; } }
+
+/* event rows */
+.events { display: grid; gap: 0; }
+.day { font-size: 11.5px; color: var(--gray); padding: 10px 0 4px; }
+.ev { display: grid; grid-template-columns: max-content max-content max-content minmax(0, 1fr); gap: 0 10px; align-items: baseline; padding: 6px 8px; border-radius: 8px; font-size: 12.5px; cursor: pointer; }
+.ev:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.ev:hover { background: var(--button-hover); }
+.ev .t { color: var(--gray); font-size: 11.5px; white-space: nowrap; }
+.ev .lv { font-size: 11px; font-weight: 600; min-width: 5ch; }
+.ev .ct { color: var(--gray); font-size: 11.5px; min-width: 7ch; }
+.ev .msg { min-width: 0; }
+.ev .sub { grid-column: 1 / -1; font-size: 11px; color: var(--gray); padding-top: 2px; }
+.ev .dat { grid-column: 1 / -1; font-size: 11.5px; padding: 4px 0 2px 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0 12px; color: var(--secondary); }
+.ev .dat span:nth-child(odd) { color: var(--gray); }
+.l-error .lv { color: var(--red); } .l-warn .lv { color: var(--orange); } .l-info .lv { color: var(--blue); } .l-debug .lv, .l-debug .msg { color: var(--gray); }
+.ev.marker { background: var(--button-hover); color: var(--red); font-weight: 600; cursor: default; }
+@media (max-width: 560px) {
+  .ev { grid-template-columns: max-content max-content minmax(0, 1fr); }
+  .ev .ct { grid-column: 3; grid-row: 1; }
+  .ev .msg { grid-column: 1 / -1; }
+}
+.more { display: flex; justify-content: center; padding-top: 8px; }
+.toast { position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: calc(100vw - 24px); background: var(--secondary); color: var(--primary); padding: 8px 14px; border-radius: 99px; font-size: 12.5px; z-index: 5; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="bar">
+    <a class="nav" href="/">&larr; cobalt</a>
+    <b>logs</b>
+    <span class="right"><a class="nav" href="/library">library</a><span class="lock">signed in &middot; only you</span></span>
+  </header>
+
+  <div class="banner" id="banner" role="alert" hidden>
+    <span>your login expired, reload to sign in</span>
+    <button id="reload" class="primary" type="button">reload</button>
+  </div>
+
+  <main style="display:grid; gap:16px">
+    <section class="card" id="crashCard" aria-label="crashes">
+      <div class="head">
+        <h2>crashes<span class="count" id="crashCount"></span></h2>
+        <button id="refresh" type="button">refresh</button>
+      </div>
+      <div class="status" id="crashStatus" role="status" aria-live="polite"></div>
+      <div class="crashes" id="crashList"></div>
+      <div class="more" id="crashMore" hidden><button id="crashMoreBtn" type="button">load older</button></div>
+    </section>
+
+    <section class="card" id="detail" aria-label="crash detail" hidden></section>
+
+    <section class="card" aria-label="events">
+      <div class="head"><h2>events<span class="count" id="evCount"></span></h2></div>
+      <div class="chips" id="levelChips" role="group" aria-label="level"></div>
+      <div class="chips" id="catChips" role="group" aria-label="category"></div>
+      <div class="status" id="evStatus" role="status" aria-live="polite"></div>
+      <div class="events" id="evList"></div>
+      <div class="more" id="evMore" hidden><button id="evMoreBtn" type="button">load older</button></div>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+/* ---------- constants (the contract's enums) ---------- */
+var LEVELS = ["debug", "info", "warn", "error"];
+var CATS = ["app", "pipeline", "upload", "share", "photos", "sync", "net", "store", "ui", "live"];
+var KIND_LABEL = { crash: "crash", hang: "hang", cpu: "cpu", disk: "disk", launch: "launch", unclean_exit: "unclean exit" };
+var EVENT_PAGE = 100;
+var CRASH_PAGE = 20;
+var MAX_INDENT = 12;
+
+/* ---------- helpers ---------- */
+var $ = function (id) { return document.getElementById(id); };
+function h(tag, attrs) {
+  var el = document.createElement(tag);
+  for (var k in (attrs || {})) {
+    var v = attrs[k];
+    if (v == null || v === false) continue;
+    if (k === "text") el.textContent = v;
+    else if (k.indexOf("on") === 0) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (var i = 2; i < arguments.length; i++) if (arguments[i]) el.append(arguments[i]);
+  return el;
+}
+function pad(n, w) { return String(n).padStart(w || 2, "0"); }
+var MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+function fmtClock(ts) { var d = new Date(ts); return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()) + "." + pad(d.getMilliseconds(), 3); }
+function fmtDay(ts) { var d = new Date(ts); return MONTHS[d.getMonth()] + " " + d.getDate() + ", " + d.getFullYear(); }
+function fmtFull(ts) { var d = new Date(ts); return MONTHS[d.getMonth()] + " " + d.getDate() + " " + fmtClock(ts); }
+function dayKey(ts) { var d = new Date(ts); return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate(); }
+function ago(ms) {
+  var s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 129600) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " d ago";
+}
+function buildOf(r) { return (r.version || "?") + (r.build ? " (" + r.build + ")" : ""); }
+function whereOf(r) { return [r.platform, r.device, r.process].filter(Boolean).join(" · "); }
+function hex(n) { return typeof n === "number" && isFinite(n) ? "0x" + Math.floor(n).toString(16) : ""; }
+function toast(msg) {
+  var t = $("toast"); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(function () { t.hidden = true; }, 1800);
+}
+function copy(text) {
+  var done = function () { toast("copied"); };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { toast("couldn't copy"); });
+  else toast("couldn't copy");
+}
+
+/* ---------- requests ---------- */
+$("reload").onclick = function () { location.reload(); };
+function Fail(code) { this.code = code; }
+// Same-origin read API. redirect: "manual": an expired Access session answers with a
+// redirect to the login page, which must surface as "expired", not a crash.
+async function api(path) {
+  var ctl = new AbortController();
+  var timer = setTimeout(function () { ctl.abort(); }, 20000);
+  var res;
+  try { res = await fetch(path, { credentials: "same-origin", redirect: "manual", signal: ctl.signal, headers: { accept: "application/json" } }); }
+  catch (e) { throw new Fail("network"); }
+  finally { clearTimeout(timer); }
+  if (res.type === "opaqueredirect" || res.status === 401 || res.status === 403) { $("banner").hidden = false; throw new Fail("expired"); }
+  var body = null;
+  try { body = await res.json(); } catch (e) {}
+  if (!res.ok || !body || body.status !== "success") throw new Fail(body && body.error ? body.error.code : "error");
+  return body;
+}
+function failText(e) {
+  if (e && e.code === "network") return "can't reach the server. check your connection and refresh.";
+  if (e && e.code === "expired") return "your login expired, reload to sign in.";
+  return "couldn't load this" + (e && e.code && e.code !== "error" ? " (" + e.code + ")" : "") + ".";
+}
+
+/* ---------- event rows (the stream and a crash's lead-up) ---------- */
+function eventRow(e, opts) {
+  opts = opts || {};
+  var row = h("div", { role: "button", tabindex: "0", class: "ev l-" + e.level, "aria-expanded": "false" },
+    h("span", { class: "t", text: opts.rel != null ? opts.rel : fmtClock(e.ts), title: fmtFull(e.ts) }),
+    h("span", { class: "lv", text: e.level }),
+    h("span", { class: "ct", text: e.cat }),
+    h("span", { class: "msg", text: e.msg }));
+  var keys = e.data ? Object.keys(e.data) : [];
+  var open = false, extra = null;
+  row.addEventListener("keydown", function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); row.click(); } });
+  row.addEventListener("click", function () {
+    if (window.getSelection && String(window.getSelection())) return; // selecting text to copy it is not a tap
+    open = !open;
+    row.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) {
+      extra = [];
+      if (keys.length) {
+        var dat = h("span", { class: "dat" });
+        keys.forEach(function (k) { dat.append(h("span", { text: k }), h("span", { text: String(e.data[k]) })); });
+        extra.push(dat);
+      }
+      var bits = [buildOf(e), whereOf(e)].filter(function (s) { return s && s !== "?"; });
+      if (!opts.noWhere && bits.length) extra.push(h("span", { class: "sub", text: bits.join(" · ") }));
+      if (!extra.length) extra.push(h("span", { class: "sub", text: "no extra data" }));
+      extra.forEach(function (x) { row.append(x); });
+    } else if (extra) { extra.forEach(function (x) { x.remove(); }); extra = null; }
+  });
+  if (keys.length) row.title = keys.length + " field" + (keys.length === 1 ? "" : "s") + " (tap)";
+  return row;
+}
+
+/* ---------- crashes ---------- */
+var crashNext = null, crashShown = 0;
+async function loadCrashes(reset) {
+  var st = $("crashStatus");
+  if (reset) { crashNext = null; crashShown = 0; $("crashList").replaceChildren(); }
+  var q = "limit=" + CRASH_PAGE + (crashNext ? "&before=" + encodeURIComponent(crashNext) : "");
+  var body;
+  try { body = await api("/api/logs/crashes?" + q); }
+  catch (e) { st.className = "status bad"; st.textContent = failText(e); return; }
+  st.className = "status"; st.textContent = "";
+  var list = $("crashList");
+  body.crashes.forEach(function (c) {
+    list.append(h("button", { type: "button", class: "crow", onclick: function () { openCrash(c.id); } },
+      h("span", { class: "l1" },
+        h("span", { class: "badge k-" + c.kind, text: KIND_LABEL[c.kind] || c.kind }),
+        h("span", { class: "sum", text: c.summary })),
+      h("span", { class: "meta" },
+        h("span", { text: ago(c.ts), title: fmtFull(c.ts) }),
+        h("span", { text: "build " + buildOf(c) }),
+        h("span", { text: whereOf(c) || "unknown device" }))));
+  });
+  crashShown += body.crashes.length;
+  crashNext = body.next_before;
+  $("crashMore").hidden = !crashNext;
+  $("crashCount").textContent = crashShown ? (crashNext ? crashShown + "+" : String(crashShown)) : "";
+  if (!crashShown) st.textContent = "no crashes recorded. that's the good news.";
+}
+
+/* MetricKit payloads: collect every call stack tree wherever it sits (a whole
+   MXDiagnosticPayload, one diagnostic, or just the tree), with the diagnostic's
+   metadata next to it. */
+function findTrees(node, label, out, depth) {
+  if (!node || typeof node !== "object" || depth > 8) return;
+  if (Array.isArray(node)) { node.forEach(function (n) { findTrees(n, label, out, depth + 1); }); return; }
+  if (node.callStackTree && typeof node.callStackTree === "object") out.push({ label: label, tree: node.callStackTree, meta: node.diagnosticMetaData || null, node: node });
+  else if (Array.isArray(node.callStacks)) out.push({ label: label, tree: node, meta: node.diagnosticMetaData || null, node: node });
+  for (var k in node) {
+    if (k === "callStackTree" || !node[k] || typeof node[k] !== "object") continue;
+    findTrees(node[k], /Diagnostics?$/.test(k) ? k.replace(/Diagnostics?$/, "") : label, out, depth + 1);
+  }
+}
+// A frame's text row; a single child continues the same indent (a plain call chain),
+// several children (a sampled hang tree) indent by one.
+function flattenFrames(frames, depth, out) {
+  (frames || []).forEach(function (f) {
+    if (!f || typeof f !== "object") return;
+    out.push({ f: f, depth: depth });
+    var kids = Array.isArray(f.subFrames) ? f.subFrames : [];
+    flattenFrames(kids, kids.length > 1 ? depth + 1 : depth, out);
+  });
+}
+function frameText(i, f) {
+  return [String(i).padStart(3, " "), f.binaryName || "?", hex(f.address) || "", typeof f.offsetIntoBinaryTextSegment === "number" ? "+" + f.offsetIntoBinaryTextSegment : "", f.binaryUUID || ""].filter(Boolean).join("  ");
+}
+function renderTree(t) {
+  var box = h("div", { class: "stack" });
+  var stacks = Array.isArray(t.tree.callStacks) ? t.tree.callStacks : [];
+  if (!stacks.length) { box.append(h("p", { class: "muted small", text: "this call stack tree has no frames" })); return box; }
+  stacks.forEach(function (cs, idx) {
+    var flat = [];
+    flattenFrames(cs && cs.callStackRootFrames, 0, flat);
+    var attributed = !!(cs && cs.threadAttributed);
+    var sum = h("summary", null,
+      h("span", { text: stacks.length > 1 || attributed ? "thread " + idx : "call stack" }),
+      attributed ? h("span", { class: "badge k-crash", text: "crashed here" }) : null,
+      h("span", { class: "muted", text: flat.length + " frame" + (flat.length === 1 ? "" : "s") }));
+    var frames = h("div", { class: "frames" });
+    var lines = [];
+    flat.forEach(function (x, i) {
+      var f = x.f;
+      var samples = typeof f.sampleCount === "number" && f.sampleCount > 1 ? f.sampleCount : 0;
+      frames.append(h("div", { class: "frame", style: "padding-left:" + Math.min(x.depth, MAX_INDENT) * 14 + "px", title: f.binaryUUID ? "binary " + f.binaryUUID : null },
+        h("span", { class: "fi", text: "#" + i }),
+        h("span", { class: "fb", text: f.binaryName || "?" }),
+        typeof f.offsetIntoBinaryTextSegment === "number" ? h("span", { class: "fo", text: "+" + f.offsetIntoBinaryTextSegment, title: hex(f.offsetIntoBinaryTextSegment) }) : null,
+        typeof f.address === "number" ? h("span", { class: "fa", text: hex(f.address) }) : null,
+        samples ? h("span", { class: "fs", text: "x" + samples }) : null));
+      lines.push(frameText(i, f));
+    });
+    var det = h("details", { class: "thread" }, sum, frames,
+      h("div", { class: "tools", style: "padding:0 12px 10px" },
+        h("button", { type: "button", text: "copy frames", onclick: function () { copy(lines.join("\n")); } })));
+    if (attributed || stacks.length === 1) det.open = true;
+    box.append(det);
+  });
+  return box;
+}
+
+async function openCrash(id) {
+  var box = $("detail");
+  box.hidden = false;
+  box.replaceChildren(h("div", { class: "status", text: "loading…" }));
+  $("crashCard").hidden = true;
+  history.replaceState(null, "", "#crash=" + id);
+  box.scrollIntoView();
+  var body;
+  try { body = await api("/api/logs/crashes/" + encodeURIComponent(id)); }
+  catch (e) {
+    box.replaceChildren(backButton(), h("div", { class: "status bad", text: e && e.code === "error.logs.not_found" ? "that crash isn't here anymore (it may have aged out after 30 days)." : failText(e) }));
+    return;
+  }
+  var c = body.crash;
+  box.replaceChildren(backButton());
+  box.append(
+    h("div", { class: "head" },
+      h("span", { style: "display:flex;gap:8px;align-items:baseline;flex-wrap:wrap" },
+        h("span", { class: "badge k-" + c.kind, text: KIND_LABEL[c.kind] || c.kind }),
+        h("h2", { text: c.summary }))),
+    meta(c));
+
+  var trees = [];
+  findTrees(c.payload, "", trees, 0);
+  if (c.payload_missing) box.append(h("p", { class: "muted small", text: "the stored payload for this crash is gone, so only the summary above is left." }));
+  else if (!c.payload) box.append(h("p", { class: "muted small", text: "no diagnostic payload came with this one (a " + (KIND_LABEL[c.kind] || c.kind) + " noticed by the app itself)." }));
+
+  trees.forEach(function (t) {
+    var sec = h("div", { style: "display:grid;gap:8px" }, h("h3", { text: "call stack" + (t.label ? " · " + t.label : "") }));
+    var md = t.meta && typeof t.meta === "object" ? Object.keys(t.meta).filter(function (k) { var v = t.meta[k]; return v !== null && typeof v !== "object" && v !== ""; }) : [];
+    if (md.length) {
+      var kv = h("dl", { class: "kv" });
+      md.forEach(function (k) { kv.append(h("dt", { text: k }), h("dd", { text: String(t.meta[k]) })); });
+      sec.append(kv);
+    }
+    sec.append(renderTree(t));
+    box.append(sec);
+  });
+  if (c.payload && !trees.length) box.append(h("p", { class: "muted small", text: "there is no call stack tree in this payload; the raw json is below." }));
+
+  if (c.payload) {
+    var text = JSON.stringify(c.payload, null, 2);
+    box.append(h("details", { class: "rawbox" },
+      h("summary", { text: "raw payload (" + (text.length > 1024 ? Math.round(text.length / 1024) + " KB" : text.length + " B") + ")" }),
+      h("div", { class: "tools", style: "padding-bottom:8px" }, h("button", { type: "button", text: "copy json", onclick: function () { copy(text); } })),
+      h("pre", { class: "raw", text: text })));
+  }
+
+  var lead = Array.isArray(c.events) ? c.events.slice().sort(function (a, b) { return a.ts - b.ts; }) : [];
+  var evBox = h("div", { style: "display:grid;gap:6px" }, h("h3", { text: "last events before it" + (lead.length ? " (" + lead.length + ")" : "") }));
+  if (!lead.length) evBox.append(h("p", { class: "muted small", text: "the app sent no events with this one." }));
+  else {
+    var list = h("div", { class: "events" });
+    lead.forEach(function (e) {
+      var d = (e.ts - c.ts) / 1000;
+      list.append(eventRow(e, { rel: (d >= 0 ? "+" : "-") + Math.abs(d).toFixed(1) + " s", noWhere: true }));
+    });
+    list.append(h("div", { class: "ev marker", role: "separator" }, h("span", { class: "t", text: "0.0 s" }), h("span", { class: "lv", text: "" }), h("span", { class: "ct", text: "" }), h("span", { class: "msg", text: (KIND_LABEL[c.kind] || c.kind) + ": " + c.summary })));
+    evBox.append(list);
+  }
+  box.append(evBox);
+}
+function meta(c) {
+  var a = c.app && typeof c.app === "object" ? c.app : {};
+  var rows = [
+    ["when", fmtFull(c.ts) + " · " + ago(c.ts)],
+    ["build", buildOf(c)],
+    ["platform", [c.platform, a.os].filter(Boolean).join(" ")],
+    ["device", c.device || "unknown"],
+    ["process", c.process || "unknown"],
+    ["install", c.install ? c.install.slice(0, 8) : "unknown"],
+    ["crash id", c.id]
+  ];
+  var kv = h("dl", { class: "kv" });
+  rows.forEach(function (r) { if (r[1]) kv.append(h("dt", { text: r[0] }), h("dd", { text: r[1] })); });
+  return kv;
+}
+function backButton() {
+  return h("button", { type: "button", class: "back", onclick: closeCrash, text: "← all crashes" });
+}
+function closeCrash() {
+  $("detail").hidden = true; $("detail").replaceChildren();
+  $("crashCard").hidden = false;
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
+/* ---------- the event stream ---------- */
+var selLevels = {}, selCats = {}, evNext = null, evShown = 0, lastDay = null, evToken = 0;
+function chip(group, name, sel) {
+  var b = h("button", { type: "button", class: "chip", "aria-pressed": "false", text: name });
+  b.addEventListener("click", function () {
+    sel[name] = !sel[name];
+    b.setAttribute("aria-pressed", sel[name] ? "true" : "false");
+    loadEvents(true);
+  });
+  group.append(b);
+}
+function chips() {
+  var lv = $("levelChips"), ct = $("catChips");
+  lv.append(h("span", { class: "lbl", text: "level" }));
+  LEVELS.forEach(function (l) { chip(lv, l, selLevels); });
+  ct.append(h("span", { class: "lbl", text: "cat" }));
+  CATS.forEach(function (c) { chip(ct, c, selCats); });
+}
+function picked(sel) { return Object.keys(sel).filter(function (k) { return sel[k]; }); }
+async function loadEvents(reset) {
+  var st = $("evStatus"), list = $("evList");
+  var token = ++evToken;
+  if (reset) { evNext = null; evShown = 0; lastDay = null; list.replaceChildren(); $("evMore").hidden = true; }
+  var q = ["limit=" + EVENT_PAGE];
+  var lv = picked(selLevels), ct = picked(selCats);
+  if (lv.length) q.push("level=" + lv.join(","));
+  if (ct.length) q.push("cat=" + ct.join(","));
+  if (evNext) q.push("before=" + encodeURIComponent(evNext));
+  st.className = "status"; st.textContent = reset ? "loading…" : "";
+  var body;
+  try { body = await api("/api/logs?" + q.join("&")); }
+  catch (e) { if (token === evToken) { st.className = "status bad"; st.textContent = failText(e); } return; }
+  if (token !== evToken) return; // a newer filter change superseded this answer
+  st.textContent = "";
+  body.events.forEach(function (e) {
+    var dk = dayKey(e.ts);
+    if (dk !== lastDay) { lastDay = dk; list.append(h("div", { class: "day", text: fmtDay(e.ts) })); }
+    list.append(eventRow(e));
+  });
+  evShown += body.events.length;
+  evNext = body.next_before;
+  $("evMore").hidden = !evNext;
+  $("evCount").textContent = evShown ? (evNext ? evShown + "+" : String(evShown)) : "";
+  if (!evShown) st.textContent = lv.length || ct.length ? "no events match these filters." : "no events yet. they arrive when the app next syncs its log.";
+}
+
+$("refresh").onclick = function () { loadCrashes(true); loadEvents(true); };
+$("crashMoreBtn").onclick = function () { loadCrashes(false); };
+$("evMoreBtn").onclick = function () { loadEvents(false); };
+chips();
+loadCrashes(true);
+loadEvents(true);
+var m = /^#crash=([0-9A-Za-z_-]{8,64})$/.exec(location.hash);
+if (m) openCrash(m[1]);
+</script>
+</body>
+</html>

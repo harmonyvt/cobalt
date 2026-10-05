@@ -314,6 +314,7 @@ extension Pipeline {
             return file
         } catch {
             if Task.isCancelled || token != runToken { throw CancellationError() }
+            Telemetry.log(.warn, .upload, "original download for frames failed", data: Telemetry.errorData(error))
             keepProgress = nil
             return nil
         }
@@ -468,6 +469,7 @@ extension Pipeline {
         keepRequest = nil
         keepProgress = nil
         defer { ctx.continued?.pipelineChanged(self) }
+        if video == nil { Telemetry.log(.warn, .store, "original not kept on device", data: ["session": .string(String(id.prefix(8)))]) }
         guard let video else { return }
         // "public share" finished before the original landed: the entry takes the link now.
         if let url = hostedURL { ctx.store.setPublicURL(url, forSession: id, orEntry: video.id) }
@@ -540,7 +542,9 @@ extension Pipeline {
         localFile = file.url
         setState(.uploading(TransferProgress(bytes: 0, total: file.bytes)))
         let relay = MainActorRelay<TransferProgress> { [weak self] p in self?.uploadProgress(p, token: token) }
+        Telemetry.log(.info, .upload, "upload start", data: ["bytes": .bytes(file.bytes), "type": .string(file.contentType)])
         let uploaded = try await client.upload(file: file.url, name: file.name, contentType: file.contentType) { relay.push($0) }
+        Telemetry.log(.info, .upload, "upload finished", data: ["bytes": .bytes(file.bytes), "session": .bool(uploaded.sessionID != nil), "studioError": .string(uploaded.studioErrorCode ?? "")])
         try Task.checkCancellation()
         guard token == runToken else { throw CancellationError() }
         uploadedItemID = uploaded.item.id.isEmpty ? nil : uploaded.item.id
@@ -624,6 +628,7 @@ extension Pipeline {
                 guard p.runToken == token else { return }
                 p.photos = .done
             } catch {
+                Telemetry.log(.error, .photos, "save picker items failed", data: Telemetry.errorData(error))
                 guard p.runToken == token else { return }
                 p.photos = pipelineFailure(from: error, during: .saving).map(ActionStatus.failed) ?? .idle
             }
@@ -739,6 +744,7 @@ extension Pipeline {
             throw e
         } catch {
             // the orbit copy is a nicety; the hosted webp is what counts
+            Telemetry.log(.warn, .store, "webp not kept on device", data: Telemetry.errorData(error))
         }
         try Task.checkCancellation()
         result = r
@@ -762,6 +768,7 @@ extension Pipeline {
             photosStep = .idle
             photos = .done
         } catch {
+            Telemetry.log(.error, .photos, "save to photos failed", data: Telemetry.errorData(error))
             guard token == runToken else { return }
             photosStep = .idle
             photos = pipelineFailure(from: error, during: .saving, limits: ctx.capabilities.limits).map(ActionStatus.failed) ?? .idle
@@ -820,6 +827,7 @@ extension Pipeline {
             }
             hosting = .done
         } catch {
+            Telemetry.log(.error, .pipeline, "host original failed", data: Telemetry.errorData(error))
             guard token == runToken else { return }
             hostRequest = nil
             hosting = pipelineFailure(from: error, during: .saving, limits: ctx.capabilities.limits).map(ActionStatus.failed) ?? .idle

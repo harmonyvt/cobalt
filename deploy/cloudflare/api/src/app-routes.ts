@@ -195,6 +195,7 @@ export async function capabilities(
                 crop: true,
                 source_wait: true,
                 delete_post: true,
+                telemetry: true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,

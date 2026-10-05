@@ -169,6 +169,7 @@ public struct HTTPCobaltClient: CobaltClient {
                 var crop: Bool?
                 var sourceWait: Bool?
                 var deletePost: Bool?
+                var telemetry: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -214,7 +215,8 @@ public struct HTTPCobaltClient: CobaltClient {
             notifyBridge: f?.notifyBridge ?? false,
             crop: f?.crop ?? false,
             sourceWait: f?.sourceWait ?? false,
-            deletePost: f?.deletePost ?? false)
+            deletePost: f?.deletePost ?? false,
+            telemetry: f?.telemetry ?? false)
     }
 
     // MARK: - Resolve and studio

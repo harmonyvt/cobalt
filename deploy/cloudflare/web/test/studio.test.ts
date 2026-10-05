@@ -32,7 +32,7 @@ describe("routing config", () => {
     it("runs the Worker first for /studio and keeps /api/keys", () => {
         const rwf = (config as any).worker.assets.runWorkerFirst as string[];
         expect(rwf).toEqual(expect.arrayContaining(["/api/keys", "/api/keys/*", "/studio", "/studio/*"]));
-        expect(rwf).toHaveLength(8); // plus the library routes, see library.test.ts
+        expect(rwf).toHaveLength(11); // plus the library and logs routes, see library.test.ts and logs.test.ts
     });
 });
 

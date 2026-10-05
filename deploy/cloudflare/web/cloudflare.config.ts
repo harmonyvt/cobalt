@@ -9,8 +9,8 @@ export default defineConfig({
 		previewUrls: false,
 		assets: {
 			notFoundHandling: "404-page",
-			// Only the key-management API, the cobalt studio page and the library
-			// (page + /api/library) run the Worker; everything else is served
+			// Only the key-management API, the cobalt studio page, the library
+			// (page + /api/library) and the telemetry logs (page + /api/logs) run the Worker; everything else is served
 			// straight from the static assets.
 			runWorkerFirst: [
 				"/api/keys",
@@ -21,6 +21,9 @@ export default defineConfig({
 				"/library/*",
 				"/api/library",
 				"/api/library/*",
+				"/logs",
+				"/api/logs",
+				"/api/logs/*",
 			],
 		},
 		domains: [
