@@ -22,9 +22,17 @@ enum FolderNaming {
     /// room for ` (99)` and the extension.
     static let maxStemBytes = 200
 
-    /// Whether `video` lives in a gallery's folder: an item or a made file, or a webp of a media that has items.
+    /// Whether `video` lives in a gallery's folder (apple/CONTRACT-GALLERY.md 1.8): a file made from a post, and the items
+    /// of a post with two or more of them or with something made from it (and a webp of such an item). A single pasted
+    /// photo is a flat file: one item, nothing made, no folder.
     static func isInGalleryFolder(_ video: StoredVideo, in media: StoredMedia?) -> Bool {
-        video.role != nil || media?.items.isEmpty == false
+        guard video.role != nil || media?.items.isEmpty == false else { return false }
+        if let role = video.role, role != .item { return true }                    // slideshow, gallery image, crop
+        // `postItems`: the post's size when the item was kept, so the first items of a gallery that is still arriving (the
+        // store holds one or two of them yet) are not mistaken for a lone photo
+        if (video.postItems ?? 0) >= 2 { return true }
+        guard let media else { return true }                                       // owner unknown: as it always was
+        return media.isGallery || !media.made.isEmpty || !media.webps.isEmpty
     }
 
     /// Where `video` goes: the folder (nil = the root) and the file name inside it.

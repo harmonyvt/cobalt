@@ -12,8 +12,9 @@ import Synchronization
 /// What a background session reports. Called on the session's delegate queue, not the main actor.
 protocol BackgroundDownloadEvents: AnyObject, Sendable {
     /// A task finished with a response. The callee must move `file` before returning: the system
-    /// deletes it right after.
-    func downloadFinished(identifier: String, task: Int, label: String, status: Int, file: URL)
+    /// deletes it right after. `contentType` is the response's `Content-Type` (nil when it sent none): the file's
+    /// extension comes from it, so a shared photo is not stored as an mp4.
+    func downloadFinished(identifier: String, task: Int, label: String, status: Int, contentType: String?, file: URL)
     /// A task ended with an error (`NSURLErrorCancelled` included).
     func downloadFailed(identifier: String, task: Int, label: String, code: Int)
     /// The system delivered every event it had queued for the session.
@@ -95,6 +96,10 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
     @MainActor var clearInstantNotifications: () -> Void = { Notifications.clearInstantSaving() }
     /// Where the extension left its request bodies (`Saves`): the ones a day old are deleted.
     @MainActor var savesDirectory: () -> URL = { AppGroup.directory("Saves") }
+    /// A gallery has no single original (`GET /studio/<sid>/source` is its lead item): the app follows it as a job that
+    /// ends in `finishUnfocusedGallery`, which keeps every item into the gallery's folder. `AppModel` wires this to the
+    /// queue; false: nothing took it (no tray yet), so nothing is downloaded for it and the next foreground asks again.
+    @MainActor var adoptGallery: (_ session: String, _ link: URL?) -> Bool = { _, _ in false }
 
     @MainActor
     init(
@@ -164,11 +169,11 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
 
     // MARK: Events (delegate queue)
 
-    func downloadFinished(identifier: String, task: Int, label: String, status: Int, file: URL) {
+    func downloadFinished(identifier: String, task: Int, label: String, status: Int, contentType: String?, file: URL) {
         let now = clock.now()
         if status == 200 {
             let name = (pending.entry(label)?.media?.name ?? label)
-            let dest = OfflineStore.inboxURL(root: inboxRoot, name: "\(name).mp4")
+            let dest = OfflineStore.inboxURL(root: inboxRoot, name: "\(name).\(Self.fileExtension(forContentType: contentType))")
             do {
                 try FileManager.default.moveItem(at: file, to: dest)
             } catch {
@@ -211,6 +216,25 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
         }
     }
 
+    /// The extension a response of this `Content-Type` is stored under: a photo is `jpg` / `png` / `webp` / `heic`, a
+    /// GIF `gif`, and anything else (a video, no header at all) `mp4`, what every original was before photos.
+    static func fileExtension(forContentType contentType: String?) -> String {
+        let type = contentType?.split(separator: ";").first.map { $0.trimmingCharacters(in: .whitespaces).lowercased() } ?? ""
+        switch type {
+        case "image/jpeg", "image/jpg", "image/pjpeg": return "jpg"
+        case "image/png": return "png"
+        case "image/webp": return "webp"
+        case "image/heic", "image/heif": return "heic"
+        case "image/gif": return "gif"
+        default: return "mp4"
+        }
+    }
+
+    /// A still photo by its stored extension (a GIF is kept as a video).
+    static func isStillExtension(_ ext: String) -> Bool {
+        ["jpg", "jpeg", "png", "webp", "heic"].contains(ext.lowercased())
+    }
+
     static func errorCode(inBodyAt file: URL) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
         defer { try? handle.close() }
@@ -248,7 +272,19 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
             pending.update(id, now: clock.now()) { $0.state = .queued }
             return
         }
-        let media = await enriched(entry.media ?? MediaInfo(name: id, duration: nil, width: nil, height: nil, bytes: nil, isImage: false), session: id)
+        var known = entry.media ?? MediaInfo(name: id, duration: nil, width: nil, height: nil, bytes: nil, isImage: false)
+        // What this session turned out to be is read again now: a save found while it was still saving (the share sheet's
+        // "save now", its 8 s fallback, a wake) carried no item count, and `source` of a gallery is only its lead item.
+        let found = known.duration == nil ? await lookUp(session: id) : nil
+        if let found, Self.isGallery(found) {
+            try? FileManager.default.removeItem(at: file)
+            pending.remove(id)
+            _ = adoptGallery(id, entry.link)
+            return
+        }
+        known = enriched(known, from: found)
+        known.isImage = Self.isStillExtension(file.pathExtension)
+        let media = known
         do {
             let video = try await store.add(
                 file: file, kind: .original, media: media, sessionID: id, link: entry.link, remoteURL: nil, move: true, keep: true)
@@ -436,11 +472,12 @@ private final class BackgroundDelegate: NSObject, URLSessionDownloadDelegate, @u
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        let status = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
+        let response = downloadTask.response as? HTTPURLResponse
+        let status = response?.statusCode ?? 0
         finished.withLock { _ = $0.insert(downloadTask.taskIdentifier) }
         events.downloadFinished(
             identifier: identifier, task: downloadTask.taskIdentifier, label: downloadTask.taskDescription ?? "",
-            status: status, file: location)
+            status: status, contentType: response?.value(forHTTPHeaderField: "Content-Type"), file: location)
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {

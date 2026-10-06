@@ -304,6 +304,9 @@ extension Pipeline {
         let target = targetMediaID
         let token = runToken
         let have = Set(store.videos.filter { $0.role == .item && $0.sessionID == sid }.compactMap(\.itemIndex))
+        // what the folder rule needs while the first items land one by one: a single pasted photo is a flat file, the first
+        // item of a gallery is already in the gallery's folder
+        let postItems = max(galleryRun?.total ?? 0, files.count)
         var done = 0
         let ready = files.filter { failures[$0.itemIndex ?? -1] == nil }
         for file in ready {
@@ -322,7 +325,7 @@ extension Pipeline {
                     _ = try await store.add(
                         file: local, kind: .original, media: info, sessionID: sid, link: link, remoteURL: nil, move: true,
                         publicURL: file.isPublic ? file.url : nil, mediaID: target, keep: true, createdAt: file.createdAt,
-                        role: .item, itemIndex: index, libraryID: file.id)
+                        role: .item, itemIndex: index, libraryID: file.id, postItems: postItems)
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let e as CobaltError where e == .cancelled || e == .network(.cancelled) {
@@ -492,10 +495,13 @@ extension Pipeline {
 
     /// The owner cancelled a make still waiting in the server's line: the save stays, the make is gone.
     func cancelMake() {
+        // A make still `.waiting` for the save never took a place of its own in the line: what the line holds is the
+        // save's, and it stays.
+        let waiting: Bool = { if case .waiting? = galleryRun?.make { return true } else { return false } }()
         for t in sideTasks { t.cancel() }
         sideTasks = []
         makeJobID = nil
-        releaseLine()
+        if !waiting { releaseLine() }
         setGalleryRun { $0.make = .none }
     }
 
@@ -585,7 +591,15 @@ extension Pipeline {
         let store = ctx.store
         let kind = m.madeKind
         // the library's copy of what was replaced is gone with the server's answer
-        if !r.replaced.isEmpty { ctx.libraryDropped?(r.replaced) }
+        if !r.replaced.isEmpty {
+            ctx.libraryDropped?(r.replaced)
+            // and so is this device's, whether or not the new file comes down (a failed download must not leave two tabs:
+            // the replaced file here and the new one in the library)
+            let gone = Set(r.replaced)
+            for old in store.videos where old.libraryID.map(gone.contains) == true && old.libraryID != r.itemID {
+                await store.remove(old.id)
+            }
+        }
         guard let itemID = r.itemID else { return r }
         let isImage: Bool
         let ext: String

@@ -15,6 +15,12 @@ struct FolderWorker: Sendable {
         var folder: String?
         /// The media the file belongs to: one folder per media, found again by its tag.
         var media: String = ""
+        /// A made file's slot in its post (`media|slideshow webp`): a remake takes the place of the file we wrote for the
+        /// same slot before (R8). Nil for everything that is never replaced (items, originals, webps, crops).
+        var slot: String?
+        /// The keys of the other records of this slot the store still holds (an older server could leave several): their
+        /// files are not replaced, only those of records that are gone.
+        var slotMates: Set<String> = []
     }
 
     enum Outcome: Sendable, Equatable {
@@ -92,6 +98,8 @@ struct FolderWorker: Sendable {
         for m in media { for r in m.renditions { byID[r.id] = m } }
         var seen: Set<String> = []
         var out: [Candidate] = []
+        var inSlot: [String: Set<String>] = [:]
+        for v in videos { if let slot = Self.slot(of: v) { inSlot[slot, default: []].insert(PhotosKey.of(v)) } }
         for v in videos {
             guard let file = v.fileURL else { continue }
             let key = PhotosKey.of(v)
@@ -100,9 +108,16 @@ struct FolderWorker: Sendable {
             let placement = FolderNaming.placement(for: v, in: byID[v.id])
             out.append(Candidate(
                 key: key, source: file, bytes: Self.size(of: file), name: placement.name, createdAt: v.createdAt,
-                folder: placement.folder, media: v.mediaID))
+                folder: placement.folder, media: v.mediaID, slot: Self.slot(of: v),
+                slotMates: Self.slot(of: v).map { (inSlot[$0] ?? []).subtracting([key]) } ?? []))
         }
         return out.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    /// The slot a made file fills in its post, for the kinds a remake replaces (R8); a crop is never replaced.
+    static func slot(of video: StoredVideo) -> String? {
+        guard let kind = video.madeKind, kind != .crop else { return nil }
+        return "\(video.mediaID)|\(kind.tabName)"
     }
 
     func counts(_ videos: [StoredVideo]) -> Counts {
@@ -168,6 +183,8 @@ struct FolderWorker: Sendable {
             return .skipped
         }
         let size = Self.size(of: c.source)
+        // a remake: the file we wrote for this slot before goes first, so the new one takes its name
+        if let slot = c.slot { removeReplaced(slot: slot, except: c.slotMates.union([c.key])) }
         var lastError: (any Error)?
         for _ in 0..<5 {
             var directory = destination
@@ -187,7 +204,7 @@ struct FolderWorker: Sendable {
             }
             let name = FolderNaming.unique(c.name) { fm.fileExists(atPath: directory.appendingPathComponent($0).path) }
             let final = directory.appendingPathComponent(name)
-            ledger.recordPlan(id, c.key, file: prefix + name, bytes: size)
+            ledger.recordPlan(id, c.key, file: prefix + name, bytes: size, slot: c.slot)
             let part = destination.appendingPathComponent(
                 "\(Self.partPrefix)\(FolderLedger.launchID.prefix(8))-\(UUID().uuidString.prefix(8))\(Self.partSuffix)")
             do {
@@ -208,6 +225,20 @@ struct FolderWorker: Sendable {
             }
         }
         return settle(lastError, key: c.key)
+    }
+
+    /// Deletes the files this ledger says it wrote for an older made file of `slot` (a remake replaces its file, R8), and
+    /// forgets those entries. Only a file still at the recorded name with the recorded size goes: one the owner renamed,
+    /// moved away or changed is theirs and is left where it is.
+    private func removeReplaced(slot: String, except keep: Set<String>) {
+        let root = destination.standardizedFileURL.path
+        for (other, entry) in ledger.items(id) where !keep.contains(other) && entry.slot == slot && entry.state == .done {
+            if let name = entry.file, let bytes = entry.bytes {
+                let url = destination.appendingPathComponent(name).standardizedFileURL
+                if url.path.hasPrefix(root + "/"), Self.size(ofFileAt: url) == bytes { try? fm.removeItem(at: url) }
+            }
+            ledger.forget(id, other)
+        }
     }
 
     /// What a failure means: out of space, no permission and a vanished folder stop the pass and leave

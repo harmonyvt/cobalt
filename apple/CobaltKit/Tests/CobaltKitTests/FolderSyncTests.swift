@@ -536,6 +536,36 @@ struct FolderKillTests {
         #expect(env.ledger.entry(id, "s:S1")?.state == .done)
     }
 
+    /// Review fix SF5: a remake of a gallery's slideshow replaces the file FolderSync wrote, it does not pile up `slideshow (2).webp`.
+    @Test func aRemadeSlideshowReplacesItsFileInTheGalleryFolder() async throws {
+        let env = try await FolderEnv(launchedLongAgo: true)
+        let link = URL(string: "https://www.instagram.com/p/Ddy0-gpGg5U/")
+        let info = MediaInfo(name: "n", duration: nil, width: 4, height: 5, bytes: nil, isImage: true)
+        for i in 0..<2 {
+            let file = try makeTempFile("item\(i)-\(UUID().uuidString.prefix(4)).jpg", bytes: 500 + i)
+            _ = try await env.store.add(
+                file: file, kind: .original, media: info, sessionID: "G1", link: link, remoteURL: nil, move: true, keep: false,
+                role: .item, itemIndex: i, libraryID: "r\(i)", postItems: 2)
+        }
+        func slideshow(_ library: String, bytes: Int) async throws -> StoredVideo {
+            try await env.store.add(
+                file: try makeTempFile("show-\(library).webp", bytes: bytes), kind: .webp, media: info, sessionID: "G1", link: link,
+                remoteURL: nil, move: true, keep: false, role: .slideshow, madeSpec: Data(#"{"format":"webp"}"#.utf8), libraryID: library)
+        }
+        let first = try await slideshow("m1", bytes: 3_000)
+        await env.sync.reconcile()
+        let gallery = env.folder.appendingPathComponent("instagram · Ddy0-gpGg5U", isDirectory: true)
+        func names() -> [String] { ((try? FileManager.default.contentsOfDirectory(atPath: gallery.path)) ?? []).filter { !$0.hasPrefix(".") }.sorted() }
+        #expect(names() == ["01.jpg", "02.jpg", "slideshow.webp"], "\(names())")
+
+        // what `Pipeline.finishMake` does: the old record goes, the new one is added
+        await env.store.remove(first.id)
+        _ = try await slideshow("m2", bytes: 4_000)
+        await env.sync.reconcile()
+        #expect(names() == ["01.jpg", "02.jpg", "slideshow.webp"], "never `slideshow (2).webp`: \(names())")
+        #expect(try Data(contentsOf: gallery.appendingPathComponent("slideshow.webp")).count == 4_000, "the new file")
+    }
+
     private func markClaimAsFromAnotherLaunch(_ ledger: FolderLedger) throws {
         var f = try JSONDecoder().decode(FolderStateFile.self, from: Data(contentsOf: ledger.url))
         for key in f.sections["default"]?.items.keys.map({ $0 }) ?? [] { f.sections["default"]?.items[key]?.by = "dead" }

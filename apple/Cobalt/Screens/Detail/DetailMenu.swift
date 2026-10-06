@@ -14,6 +14,9 @@ struct DetailMenu: View {
     /// Opens the rename alert; the same item sits in the detail's title menu.
     var rename: () -> Void = {}
 
+    /// `crop…` and `repost frame…` (lane A7, `Screens/Tools`): the tool sheet that is up.
+    @State private var tool: ToolSheet?
+
     private var model: AppModel { controller.model }
 
     /// From the orbit, when the library has the post: the library tab, on this media.
@@ -34,7 +37,7 @@ struct DetailMenu: View {
     private var liveRendition: Rendition? { page?.rendition }
 
     /// After `rename` and `open in library`: make from this post…, select photos, save all to photos, copy all links (on the
-    /// pager); save to photos and share (on a made file). `crop…` and `repost frame…` arrive with lane A7.
+    /// pager); save to photos and share (on a made file). Then `crop…` (the photo in view) and `repost frame…` (lane A7).
     @ViewBuilder
     private func galleryItems(deleting: Bool) -> some View {
         if item.detailShape == .gallery {
@@ -57,7 +60,18 @@ struct DetailMenu: View {
             if item.detailShape == .gallery {
                 Button(Copy.Gallery.copyAllLinks, systemImage: Symbol.Gallery.copyLinks) { controller.copyAllLinks(item) }
             }
-            // TODO(A7): `crop…` and `repost frame…` (Screens/Tools) go here, after copy all links.
+            if ToolSheet.canCrop(page?.rendition) {
+                Button(ToolsCopy.cropMenu, systemImage: Symbol.Gallery.crop) {
+                    if let r = page?.rendition { tool = .crop(r, initial: nil) }
+                }
+                .disabled(deleting)
+            }
+            if ToolSheet.canRepost(item) {
+                Button(ToolsCopy.repostMenu, systemImage: Symbol.Gallery.repostFrame) {
+                    tool = .repost(start: page?.rendition, initial: nil)
+                }
+                .disabled(deleting)
+            }
         } else if rendition.isMade || rendition.isWebp {
             if RenditionPhotos.canSave(rendition), controller.placement(of: rendition, in: item) == .none {
                 Button(GalleryActions.saveTitle(done: false), systemImage: GalleryActions.saveSymbol) {
@@ -80,7 +94,7 @@ struct DetailMenu: View {
             .disabled(deleting)
             .accessibilityLabel("\(Copy.Gallery.deletePhoto): \(r.itemLabel ?? "")")
         } else if page == nil, rendition.isMade {
-            Button(Copy.Gallery.deleteFile, systemImage: Symbol.Media.deleteWebp, role: .destructive) {
+            Button(rendition.madeKind == .crop ? Copy.Gallery.deleteCrop : Copy.Gallery.deleteFile, systemImage: Symbol.Media.deleteWebp, role: .destructive) {
                 controller.confirm = .deleteMade(rendition.id)
             }
             .disabled(deleting)
@@ -135,6 +149,17 @@ struct DetailMenu: View {
             Label(Copy.Media.more, systemImage: Symbol.Media.more)
         }
         .accessibilityLabel(Copy.Media.more)
+        // a crop that became a tab selects itself (`MediaDetail`); a picture sent to Photos says so under the actions
+        .toolSheet($tool, model: model, item: item) { line in if let line { controller.say(line) } }
+        #if DEBUG
+        .task {
+            ToolsDebug.seedPhotos(of: item)
+            if let sheet = ToolsDebug.launch(for: item) {
+                try? await Task.sleep(for: .milliseconds(600))
+                tool = sheet
+            }
+        }
+        #endif
     }
 }
 

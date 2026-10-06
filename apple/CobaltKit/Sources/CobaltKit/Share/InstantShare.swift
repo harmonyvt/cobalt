@@ -37,6 +37,39 @@ extension ShareInbox {
 }
 
 extension InstantShare {
+    /// Whether a link could be a post of several items, decided by its shape alone (no network): the share sheet asks the
+    /// server what a link is only when this is true. A reel, a video, a plain media file can never be a gallery, so they
+    /// go straight to today's instant save: no resolve, no "checking" sheet, no 8 s wait, and the server resolves once.
+    ///
+    /// Only these are looked into: Instagram `/p/` (and any Instagram shape that is not a reel, `/reels/` or `/tv/`),
+    /// X / Twitter statuses (a `/video/<n>` suffix says which video, so that one is a single file), TikTok `/photo/`
+    /// (a `/video/` link is a video; a short link is unknown), and every host that is not named here.
+    public static func mayBeGallery(_ link: URL) -> Bool {
+        let host = (link.host(percentEncoded: false) ?? "").lowercased()
+        func on(_ domain: String) -> Bool { host == domain || host.hasSuffix("." + domain) }
+        let parts = link.pathComponents.filter { $0 != "/" && !$0.isEmpty }.map { $0.lowercased() }
+        // a plain media file: a video, audio or one image (its own extension, a query does not count)
+        let file = (link.path as NSString).pathExtension.lowercased()
+        let media: Set<String> = [
+            "mp4", "mov", "m4v", "webm", "mkv", "avi", "mpg", "mpeg", "3gp", "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus",
+            "gif", "jpg", "jpeg", "png", "webp", "heic", "heif", "avif",
+        ]
+        if media.contains(file) { return false }
+        if on("instagram.com") || on("instagr.am") {
+            return !parts.contains { ["reel", "reels", "tv"].contains($0) }
+        }
+        if on("youtube.com") || on("youtu.be") || on("youtube-nocookie.com") { return false }
+        if on("tiktok.com") {
+            return !parts.contains("video")
+        }
+        if on("x.com") || on("twitter.com") || on("fxtwitter.com") || on("vxtwitter.com") {
+            guard let status = parts.firstIndex(where: { $0 == "status" || $0 == "statuses" }) else { return true }
+            // `/status/<id>/video/<n>`: one video of the post
+            return !parts.dropFirst(status + 2).contains("video")
+        }
+        return true
+    }
+
     /// What the extension does with what was shared (the extension's entry point, called from `viewDidLoad`).
     public enum Start: Sendable {
         /// A link: the flow asks the server what it is. One item is saved and the extension closes without showing

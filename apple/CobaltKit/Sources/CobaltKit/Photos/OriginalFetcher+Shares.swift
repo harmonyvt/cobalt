@@ -94,6 +94,9 @@ extension OriginalFetcher {
     func adoptShared(id: String, link: URL?, info: StudioSession?) -> Bool {
         guard keepsOriginals(), pending.entry(id) == nil else { return false }
         if store.videos.contains(where: { $0.kind == .original && $0.sessionID == id }) { return false }
+        // A gallery is not one original: `source` would give its lead item (a photo stored as a video, items 2-N never
+        // kept). The app follows it as a gallery job instead; with no job to give it to nothing is queued.
+        if let info, Self.isGallery(info) { return adoptGallery(id, link) }
         let name = info?.title ?? link.flatMap(LinkInfo.init)?.ref ?? id
         let media = MediaInfo(name: name, duration: info?.duration, width: info?.width, height: info?.height, bytes: info?.bytes, isImage: false)
         let source = HTTPCobaltClient(baseURL: serverURL(), apiKey: { nil }).sourceURL(session: id)
@@ -103,13 +106,28 @@ extension OriginalFetcher {
         return true
     }
 
+    /// A post of several items (`items` listed, or `item_count` 2 or more): saved whole, not as one original.
+    static func isGallery(_ session: StudioSession) -> Bool {
+        !session.items.isEmpty || (session.itemCount ?? 0) >= 2
+    }
+
+    /// `GET /studio/<sid>`, for at most 5 s (nil: unknown).
+    @MainActor
+    func lookUp(session id: String) async -> StudioSession? {
+        let lookup = sessionInfo
+        return await InstantShareEngine.within(5) { await lookup(id) }
+    }
+
     /// A saving session has no title or size yet; the original's name comes from the session once it lands.
     @MainActor
     func enriched(_ media: MediaInfo, session id: String) async -> MediaInfo {
         guard media.duration == nil else { return media }
-        let lookup = sessionInfo
-        let found = await InstantShareEngine.within(5) { await lookup(id) }
-        guard let found else { return media }
+        return enriched(media, from: await lookUp(session: id))
+    }
+
+    @MainActor
+    func enriched(_ media: MediaInfo, from found: StudioSession?) -> MediaInfo {
+        guard media.duration == nil, let found else { return media }
         return MediaInfo(
             name: found.title ?? media.name, duration: found.duration ?? media.duration, width: found.width ?? media.width,
             height: found.height ?? media.height, bytes: media.bytes ?? found.bytes, isImage: media.isImage)

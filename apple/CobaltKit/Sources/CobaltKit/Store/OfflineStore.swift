@@ -59,6 +59,9 @@ public struct StoredVideo: Sendable, Codable, Equatable, Identifiable {
     /// The server's library row for this file (an item or a made file), when known: what a download and a replace
     /// are keyed by. Nil for everything else.
     public var libraryID: String?
+    /// How many items the post had when this item was kept (a gallery's items; nil elsewhere and on older records). It lets
+    /// the folder rule tell a single pasted photo (a flat file) from the first item of a gallery that is still arriving.
+    public var postItems: Int?
 
     public enum Place: String, Sendable, Codable { case cache, offline }
 
@@ -67,7 +70,8 @@ public struct StoredVideo: Sendable, Codable, Equatable, Identifiable {
         width: Int?, height: Int?, bytes: Int64, sessionID: String?, link: URL?, remoteURL: URL?,
         createdAt: Date, previewFrameURLs: [URL] = [], publicURL: URL? = nil, mediaID: String? = nil,
         clip: WebpClip? = nil, title: String? = nil, place: Place? = nil, keep: Bool = false,
-        role: GalleryRole? = nil, itemIndex: Int? = nil, madeFrom: [Int]? = nil, madeSpec: Data? = nil, libraryID: String? = nil
+        role: GalleryRole? = nil, itemIndex: Int? = nil, madeFrom: [Int]? = nil, madeSpec: Data? = nil, libraryID: String? = nil,
+        postItems: Int? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -95,6 +99,7 @@ public struct StoredVideo: Sendable, Codable, Equatable, Identifiable {
         self.madeFrom = madeFrom
         self.madeSpec = madeSpec
         self.libraryID = libraryID
+        self.postItems = postItems
     }
 
     /// The kind of made file this is (the key a remake replaces); nil for anything else.
@@ -124,11 +129,13 @@ extension StoredVideo {
             title: try c.decodeIfPresent(String.self, forKey: .title),
             place: try c.decodeIfPresent(Place.self, forKey: .place),
             keep: try c.decodeIfPresent(Bool.self, forKey: .keep) ?? false,
-            role: try c.decodeIfPresent(GalleryRole.self, forKey: .role),
+            // a role this build does not know (a later one wrote it) reads as none: one record must not make the index unreadable
+            role: (try? c.decodeIfPresent(GalleryRole.self, forKey: .role)) ?? nil,
             itemIndex: try c.decodeIfPresent(Int.self, forKey: .itemIndex),
             madeFrom: try c.decodeIfPresent([Int].self, forKey: .madeFrom),
             madeSpec: try c.decodeIfPresent(Data.self, forKey: .madeSpec),
-            libraryID: try c.decodeIfPresent(String.self, forKey: .libraryID))
+            libraryID: try c.decodeIfPresent(String.self, forKey: .libraryID),
+            postItems: try c.decodeIfPresent(Int.self, forKey: .postItems))
     }
 }
 
@@ -423,7 +430,8 @@ public final class OfflineStore {
         link: URL?, remoteURL: URL?, move: Bool, publicURL: URL? = nil,
         mediaID: String? = nil, clip: WebpClip? = nil, keep: Bool, createdAt: Date? = nil,
         origin: AddOrigin = .save,
-        role: GalleryRole? = nil, itemIndex: Int? = nil, madeFrom: [Int]? = nil, madeSpec: Data? = nil, libraryID: String? = nil
+        role: GalleryRole? = nil, itemIndex: Int? = nil, madeFrom: [Int]? = nil, madeSpec: Data? = nil, libraryID: String? = nil,
+        postItems: Int? = nil
     ) async throws -> StoredVideo {
         let keep = keep && canKeep
         let fm = FileManager.default
@@ -467,7 +475,7 @@ public final class OfflineStore {
             previewNames: flipbook.names.isEmpty ? nil : flipbook.names,
             previewBytes: flipbook.names.isEmpty ? nil : flipbook.bytes, publicURL: publicURL,
             mediaID: nil, clip: kind == .webp ? clip : nil, keep: keep,
-            role: role, itemIndex: itemIndex, madeFrom: madeFrom, madeSpec: madeSpec, libraryID: libraryID)
+            role: role, itemIndex: itemIndex, madeFrom: madeFrom, madeSpec: madeSpec, libraryID: libraryID, postItems: postItems)
 
         // The identity check runs inside the coordinated index write (re-read from disk first), so
         // two adds of the same item, in this process or the other one, can never both insert.
@@ -564,6 +572,7 @@ public final class OfflineStore {
         old.libraryID = old.libraryID ?? new.libraryID
         old.madeFrom = old.madeFrom ?? new.madeFrom
         old.madeSpec = old.madeSpec ?? new.madeSpec
+        old.postItems = old.postItems ?? new.postItems
 
         var discard = Eviction()
         if old.fileName == nil, old.visiblePath == nil, let name = new.fileName {
@@ -924,7 +933,7 @@ public final class OfflineStore {
                 width: v.width, height: v.height, bytes: v.bytes, sessionID: v.sessionID, link: v.link,
                 remoteURL: v.remoteURL, createdAt: v.createdAt, publicURL: v.publicURL, mediaID: v.mediaID, clip: v.clip,
                 title: v.title, role: v.role, itemIndex: v.itemIndex, madeFrom: v.madeFrom, madeSpec: v.madeSpec,
-                libraryID: v.libraryID)
+                libraryID: v.libraryID, postItems: v.postItems)
         }
         if let written = try? Self.mutate(root: root, { $0 = records }) {
             adopt(written)
@@ -1165,11 +1174,13 @@ public final class OfflineStore {
         /// the media in cobalt renames the file; one the owner renamed is never renamed again.
         var givenName: String?
         /// Gallery fields (apple/CONTRACT-GALLERY.md 4); nil in an index written before galleries.
-        var role: GalleryRole?
+        @LenientRole var role: GalleryRole?
         var itemIndex: Int?
         var madeFrom: [Int]?
         var madeSpec: Data?
         var libraryID: String?
+        /// How many items the post had when this item was kept (see `StoredVideo.postItems`).
+        var postItems: Int?
 
         /// The effective media id.
         var media: String { mediaID ?? id }
@@ -1213,7 +1224,8 @@ public final class OfflineStore {
                 sessionID: sessionID, link: link, remoteURL: remoteURL, createdAt: createdAt,
                 previewFrameURLs: (previewNames ?? []).map { root.appendingPathComponent("previews/\($0)") },
                 publicURL: publicURL, mediaID: media, clip: clip, title: title, place: place, keep: keep == true,
-                role: role, itemIndex: itemIndex, madeFrom: madeFrom, madeSpec: madeSpec, libraryID: libraryID)
+                role: role, itemIndex: itemIndex, madeFrom: madeFrom, madeSpec: madeSpec, libraryID: libraryID,
+                postItems: postItems)
         }
     }
 

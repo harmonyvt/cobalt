@@ -590,6 +590,32 @@ public struct HTTPCobaltClient: CobaltClient {
         guard (200..<300).contains(http.statusCode) else { throw apiError(data, status: http.statusCode) }
     }
 
+    /// `PUT /library/items/<id>/made?role=&name=&spec=` (18.6): the body is the file, streamed; `201` answers the new row.
+    public func uploadMade(
+        item itemID: String, role: GalleryRole, file: URL, contentType: String, name: String, spec: Data,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> MadeUpload {
+        let query = [("role", role.rawValue), ("name", name), ("spec", String(decoding: spec, as: UTF8.self))]
+        var req = try makeRequest("PUT", "/library/items/\(Self.encode(itemID))/made", query: query, keyed: true, timeout: 120)
+        req.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        let delegate = ProgressDelegate(progress)
+        defer { delegate.finish() }
+        let data: Data
+        let http: HTTPURLResponse
+        do {
+            let (d, r) = try await urlSession.upload(for: req, fromFile: file, delegate: delegate)
+            guard let h = r as? HTTPURLResponse else { throw CobaltError.invalidResponse(httpStatus: 0) }
+            data = d; http = h
+        } catch let e as URLError {
+            throw CobaltError.network(e.code)
+        }
+        guard http.statusCode == 201 || http.statusCode == 200 else { throw apiError(data, status: http.statusCode) }
+        guard let wire = try? CobaltJSON.decoder().decode(MadeWire.self, from: data), let item = wire.item else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return MadeUpload(file: item, replaced: wire.replaced ?? [])
+    }
+
     /// `200` → every file; `502 error.library.partial` → the files that switched and the ids that did not (a retry is
     /// idempotent); any other error as the keyed calls throw it.
     public func setPostVisibility(anchor itemID: String, public makePublic: Bool) async throws -> VisibilityResult {
@@ -819,6 +845,11 @@ private struct PostVisibilityWire: Decodable {
     var items: [Lossy<LibraryFile>]?
     var cacheCleared: Bool?
     var remaining: [String]?
+}
+
+private struct MadeWire: Decodable {
+    var item: LibraryFile?
+    var replaced: [String]?
 }
 
 private struct UploadWire: Decodable {

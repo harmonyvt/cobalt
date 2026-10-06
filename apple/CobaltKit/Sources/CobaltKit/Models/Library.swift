@@ -19,7 +19,9 @@ public struct VisibilityChange: Sendable, Equatable {
 
 public struct LibraryFile: Sendable, Codable, Equatable, Identifiable {
     public enum Kind: String, Sendable, Codable { case `public`, `private` }
-    public enum Source: String, Sendable, Codable { case webp, studio, host, upload, saved }
+    /// `made`: a crop (or an export) made on the device and uploaded with `PUT /library/items/<id>/made` (18.6). Before this
+    /// word a `made` row failed to decode, and the library page dropped it.
+    public enum Source: String, Sendable, Codable { case webp, studio, host, upload, saved, made }
     public enum Role: Sendable, Equatable { case webp, hostedLink, privateCopy }
 
     public var id: String

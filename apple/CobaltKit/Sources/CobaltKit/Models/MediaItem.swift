@@ -11,7 +11,7 @@ public struct Rendition: Sendable, Equatable, Identifiable {
         case item(index: Int, type: MediaType)
         case slideshow(number: Int, format: SlideshowPlan.Format)
         case galleryImage(layout: GalleryLayout, number: Int)
-        /// A crop of item `of` (A7). `spec` is what the server stored (`aspect`, `fill`); the typed `FrameSpec` arrives with the tools wave.
+        /// A crop of item `of` (A7). `spec` is what the server stored (`aspect`, `fill`, `rect`); `spec.frame` is it as a `FrameSpec`.
         case crop(of: Int, spec: MadeSpec?)
     }
 
@@ -132,7 +132,7 @@ public struct Rendition: Sendable, Equatable, Identifiable {
         case .slideshow(let n, let format): return n > 1 ? "\(MadeKind.slideshow(format).tabName) \(n)" : MadeKind.slideshow(format).tabName
         case .galleryImage(let layout, let n):
             return n > 1 ? "\(MadeKind.galleryImage(layout).tabName) \(n)" : MadeKind.galleryImage(layout).tabName
-        case .crop: return "crop"
+        case .crop(_, let spec): return spec?.frame?.tabName ?? "crop"
         }
     }
 

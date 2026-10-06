@@ -101,7 +101,7 @@ struct OfflineJob: Codable, Equatable, Sendable {
         /// The device's media this joins (its other renditions), when it has one.
         var mediaID: String?
         /// A gallery's item or a file made from it (apple/CONTRACT-GALLERY.md 4); nil on every other rendition.
-        var role: GalleryRole?
+        @LenientRole var role: GalleryRole?
         var itemIndex: Int?
         var madeFrom: [Int]?
         var madeSpec: Data?

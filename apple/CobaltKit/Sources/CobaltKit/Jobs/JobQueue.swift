@@ -62,6 +62,19 @@ public final class JobQueue {
         /// When the job started waiting in a line (for "job line" / "job busy elsewhere" telemetry).
         var waitingSince: Date?
         var loggedBusyElsewhere = false
+        /// A job made by `addGallery`: what it was asked to do, so a retry does the same work (never a full save of the link).
+        var gallery: GalleryJobSpec?
+    }
+
+    /// What `addGallery` was called with.
+    private struct GalleryJobSpec {
+        var work: GalleryWork
+        var session: String
+        var items: [GalleryItem]
+        var media: MediaInfo?
+        var link: URL?
+        var mediaID: String?
+        var failures: [Int: String]
     }
 
     private var waiterCounter = 0
@@ -240,6 +253,7 @@ public final class JobQueue {
         addCounter += 1
         var m = Meta(input: nil, options: JobOptions())
         m.addedMonotonic = addCounter
+        m.gallery = GalleryJobSpec(work: work, session: session, items: items, media: media, link: link, mediaID: mediaID, failures: failures)
         meta[id] = m
         let job = Job(id: id, pipeline: p, origin: .app, addedAt: ctx.clock.now(), via: .make)
         jobs.append(job)
@@ -379,6 +393,15 @@ public final class JobQueue {
             answer = "reading"
             p.detach()
         case .fetching, .uploading, .saving, .rendering, .gallery:
+            if case .gallery = p.state, p.galleryRun?.make.isActive == true, p.makeJobID == nil {
+                // A make that has no job on the server yet (it waits for its save, or is on its way): only the make
+                // goes, here. Asking the server to cancel would cancel the SAVE (`DELETE /studio/<sid>/line`).
+                notice = JobNotice(kind: .cancelledWebp, title: title)
+                p.cancelMake()
+                Telemetry.log(.info, .pipeline, "job cancel", data: tele(["phase": .string("make"), "onServer": false, "answer": .string("local")]))
+                changed()
+                return
+            }
             if queuedOnServer, let sid = p.sessionID {
                 do {
                     // a render, or a make from a gallery: the save stays and only that is cancelled
@@ -445,7 +468,21 @@ public final class JobQueue {
 
     /// Failed → the same input again, at the back of the line (a new job; it takes the focus when the failed one had it).
     public func retry(_ id: Job.ID) {
-        guard let job = job(id), job.isFailed else { return }
+        guard let job = job(id) else { return }
+        if let spec = meta[id]?.gallery {
+            // A make or a retry of missing items is its own work on a saved post: the same work again, never the post's
+            // link as a new save (that would be a second copy of the whole gallery).
+            let makeFailed: Bool = { if case .failed? = job.pipeline.galleryRun?.make { return true } else { return false } }()
+            guard job.isFailed || makeFailed else { return }
+            let known = job.pipeline.galleryItems
+            remove(id)
+            job.pipeline.reset()
+            addGallery(
+                spec.work, session: spec.session, items: known.isEmpty ? spec.items : known, media: spec.media, link: spec.link,
+                mediaID: spec.mediaID, failures: spec.failures)
+            return
+        }
+        guard job.isFailed else { return }
         let p = job.pipeline
         var input = meta[id]?.input
         if input == nil, case .link(let info)? = p.input { input = .link(info.url) }
@@ -875,6 +912,23 @@ public final class JobQueue {
                 media: nil, trim: nil, stage: .saving, wantsTrim: false, pickedUp: false, updatedAt: ctx.clock.now())
             add([.shared(shared)], via: .share, options: JobOptions(), allowsFocus: false)
         }
+    }
+}
+
+extension JobQueue {
+    /// A gallery the share sheet saved on a build with no app group: the app finds it through `GET /studio/recent` and
+    /// follows it as a `.shared` job in `.saving` stage, which ends in `finishUnfocusedGallery` (every item kept into the
+    /// gallery's folder). False when there is no tray on screen yet: nothing is started the owner cannot see, and the next
+    /// foreground asks again. True also when a job of this queue already follows the session.
+    @MainActor
+    func adoptSharedGallery(session id: String, link: URL?) -> Bool {
+        if jobs.contains(where: { $0.pipeline.sessionID == id }) { return true }
+        guard trayIsShown else { return false }
+        let shared = SharedJob(
+            id: UUID(), origin: .shareExtension, link: link?.scheme?.hasPrefix("http") == true ? link : nil, sessionID: id,
+            media: nil, trim: nil, stage: .saving, wantsTrim: false, pickedUp: false, updatedAt: ctx.clock.now())
+        add([.shared(shared)], via: .share, options: JobOptions(), allowsFocus: false)
+        return true
     }
 }
 

@@ -177,14 +177,14 @@ final class FakeBackgroundTransport: BackgroundTransport, @unchecked Sendable {
         func cancel(task id: Int) { lock.withLock { _ = _live.remove(id) } }
 
         /// The server answered: status and body. The delegate callback runs inline.
-        func respond(task id: Int, status: Int, body: Data) {
+        func respond(task id: Int, status: Int, body: Data, contentType: String? = nil) {
             guard let task = lock.withLock({ _tasks.first { $0.id == id } }) else { return }
             lock.withLock { _ = _live.remove(id) }
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fake-bg-\(UUID().uuidString.prefix(8))", isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let file = dir.appendingPathComponent("CFNetworkDownload.tmp")
             try? body.write(to: file)
-            events?.downloadFinished(identifier: identifier, task: id, label: task.label, status: status, file: file)
+            events?.downloadFinished(identifier: identifier, task: id, label: task.label, status: status, contentType: contentType, file: file)
             try? FileManager.default.removeItem(at: dir)        // the system deletes what the delegate left
         }
 

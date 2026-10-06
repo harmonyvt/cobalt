@@ -97,6 +97,13 @@ public protocol CobaltClient: Sendable {
     /// `DELETE /library/items/<id>` (keyed): one item, slideshow, crop or export. The last item of a post is
     /// `409 error.library.last_item` (use `deletePost`).
     func deleteItem(_ itemID: String) async throws
+    /// `PUT /library/items/<id>/made` (keyed, 18.6): a file made on the device from the item `itemID` (a crop: `role .crop`,
+    /// an `image/jpeg` body, `spec` the JSON of `made_spec`, at most 512 bytes). The row joins the post and follows its
+    /// public/private switch. Nothing changes on the server when it throws.
+    func uploadMade(
+        item itemID: String, role: GalleryRole, file: URL, contentType: String, name: String, spec: Data,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> MadeUpload
     /// `PATCH /library/items/<id>/visibility {"public", "scope": "post"}` (keyed): the whole post's files at once.
     func setPostVisibility(anchor itemID: String, public makePublic: Bool) async throws -> VisibilityResult
     /// `GET /library` with `v=3` when `v3` (only when the server has `features.gallery`): `v=2` plus gallery items,
@@ -152,6 +159,12 @@ extension CobaltClient {
     public func makeStatus(session: String, job: String, wait: Int) async throws -> MakeStatus { throw PipelineFailure.unsupported }
     public func retryItems(session: String, items: [Int]) async throws -> StudioCreated { throw PipelineFailure.unsupported }
     public func deleteItem(_ itemID: String) async throws { throw PipelineFailure.unsupported }
+    public func uploadMade(
+        item itemID: String, role: GalleryRole, file: URL, contentType: String, name: String, spec: Data,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> MadeUpload {
+        throw PipelineFailure.unsupported
+    }
     public func setPostVisibility(anchor itemID: String, public makePublic: Bool) async throws -> VisibilityResult {
         throw PipelineFailure.unsupported
     }

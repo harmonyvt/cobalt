@@ -519,12 +519,14 @@ struct GalleryStoreTests {
 
     private func add(
         _ store: OfflineStore, _ dir: URL, ext: String = "jpg", session: String, kind: StoredVideo.Kind = .original,
-        role: GalleryRole? = nil, index: Int? = nil, library: String? = nil, title: String? = nil, from: [Int]? = nil, spec: String? = nil
+        role: GalleryRole? = nil, index: Int? = nil, library: String? = nil, title: String? = nil, from: [Int]? = nil, spec: String? = nil,
+        postItems: Int? = nil
     ) async throws -> StoredVideo {
         try await store.add(
             file: try file(dir, "x.\(ext)"), kind: kind, media: MediaInfo(name: "n", duration: nil, width: 4, height: 5, bytes: nil, isImage: ext != "mp4"),
             sessionID: session, link: URL(string: "https://www.instagram.com/p/Ddy0-gpGg5U/"), remoteURL: nil, move: true, keep: true,
-            role: role, itemIndex: index, madeFrom: from, madeSpec: spec.map { Data($0.utf8) }, libraryID: library)
+            role: role, itemIndex: index, madeFrom: from, madeSpec: spec.map { Data($0.utf8) }, libraryID: library,
+            postItems: postItems)
     }
 
     @Test func itemsOfOneSessionJoinOneMediaOneToAnIndex() async throws {
@@ -580,9 +582,9 @@ struct GalleryStoreTests {
         let (store, dir) = try store()
         let root = try #require(store.visibleRoot)
         var items: [StoredVideo] = []
-        for i in [0, 1, 2] { items.append(try await add(store, dir, session: "S1", role: .item, index: i, library: "r\(i)")) }
+        for i in [0, 1, 2] { items.append(try await add(store, dir, session: "S1", role: .item, index: i, library: "r\(i)", postItems: 4)) }
         // a video item and a webp of it, a slideshow of each format, a gallery image
-        let video = try await add(store, dir, ext: "mp4", session: "S1", role: .item, index: 3, library: "r3")
+        let video = try await add(store, dir, ext: "mp4", session: "S1", role: .item, index: 3, library: "r3", postItems: 4)
         let webp = try await add(store, dir, ext: "webp", session: "S1", kind: .webp, library: nil, from: [3])
         let sw = try await add(store, dir, ext: "webp", session: "S1", kind: .webp, role: .slideshow, library: "m1", spec: #"{"format":"webp"}"#)
         let sm = try await add(store, dir, ext: "mp4", session: "S1", role: .slideshow, library: "m2", spec: #"{"format":"mp4"}"#)
@@ -611,7 +613,7 @@ struct GalleryStoreTests {
 
     @Test func aRemakeFreesTheNameSoTheNewFileTakesIt() async throws {
         let (store, dir) = try store()
-        for i in 0..<2 { _ = try await add(store, dir, session: "S1", role: .item, index: i, library: "r\(i)") }
+        for i in 0..<2 { _ = try await add(store, dir, session: "S1", role: .item, index: i, library: "r\(i)", postItems: 2) }
         let first = try await add(store, dir, ext: "webp", session: "S1", kind: .webp, role: .slideshow, library: "m1", spec: #"{"format":"webp"}"#)
         await store.reload()
         #expect(store.records.first { $0.id == first.id }?.visiblePath == "instagram · Ddy0-gpGg5U/slideshow.webp")
@@ -625,8 +627,8 @@ struct GalleryStoreTests {
     @Test func theFolderGoesWithItsLastFile() async throws {
         let (store, dir) = try store()
         let root = try #require(store.visibleRoot)
-        let a = try await add(store, dir, session: "S1", role: .item, index: 0, library: "r0")
-        let b = try await add(store, dir, session: "S1", role: .item, index: 1, library: "r1")
+        let a = try await add(store, dir, session: "S1", role: .item, index: 0, library: "r0", postItems: 2)
+        let b = try await add(store, dir, session: "S1", role: .item, index: 1, library: "r1", postItems: 2)
         let folder = root.appendingPathComponent("instagram · Ddy0-gpGg5U")
         #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("01.jpg").path))
         await store.remove(a.id)
@@ -638,7 +640,7 @@ struct GalleryStoreTests {
     @Test func aFolderWithTheOwnersFileInItStays() async throws {
         let (store, dir) = try store()
         let root = try #require(store.visibleRoot)
-        let a = try await add(store, dir, session: "S1", role: .item, index: 0, library: "r0")
+        let a = try await add(store, dir, session: "S1", role: .item, index: 0, library: "r0", postItems: 2)
         let folder = root.appendingPathComponent("instagram · Ddy0-gpGg5U")
         let mine = folder.appendingPathComponent("my notes.txt")
         try Data("hi".utf8).write(to: mine)

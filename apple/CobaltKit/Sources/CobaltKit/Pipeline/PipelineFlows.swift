@@ -1106,8 +1106,9 @@ extension Pipeline {
                     do { s = try await p.pollSaving(client, id: sid) }
                     catch { p.releaseLine(); throw error }
                     p.releaseLine()
-                    // a gallery the share sheet (or a relaunch) was saving: it finishes as a gallery
-                    if p.ctx.capabilities.gallery, !s.items.isEmpty {
+                    // a gallery the share sheet (or a relaunch) was saving: it finishes as a gallery. What the session lists
+                    // decides, not the cached `features.gallery` (unknown right after a relaunch or a cold wake).
+                    if !s.items.isEmpty {
                         try await p.finishUnfocusedGallery(client, session: s, link: linkInfo?.url)
                         return
                     }

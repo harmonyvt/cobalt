@@ -81,7 +81,7 @@ struct OfflineTag: Codable, Equatable, Sendable {
     /// The owner's custom title of the media, when there is one.
     var title: String?
     /// Gallery fields (apple/CONTRACT-GALLERY.md 4), so a lost index can rebuild an item or a made file as what it is.
-    var role: GalleryRole?
+    @LenientRole var role: GalleryRole?
     var item: Int?
     var lib: String?
 

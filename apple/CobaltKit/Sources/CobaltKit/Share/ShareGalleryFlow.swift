@@ -200,6 +200,13 @@ public final class ShareGalleryFlow {
     public func begin() {
         guard !started else { return }
         started = true
+        // A link that can never be a gallery (a reel, a video, a media file) is today's instant save at once: nothing is
+        // asked of the server first, so no "checking" sheet, no 8 s wait and one resolve (the server's own) for the save.
+        guard InstantShare.mayBeGallery(link.url) else {
+            Telemetry.log(.info, .share, "share gallery", data: ["result": "not-a-gallery-shape"])
+            start(.single)
+            return
+        }
         let server = env.server, url = link.url
         track { [weak self] in
             let result: Result<CobaltResult, any Error>

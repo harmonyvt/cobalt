@@ -39,9 +39,16 @@ final class PreviewServer: Sendable {
         var titles: [String: String] = [:]     // post id -> custom title the "server" holds ("" = cleared)
         var titleCalls: [String] = []          // "<item id> <title or ->" for every `setTitle`, in order
         var line = PreviewLineState()
+        var failMadeDownloads = false
     }
 
     private let state = Mutex(State())
+
+    /// Tests: a made file cannot be downloaded from the library (it stays on the "server"; the save is untouched).
+    var failMadeDownloads: Bool {
+        get { state.withLock { $0.failMadeDownloads } }
+        set { state.withLock { $0.failMadeDownloads = newValue } }
+    }
 
     func newSession(isUpload: Bool, clip: PreviewData.Clip, name: String?, bytes: Int64, at now: Date, link: URL? = nil) -> String {
         state.withLock { s in
@@ -725,6 +732,9 @@ public struct PreviewClient: CobaltClient {
         case .studioSource(let id): total = server.session(id)?.clip.bytes ?? clip.bytes
         case .open(let url): total = url == clip.webpURL ? clip.webpBytes : 2_000_000
         case .libraryItem(let id):
+            if server.failMadeDownloads, galleries.gallery(forRow: id)?.made.contains(where: { $0.id == id }) == true {
+                throw CobaltError.network(.timedOut)
+            }
             total = galleries.gallery(forRow: id).map { g in
                 g.made.first { $0.id == id }?.bytes ?? (Int(id.suffix(2)).flatMap { $0 < g.post.items.count ? g.post.items[$0].bytes : nil } ?? 200_000)
             } ?? clip.bytes

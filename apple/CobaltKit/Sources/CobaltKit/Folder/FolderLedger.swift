@@ -17,6 +17,9 @@ struct FolderEntry: Codable, Equatable, Sendable {
     var code: Int?
     var tries: Int = 0
     var skip: Skip?
+    /// What a made file is within its post (`media|slideshow webp`), recorded with the plan: a later file of the same slot
+    /// replaces this one in the folder (the file we wrote, named here), never numbered beside it. Nil for everything else.
+    var slot: String?
 }
 
 /// Where the copies go, as the owner chose it. `bookmark == nil` is the default folder (`~/Movies/cobalt`).
@@ -166,11 +169,12 @@ final class FolderLedger: Sendable {
     }
 
     /// The name this copy will have, kept before the copy starts so a pass after a kill can find it.
-    func recordPlan(_ dest: String, _ key: String, file name: String, bytes: Int64) {
+    func recordPlan(_ dest: String, _ key: String, file name: String, bytes: Int64, slot: String? = nil) {
         file.mutate { f in
             guard var e = f.sections[dest]?.items[key], e.state == .claimed else { return }
             e.file = name
             e.bytes = bytes
+            e.slot = slot
             f.sections[dest]?.items[key] = e
         }
     }
@@ -218,6 +222,11 @@ final class FolderLedger: Sendable {
             f.sections[dest] = section
             return e.state
         }
+    }
+
+    /// The entry is over: the file it named was replaced by a newer one of the same slot, so nothing refers to it any more.
+    func forget(_ dest: String, _ key: String) {
+        file.mutate { f in f.sections[dest]?.items[key] = nil }
     }
 
     // MARK: Skipping

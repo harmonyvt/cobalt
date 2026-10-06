@@ -173,6 +173,8 @@ public final class AppModel {
         model.telemetry = TelemetryService.live(settings: settings, capabilities: { [unowned model] in model.capabilities })
         fetcher.isActive = { [unowned ctx] in ctx.background.activity.isActive }
         fetcher.serverHoldsRequests = { [unowned model] in model.capabilities.sourceWait }
+        // a gallery found by the foreground (a build with no app group) is followed as a job, not downloaded as one file
+        fetcher.adoptGallery = { [unowned model] id, link in model.queue.adoptSharedGallery(session: id, link: link) }
         #if os(iOS) && canImport(ActivityKit)
         // First thing at launch, before any run: the push-to-start token observer (CONTRACT-LIVE.md 2.5).
         let manager = LiveActivityManager(context: ctx, adapter: ActivityKitAdapter(), environment: LiveEnvironment.current)

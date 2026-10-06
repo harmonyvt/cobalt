@@ -333,7 +333,7 @@ extension PreviewClient {
             files.append(file)
         }
         for made in g.made {
-            let isImage = made.role == .export || made.kind == .slideshow(.webp)
+            let isImage = made.role == .export || made.role == .crop || made.kind == .slideshow(.webp)
             var file = LibraryFile(
                 id: made.id, kind: .private, source: .studio, name: made.kind.tabName,
                 url: url(made.id, made.kind == .slideshow(.webp) ? "webp" : (isImage ? "jpg" : "mp4")),
@@ -404,6 +404,49 @@ extension PreviewClient {
         let live = g.post.items.indices.filter { !g.deleted.contains($0) && !g.failing.contains($0) }
         if live.count <= 1 { throw CobaltError.api(code: "error.library.last_item", httpStatus: 409) }
         galleries.update(g.sid) { $0.deleted.insert(index) }
+    }
+
+    /// `PUT /library/items/<id>/made` of a crop (18.6): the upload takes a moment, the first one of `galleryMakeFails` fails
+    /// (`503 error.api.generic`, nothing stored), a video or a missing item answers like the server (`409`, `404`).
+    public func uploadMade(
+        item itemID: String, role: GalleryRole, file: URL, contentType: String, name: String, spec: Data,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> MadeUpload {
+        guard scenario.isGallery else { throw PipelineFailure.unsupported }
+        guard role == .crop, contentType == "image/jpeg", spec.count <= 512, MadeSpec(data: spec) != nil else {
+            throw CobaltError.api(code: "error.library.bad_request", httpStatus: 400)
+        }
+        guard let g = galleries.gallery(forRow: itemID), let index = Int(itemID.suffix(2)), index < g.post.items.count,
+              !g.deleted.contains(index), !g.failing.contains(index)
+        else { throw CobaltError.api(code: "error.library.not_found", httpStatus: 404) }
+        guard g.post.items[index].type == .photo else { throw CobaltError.api(code: "error.library.not_photo", httpStatus: 409) }
+        let size = ((try? FileManager.default.attributesOfItem(atPath: file.path)[.size]) as? NSNumber)?.int64Value ?? 0
+        progress(TransferProgress(bytes: 0, total: size))
+        for i in 1...4 {
+            try await clock.sleep(seconds: 0.15 * timeScale)
+            progress(TransferProgress(bytes: size * Int64(i) / 4, total: size))
+        }
+        galleries.record("made", "\(role.rawValue) \(itemID) \(String(decoding: spec, as: UTF8.self))")
+        if galleries.update(g.sid, { g -> Bool in
+            guard g.makeFailuresLeft > 0 else { return false }
+            g.makeFailuresLeft -= 1
+            return true
+        }) == true {
+            throw CobaltError.api(code: "error.api.generic", httpStatus: 503)
+        }
+        let dims = FrameRenderer.sourceSize(of: file) ?? CGSize(width: 1080, height: 1920)
+        var id = ""
+        galleries.update(g.sid) { g in
+            g.counter += 1
+            id = "\(g.sid)-m\(g.counter)"
+            g.made.append(PreviewGalleryServer.Made(
+                id: id, kind: .crop, role: .crop, createdAt: clock.now(), bytes: size, width: Int(dims.width), height: Int(dims.height),
+                seconds: nil, items: [index], spec: spec))
+        }
+        guard let updated = galleries.gallery(g.sid), let row = libraryPost(updated).files.first(where: { $0.id == id }) else {
+            throw CobaltError.api(code: "error.api.generic", httpStatus: 503)
+        }
+        return MadeUpload(file: row)
     }
 
     public func setPostVisibility(anchor itemID: String, public makePublic: Bool) async throws -> VisibilityResult {
