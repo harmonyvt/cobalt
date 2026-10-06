@@ -31,7 +31,24 @@ public struct LiveContentState: Codable, Hashable, Sendable {
     public var failure: String?          // failed: a PipelineFailure case name
     public var code: String?             // failed: the server's error code, when there is one
 
+    // The busy period's summary (CONTRACT-PARALLEL.md section 6). Additive and optional: the server never writes them
+    // (its allow-list drops unknown keys), a per-run activity never carries them, and an old widget ignores them.
+    /// The jobs this activity speaks for (live ones, the lead included). Nil on a per-run activity.
+    public var jobs: Int?
+    /// Of those, the ones waiting for the server (queued on its line, or in the device line), the lead included when
+    /// it is waiting too: `waiting == jobs` means everything is in line.
+    public var waiting: Int?
+    /// Finished summary only (`stage` done or failed): how many saves landed, webps were made and jobs did not finish.
+    public var savedCount: Int?
+    public var webpCount: Int?
+    public var failedCount: Int?
+
     public var isTerminal: Bool { stage == .done || stage == .failed }
+
+    /// This content is a busy period's summary, not one run's.
+    public var isSummary: Bool { jobs != nil }
+    /// The summary of a period that has ended ("3 saved · 1 webp").
+    public var isFinishedSummary: Bool { isTerminal && savedCount != nil }
 
     public init(stage: Stage, rail: Int, since: Double, waking: Bool = false, packing: Bool = false) {
         self.stage = stage
@@ -63,6 +80,11 @@ public struct LiveContentState: Codable, Hashable, Sendable {
         resultSeconds = try c.decodeIfPresent(Double.self, forKey: .resultSeconds)
         failure = try c.decodeIfPresent(String.self, forKey: .failure)
         code = try c.decodeIfPresent(String.self, forKey: .code)
+        jobs = try c.decodeIfPresent(Int.self, forKey: .jobs)
+        waiting = try c.decodeIfPresent(Int.self, forKey: .waiting)
+        savedCount = try c.decodeIfPresent(Int.self, forKey: .savedCount)
+        webpCount = try c.decodeIfPresent(Int.self, forKey: .webpCount)
+        failedCount = try c.decodeIfPresent(Int.self, forKey: .failedCount)
     }
 
     /// The fixture states of CONTRACT-LIVE.md 2.4 by name, for the widget's previews. The same ten
@@ -109,6 +131,44 @@ public struct LiveContentState: Codable, Hashable, Sendable {
             },
             "failed_fetch": make(.failed, rail: 0, since: 1_790_000_002) {
                 $0.failure = "fetchFailed"; $0.code = "error.api.fetch.empty"
+            },
+        ]
+    }()
+
+    /// The busy period's summary, for the widget's previews and the tests (not part of the parity fixture: the server
+    /// never writes these). Names: `running_3` (the lead saving, two more behind it), `running_3_waiting` (one of the
+    /// others waits for the server), `all_waiting`, `last_one`, `done_3_1`, `done_mixed`, `failed_all`.
+    public static let summarySamples: [String: LiveContentState] = {
+        func make(
+            _ stage: Stage, rail: Int, since: Double = 1_790_000_100, _ fill: (inout LiveContentState) -> Void
+        ) -> LiveContentState {
+            var s = LiveContentState(stage: stage, rail: rail, since: since)
+            fill(&s)
+            return s
+        }
+        let name = "instagram_Dd7P496wolG"
+        return [
+            "running_3": make(.saving, rail: 1) {
+                $0.bytes = 2_100_000; $0.total = 4_331_778; $0.jobs = 3; $0.waiting = 0
+            },
+            "running_3_waiting": make(.saving, rail: 1) {
+                $0.bytes = 2_100_000; $0.total = 4_331_778; $0.jobs = 3; $0.waiting = 1
+            },
+            "reading_3": make(.reading, rail: 2) {
+                $0.framesDone = 4; $0.framesTotal = 9; $0.title = name; $0.jobs = 3; $0.waiting = 1
+            },
+            "all_waiting": make(.fetching, rail: 0) { $0.jobs = 3; $0.waiting = 3 },
+            "last_one": make(.rendering, rail: 3) {
+                $0.framesDone = 42; $0.framesTotal = 150; $0.title = name; $0.jobs = 1; $0.waiting = 0
+            },
+            "done_3_1": make(.done, rail: 3) {
+                $0.jobs = 3; $0.savedCount = 3; $0.webpCount = 1; $0.failedCount = 0
+            },
+            "done_mixed": make(.done, rail: 3) {
+                $0.jobs = 3; $0.savedCount = 2; $0.webpCount = 0; $0.failedCount = 1
+            },
+            "failed_all": make(.failed, rail: 0) {
+                $0.jobs = 2; $0.savedCount = 0; $0.webpCount = 0; $0.failedCount = 2
             },
         ]
     }()

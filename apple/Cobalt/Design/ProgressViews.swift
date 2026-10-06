@@ -31,6 +31,8 @@ struct StoryBar: View {
     var ink: ProgressInk = .app
     /// False in a Live Activity, which can only animate what the system animates.
     var sweeps = true
+    /// 4 pt on the progress card; the tray's mini cards draw it at 3.
+    var height: CGFloat = 4
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -42,7 +44,7 @@ struct StoryBar: View {
                 IndeterminateBar(ink: ink, moving: sweeps && !reduceMotion)
             }
         }
-        .frame(height: 4)
+        .frame(height: height)
         .accessibilityHidden(true)
     }
 }
@@ -57,7 +59,7 @@ private struct MonochromeBarStyle: ProgressViewStyle {
                 Capsule().fill(ink.track)
                 // a real 0 stays an empty bar; anything else shows at least a dot's worth
                 Capsule().fill(ink.fill)
-                    .frame(width: value <= 0 ? 0 : max(4, proxy.size.width * value))
+                    .frame(width: value <= 0 ? 0 : max(proxy.size.height, proxy.size.width * value))
             }
             .animation(.linear(duration: 0.25), value: value)
         }
@@ -125,6 +127,7 @@ struct ProgressStepper: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .motion(.easeOut(duration: 0.3), value: story.index, reduced: .jump)
         .motion(.easeOut(duration: 0.3), value: story.finished, reduced: .jump)
+        .motion(.easeOut(duration: 0.3), value: story.waiting, reduced: .jump)
         .accessibilityHidden(true)
     }
 
@@ -139,7 +142,7 @@ struct ProgressStepper: View {
                     segment(i < story.count - 1 && reached(i + 1))
                         .opacity(i == story.count - 1 ? 0 : 1)
                 }
-                StepDot(state: state, size: dot, ink: ink, pulses: pulses && !reduceMotion)
+                StepDot(state: state, size: dot, ink: ink, pulses: pulses && !reduceMotion && !story.waiting)
             }
             .frame(height: dot + 4)
             if showsNames {

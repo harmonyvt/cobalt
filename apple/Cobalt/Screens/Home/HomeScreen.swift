@@ -79,6 +79,16 @@ struct HomeScreen: View {
     @State private var knownIDs: Set<String> = []
     @State private var knownReady = false
 
+    // the tray of jobs alongside (JobTray.swift)
+    /// A line the tray should say once ("<title> keeps going alongside.").
+    @State private var trayNote: String?
+    /// Counts up when `cobalt-apple://jobs` asks for the tray.
+    @State private var trayOpenRequest = 0
+    /// The tray's frame (global space; zero when it draws nothing): a tap there is the tray's, not a planet's.
+    @State private var trayFrame: CGRect = .zero
+    /// The job the star was born for: a star never morphs into another job's planet.
+    @State private var starJob: UUID?
+
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.shell) private var shell
@@ -247,7 +257,53 @@ struct HomeScreen: View {
 
     /// Where a tap is chrome's, not the orbit's (the circles and their captions, with slack).
     private func isChrome(_ point: CGPoint) -> Bool {
-        !circlesFrame.isEmpty && circlesFrame.insetBy(dx: -14, dy: -12).contains(point)
+        if !trayFrame.isEmpty, trayFrame.insetBy(dx: -6, dy: -6).contains(point) { return true }
+        return !circlesFrame.isEmpty && circlesFrame.insetBy(dx: -14, dy: -12).contains(point)
+    }
+
+    // MARK: the tray
+
+    /// A planet (or a job) is in focus: the bottom of the phone, and the middle of a narrow column, are its.
+    private var hasFocus: Bool { model.queue.focusedID != nil }
+
+    /// Where the tray sits (CONTRACT-PARALLEL option A): above the circles on the phone, at the top right on the Mac
+    /// and iPad, and as a pill under the title while a planet is in focus (or beside it where the home column is too
+    /// narrow to keep the tray out of the planet's way: the inspector is open).
+    private var trayStyle: JobTray.Style {
+        if tier == .compact { return hasFocus ? .pill(centered: true) : .above }
+        if hasFocus, contentWidth > 0, contentWidth < 1100 { return .pill(centered: false) }
+        return .panel
+    }
+
+    private var trayCentered: Bool {
+        if case .pill(let centered) = trayStyle { return centered }
+        return false
+    }
+
+    private var trayIsPill: Bool {
+        if case .pill = trayStyle { return true }
+        return false
+    }
+
+    /// The panel shows fewer cards while a planet is lifted, so it stays clear of the info card and the buttons.
+    private var trayCap: Int {
+        switch trayStyle {
+        case .above: return 2
+        case .panel: return focusActive && focusLifted ? 3 : 5
+        case .pill: return 5
+        }
+    }
+
+    private var tray: JobTray {
+        JobTray(
+            model: model, style: trayStyle, cap: trayCap, note: $trayNote, openRequest: trayOpenRequest,
+            onFrame: { trayFrame = $0 })
+    }
+
+    /// Room the planet leaves at the top for the pill (the planet sits under the title in a single column).
+    private var topReserve: CGFloat {
+        guard trayIsPill, !trayFrame.isEmpty, tier == .compact || contentWidth < 800 else { return 0 }
+        return 44
     }
 
     private var canInspect: Bool { tier == .wide && stage == .focus && focusLifted }
@@ -288,7 +344,8 @@ struct HomeScreen: View {
                 if focusActive {
                     FocusLayer(
                         model: model, pipeline: pipeline, contentWidth: contentWidth, phase: focusPhase,
-                        lifted: focusLifted, player: focusPlayer, visible: homeVisible, onClose: closeFocus)
+                        lifted: focusLifted, player: focusPlayer, visible: homeVisible, topReserve: topReserve,
+                        onClose: closeFocus)
                         // a run that takes over (a share-sheet job resumed) is a new planet: new layer state
                         .id(pipeline.runID)
                         .environment(\.homeHeight, proxy.size.height)
@@ -300,6 +357,14 @@ struct HomeScreen: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                         .environment(\.homeHeight, proxy.size.height)
+                }
+                // The tray above the circles lives in the column (it is part of the page that scrolls); the panel
+                // and the pill float over the focus layer.
+                if trayStyle != .above {
+                    tray
+                        .padding(.top, 8)
+                        .padding(.horizontal, 14)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: trayStyle == .panel || !trayCentered ? .topTrailing : .top)
                 }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { homeFrame = $0 }
@@ -369,6 +434,16 @@ struct HomeScreen: View {
             guard let id else { return }
             model.requestedMediaID = nil
             if let media = model.store.media(id: id) { open(media) }
+        }
+        .onAppear {
+            // the tray is on screen from here: jobs the owner could not see (a share, a relaunch) may join it
+            model.queue.trayIsShown = true
+        }
+        .onChange(of: model.requestedJobs, initial: true) { _, asked in
+            // `cobalt-apple://jobs` (the Hark summary): the tray opens
+            guard asked else { return }
+            model.requestedJobs = false
+            trayOpenRequest += 1
         }
         .onChange(of: openedID) { _, id in
             // the detail went away: its planet's player is the orbit's again
@@ -451,6 +526,21 @@ struct HomeScreen: View {
             guard let first = orbitMedia.first else { return }
             await model.makeWebp(for: model.mediaItem(for: baseMedia(first)))
         }
+        // `-previewTray 4` pastes that many links as a batch 1.5 s after launch (design review): the tray with real
+        // jobs. With `-previewTrayFocus YES` the first one is a single paste that takes the focus, the rest go alongside.
+        .task {
+            let n = UserDefaults.standard.integer(forKey: "previewTray")
+            guard n > 0 else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            let keys = ["Dd7P496wolG", "Dd8RkQ2xLpe", "De1Hj4tYm0Z", "De2Ab9cQwEr", "De3Zx7LkPoN", "De4Mn5BvCxS", "De5Qw8ErTyU"]
+            let links = keys.prefix(n).compactMap { URL(string: "https://www.instagram.com/reel/\($0)/") }
+            if UserDefaults.standard.bool(forKey: "previewTrayFocus"), let first = links.first {
+                model.queue.add([.link(first)], via: .paste)
+                model.queue.add(links.dropFirst().map { .link($0) }, via: .review)
+            } else {
+                model.queue.add(links.map { .link($0) }, via: .review)
+            }
+        }
         #endif
         #if os(iOS)
         .navigationDestination(item: $openedID) { id in
@@ -518,6 +608,7 @@ struct HomeScreen: View {
         let isIdle = stage == .idle
         return VStack(spacing: 12) {
             Spacer(minLength: 0)
+            if trayStyle == .above { tray }
             GlassEffectContainer(spacing: 2) {
                 VStack(spacing: 12) {
                     if let kind = cardKind {
@@ -577,7 +668,7 @@ struct HomeScreen: View {
         case .fetching, .uploading, .saving, .reading:
             if let story = pipeline.progressStory { ProgressCard(story: story) }
         case .failed(let f) where !keepsFocus(f) && !isBlocking(f):
-            InlineStatus(message: Copy.failure(f)) {
+            InlineStatus(message: TrayCopy.failure(f, lineMax: model.capabilities.limits.lineMax)) {
                 Button(Copy.ok, systemImage: Symbol.checkmark) { pipeline.reset() }.buttonStyle(.cobaltSecondary(fullWidth: false))
             }
         case .image(let info):
@@ -667,6 +758,13 @@ struct HomeScreen: View {
 
     private func advanceStar(from old: StarCategory, to new: StarCategory) {
         let next: StarPhase?
+        // A star belongs to the job it was born for. The owner opened another job from the tray while it lived: the
+        // new one's planet does not ride a star that was never its own.
+        if old == .working, new != .working, starJob != model.queue.focusedID {
+            starToken = UUID()
+            star = .none
+            return
+        }
         switch (old, new) {
         case (_, .working): next = .alive
         case (.working, .landed):
@@ -680,6 +778,7 @@ struct HomeScreen: View {
         default: next = nil
         }
         guard let phase = next else { return }
+        if new == .working { starJob = model.queue.focusedID }
         let token = UUID()
         starToken = token
         star = StarState(phase: phase, since: Date())
@@ -820,7 +919,7 @@ struct HomeScreen: View {
         } else {
             focusPlayer.stop()
         }
-        if sameRun { pipeline.detach() }
+        if sameRun { leaveFocus() }
         focusActive = false
         focusReserved = false
         focusLifted = false
@@ -830,6 +929,24 @@ struct HomeScreen: View {
         syncOrbit()
         guard sameRun else { return }
         if let mine { markFresh(mine.id, pop: false) }
+    }
+
+    /// Closing the focus (CONTRACT-PARALLEL 5.4): a job still working keeps going alongside, as a card in the tray; one
+    /// that has nothing left to show (saved, a webp made, failed with its trim kept) is put away the way closing
+    /// always did, with the keep-original download or a publish handed to the background.
+    private func leaveFocus() {
+        let queue = model.queue
+        guard let job = queue.focused else {
+            pipeline.detach()
+            return
+        }
+        if job.isLive {
+            let title = job.pipeline.trayTitle
+            queue.unfocus()
+            trayNote = Copy.Jobs.keepsGoing(title)
+        } else {
+            queue.dismiss(job.id)
+        }
     }
 
     private func markFresh(_ id: String, pop: Bool) {
@@ -1089,6 +1206,18 @@ struct CircleLabel: View {
 }
 #Preview("home · empty orbit") {
     PreviewHost(.emptyOrbit) { HomeScreen(model: $0, tier: .compact) }
+}
+#Preview("home · tray · 3 links pasted") {
+    HomeScreen(model: trayPreviewModel(links: 3), tier: .compact)
+}
+#Preview("home · tray · docked pill under a focused save") {
+    HomeScreen(model: trayPreviewModel(links: 3, focusFirst: true), tier: .compact)
+}
+#Preview("home · tray · behind a share from the iphone") {
+    HomeScreen(model: trayPreviewModel(.serverBusyWithShare, links: 2), tier: .compact)
+}
+#Preview("home · tray · mac", traits: .fixedLayout(width: 1100, height: 780)) {
+    HomeScreen(model: trayPreviewModel(links: 5), tier: .regular)
 }
 #Preview("home · regular (preview beside trim)", traits: .fixedLayout(width: 820, height: 760)) {
     PreviewHost(.happy, script: .input) { HomeScreen(model: $0, tier: .regular) }

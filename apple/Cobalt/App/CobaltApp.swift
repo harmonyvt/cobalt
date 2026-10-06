@@ -87,6 +87,11 @@ struct CobaltApp: App {
         CobaltFont.register()
         let model = LaunchConfig.makeModel()
         _model = State(initialValue: model)
+        // Shortcuts, Siri and Spotlight run in this process, before any scene (CONTRACT-PARALLEL 15.2)
+        IntentDependencies.register(model)
+        #if os(macOS)
+        DockBadge.follow(model.queue)
+        #endif
         #if DEBUG
         // Before any scene exists, like a notification tap that launches the app.
         DebugHooks.runIfRequested(model)
@@ -163,11 +168,9 @@ struct CobaltApp: App {
         Window("cobalt", id: "main") { windowContent }
             .defaultSize(width: 1280, height: 780)
             .defaultLaunchBehavior(.presented)
+            // ⌘V is not a menu command here: the system's Paste reaches the window's paste destination, and a text field
+            // that has the focus (the `name it` sheet's) takes it first (`AppShell.PasteAnywhere`, CONTRACT-PARALLEL 4.1)
             .commands {
-                CommandGroup(after: .pasteboard) {
-                    Button(Copy.pasteA11y, systemImage: Symbol.paste) { model.pasteFromClipboard() }
-                        .keyboardShortcut("v", modifiers: .command)
-                }
                 CommandGroup(after: .newItem) {
                     Button(Copy.trimNewWebp, systemImage: Symbol.trim) { trimSelected(model) }
                         .keyboardShortcut("t", modifiers: .command)

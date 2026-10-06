@@ -170,7 +170,28 @@ struct LibraryPreviewCard: View {
     }
 }
 
-/// The two-segment view switcher: `square.grid.2x2` / `list.bullet`, remembered per device by the model.
+/// One half of the iPhone and iPad's view switcher: a plain toolbar button for a view, the current one filled and
+/// in the primary ink. Two of them in a `ToolbarItemGroup` share one glass capsule.
+struct LibraryViewButton: View {
+    @Bindable var library: LibraryModel
+    let mode: LibraryViewMode
+
+    var body: some View {
+        let selected = library.viewMode == mode
+        Button {
+            library.viewMode = mode
+        } label: {
+            Image(systemName: mode == .mosaic ? Symbol.Library.mosaic : Symbol.Library.table)
+                .symbolVariant(selected ? .fill : .none)
+                .foregroundStyle(selected ? .primary : .secondary)
+        }
+        .accessibilityLabel(Copy.Library2.name(mode))
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .help(Copy.Library2.name(mode))
+    }
+}
+
+/// The Mac's two-segment view switcher: `square.grid.2x2` / `list.bullet`, remembered per device by the model.
 struct LibraryViewSwitcher: View {
     @Bindable var library: LibraryModel
 

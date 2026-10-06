@@ -53,6 +53,9 @@ struct FocusLayer: View {
     /// first-use cost of these views (SwiftUI's layout descriptors, glass, the player surface) in the middle of the
     /// morph. It draws nothing, takes no touches and touches no state of the run.
     var warm = false
+    /// Room kept free at the top of a single-column layout for the tray's pill (JobTray.swift): the pill sits under
+    /// the title while a planet is in focus and must not cover it.
+    var topReserve: CGFloat = 0
     /// Close or swipe down.
     let onClose: () -> Void
 
@@ -173,6 +176,8 @@ struct FocusLayer: View {
     }
 
     private var heroProgress: HeroProgress {
+        // queued, not started: the planet does not breathe for work nobody is doing yet
+        if pipeline.line != nil { return .none }
         if case .rendering(let p) = pipeline.state {
             switch p {
             case .decoding(let done, let total): return .decoding(done: done, total: total)
@@ -184,6 +189,12 @@ struct FocusLayer: View {
     }
 
     private var isHosting: Bool { pipeline.hosting == .working }
+
+    /// The webp waits in the server's line (nothing has started): it can still be cancelled there.
+    private var canCancelQueuedWebp: Bool {
+        guard isRendering, model.queue.lineMode == .server, case .inLine? = pipeline.line else { return false }
+        return pipeline.sessionID != nil
+    }
 
     /// The edge sweep runs while hosting (`-previewSweepHold YES` holds it on for design review).
     private var heroSharing: Bool {
@@ -252,8 +263,9 @@ struct FocusLayer: View {
 
     /// The failure shown under the planet, with how to retry it.
     private var failure: (message: String, retry: () -> Void)? {
-        if case .failed(let f) = pipeline.state { return (Copy.failure(f), { pipeline.makeWebp() }) }
-        if case .failed(let f) = pipeline.hosting { return (Copy.failure(f), { pipeline.hostOriginal() }) }
+        let lineMax = model.capabilities.limits.lineMax
+        if case .failed(let f) = pipeline.state { return (TrayCopy.failure(f, lineMax: lineMax), { pipeline.makeWebp() }) }
+        if case .failed(let f) = pipeline.hosting { return (TrayCopy.failure(f, lineMax: lineMax), { pipeline.hostOriginal() }) }
         return nil
     }
 
@@ -486,7 +498,8 @@ struct FocusLayer: View {
                 controls
             }
             .padding(.horizontal, Metrics.gutter)
-            .padding(.top, 6)
+            .padding(.top, 6 + topReserve)
+            .animation(reduceMotion ? Motion.fade : Motion.rows, value: topReserve)
             // clear of the floating tab bar (the layer sits outside the scroll view, which is what
             // gets the bar's inset): about 24 pt between the last row and the bar
             .padding(.bottom, 24)
@@ -937,12 +950,22 @@ struct FocusLayer: View {
     @ViewBuilder
     private var workingRow: some View {
         if let story = isRendering ? pipeline.progressStory : (isHosting ? pipeline.hostingStory(since: hostSince) : nil) {
-            ProgressCard(story: story)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-                .frame(maxWidth: Self.columnWidth)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
-                .transition(.opacity)
+            VStack(alignment: .leading, spacing: 10) {
+                ProgressCard(story: story)
+                // A webp that is only queued on the server can be taken back (CONTRACT-PARALLEL 3.4); one that is
+                // being made cannot be stopped, so there is no button for it: closing leaves it going alongside.
+                if canCancelQueuedWebp, let id = model.queue.focusedID {
+                    Button(Copy.cancel, systemImage: Symbol.close) { Task { await model.queue.cancel(id) } }
+                        .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                        .accessibilityLabel(TrayCopy.cancelWebpA11y)
+                        .transition(.opacity)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .frame(maxWidth: Self.columnWidth)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
+            .transition(.opacity)
         }
     }
 }

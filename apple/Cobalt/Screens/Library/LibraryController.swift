@@ -231,4 +231,10 @@ final class LibraryController {
         if library.needsWholeLibrary { await library.loadAll() }
         reload += 1
     }
+
+    /// Pull to refresh: the spinner lets go at once and the page loads in place. Holding the gesture open for the
+    /// network left the page hanging ~90 pt low under a blank band after a fling to the top (the owner's flicker).
+    func pullToRefresh() {
+        Task { await refresh() }
+    }
 }

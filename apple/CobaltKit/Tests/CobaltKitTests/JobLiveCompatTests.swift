@@ -2,9 +2,10 @@ import Foundation
 import Testing
 @testable import CobaltKit
 
-/// Until the Live lane teaches the activity about several jobs (wave 2), the router keeps today's single-run behaviour
-/// for the sink it has: batch jobs the owner never focused report nothing, and a focused run that is closed carries
-/// its activity alongside (CONTRACT-PARALLEL.md section 6, Jobs/LiveRouter.swift).
+/// The router and the Live manager once the manager hears every job (`LiveActivityManager: JobLiveSink`, wave 2): a
+/// batch beside a focused run no longer reports nothing; the run's activity becomes the busy period's one activity and
+/// is not ended by it (CONTRACT-PARALLEL.md section 6, Jobs/LiveRouter.swift). The summary's own rules are in
+/// `LiveSummaryTests`.
 @MainActor
 struct JobLiveCompatTests {
     @Test func aBatchNeverStartsOrEndsTheFocusedRunsActivity() async throws {
@@ -18,14 +19,17 @@ struct JobLiveCompatTests {
         #expect(rig.adapter.requests.count == 1, "the focused run has its activity")
 
         // a batch lands beside it: none of it touches the activity
-        let batch = queue.add([.link(linkB), .link(linkC)], via: .review)
+        let batch = queue.add([.link(linkA), .link(linkC)], via: .review)
         await rig.drive { batch.allSatisfy { $0.pipeline.state == .ready } }
         await rig.drive { if case .done = focused.pipeline.state { true } else { false } }
         await rig.settle()
-        #expect(rig.adapter.requests.count == 1, "batch jobs report nothing to the single-run sink")
+        #expect(rig.adapter.requests.count == 1, "the batch joins the focused run's activity: no second request")
+        await rig.drive { batch.allSatisfy { $0.pipeline.state == .ready } }
+        await rig.settle()
         let handle = try #require(rig.handle)
-        #expect(rig.stages(of: handle).contains(.done), "the focused run finished its own activity: \(rig.stages(of: handle))")
+        #expect(rig.stages(of: handle).contains(.done), "the period ended on the run's activity: \(rig.stages(of: handle))")
         #expect(!rig.stages(of: handle).contains(.failed))
+        #expect(handle.end?.state.savedCount == 2 && handle.end?.state.webpCount == 1, "\(String(describing: handle.end?.state))")
     }
 
     @Test func closingTheFocusMidRenderKeepsTheActivityGoing() async throws {
@@ -36,11 +40,12 @@ struct JobLiveCompatTests {
         job.pipeline.makeWebp()
         await rig.drive { if case .rendering = job.pipeline.state { true } else { false } }
         queue.unfocus()
-        // the owner pastes another link: it takes the (now empty) focus, and the first run's activity must survive it
-        let next = queue.add([.link(linkB)], via: .paste)[0]
+        // the owner pastes another link: nothing takes the focus while the render is live, and the first run's activity
+        // survives it (it carries both jobs now)
+        let next = queue.add([.link(linkA)], via: .paste)[0]
         #expect(queue.focusedID == nil, "a render is still live, so nothing takes the focus")
-        _ = next
         await rig.drive { if case .done = job.pipeline.state { true } else { false } }
+        await rig.drive { next.pipeline.state == .ready }
         await rig.settle()
         let handle = try #require(rig.handle)
         #expect(rig.stages(of: handle).contains(.done), "\(rig.stages(of: handle))")

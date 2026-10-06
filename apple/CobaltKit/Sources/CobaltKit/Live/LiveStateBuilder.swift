@@ -127,3 +127,49 @@ extension PipelineState {
         }
     }
 }
+
+// MARK: - The busy period's summary (CONTRACT-PARALLEL.md section 6)
+
+extension LiveContentState {
+    /// The summary while jobs are live: the lead's own content (its stage, rail, counters, title, clock) plus how many jobs
+    /// the activity speaks for. `waiting` counts every waiting job, the lead included, so `waiting == jobs` reads as
+    /// "all of it is in line".
+    static func summary(lead: LiveContentState, jobs: Int, waiting: Int) -> LiveContentState {
+        var s = lead
+        s.jobs = jobs
+        s.waiting = min(waiting, jobs)
+        s.savedCount = nil
+        s.webpCount = nil
+        s.failedCount = nil
+        return s
+    }
+
+    /// The summary of a period that has ended: "3 saved · 1 webp" (`done`), or, when nothing came out of it and
+    /// something failed, "2 couldn't be saved" (`failed`: the shorter dismissal). Nil when there is nothing to say (every job
+    /// was cancelled).
+    static func finishedSummary(saved: Int, webps: Int, failed: Int, jobs: Int, now: Double) -> LiveContentState? {
+        guard saved + webps + failed > 0 else { return nil }
+        let nothingCameOut = saved + webps == 0
+        var s = LiveContentState(stage: nothingCameOut ? .failed : .done, rail: nothingCameOut ? 0 : 3, since: now)
+        s.jobs = jobs
+        s.waiting = 0
+        s.savedCount = saved
+        s.webpCount = webps
+        s.failedCount = failed
+        return s
+    }
+}
+
+extension Pipeline {
+    /// Which job the summary follows: 0 = running on the server (it has a session and is not waiting), 1 = work of
+    /// this device (checking the link, an upload, reading frames), 2 = waiting in a line. Lower is better; the newest
+    /// job wins inside a rank. (Contract: "lead = the job running on the server, else the newest live"; a job that only
+    /// waits is the lead last, so the card shows something that is happening.)
+    var liveLeadRank: Int {
+        if line != nil { return 2 }
+        switch state {
+        case .fetching, .saving, .rendering: return sessionID != nil ? 0 : 1
+        default: return 1
+        }
+    }
+}

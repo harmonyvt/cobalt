@@ -42,7 +42,7 @@ struct CobaltLiveActivity: Widget {
             } compactLeading: {
                 LiveStepGlyph(facts: facts)
             } compactTrailing: {
-                LiveRing(facts: facts, glyph: false)
+                LiveCompactTrailing(facts: facts)
             } minimal: {
                 LiveRing(facts: facts)
             }

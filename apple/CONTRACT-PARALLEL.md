@@ -36,6 +36,9 @@ the pinned shape for the implementation lanes, not code that exists.
 4. **New request**, verbatim: "I was also thinking it would be cool to have some uh, cobalt shortcuts um, for pasting
    links just and even uploading files that cobalt offers and I could use it in a shortcuts app please". Section 15
    (App Intents in the app itself: save links, upload files, make a webp, get the latest saves).
+5. **(owner, 2026-10-06, `CONTRACT-GALLERY.md` owner decision 5) Galleries in a batch or a Shortcut save everything**, reversing
+   question 3's "first video" default (section 14). Interim: until the gallery server (`APP-API-CONTRACT.md` section 18,
+   `features.gallery`) is deployed, a batch and a Shortcut keep today's first-video behaviour; nothing in this file's lanes changes.
 
 ## 0. What the request means (interpretation, to confirm)
 
@@ -585,7 +588,7 @@ App (waves 1 and 2):
 
 1. ~~Should each pasted link also become a webp?~~ **Answered 2026-10-06: stop at saved.**
 2. ~~Should the server hold the line?~~ **Answered 2026-10-06: yes, in v1** (section 7, APP-API-CONTRACT 17).
-3. A post with several videos or photos, pasted **in a batch** or sent from a **Shortcut**, goes straight to the
+3. **Reversed 2026-10-06: save everything** (owner decisions item 5; first video until `features.gallery`). Was: a post with several videos or photos, pasted **in a batch** or sent from a **Shortcut**, goes straight to the
    server, which saves its **first video** without asking (a single pasted link still opens the picker so you choose).
    OK? **Default: yes.** (Asking would mean the batch waits for you before it can be handed to the server.)
 4. Do you want a Shortcuts action that hands back the **video file** itself (for a private save), not just its link?

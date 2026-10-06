@@ -31,6 +31,9 @@ struct ProgressStory: Equatable {
     /// The run waits for the owner (the trim) after the last finished step: nothing is current.
     var awaiting = false
     var failed = false
+    /// The run is queued, not working (CONTRACT-PARALLEL 3.2, 9): the server's line or the device's has not got to
+    /// it yet. The bar stays empty and the stepper does not pulse: waiting is not progress.
+    var waiting = false
 
     var count: Int { steps.count }
     var finished: Bool { phase == .finished }
@@ -89,6 +92,9 @@ extension Pipeline {
         func ratio(_ done: Int64, _ total: Int64?) -> Double? {
             total.flatMap { $0 > 0 ? min(1, Double(done) / Double($0)) : nil }
         }
+        // Waiting is read first (CONTRACT-PARALLEL 3.2): a queued save is `.fetching` and a queued webp is
+        // `.rendering(.working)`, and `line` says why.
+        if let line, let waiting = waitingStory(line, rail: rail) { return waiting }
         switch state {
         case .fetching(let since, let waking):
             return story(
@@ -120,6 +126,32 @@ extension Pipeline {
         default:
             return nil
         }
+    }
+
+    /// "waiting for the server · 2nd in line · your webp goes next". Nil for a state that cannot wait.
+    private func waitingStory(_ line: LinePosition, rail: Rail) -> ProgressStory? {
+        let phase: ProgressStory.Phase
+        let isRender: Bool
+        switch state {
+        case .fetching: (phase, isRender) = (.fetching, false)
+        case .rendering(.working(_)): (phase, isRender) = (.rendering, true)
+        default: return nil
+        }
+        var detail: ProgressStory.Detail
+        var footnote: String?
+        switch line {
+        case .inLine(let place, let behind):
+            // a focused webp goes ahead of every save that has not started: right behind the one running
+            detail = .text(Copy.Jobs.lineDetail(place: place, webpNext: isRender && place == 2))
+            footnote = behind.flatMap { $0.isEmpty ? nil : Copy.Jobs.behind($0) }
+        case .serverBusy(let since, let label):
+            // the card's own clock adds " · 4 s" (`Copy.Jobs.busyElsewhere` is the same words with a fixed number)
+            let what = label.flatMap { $0.isEmpty ? nil : $0 } ?? "a save that isn't in this list"
+            detail = .elapsed(prefix: "it's busy with \(what)", since: since)
+        }
+        return ProgressStory(
+            phase: phase, headline: Copy.Jobs.waiting, detail: detail, fraction: 0, footnote: footnote,
+            steps: rail.steps, index: rail.index, waiting: true)
     }
 
     /// Publishing the original (public share): indeterminate, the last step becomes "publish".

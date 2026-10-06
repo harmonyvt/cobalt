@@ -135,7 +135,7 @@ struct LibraryTable: View {
             LibraryFooterView(state: footer) { Task { await library.loadMore() } }
         }
         .offlineRemoveConfirm($removing, model: controller.model)
-        .refreshable { await controller.refresh() }
+        .refreshable { controller.pullToRefresh() }
         .accessibilityLabel(Copy.postsA11y)
     }
 
@@ -234,7 +234,7 @@ struct LibraryList: View {
             .listStyle(.insetGrouped)
             #endif
             .offlineRemoveConfirm($removing, model: controller.model)
-            .refreshable { await controller.refresh() }
+            .refreshable { controller.pullToRefresh() }
             .accessibilityLabel(Copy.postsA11y)
             .onChange(of: controller.reveal, initial: true) { _, request in
                 guard let request else { return }

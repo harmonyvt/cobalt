@@ -54,8 +54,8 @@ extension EnvironmentValues {
     }
 }
 
-/// The pasteboard, read only when the owner taps paste. Previews and the simulator evidence run
-/// override it so no "allow paste" prompt gets in the way.
+/// The pasteboard, read only when the owner taps paste (or presses ⌘V where the system gives the shell no paste to
+/// receive). Previews and the simulator evidence run override it so no "allow paste" prompt gets in the way.
 @MainActor
 enum Pasteboard {
     static var override: String?
@@ -76,5 +76,18 @@ enum Pasteboard {
         #else
         return NSPasteboard.general.string(forType: .string)
         #endif
+    }
+
+    /// What is on the pasteboard, as a paste hands it over: on the Mac the files copied in the Finder (uploads),
+    /// then the text (a copied link is text too). On iPhone and iPad only the text, which is the one read that asks
+    /// "allow paste" and only when the owner pressed paste.
+    static func contents() -> [PastedContent] {
+        if let override { return [.text(override)] }
+        #if canImport(AppKit)
+        let files = NSPasteboard.general.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        if !files.isEmpty { return files.map(PastedContent.file) }
+        #endif
+        return string().map { [.text($0)] } ?? []
     }
 }

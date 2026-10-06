@@ -117,6 +117,11 @@ private struct LibraryContent: View {
         let phase = phase(rows)
         content(rows: rows, phase: phase)
             .navigationTitle(Copy.library)
+            #if os(iOS)
+            // An inline title: the large title grew and shrank with the scroll (and with a pull to refresh) while the
+            // search drawer and the glass bar re-sampled the tiles under them, which read as a flicker at the top.
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .navigationSubtitle(Copy.libraryCounts(posts: library.postCount, files: library.fileCount))
             .searchable(text: $library.query, placement: searchPlacement, prompt: Copy.Library2.searchPrompt)
             .toolbar { toolbar }
@@ -184,7 +189,13 @@ private struct LibraryContent: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         #if os(iOS)
-        ToolbarItem(placement: .topBarLeading) { LibraryViewSwitcher(library: library) }
+        // Two plain buttons in one group, drawn as one glass capsule like the trailing group. A segmented `Picker` in a
+        // toolbar item got a second glass capsule behind it on iOS 26 (the bar's and the control's own).
+        ToolbarItemGroup(placement: .topBarLeading) {
+            ForEach(LibraryViewMode.allCases, id: \.self) { mode in
+                LibraryViewButton(library: library, mode: mode)
+            }
+        }
         #else
         ToolbarItem(placement: .navigation) { LibraryViewSwitcher(library: library) }
         #endif
@@ -359,7 +370,7 @@ private struct LibraryPlaceholder: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 40)
         }
-        .refreshable { await controller.refresh() }
+        .refreshable { controller.pullToRefresh() }
     }
 }
 

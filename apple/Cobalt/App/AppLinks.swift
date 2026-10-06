@@ -11,7 +11,7 @@ import AppKit
 /// Where every `cobalt-apple://` link ends up: `job/<uuid>[?session=<sid>]` and `session/<sid>` (a
 /// notification tap, the Live Activity's tap, the share sheet's "open in cobalt", the Hark
 /// notification once the server sends its link: `AppModel.openRunLink`, CONTRACT-SHARE-QUICK.md),
-/// `open`, `library`, and `copy?url=<https link>` (the Live Activity's "copy link": an activity cannot
+/// `open`, `library`, `jobs` (the Hark summary: the tray), and `copy?url=<https link>` (the Live Activity's "copy link": an activity cannot
 /// write to the pasteboard itself, so the link goes to the pasteboard, only if it is a web link, and
 /// the app opens on the save tab). Everything but `copy` is the model's.
 @MainActor
@@ -34,6 +34,12 @@ func handleAppLink(_ url: URL, model: AppModel) {
     #if DEBUG
     if QuickShareDebug.handle(url, model: model) { return }
     #endif
+    // the Hark summary's link (APP-API-CONTRACT 17.8): the save tab, with the jobs tray asked for. The Mac's tray is
+    // always on screen; the iPhone's pill opens its cards. Not a run link, so `openRunLink` never sees it.
+    if url.scheme?.lowercased() == "cobalt-apple", url.host(percentEncoded: false)?.lowercased() == "jobs" {
+        model.open(url)
+        return
+    }
     if model.openRunLink(url) {
         #if DEBUG
         NSLog("[sharequick] app run link %@ -> following run=%@ state=%@", url.absoluteString,
@@ -120,6 +126,11 @@ final class LinkInbox {
 /// owns the app lifecycle; the delegate exists for what it has no scene API for: showing a notification
 /// while the app is in front, and the tap on one.
 final class CobaltAppDelegate: NSObject, UNUserNotificationCenterDelegate {
+    #if os(macOS)
+    /// Set by the shell while its window is up: what to do before the app quits (CONTRACT-PARALLEL 6, leaving).
+    @MainActor static var onQuit: (@MainActor () async -> Void)?
+    #endif
+
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter, willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
@@ -155,6 +166,18 @@ extension CobaltAppDelegate: NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Before the first window: a tap that launches the app is delivered right after this.
         UNUserNotificationCenter.current().delegate = self
+    }
+
+    /// Quitting with work on the server: the shell's hook sends the line's one summary opt-in first (bounded to about a
+    /// second), so the process does not exit under the request. Nothing to say: it quits at once.
+    @MainActor
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let hook = Self.onQuit else { return .terminateNow }
+        Task { @MainActor in
+            await hook()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }
 #endif

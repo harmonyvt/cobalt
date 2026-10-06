@@ -31,6 +31,13 @@ enum Symbol {
     static let openApp = "arrow.up.forward.app"
     static let web = "arrow.up.right.square"
 
+    // jobs alongside (CONTRACT-PARALLEL): the tray, a job in line, stopping one, the review sheet's tick boxes
+    static let tray = "rectangle.stack"
+    static let queued = "clock"
+    static let stop = "stop.circle"
+    static let tickOn = "checkmark.square.fill"
+    static let tickOff = "square"
+
     // the focused planet and its file-type badges
     static let publicShare = "link.badge.plus"
     static let convert = "sparkles"

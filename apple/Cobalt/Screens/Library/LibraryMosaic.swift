@@ -144,7 +144,7 @@ struct LibraryMosaic: View {
         }
         .task { budget.start() }
         .onDisappear { budget.stop() }
-        .refreshable { await controller.refresh() }
+        .refreshable { controller.pullToRefresh() }
         .accessibilityLabel(Copy.postsA11y)
     }
 

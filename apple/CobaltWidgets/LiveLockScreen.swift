@@ -46,7 +46,9 @@ struct LiveLockScreenView: View {
                 header(ink)
                 // the title, one line above the headline (CONTRACT-LIBRARY2 decision 9); one row of the budget
                 if let caption = facts.caption { LiveCaption(text: caption) }
-                if facts.isDone {
+                if facts.isFinishedSummary {
+                    LiveSummaryDone(facts: facts)
+                } else if facts.isDone {
                     LiveLockDone(facts: facts)
                 } else {
                     progress(story, ink)
@@ -56,7 +58,7 @@ struct LiveLockScreenView: View {
             .accessibilityLabel(Copy.progressA11y)
             .accessibilityValue(facts.showsStale ? "\(story.spoken), \(Copy.Live.waitingForCobalt)" : story.spoken)
             // outside the combined element so the two links stay reachable
-            if facts.isDone && !reduced {
+            if (facts.isDone || facts.isFinishedSummary) && !reduced {
                 LiveActions(facts: facts, compact: true)
             }
         }
@@ -120,8 +122,10 @@ struct LiveLockScreenView: View {
         if !facts.isTerminal && !facts.showsStale && story.phase != .ready {
             StoryBar(fraction: story.fraction, ink: ink.progress, sweeps: false)
         }
-        // A failed card is already two lines of reason: its stepper stays dots only.
-        LiveStepper(story: story, ink: ink.progress, names: !failed && typeSize <= LiveLock.namesUpTo)
+        // A failed card is already two lines of reason: its stepper stays dots only. So does a busy period's, which
+        // gives the row it saves to the "+2 more" line (the card has 136 pt of content, see the budget above).
+        LiveStepper(story: story, ink: ink.progress, names: !failed && !facts.isSummary && typeSize <= LiveLock.namesUpTo)
+        if let more = facts.more { LiveSummaryMore(text: more) }
     }
 }
 

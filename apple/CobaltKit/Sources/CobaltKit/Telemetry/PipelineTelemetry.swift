@@ -69,6 +69,28 @@ extension Telemetry {
         }
     }
 
+    // MARK: Parallel work (CONTRACT-PARALLEL.md section 8). Category `pipeline` (the server accepts no new one); ids and
+    // counts only: no links, titles or file names.
+
+    /// `paste` {via, links, kept, duplicates, concurrent, line}: one paste or drop of links, once the owner has seen
+    /// what was found (`links` = found, `kept` = sent on, `duplicates` = left out because they were already saved or
+    /// running). The paste code (`AppShell`, the review sheet) calls it; `JobQueue.add` logs the jobs themselves.
+    public static func logPaste(via: JobVia, links: Int, kept: Int, duplicates: Int, concurrent: Int, line: LineMode) {
+        log(.info, .pipeline, "paste", data: [
+            "via": .string(via.rawValue), "links": .int(links), "kept": .int(kept), "duplicates": .int(duplicates),
+            "concurrent": .int(concurrent), "line": .string(line == .server ? "server" : "device"),
+        ])
+    }
+
+    /// `live summary` {jobs, waiting, concurrent, line}: the one Live Activity of a busy period began, or its counts
+    /// changed. (`jobs` and `waiting` are what the activity says; `concurrent` is the queue's live count.)
+    static func logLiveSummary(jobs: Int, waiting: Int, line: LineMode) {
+        log(.info, .pipeline, "live summary", data: [
+            "jobs": .int(jobs), "waiting": .int(waiting), "concurrent": .int(jobs),
+            "line": .string(line == .server ? "server" : "device"),
+        ])
+    }
+
     /// How much memory the process may still use (iOS: the share extension has about 120 MB in all).
     /// Empty on the Mac.
     public static func memoryData() -> [String: TelemetryValue] {

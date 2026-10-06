@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 #if os(iOS)
 import BackgroundTasks
 #endif
@@ -24,6 +25,12 @@ import BackgroundTasks
 // Not checked on a device (the simulator refuses background tasks, and this sandbox has none): that
 // the system accepts a submission made at run start, and how its progress UI sits next to the
 // app's own Live Activity.
+//
+// Several jobs (CONTRACT-PARALLEL.md section 6): one task per busy period, not per pipeline. On a server that holds the
+// line (`features.line`) the task is wanted only while work of THIS device remains (a link check, an upload, frames
+// being read, a download or a publish of the original): a job queued or running on the server needs no process to
+// finish, and the server's one summary (`PUT /studio/line/notify`) tells the owner. Progress is the mean over every job
+// of the spell, the finished ones counting as done.
 
 /// Told by every pipeline when its work starts, moves or ends.
 @MainActor
@@ -108,6 +115,87 @@ enum ContinuedProgress {
     }
 
     static func subtitle(of p: Pipeline) -> String { p.notifyLabel }
+
+    /// The jobs of a spell that are still going: what the task's words count.
+    static func goingOn(_ spell: [Pipeline]) -> [Pipeline] { spell.filter { $0.state.isLiveInFlight } }
+
+    /// The task's title: the lead's words for one job, "saving your videos" / "making your webps" for several.
+    static func title(of spell: [Pipeline], lead: Pipeline) -> String {
+        let going = goingOn(spell)
+        guard going.count > 1 else { return title(of: lead) }
+        let renders = going.filter { if case .rendering = $0.state { return true } else { return false } }
+        return renders.count == going.count ? "making your webps" : "saving your videos"
+    }
+
+    /// "3 saves · 1 waiting": what is left of the spell. One job keeps its own label.
+    static func subtitle(of spell: [Pipeline], lead: Pipeline) -> String {
+        let going = goingOn(spell)
+        guard going.count > 1 else { return subtitle(of: lead) }
+        let waiting = going.filter { $0.line != nil }.count
+        let renders = going.filter { if case .rendering = $0.state { return true } else { return false } }
+        let noun = renders.count == going.count ? "webps" : "saves"
+        return waiting > 0 ? "\(going.count) \(noun) · \(waiting) waiting" : "\(going.count) \(noun)"
+    }
+
+    /// The task's number: the mean over every job of the spell, a finished one counting as done (the contract's
+    /// "(finished + the running job's fraction) / jobs"). A job the owner reset (idle) is not part of the spell.
+    static func fraction(ofSpell spell: [Pipeline], now: Date) -> Double {
+        let members = spell.filter { if case .idle = $0.state { return false } else { return true } }
+        guard !members.isEmpty else { return 0 }
+        return members.map { fraction(of: $0, now: now) }.reduce(0, +) / Double(members.count)
+    }
+}
+
+// MARK: - "waiting for cobalt"
+
+/// What the owner is told when the app leaves with work only this device can do and nothing keeps the process alive
+/// (the system refused or ended the task): jobs whose bytes never reached the server (an upload mid-way, a link not
+/// sent yet, the device line's waiting jobs).
+struct WaitingNotice: Equatable, Sendable {
+    var links: Int
+    var uploads: Int
+
+    var count: Int { links + uploads }
+    var title: String {
+        let noun: String
+        if uploads > 0, links == 0 { noun = count == 1 ? "upload" : "uploads" }
+        else if links > 0, uploads == 0 { noun = count == 1 ? "link" : "links" }
+        else { noun = count == 1 ? "job" : "jobs" }
+        return "\(count) \(noun) \(count == 1 ? "is" : "are") waiting for cobalt"
+    }
+    var body: String { count == 1 ? "open cobalt to finish it." : "open cobalt to finish them." }
+
+    static let identifier = "waiting-for-cobalt"
+    /// Opens the tray (`cobalt-apple://jobs`); without one, the save tab.
+    static let url = "cobalt-apple://jobs"
+}
+
+/// The seam for it, apart from `NotificationPosting` (the share sheet's kinds are closed). The system notifier
+/// conforms; tests inject their own.
+protocol WaitingNoticePosting: Sendable {
+    func postWaiting(_ notice: WaitingNotice) async
+    func clearWaiting() async
+}
+
+extension SystemNotifier: WaitingNoticePosting {
+    func postWaiting(_ notice: WaitingNotice) async {
+        guard Notifications.runsInApp else { return }
+        let content = UNMutableNotificationContent()
+        content.title = notice.title
+        content.body = notice.body
+        content.sound = .default
+        content.threadIdentifier = "cobalt-jobs"
+        content.userInfo = ["url": WaitingNotice.url]
+        // one at a time: a second one replaces the first
+        try? await UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: WaitingNotice.identifier, content: content, trigger: nil))
+    }
+
+    func clearWaiting() async {
+        guard Notifications.runsInApp else { return }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [WaitingNotice.identifier])
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [WaitingNotice.identifier])
+    }
 }
 
 // MARK: - The controller
@@ -172,19 +260,33 @@ final class ContinuedProcessing: ContinuedWorkSink {
 
     // MARK: Which runs are in flight
 
+    /// The server holds the line (`features.line`): a job on it needs no process of ours to finish.
+    private var serverMode: Bool { ctx.capabilities.line }
+
     /// Runs with work the owner would lose to a suspended process: a save, a render, an upload,
-    /// frames being read, the original arriving, a publish, "save to photos".
+    /// frames being read, the original arriving, a publish, "save to photos". On a server with a line only the work of
+    /// this device counts (`needsProcess`).
     private func busyPipelines() -> [Pipeline] {
-        ([home()] + ctx.background.runs).filter(Self.isBusy)
+        var seen = Set<ObjectIdentifier>()
+        return ([home()] + ctx.background.runs).filter { seen.insert(ObjectIdentifier($0)).inserted && Self.needsProcess($0, serverMode: serverMode) }
     }
 
-    static func isBusy(_ p: Pipeline) -> Bool {
+    /// Without a server line every step of a run needs this process (it polls and downloads). With one, a job that the
+    /// server has (a session) and is saving or rendering does not: only a link check, an upload, frames being read,
+    /// the original arriving, a publish or "save to photos" do.
+    static func needsProcess(_ p: Pipeline, serverMode: Bool) -> Bool {
         switch p.state {
-        case .fetching, .uploading, .saving, .reading, .rendering: return true
+        case .uploading, .reading: return true
+        case .fetching: return !serverMode || p.sessionID == nil
+        case .saving, .rendering: if !serverMode { return true }
         default: break
         }
         return p.keepRequest != nil || p.hosting == .working || p.photos == .working
     }
+
+    static func isBusy(_ p: Pipeline) -> Bool { needsProcess(p, serverMode: false) }
+
+    private var waitingNotifier: (any WaitingNoticePosting)? { ctx.notifier as? any WaitingNoticePosting }
 
     // MARK: Events
 
@@ -193,17 +295,27 @@ final class ContinuedProcessing: ContinuedWorkSink {
     }
 
     /// The scene is about to leave the screen: tell the server to speak for runs in flight (the
-    /// task may be refused or may expire), and ask for a task if none was.
+    /// task may be refused or may expire), and ask for a task if none was. With a line on the server that is one
+    /// message for everything it holds (`JobQueue.appLeft`); the work only this device can do is told apart: when no
+    /// task keeps the process, the owner hears "1 upload is waiting for cobalt".
     func appResigned() {
         let busy = busyPipelines()
+        if serverMode {
+            leaveOnServer(busy)
+        } else if !busy.isEmpty {
+            ctx.jobQueue?.appLeft()
+            registerServerNotify(for: busy)
+        }
         guard !busy.isEmpty else { return }
-        registerServerNotify(for: busy)
         if case .idle = phase, !requestedInSpell { request(for: busy) }
+        if case .idle = phase { postWaiting(for: busy) }
     }
 
     /// The owner is back: the server need not speak for what they are watching.
     func appBecameActive() {
         ctx.notify.cancelAll(source: .background, client: ctx.client)
+        ctx.queueLineCancel()                              // the line's summary (nothing is sent when none was)
+        if let waiting = waitingNotifier { Task { await waiting.clearWaiting() } }
     }
 
     private func reconcile() {
@@ -213,6 +325,7 @@ final class ContinuedProcessing: ContinuedWorkSink {
             return
         }
         for p in busy where !spell.contains(where: { $0 === p }) { spell.append(p) }
+        spell.removeAll { if case .idle = $0.state { return true } else { return false } }       // reset by the owner: not part of it
         for p in busy {
             switch p.state {
             case .fetching, .uploading, .saving, .reading: sawSave = true
@@ -232,7 +345,8 @@ final class ContinuedProcessing: ContinuedWorkSink {
         let identifier = makeIdentifier()
         do {
             try scheduler.submit(
-                identifier: identifier, title: ContinuedProgress.title(of: lead), subtitle: ContinuedProgress.subtitle(of: lead))
+                identifier: identifier, title: ContinuedProgress.title(of: spell(with: busy), lead: lead),
+                subtitle: ContinuedProgress.subtitle(of: spell(with: busy), lead: lead))
             submissions.append(identifier)
             phase = .requested(identifier: identifier)
             lastSubmitError = nil
@@ -249,20 +363,33 @@ final class ContinuedProcessing: ContinuedWorkSink {
         lastFraction = 0
         let busy = busyPipelines()
         guard !busy.isEmpty else { endSpell(); return }       // the work ended before the system got to us
-        if let lead = busy.first { handle.update(title: ContinuedProgress.title(of: lead), subtitle: ContinuedProgress.subtitle(of: lead)) }
+        if let lead = busy.first {
+            handle.update(
+                title: ContinuedProgress.title(of: spell(with: busy), lead: lead),
+                subtitle: ContinuedProgress.subtitle(of: spell(with: busy), lead: lead))
+        }
         pushProgress(busy)
+    }
+
+    /// The spell's jobs: those that made it, and the ones busy right now (a run that has not reached `reconcile` yet).
+    private func spell(with busy: [Pipeline]) -> [Pipeline] {
+        spell + busy.filter { p in !spell.contains { $0 === p } }
     }
 
     private func pushProgress(_ busy: [Pipeline]) {
         guard case .running(let handle, _) = phase, !busy.isEmpty else { return }
         let now = ctx.clock.now()
-        let mean = busy.map { ContinuedProgress.fraction(of: $0, now: now) }.reduce(0, +) / Double(busy.count)
+        let members = spell(with: busy)
+        let mean = ContinuedProgress.fraction(ofSpell: members, now: now)
         // never backwards, and only when it moved: the system watches for a stalled task
         let next = max(lastFraction, min(0.99, mean))
         guard next - lastFraction >= 0.002 || lastFraction == 0 else { return }
         lastFraction = next
         handle.setProgress(completed: Int64((next * Double(ContinuedProgress.total)).rounded()), total: ContinuedProgress.total)
-        if let lead = busy.first { handle.update(title: ContinuedProgress.title(of: lead), subtitle: ContinuedProgress.subtitle(of: lead)) }
+        if let lead = busy.first {
+            handle.update(
+                title: ContinuedProgress.title(of: members, lead: lead), subtitle: ContinuedProgress.subtitle(of: members, lead: lead))
+        }
     }
 
     /// The system is taking the time back. The server speaks for the run from here on (the opt-in
@@ -273,7 +400,9 @@ final class ContinuedProcessing: ContinuedWorkSink {
         handle.complete(success: false)
         phase = .idle
         let busy = busyPipelines()
-        if !busy.isEmpty, !ctx.background.activity.isActive { registerServerNotify(for: busy) }
+        guard !busy.isEmpty, !ctx.background.activity.isActive else { return }
+        if serverMode { leaveOnServer(busy) } else { registerServerNotify(for: busy) }
+        postWaiting(for: busy)
     }
 
     // MARK: The end
@@ -300,10 +429,15 @@ final class ContinuedProcessing: ContinuedWorkSink {
         }
         phase = .idle
         let wasInBackground = !ctx.background.activity.isActive
-        // The server's opt-in is moot once the app has said it itself (or the owner is watching).
-        let sessions = spell.compactMap(\.sessionID)
-        for sid in sessions { ctx.queueCancelNotify(session: sid) }
-        guard wasInBackground, let kind = outcome.notification, let notifier = ctx.notifier else { return }
+        // The server's opt-in is moot once the app has said it itself (or the owner is watching). With a line on the
+        // server nothing was registered per job, and the one summary for everything left behind stays: it fires once,
+        // when all of it is done, so this process does not also say a part of it.
+        let speaksForItself = serverMode && ctx.capabilities.notifyBridge
+        if !serverMode {
+            let sessions = spell.compactMap(\.sessionID)
+            for sid in sessions { ctx.queueCancelNotify(session: sid) }
+        }
+        guard wasInBackground, !speaksForItself, let kind = outcome.notification, let notifier = ctx.notifier else { return }
         let id = outcome.jobID
         Task { await notifier.post(kind, jobID: id) }
     }
@@ -344,12 +478,46 @@ final class ContinuedProcessing: ContinuedWorkSink {
 
     // MARK: The server's voice (no APNs)
 
+    /// Without a line on the server: every run with a session gets its own opt-in.
     private func registerServerNotify(for busy: [Pipeline]) {
-        guard ctx.capabilities.notifyBridge else { return }
+        guard !serverMode, ctx.capabilities.notifyBridge else { return }
         for p in busy {
             guard let sid = p.sessionID, let optIn = p.notifyOptIn, !ctx.notify.isRegistered(sid) else { continue }
             ctx.queueNotify(session: sid, optIn, source: .background)
         }
+    }
+
+    /// With a line on the server, leaving is ONE `PUT /studio/line/notify` for everything it holds (never one per
+    /// session). The queue knows its jobs; a context without one (a share sheet's, tests) asks the bridge itself when a
+    /// run has a session.
+    private func leaveOnServer(_ busy: [Pipeline]) {
+        guard ctx.notify.lineSource == nil else { return }       // the summary is already asked for (expiry comes after leaving)
+        if let queue = ctx.jobQueue {
+            queue.appLeft()
+        } else if busy.contains(where: { $0.sessionID != nil }) {
+            ctx.queueLineNotify()
+        }
+    }
+
+    // MARK: Work the server does not have
+
+    /// The app left and nothing keeps this process: what only this device could finish is told to the owner. Not for
+    /// work the server has (it speaks for that itself).
+    private func postWaiting(for busy: [Pipeline]) {
+        guard let waiting = waitingNotifier else { return }
+        var links = 0
+        var uploads = 0
+        for p in busy where p.sessionID == nil {
+            switch p.state {
+            case .fetching, .uploading: break
+            default: continue
+            }
+            if case .file? = p.input { uploads += 1 } else { links += 1 }
+        }
+        let notice = WaitingNotice(links: links, uploads: uploads)
+        guard notice.count > 0 else { return }
+        ctx.notificationsNowUseful()
+        Task { await waiting.postWaiting(notice) }
     }
 }
 

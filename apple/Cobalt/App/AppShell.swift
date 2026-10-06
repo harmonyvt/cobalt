@@ -2,9 +2,14 @@ import CobaltKit
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
 
 extension AppModel {
-    /// The pipeline can take a new input (nothing is mid-flight).
+    /// The focused pipeline can take a new input (nothing is mid-flight on it). Only the Photos picker still asks:
+    /// it resets the focused pipeline before it copies the picked item. A paste, a drop and a file never ask (a new
+    /// input goes alongside: CONTRACT-PARALLEL 5.5).
     var pipelineIsFree: Bool {
         switch pipeline.state {
         case .idle, .done, .failed, .savedLocally, .image: return true
@@ -12,25 +17,19 @@ extension AppModel {
         }
     }
 
-    /// The paste circle, ⌘V and the library's toolbar button.
-    func pasteFromClipboard() {
-        guard pipelineIsFree else { return }
+    /// The file circle's picker, a file from Photos, a file pasted or dropped: one upload job. Never refused because
+    /// something else runs; it takes the focus only on a quiet screen (`JobQueue.add`, CONTRACT-PARALLEL 5.1).
+    @discardableResult
+    func importFile(_ url: URL, photosAssetID: String? = nil, via: JobVia = .circle) -> Job? {
         selectedTab = .save
-        pipeline.start(pastedText: Pasteboard.string())
-    }
-
-    /// The file circle's picker, and a file dropped on the window.
-    func importFile(_ url: URL) {
-        guard pipelineIsFree else { return }
-        selectedTab = .save
-        pipeline.start(file: url)
+        return queue.add([.file(url, photosAssetID: photosAssetID)], via: via).first
     }
 
     /// The title sheet for the file upload `importFile` just started (CONTRACT-LIBRARY2 decision 3): nil when no
     /// upload began (a refused or unreadable file) or when the server cannot keep a title (rename later is then
     /// this device only). The default is the file's name without its media extension, which for a Photos pick is
     /// `from photos · 4 oct`.
-    var titleRequestForRun: TitleRequest? {
+    func titleRequest(for pipeline: Pipeline) -> TitleRequest? {
         guard capabilities.titles, case .uploading = pipeline.state, case .file(let name, _, _) = pipeline.input else { return nil }
         return TitleRequest(defaultTitle: MediaTitle.stripExtension(name))
     }
@@ -53,8 +52,10 @@ struct AppShell: View {
     @State private var pickedPhoto: PhotosPickerItem?
     @State private var photoImport = PhotoImport()
     @State private var dropTargeted = false
-    /// The `name it` sheet over the save tab while a picked file uploads.
-    @State private var titleRequest: TitleRequest?
+    /// The `name it` sheet over the save tab while a picked file uploads, with the upload it names.
+    @State private var titleSheet: TitleSheetRequest?
+    /// Two or more links pasted or dropped: the review sheet (CONTRACT-PARALLEL 4.5).
+    @State private var review: PasteReviewRequest?
     @State private var width: CGFloat = 0
     /// What a screen that has just popped left to say ("deleted."), drawn over the shell for a moment.
     @State private var status: String?
@@ -84,11 +85,16 @@ struct AppShell: View {
                 }
             }
             .animation(Motion.card, value: status)
-            .dropDestination(for: URL.self) { urls, _ in
-                guard let file = urls.first(where: \.isFileURL) else { return false }
-                intake(file)
+            // files, web links and text on the whole window (CONTRACT-PARALLEL 4.6): a drop is a paste
+            .dropDestination(for: PastedContent.self) { items, _ in
+                handle(items, via: .drop, dropped: true)
                 return true
             } isTargeted: { dropTargeted = $0 }
+            // ⌘V and Edit > Paste anywhere in the window; a text field that has the focus takes them first
+            .modifier(PasteAnywhere { handle($0, via: .paste, dropped: false) })
+            #if os(macOS)
+            .modifier(MacShellLifecycle(model: model) { handle(Pasteboard.contents(), via: .paste, dropped: false) })
+            #endif
             .fileImporter(isPresented: $showImporter, allowedContentTypes: [.movie, .image, .gif, .webP]) { result in
                 if case .success(let url) = result { intake(url) }
             }
@@ -103,11 +109,20 @@ struct AppShell: View {
             .onChange(of: pickedPhoto) { _, item in
                 guard let item else { return }
                 pickedPhoto = nil
-                photoImport.load(item, into: model) { intake($0) }
+                // the picker's asset id rides with the file, so the upload joins the cobalt album as that asset
+                photoImport.load(item, into: model) { [id = item.itemIdentifier] in intake($0, photosAssetID: id) }
             }
-            .sheet(item: $titleRequest) { request in
-                TitleSheet(pipeline: model.pipeline, defaultTitle: request.defaultTitle) { titleRequest = nil }
+            .sheet(item: $titleSheet) { sheet in
+                TitleSheet(pipeline: sheet.pipeline, defaultTitle: sheet.request.defaultTitle) { titleSheet = nil }
                     .cobaltRoot(model: model)
+            }
+            .sheet(item: $review) { request in
+                PasteReviewSheet(request: request) {
+                    finishReview(request, saving: [])
+                } save: { urls in
+                    finishReview(request, saving: urls)
+                }
+                .cobaltRoot(model: model)
             }
             .background { shortcuts }
             #if DEBUG
@@ -154,6 +169,8 @@ struct AppShell: View {
                 #if DEBUG
                 DebugHooks.log("scenePhase \(String(describing: phase))")
                 #endif
+                // leaving with work on the server: one summary opt-in for all of it (CONTRACT-PARALLEL 6; idempotent)
+                if phase == .background { model.queue.appLeft() }
                 guard phase == .active else { return }
                 Task {
                     await model.pickUpSharedJobs()
@@ -163,19 +180,84 @@ struct AppShell: View {
             }
     }
 
-    // MARK: file intake
+    // MARK: paste, drop and file intake
 
-    /// Files, a drop on the window and Photos all come through here: the upload starts first (`importFile`), then
-    /// the title sheet rises over it (never in its way: the run does not wait for it). A beat later, so the
-    /// picker that returned the file has finished leaving, and only if the run is still that upload.
-    private func intake(_ url: URL) {
-        let wasFree = model.pipelineIsFree
-        model.importFile(url)
-        guard wasFree, let request = model.titleRequestForRun else { return }
+    /// What was pasted (⌘V, Edit > Paste, the paste circle) or dropped. Files are uploads, web links and text are read
+    /// for links; nothing here is ever silent (CONTRACT-PARALLEL 4).
+    private func handle(_ items: [PastedContent], via: JobVia, dropped: Bool) {
+        let files = items.compactMap(\.fileURL)
+        if !files.isEmpty {
+            addFiles(files, via: via)
+            return
+        }
+        let text = items.compactMap(\.text).joined(separator: "\n")
+        let source: PasteReviewRequest.Source = dropped ? .dropped : .clipboard
+        switch PasteIntake.outcome(for: text, source: source, model: model) {
+        case .none:
+            logPaste(via: via, found: 0, kept: 0, duplicates: 0)
+            showStatus(dropped ? Copy.Jobs.nothingDropped : Copy.Jobs.noLink)
+        case .duplicate:
+            logPaste(via: via, found: 1, kept: 0, duplicates: 1)
+            showStatus(Copy.Jobs.duplicate)
+        case .one(let url):
+            logPaste(via: via, found: 1, kept: 1, duplicates: 0)
+            addLinks([url], via: via)
+        case .review(let request):
+            review = request
+        }
+    }
+
+    /// The review's end: "save N" sends the ticked links to the line at once, "cancel" sends nothing.
+    private func finishReview(_ request: PasteReviewRequest, saving urls: [URL]) {
+        review = nil
+        let duplicates = request.rows.filter { $0.status != .new }.count
+        logPaste(via: .review, found: request.found, kept: urls.count, duplicates: duplicates)
+        guard !urls.isEmpty else { return }
+        addLinks(urls, via: .review)
+    }
+
+    /// Links go to the queue; whatever did not take the focus says where it went.
+    private func addLinks(_ urls: [URL], via: JobVia) {
+        model.selectedTab = .save
+        let jobs = model.queue.add(urls.map(JobInput.link), via: via)
+        let alongside = jobs.filter { $0.id != model.queue.focusedID }.count
+        if alongside > 0 { showStatus(Copy.Jobs.savingAlongside(alongside)) }
+    }
+
+    /// One file: the upload and its `name it` sheet, as always. Several files: several upload jobs alongside.
+    private func addFiles(_ urls: [URL], via: JobVia) {
+        if urls.count == 1 {
+            intake(urls[0], via: via)
+            return
+        }
+        model.selectedTab = .save
+        let jobs = model.queue.add(urls.map { JobInput.file($0, photosAssetID: nil) }, via: via)
+        showStatus(Copy.Jobs.uploadingAlongside(jobs.count))
+    }
+
+    /// Files from the picker, Photos, a paste and a drop come through here: the upload starts first
+    /// (`importFile`), then the title sheet rises over it (never in its way: the run does not wait for it). A beat
+    /// later, so the picker that returned the file has finished leaving, and only if the run is still that upload.
+    private func intake(_ url: URL, photosAssetID: String? = nil, via: JobVia = .circle) {
+        guard let job = model.importFile(url, photosAssetID: photosAssetID, via: via),
+              let request = model.titleRequest(for: job.pipeline)
+        else { return }
+        let pipeline = job.pipeline
         Task {
             try? await Task.sleep(for: .milliseconds(350))
-            if model.pipeline.state != .idle, case .file = model.pipeline.input { titleRequest = request }
+            if pipeline.state != .idle, case .file = pipeline.input {
+                titleSheet = TitleSheetRequest(request: request, pipeline: pipeline)
+            }
         }
+    }
+
+    /// `paste` (CONTRACT-PARALLEL 8): counts only, never a link.
+    private func logPaste(via: JobVia, found: Int, kept: Int, duplicates: Int) {
+        Telemetry.log(.info, .pipeline, "paste", data: [
+            "via": .string(via.rawValue), "links": .int(found), "kept": .int(kept), "duplicates": .int(duplicates),
+            "concurrent": .int(model.queue.live.count),
+            "line": .string(model.queue.lineMode == .server ? "server" : "device"),
+        ])
     }
 
     #if DEBUG
@@ -251,7 +333,7 @@ struct AppShell: View {
 
     private var actions: ShellActions {
         ShellActions(
-            paste: { model.pasteFromClipboard() },
+            paste: { handle(Pasteboard.contents(), via: .circle, dropped: false) },
             chooseFile: { showImporter = true },
             choosePhotos: { showPhotos = true },
             trimNewWebp: { post in
@@ -297,12 +379,17 @@ struct AppShell: View {
             .transition(.opacity)
     }
 
-    /// ⌘V pastes and ⌘T trims on an iPad with a keyboard; on the Mac the same two live in the menus.
+    /// ⌘T trims on an iPad with a keyboard (the Mac's lives in the menus). ⌘V on an iPad is the system's: the shell is a
+    /// paste destination (`PasteAnywhere`); only before iOS 27, which has no `pasteDestination`, a hidden button keeps
+    /// the shortcut and reads the pasteboard when it is pressed.
     @ViewBuilder
     private var shortcuts: some View {
         #if os(iOS)
         VStack {
-            Button(Copy.pasteA11y, systemImage: Symbol.paste) { model.pasteFromClipboard() }.keyboardShortcut("v", modifiers: .command)
+            if #unavailable(iOS 27.0) {
+                Button(Copy.pasteA11y, systemImage: Symbol.paste) { handle(Pasteboard.contents(), via: .paste, dropped: false) }
+                    .keyboardShortcut("v", modifiers: .command)
+            }
             Button(Copy.trimNewWebp, systemImage: Symbol.trim) { trimSelected(model) }.keyboardShortcut("t", modifiers: .command)
         }
         .frame(width: 0, height: 0)
@@ -311,6 +398,117 @@ struct AppShell: View {
         #endif
     }
 }
+
+/// The `name it` sheet and the upload it names (the sheet follows that run, focused or not).
+private struct TitleSheetRequest: Identifiable {
+    let request: TitleRequest
+    let pipeline: Pipeline
+    var id: UUID { request.id }
+}
+
+/// ⌘V and Edit > Paste anywhere in the window (CONTRACT-PARALLEL 4.1): the content is a paste destination, so a text
+/// field that has the focus (the `name it` sheet's) takes ⌘V itself and the shell sees only the pastes nothing else
+/// wants. Replaces the old global menu command, which bound ⌘V even over a text field.
+private struct PasteAnywhere: ViewModifier {
+    let received: @MainActor ([PastedContent]) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 27.0, macOS 13.0, *) {
+            content.pasteDestination(for: PastedContent.self) { received($0) }
+        } else {
+            content
+        }
+    }
+}
+
+#if os(macOS)
+/// What the Mac window needs from the app as a whole: ⌘V when no view of the window has the focus to receive a paste
+/// command, the Dock's badge, and one summary opt-in when the window closes or the app quits with work on the server.
+private struct MacShellLifecycle: ViewModifier {
+    let model: AppModel
+    /// ⌘V reached the window with no text field to take it: a paste, like Edit > Paste.
+    let paste: @MainActor () -> Void
+    @State private var window = WindowBox()
+
+    func body(content: Content) -> some View {
+        content
+            // kept when the view leaves its window: the close notification arrives while the window is still going
+            .background(WindowReader { if let found = $0 { window.window = found } })
+            .onAppear {
+                window.installPasteKey(paste)
+                CobaltAppDelegate.onQuit = { [model] in await leave(model) }
+            }
+            .onDisappear { window.removePasteKey() }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { note in
+                // the main window going (not a sheet, not Settings): the owner has left cobalt
+                if let closing = note.object as? NSWindow, closing === window.window { model.queue.appLeft() }
+            }
+    }
+}
+
+/// Quitting with work on the server: the summary opt-in goes out first, bounded, so the process does not exit under it.
+@MainActor
+private func leave(_ model: AppModel) async {
+    guard model.queue.live.contains(where: { $0.pipeline.sessionID != nil }) else { return }
+    model.queue.appLeft()
+    try? await Task.sleep(for: .milliseconds(1200))
+}
+
+/// The main window and the ⌘V key monitor. The monitor sees ⌘V before the menu does and takes it only in this window,
+/// with no sheet over it and no text field (or any text view) holding the first responder.
+@MainActor
+private final class WindowBox {
+    weak var window: NSWindow?
+    private var monitor: Any?
+
+    func installPasteKey(_ paste: @escaping @MainActor () -> Void) {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let take = MainActor.assumeIsolated { self?.takes(event) ?? false }
+            guard take else { return event }
+            MainActor.assumeIsolated { paste() }
+            return nil
+        }
+    }
+
+    func removePasteKey() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+
+    private func takes(_ event: NSEvent) -> Bool {
+        guard let window, event.window === window, window.isKeyWindow, window.attachedSheet == nil,
+              event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+              event.charactersIgnoringModifiers?.lowercased() == "v"
+        else { return false }
+        if let responder = window.firstResponder, responder is NSText || responder is NSTextInputClient { return false }
+        return true
+    }
+}
+
+/// Hands the hosting `NSWindow` to `onWindow` as soon as the view is in one (and `nil` when it leaves).
+private struct WindowReader: NSViewRepresentable {
+    let onWindow: @MainActor (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> Probe {
+        let view = Probe()
+        view.onWindow = onWindow
+        return view
+    }
+
+    func updateNSView(_ view: Probe, context: Context) { view.onWindow = onWindow }
+
+    final class Probe: NSView {
+        var onWindow: (@MainActor (NSWindow?) -> Void)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            let window = window
+            MainActor.assumeIsolated { onWindow?(window) }
+        }
+    }
+}
+#endif
 
 /// The environment every scene shares: monochrome tint, Dynamic Type up to the accessibility sizes,
 /// the haptics setting. The app's window and the Mac's Settings window both wear it.

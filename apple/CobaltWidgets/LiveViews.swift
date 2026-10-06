@@ -30,12 +30,18 @@ struct LiveFacts {
 
     var service: String? { attributes.service.isEmpty ? nil : attributes.service }
 
-    /// "instagram · Dd7P496wolG", or the file's name.
-    var source: String { Copy.Live.source(service: attributes.service, ref: attributes.ref, input: attributes.input) }
+    /// "instagram · Dd7P496wolG", or the file's name. A busy period's activity is not one run's: "3 running".
+    var source: String {
+        if state.isSummary {
+            return state.isTerminal ? Copy.Live.summaryDoneSource : Copy.Live.summarySource(jobs: jobCount, waiting: waitingCount)
+        }
+        return Copy.Live.source(service: attributes.service, ref: attributes.ref, input: attributes.input)
+    }
 
     /// Just the service, for the narrow expanded leading slot ("instagram"); a file keeps its name.
     var shortSource: String {
-        attributes.input == "file" || attributes.service == "file" || attributes.service.isEmpty
+        if state.isSummary { return source }
+        return attributes.input == "file" || attributes.service == "file" || attributes.service.isEmpty
             ? attributes.ref : attributes.service
     }
 
@@ -43,6 +49,8 @@ struct LiveFacts {
     /// extension (`LiveSink`). Drawn as a one-line caption above the headline, so a named file reads as its name
     /// and not only as `file`. Nil when it adds nothing to the header's own source line.
     var caption: String? {
+        // a busy period's card has no room for the lead's title (the "+2 more" line takes its row)
+        guard !state.isSummary else { return nil }
         guard let raw = state.title?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
         let title = MediaTitle.stripExtension(raw)
         guard title.caseInsensitiveCompare(MediaTitle.stripExtension(source)) != .orderedSame else { return nil }
@@ -83,6 +91,15 @@ struct LiveFacts {
             return Double(done) / Double(total)
         }
         let headline = Copy.Live.stage(state, service: service)
+        if state.isFinishedSummary {
+            var story = make(state.stage == .failed ? .failed : .finished, Copy.Live.summaryDone(state))
+            story.index = steps.count
+            story.failed = state.stage == .failed
+            return story
+        }
+        if allWaiting {
+            return make(.fetching, Copy.Live.waitingForServer, detail: jobCount > 1 ? .text(Copy.Live.inLine(jobCount)) : nil)
+        }
         switch state.stage {
         case .fetching:
             return make(
@@ -133,6 +150,8 @@ struct LiveFacts {
 
     /// Where a tap goes: the share sheet's run opens its job, any other run just opens cobalt.
     var openURL: URL {
+        // the busy period's activity opens the tray; it is not any one job's
+        if state.isSummary { return Self.jobs }
         if attributes.origin == "share", UUID(uuidString: attributes.run) != nil {
             return URL(string: "cobalt-apple://job/\(attributes.run)") ?? Self.home
         }
@@ -150,6 +169,7 @@ struct LiveFacts {
     }
 
     private static let home = URL(string: "cobalt-apple://open")!
+    private static let jobs = URL(string: "cobalt-apple://jobs")!
 }
 
 extension LiveFacts {
@@ -365,7 +385,13 @@ struct LiveRing: View {
                         .rotationEffect(.degrees(-90))
                         .padding(1)
                 }
-                if glyph {
+                if glyph, facts.showsCount {
+                    // the minimal island of a busy period: how many, not which step
+                    Text("\(facts.jobCount)")
+                        .font(liveFont(10, .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(ink.primary)
+                } else if glyph {
                     Image(systemName: Symbol.step(facts.story.currentStep))
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(ink.primary)
@@ -474,7 +500,7 @@ struct LiveExpandedBottom: View {
         let story = facts.story
         VStack(alignment: .leading, spacing: 8) {
             // a finished run says "done" in the center and the check at the right already
-            if !facts.isDone {
+            if !facts.isDone && !facts.isFinishedSummary {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     if facts.showsStale {
                         Text(Copy.Live.waitingForCobalt).font(liveFont(11.5)).foregroundStyle(ink.secondary).lineLimit(1)
@@ -485,11 +511,12 @@ struct LiveExpandedBottom: View {
                     LiveStepText(story: story, size: 11.5)
                 }
             }
-            if facts.isDone {
+            if facts.isDone || facts.isFinishedSummary {
                 LiveDoneDetails(facts: facts, actions: true, compact: true)
             } else if !facts.isTerminal && !facts.showsStale && story.phase != .ready {
                 StoryBar(fraction: story.fraction, ink: ink.progress, sweeps: false)
             }
+            if let more = facts.more { LiveSummaryMore(text: more, size: 11.5) }
         }
         .padding(.top, 4)
         .dynamicTypeSize(...LiveLock.largestType)
