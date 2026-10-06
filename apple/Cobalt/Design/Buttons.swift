@@ -127,8 +127,11 @@ struct CircleButtonStyle: ButtonStyle {
     }
 }
 
-/// An icon-only close button: a system glass circle, labelled for VoiceOver.
+/// An icon-only close button: a system glass circle, labelled for VoiceOver. `cancels` also makes it the
+/// presenting sheet's Escape key (and a hardware keyboard's on iPad): every sheet on the Mac needs one,
+/// since a Mac sheet has no swipe down.
 struct CloseButton: View {
+    var cancels = false
     let action: () -> Void
 
     var body: some View {
@@ -141,7 +144,40 @@ struct CloseButton: View {
         #if os(iOS)
         .controlSize(.large)
         #endif
+        .modifier(CancelShortcut(enabled: cancels))
+        #if os(macOS)
+        .background {
+            // ⌘W closes the sheet too (the window's own Close has nothing to close while a sheet is up)
+            if cancels {
+                Button(action: action) { EmptyView() }
+                    .keyboardShortcut("w", modifiers: .command)
+                    .accessibilityHidden(true)
+            }
+        }
+        #endif
         .accessibilityLabel(Copy.closeA11y)
+    }
+}
+
+private struct CancelShortcut: ViewModifier {
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.keyboardShortcut(.cancelAction)
+        } else {
+            content
+        }
+    }
+}
+
+/// The Mac sheet's size: big enough that the detail goes two columns (`DetailWidth.wide`), never clipped, and
+/// still resizable.
+struct MacSheetSize: ViewModifier {
+    func body(content: Content) -> some View {
+        content.frame(
+            minWidth: 600, idealWidth: 860, maxWidth: 1100,
+            minHeight: 560, idealHeight: 660, maxHeight: 900)
     }
 }
 

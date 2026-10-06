@@ -8,6 +8,9 @@ struct PickerSheet: View {
     let pipeline: Pipeline
     let items: [PickerItem]
     let webpAvailable: Bool
+    #if os(macOS)
+    @Environment(\.dismiss) private var dismiss
+    #endif
 
     var body: some View {
         PickerContent(pipeline: pipeline, items: items, webpAvailable: webpAvailable)
@@ -20,6 +23,11 @@ struct PickerSheet: View {
             .presentationDragIndicator(.visible)
             #else
             .frame(minWidth: 420, minHeight: 560)
+            .overlay(alignment: .topTrailing) {
+                // a Mac sheet has no swipe down: closing is the same as leaving the picker (the binding resets the run)
+                CloseButton(cancels: true) { dismiss() }
+                    .padding(12)
+            }
             #endif
     }
 }

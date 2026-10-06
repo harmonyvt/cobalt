@@ -85,10 +85,10 @@ struct InspectorColumn: View {
         .sheet(item: $opened) { open in
             NavigationStack {
                 MediaDetail(model: model, item: open.item, initial: open.rendition)
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { CloseButton { opened = nil } } }
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { CloseButton(cancels: true) { opened = nil } } }
             }
             #if os(macOS)
-            .frame(minWidth: 900, minHeight: 640)
+            .modifier(MacSheetSize())
             #endif
         }
     }

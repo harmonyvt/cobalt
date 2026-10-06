@@ -135,8 +135,11 @@ struct AppShell: View {
             }
             #else
             .sheet(item: $debugDetail) { item in
-                NavigationStack { MediaDetail(model: model, item: item, initial: DetailDebug.initial(item)) }
-                    .frame(minWidth: 900, minHeight: 640)
+                NavigationStack {
+                    MediaDetail(model: model, item: item, initial: DetailDebug.initial(item))
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { CloseButton(cancels: true) { debugDetail = nil } } }
+                }
+                .modifier(MacSheetSize())
             }
             #endif
             #endif

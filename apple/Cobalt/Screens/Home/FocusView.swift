@@ -333,6 +333,9 @@ struct FocusLayer: View {
         // visible over the paste and file circles during the first second of every launch (owner, 2026-10-05)
         .opacity(warm ? 0 : 1)
         .coordinateSpace(name: "focusLayer")
+        #if os(macOS)
+        .background { escapeShortcut }
+        #endif
         .heroFullScreen(item: $fullScreen) { closedFullScreen(at: $0) }
         // the bar follows the focused planet's player (made when the video first shows, handed away on the return)
         .onChange(of: player.player.map { ObjectIdentifier($0) }, initial: true) { _, _ in
@@ -625,6 +628,25 @@ struct FocusLayer: View {
         transport.resumeIfPausedByUser()
         onClose()
     }
+
+    #if os(macOS)
+    /// Escape steps out of the planet on the Mac, one layer at a time: the trim panel first, then the focus
+    /// itself. The crop editor keeps its own `done`. Only the live, lifted, on-screen instance listens.
+    private var escapeShortcut: some View {
+        Button(Copy.closeA11y) {
+            if showsTrim {
+                withAnimation(reduceMotion ? Motion.fade : FocusMotion.content) { showsTrim = false }
+            } else {
+                close()
+            }
+        }
+        .keyboardShortcut(.cancelAction)
+        .disabled(warm || !lifted || !visible || isCropping)
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
+    }
+    #endif
 
     private var closeDrag: some Gesture {
         DragGesture(minimumDistance: 14)

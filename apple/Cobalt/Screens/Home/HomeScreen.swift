@@ -463,7 +463,11 @@ struct HomeScreen: View {
         #else
         .sheet(item: $openedSheet) { item in
             if let media = model.store.media(id: baseID(item.id)) {
-                NavigationStack { MediaDetail(model: model, item: model.mediaItem(for: media)) }.frame(minWidth: 460, minHeight: 560)
+                NavigationStack {
+                    MediaDetail(model: model, item: model.mediaItem(for: media))
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { CloseButton(cancels: true) { openedSheet = nil } } }
+                }
+                .modifier(MacSheetSize())
             }
         }
         #endif

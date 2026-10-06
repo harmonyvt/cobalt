@@ -162,11 +162,24 @@ private struct FullScreenWebp: View {
                 .offset(y: drag)
                 .accessibilityLabel(Copy.Media.webpViewerA11y(name))
                 .accessibilityAddTraits(.isButton)
+            #if os(macOS)
+            // the Mac sheet has no swipe down: a visible close, top leading like the video's, that is also Escape
+            VStack {
+                HStack {
+                    CloseButton(cancels: true, action: close)
+                    Spacer()
+                }
+                Spacer()
+            }
+            .padding(.leading, 12)
+            .padding(.top, 8)
+            #else
             Button(Copy.Media.exitFullScreen, action: close)
                 .keyboardShortcut(.cancelAction)
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .accessibilityHidden(true)
+            #endif
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: close)
