@@ -23,7 +23,7 @@ import { Crop, HELPER_UPLOAD_MS, JobRecord, KV, MEDIA_NAME_LENGTH, Quality, Webp
 import { KEY_ID_HEADER } from "./headers";
 import { cropToPixels, parseCrop } from "../helper/crop.js";
 import { STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "./gate";
-import { SERVICE_KEY_ID, insertMediaItem, mediaNameFromUrl, pageLink } from "./library";
+import { SERVICE_KEY_ID, insertMediaItem, mediaNameFromUrl, pageLink, releasePoster } from "./library";
 import { LIVE_PUSH_MS, type LiveHooks, type LiveRenderEvent } from "./live";
 import {
     LINE_BUSY_WAIT_MS,
@@ -33,15 +33,16 @@ import {
     isFocusedKey,
     parseFlag,
     startingFresh,
+    type GalleryRun,
     type ItemsChoice,
     type LineEntry,
     type SlideshowInput,
     type SlideshowRun,
 } from "./line";
-import { NOTIFY_MAX_BODY_BYTES, isEmptyLineBody, parseOptIn, type LineOutcome, type NotifyHooks, type NotifyRenderEvent } from "./notify";
+import { NOTIFY_MAX_BODY_BYTES, isEmptyLineBody, parseOptIn, type LineOutcome, type MakeWhat, type NotifyHooks, type NotifyRenderEvent } from "./notify";
 import { MAX_POSTER_BYTES, PosterService, POSTER_BATCH, type MediaStore } from "./poster";
 import { publishStudio } from "./publish";
-import { ITEM_COLUMNS, getRow, makePublic, publishOriginal, sessionItem, effectiveVisibility, type MediaRow, type PurgeFn } from "./visibility";
+import { ITEM_COLUMNS, getRow, makePublic, publishOriginal, purgeUrls, sessionItem, effectiveVisibility, type MediaRow, type PurgeFn } from "./visibility";
 
 export const SID_LENGTH = 22;
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -104,7 +105,9 @@ export const RENDER_QUALITIES = ["low", "med", "high"] as const;
 export const SWEEP_RENDER_MS = 6 * 60 * 1000;
 // A slideshow job (section 18.5) has the helper's 10 minute budget: it is collected by the sweep for this long.
 export const SWEEP_SLIDESHOW_MS = 12 * 60 * 1000;
-const jobWindowMs = (rec: { slideshow?: unknown }) => (rec.slideshow ? SWEEP_SLIDESHOW_MS : SWEEP_RENDER_MS);
+const jobWindowMs = (rec: { slideshow?: unknown; gallery?: unknown }) => (rec.slideshow || rec.gallery ? SWEEP_SLIDESHOW_MS : SWEEP_RENDER_MS);
+// a job record of a make (a slideshow, or a gallery image: 18.11) the helper is running
+type MakeJobRecord = JobRecord & { gallery?: GalleryRun };
 export const SWEEP_SAVE_SLACK_MS = 60_000;
 // Ceiling on one item of a sweep pass (one render poll or one save step): the
 // Containers library awaits the whole pass inside alarm() before it checks
@@ -180,7 +183,8 @@ export type RenderRow = {
     out_height: number | null;
     seconds: number | null;
     created_at: number;
-    // migration 0009: null = a webp (today), 'slideshow' (section 18.5) and its validated plan as JSON
+    // migration 0009: null = a webp (today), 'slideshow' (section 18.5), 'gallery_image' (18.11) and its validated plan as JSON
+    // (a webp of one item of a gallery, 18.13, keeps `{item, item_id}` there; a finished make adds `out`)
     kind?: string | null;
     plan?: string | null;
 };
@@ -196,7 +200,7 @@ export async function getSession(db: D1Database, sid: string): Promise<SessionRo
 export async function listSuccessfulRenders(db: D1Database, sid: string): Promise<RenderRow[]> {
     const res = await db
         .prepare(
-            "SELECT * FROM studio_renders WHERE session_id = ?1 AND status = 'success' AND (kind IS NULL OR kind <> 'slideshow') ORDER BY created_at DESC, id DESC LIMIT 100",
+            "SELECT * FROM studio_renders WHERE session_id = ?1 AND status = 'success' AND (kind IS NULL OR kind NOT IN ('slideshow', 'gallery_image')) ORDER BY created_at DESC, id DESC LIMIT 100",
         )
         .bind(sid)
         .all<RenderRow>();
@@ -525,35 +529,78 @@ export function parseItemCountField(raw: unknown): { ok: true; count: number | u
 
 export type SlideshowPlan = {
     items: number[];
-    // a still's seconds (1-15, one decimal); null = its own length (a video or a gif)
+    // a still's seconds (0.5-15, one decimal); null = its own length (a video or a gif)
     seconds: (number | null)[];
     fade: boolean;
     frame: "keep" | "9:16" | "1:1";
     sound: "none" | "own";
+    // 18.10: the webp slideshow. Absent = the mp4 (a plan stored before 18.10 reads as one); `quality` and `width` only with `webp`
+    format?: "webp";
+    quality?: Quality;
+    width?: 320 | 480;
+    // asked for with the save (POST /studio, 18.12): an item that failed to save is dropped from the plan instead of ending it
+    chained?: boolean;
 };
 
-// The shape of a slideshow plan (18.5), judged before anything is created. Which items are stills and what the
-// whole adds up to is decided against the stored rows (`slideshowRun`).
+export const MAX_WEBP_SLIDESHOW_SECONDS = 60;
+export const MAX_GALLERY_IMAGE_BODY_BYTES = 2048;
+type MakeKind = "slideshow" | "gallery_image";
+// the helper's route family of a make
+const helperDir = (k: MakeKind) => (k === "slideshow" ? "slideshow" : "gallery");
+// where a make's file is stored: `originals/<sid>-s<job>.mp4|webp`, `originals/<sid>-g<job>.jpg`
+const makeKey = (sid: string, job: string, k: MakeKind, webp: boolean) =>
+    k === "gallery_image" ? `originals/${sid}-g${job}.jpg` : `originals/${sid}-s${job}.${webp ? "webp" : "mp4"}`;
+const parseJsonObject = (raw: string | null | undefined): Record<string, unknown> | null => {
+    if (!raw) return null;
+    try {
+        const v: unknown = JSON.parse(raw);
+        return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+    } catch {
+        return null;
+    }
+};
+// the helper names input slots (`n`); the API answers `item_index` values
+const slotsToItems = (slots: unknown, inputs: SlideshowInput[]): number[] =>
+    Array.isArray(slots) ? slots.flatMap((n) => inputs.find((i) => i.n === n)?.index ?? []) : [];
+export const MIN_STILL_SECONDS = 0.5;
+export const GALLERY_LAYOUTS = ["strip", "grid2", "grid3", "row"] as const;
+export type GalleryLayout = (typeof GALLERY_LAYOUTS)[number];
+export type GalleryImagePlan = { items: number[]; layout: GalleryLayout; chained?: boolean };
+
+// The shape of a slideshow plan (18.5, 18.10), judged before anything is created. Which items are stills and what the
+// whole adds up to is decided against the stored rows (`buildSlideshow`). `opts.stored`: the plan comes from a render
+// row (it may carry `chained`), not from a client.
 export function parseSlideshowPlan(
     raw: unknown,
     invalidCode: string,
+    opts: { stored?: boolean } = {},
 ): { ok: true; plan: SlideshowPlan } | { ok: false; status: 400; code: string } {
     const bad = (code = invalidCode) => ({ ok: false as const, status: 400 as const, code });
     if (!isPlainObject(raw)) return bad();
-    const { items, seconds, fade, frame, sound } = raw;
+    const { items, seconds, fade, frame, sound, format, quality, width } = raw;
     if (!Array.isArray(items) || items.length < 2 || items.length > MAX_ITEMS) return bad();
     if (!items.every(isIndex) || new Set(items).size !== items.length) return bad();
     if (!Array.isArray(seconds) || seconds.length !== items.length) return bad();
+    if (format !== undefined && format !== null && format !== "mp4" && format !== "webp") return bad();
+    const webp = format === "webp";
+    // `quality` and `width` belong to the webp only
+    if (!webp && ((quality !== undefined && quality !== null) || (width !== undefined && width !== null))) return bad();
+    if (webp) {
+        if (quality !== undefined && quality !== null && !(RENDER_QUALITIES as readonly unknown[]).includes(quality)) return bad();
+        if (width !== undefined && width !== null && width !== 320 && width !== 480) return bad();
+        // a webp has no sound
+        if (sound !== undefined && sound !== "none") return bad();
+    }
     let known = 0;
     for (const s of seconds) {
         if (s === null) continue;
-        if (typeof s !== "number" || !Number.isFinite(s) || s < 1 || s > 15 || Math.abs(s * 10 - Math.round(s * 10)) > 1e-9) return bad();
+        if (typeof s !== "number" || !Number.isFinite(s) || s < MIN_STILL_SECONDS || s > 15 || Math.abs(s * 10 - Math.round(s * 10)) > 1e-9) return bad();
         known += s;
     }
     if (fade !== undefined && typeof fade !== "boolean") return bad();
     if (frame !== undefined && frame !== "keep" && frame !== "9:16" && frame !== "1:1") return bad();
     if (sound !== undefined && sound !== "none" && sound !== "own") return bad();
-    if (known > MAX_SLIDESHOW_SECONDS) return bad("error.webp.too_long");
+    if (known > (webp ? MAX_WEBP_SLIDESHOW_SECONDS : MAX_SLIDESHOW_SECONDS)) return bad("error.webp.too_long");
     return {
         ok: true,
         plan: {
@@ -562,7 +609,29 @@ export function parseSlideshowPlan(
             fade: fade !== false,
             frame: (frame as SlideshowPlan["frame"] | undefined) ?? "keep",
             sound: (sound as SlideshowPlan["sound"] | undefined) ?? "none",
+            ...(webp
+                ? { format: "webp" as const, quality: ((quality as Quality | null | undefined) ?? "med") as Quality, width: ((width as 320 | 480 | null | undefined) ?? 480) as 320 | 480 }
+                : {}),
+            ...(opts.stored && raw.chained === true ? { chained: true } : {}),
         },
+    };
+}
+
+// The shape of a gallery image plan (18.11): 2-20 unique `item_index` values in the order to draw, and a layout.
+export function parseGalleryImagePlan(
+    raw: unknown,
+    invalidCode: string,
+    opts: { stored?: boolean } = {},
+): { ok: true; plan: GalleryImagePlan } | { ok: false; status: 400; code: string } {
+    const bad = () => ({ ok: false as const, status: 400 as const, code: invalidCode });
+    if (!isPlainObject(raw)) return bad();
+    const { items, layout } = raw;
+    if (!Array.isArray(items) || items.length < 2 || items.length > MAX_ITEMS) return bad();
+    if (!items.every(isIndex) || new Set(items).size !== items.length) return bad();
+    if (typeof layout !== "string" || !(GALLERY_LAYOUTS as readonly string[]).includes(layout)) return bad();
+    return {
+        ok: true,
+        plan: { items: [...(items as number[])], layout: layout as GalleryLayout, ...(opts.stored && raw.chained === true ? { chained: true } : {}) },
     };
 }
 
@@ -571,13 +640,18 @@ export const itemTypeOf = (contentType: string | null): "photo" | "video" | "gif
     contentType === "image/gif" ? "gif" : (contentType ?? "").startsWith("image/") ? "photo" : "video";
 
 const even = (n: number) => Math.max(2, Math.floor(n) - (Math.floor(n) % 2));
+// the nearest even integer (a webp frame's height: 480 / (9/16) = 853.33 -> 854, APP-API-CONTRACT 18.10)
+const evenNear = (n: number) => Math.max(2, Math.round(n / 2) * 2);
 
-// The output frame (18.5): `keep` = the most common width x height among the chosen items (ties: the first),
-// scaled to 1080 on the short side (and to 1920 on the long side when that is bigger); both sides rounded
-// down to even. `9:16` = 1080x1920, `1:1` = 1080x1080.
-export function slideshowFrame(frame: SlideshowPlan["frame"], dims: { width: number | null; height: number | null }[]): { width: number; height: number } {
-    if (frame === "9:16") return { width: 1080, height: 1920 };
-    if (frame === "1:1") return { width: 1080, height: 1080 };
+// The output frame (18.5, 18.10). mp4: `keep` = the most common width x height among the chosen items (ties: the first),
+// scaled to 1080 on the short side (and to 1920 on the long side when that is bigger); both sides rounded down to even;
+// `9:16` = 1080x1920, `1:1` = 1080x1080. webp (`webp` = its width, 320 | 480): that width across and height = width / the
+// aspect of `keep` (the most common size), `9:16` or `1:1`, to the nearest even number (480 -> 480x600 for 4:5, 480x854, 480x480).
+export function slideshowFrame(
+    frame: SlideshowPlan["frame"],
+    dims: { width: number | null; height: number | null }[],
+    webp?: number,
+): { width: number; height: number } {
     const counts = new Map<string, { w: number; h: number; n: number }>();
     for (const d of dims) {
         if (!d.width || !d.height || d.width <= 0 || d.height <= 0) continue;
@@ -588,6 +662,13 @@ export function slideshowFrame(frame: SlideshowPlan["frame"], dims: { width: num
     }
     let best: { w: number; h: number; n: number } | null = null;
     for (const e of counts.values()) if (!best || e.n > best.n) best = e;
+    if (webp !== undefined) {
+        const aspect = frame === "9:16" ? 9 / 16 : frame === "1:1" || !best ? 1 : best.w / best.h;
+        // (the helper refuses a side over 1920, as for the mp4: a very tall post is cut to that)
+        return { width: webp, height: Math.min(MAX_FRAME_SIDE, evenNear(webp / aspect)) };
+    }
+    if (frame === "9:16") return { width: 1080, height: 1920 };
+    if (frame === "1:1") return { width: 1080, height: 1080 };
     if (!best) return { width: 1080, height: 1080 };
     const scale = Math.min(1080 / Math.min(best.w, best.h), MAX_FRAME_SIDE / Math.max(best.w, best.h));
     return { width: even(best.w * scale), height: even(best.h * scale) };
@@ -812,12 +893,17 @@ export class StudioService {
     // one seen is kept in storage, so `features.gallery` is advertised only while the helper that runs has the
     // slideshow routes (an older image answers without the header). Unknown until the first call.
     private helperGallery: boolean | undefined;
+    // `make=1` (18.10-18.13): the slideshow webp and the gallery image routes
+    private helperMake: boolean | undefined;
     private noteHelper(res: Response): Response {
         try {
-            const g = (res.headers.get(HELPER_CAPS_HEADER) ?? "").includes("gallery=1");
-            if (g !== this.helperGallery) {
+            const caps = res.headers.get(HELPER_CAPS_HEADER) ?? "";
+            const g = caps.includes("gallery=1");
+            const m = caps.includes("make=1");
+            if (g !== this.helperGallery || m !== this.helperMake) {
                 this.helperGallery = g;
-                void Promise.resolve(this.d.storage.put("helper:caps", { gallery: g, at: this.d.now() })).catch(() => {});
+                this.helperMake = m;
+                void Promise.resolve(this.d.storage.put("helper:caps", { gallery: g, make: m, at: this.d.now() })).catch(() => {});
             }
         } catch {
             // a response whose headers cannot be read says nothing
@@ -826,14 +912,18 @@ export class StudioService {
     }
     async helperCaps(): Promise<StudioReply> {
         let gallery = this.helperGallery;
+        let make = this.helperMake;
         if (gallery === undefined) {
             try {
-                gallery = (await this.d.storage.get<{ gallery?: boolean }>("helper:caps"))?.gallery === true;
+                const stored = await this.d.storage.get<{ gallery?: boolean; make?: boolean }>("helper:caps");
+                gallery = stored?.gallery === true;
+                make = stored?.make === true;
             } catch {
                 gallery = false;
+                make = false;
             }
         }
-        return { status: 200, body: { status: "success", gallery } };
+        return { status: 200, body: { status: "success", gallery, make: make === true } };
     }
     // helper job id -> when this DO started it; used only for the busy answer.
     private encodes = new Map<string, number>();
@@ -993,21 +1083,65 @@ export class StudioService {
             bytes?: unknown;
             width?: unknown;
             height?: unknown;
+            format?: unknown;
+            cropped?: unknown;
             error?: { code?: unknown };
         };
+        // a make's done answer says what it is (a slideshow's `format`, a gallery image's `cropped`); its link is absent
+        // while the post is private, and the message still goes
+        const what: MakeWhat | undefined =
+            b.format === "webp" ? "slideshow webp" : b.format === "mp4" ? "slideshow" : Array.isArray(b.cropped) ? "gallery image" : undefined;
         let e: NotifyRenderEvent | null = null;
-        if (b.status === "success" && typeof b.url === "string") {
-            e = { kind: "success", url: b.url, bytes: finite(b.bytes), width: finite(b.width), height: finite(b.height) };
+        if (b.status === "success" && (typeof b.url === "string" || what)) {
+            e = {
+                kind: "success",
+                url: typeof b.url === "string" ? b.url : null,
+                bytes: finite(b.bytes),
+                width: finite(b.width),
+                height: finite(b.height),
+                ...(what ? { what } : {}),
+            };
         } else if (b.status === "error" && typeof b.error?.code === "string") {
             // a cancelled render (section 17.7) is the owner's own doing: no Hark message, however
             // often it is polled again
             if (b.error.code === "error.webp.cancelled") return;
-            e = { kind: "failed", code: b.error.code };
+            const { suppress, ...made } = await this.failedMake(sid, job, b.error.code);
+            if (suppress) return;
+            e = { kind: "failed", code: b.error.code, ...made };
         }
         if (e) {
             const ev = e;
             await this.notifyCall("render", (n) => n.onRender(sid, job, ev));
             await this.settleLine(sid, job, ev.kind === "success" ? { ...ev, kind: "rendered" } : ev);
+        }
+    }
+
+    // What a failed render was, when it was a make (18.12): its name, and for one asked for with its save how many items
+    // that save kept and (a webp over its cap) how long it would have been. Nothing for a webp of a clip. Never throws.
+    private async failedMake(sid: string, job: string, code: string): Promise<{ what?: MakeWhat; suppress?: boolean; chained?: { saved: number; length?: string | null } }> {
+        try {
+            const row = await getRender(this.d.db, sid, job);
+            if (!row || (row.kind !== "slideshow" && row.kind !== "gallery_image")) return {};
+            const plan = parseJsonObject(row.plan);
+            const what: MakeWhat = row.kind === "gallery_image" ? "gallery image" : plan?.format === "webp" ? "slideshow webp" : "slideshow";
+            if (plan?.chained !== true) return { what };
+            // its save failed: the save's own failure message went already (18.12: one message), whoever polls this job
+            if ((await getSession(this.d.db, sid))?.status !== "ready") return { what, suppress: true };
+            const rows = await this.makeRows(sid);
+            let length: string | null = null;
+            if (code === "error.webp.too_long" && what === "slideshow webp" && Array.isArray(plan.items) && Array.isArray(plan.seconds)) {
+                const byIndex = new Map(rows.map((r) => [r.item_index, r]));
+                let total = 0;
+                (plan.items as number[]).forEach((i, n) => {
+                    const sec = (plan.seconds as (number | null)[])[n];
+                    total += typeof sec === "number" ? sec : (byIndex.get(i)?.duration ?? 0);
+                });
+                const whole = Math.round(total);
+                length = `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+            }
+            return { what, chained: { saved: rows.length, length } };
+        } catch {
+            return {};
         }
     }
 
@@ -1158,7 +1292,11 @@ export class StudioService {
         this.encodes.delete(job);
         await this.liveRender(sid, job, { kind: "failed", code });
         if (!changed) return;
-        if (!silent) await this.notifyCall("render", (n) => n.onRender(sid, job, { kind: "failed", code }));
+        if (!silent) {
+            // a make that came with its save says what it was (18.12)
+            const { suppress, ...made } = await this.failedMake(sid, job, code);
+            if (!suppress) await this.notifyCall("render", (n) => n.onRender(sid, job, { kind: "failed", code, ...made }));
+        }
         await this.settleLine(sid, job, silent ? { kind: "cancelled" } : { kind: "failed", code });
     }
 
@@ -1314,8 +1452,8 @@ export class StudioService {
                     await this.line.remove(key);
                     continue;
                 }
-                if (entry.kind === "slideshow") {
-                    if (!entry.slideshow || !session || session.expires_at <= now || session.status !== "ready") {
+                if (entry.kind === "slideshow" || entry.kind === "gallery_image") {
+                    if (!(entry.kind === "slideshow" ? entry.slideshow : entry.gallery) || !session || session.expires_at <= now || session.status !== "ready") {
                         const gone = !session || session.expires_at <= now;
                         after.push(await this.endEntry(key, entry, gone ? "error.studio.expired" : "error.studio.not_ready", gone));
                         continue;
@@ -1338,7 +1476,7 @@ export class StudioService {
                 const marked: LineEntry = { ...entry, starting: now };
                 await this.line.put(key, marked);
                 this.startingJobs.set(job, now);
-                start = { key, entry: marked, r2Key: session.r2_key, title: session.title, duration: session.duration };
+                start = { key, entry: marked, r2Key: entry.render.r2Key ?? session.r2_key, title: session.title, duration: session.duration };
                 return;
             }
         });
@@ -1364,6 +1502,8 @@ export class StudioService {
         const job = entry.job!;
         const keepAwake = this.d.renew ? setInterval(this.d.renew, 20_000) : undefined;
         let reply;
+        // the source is gone from R2 (a render of one item whose item was deleted while it waited, 18.13): not a storage fault
+        let missing = false;
         try {
             this.d.renew?.();
             reply = await this.d.webp.createFromUpload(
@@ -1371,6 +1511,7 @@ export class StudioService {
                 entry.render!.params,
                 async () => {
                     const obj = await this.d.originals.get(s.r2Key);
+                    if (!obj) missing = true;
                     return obj ? { body: obj.body, size: obj.size } : null;
                 },
                 { id: job },
@@ -1392,6 +1533,11 @@ export class StudioService {
         // a foreign 429 (a /webp job or a poster `held()` did not see), a container that could not be
         // reached (503, or 502 error.webp.unavailable) or a call that threw: it stays at the head and
         // the next pass tries again; the 30 min ceiling bounds it. (Nobody is waiting to retry it.)
+        if (missing && entry.render?.itemId && reply && reply.status === 502 && body?.error?.code === "error.webp.storage") {
+            await this.line.remove(key);
+            await this.endQueuedRender(entry.sid, job, "error.studio.missing", false);
+            return "again";
+        }
         const transient =
             !reply ||
             reply.status === 429 ||
@@ -1575,8 +1721,8 @@ export class StudioService {
             const mine = entry.keyId === keyId;
             return {
                 position: base + i,
-                // a slideshow is a render to everything outside this object (older builds decode two kinds only)
-                kind: entry.kind === "slideshow" ? "render" : entry.kind,
+                // a slideshow or a gallery image is a render to everything outside this object (older builds decode two kinds only)
+                kind: entry.kind === "save" ? "save" : "render",
                 mine,
                 sid: mine ? entry.sid : null,
                 job: mine ? entry.job : null,
@@ -1663,6 +1809,7 @@ export class StudioService {
         let itemsField: unknown;
         let itemCountField: unknown;
         let slideshowField: unknown;
+        let galleryImageField: unknown;
         try {
             if (rawBody.length <= MAX_BODY_BYTES) {
                 const parsed = JSON.parse(rawBody);
@@ -1676,6 +1823,7 @@ export class StudioService {
                     itemsField = (parsed as { items?: unknown }).items;
                     itemCountField = (parsed as { item_count?: unknown }).item_count;
                     slideshowField = (parsed as { slideshow?: unknown }).slideshow;
+                    galleryImageField = (parsed as { gallery_image?: unknown }).gallery_image;
                 }
             }
         } catch {
@@ -1723,16 +1871,27 @@ export class StudioService {
         if (Array.isArray(items) && itemCount !== undefined && items.some((i) => i >= itemCount)) {
             return studioErr(400, "error.studio.invalid_params");
         }
-        let plan: SlideshowPlan | null = null;
-        if (slideshowField !== undefined && slideshowField !== null) {
+        // a make asked for with the save (18.2, 18.12): a slideshow (either format) OR a gallery image, never both
+        const wantsSlideshow = slideshowField !== undefined && slideshowField !== null;
+        const wantsGalleryImage = galleryImageField !== undefined && galleryImageField !== null;
+        if (wantsSlideshow && wantsGalleryImage) return studioErr(400, "error.studio.invalid_params");
+        let make: { kind: "slideshow"; plan: SlideshowPlan } | { kind: "gallery_image"; plan: GalleryImagePlan } | null = null;
+        if (wantsSlideshow || wantsGalleryImage) {
             // only with `items`, and only over items that will be saved
             if (items === undefined) return studioErr(400, "error.studio.invalid_params");
-            const p = parseSlideshowPlan(slideshowField, "error.studio.invalid_params");
-            if (!p.ok) return studioErr(p.status, p.code);
-            if (Array.isArray(items) && p.plan.items.some((i) => !items.includes(i))) return studioErr(400, "error.studio.invalid_params");
-            plan = p.plan;
+            if (wantsSlideshow) {
+                const p = parseSlideshowPlan(slideshowField, "error.studio.invalid_params");
+                if (!p.ok) return studioErr(p.status, p.code);
+                if (Array.isArray(items) && p.plan.items.some((i) => !items.includes(i))) return studioErr(400, "error.studio.invalid_params");
+                make = { kind: "slideshow", plan: { ...p.plan, chained: true } };
+            } else {
+                const p = parseGalleryImagePlan(galleryImageField, "error.studio.invalid_params");
+                if (!p.ok) return studioErr(p.status, p.code);
+                if (Array.isArray(items) && p.plan.items.some((i) => !items.includes(i))) return studioErr(400, "error.studio.invalid_params");
+                make = { kind: "gallery_image", plan: { ...p.plan, chained: true } };
+            }
         }
-        const slideshowJob = plan ? mintId(this.d.randomBytes) : null;
+        const makeJob = make ? mintId(this.d.randomBytes) : null;
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.reapOrphans();
@@ -1756,11 +1915,11 @@ export class StudioService {
                     .run();
                 // the slideshow of the share sheet and the Shortcuts (18.2): its render row now, so the client
                 // has a job id to poll; the job joins the line when the save is ready
-                if (plan && slideshowJob) {
+                if (make && makeJob) {
                     try {
                         await this.d.db
-                            .prepare("INSERT INTO studio_renders (id, session_id, status, created_at, kind, plan) VALUES (?1, ?2, 'pending', ?3, 'slideshow', ?4)")
-                            .bind(slideshowJob, sid, now, JSON.stringify(plan))
+                            .prepare("INSERT INTO studio_renders (id, session_id, status, created_at, kind, plan) VALUES (?1, ?2, 'pending', ?3, ?4, ?5)")
+                            .bind(makeJob, sid, now, make.kind, JSON.stringify(make.plan))
                             .run();
                     } catch (e) {
                         await this.d.db.prepare("DELETE FROM studio_sessions WHERE id = ?1").bind(sid).run().catch(() => {});
@@ -1808,7 +1967,7 @@ export class StudioService {
                 // only for a caller that opted in (a share, or `queue: true`): the rest see today's shape
                 ...(wantsQueue ? { queued: !free, queue_ahead: ahead } : {}),
                 ...(notifyBody ? { notify: notifyBody } : {}),
-                ...(slideshowJob ? { slideshow: { job: slideshowJob } } : {}),
+                ...(make && makeJob ? { make: { job: makeJob, kind: make.kind }, ...(make.kind === "slideshow" ? { slideshow: { job: makeJob } } : {}) } : {}),
             },
         };
     }
@@ -2058,10 +2217,10 @@ export class StudioService {
                 .bind(code, sid)
                 .run();
             const changed = Number(res.meta?.changes ?? 0) > 0;
-            // a slideshow asked for with the save (18.2) cannot be made from a save that failed
+            // a make asked for with the save (18.2, 18.12) cannot be made from a save that failed
             if (changed) {
                 await this.d.db
-                    .prepare("UPDATE studio_renders SET status = 'error', error_code = ?1 WHERE session_id = ?2 AND kind = 'slideshow' AND status = 'pending'")
+                    .prepare("UPDATE studio_renders SET status = 'error', error_code = ?1 WHERE session_id = ?2 AND kind IN ('slideshow', 'gallery_image') AND status = 'pending'")
                     .bind(code, sid)
                     .run()
                     .catch(() => {});
@@ -3131,7 +3290,27 @@ export class StudioService {
         if (priority !== undefined && priority !== null && priority !== "focused") return studioErr(400, "error.webp.invalid_params");
         if (priority === "focused" && !queueFlag) return studioErr(400, "error.webp.invalid_params");
         const focused = priority === "focused";
-        const check = validateRender(parsed, { duration: row.duration, width: row.width, height: row.height });
+        // `item` (18.13): a render of one video or gif item of a gallery reads that item, not the session's lead
+        let source = { r2Key: row.r2_key, duration: row.duration, width: row.width, height: row.height };
+        let item: { index: number; id: string } | undefined;
+        const itemField = isPlainObject(parsed) ? parsed.item : undefined;
+        if (itemField !== undefined && itemField !== null) {
+            if (!isIndex(itemField) || typeof row.item_count !== "number") return studioErr(400, "error.webp.invalid_params");
+            let found: { id: string; r2_key: string; content_type: string | null; duration: number | null; width: number | null; height: number | null } | null;
+            try {
+                found = await this.d.db
+                    .prepare("SELECT id, r2_key, content_type, duration, width, height FROM media_items WHERE session_id = ?1 AND role = 'item' AND item_index = ?2 AND deleted_at IS NULL LIMIT 1")
+                    .bind(sid, itemField)
+                    .first();
+            } catch {
+                return studioErr(503, "error.api.generic");
+            }
+            if (!found) return studioErr(404, "error.studio.not_found");
+            if (itemTypeOf(found.content_type) === "photo") return studioErr(409, "error.studio.not_video");
+            source = { r2Key: found.r2_key, duration: found.duration, width: found.width, height: found.height };
+            item = { index: itemField, id: found.id };
+        }
+        const check = validateRender(parsed, { duration: source.duration, width: source.width, height: source.height });
         if (!check.ok) return studioErr(check.status, check.code);
         const p = check.params;
 
@@ -3140,7 +3319,8 @@ export class StudioService {
         // the helper is held (one job at a time), or somebody waits ahead of this render
         const free = await this.isFree(focused);
 
-        const r2Key = row.r2_key;
+        const r2Key = source.r2Key!;
+        const itemPlan = item ? JSON.stringify({ item: item.index, item_id: item.id }) : null;
         const params: WebpParams = {
             url: row.link ?? "",
             start: p.start,
@@ -3150,7 +3330,7 @@ export class StudioService {
             quality: p.quality,
             ...(p.crop ? { crop: p.crop } : {}),
         };
-        const joinOpts = { sid, row, params, p, focused, notifyFlag: notifyFlag === true };
+        const joinOpts = { sid, row, params, p, focused, notifyFlag: notifyFlag === true, item, r2Key };
         if (!free) {
             if (!queueFlag) return await this.refuse("error.webp.busy");
             return await this.enqueueRender(joinOpts);
@@ -3178,9 +3358,9 @@ export class StudioService {
         try {
             await this.d.db
                 .prepare(
-                    "INSERT INTO studio_renders (id, session_id, status, start, length, width, quality, created_at) VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ?7)",
+                    "INSERT INTO studio_renders (id, session_id, status, start, length, width, quality, created_at, plan) VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ?7, ?8)",
                 )
-                .bind(job, sid, p.start, p.length, p.effectiveWidth, p.quality, this.d.now())
+                .bind(job, sid, p.start, p.length, p.effectiveWidth, p.quality, this.d.now(), itemPlan)
                 .run();
         } catch {
             return studioErr(503, "error.api.generic");
@@ -3200,6 +3380,8 @@ export class StudioService {
         p: RenderParams;
         focused: boolean;
         notifyFlag: boolean;
+        item?: { index: number; id: string };
+        r2Key: string;
     }): Promise<StudioReply> {
         if ((await this.line.size()) >= LINE_MAX) return studioErr(429, "error.studio.line_full");
         const job = mintId(this.d.randomBytes);
@@ -3207,9 +3389,9 @@ export class StudioService {
         try {
             await this.d.db
                 .prepare(
-                    "INSERT INTO studio_renders (id, session_id, status, start, length, width, quality, created_at) VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ?7)",
+                    "INSERT INTO studio_renders (id, session_id, status, start, length, width, quality, created_at, plan) VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ?7, ?8)",
                 )
-                .bind(job, o.sid, o.p.start, o.p.length, o.p.effectiveWidth, o.p.quality, now)
+                .bind(job, o.sid, o.p.start, o.p.length, o.p.effectiveWidth, o.p.quality, now, o.item ? JSON.stringify({ item: o.item.index, item_id: o.item.id }) : null)
                 .run();
         } catch {
             return studioErr(503, "error.api.generic");
@@ -3231,6 +3413,7 @@ export class StudioService {
                     quality: o.p.quality,
                     start: o.p.start,
                     length: o.p.length,
+                    ...(o.item ? { r2Key: o.r2Key, itemId: o.item.id } : {}),
                 },
             },
             o.focused,
@@ -3247,40 +3430,53 @@ export class StudioService {
         return { status: 202, body: { status: "pending", job, queued: true, queue_ahead: joined } };
     }
 
-    // ---- POST /studio/<sid>/slideshow (section 18.5) -----------------------------------------------
+    // ---- POST /studio/<sid>/slideshow (18.5, 18.10) and /gallery-image (18.11): the makes ----------------
+
+    // The live item rows of a post's session, in item_index order (what a make is built from)
+    private async makeRows(sid: string) {
+        return (
+            await this.d.db
+                .prepare(
+                    "SELECT id, item_index, r2_key, content_type, width, height, duration FROM media_items WHERE session_id = ?1 AND role = 'item' AND deleted_at IS NULL ORDER BY item_index, id",
+                )
+                .bind(sid)
+                .all<{ id: string; item_index: number; r2_key: string; content_type: string | null; width: number | null; height: number | null; duration: number | null }>()
+        ).results;
+    }
 
     // Validates a plan against the session's stored items: which are stills and which are videos, the total
-    // length, the frame. The run it returns is what the line entry carries.
+    // length, the frame. The run it returns is what the line entry carries. A `chained` plan (asked for with the
+    // save, 18.12) is built over the asked items that WERE saved: a failed one is dropped, and fewer than 2 left
+    // ends it `error.studio.not_gallery`.
     private async buildSlideshow(
         sid: string,
         plan: SlideshowPlan,
     ): Promise<{ ok: true; run: SlideshowRun } | { ok: false; status: number; code: string }> {
         const bad = (code = "error.webp.invalid_params") => ({ ok: false as const, status: 400, code });
-        let rows: { id: string; item_index: number; r2_key: string; content_type: string | null; width: number | null; height: number | null; duration: number | null }[];
+        let rows: Awaited<ReturnType<StudioService["makeRows"]>>;
         try {
-            rows = (
-                await this.d.db
-                    .prepare(
-                        "SELECT id, item_index, r2_key, content_type, width, height, duration FROM media_items WHERE session_id = ?1 AND role = 'item' AND deleted_at IS NULL ORDER BY item_index, id",
-                    )
-                    .bind(sid)
-                    .all<{ id: string; item_index: number; r2_key: string; content_type: string | null; width: number | null; height: number | null; duration: number | null }>()
-            ).results;
+            rows = await this.makeRows(sid);
         } catch {
             return { ok: false, status: 503, code: "error.api.generic" };
         }
         if (rows.length < 2) return { ok: false, status: 409, code: "error.studio.not_gallery" };
         const byIndex = new Map(rows.map((r) => [r.item_index, r]));
+        let wanted = plan.items.map((index, n) => ({ index, seconds: plan.seconds[n] ?? null }));
+        if (plan.chained) {
+            wanted = wanted.filter((w) => byIndex.has(w.index));
+            if (wanted.length < 2) return { ok: false, status: 409, code: "error.studio.not_gallery" };
+        }
+        const webp = plan.format === "webp";
         const chosen: typeof rows = [];
         const inputs: SlideshowInput[] = [];
         let total = 0;
         let motion = 0;
         let hasVideo = false;
-        for (let n = 0; n < plan.items.length; n++) {
-            const r = byIndex.get(plan.items[n]!);
+        for (let n = 0; n < wanted.length; n++) {
+            const r = byIndex.get(wanted[n]!.index);
             if (!r) return bad();
             const type = itemTypeOf(r.content_type);
-            const seconds = plan.seconds[n] ?? null;
+            const seconds = wanted[n]!.seconds;
             // a still has the seconds it is shown for; a video or a gif plays its own length (a gif once)
             if (type === "photo" ? seconds === null : seconds !== null) return bad();
             // HEIC stays as it was uploaded: the container's ffmpeg has no HEIF still decoder
@@ -3291,15 +3487,56 @@ export class StudioService {
             chosen.push(r);
             inputs.push({ n, index: r.item_index, itemId: r.id, r2Key: r.r2_key, type, seconds });
         }
-        if (total > MAX_SLIDESHOW_SECONDS) return bad("error.webp.too_long");
+        // the webp stops at 60 s and the mp4 at 3:00 (the videos counted); the videos together at 60 s in both
+        if (total > (webp ? MAX_WEBP_SLIDESHOW_SECONDS : MAX_SLIDESHOW_SECONDS) + (webp ? 0.5 : 0)) return bad("error.webp.too_long");
         // the videos inside it cost decode time per second (the stills are made once): a cap of their own
         if (motion > MAX_SLIDESHOW_MOTION_SECONDS) return bad("error.webp.too_long");
         if (plan.sound === "own" && !hasVideo) return bad();
-        const { width, height } = slideshowFrame(plan.frame, chosen);
-        return { ok: true, run: { width, height, fade: plan.fade, sound: plan.sound, inputs } };
+        const { width, height } = slideshowFrame(plan.frame, chosen, webp ? (plan.width ?? 480) : undefined);
+        return {
+            ok: true,
+            run: { width, height, fade: plan.fade, sound: plan.sound, inputs, ...(webp ? { format: "webp" as const, quality: plan.quality ?? "med" } : {}) },
+        };
+    }
+
+    // The gallery image's plan against the stored rows (18.11): photos only, 2-20 of them, in the order to draw.
+    private async buildGalleryImage(
+        sid: string,
+        plan: GalleryImagePlan,
+    ): Promise<{ ok: true; run: GalleryRun } | { ok: false; status: number; code: string }> {
+        let rows: Awaited<ReturnType<StudioService["makeRows"]>>;
+        try {
+            rows = await this.makeRows(sid);
+        } catch {
+            return { ok: false, status: 503, code: "error.api.generic" };
+        }
+        const stills = rows.filter((r) => itemTypeOf(r.content_type) === "photo");
+        if (stills.length < 2) return { ok: false, status: 409, code: "error.studio.too_few_photos" };
+        const byIndex = new Map(rows.map((r) => [r.item_index, r]));
+        let wanted = plan.items;
+        if (plan.chained) {
+            wanted = wanted.filter((i) => byIndex.has(i));
+            if (wanted.length < 2) return { ok: false, status: 409, code: "error.studio.too_few_photos" };
+        }
+        const inputs: SlideshowInput[] = [];
+        for (let n = 0; n < wanted.length; n++) {
+            const r = byIndex.get(wanted[n]!);
+            if (!r || itemTypeOf(r.content_type) !== "photo") return { ok: false, status: 400, code: "error.webp.invalid_params" };
+            if (r.content_type === "image/heic") return { ok: false, status: 400, code: "error.studio.unsupported_image" };
+            inputs.push({ n, index: r.item_index, itemId: r.id, r2Key: r.r2_key, type: "photo", seconds: null });
+        }
+        return { ok: true, run: { layout: plan.layout, inputs } };
     }
 
     async slideshow(keyId: string, sid: string, rawBody: string): Promise<StudioReply> {
+        return await this.makeRoute("slideshow", keyId, sid, rawBody);
+    }
+
+    async galleryImage(keyId: string, sid: string, rawBody: string): Promise<StudioReply> {
+        return await this.makeRoute("gallery_image", keyId, sid, rawBody);
+    }
+
+    private async makeRoute(kind: MakeKind, keyId: string, sid: string, rawBody: string): Promise<StudioReply> {
         const invalid = (code = "error.webp.invalid_params") => studioErr(400, code);
         const owned = await this.ownedSession(keyId, sid);
         if ("reply" in owned) return owned.reply;
@@ -3307,7 +3544,7 @@ export class StudioService {
         if (this.d.now() > row.expires_at) return studioErr(410, "error.studio.expired");
         let parsed: unknown;
         try {
-            if (new TextEncoder().encode(rawBody).length > MAX_SLIDESHOW_BODY_BYTES) return invalid();
+            if (new TextEncoder().encode(rawBody).length > (kind === "slideshow" ? MAX_SLIDESHOW_BODY_BYTES : MAX_GALLERY_IMAGE_BODY_BYTES)) return invalid();
             parsed = JSON.parse(rawBody);
         } catch {
             return invalid();
@@ -3319,10 +3556,21 @@ export class StudioService {
         if (parsed.priority === "focused" && !queueFlag) return invalid();
         const focused = parsed.priority === "focused";
         if (parsed.notify !== undefined && typeof parsed.notify !== "boolean") return invalid();
-        const checked = parseSlideshowPlan(parsed, "error.webp.invalid_params");
-        if (!checked.ok) return studioErr(checked.status, checked.code);
-        if (row.status !== "ready") return studioErr(409, "error.studio.not_ready");
-        const built = await this.buildSlideshow(sid, checked.plan);
+        let planJson: string;
+        let built: { ok: true; run: SlideshowRun | GalleryRun } | { ok: false; status: number; code: string };
+        if (kind === "slideshow") {
+            const checked = parseSlideshowPlan(parsed, "error.webp.invalid_params");
+            if (!checked.ok) return studioErr(checked.status, checked.code);
+            if (row.status !== "ready") return studioErr(409, "error.studio.not_ready");
+            planJson = JSON.stringify(checked.plan);
+            built = await this.buildSlideshow(sid, checked.plan);
+        } else {
+            const checked = parseGalleryImagePlan(parsed, "error.webp.invalid_params");
+            if (!checked.ok) return studioErr(checked.status, checked.code);
+            if (row.status !== "ready") return studioErr(409, "error.studio.not_ready");
+            planJson = JSON.stringify(checked.plan);
+            built = await this.buildGalleryImage(sid, checked.plan);
+        }
         if (!built.ok) return studioErr(built.status, built.code);
 
         await this.posters?.idle(this.d.posterIdleMs);
@@ -3333,17 +3581,14 @@ export class StudioService {
         const now = this.d.now();
         try {
             await this.d.db
-                .prepare("INSERT INTO studio_renders (id, session_id, status, created_at, kind, plan) VALUES (?1, ?2, 'pending', ?3, 'slideshow', ?4)")
-                .bind(job, sid, now, JSON.stringify(checked.plan))
+                .prepare("INSERT INTO studio_renders (id, session_id, status, created_at, kind, plan) VALUES (?1, ?2, 'pending', ?3, ?4, ?5)")
+                .bind(job, sid, now, kind, planJson)
                 .run();
         } catch {
             return studioErr(503, "error.api.generic");
         }
         if (parsed.notify === true) await this.notifyCall("render opt-in", (n) => n.optInJob(sid, job));
-        const joined = await this.joinLine(
-            { kind: "slideshow", sid, job, keyId: row.key_id ?? "", at: now, origin: null, adopt: false, render: null, slideshow: built.run },
-            focused,
-        );
+        const joined = await this.joinLine(this.makeEntry(kind, sid, job, row.key_id ?? "", now, built.run), focused);
         if (joined === null) {
             await this.d.db.prepare("DELETE FROM studio_renders WHERE id = ?1").bind(job).run().catch(() => {});
             return studioErr(429, "error.studio.line_full");
@@ -3359,17 +3604,23 @@ export class StudioService {
         };
     }
 
-    // The slideshow asked for with a save (POST /studio `slideshow`, 18.2): once the save is ready its job joins
-    // the line (or ends with the reason the plan cannot be made). Idempotent; a poll of the job calls it too.
+    // The line entry of a make
+    private makeEntry(kind: MakeKind, sid: string, job: string, keyId: string, at: number, run: SlideshowRun | GalleryRun): Omit<LineEntry, "starting" | "attempts"> {
+        const base = { sid, job, keyId, at, origin: null, adopt: false, render: null } as const;
+        return kind === "slideshow" ? { ...base, kind, slideshow: run as SlideshowRun } : { ...base, kind, gallery: run as GalleryRun };
+    }
+
+    // The make asked for with a save (POST /studio `slideshow` / `gallery_image`, 18.2, 18.12): once the save is ready its
+    // job joins the line (or ends with the reason it cannot be made). Idempotent; a poll of the job calls it too.
     private async startSlideshowAfterSave(sid: string): Promise<void> {
         try {
             const { results } = await this.d.db
-                .prepare("SELECT * FROM studio_renders WHERE session_id = ?1 AND kind = 'slideshow' AND status = 'pending' ORDER BY created_at, id LIMIT 5")
+                .prepare("SELECT * FROM studio_renders WHERE session_id = ?1 AND kind IN ('slideshow', 'gallery_image') AND status = 'pending' ORDER BY created_at, id LIMIT 5")
                 .bind(sid)
                 .all<RenderRow>();
             for (const render of results) await this.ensureSlideshowQueued(sid, render);
         } catch (e) {
-            console.error("[studio] queueing the slideshow of a save failed", sid, String(e));
+            console.error("[studio] queueing the make of a save failed", sid, String(e));
         }
     }
 
@@ -3379,24 +3630,28 @@ export class StudioService {
         if ((await this.d.storage.get(`job:${job}`)) || (await this.line.find(sid, job))) return "queued";
         const session = await getSession(this.d.db, sid);
         if (!session || session.status !== "ready") return "waiting";
-        let plan: SlideshowPlan | null = null;
+        const kind: MakeKind = render.kind === "gallery_image" ? "gallery_image" : "slideshow";
+        let built: { ok: true; run: SlideshowRun | GalleryRun } | { ok: false; status: number; code: string };
         try {
-            const p = parseSlideshowPlan(JSON.parse(render.plan ?? "null"), "error.webp.invalid_params");
-            plan = p.ok ? p.plan : null;
+            const raw = JSON.parse(render.plan ?? "null");
+            if (kind === "slideshow") {
+                const p = parseSlideshowPlan(raw, "error.webp.invalid_params", { stored: true });
+                built = p.ok ? await this.buildSlideshow(sid, p.plan) : { ok: false, status: 400, code: "error.webp.invalid_params" };
+            } else {
+                const p = parseGalleryImagePlan(raw, "error.webp.invalid_params", { stored: true });
+                built = p.ok ? await this.buildGalleryImage(sid, p.plan) : { ok: false, status: 400, code: "error.webp.invalid_params" };
+            }
         } catch {
-            plan = null;
+            built = { ok: false, status: 400, code: "error.webp.invalid_params" };
         }
-        const built = plan ? await this.buildSlideshow(sid, plan) : ({ ok: false, status: 400, code: "error.webp.invalid_params" } as const);
         if (!built.ok) {
             await this.endQueuedRender(sid, job, built.code, false);
             return "ended";
         }
+        const entry = this.makeEntry(kind, sid, job, session.key_id ?? "", this.d.now(), built.run);
         const joined = await this.withLine(async () => {
             if (await this.line.find(sid, job)) return "dup" as const;
-            const q = await this.line.enqueue(
-                { kind: "slideshow", sid, job, keyId: session.key_id ?? "", at: this.d.now(), origin: null, adopt: false, render: null, slideshow: built.run },
-                false,
-            );
+            const q = await this.line.enqueue(entry, false);
             return "full" in q ? ("full" as const) : ("ok" as const);
         });
         if (joined === "full") {
@@ -3408,26 +3663,28 @@ export class StudioService {
         return "queued";
     }
 
-    private async dropSlideshowJob(job: string): Promise<void> {
+    private async dropSlideshowJob(job: string, kind: MakeKind = "slideshow"): Promise<void> {
         try {
-            await this.callHelper(`/slideshow/${job}`, { method: "DELETE" });
+            await this.callHelper(`/${helperDir(kind)}/${job}`, { method: "DELETE" });
         } catch {
             // the helper reaps an idle job on its own
         }
     }
 
-    // Streams each chosen original into the helper and starts the job (18.7). "transient": the helper is busy or did
-    // not answer, the entry stays at the head; "fatal": it cannot be made, with the code.
+    // Streams each chosen original into the helper and starts the job (18.7, 18.11). "transient": the helper is busy or
+    // did not answer, the entry stays at the head; "fatal": it cannot be made, with the code.
     private async uploadSlideshow(
         sid: string,
         job: string,
-        run: SlideshowRun,
+        kind: MakeKind,
+        run: SlideshowRun | GalleryRun,
     ): Promise<{ kind: "started" } | { kind: "transient" } | { kind: "fatal"; code: string }> {
         try {
             await this.d.ensureRunning();
         } catch {
             return { kind: "transient" };
         }
+        const dir = helperDir(kind);
         for (const input of run.inputs) {
             let obj: Awaited<ReturnType<OriginalsBucket["get"]>>;
             try {
@@ -3439,7 +3696,7 @@ export class StudioService {
             let res: Response;
             try {
                 res = await this.callHelper(
-                    `/slideshow/${job}/inputs/${input.n}`,
+                    `/${dir}/${job}/inputs/${input.n}`,
                     {
                         method: "PUT",
                         headers: { "content-type": "application/octet-stream", "content-length": String(obj.size) },
@@ -3462,18 +3719,26 @@ export class StudioService {
             if (res.status === 429 || res.status === 503) return { kind: "transient" };
             return { kind: "fatal", code: "error.webp.unavailable" };
         }
+        // a helper that does not say `make=1` (an older image) would make an mp4 of a webp plan: never start that
+        const webp = kind === "slideshow" && (run as SlideshowRun).format === "webp";
+        if (webp && this.helperMake !== true) return { kind: "fatal", code: "error.webp.unavailable" };
         let res: Response;
         try {
-            res = await this.callHelper(`/slideshow/${job}/start`, {
+            const body =
+                kind === "gallery_image"
+                    ? { layout: (run as GalleryRun).layout, slides: run.inputs.map((i) => ({ n: i.n })) }
+                    : {
+                          width: (run as SlideshowRun).width,
+                          height: (run as SlideshowRun).height,
+                          fade: (run as SlideshowRun).fade,
+                          sound: (run as SlideshowRun).sound,
+                          slides: run.inputs.map((i) => ({ n: i.n, seconds: i.seconds })),
+                          ...(webp ? { format: "webp", quality: (run as SlideshowRun).quality ?? "med", fps: RENDER_FPS } : {}),
+                      };
+            res = await this.callHelper(`/${dir}/${job}/start`, {
                 method: "POST",
                 headers: { "content-type": "application/json" },
-                body: JSON.stringify({
-                    width: run.width,
-                    height: run.height,
-                    fade: run.fade,
-                    sound: run.sound,
-                    slides: run.inputs.map((i) => ({ n: i.n, seconds: i.seconds })),
-                }),
+                body: JSON.stringify(body),
             });
         } catch {
             return { kind: "transient" };
@@ -3494,28 +3759,30 @@ export class StudioService {
         return { kind: "fatal", code: "error.webp.unavailable" };
     }
 
-    // Starts a queued slideshow the way startQueuedRender starts a render (section 17.5 step 3).
+    // Starts a queued make the way startQueuedRender starts a render (section 17.5 step 3).
     private async startQueuedSlideshow(s: { key: string; entry: LineEntry }): Promise<"done" | "again"> {
         const { key, entry } = s;
         const job = entry.job!;
+        const kind: MakeKind = entry.kind === "gallery_image" ? "gallery_image" : "slideshow";
+        const run = (kind === "slideshow" ? entry.slideshow : entry.gallery)!;
         const keepAwake = this.d.renew ? setInterval(this.d.renew, 20_000) : undefined;
         let out: Awaited<ReturnType<StudioService["uploadSlideshow"]>>;
         try {
             this.d.renew?.();
-            out = await this.uploadSlideshow(entry.sid, job, entry.slideshow!);
+            out = await this.uploadSlideshow(entry.sid, job, kind, run);
         } catch (e) {
-            console.error("[studio] starting a queued slideshow threw", job, String(e));
+            console.error("[studio] starting a queued make threw", job, String(e));
             out = { kind: "transient" };
         } finally {
             if (keepAwake !== undefined) clearInterval(keepAwake);
             this.startingJobs.delete(job);
         }
         if (out.kind === "started") {
-            const rec: JobRecord = {
+            const rec: MakeJobRecord = {
                 keyId: `studio:${entry.sid}`,
                 createdAt: this.d.now(),
                 params: { url: "", start: 0, length: 0, width: 480, fps: RENDER_FPS, quality: "med" },
-                slideshow: entry.slideshow!,
+                ...(kind === "slideshow" ? { slideshow: entry.slideshow! } : { gallery: entry.gallery! }),
             };
             await this.d.storage.put(`job:${job}`, rec);
             this.encodes.set(job, this.d.now());
@@ -3524,7 +3791,7 @@ export class StudioService {
             return "done";
         }
         // a partly uploaded job must not keep holding the helper
-        await this.dropSlideshowJob(job);
+        await this.dropSlideshowJob(job, kind);
         if (out.kind === "transient") {
             await this.line.put(key, { ...entry, starting: null, attempts: entry.attempts + 1 });
             return "done";
@@ -3534,9 +3801,11 @@ export class StudioService {
         return "again";
     }
 
-    // a slideshow job's last word from the helper (in memory only)
+    // a make job's last word from the helper (in memory only)
     private slideProgress = new Map<string, { phase: "composing" | "encoding"; done: number | null; total: number | null }>();
     private slideInflight = new Map<string, Promise<StudioReply>>();
+    // sid -> the collect of a make running (or last queued) for that post (in memory only)
+    private postLocks = new Map<string, Promise<void>>();
 
     private slidePending(job: string, phase: "queued" | "uploading" | "composing" | "encoding", ahead: number | null = null): StudioReply {
         const p = phase === "composing" || phase === "encoding" ? this.slideProgress.get(job) : undefined;
@@ -3546,13 +3815,19 @@ export class StudioService {
         };
     }
 
+    // The done answer of a make, from its row: the plan column keeps what the helper's answer added (`out`)
     private async slideshowSuccess(row: RenderRow): Promise<StudioReply> {
+        const plan = parseJsonObject(row.plan);
+        const gallery = row.kind === "gallery_image";
+        const webp = !gallery && plan?.format === "webp";
+        const out = isPlainObject(plan?.out) ? (plan!.out as Record<string, unknown>) : {};
+        const asList = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === "number" || typeof x === "string") : []);
         let item: { id: string; url: string | null } | null = null;
         try {
-            // the stored file is named by the job (`originals/<sid>-s<job>.mp4`)
+            // the stored file is named by the job (`originals/<sid>-s<job>.mp4|webp`, `originals/<sid>-g<job>.jpg`)
             item = await this.d.db
                 .prepare("SELECT id, url FROM media_items WHERE bucket = 'originals' AND r2_key = ?1 AND deleted_at IS NULL LIMIT 1")
-                .bind(`originals/${row.session_id}-s${row.id}.mp4`)
+                .bind(makeKey(row.session_id, row.id, gallery ? "gallery_image" : "slideshow", webp))
                 .first<{ id: string; url: string | null }>();
         } catch {
             // the answer below says what the row knows
@@ -3567,17 +3842,19 @@ export class StudioService {
                 bytes: row.bytes,
                 width: row.out_width,
                 height: row.out_height,
-                seconds: row.seconds,
+                ...(gallery ? { cropped: asList(out.cropped), upscaled: asList(out.upscaled) } : { seconds: row.seconds, format: webp ? "webp" : "mp4" }),
+                replaced: asList(out.replaced),
             },
         };
     }
 
-    // The status of a slideshow job (18.5): the render row is the record, the helper is asked while it is pending.
+    // The status of a make job (18.5, 18.11): the render row is the record, the helper is asked while it is pending.
     private async slideshowStatus(sid: string, job: string, session: SessionRow, row: RenderRow): Promise<StudioReply> {
         if (row.status === "success") return await this.slideshowSuccess(row);
         if (row.status === "error") return studioErr(200, row.error_code ?? "error.webp.encode_failed");
-        const rec = await this.d.storage.get<JobRecord>(`job:${job}`);
-        if (!rec?.slideshow) {
+        const kind: MakeKind = row.kind === "gallery_image" ? "gallery_image" : "slideshow";
+        const rec = await this.d.storage.get<MakeJobRecord>(`job:${job}`);
+        if (!rec?.slideshow && !rec?.gallery) {
             const waiting = await this.line.find(sid, job);
             if (waiting) {
                 const fresh = startingFresh(waiting.entry, this.d.now());
@@ -3593,21 +3870,21 @@ export class StudioService {
                 }
                 return this.slidePending(job, "queued");
             }
-            return await this.endSlideshow(sid, job, "error.webp.job_lost");
+            return await this.endSlideshow(sid, job, "error.webp.job_lost", kind);
         }
 
         let res: Response;
         try {
-            res = await this.callHelper(`/slideshow/${job}`);
+            res = await this.callHelper(`/${helperDir(kind)}/${job}`);
         } catch {
             return this.slidePending(job, "composing");
         }
-        if (res.status === 404) return await this.endSlideshow(sid, job, "error.webp.job_lost");
+        if (res.status === 404) return await this.endSlideshow(sid, job, "error.webp.job_lost", kind);
         const body = await this.readJson(res);
         if (!body || typeof body.status !== "string") return this.slidePending(job, "composing");
         if (body.status === "error") {
             const code = body.error?.code;
-            return await this.endSlideshow(sid, job, typeof code === "string" ? code : "error.webp.encode_failed");
+            return await this.endSlideshow(sid, job, typeof code === "string" ? code : "error.webp.encode_failed", kind);
         }
         if (body.status === "pending") {
             const phase = body.phase === "encoding" ? "encoding" : "composing";
@@ -3617,13 +3894,24 @@ export class StudioService {
         if (body.status !== "done") return this.slidePending(job, "composing");
         const existing = this.slideInflight.get(job);
         if (existing) return existing;
-        const p = this.collectSlideshow(sid, job, session, rec, body).finally(() => this.slideInflight.delete(job));
+        // one collect per post at a time, in the order they came: a collect stores its file and then deletes the earlier one of
+        // its kind (R8), so two at once would each delete the other's new file; run in turn, the later one replaces the earlier
+        const prev = this.postLocks.get(sid) ?? Promise.resolve();
+        const p = prev.then(() => this.collectSlideshow(sid, job, session, rec, row, body)).finally(() => this.slideInflight.delete(job));
+        const tail = p.then(
+            () => {},
+            () => {},
+        );
+        this.postLocks.set(sid, tail);
+        void tail.then(() => {
+            if (this.postLocks.get(sid) === tail) this.postLocks.delete(sid);
+        });
         this.slideInflight.set(job, p);
         return p;
     }
 
     // The render ends in an error (recorded once, as a result, so polling again is stable) and the helper is freed.
-    private async endSlideshow(sid: string, job: string, code: string): Promise<StudioReply> {
+    private async endSlideshow(sid: string, job: string, code: string, kind: MakeKind = "slideshow"): Promise<StudioReply> {
         const upd = await this.d.db
             .prepare("UPDATE studio_renders SET status = 'error', error_code = ?1 WHERE id = ?2 AND status = 'pending'")
             .bind(code, job)
@@ -3637,18 +3925,58 @@ export class StudioService {
             if (now?.status === "error") return studioErr(200, now.error_code ?? code);
         }
         await this.d.storage.put(`result:${job}`, { status: "error", error: { code } });
-        await this.dropSlideshowJob(job);
+        await this.dropSlideshowJob(job, kind);
         return studioErr(200, code);
     }
 
-    // The helper finished: its file goes to R2 as a `role 'slideshow'` row of the post, with the post's visibility
-    // and a poster (18.5). A transient failure leaves the job as it is: the next poll collects it.
-    private async collectSlideshow(sid: string, job: string, session: SessionRow, rec: JobRecord, done: Record<string, unknown>): Promise<StudioReply> {
-        const run = rec.slideshow!;
+    // A poster JPEG (the bytes) into the public bucket under 13.3's naming; null without a public bucket or on anything wrong.
+    private async storePosterJpeg(sid: string, jpeg: ArrayBuffer): Promise<{ url: string; name: string } | null> {
+        if (!this.d.media || !this.d.mediaBaseUrl) return null;
+        try {
+            const head = new Uint8Array(jpeg, 0, Math.min(2, jpeg.byteLength));
+            if (jpeg.byteLength === 0 || jpeg.byteLength > MAX_POSTER_BYTES || head[0] !== 0xff || head[1] !== 0xd8) return null;
+            const name = `${randomBase62(MEDIA_NAME_LENGTH, this.d.randomBytes)}.jpg`;
+            await this.d.media.put(name, jpeg, {
+                httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" },
+                customMetadata: { poster: "1", sessionId: sid, createdAt: String(this.d.now()) },
+            });
+            const base = this.d.mediaBaseUrl.endsWith("/") ? this.d.mediaBaseUrl : `${this.d.mediaBaseUrl}/`;
+            return { url: base + name, name };
+        } catch (e) {
+            console.error("[studio] storing a make's poster failed", sid, String(e));
+            return null;
+        }
+    }
+
+    // One live row goes: its object (and public mirror), the row, an unshared poster, the edge copy (as 18.4). Throws
+    // when the object cannot be deleted, so the row stays live and the caller leaves it.
+    private async removeMadeRow(f: { id: string; bucket: string; r2_key: string; public_key: string | null; poster: string | null; url: string | null }): Promise<void> {
+        await (f.bucket === "media" ? this.d.media : this.d.originals)?.delete(f.r2_key);
+        if (f.public_key) await this.d.media?.delete(f.public_key);
+        await this.d.db.prepare("UPDATE media_items SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL").bind(this.d.now(), f.id).run();
+        if (f.poster) await releasePoster(this.d.db, this.d.media, f.poster);
+        if (f.url) await purgeUrls({ purge: this.d.purge }, [f.url]).catch(() => null);
+    }
+
+    // The helper finished: its file goes to R2 as a made row of the post (`role 'slideshow'`, or `role 'export'` for the
+    // gallery image), with the post's visibility and a poster; the earlier file of the same kind goes (R8). A transient
+    // failure leaves the job as it is: the next poll collects it.
+    private async collectSlideshow(
+        sid: string,
+        job: string,
+        session: SessionRow,
+        rec: MakeJobRecord,
+        render: RenderRow,
+        done: Record<string, unknown>,
+    ): Promise<StudioReply> {
+        const kind: MakeKind = rec.gallery ? "gallery_image" : "slideshow";
+        const run = (rec.slideshow ?? rec.gallery)!;
+        const slide = rec.slideshow;
+        const webp = kind === "slideshow" && slide?.format === "webp";
         const transient = () => ({ status: 502, body: { status: "error", error: { code: "error.webp.storage" } } }) as StudioReply;
         let file: Response;
         try {
-            file = await this.callHelper(`/slideshow/${job}/file`);
+            file = await this.callHelper(`/${helperDir(kind)}/${job}/file`);
         } catch {
             return transient();
         }
@@ -3660,18 +3988,20 @@ export class StudioService {
             if (now?.status === "success") return await this.slideshowSuccess(now);
             return transient();
         }
-        if (declared > MAX_SOURCE_BYTES) return await this.endSlideshow(sid, job, "error.studio.too_large");
-        const key = `originals/${sid}-s${job}.mp4`;
+        if (declared > MAX_SOURCE_BYTES) return await this.endSlideshow(sid, job, "error.studio.too_large", kind);
+        const key = makeKey(sid, job, kind, webp);
+        const contentType = kind === "gallery_image" ? "image/jpeg" : webp ? "image/webp" : "video/mp4";
+        const role = kind === "gallery_image" ? "export" : "slideshow";
         let stored: { size: number } | null;
         const keepAwake = this.d.renew ? setInterval(this.d.renew, 20_000) : undefined;
         try {
             this.d.renew?.();
             stored = await this.d.originals.put(key, this.d.fixedLength(file.body, declared), {
-                httpMetadata: { contentType: "video/mp4" },
-                customMetadata: { keyId: session.key_id ?? "", source: (session.link ?? "").slice(0, 1000), sessionId: sid, role: "slideshow", createdAt: String(this.d.now()) },
+                httpMetadata: { contentType },
+                customMetadata: { keyId: session.key_id ?? "", source: (session.link ?? "").slice(0, 1000), sessionId: sid, role, createdAt: String(this.d.now()) },
             });
         } catch (e) {
-            console.error("[studio] R2 put of a slideshow failed", job, String(e));
+            console.error("[studio] R2 put of a make failed", job, String(e));
             await this.d.originals.delete(key).catch(() => {});
             return transient();
         } finally {
@@ -3680,16 +4010,43 @@ export class StudioService {
         const bytes = stored?.size ?? declared;
         const width = finite(done.width);
         const height = finite(done.height);
-        const seconds = finite(done.duration);
-        const spec = JSON.stringify({ items: run.inputs.map((i) => i.index), seconds: run.inputs.map((i) => i.seconds), fade: run.fade, frame: `${run.width}x${run.height}`, sound: run.sound });
-        const name = `${(session.title ?? sid).slice(0, 100)}-video.mp4`;
+        const seconds = kind === "slideshow" ? finite(done.duration) : null;
+
+        // the webp's poster is the helper's first frame (ffmpeg here cannot decode an animated webp, so no poster job)
+        let poster: { url: string; name: string } | null = null;
+        if (webp) {
+            try {
+                const pr = await this.callHelper(`/slideshow/${job}/poster`);
+                if (pr.ok) poster = await this.storePosterJpeg(sid, await pr.arrayBuffer());
+                else await pr.body?.cancel().catch(() => {});
+            } catch {
+                // the row has no poster: the app draws the webp itself
+            }
+        }
+
+        const inputs = run.inputs;
+        const title = (session.title ?? sid).slice(0, 100);
+        let spec: string;
+        let name: string;
+        if (kind === "gallery_image") {
+            spec = JSON.stringify({ kind: "gallery", layout: (run as GalleryRun).layout, items: inputs.map((i) => i.index) });
+            name = `${title}-gallery-${(run as GalleryRun).layout}.jpg`;
+        } else {
+            const s = run as SlideshowRun;
+            // `format` always fits: a spec over 512 bytes (20 items) drops the lists first (made_from names the items)
+            const base = { format: webp ? "webp" : "mp4", fade: s.fade, frame: `${s.width}x${s.height}`, ...(webp ? { quality: s.quality ?? "med", width: s.width } : { sound: s.sound }) };
+            const full = { ...base, items: inputs.map((i) => i.index), seconds: inputs.map((i) => i.seconds) };
+            const fits = (o: object) => new TextEncoder().encode(JSON.stringify(o)).length <= 512;
+            spec = JSON.stringify(fits(full) ? full : fits({ ...base, items: full.items }) ? { ...base, items: full.items } : base);
+            name = `${title}-${webp ? "slideshow.webp" : "video.mp4"}`;
+        }
         await insertMediaItem(this.d.db, {
             kind: "private",
             source: "studio",
             bucket: "originals",
             r2_key: key,
             name,
-            content_type: "video/mp4",
+            content_type: contentType,
             bytes,
             width,
             height,
@@ -3698,19 +4055,22 @@ export class StudioService {
             session_id: sid,
             key_id: session.key_id,
             created_at: this.d.now(),
-            role: "slideshow",
-            made_from: JSON.stringify(run.inputs.map((i) => i.itemId)),
+            role,
+            made_from: JSON.stringify(inputs.map((i) => i.itemId)),
             made_spec: new TextEncoder().encode(spec).length <= 512 ? spec : null,
             post_key: sid,
+            poster: poster?.url ?? null,
         });
 
         // the post's visibility: the new file is public when its lead item is (best effort, the owner's switch can fix it)
         let url: string | null = null;
+        let newRowId: string | null = null;
         try {
             const mine = await this.d.db
                 .prepare(`SELECT ${ITEM_COLUMNS} FROM media_items WHERE bucket = 'originals' AND r2_key = ?1 AND deleted_at IS NULL LIMIT 1`)
                 .bind(key)
                 .first<MediaRow>();
+            newRowId = mine?.id ?? null;
             const lead = session.r2_key ? await getRow(this.d.db, (await this.itemIdOf(session.r2_key)) ?? "") : null;
             const vis = this.visDeps();
             if (mine && vis && lead && effectiveVisibility(lead) === "public") {
@@ -3720,22 +4080,76 @@ export class StudioService {
                 url = mine.url;
             }
         } catch (e) {
-            console.error("[studio] making the slideshow public failed", job, String(e));
+            console.error("[studio] making the make public failed", job, String(e));
         }
-        await this.posters?.onReady(key);
+        if (!webp) await this.posters?.onReady(key);
 
+        // one of a kind per post (R8): the earlier file goes once the new one is stored
+        // (a collect that is run again after a transient failure keeps what the first run already replaced: it was written
+        // to the plan before this step ended, so `replaced` says the same however often the job is collected)
+        const prior = (parseJsonObject(render.plan)?.out as { replaced?: unknown } | undefined)?.replaced;
+        const replaced: string[] = Array.isArray(prior) ? prior.filter((x): x is string => typeof x === "string") : [];
+        const replacedBefore = replaced.length;
+        if (newRowId) {
+            try {
+                const { results } = await this.d.db
+                    .prepare(
+                        "SELECT id, bucket, r2_key, public_key, poster, url, content_type, made_spec FROM media_items WHERE post_key = ?1 AND role = ?2 AND deleted_at IS NULL AND id <> ?3 AND r2_key <> ?4",
+                    )
+                    .bind(sid, role, newRowId, key)
+                    .all<{ id: string; bucket: string; r2_key: string; public_key: string | null; poster: string | null; url: string | null; content_type: string | null; made_spec: string | null }>();
+                for (const old of results) {
+                    const same =
+                        kind === "gallery_image"
+                            ? (() => {
+                                  const sp = parseJsonObject(old.made_spec);
+                                  return sp?.kind === "gallery" && sp.layout === (run as GalleryRun).layout;
+                              })()
+                            : // a row made before 18.10 is an mp4
+                              (old.content_type === "image/webp") === webp;
+                    if (!same) continue;
+                    try {
+                        await this.removeMadeRow(old);
+                        replaced.push(old.id);
+                    } catch (e) {
+                        console.error("[studio] replacing the earlier make failed", old.id, String(e));
+                    }
+                }
+            } catch (e) {
+                console.error("[studio] replacing the earlier make failed", job, String(e));
+            }
+        }
+
+        if (replaced.length > replacedBefore) {
+            await this.d.db
+                .prepare("UPDATE studio_renders SET plan = ?1 WHERE id = ?2 AND status = 'pending'")
+                .bind(JSON.stringify({ ...(parseJsonObject(render.plan) ?? {}), out: { replaced } }), job)
+                .run()
+                .catch(() => {});
+        }
+
+        // what the helper added to its answer, kept on the row so every later poll says the same
+        const out =
+            kind === "gallery_image"
+                ? {
+                      replaced,
+                      cropped: slotsToItems(done.cropped, inputs),
+                      upscaled: slotsToItems(done.upscaled, inputs),
+                  }
+                : { replaced };
+        const plan = { ...(parseJsonObject(render.plan) ?? {}), out };
         const upd = await this.d.db
             .prepare(
-                "UPDATE studio_renders SET status = 'success', error_code = NULL, url = ?1, bytes = ?2, out_width = ?3, out_height = ?4, seconds = ?5 WHERE id = ?6 AND status = 'pending'",
+                "UPDATE studio_renders SET status = 'success', error_code = NULL, url = ?1, bytes = ?2, out_width = ?3, out_height = ?4, seconds = ?5, plan = ?6 WHERE id = ?7 AND status = 'pending'",
             )
-            .bind(url, bytes, width, height, seconds, job)
+            .bind(url, bytes, width, height, seconds, JSON.stringify(plan), job)
             .run();
         this.encodes.delete(job);
         this.slideProgress.delete(job);
         const finished = (await getRender(this.d.db, sid, job)) ?? null;
         const reply = finished ? await this.slideshowSuccess(finished) : transient();
         if (Number(upd.meta?.changes ?? 0) > 0 && reply.status === 200) await this.d.storage.put(`result:${job}`, reply.body);
-        await this.dropSlideshowJob(job);
+        await this.dropSlideshowJob(job, kind);
         return reply;
     }
 
@@ -3853,7 +4267,7 @@ export class StudioService {
         }
         if (!row) return studioErr(404, "error.studio.not_found");
         // a slideshow (section 18.5) is collected from its own helper job
-        if (row.kind === "slideshow") return await this.slideshowStatus(sid, job, found.row, row);
+        if (row.kind === "slideshow" || row.kind === "gallery_image") return await this.slideshowStatus(sid, job, found.row, row);
         if (row.status === "success") return { status: 200, body: this.successBody(row) };
         if (row.status === "error") {
             return studioErr(200, row.error_code ?? "error.webp.encode_failed");
@@ -3920,6 +4334,8 @@ export class StudioService {
                     session_id: sid,
                     key_id: found.row.key_id,
                     created_at: this.d.now(),
+                    // a webp of one item of a gallery says which (18.13)
+                    ...(typeof parseJsonObject(row.plan)?.item_id === "string" ? { made_from: JSON.stringify([parseJsonObject(row.plan)!.item_id]) } : {}),
                 });
             }
             return { status: 200, body: this.successBody(done) };
@@ -4239,15 +4655,21 @@ export async function handleStudioRoute(
         if (!STUDIO_JOB_REGEX.test(job)) return toResponse(studioErr(404, "error.studio.not_found"));
         return toResponse(await service.cancelRender(keyId, sid, job));
     }
-    // POST /studio/<sid>/slideshow and POST /studio/<sid>/items/retry (section 18): keyed, the creating key only
-    if (request.method === "POST" && parts[1] === "studio" && ((parts.length === 4 && parts[3] === "slideshow") || (parts.length === 5 && parts[3] === "items" && parts[4] === "retry"))) {
+    // POST /studio/<sid>/slideshow, /gallery-image and /items/retry (section 18): keyed, the creating key only
+    if (request.method === "POST" && parts[1] === "studio" && ((parts.length === 4 && (parts[3] === "slideshow" || parts[3] === "gallery-image")) || (parts.length === 5 && parts[3] === "items" && parts[4] === "retry"))) {
         const keyId = request.headers.get(KEY_ID_HEADER);
         if (!keyId) return new Response(null, { status: 403 });
         if (keyId === SERVICE_KEY_ID) return new Response(null, { status: 404 });
         const sid = parts[2];
         if (!STUDIO_SID_REGEX.test(sid)) return toResponse(studioErr(404, "error.studio.not_found"));
         const body = await request.text();
-        return toResponse(parts[3] === "slideshow" ? await service.slideshow(keyId, sid, body) : await service.retryItems(keyId, sid, body));
+        return toResponse(
+            parts[3] === "slideshow"
+                ? await service.slideshow(keyId, sid, body)
+                : parts[3] === "gallery-image"
+                  ? await service.galleryImage(keyId, sid, body)
+                  : await service.retryItems(keyId, sid, body),
+        );
     }
     if (parts.length >= 4 && parts[1] === "studio" && parts[3] === "render") {
         const sid = parts[2];

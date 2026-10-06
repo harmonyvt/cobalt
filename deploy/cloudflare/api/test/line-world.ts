@@ -43,8 +43,8 @@ export class LiveLog {
     hasActiveRuns = async () => false;
 }
 
-export async function lineWorld(opts: { hook?: string | null; posters?: boolean } = {}) {
-    const w = world();
+export async function lineWorld(opts: { hook?: string | null; posters?: boolean; helperFn?: (path: string, init?: RequestInit) => Promise<Response> } = {}) {
+    const w = world(opts.helperFn ? { helperFn: opts.helperFn } : {});
     await w.addKey();
     const hark = new FakeHark();
     const notify = new NotifyService({

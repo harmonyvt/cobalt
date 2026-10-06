@@ -971,6 +971,7 @@ describe("GET /capabilities", () => {
                 // advertised only once the container's helper has said it has the slideshow routes (none has
                 // answered in this world yet)
                 gallery: false,
+                gallery_make: false,
             },
             limits: {
                 max_webp_seconds: 10,

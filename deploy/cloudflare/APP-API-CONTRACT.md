@@ -2065,8 +2065,8 @@ carousel with `error.webp.no_video` (`helper/lib.js:188-202`, `server.js:582`). 
   error.webp.invalid_params`. `seconds` of a photo: **0.5 to 15**, one decimal (was 1 to 15). `sound` must be `"none"` with `webp`
   (else 400). Totals: `webp` ≤ **60 s** (`400 error.webp.too_long` when the photos alone exceed it; with videos the helper decides
   after probing), `mp4` ≤ 180 s as before; videos and gifs ≤ 60 s together in both (helper, `error.webp.too_long`).
-- **Frame**: `mp4` as 18.5. `webp`: width = `width`, height = even(width / aspect) with the aspect of `keep` (18.5's most common size),
-  `9:16` or `1:1` (480 → 480×600 for 4:5, 480×854, 480×480).
+- **Frame**: `mp4` as 18.5. `webp`: width = `width`, height = width / the aspect of `keep` (18.5's most common size),
+  `9:16` or `1:1`, to the **nearest even** number and at most 1920 (480 → 480×600 for 4:5, 480×854, 480×480).
 - **Helper**: `POST /slideshow/:id/start` gains `format`, `quality`, `fps` (15; webp only); `seconds` 0.5-15. The webp recipe is
   `apple/CONTRACT-GALLERY.md` 6.2 (a frame list encoded by one `img2webp` run with today's `-kmin 3 -kmax 5`). `GET /slideshow/:id`
   done answers `{bytes, duration, width, height, format}`; `GET /slideshow/:id/file` → `image/webp` or `video/mp4`; new `GET
@@ -2106,7 +2106,7 @@ carousel with `error.webp.no_video` (`helper/lib.js:188-202`, `server.js:582`). 
 
 - `POST /studio` (with `items`) takes `slideshow` as 18.2 plus 18.10's `format`/`quality`/`width`, **or** `gallery_image: {items,
   layout}` (18.11's fields), not both (400). `slideshow.seconds` carries `null` for every video and gif item (its own length) and the
-  photo time for every photo, in the plan's order (the approved boards' shape); a number for a video or `null` for a photo → 400. The make's render row is created with the session (its job id is in the answer as
+  photo time for every photo, in the plan's order (the approved boards' shape); a number for a video or `null` for a photo → 400 on `POST /studio/<sid>/slideshow`; on `POST /studio` the item types are not known until the save is done, so the mix is checked then and the make ends `error.webp.invalid_params` (the save stays). The make's render row is created with the session (its job id is in the answer as
   `make: {job, kind}`) and joins the line (class 1) when the save is ready, over the asked items **that were saved** (a failed item is
   dropped from the plan; for a gallery image, fewer than 2 photos left → the render ends `error.studio.too_few_photos`, the save
   stays; for a slideshow, fewer than 2 items left → `error.studio.not_gallery`).

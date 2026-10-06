@@ -85,6 +85,7 @@ export type LookupThen =
     | "studio_cancel"
     // photos and galleries (APP-API-CONTRACT.md section 18)
     | "studio_slideshow"
+    | "studio_gallery_image"
     | "studio_items_retry"
     | "library_item_delete"
     | "library_made"
@@ -396,6 +397,11 @@ function decideStudio(req: GateRequest): GateDecision {
     if (sub === "slideshow" && job === undefined) {
         if (req.service) return reject(404);
         return req.method === "POST" ? lookupThen(req, "studio_slideshow", { sid }) : reject(404);
+    }
+    // The gallery image made from a gallery's photos (section 18.11): the same rules as the slideshow
+    if (sub === "gallery-image" && job === undefined) {
+        if (req.service) return reject(404);
+        return req.method === "POST" ? lookupThen(req, "studio_gallery_image", { sid }) : reject(404);
     }
     if (sub === "items" && job === "retry") {
         if (req.service) return reject(404);

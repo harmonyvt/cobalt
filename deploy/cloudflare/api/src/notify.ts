@@ -128,18 +128,26 @@ export function savedMessage(what: string, duration: number | null): { title: st
     };
 }
 
+// What a make is called to the owner (APP-API-CONTRACT 18.12): the three things a gallery can be made into
+export type MakeWhat = "slideshow webp" | "slideshow" | "gallery image";
+
 export type RenderSuccess = {
-    url: string;
+    // a private post's make has no public link: the message then has no link line (a tap still opens the session)
+    url: string | null;
     bytes: number | null;
     width: number | null;
     height: number | null;
+    // absent = a webp of a clip (today)
+    what?: MakeWhat;
 };
 
-export function renderedMessage(r: RenderSuccess): { title: string; body: string } {
-    const parts = ["webp ready"];
+// `<what> ready · <w>×<h> · <size>` + the link; a make that came with a save (`label`, 18.12) leads with the post's name
+export function renderedMessage(r: RenderSuccess, label?: string | null): { title: string; body: string } {
+    const parts = [`${r.what ?? "webp"} ready`];
     if (r.width && r.height) parts.push(`${r.width}×${r.height}`);
     if (r.bytes && r.bytes > 0) parts.push(formatBytes(r.bytes));
-    return { title: "cobalt", body: clip(`${parts.join(" · ")}\n${r.url}`, HARK_MAX_BODY) };
+    const head = label && r.what ? `${label} · ` : "";
+    return { title: "cobalt", body: clip(`${head}${parts.join(" · ")}${r.url ? `\n${r.url}` : ""}`, HARK_MAX_BODY) };
 }
 
 // A short plain reason for an error code the owner may see on the lock screen.
@@ -175,14 +183,33 @@ export function plainReason(code: string): string {
             return "the server was not available";
         case "error.webp.too_long":
             return "the clip is too long";
+        case "error.studio.too_few_photos":
+            return "there are fewer than 2 photos to use";
+        case "error.studio.not_gallery":
+            return "there are fewer than 2 items to use";
+        case "error.studio.missing":
+            return "a file is missing on the server";
+        case "error.studio.unsupported_image":
+            return "that kind of photo is not supported";
         default:
             return "something went wrong on the server";
     }
 }
 
-export function failedMessage(phase: "saving" | "rendering", what: string, code: string): { title: string; body: string } {
-    const lead = phase === "saving" ? `couldn't save ${what}` : "couldn't make the webp";
+export function failedMessage(phase: "saving" | "rendering", what: string, code: string, made?: MakeWhat): { title: string; body: string } {
+    const lead = phase === "saving" ? `couldn't save ${what}` : `couldn't make the ${made ?? "webp"}`;
     return { title: "cobalt couldn't finish", body: clip(`${lead} — ${plainReason(code)}`, HARK_MAX_BODY) };
+}
+
+// A make that came with its save (POST /studio `slideshow` / `gallery_image`, 18.12): the save worked and the make did
+// not. A webp over 60 s says so and points at the mp4 (`length` = what it would have been, `m:ss`).
+export function savedButFailedMessage(label: string, saved: number, what: MakeWhat, code: string, length?: string | null): { title: string; body: string } {
+    const lead = `${label} · saved ${saved} ${saved === 1 ? "item" : "items"}. `;
+    const rest =
+        code === "error.webp.too_long" && what === "slideshow webp" && length
+            ? `the slideshow webp would be ${length} and webps stop at 60 s. open cobalt to make the mp4.`
+            : `the ${what} couldn't be made — ${plainReason(code)}`;
+    return { title: "cobalt", body: clip(`${lead}${rest}`, HARK_MAX_BODY) };
 }
 
 // ---- records ----------------------------------------------------------------------
@@ -209,7 +236,13 @@ type EventRecord = {
 
 export type NotifyRenderEvent =
     | ({ kind: "success" } & RenderSuccess)
-    | { kind: "failed"; code: string };
+    | {
+          kind: "failed";
+          code: string;
+          what?: MakeWhat;
+          // the make was asked for with its save (18.12): how many items the save kept, and (a webp over its cap) its length
+          chained?: { saved: number; length?: string | null };
+      };
 
 // How a job in the line settled (section 17.8). A cancelled member is dropped from the summary.
 export type LineOutcome =
@@ -349,7 +382,9 @@ export function lineSummaryMessage(
     const failed = entries.filter((e) => e.state.startsWith("failed:"));
     const parts = ["done"];
     if (saved > 0) parts.push(`${saved} saved`);
-    if (webps.length > 0) parts.push(`${webps.length} ${webps.length === 1 ? "webp" : "webps"} ready`);
+    // webps are "webps"; a gallery image or an mp4 in the mix makes them "files"
+    const allWebps = webps.every((w) => !rec.webps[w.key]?.what || rec.webps[w.key]!.what === "slideshow webp");
+    if (webps.length > 0) parts.push(`${webps.length} ${allWebps ? (webps.length === 1 ? "webp" : "webps") : webps.length === 1 ? "file" : "files"} ready`);
     if (failed.length > 0) parts.push(`${failed.length} couldn't finish`);
     const lines = [parts.join(" · ")];
     for (const f of failed.slice(0, 3)) {
@@ -358,7 +393,8 @@ export function lineSummaryMessage(
             (f.job ? failedMessage("rendering", describeJob(null, null), code) : failedMessage("saving", saveWhat(f.sid), code)).body,
         );
     }
-    if (webps.length === 1 && rec.webps[webps[0]!.key]) lines.push(rec.webps[webps[0]!.key]!.url);
+    const one = webps.length === 1 ? rec.webps[webps[0]!.key] : undefined;
+    if (one?.url) lines.push(one.url);
     return { title: "cobalt", body: lines.join("\n"), url: JOBS_URL, sid: first.sid };
 }
 
@@ -500,8 +536,14 @@ export class NotifyService implements NotifyHooks, SweepNotify {
         if (!this.enabled()) return;
         const want = await this.wanted(sid, e.kind === "success" ? "rendered" : "failed", job);
         if (!want) return;
-        const msg =
-            e.kind === "success" ? renderedMessage(e) : failedMessage("rendering", describeJob(want.label, null), e.code);
+        let msg: { title: string; body: string };
+        if (e.kind === "success") {
+            msg = renderedMessage(e, want.label);
+        } else if (e.chained && e.what) {
+            msg = savedButFailedMessage(describeJob(want.label, await this.sessionRow(sid)), e.chained.saved, e.what, e.code, e.chained.length);
+        } else {
+            msg = failedMessage("rendering", describeJob(want.label, null), e.code, e.what);
+        }
         await this.fire(`${EV_PREFIX}${sid}:r:${job}`, sid, msg);
     }
 
@@ -600,7 +642,7 @@ export class NotifyService implements NotifyHooks, SweepNotify {
                     cur.members[member] = "saved";
                 } else if (outcome.kind === "rendered") {
                     cur.members[member] = "rendered";
-                    cur.webps[member] = { url: outcome.url, bytes: outcome.bytes, width: outcome.width, height: outcome.height };
+                    cur.webps[member] = { url: outcome.url, bytes: outcome.bytes, width: outcome.width, height: outcome.height, ...(outcome.what ? { what: outcome.what } : {}) };
                 } else {
                     cur.members[member] = `failed:${outcome.code}`;
                 }

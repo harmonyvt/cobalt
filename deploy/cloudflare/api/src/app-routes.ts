@@ -167,6 +167,8 @@ export async function capabilities(
     // the container's helper has said it has the slideshow routes (section 18.8): a Worker deployed ahead of the
     // container rollout must not advertise what an older helper image cannot do
     helperGallery = false,
+    // ... and the make routes too: the webp slideshow, the gallery image, `item` on renders (section 18.10-18.13)
+    helperMake = false,
 ): Promise<StudioReply> {
     const state = await resolveKeyState(d.db, auth, key, d.now());
     const version: unknown = apiVersion;
@@ -211,6 +213,10 @@ export async function capabilities(
                 // the visibility toggle (APP-API-CONTRACT.md section 18; needs `line`, and a helper that said it has
                 // the slideshow routes: the Durable Object learns that from the helper's own answers)
                 gallery: helperGallery === true,
+                // the three makes (slideshow webp, slideshow mp4 to 3:00, gallery image) and `slideshow.format` /
+                // `gallery_image` on POST /studio, `item` on POST /studio/<sid>/render (section 18.10-18.13): only while
+                // the helper that runs said `make=1`
+                gallery_make: helperGallery === true && helperMake === true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,
@@ -488,7 +494,7 @@ export function decodeCursor(raw: string): { ms: number; key: string } | null {
 }
 
 // migration 0009's columns (section 18.1)
-type GalleryCols = { role: string | null; item_index: number | null; made_from: string | null; made_spec: string | null };
+type GalleryCols = { role?: string | null; item_index: number | null; made_from: string | null; made_spec: string | null };
 type FileRow = MediaRow & GalleryCols & { post_key: string };
 type SessionRowLite = {
     id: string;
@@ -499,7 +505,8 @@ type SessionRowLite = {
     items: string | null;
     post_key: string;
 };
-const GALLERY_COLUMNS = "role, item_index, made_from, made_spec";
+// (`role` comes with ITEM_COLUMNS)
+const GALLERY_COLUMNS = "item_index, made_from, made_spec";
 
 // A JSON column as a value, null when it is not valid JSON (never throws)
 const parseJson = (raw: string | null | undefined): unknown => {
@@ -585,6 +592,7 @@ async function bounded<T>(p: Promise<T>, ms: number): Promise<T | null> {
 type Tomb = Pick<MediaRow, "id" | "name" | "content_type" | "bytes" | "width" | "height" | "duration" | "created_at" | "poster">;
 
 export function fileShape(f: FileRow, v2: boolean, v3 = false) {
+    // (a row with a role is never a webp: webpName says so)
     const wn = webpName(f);
     const isOrig = f.bucket === "originals" && isOriginalSource(f.source);
     return {
@@ -1036,7 +1044,7 @@ async function setPostVisibility(d: AppDeps, id: string, want: boolean, keyId: s
     try {
         anchor = await getFile(d.db, id);
         if (!anchor) return err(404, "error.library.not_found");
-        rows = (await postFiles(d.db, anchor.post_key, "originals")).filter((r) => webpName(r) === null);
+        rows = (await postFiles(d.db, anchor.post_key, "originals")).filter((r) => r.role != null || webpName(r) === null);
     } catch {
         return err(503, "error.api.generic");
     }
@@ -1054,7 +1062,7 @@ async function setPostVisibility(d: AppDeps, id: string, want: boolean, keyId: s
     }
     let items: ReturnType<typeof fileShape>[];
     try {
-        items = (await postFiles(d.db, anchor.post_key, "originals")).filter((r) => webpName(r) === null).map((r) => fileShape(r, true, true));
+        items = (await postFiles(d.db, anchor.post_key, "originals")).filter((r) => r.role != null || webpName(r) === null).map((r) => fileShape(r, true, true));
     } catch {
         return err(503, "error.api.generic");
     }

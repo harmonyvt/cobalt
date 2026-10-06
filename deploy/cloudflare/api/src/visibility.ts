@@ -71,10 +71,12 @@ export type MediaRow = {
     public_key: string | null;
     public_id: string | null;
     merged_into: string | null;
+    // migration 0009 (section 18): a gallery item or a made file has a role; a row with one is never a webp rendition
+    role?: string | null;
 };
 
 export const ITEM_COLUMNS =
-    "id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at, poster, poster_at, visibility, public_key, public_id, merged_into";
+    "id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at, poster, poster_at, visibility, public_key, public_id, merged_into, role";
 
 // The SQL form of effectiveVisibility(), for a table alias (`m.`) or none.
 export const visSql = (alias = "") =>
@@ -99,8 +101,9 @@ export const extOf = (key: string): string => /\.([0-9A-Za-z]{1,8})$/.exec(key)?
 export const privateWebpKey = (name: string) => `webps/${name}`;
 
 // The public name a webp row is known by (DELETE /media/<name>.webp), whichever bucket holds its bytes.
-export const webpName = (r: Pick<MediaRow, "bucket" | "source" | "r2_key" | "public_key">): string | null => {
-    if (!isWebpSource(r.source)) return null;
+// A row with a role (a slideshow webp's mirror name looks like one) is a made file with its own delete route: never a webp.
+export const webpName = (r: Pick<MediaRow, "bucket" | "source" | "r2_key" | "public_key"> & { role?: string | null }): string | null => {
+    if (!isWebpSource(r.source) || r.role) return null;
     const n = r.bucket === "media" ? r.r2_key : r.public_key;
     return n && MEDIA_NAME_REGEX.test(n) ? n : null;
 };

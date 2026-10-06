@@ -68,7 +68,7 @@ describe("a slideshow on a free helper", () => {
         const done = await L.studio.renderStatus(sid, job, 0);
         expect(done.status).toBe(200);
         const row = slideRows(L, sid)[0]!;
-        expect(done.body).toEqual({ status: "success", job, item_id: row.id, bytes: 5000, width: 1080, height: 1350, seconds: 12.3 }); // private: no url
+        expect(done.body).toEqual({ status: "success", job, item_id: row.id, bytes: 5000, width: 1080, height: 1350, seconds: 12.3, format: "mp4", replaced: [] }); // private: no url
         expect(row).toMatchObject({
             kind: "private",
             source: "studio",
@@ -158,7 +158,7 @@ describe("validation: every bad request is refused before anything is created", 
         ["21 items", plan({ items: Array.from({ length: 21 }, (_, i) => i), seconds: Array(21).fill(3) }), 400, "error.webp.invalid_params"],
         ["a repeated index", plan({ items: [0, 0, 1, 3], seconds: [3, 3, 3, null] }), 400, "error.webp.invalid_params"],
         ["seconds of another length", plan({ seconds: [3, 3] }), 400, "error.webp.invalid_params"],
-        ["a still under 1 s", plan({ seconds: [0.5, 3, 3, null] }), 400, "error.webp.invalid_params"],
+        ["a still under 0.5 s", plan({ seconds: [0.4, 3, 3, null] }), 400, "error.webp.invalid_params"],
         ["a still over 15 s", plan({ seconds: [16, 3, 3, null] }), 400, "error.webp.invalid_params"],
         ["two decimals", plan({ seconds: [3.25, 3, 3, null] }), 400, "error.webp.invalid_params"],
         ["a null for a photo", plan({ seconds: [null, 3, 3, null] }), 400, "error.webp.invalid_params"],
@@ -471,7 +471,8 @@ describe("the slideshow asked for with the save (share sheet, Shortcuts: POST /s
         L.helper.gallery = photos(3);
         const r = await create(L, { slideshow: planOf() });
         expect(r.status).toBe(201);
-        expect(r.body).toEqual({ status: "success", id: expect.any(String), url: expect.any(String), slideshow: { job: expect.stringMatching(/^[A-Za-z0-9]{20}$/) } });
+        const job20 = expect.stringMatching(/^[A-Za-z0-9]{20}$/);
+        expect(r.body).toEqual({ status: "success", id: expect.any(String), url: expect.any(String), slideshow: { job: job20 }, make: { job: job20, kind: "slideshow" } });
         const { id: sid, slideshow } = asBody(r);
         // while the save runs the job answers queued
         expect(renderRow(L, slideshow.job)).toMatchObject({ kind: "slideshow", status: "pending", session_id: sid });
@@ -505,13 +506,24 @@ describe("the slideshow asked for with the save (share sheet, Shortcuts: POST /s
         expect(asBody(await L.studio.renderStatus(r.id, r.slideshow.job, 0)).error.code).toBe("error.studio.fetch_failed");
     });
 
-    it("an item that did not save makes the plan unmakeable: the job ends invalid_params, the photos are kept", async () => {
+    it("an item that did not save is dropped from the plan (18.12): the slideshow is made over the saved ones", async () => {
         const L = await lineWorld();
         L.helper.gallery = [{ type: "photo" }, { type: "photo", fail: "error.studio.fetch_failed" }, { type: "photo" }];
         const r = asBody(await create(L, { slideshow: planOf() }));
         await L.settle(r.id);
-        expect(asBody(await L.studio.renderStatus(r.id, r.slideshow.job, 0)).error.code).toBe("error.webp.invalid_params");
+        expect(asBody(await L.studio.renderStatus(r.id, r.slideshow.job, 0)).status).toBe("success");
         expect(itemRows(L as any, r.id)).toHaveLength(2);
+        expect(L.helper.slideStarts[0]!.body.slides).toEqual([{ n: 0, seconds: 3 }, { n: 1, seconds: 3 }]);
+        expect(JSON.parse(slideRows(L, r.id)[0]!.made_from)).toEqual(itemRows(L as any, r.id).map((x) => x.id));
+    });
+
+    it("fewer than 2 items saved: the job ends not_gallery and the save stays", async () => {
+        const L = await lineWorld();
+        L.helper.gallery = [{ type: "photo" }, { type: "photo", fail: "error.studio.fetch_failed" }, { type: "photo", fail: "error.studio.fetch_failed" }];
+        const r = asBody(await create(L, { slideshow: planOf() }));
+        await L.settle(r.id);
+        expect(asBody(await L.studio.renderStatus(r.id, r.slideshow.job, 0)).error.code).toBe("error.studio.not_gallery");
+        expect(itemRows(L as any, r.id)).toHaveLength(1);
         expect(L.helper.slideStarts).toEqual([]);
     });
 

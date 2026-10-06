@@ -63,9 +63,24 @@
 //   POST   /slideshow/:id/start {width,height,fade,sound,slides:[{n,seconds|null}]}
 //                      -> 202 | 400 | 404 | 409 (an input missing, or already started)
 //   GET    /slideshow/:id     -> {status:"pending", phase:"composing"|"encoding"|null, done, total} |
-//                      {status:"done", bytes, duration, width, height} | {status:"error",error:{code}}
-//   GET    /slideshow/:id/file -> video/mp4 (once done)
+//                      {status:"done", bytes, duration, width, height, format} | {status:"error",error:{code}}
+//   GET    /slideshow/:id/file -> video/mp4 or image/webp (once done)
+//   GET    /slideshow/:id/poster -> image/jpeg, the first frame (once done)
 //   DELETE /slideshow/:id     -> 204
+//   The start body of a WEBP slideshow (18.10, CONTRACT-GALLERY 6.2, ./make.js) adds format:"webp", quality (low|med|high) and
+//   fps (15): a frame list (each photo one webp frame held its seconds, each crossfade 4 blended frames, a video decoded at
+//   15 fps) encoded by one img2webp run; width 320|480, no sound, at most 60 s. Seconds of a photo are 0.5-15.
+//
+// Gallery image (18.11, CONTRACT-GALLERY 6.3-6.4, ./make.js): the photos of a gallery into ONE borderless JPEG. Holds the
+// helper exactly like a slideshow (and a slideshow and a gallery image hold it against each other):
+//   PUT    /gallery/:id/inputs/:n   body = the photo (n 0-19, <= 200 MB each, <= 500 MB a job) -> 204 | 400 | 413 | 429 busy
+//   POST   /gallery/:id/start {layout:"strip"|"grid2"|"grid3"|"row", slides:[{n}]}   (the order they are drawn, 2-20)
+//                      -> 202 | 400 | 404 | 409
+//   GET    /gallery/:id       -> {status:"pending", phase:"composing", done, total} |
+//                      {status:"done", bytes, width, height, cropped:[n...], upscaled:[n...]} | {status:"error",error:{code}}
+//                      (cropped / upscaled name input slots: the photo cut to its cell / drawn larger than its own pixels)
+//   GET    /gallery/:id/file  -> image/jpeg (once done)
+//   DELETE /gallery/:id       -> 204
 //
 // Poster frames (APP-API-CONTRACT.md section 13): a thumbnail for a stored video (or the picture itself,
 // for an image: frame 0).
@@ -78,7 +93,7 @@
 //                      a time, like /probe) | 502 error.studio.upload_failed
 
 import { spawn } from "node:child_process";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import http from "node:http";
 import http2 from "node:http2";
@@ -87,6 +102,7 @@ import path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { cropToPixels } from "./crop.js";
+import { makePoster, renderGalleryImage, renderSlideshowWebp, validateGalleryStart } from "./make.js";
 import {
     COBALT_ORIGIN,
     FRAME_RE,
@@ -128,11 +144,12 @@ import {
 
 /** Sent on every answer (see `createServer`): the Durable Object's `features.gallery` follows it. */
 export const HELPER_CAPS_HEADER = "x-cobalt-helper";
-export const HELPER_CAPS = "gallery=1";
+// `gallery=1`: the slideshow routes; `make=1`: the slideshow webp, the gallery image routes, `item` renders' (APP-API-CONTRACT 18.8, 18.10-18.13)
+export const HELPER_CAPS = "gallery=1,make=1";
 
-/** A slideshow nobody has asked about for this long is dropped (the helper is freed). */
+/** A slideshow or gallery image nobody has asked about for this long is dropped (the helper is freed). */
 export const SLIDESHOW_IDLE_MS = 5 * 60_000;
-/** One slideshow job's whole budget (composing and encoding). */
+/** One slideshow (or gallery image) job's whole budget (composing and encoding). */
 export const SLIDESHOW_TIMEOUT_MS = 10 * 60_000;
 
 // The relay's whole budget for one push (see APNS_TIMEOUT_MS inside createHelper).
@@ -148,11 +165,12 @@ export const APNS_DEFAULT_TIMEOUT_MS = 2000;
  *   files?: Map<number, {file: string, thumb: string|null, contentType: string}>,
  *   lead?: number}} Job
  *
- * @typedef {{id: string, status: "pending"|"done"|"error", started: boolean, createdAt: number,
+ * @typedef {{id: string, kind: "slideshow"|"gallery", status: "pending"|"done"|"error", started: boolean, createdAt: number,
  *   touched: number, dir: string, files: Map<number, string>, sizes: Map<number, number>,
  *   phase: "composing"|"encoding"|null, done: number, total: number,
- *   error?: {code: string}, result?: {bytes: number, duration: number|null, width: number|null, height: number|null},
- *   proc?: import("node:child_process").ChildProcess}} SlideshowJob
+ *   format?: "mp4"|"webp",
+ *   error?: {code: string}, result?: Record<string, unknown>,
+ *   proc?: import("node:child_process").ChildProcess}} SlideshowJob  (a slideshow, or a gallery image: 18.11)
  */
 
 /**
@@ -162,7 +180,7 @@ export const APNS_DEFAULT_TIMEOUT_MS = 2000;
  *   cobaltOrigin?: string, apiOrigin?: string,
  *   ffmpegTimeoutMs?: number, downloadTimeoutMs?: number, fetchTimeoutMs?: number,
  *   maxFetchBytes?: number, maxJobBytes?: number, keepJobs?: number, jobTtlMs?: number,
- *   slideshowDir?: string, slideshowIdleMs?: number, slideshowTimeoutMs?: number,
+ *   slideshowDir?: string, galleryDir?: string, slideshowIdleMs?: number, slideshowTimeoutMs?: number,
  *   probeAV?: (input: string) => Promise<{duration: number|null, width: number|null, height: number|null, hasAudio: boolean}>,
  *   ffmpegPath?: () => string, img2webpPath?: () => string,
  *   probe?: (input: string) => Promise<{duration: number|null, width: number|null, height: number|null}>,
@@ -192,6 +210,7 @@ export function createHelper(opts = {}) {
     const MAX_FETCH = opts.maxFetchBytes ?? MAX_FETCH_BYTES;
     const MAX_JOB = opts.maxJobBytes ?? MAX_JOB_BYTES;
     const SLIDESHOW_DIR = opts.slideshowDir ?? "/tmp/slideshow";
+    const GALLERY_DIR = opts.galleryDir ?? "/tmp/gallery";
     const SLIDESHOW_IDLE = opts.slideshowIdleMs ?? SLIDESHOW_IDLE_MS;
     const SLIDESHOW_TIMEOUT = opts.slideshowTimeoutMs ?? SLIDESHOW_TIMEOUT_MS;
     const KEEP_JOBS = opts.keepJobs ?? 20;
@@ -219,6 +238,9 @@ export function createHelper(opts = {}) {
 
     /** @type {Map<string, SlideshowJob>} a slideshow holds the helper from its first input until DELETE or idle */
     const slideshows = new Map();
+    /** @type {Map<string, SlideshowJob>} a gallery image holds it the same way (APP-API-CONTRACT 18.11) */
+    const galleries = new Map();
+    const makeMaps = () => [slideshows, galleries];
 
     const busy = () => {
         reapSlideshows();
@@ -226,7 +248,7 @@ export function createHelper(opts = {}) {
             probing.size > 0 ||
             // a slideshow holds the helper while it is being filled, started and encoded; one that has finished (or
             // failed, a timeout included) stays only to be collected and no longer keeps anything else out
-            [...slideshows.values()].some((j) => j.status === "pending") ||
+            makeMaps().some((m) => [...m.values()].some((j) => j.status === "pending")) ||
             [...jobs.values(), ...fetches.values()].some((j) => j.status === "pending")
         );
     };
@@ -234,14 +256,15 @@ export function createHelper(opts = {}) {
     /** @param {SlideshowJob} job */
     async function dropSlideshow(job) {
         // out of the map first, synchronously: the helper is free as soon as this returns
-        if (slideshows.get(job.id) === job) slideshows.delete(job.id);
+        const map = job.kind === "gallery" ? galleries : slideshows;
+        if (map.get(job.id) === job) map.delete(job.id);
         job.proc?.kill("SIGKILL");
         await rm(job.dir, { recursive: true, force: true }).catch(() => {});
     }
 
     function reapSlideshows() {
         const now = Date.now();
-        for (const job of [...slideshows.values()]) {
+        for (const job of makeMaps().flatMap((m) => [...m.values()])) {
             if (now - job.touched > SLIDESHOW_IDLE) void dropSlideshow(job);
         }
     }
@@ -1219,52 +1242,111 @@ export function createHelper(opts = {}) {
         }
     }
 
-    // ---- slideshow (APP-API-CONTRACT 18.7) ----------------------------------------------
+    // ---- slideshow and gallery image (APP-API-CONTRACT 18.7, 18.10, 18.11) -----------------------------
 
-    /** @param {SlideshowJob} job */
-    async function runSlideshow(job, plan) {
-        const output = path.join(job.dir, "out.mp4");
+    /** logs the version of the encoder once per process, at the first webp made (the Alpine package's version is not otherwise known) */
+    let img2webpLogged = false;
+    function logEncoderOnce() {
+        if (img2webpLogged) return;
+        img2webpLogged = true;
+        try {
+            const c = spawn(img2webpPath(), ["-version"], { stdio: ["ignore", "pipe", "pipe"] });
+            let out = "";
+            c.stdout.on("data", (d) => (out += d));
+            c.stderr.on("data", (d) => (out += d));
+            c.on("error", () => console.error("[webp-helper] img2webp: not found"));
+            c.on("close", () => console.error(`[webp-helper] img2webp ${out.trim().split("\n")[0] ?? "?"}`));
+        } catch {
+            // best effort
+        }
+    }
+
+    /**
+     * Runs a started slideshow (mp4 or webp) or gallery image job.
+     * @param {SlideshowJob} job @param {any} plan the validated start body
+     */
+    async function runMake(job, plan) {
+        const gallery = job.kind === "gallery";
+        const webp = !gallery && plan.format === "webp";
+        const map = gallery ? galleries : slideshows;
+        const output = path.join(job.dir, gallery ? "out.jpg" : webp ? "out.webp" : "out.mp4");
         // the whole job's budget, probing included: whatever is still running then is killed and the job fails with
-        // error.webp.timeout (renderSlideshow's own budget covers its ffmpeg runs; this covers a hung probe too)
+        // error.webp.timeout (the renderers' own budget covers their ffmpeg runs; this covers a hung probe too)
         const watchdog = setTimeout(() => {
-            if (job.status !== "pending" || slideshows.get(job.id) !== job) return;
+            if (job.status !== "pending" || map.get(job.id) !== job) return;
             job.error = { code: "error.webp.timeout" };
             job.status = "error";
             job.proc?.kill("SIGKILL");
             void rm(job.dir, { recursive: true, force: true }).catch(() => {});
         }, SLIDESHOW_TIMEOUT + 2000);
+        const onChild = (c) => {
+            job.proc = c;
+        };
+        const onPhase = (phase, { done, total }) => {
+            job.phase = phase;
+            job.done = done;
+            job.total = total;
+        };
         try {
-            const r = await renderSlideshow({
-                ffmpegBin: ffmpegPath(),
-                dir: job.dir,
-                output,
-                files: job.files,
-                plan,
-                probeAV,
-                timeoutMs: SLIDESHOW_TIMEOUT,
-                maxOutputBytes: MAX_FETCH,
-                onChild: (c) => {
-                    job.proc = c;
-                },
-                onPhase: (phase, { done, total }) => {
-                    job.phase = phase;
-                    job.done = done;
-                    job.total = total;
-                },
-            });
+            /** @type {Record<string, unknown>} */
+            let result;
+            if (gallery) {
+                const r = await renderGalleryImage({
+                    ffmpegBin: ffmpegPath(),
+                    output,
+                    files: job.files,
+                    plan,
+                    probeAV,
+                    timeoutMs: SLIDESHOW_TIMEOUT,
+                    onChild,
+                    onPhase,
+                });
+                result = { bytes: r.bytes, width: r.width, height: r.height, cropped: r.cropped, upscaled: r.upscaled };
+            } else if (webp) {
+                logEncoderOnce();
+                const r = await renderSlideshowWebp({
+                    ffmpegBin: ffmpegPath(),
+                    img2webpBin: img2webpPath(),
+                    dir: job.dir,
+                    output,
+                    files: job.files,
+                    plan,
+                    probeAV,
+                    timeoutMs: SLIDESHOW_TIMEOUT,
+                    maxOutputBytes: MAX_OUTPUT_BYTES,
+                    onChild,
+                    onPhase,
+                });
+                result = { bytes: r.bytes, duration: r.duration, width: r.width, height: r.height, format: "webp" };
+            } else {
+                const r = await renderSlideshow({
+                    ffmpegBin: ffmpegPath(),
+                    dir: job.dir,
+                    output,
+                    files: job.files,
+                    plan,
+                    probeAV,
+                    timeoutMs: SLIDESHOW_TIMEOUT,
+                    maxOutputBytes: MAX_FETCH,
+                    onChild,
+                    onPhase,
+                });
+                // (an mp4's poster is made when it is asked for, GET /slideshow/:id/poster: the API makes its own with a poster job)
+                result = { ...r, format: "mp4" };
+            }
             // the inputs and the composed stills are no longer needed; only the result stays
             for (const f of [...job.files.values()]) await rm(f, { force: true }).catch(() => {});
             for (const f of await readdir(job.dir).catch(() => [])) {
                 if (/^s-\d+\.jpg$/.test(f)) await rm(path.join(job.dir, f), { force: true }).catch(() => {});
             }
             if (job.status === "pending") {
-                job.result = r;
+                job.result = result;
                 job.status = "done";
             }
         } catch (e) {
-            if (!(e instanceof JobError)) console.error("[webp-helper] slideshow failed:", e);
+            if (!(e instanceof JobError)) console.error(`[webp-helper] ${job.kind} failed:`, e);
             // a dropped job (DELETE, reaped) has nothing left to record; a timed-out one already says so
-            if (slideshows.get(job.id) === job && job.status === "pending") {
+            if (map.get(job.id) === job && job.status === "pending") {
                 await rm(job.dir, { recursive: true, force: true }).catch(() => {});
                 job.error = { code: e instanceof JobError ? e.code : "error.webp.encode_failed" };
                 job.status = "error";
@@ -1275,19 +1357,23 @@ export function createHelper(opts = {}) {
         }
     }
 
-    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {string} pathname */
-    async function handleSlideshowRoute(req, res, pathname) {
-        const m = pathname.match(/^\/slideshow\/([A-Za-z0-9]+)(?:\/(start|file)|\/inputs\/([^/]*))?$/);
+    /**
+     * `/slideshow/:id/...` (18.7, 18.10) and `/gallery/:id/...` (18.11): the same hold / reap / busy rules, two kinds of job.
+     * @param {"slideshow" | "gallery"} kind @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {string} pathname
+     */
+    async function handleMakeRoute(kind, req, res, pathname) {
+        const m = pathname.match(new RegExp(`^/${kind}/([A-Za-z0-9]+)(?:/(start|file|poster)|/inputs/([^/]*))?$`));
         if (!m) return fail(res, 404, "error.webp.not_found");
         const [, id, sub, nRaw] = m;
         const isInput = nRaw !== undefined;
+        const map = kind === "gallery" ? galleries : slideshows;
 
         // PUT /slideshow/:id/inputs/:n
         if (isInput) {
             if (req.method !== "PUT") return failAndClose(req, res, 405, "error.webp.bad_request");
             if (!ID_RE.test(id) || !SLIDESHOW_N_RE.test(nRaw)) return failAndClose(req, res, 400, "error.webp.invalid_params");
             const n = Number(nRaw);
-            let job = slideshows.get(id);
+            let job = map.get(id);
             if (!job && busy()) return failAndClose(req, res, 429, "error.webp.busy");
             if (job?.started) return failAndClose(req, res, 409, "error.webp.bad_request");
             const others = job ? [...job.sizes].filter(([k]) => k !== n).reduce((t, [, v]) => t + v, 0) : 0;
@@ -1300,18 +1386,19 @@ export function createHelper(opts = {}) {
                 created = true;
                 job = {
                     id,
+                    kind,
                     status: "pending",
                     started: false,
                     createdAt: Date.now(),
                     touched: Date.now(),
-                    dir: path.join(SLIDESHOW_DIR, id),
+                    dir: path.join(kind === "gallery" ? GALLERY_DIR : SLIDESHOW_DIR, id),
                     files: new Map(),
                     sizes: new Map(),
                     phase: null,
                     done: 0,
                     total: 0,
                 };
-                slideshows.set(id, job);
+                map.set(id, job);
             }
             const mine = job;
             mine.touched = Date.now();
@@ -1333,7 +1420,7 @@ export function createHelper(opts = {}) {
                 mine.sizes.delete(n);
                 await pipeline(req, counter, createWriteStream(file));
                 if (got === 0) throw new JobError("error.webp.bad_source");
-                if (slideshows.get(id) !== mine) throw new JobError("error.webp.not_found");
+                if (map.get(id) !== mine) throw new JobError("error.webp.not_found");
                 mine.files.set(n, file);
                 mine.sizes.set(n, got);
                 mine.touched = Date.now();
@@ -1354,14 +1441,15 @@ export function createHelper(opts = {}) {
 
         // DELETE /slideshow/:id (idempotent: a job already reaped is still a 204)
         if (!sub && req.method === "DELETE") {
-            const job = slideshows.get(id);
+            const job = map.get(id);
             if (job) await dropSlideshow(job);
             res.writeHead(204);
             return void res.end();
         }
 
-        const job = slideshows.get(id);
+        const job = map.get(id);
         if (!job) return fail(res, 404, "error.webp.not_found");
+        if (sub === "poster" && kind === "gallery") return fail(res, 404, "error.webp.not_found");
 
         // POST /slideshow/:id/start
         if (sub === "start") {
@@ -1373,7 +1461,7 @@ export function createHelper(opts = {}) {
             } catch {
                 return fail(res, 400, "error.webp.invalid_params");
             }
-            const plan = validateSlideshowStart(body);
+            const plan = kind === "gallery" ? validateGalleryStart(body) : validateSlideshowStart(body);
             if (!plan) return fail(res, 400, "error.webp.invalid_params");
             if (job.started) return fail(res, 409, "error.webp.bad_request");
             // every slide needs its input on disk
@@ -1381,22 +1469,31 @@ export function createHelper(opts = {}) {
             job.started = true;
             job.phase = "composing";
             job.done = 0;
-            job.total = plan.slides.filter((sl) => sl.seconds !== null).length;
+            job.total = kind === "gallery" ? plan.slides.length : plan.slides.filter((sl) => sl.seconds !== null).length;
+            job.format = kind === "gallery" ? undefined : (plan.format ?? "mp4");
             send(res, 202, { status: "pending", id });
-            void runSlideshow(job, plan);
+            void runMake(job, plan);
             return;
         }
 
         if (req.method !== "GET") return fail(res, 405, "error.webp.bad_request");
         job.touched = Date.now();
 
-        // GET /slideshow/:id/file
-        if (sub === "file") {
+        // GET /slideshow/:id/file (video/mp4 or image/webp), GET /gallery/:id/file (image/jpeg), GET /slideshow/:id/poster (image/jpeg)
+        if (sub === "file" || sub === "poster") {
             if (job.status !== "done") return fail(res, 409, "error.webp.not_ready");
-            const out = path.join(job.dir, "out.mp4");
+            const poster = sub === "poster";
+            const name = poster ? "poster.jpg" : kind === "gallery" ? "out.jpg" : job.format === "webp" ? "out.webp" : "out.mp4";
+            const type = poster || kind === "gallery" ? "image/jpeg" : job.format === "webp" ? "image/webp" : "video/mp4";
+            const out = path.join(job.dir, name);
+            // an mp4's first frame, made now (a webp's was made with it)
+            if (poster && job.format !== "webp" && !existsSync(out)) {
+                await makePoster({ ffmpegBin: ffmpegPath(), input: path.join(job.dir, "out.mp4"), output: out, at: 0, timeoutMs: POSTER_TIMEOUT_MS, onChild: (c) => { job.proc = c; } });
+                job.proc = undefined;
+            }
             const st = await stat(out).catch(() => null);
             if (!st) return fail(res, 404, "error.webp.not_found");
-            res.writeHead(200, { "content-type": "video/mp4", "content-length": st.size });
+            res.writeHead(200, { "content-type": type, "content-length": st.size });
             return void pipeline(createReadStream(out), res).catch(() => res.destroy());
         }
 
@@ -1426,7 +1523,8 @@ export function createHelper(opts = {}) {
             if (pathname === "/fetch" || pathname.startsWith("/fetch/")) {
                 return await handleFetchRoute(req, res, url);
             }
-            if (pathname.startsWith("/slideshow/")) return await handleSlideshowRoute(req, res, pathname);
+            if (pathname.startsWith("/slideshow/")) return await handleMakeRoute("slideshow", req, res, pathname);
+            if (pathname.startsWith("/gallery/")) return await handleMakeRoute("gallery", req, res, pathname);
 
             const m = pathname.match(/^\/jobs(?:\/([A-Za-z0-9]+)(\/file)?)?$/);
             if (!m) return fail(res, 404, "error.webp.not_found");
@@ -1497,9 +1595,10 @@ export function createHelper(opts = {}) {
         jobs,
         fetches,
         slideshows,
+        galleries,
         /** SIGKILL every running child (cobalt died: nothing can finish). */
         killAll() {
-            for (const job of [...jobs.values(), ...fetches.values(), ...slideshows.values()]) job.proc?.kill("SIGKILL");
+            for (const job of [...jobs.values(), ...fetches.values(), ...slideshows.values(), ...galleries.values()]) job.proc?.kill("SIGKILL");
         },
         close() {
             clearInterval(evictTimer);

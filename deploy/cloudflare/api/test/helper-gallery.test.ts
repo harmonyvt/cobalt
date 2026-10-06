@@ -323,7 +323,7 @@ describe("validateSlideshowStart", () => {
         ["21 slides", { ...good, slides: Array.from({ length: 21 }, (_, i) => ({ n: i % 20, seconds: 1 })) }],
         ["repeated n", { ...good, slides: [{ n: 0, seconds: 3 }, { n: 0, seconds: 3 }] }],
         ["n 20", { ...good, slides: [{ n: 20, seconds: 3 }] }],
-        ["seconds 0.5", { ...good, slides: [{ n: 0, seconds: 0.5 }] }],
+        ["seconds 0.4", { ...good, slides: [{ n: 0, seconds: 0.4 }] }],
         ["seconds 16", { ...good, slides: [{ n: 0, seconds: 16 }] }],
         ["seconds a string", { ...good, slides: [{ n: 0, seconds: "3" }] }],
         ["seconds missing", { ...good, slides: [{ n: 0 }] }],
@@ -331,6 +331,9 @@ describe("validateSlideshowStart", () => {
         ["null", null],
     ])("rejects %s", (_n, b) => {
         expect(validateSlideshowStart(b)).toBeNull();
+    });
+    it("0.5 s a photo is accepted (owner interview 2026-10-07)", () => {
+        expect(validateSlideshowStart({ ...good, slides: [{ n: 0, seconds: 0.5 }] })).not.toBeNull();
     });
     it("exactly 180 s of stills is fine", () => {
         expect(validateSlideshowStart({ ...good, slides: Array.from({ length: 12 }, (_, i) => ({ n: i, seconds: 15 })) })).not.toBeNull();
@@ -1427,11 +1430,11 @@ describe("the helper says what it can do on every answer (the API's features.gal
     it("x-cobalt-helper: gallery=1 on a 200, a 404 and a 403", async () => {
         const ok = await call(`/slideshow/${rid()}`);
         expect(ok.status).toBe(404);
-        expect(ok.headers.get("x-cobalt-helper")).toBe("gallery=1");
+        expect(ok.headers.get("x-cobalt-helper")).toBe("gallery=1,make=1");
         const denied = await call(`/slideshow/${rid()}`, {}, "wrong-key");
         expect(denied.status).toBe(403);
         const poster = await call("/nothing-here");
-        expect(poster.headers.get("x-cobalt-helper")).toBe("gallery=1");
+        expect(poster.headers.get("x-cobalt-helper")).toBe("gallery=1,make=1");
     });
 });
 

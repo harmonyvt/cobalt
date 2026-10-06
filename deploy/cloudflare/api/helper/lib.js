@@ -905,15 +905,22 @@ export const MAX_SLIDESHOW_INPUTS = 20;
 /** `n` of `PUT /slideshow/:id/inputs/:n`: 0-19. */
 export const SLIDESHOW_N_RE = /^(?:[0-9]|1[0-9])$/;
 export const MAX_STILL_SECONDS = 15;
+/** The shortest a photo is shown (owner interview 2026-10-07; was 1 s). */
+export const MIN_STILL_SECONDS = 0.5;
+/** A slideshow WEBP stops here (the mp4 goes to MAX_SLIDESHOW_SECONDS): CONTRACT-GALLERY R6 / 6.2. */
+export const MAX_WEBP_SLIDESHOW_SECONDS = 60;
 
 /**
- * Re-validates the body of `POST /slideshow/:id/start`: `{width, height, fade, sound, slides:
- * [{n, seconds|null}]}`. width/height even, 16-1920; `slides` 1-20 entries with unique n 0-19;
- * `seconds` 1-15 for a still, null for a video or gif (own length); the stills together at most
- * 180 s (a video's length is added once it is probed). Returns the normalised body or null.
+ * Re-validates the body of `POST /slideshow/:id/start`: `{width, height, fade, sound, slides: [{n, seconds|null}]}` and,
+ * for the webp (APP-API-CONTRACT 18.10), `format: "webp"` with `quality` (default med) and `fps` (default 15). `format`
+ * absent = "mp4", which takes neither `quality` nor `fps`. width/height even, 16-1920 (a webp's width 320 or 480);
+ * `slides` 1-20 entries with unique n 0-19; `seconds` 0.5-15 for a still, null for a video or gif (own length); the
+ * stills together at most 180 s for the mp4 and 60 s for the webp (a video's length is added once it is probed); a webp
+ * has no sound. Returns the normalised body (an mp4's has no `format`, exactly as it came) or null.
  * @param {any} b
  * @returns {{width: number, height: number, fade: boolean, sound: "none" | "own",
- *            slides: {n: number, seconds: number | null}[]} | null}
+ *            slides: {n: number, seconds: number | null}[],
+ *            format?: "webp", quality?: "low" | "med" | "high", fps?: number} | null}
  */
 export function validateSlideshowStart(b) {
     if (typeof b !== "object" || b === null) return null;
@@ -923,6 +930,20 @@ export function validateSlideshowStart(b) {
     }
     if (typeof b.fade !== "boolean") return null;
     if (b.sound !== "none" && b.sound !== "own") return null;
+    if (b.format !== undefined && b.format !== "mp4" && b.format !== "webp") return null;
+    const webp = b.format === "webp";
+    /** @type {{quality?: "low" | "med" | "high", fps?: number}} */
+    let enc = {};
+    if (webp) {
+        if (b.sound !== "none" || ![320, 480].includes(width)) return null;
+        const quality = b.quality === undefined ? "med" : b.quality;
+        if (typeof quality !== "string" || !Object.hasOwn(QUALITY, quality)) return null;
+        const fps = b.fps === undefined ? 15 : b.fps;
+        if (!Number.isInteger(fps) || fps < 10 || fps > 25) return null;
+        enc = { quality, fps };
+    } else if (b.quality !== undefined || b.fps !== undefined) {
+        return null;
+    }
     if (!Array.isArray(b.slides) || b.slides.length < 1 || b.slides.length > MAX_SLIDESHOW_INPUTS) return null;
     const seen = new Set();
     let total = 0;
@@ -936,12 +957,12 @@ export function validateSlideshowStart(b) {
             continue;
         }
         if (typeof sl.seconds !== "number" || !Number.isFinite(sl.seconds)) return null;
-        if (sl.seconds < 1 || sl.seconds > MAX_STILL_SECONDS) return null;
+        if (sl.seconds < MIN_STILL_SECONDS || sl.seconds > MAX_STILL_SECONDS) return null;
         total += sl.seconds;
         slides.push({ n: sl.n, seconds: sl.seconds });
     }
-    if (total > MAX_SLIDESHOW_SECONDS + 1e-6) return null;
-    return { width, height, fade: b.fade, sound: b.sound, slides };
+    if (total > (webp ? MAX_WEBP_SLIDESHOW_SECONDS : MAX_SLIDESHOW_SECONDS) + 1e-6) return null;
+    return { width, height, fade: b.fade, sound: b.sound, slides, ...(webp ? { format: "webp", ...enc } : {}) };
 }
 
 /** Whether `ffmpeg -i` stderr lists an audio stream. */

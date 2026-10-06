@@ -258,6 +258,24 @@ export class FakeHelper {
     slideFile = new Uint8Array(5000).fill(4);
     slideDeletes: string[] = [];
     slideGate: Promise<void> | null = null; // holds PUT inputs (an upload "in progress")
+    // the webp slideshow (18.10): what the start body asked for decides the format the answers carry
+    slideFormats = new Map<string, "mp4" | "webp">();
+    slideWebpResult: Record<string, unknown> = { bytes: 3000, duration: 6, width: 480, height: 600 };
+    slideWebpFile = new Uint8Array(3000).fill(8);
+    slidePosterStatus = 200; // GET /slideshow/:id/poster
+    // the gallery image (18.11), as the slideshow above
+    galleryBusy = false;
+    galleryInputStatus: number | null = null;
+    galleryInputs = new Map<string, Map<number, number>>();
+    galleryStarts: { job: string; body: any }[] = [];
+    galleryStartStatus: number | null = null;
+    galleryPolls = 0;
+    galleryPendingFields: Record<string, unknown> = { phase: "composing", done: 1, total: 3 };
+    galleryError: string | null = null;
+    galleryGone = false;
+    galleryResult: Record<string, unknown> = { bytes: 4000, width: 2160, height: 4500, cropped: [], upscaled: [] };
+    galleryFile = new Uint8Array(4000).fill(6);
+    galleryDeletes: string[] = [];
     videoBytes = new Uint8Array(4096).fill(7);
     busyFetchStarts = 0; // this many POST /fetch answer 429 first
     fetchPolls = 0; // this many GET /fetch/:id answer pending first
@@ -341,9 +359,10 @@ export class FakeHelper {
     // every answer says what this helper can do, like the real one (helper/server.js HELPER_CAPS_HEADER); an
     // "older helper image" is `advertise = false`
     advertise = true;
+    makes = true;
     helper = async (path: string, init?: RequestInit): Promise<Response> => {
         const res = await this.answer(path, init);
-        if (this.advertise) res.headers.set("x-cobalt-helper", "gallery=1");
+        if (this.advertise) res.headers.set("x-cobalt-helper", this.makes ? "gallery=1,make=1" : "gallery=1");
         return res;
     };
 
@@ -440,6 +459,7 @@ export class FakeHelper {
                 const have = this.slideInputs.get(job!);
                 if (!have || body.slides.some((sl: any) => !have.has(sl.n))) return json(409, { status: "error", error: { code: "error.studio.missing" } });
                 this.slideStarts.push({ job: job!, body });
+                this.slideFormats.set(job!, body.format === "webp" ? "webp" : "mp4");
                 return json(202, { status: "pending" });
             }
             if (method === "GET" && sub === undefined) {
@@ -449,14 +469,59 @@ export class FakeHelper {
                     return json(200, { status: "pending", ...this.slidePendingFields });
                 }
                 if (this.slideError) return json(200, { status: "error", error: { code: this.slideError } });
-                return json(200, { status: "done", ...this.slideResult });
+                const webp = this.slideFormats.get(job!) === "webp";
+                return json(200, { status: "done", ...(webp ? this.slideWebpResult : this.slideResult), format: webp ? "webp" : "mp4" });
             }
             if (method === "GET" && sub === "file") {
-                return new Response(this.slideFile, { headers: { "content-length": String(this.slideFile.length) } });
+                const f = this.slideFormats.get(job!) === "webp" ? this.slideWebpFile : this.slideFile;
+                return new Response(f, { headers: { "content-length": String(f.length) } });
+            }
+            if (method === "GET" && sub === "poster") {
+                if (this.slidePosterStatus !== 200) return json(this.slidePosterStatus, { status: "error", error: { code: "error.webp.not_found" } });
+                return new Response(this.posterJpeg, { headers: { "content-type": "image/jpeg", "content-length": String(this.posterJpeg.length) } });
             }
             if (method === "DELETE") {
                 this.slideDeletes.push(job!);
                 this.slideInputs.delete(job!);
+                return new Response(null, { status: 204 });
+            }
+        }
+        // the gallery image (a helper from before the makes has no such route)
+        if (p.startsWith("/gallery/") && !this.makes) return json(404, { status: "error", error: { code: "error.webp.not_found" } });
+        if (p.startsWith("/gallery/")) {
+            const [, , job, sub, n] = p.split("/");
+            if (method === "PUT" && sub === "inputs") {
+                if (this.galleryBusy) return json(429, { status: "error", error: { code: "error.webp.busy" } });
+                const len = (await collect(init?.body as ReadableStream)).length;
+                if (this.galleryInputStatus) return json(this.galleryInputStatus, { status: "error", error: { code: "error.studio.too_large" } });
+                const m = this.galleryInputs.get(job!) ?? new Map<number, number>();
+                m.set(Number(n), len);
+                this.galleryInputs.set(job!, m);
+                return new Response(null, { status: 204 });
+            }
+            if (method === "POST" && sub === "start") {
+                const body = JSON.parse(String(init?.body));
+                if (this.galleryStartStatus) return json(this.galleryStartStatus, { status: "error", error: { code: "error.webp.invalid_params" } });
+                const have = this.galleryInputs.get(job!);
+                if (!have || body.slides.some((sl: any) => !have.has(sl.n))) return json(409, { status: "error", error: { code: "error.studio.missing" } });
+                this.galleryStarts.push({ job: job!, body });
+                return json(202, { status: "pending" });
+            }
+            if (method === "GET" && sub === undefined) {
+                if (this.galleryGone || !this.galleryStarts.some((x) => x.job === job)) return json(404, { status: "error", error: { code: "error.webp.not_found" } });
+                if (this.galleryPolls > 0) {
+                    this.galleryPolls--;
+                    return json(200, { status: "pending", ...this.galleryPendingFields });
+                }
+                if (this.galleryError) return json(200, { status: "error", error: { code: this.galleryError } });
+                return json(200, { status: "done", ...this.galleryResult });
+            }
+            if (method === "GET" && sub === "file") {
+                return new Response(this.galleryFile, { headers: { "content-length": String(this.galleryFile.length) } });
+            }
+            if (method === "DELETE") {
+                this.galleryDeletes.push(job!);
+                this.galleryInputs.delete(job!);
                 return new Response(null, { status: 204 });
             }
         }

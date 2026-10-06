@@ -210,7 +210,7 @@ async function handleInner(
             decision.key,
             livePushConfigured(env),
             harkConfigured(env),
-            await helperHasGallery(container),
+            ...(await helperHas(container)),
         );
         return new Response(JSON.stringify(r.body), {
             status: r.status,
@@ -391,6 +391,7 @@ async function handleInner(
             // a slideshow made from a gallery's items and the retry of the items that failed to save (section 18):
             // the Durable Object owns the line and the helper
             decision.then === "studio_slideshow" ||
+            decision.then === "studio_gallery_image" ||
             decision.then === "studio_items_retry"
         ) {
             const headers = new Headers(request.headers);
@@ -448,14 +449,17 @@ async function handleInner(
     return container.fetch(request);
 }
 
-// Whether the container's helper has said it has the slideshow routes (the Durable Object keeps what it last
-// answered; it never wakes the container for this). Any failure is "not yet": the capability is simply not offered.
-async function helperHasGallery(container: ContainerStub): Promise<boolean> {
+// What the container's helper has said it can do (the Durable Object keeps what it last answered; it never wakes the
+// container for this): the slideshow routes (`gallery`), and the webp slideshow, the gallery image and `item` renders
+// (`make`). Any failure is "not yet": the capability is simply not offered.
+async function helperHas(container: ContainerStub): Promise<[boolean, boolean]> {
     try {
         const res = await container.fetch(new Request("https://do.internal/helper/caps", { headers: { [KEY_ID_HEADER]: "worker:capabilities" } }));
-        return res.status === 200 && ((await res.json()) as { gallery?: unknown })?.gallery === true;
+        if (res.status !== 200) return [false, false];
+        const body = (await res.json()) as { gallery?: unknown; make?: unknown };
+        return [body?.gallery === true, body?.make === true];
     } catch {
-        return false;
+        return [false, false];
     }
 }
 

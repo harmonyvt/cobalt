@@ -45,12 +45,22 @@ export type SlideshowRun = {
     fade: boolean;
     sound: "none" | "own";
     inputs: SlideshowInput[];
+    // 18.10: the webp slideshow (absent = mp4); `quality` only with it, the frame's `width` is the webp's
+    format?: "mp4" | "webp";
+    quality?: "low" | "med" | "high";
+};
+
+// What a queued gallery image (18.11) carries: the layout and the chosen photos in the order they are drawn
+// (`seconds` is always null: a photo has none).
+export type GalleryRun = {
+    layout: "strip" | "grid2" | "grid3" | "row";
+    inputs: SlideshowInput[];
 };
 
 export type LineEntry = {
-    // "slideshow" (section 18.5) behaves as a render everywhere it is observed from outside (`GET
-    // /studio/line` reports it as one): only the Durable Object tells them apart
-    kind: "save" | "render" | "slideshow";
+    // "slideshow" (section 18.5) and "gallery_image" (18.11) behave as a render everywhere they are observed from
+    // outside (`GET /studio/line` reports them as one): only the Durable Object tells them apart
+    kind: "save" | "render" | "slideshow" | "gallery_image";
     // the studio session (a queued save's row exists, status 'saving')
     sid: string;
     // render: the job id, minted at enqueue (webp.ts `mintId`, 20 base62)
@@ -62,9 +72,12 @@ export type LineEntry = {
     origin: "share" | null;
     // a save that is an adopted upload: it starts in phase "probing"
     adopt: boolean;
-    render: { params: WebpParams; effectiveWidth: number; quality: string; start: number; length: number } | null;
+    // `r2Key` / `itemId`: a render of one item of a gallery (18.13) reads that item, not the session's lead
+    render: { params: WebpParams; effectiveWidth: number; quality: string; start: number; length: number; r2Key?: string; itemId?: string } | null;
     // slideshow: what to run
     slideshow?: SlideshowRun | null;
+    // gallery image: what to run
+    gallery?: GalleryRun | null;
     // a save of a post's items (section 18.2): which, and how many the client saw; `retry` = the session
     // is ready already and only these indices are fetched again (18.2 `items/retry`)
     items?: ItemsChoice;
