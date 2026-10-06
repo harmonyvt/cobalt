@@ -4,12 +4,14 @@ import Foundation
 
 /// "Get latest saves" filter (CONTRACT-PARALLEL.md 15.4).
 enum CobaltSaveKind: String, AppEnum {
-    case anything, videos, webps
+    case anything, videos, photos, galleries, webps
 
     static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Kind")
     static let caseDisplayRepresentations: [CobaltSaveKind: DisplayRepresentation] = [
         .anything: "Anything",
         .videos: "Videos",
+        .photos: "Photos",
+        .galleries: "Galleries",
         .webps: "Webps",
     ]
 
@@ -17,6 +19,8 @@ enum CobaltSaveKind: String, AppEnum {
         switch self {
         case .anything: return .anything
         case .videos: return .videos
+        case .photos: return .photos
+        case .galleries: return .galleries
         case .webps: return .webps
         }
     }

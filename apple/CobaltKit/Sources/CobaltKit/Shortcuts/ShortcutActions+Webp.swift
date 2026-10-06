@@ -188,10 +188,15 @@ extension ShortcutActions {
             if post == nil { throw ShortcutError.noVideo }
         }
         guard let post else { throw ShortcutError.saveNotFound }
-        guard ShortcutSave(post: post).hasVideo else { throw ShortcutError.noVideo }
+        let save = ShortcutSave(post: post)
+        guard save.hasVideo else { throw ShortcutError.noVideo }
         if let s = post.session, s.status == .ready, s.expiresAt > ctx.clock.now() {
-            return WebpTarget(session: s.id, item: nil, duration: post.duration)
+            // a gallery's session renders its first video item (the server's lead, APP-API-CONTRACT 18.1)
+            return WebpTarget(session: s.id, item: nil, duration: save.kind == .gallery ? nil : post.duration)
         }
+        // a gallery has no single original to open again (CONTRACT-GALLERY 1.18: no reopen): once its session is gone
+        // only the app can make from it
+        if save.kind == .gallery { throw ShortcutError.failed(.expired) }
         // the original (private copy, else a hosted one), reopened as a studio session
         let original = post.files.first { $0.role == .privateCopy } ?? post.files.first { $0.role != .webp }
         guard let item = original?.id else { throw ShortcutError.saveNotFound }

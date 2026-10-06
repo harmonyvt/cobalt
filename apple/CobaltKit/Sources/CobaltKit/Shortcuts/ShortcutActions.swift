@@ -115,11 +115,17 @@ public final class ShortcutActions {
     /// "Save links" (15.3 steps 1 to 5). Hands the links to the server's line and returns what it answered; the wait
     /// (`waitUntilSaved`) and "open cobalt" are the caller's, told through `then`.
     ///
+    /// - `galleries` / `layout` (CONTRACT-GALLERY 1.13): what becomes of a post that holds several items. The default
+    ///   saves everything into cobalt (never into Photos); `.firstVideo` is today's rule; the two makes save everything and
+    ///   then make a slideshow webp or a gallery image behind it (`layout` is the gallery image's), which the server must be
+    ///   able to make (`features.gallery_make`): asked of one that cannot, nothing is queued. A link that is not a gallery
+    ///   is saved as ever and nothing is made.
     /// - `allowDeviceLine`: the server has no line; the caller has already asked to continue in the foreground and was
     ///   not refused, so a job may wait in this device's line.
     /// - Throws the first failure when every link failed; some failing is `outcome.failures`.
     public func saveLinks(
         _ texts: [String], title: String? = nil, visibility: ShortcutVisibility = .appDefault,
+        galleries: ShortcutGalleries = .everything, layout: GalleryLayout = .grid3,
         then: FollowUp = .leave, allowDeviceLine: Bool = false
     ) async throws -> ShortcutSaveOutcome {
         let began = ctx.clock.now()
@@ -128,16 +134,21 @@ public final class ShortcutActions {
         do {
             ready = try await prepare()
             if !ready.hasLine && !allowDeviceLine { throw ShortcutError.oldServer }
+            // A make is the server's: one that cannot make (an older one, plain cobalt) is told before anything is saved.
+            if galleries.makes, !(ctx.capabilities.gallery && ctx.capabilities.galleryMake) { throw ShortcutError.failed(.unsupported) }
             links = try resolveLinks(texts)
         } catch {
-            logRun(action: "save", inputs: texts.count, accepted: 0, failed: 0, began: began, outcome: "refused")
+            logRun(action: "save", inputs: texts.count, accepted: 0, failed: 0, began: began, outcome: "refused", galleries: galleries)
             throw error
         }
-        let options = JobOptions(title: links.count == 1 ? title.flatMap(MediaTitle.clean) : nil, makePublic: visibility.makePublic)
+        let options = JobOptions(
+            title: links.count == 1 ? title.flatMap(MediaTitle.clean) : nil, makePublic: visibility.makePublic,
+            galleries: galleries.handling(layout: layout))
         let jobs = queue.add(links.map(JobInput.link), via: .shortcut, options: options)
         let entries = zip(jobs, links).map { Entry(job: $0, label: Self.label(for: $1), link: $1, fileName: nil, title: options.title) }
-        let outcome = await collect(entries, timeout: Self.acceptTimeout, lineMax: ready.lineMax)
-        return try await conclude(outcome, action: "save", then: then, began: began)
+        var outcome = await collect(entries, timeout: Self.acceptTimeout, lineMax: ready.lineMax)
+        outcome.makeWhat = galleries.what
+        return try await conclude(outcome, action: "save", then: then, began: began, galleries: galleries)
     }
 
     // MARK: - Upload files
@@ -268,15 +279,17 @@ public final class ShortcutActions {
 
     /// 15.3 step 5, and the registration of 15.2.5: all failed → the first failure's words; some failed → the outcome
     /// says which; work left on the server with the app away → one summary from Hark.
-    private func conclude(_ outcome: ShortcutSaveOutcome, action: String, then: FollowUp, began: Date) async throws -> ShortcutSaveOutcome {
+    private func conclude(
+        _ outcome: ShortcutSaveOutcome, action: String, then: FollowUp, began: Date, galleries: ShortcutGalleries = .everything
+    ) async throws -> ShortcutSaveOutcome {
         if outcome.saves.isEmpty, let first = outcome.failures.first {
-            logRun(action: action, inputs: outcome.total, accepted: 0, failed: outcome.failures.count, began: began, outcome: "failed")
+            logRun(action: action, inputs: outcome.total, accepted: 0, failed: outcome.failures.count, began: began, outcome: "failed", galleries: galleries)
             throw first.error
         }
         if then == .leave { await leaveToHark(outcome) }
         logRun(
             action: action, inputs: outcome.total, accepted: outcome.saves.count, failed: outcome.failures.count, began: began,
-            outcome: outcome.failures.isEmpty ? "ok" : "partial", then: then)
+            outcome: outcome.failures.isEmpty ? "ok" : "partial", then: then, galleries: galleries)
         return outcome
     }
 
@@ -390,16 +403,18 @@ public final class ShortcutActions {
     /// `shortcut run` (CONTRACT-PARALLEL 8): counts and services only, never a link, title or file name.
     func logRun(
         action: String, inputs: Int, accepted: Int, failed: Int, began: Date, outcome: String, then: FollowUp? = nil,
-        waited: Bool = false
+        waited: Bool = false, galleries: ShortcutGalleries = .everything
     ) {
         let now = ctx.clock.now()
         let mode = ctx.background.activity.isActive ? "foreground" : "background"
-        Telemetry.log(.info, .pipeline, "shortcut run", data: [
+        var data: [String: TelemetryValue] = [
             "action": .string(action), "inputs": .int(inputs), "accepted": .int(accepted), "failed": .int(failed),
             "mode": .string(mode), "waitedMs": .int(Int(now.timeIntervalSince(began) * 1000)), "outcome": .string(outcome),
             "waits": .bool(waited || then == .wait),
             "concurrent": .int(queue.live.count), "line": .string(queue.lineMode == .server ? "server" : "device"),
-        ])
+        ]
+        if galleries != .everything { data["galleries"] = .string(galleries.rawValue) }       // the choice only, never a link
+        Telemetry.log(.info, .pipeline, "shortcut run", data: data)
     }
 }
 

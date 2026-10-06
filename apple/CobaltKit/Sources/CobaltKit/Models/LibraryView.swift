@@ -5,7 +5,7 @@ import Foundation
 
 public enum LibraryViewMode: String, Sendable, CaseIterable { case mosaic, table }
 
-public enum LibrarySortKey: String, Sendable, CaseIterable { case date, title, length, size, resolution, files, visibility, offline }
+public enum LibrarySortKey: String, Sendable, CaseIterable { case date, title, length, size, resolution, files, visibility, offline, kind }
 
 public struct LibrarySort: Sendable, Equatable {
     public var key: LibrarySortKey
@@ -44,6 +44,18 @@ public enum LibraryKindFilter: String, Sendable, CaseIterable {
         case .photos: return kind == .photo
         case .galleries: return kind == .gallery
         case .webps: return kind == .webp
+        }
+    }
+}
+
+extension MediaKind {
+    /// The kind sort's order, ascending: galleries, photos, videos, webps (the board `Library-Mixed`'s "sort: kind").
+    public var sortRank: Int {
+        switch self {
+        case .gallery: return 0
+        case .photo: return 1
+        case .video: return 2
+        case .webp: return 3
         }
     }
 }
@@ -153,6 +165,7 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
         case .files: order = compare(a.fileCount, b.fileCount)
         case .visibility: order = compare(a.visibilityRank, b.visibilityRank)
         case .offline: order = compare(a.offline, b.offline)
+        case .kind: order = compare(a.kind.sortRank, b.kind.sortRank)
         }
         if order != .orderedSame { return sort.ascending ? order == .orderedAscending : order == .orderedDescending }
         if sort.key != .date, a.date != b.date { return a.date > b.date }

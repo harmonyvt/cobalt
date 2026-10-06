@@ -78,18 +78,23 @@ struct PlanetBadges: View {
     var linked = false
     /// How many webps the media has: 2 or more reads `webp ×N` on a webp face.
     var webpCount = 0
+    /// A gallery: the stack-and-count badge takes the place of the type (CONTRACT-GALLERY 1.22).
+    var stack: Int?
     let compact: Bool
 
     private var label: String {
-        type.label == "webp" && webpCount > 1 ? Copy.Media.webpCount(webpCount) : type.label
+        if let stack { return "\(stack)" }
+        return type.label == "webp" && webpCount > 1 ? Copy.Media.webpCount(webpCount) : type.label
     }
+
+    private var symbol: String { stack == nil ? type.symbol : Symbol.Gallery.gallery }
 
     var body: some View {
         Group {
             if compact {
                 HStack(spacing: 2) {
                     if linked { dot(Symbol.linkBadge, size: 14, glyph: 8) }
-                    dot(type.symbol, size: 14, glyph: 8)
+                    dot(symbol, size: 14, glyph: 8)
                 }
             } else {
                 VStack(alignment: .trailing, spacing: 3) {
@@ -102,7 +107,10 @@ struct PlanetBadges: View {
     }
 
     private var capsule: some View {
-        Text(label)
+        HStack(spacing: 3) {
+            if stack != nil { Image(systemName: Symbol.Gallery.gallery).font(.system(size: 9, weight: .semibold)) }
+            Text(label)
+        }
             .font(Font.cobalt(11, .medium, relativeTo: .caption))
             .dynamicTypeSize(...DynamicTypeSize.large)
             .lineLimit(1)

@@ -3,10 +3,11 @@ import CobaltKit
 import SwiftUI
 
 /// What the hero's full-screen button opens: a video in the system player (sound on, scrub, AirPlay, PiP where the
-/// system has them), or an animated webp in a black viewer at its real aspect.
+/// system has them), an animated webp in a black viewer at its real aspect, or a photo in the zoomable viewer.
 enum HeroFullScreen: Identifiable {
     case video(url: URL, name: String, start: CMTime)
     case webp(source: AnimatedImageView.Source, aspect: CGFloat, name: String)
+    case photo(source: PhotoSource, aspect: CGFloat, name: String)
 
     var id: String {
         switch self {
@@ -15,6 +16,7 @@ enum HeroFullScreen: Identifiable {
             switch source {
             case .file(let url), .remote(let url): return "webp-\(url.absoluteString)"
             }
+        case .photo(let source, _, _): return "photo-\(source.url?.absoluteString ?? "none")"
         }
     }
 }
@@ -91,6 +93,8 @@ private struct HeroFullScreenContent: View {
             FullScreenVideo(url: url, start: start, close: close)
         case .webp(let source, let aspect, let name):
             FullScreenWebp(source: source, aspect: aspect, name: name) { close(nil) }
+        case .photo(let source, let aspect, let name):
+            FullScreenPhoto(source: source, aspect: aspect, name: name) { close(nil) }
         }
     }
 }

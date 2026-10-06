@@ -42,6 +42,8 @@ final class LibraryController {
     var deleting: MediaItem?
     /// The media whose video the owner is turning private (the confirm: its link stops working for everyone).
     var makingPrivate: MediaItem?
+    /// The gallery the owner chose `make from this post…` for: the combine sheet is open on it (`LibraryCombineSheet`).
+    var combining: MediaItem?
 
     /// True on the phone layout (a push); false where the detail is an inspector.
     @ObservationIgnored var compact = true
@@ -77,10 +79,15 @@ final class LibraryController {
 
     /// A tap: the phone pushes the detail on the media's face; the iPad and Mac select it in the inspector.
     func open(_ row: LibraryRow) {
+        open(row.item, initial: row.item.face.id)
+    }
+
+    /// Opens the detail of `item` on the tab `initial` (the phone pushes it; the iPad and Mac select it).
+    func open(_ item: MediaItem, initial: Rendition.ID?) {
         if compact {
-            opened = OpenedMedia(item: row.item, initial: row.item.face.id)
+            opened = OpenedMedia(item: item, initial: initial)
         } else {
-            selection = row.id
+            selection = item.post?.id ?? item.id
             inspectorOpen = true
         }
     }
@@ -115,12 +122,40 @@ final class LibraryController {
         return nil
     }
 
-    func canSave(_ item: MediaItem) -> Bool { RenditionPhotos.canSave(item.face) }
+    /// `save to photos` of one file: a video, a webp, or a single photo. A gallery has `save all to photos` instead.
+    func canSave(_ item: MediaItem) -> Bool { item.kind != .gallery && RenditionPhotos.canSave(item.face) }
+
+    /// A photo or a gallery: what the media holds is its items, not a video.
+    func holdsItems(_ item: MediaItem) -> Bool { item.video == nil && !item.items.isEmpty }
+
+    /// `copy photo link`: a single photo's public link.
+    func photoLink(_ item: MediaItem) -> URL? { item.kind == .photo ? item.face.publicURL : nil }
+
+    /// `copy all links` is offered for a gallery with at least one public link (items, then what was made).
+    func canCopyAllLinks(_ item: MediaItem) -> Bool {
+        item.kind == .gallery && !model.copyAllLinks(item).isEmpty
+    }
+
+    /// `save all to photos` (owner-asked only; the Mac has no Photos sync, its folder is in Finder): a gallery's items.
+    func canSaveAll(_ item: MediaItem) -> Bool {
+        #if os(iOS)
+        item.kind == .gallery && item.items.contains { RenditionPhotos.canSave($0) }
+        #else
+        false
+        #endif
+    }
+
+    /// `make from this post…`: a gallery of 2+ items on a server that makes things.
+    func canMakeFromPost(_ item: MediaItem) -> Bool {
+        item.kind == .gallery && item.itemCount >= 2 && model.capabilities.gallery && model.capabilities.galleryMake
+    }
 
     /// "make public" / "make private…": the server takes the switch for this media's video (the same switch the
-    /// detail has; a webp's is on its tab there).
+    /// detail has; a webp's is on its tab there). A photo or gallery has the post's switch (`AppModel.setPublic`).
     func canSwitchVisibility(_ item: MediaItem) -> Bool {
-        model.capabilities.visibility && (item.video?.canToggleVisibility ?? false)
+        guard model.capabilities.visibility else { return false }
+        if let video = item.video { return video.canToggleVisibility }
+        return holdsItems(item) && item.items.contains { $0.canToggleVisibility }
     }
 
     /// `delete everything` is offered when the media has something on the server and a way to delete it
@@ -136,6 +171,9 @@ final class LibraryController {
 
     /// The confirm's message (CONTRACT-MEDIA 1.12): what exists, for everyone, or on an older server only the webps.
     func deleteMessage(_ item: MediaItem) -> String {
+        if usesPostRoute(item), holdsItems(item) {
+            return Copy.Library2.deleteGalleryMessage(items: item.itemCount, made: item.made.count)
+        }
         if usesPostRoute(item) {
             let video = item.video
             let hosted = video?.hosted != nil || video?.publicURL != nil
@@ -159,15 +197,21 @@ final class LibraryController {
     /// The video's link on or off, said in the shell's status line. Off asks first (`makingPrivate`); the library's
     /// file flips at once and goes back when the server says no (`AppModel.setVisibility`).
     func setVisibility(_ item: MediaItem, public makePublic: Bool) {
-        guard let video = item.video else { return }
+        let video = item.video
+        guard video != nil || holdsItems(item) else { return }
         Task {
             if makePublic { showStatus(Copy.Library2.makingPublic) }
             do {
-                let change = try await model.setVisibility(video, public: makePublic)
+                var cacheCleared: Bool?
+                if let video {
+                    cacheCleared = try await model.setVisibility(video, public: makePublic).cacheCleared
+                } else {
+                    cacheCleared = try await model.setPublic(makePublic, for: item).cacheCleared
+                }
                 if makePublic {
                     showStatus(Copy.Library2.nowPublic)
                 } else {
-                    showStatus(change.cacheCleared == false ? "\(Copy.Library2.nowPrivate) \(Copy.Media.cacheNote)" : Copy.Library2.nowPrivate)
+                    showStatus(cacheCleared == false ? "\(Copy.Library2.nowPrivate) \(Copy.Media.cacheNote)" : Copy.Library2.nowPrivate)
                 }
             } catch {
                 showStatus(makePublic ? Copy.Media.makeLinkFailed : Copy.Media.turnOffFailed)
@@ -178,7 +222,16 @@ final class LibraryController {
     func save(_ item: MediaItem) {
         Task {
             do {
-                try await RenditionPhotos.save(item.face, model: model)
+                let face = item.face
+                #if os(iOS)
+                if face.isItem || face.isMade {
+                    try await model.saveToPhotos([face], of: item)      // records the gallery file's ledger key
+                } else {
+                    try await RenditionPhotos.save(face, model: model)
+                }
+                #else
+                try await RenditionPhotos.save(face, model: model)
+                #endif
                 #if os(iOS)
                 showStatus(Copy.savedPhotos)
                 #endif
@@ -186,6 +239,36 @@ final class LibraryController {
                 showStatus(Self.words(error))
             }
         }
+    }
+
+    /// `save all to photos`: every item of the gallery, only because the owner asked (iPhone and iPad).
+    func saveAll(_ item: MediaItem) {
+        #if os(iOS)
+        Task {
+            do {
+                try await model.saveToPhotos(item.items.filter { RenditionPhotos.canSave($0) }, of: item)
+                showStatus(Copy.savedPhotos)
+            } catch {
+                showStatus(Self.words(error))
+            }
+        }
+        #endif
+    }
+
+    /// `copy all links`: the public links of the items and of what was made, one a line.
+    func copyAllLinks(_ item: MediaItem) {
+        let text = model.copyAllLinks(item)
+        guard !text.isEmpty else {
+            showStatus(Copy.Library2.noPublicLinks)
+            return
+        }
+        Pasteboard.copy(text)
+        showStatus(Copy.Library2.copiedLinks(text.split(separator: "\n").count))
+    }
+
+    /// `make from this post…`: the combine sheet on this gallery.
+    func makeFromPost(_ item: MediaItem) {
+        combining = item
     }
 
     /// `delete everything` after the confirm, with the outcomes of the detail's (CONTRACT-MEDIA 1.12).

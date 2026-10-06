@@ -8,12 +8,24 @@ extension Rendition {
     func tabName(of item: MediaItem) -> String {
         switch kind {
         case .video: return Copy.Media.video
-        case .webp(let n): return item.webpCount > 1 ? Copy.Media.webpTab(n) : Copy.Media.webp
-        case .item, .slideshow, .galleryImage, .crop: return self.tabName      // gallery tabs: lane A3 draws them (CONTRACT-GALLERY.A0-API.md)
+        case .webp(let n):
+            // a gallery's webps are always numbered (`webp 1`, CONTRACT-GALLERY 1.19): they are made from one item each
+            return item.webpCount > 1 || item.detailShape != .classic ? Copy.Media.webpTab(n) : Copy.Media.webp
+        case .item(let index, let type): return Copy.Gallery.itemLabel(type, index: index)
+        case .slideshow, .galleryImage, .crop: return self.tabName      // never numbered (R8): one of each, a remake replaces it
         }
     }
 
-    var tabSymbol: String { isWebp ? Symbol.Media.webp : Symbol.Media.video }
+    var tabSymbol: String {
+        switch kind {
+        case .video: return Symbol.Media.video
+        case .webp: return Symbol.Media.webp
+        case .item(_, let type): return type == .photo ? Symbol.Gallery.photo : Symbol.Gallery.video
+        case .slideshow(_, let format): return format == .webp ? Symbol.Gallery.slideshowWebp : Symbol.Gallery.slideshowMp4
+        case .galleryImage: return Symbol.Gallery.galleryImage
+        case .crop: return Symbol.Gallery.crop
+        }
+    }
 
     /// The device holds the file (the index says so; the player and the share link check the disk).
     var hasFileHere: Bool { local?.fileURL != nil }
@@ -70,8 +82,27 @@ enum DetailMeta {
         let bytes = r.bytes.map { Format.bytes($0) }
         let when = Format.when(r.createdAt, now: now)
         switch r.kind {
-        case .video, .item, .slideshow, .galleryImage, .crop:         // gallery files: lane A3 words their own meta lines
+        case .video:
+            if r.isStillPicture {                                          // an older single photo: `photo · 1080×1080 · 238 KB · saved …`
+                return Copy.Media.videoMeta(seconds: DetailWords.photo, size: size(r), bytes: bytes, when: when)
+            }
             return Copy.Media.videoMeta(seconds: r.duration.map { Format.seconds($0) }, size: size(r), bytes: bytes, when: when)
+        case .item(let index, let type):
+            // `photo 3 of 10 · 1080×1350 · 211 KB · saved today 14:02`; a video or a gif adds its length
+            let name = Copy.Gallery.itemName(type == .photo ? "photo" : type.rawValue, index + 1, of: item.galleryTotal)
+            let length = type == .photo ? nil : r.duration.map { Format.seconds($0) }
+            return ([name, length, size(r), bytes].compactMap { $0 } + ["saved \(when)"]).joined(separator: " · ")
+        case .slideshow, .galleryImage, .crop:
+            // `20.0 s · 480×600 · 1.4 MB · made today 14:09 · 10 photos`
+            var lead: String?
+            switch r.kind {
+            case .slideshow: lead = r.duration.map { Format.seconds($0) }
+            case .galleryImage(let layout, _): lead = layout.label
+            default: lead = r.tabName
+            }
+            let from = (r.file?.madeFrom.count).flatMap { $0 > 0 ? $0 : nil } ?? r.local?.madeFrom?.count
+            return ([lead, size(r), bytes].compactMap { $0 } + ["made \(when)"] + [from.map { DetailWords.fromPhotos($0) }].compactMap { $0 })
+                .joined(separator: " · ")
         case .webp:
             return Copy.Media.webpMeta(range: range(r), crop: crop(r, in: item), size: size(r), bytes: bytes, when: when)
         }
@@ -89,7 +120,7 @@ enum DetailMeta {
         }
         if let size = size(r) { out.append((Copy.Media.size, size)) }
         if let bytes = r.bytes { out.append((Copy.Media.fileSize, Format.bytes(bytes))) }
-        out.append((r.isWebp ? Copy.Media.made : Copy.Media.saved, Format.when(r.createdAt, now: now)))
+        out.append((r.isWebp || r.isMade ? Copy.Media.made : Copy.Media.saved, Format.when(r.createdAt, now: now)))
         return out
     }
 

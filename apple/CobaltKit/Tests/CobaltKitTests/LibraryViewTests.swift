@@ -142,6 +142,23 @@ struct LibraryRowTests {
         }
     }
 
+    @Test func theKindKeyGroupsGalleriesPhotosVideosWebpsNewestFirstInEachGroup() {
+        func ofKind(_ id: String, _ kind: MediaKind, _ age: TimeInterval) -> LibraryPost {
+            var p = post(id, at: t0.addingTimeInterval(age))
+            p.kind = kind
+            return p
+        }
+        let app = emptyApp(posts: [
+            ofKind("v-old", .video, 10), ofKind("w", .webp, 20), ofKind("g-old", .gallery, 30), ofKind("p", .photo, 40),
+            ofKind("v-new", .video, 50), ofKind("g-new", .gallery, 60),
+        ])
+        app.library.sort = LibrarySort(key: .kind, ascending: true)
+        #expect(ids(app) == ["g-new", "g-old", "p", "v-new", "v-old", "w"])
+        app.library.sort = LibrarySort(key: .kind, ascending: false)
+        #expect(ids(app) == ["w", "v-new", "v-old", "p", "g-new", "g-old"])
+        #expect(LibrarySort(stored: "kind.asc") == LibrarySort(key: .kind, ascending: true))
+    }
+
     @Test func tiesBreakByDateNewestFirstThenIdWhicheverWayTheKeyRuns() {
         let same = [
             post("x1", custom: "t", at: t0.addingTimeInterval(1), privateBytes: 100),

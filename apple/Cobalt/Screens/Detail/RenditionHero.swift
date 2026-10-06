@@ -20,7 +20,13 @@ struct RenditionHero: View {
 
     var body: some View {
         Group {
-            if let local = rendition.local {
+            if case .galleryImage = rendition.kind {
+                // a long strip scrolls inside its frame (CONTRACT-GALLERY 1.19)
+                GalleryImageHero(rendition: rendition, maxHeight: maxHeight)
+            } else if rendition.isStillPicture {
+                // a photo, a crop, an older single photo: the viewer with zoom, not the player
+                PhotoHero(rendition: rendition, item: item, maxHeight: maxHeight)
+            } else if let local = rendition.local {
                 DetailPlayer(video: local, maxHeight: maxHeight, aspect: rendition.aspect, remote: remote)
             } else {
                 // the server's poster comes through `remote.still`, so a private video not on this device has its picture
@@ -55,6 +61,27 @@ struct HeroRemote: Equatable {
         // the server's poster for a video (the rendition's own, else the post's): a still the server made, cheaper
         // and kinder than a frame pulled from the mp4, and the only picture a private-only video has
         let serverPoster = (r.posterURL ?? (r.isWebp ? nil : item?.post?.posterURL)).map { RemotePoster(url: $0, isVideo: false) }
+        if r.isAnimatedMade || r.isGifItem {
+            // a slideshow webp and a gif item are animated pictures, played like a webp from their public link
+            if let url = r.publicURL ?? r.file?.url {
+                animatedWebp = url
+                still = serverPoster ?? RemotePoster(url: url, isVideo: false)
+            } else {
+                still = serverPoster
+                lockedWebp = r.visibility == .private && serverPoster == nil
+            }
+            return
+        }
+        if r.isMade || r.isItem {
+            // a made mp4 and a video item: the public file plays muted over the server's poster
+            if let url = r.publicURL ?? r.file?.url {
+                playableVideo = url
+                still = serverPoster ?? RemotePoster(url: url, isVideo: true)
+            } else {
+                still = serverPoster
+            }
+            return
+        }
         if r.isWebp {
             if let url = r.publicURL ?? r.file?.url {
                 animatedWebp = url
@@ -117,7 +144,7 @@ struct DetailTypeBadge: View {
     }
 }
 
-private extension View {
+extension View {
     /// Fits `aspect` inside `maxHeight`, centred, with the corner capsule, and (when there is something to open) the
     /// full-screen button in the bottom-right corner.
     func heroFrame(aspect: CGFloat, maxHeight: CGFloat, label: String, expand: (() -> Void)? = nil) -> some View {
@@ -309,7 +336,7 @@ struct DetailPlayer: View {
     /// file here, the public webp or hosted video.
     private func fullScreenRequest(withTime: Bool) -> HeroFullScreen? {
         if onDisk, let url = video.fileURL {
-            if video.kind == .webp { return .webp(source: .file(url), aspect: shape, name: video.name) }
+            if isAnimatedPicture { return .webp(source: .file(url), aspect: shape, name: video.name) }
             guard !isStill else { return nil }
             let start = withTime ? (player?.currentTime() ?? .zero) : .zero
             return .video(url: url, name: video.name, start: start)
@@ -368,6 +395,12 @@ struct DetailPlayer: View {
         guard let ext = video.fileURL?.pathExtension.lowercased(), !ext.isEmpty, let type = UTType(filenameExtension: ext) else { return false }
         return type.conforms(to: .image) && ext != "webp" && ext != "gif"
     }
+
+    /// A gif is an animated picture: it plays like a webp (a plain `AVPlayer` cannot open it).
+    private var isGif: Bool { video.fileURL?.pathExtension.lowercased() == "gif" }
+
+    /// The record is an animated picture file: a webp or a gif.
+    private var isAnimatedPicture: Bool { video.kind == .webp || isGif }
 
     private var label: String {
         var ext = (video.fileURL ?? video.remoteURL)?.pathExtension.lowercased() ?? ""
@@ -435,7 +468,7 @@ struct DetailPlayer: View {
     var body: some View {
         Group {
             if onDisk, let url = video.fileURL {
-                if video.kind == .webp {
+                if isAnimatedPicture {
                     AnimatedImageView(source: .file(url))
                 } else if isStill {
                     StillImage(url: url)
@@ -478,7 +511,7 @@ struct DetailPlayer: View {
             guard let url = video.fileURL, FileManager.default.fileExists(atPath: url.path) else { onDisk = false; diskChecked = true; return }
             onDisk = true
             diskChecked = true
-            guard video.kind == .original, !isStill else { return }
+            guard video.kind == .original, !isStill, !isGif else { return }
             var resume = CMTime.zero
             if let lent, lent.id == video.id {
                 if lent.wholeClip {

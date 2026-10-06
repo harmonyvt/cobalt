@@ -44,9 +44,9 @@ struct OrbitView: View {
     /// Where the orbit really is drawn (global), measured from inside so it is the full-bleed frame.
     var onFrame: (CGRect) -> Void = { _ in }
 
-    /// Ids of the media whose face file the disk has confirmed, resolved off the view body (a body runs
-    /// many times a second while the orbit turns).
-    @State private var onDisk: Set<String> = []
+    /// What the disk has confirmed for the shown planets (face files, the picture of a still, a gallery's turn),
+    /// resolved off the view body (a body runs many times a second while the orbit turns).
+    @State private var files = OrbitFiles()
     /// What was last drawn for each id: a planet that is leaving (deleted) fades out wearing its own face.
     @State private var retained: [String: StoredMedia] = [:]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -56,7 +56,7 @@ struct OrbitView: View {
 
     private var sources: [String: (url: URL, duration: Double?)] {
         var out: [String: (url: URL, duration: Double?)] = [:]
-        for m in shown where m.face.kind == .original && onDisk.contains(m.id) {
+        for m in shown where m.face.kind == .original && files.onDisk.contains(m.id) && !PlanetStills.isStill(m.face) {
             if let url = m.face.fileURL { out[m.id] = (url, m.face.duration) }
         }
         return out
@@ -72,11 +72,9 @@ struct OrbitView: View {
         }
         .opacity(dim)
         .animation(reduceMotion ? Motion.fade : Motion.lights, value: dim)
-        .task(id: shown.map { "\($0.id)|\($0.face.id)|\($0.face.fileURL?.path ?? "")" }) {
-            let candidates = shown.compactMap { m in m.face.fileURL.map { (m.id, $0.path) } }
-            onDisk = await Task.detached(priority: .utility) {
-                Set(candidates.filter { FileManager.default.fileExists(atPath: $0.1) }.map(\.0))
-            }.value
+        .task(id: shown.map { "\($0.id)|\($0.face.id)|\($0.face.fileURL?.path ?? "")|\($0.items.count)|\($0.face.posterURL?.path ?? "")" }) {
+            let planets = shown
+            files = await Task.detached(priority: .utility) { OrbitFiles.resolve(planets) }.value
         }
         .onChange(of: shown, initial: true) { _, now in
             for m in now { retained[m.id] = m }
@@ -127,7 +125,8 @@ struct OrbitView: View {
                         media: media, slot: item.slot,
                         isFront: front.contains(media.id),
                         playing: playersEnabled, flipbooks: flipbooksEnabled,
-                        hasFile: onDisk.contains(media.id) || pool.players[media.id] != nil, pool: pool,
+                        hasFile: files.onDisk.contains(media.id) || pool.players[media.id] != nil, pool: pool,
+                        still: files.still[media.id], turn: files.turn[media.id] ?? [],
                         fresh: freshID == media.id, pops: popID == media.id, showsLabel: item.slot.ring == 0,
                         zoom: zoom)
                         .position(item.slot.position)
@@ -166,7 +165,7 @@ struct OrbitView: View {
         .onChange(of: front, initial: true) { _, ids in
             pool.sync(front: ids, sources: sources, active: playersEnabled)
         }
-        .onChange(of: onDisk) { _, _ in
+        .onChange(of: files.onDisk) { _, _ in
             pool.sync(front: front, sources: sources, active: playersEnabled)
         }
         .onChange(of: playersEnabled) { _, active in
@@ -238,10 +237,23 @@ private struct PlanetPicture: View {
     let flipbooks: Bool
     let hasFile: Bool
     let pool: OrbitPlayerPool
+    /// The picture of a still face (a photo, a gallery's item): its poster, else the photo itself.
+    var still: URL?
+    /// A gallery's pictures, in order: the front band turns through them while the orbit moves.
+    var turn: [URL] = []
 
     var body: some View {
         let face = media.face
         ZStack {
+            if PlanetStills.isStill(face) {
+                // a photo planet: the still at its aspect, nothing to play. A gallery planet in the front band, while the
+                // orbit moves, turns through its items (Reduce Motion and Low Power hold item 1: `playing` is off).
+                if isFront && playing && turn.count >= 2 {
+                    GalleryTurner(urls: turn, seed: media.id)
+                } else if let still {
+                    StillImage(url: still)
+                }
+            } else {
             // a webp without a poster of its own borrows the video's (the frame is aspect-filled)
             if let poster = face.posterURL ?? media.original?.posterURL { StillImage(url: poster) }
             if isFront && playing && hasFile, let url = face.fileURL {
@@ -258,6 +270,7 @@ private struct PlanetPicture: View {
                 FlipbookView(urls: face.previewFrameURLs, fps: ring == 0 ? 6 : 5)
             }
             // tier (c): the poster above stays under everything until frames exist
+            }
         }
     }
 }
@@ -271,6 +284,8 @@ private struct OrbitThumb: View {
     /// The face's file is on this device (resolved by the orbit, not in this body).
     let hasFile: Bool
     let pool: OrbitPlayerPool
+    var still: URL?
+    var turn: [URL] = []
     let fresh: Bool
     let pops: Bool
     let showsLabel: Bool
@@ -296,7 +311,7 @@ private struct OrbitThumb: View {
             // the same planet, a new picture: the old face and the new crossfade
             PlanetPicture(
                 media: media, ring: slot.ring, isFront: isFront, playing: playing, flipbooks: flipbooks,
-                hasFile: hasFile, pool: pool)
+                hasFile: hasFile, pool: pool, still: still, turn: turn)
                 .id(face.id)
                 .transition(.opacity)
             if sweep > 0 {
@@ -312,7 +327,7 @@ private struct OrbitThumb: View {
         .clipShape(shape)
         .matchedTransitionSource(id: media.id, in: zoom) { source in source.clipShape(shape) }
         .overlay(alignment: .bottomLeading) {
-            if showsLabel && size.width * slot.scale >= 58 {
+            if showsLabel && size.width * slot.scale >= 58 && !PlanetStills.isStill(face) {
                 Text(face.duration.map { Format.seconds($0) } ?? "video")
                     .font(CobaltType.badge)
                     .dynamicTypeSize(...DynamicTypeSize.large)
@@ -328,7 +343,8 @@ private struct OrbitThumb: View {
         .overlay(alignment: .topTrailing) {
             PlanetBadges(
                 type: PlanetType(face), linked: media.isHosted, webpCount: media.webps.count,
-                compact: visibleShort < (counts ? PlanetBadge.compactBelowWithCount : PlanetBadge.compactBelow))
+                stack: media.isGallery ? media.items.count : nil,
+                compact: visibleShort < (counts || media.isGallery ? PlanetBadge.compactBelowWithCount : PlanetBadge.compactBelow))
                 .padding(PlanetBadge.inset)
         }
         .overlay {
@@ -337,6 +353,14 @@ private struct OrbitThumb: View {
                 .padding(-4)
                 .opacity(fresh ? 1 : 0)
                 .animation(.easeOut(duration: 0.3), value: fresh)
+        }
+        .background {
+            // a gallery: two card edges peek out behind, up and to the right
+            if media.isGallery {
+                CardEdges(
+                    size: size, radius: Metrics.thumbRadius,
+                    step: CardEdges.step(forShort: visibleShort) / max(0.01, slot.scale))
+            }
         }
         .shadow(color: .black.opacity(0.35), radius: 8, y: 5)
         .scaleEffect(slot.scale * popScale)

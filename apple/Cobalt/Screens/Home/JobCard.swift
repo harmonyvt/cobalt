@@ -175,21 +175,17 @@ struct JobCardFacts: Equatable {
             failureOpens = f.keepsTrim && p.media != nil && p.sessionID != nil
             canRetry = TrayCopy.isRetryable(f)
         case .gallery:
-            // minimal card so the tray compiles; lane A1 draws the real one (CONTRACT-GALLERY.A0-API.md)
-            let run = p.galleryRun
-            if p.galleryIsSettled {
-                kind = .saved
-                headline = TrayCopy.saved
-                detail = .text(TrayCopy.savedWhere)
-                stepText = Copy.stepDone
-            } else {
-                kind = p.line != nil ? .waiting : .running
-                headline = run.map { Copy.Gallery.saving($0.done, of: $0.total) } ?? title
-                stepText = ""
-                showsBar = true
-                fraction = run.map { $0.total > 0 ? Double($0.done) / Double($0.total) : 0 }
-                exit = Self.exit(for: p, lineMode: lineMode)
-            }
+            let g = GalleryCardParts(pipeline: p, title: title, lineMax: lineMax)
+            kind = g.kind
+            headline = g.headline
+            detail = g.detail
+            footnote = g.footnote
+            stepText = g.stepText
+            fraction = g.fraction
+            showsBar = g.showsBar
+            failureOpens = g.failureOpens
+            canRetry = g.canRetry
+            if g.isLive { exit = Self.exit(for: p, lineMode: lineMode) }
         case .idle:
             break
         }
@@ -406,5 +402,132 @@ private struct TrayPillStyle: ButtonStyle {
             .frame(minHeight: 32)
             .background(CobaltColor.text.opacity(configuration.isPressed ? 0.16 : 0.08), in: Capsule())
             .contentShape(Capsule())
+    }
+}
+
+// MARK: - a gallery's card
+
+/// What a gallery job says in the tray (apple/CONTRACT-GALLERY.md 1.10): the save as `saving 4 of 10`, a make chosen while
+/// it runs as `slideshow webp · after the save · 6 of 10`, then the make's own progress; saved, it says what it holds and
+/// that it is in the orbit and the library; a make that failed offers `open` (the focus has the try again).
+struct GalleryCardParts {
+    var kind: JobCardFacts.Kind = .running
+    var headline = ""
+    var detail: ProgressStory.Detail?
+    var footnote: String?
+    var stepText = ""
+    var fraction: Double?
+    var showsBar = false
+    var failureOpens = false
+    var canRetry = false
+    /// The x applies (something is still happening).
+    var isLive = false
+
+    @MainActor
+    init(pipeline p: Pipeline, title: String, lineMax: Int) {
+        guard let run = p.galleryRun else {
+            kind = .saved
+            headline = TrayCopy.saved
+            detail = .text(TrayCopy.savedWhere)
+            return
+        }
+        let items = p.galleryItems
+        let photos = items.filter(\.isPhoto).count
+        let count = Copy.Gallery.count(photos: photos, videos: items.count - photos)
+        func makeWord(_ m: GalleryMake) -> String {
+            switch m {
+            case .slideshow(let plan): return plan.format == .webp ? Copy.Gallery.slideshowWebp : "video"
+            case .image: return Copy.Gallery.galleryImage
+            }
+        }
+        func waitingDetail() -> ProgressStory.Detail? {
+            switch p.line {
+            case .inLine(let place, let behind)?: return .text(Copy.Jobs.lineDetail(place: place, behind: behind))
+            case .serverBusy(let since, let label)?:
+                let what = label.flatMap { $0.isEmpty ? nil : $0 } ?? "a save that isn't in this list"
+                return .elapsed(prefix: "it's busy with \(what)", since: since)
+            case nil: return nil
+            }
+        }
+        let saveFraction = run.total > 0 ? Double(run.done) / Double(run.total) : 0
+        switch run.phase {
+        case .failed(let f):
+            kind = .failed
+            headline = TrayCopy.failure(f, lineMax: lineMax)
+            canRetry = TrayCopy.isRetryable(f)
+        case .saving:
+            isLive = true
+            if case .waiting(let m) = run.make {
+                headline = "\(makeWord(m)) · \(Copy.Gallery.afterTheSave(run.done, of: run.total))"
+                detail = .text(Copy.Gallery.saving(min(run.total, run.done + 1), of: run.total))
+                fraction = saveFraction
+                showsBar = true
+            } else if p.line != nil {
+                kind = .waiting
+                headline = Copy.Jobs.waiting
+                detail = waitingDetail()
+                fraction = 0
+                showsBar = true
+            } else {
+                headline = Copy.Gallery.saving(min(run.total, run.done + 1), of: run.total)
+                detail = .text(count)
+                fraction = run.done > 0 ? saveFraction : nil
+                showsBar = true
+            }
+        case .saved:
+            switch run.make {
+            case .none, .waiting:
+                kind = .saved
+                if run.failures.isEmpty {
+                    headline = TrayCopy.saved
+                    detail = .text("\(count) · \(TrayCopy.savedWhere)")
+                } else {
+                    headline = "saved \(run.kept) of \(run.total)"
+                    detail = .text(Copy.Gallery.notFetched(Self.failedName(run, items), kept: run.kept))
+                }
+            case .sending(let m):
+                isLive = true
+                headline = Copy.Gallery.making(makeWord(m), 0)
+                detail = .text(count)
+                fraction = 0
+                showsBar = true
+            case .queued(let m, let ahead):
+                isLive = true
+                kind = .waiting
+                headline = "\(makeWord(m)) · \(Copy.Jobs.waiting)"
+                detail = .text(Copy.Jobs.lineDetail(place: ahead + 1))
+                fraction = 0
+                showsBar = true
+            case .making(let m, let progress):
+                isLive = true
+                headline = Copy.Gallery.making(makeWord(m), Int((progress.fraction * 100).rounded()))
+                detail = .text(count)
+                fraction = progress.fraction
+                showsBar = true
+            case .done(let m, let result):
+                kind = .saved
+                headline = Copy.Gallery.addedAsTab(Self.tab(m))
+                var facts: [String] = []
+                if let w = result.width, let h = result.height { facts.append(Format.size(w, h)) }
+                if let bytes = result.bytes { facts.append(Format.bytes(bytes)) }
+                detail = .text(facts.isEmpty ? count : facts.joined(separator: " · "))
+            case .failed(let m, _):
+                kind = .failed
+                headline = Copy.Gallery.makeFailed(makeWord(m))
+                failureOpens = true
+            }
+        }
+    }
+
+    private static func tab(_ m: GalleryMake) -> String {
+        switch m {
+        case .slideshow(let plan): return plan.format == .webp ? "slideshow webp" : "slideshow"
+        case .image(let plan): return Copy.Gallery.galleryImageTab(plan.layout.label)
+        }
+    }
+
+    /// "photo 7", "photos 2 and 7".
+    private static func failedName(_ run: GalleryRun, _ items: [GalleryItem]) -> String {
+        Copy.Gallery.photoNames(run.failures.keys.sorted())
     }
 }

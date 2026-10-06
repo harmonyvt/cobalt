@@ -19,6 +19,7 @@ enum LibraryRowCopy {
 
     /// "720×1280"; "—" when unknown.
     static func resolution(_ row: LibraryRow) -> String {
+        guard row.kind != .gallery else { return "—" }          // a gallery's face may be a slideshow, not one of its photos
         guard let w = row.width, let h = row.height, w > 0, h > 0 else { return "—" }
         return Format.size(w, h)
     }
@@ -28,10 +29,36 @@ enum LibraryRowCopy {
         row.bytes > 0 ? Format.bytes(row.bytes) : "—"
     }
 
-    /// "video + webp ×3", "image", "webp ×2".
+    /// "video + webp ×3", "image", "webp ×2"; a photo or gallery says what it holds: "10 photos + 2 made".
     static func files(_ row: LibraryRow) -> String {
-        Copy.Library2.files(
+        if row.kind == .gallery || (row.kind == .photo && !row.item.items.isEmpty) {
+            let types = row.item.items.compactMap(\.itemType)
+            let photos = types.filter { $0 == .photo }.count
+            return Copy.Library2.photoFiles(photos: photos, videos: types.count - photos, made: row.item.made.count)
+        }
+        return Copy.Library2.files(
             original: row.hasVideo ? (row.originalIsImage ? .image : .video) : nil, webps: row.webps)
+    }
+
+    /// The kind column and the second line's first word: `gallery · 10`, `photo`, `video`, `webp`.
+    static func kind(_ row: LibraryRow) -> String {
+        Copy.Library2.kindWord(row.kind, items: row.itemCount)
+    }
+
+    /// The items of a gallery in words, for VoiceOver: "10 photos", "2 photos + 2 videos".
+    static func itemWords(_ row: LibraryRow) -> String {
+        let types = row.item.items.compactMap(\.itemType)
+        let photos = types.filter { $0 == .photo }.count
+        return Copy.Gallery.count(photos: photos, videos: types.count - photos)
+    }
+
+    /// What VoiceOver says for a tile or row: the post as it opens.
+    static func a11yLabel(_ row: LibraryRow) -> String {
+        switch row.kind {
+        case .gallery: return Copy.Library2.openGallery(spoken(row), items: itemWords(row))
+        case .photo: return Copy.Library2.openPhoto(spoken(row))
+        case .video, .webp: return Copy.Media.planetA11y(title: spoken(row), webps: row.webps, hasVideo: row.hasVideo)
+        }
     }
 
     /// The service cell: `instagram`, `x`, `file` for an upload.
@@ -43,11 +70,12 @@ enum LibraryRowCopy {
         row.isPublic ? Copy.Library2.isPublic : Copy.Library2.isPrivate
     }
 
-    /// "14.8 s · 720×1280 · 12.8 MB · today 21:04": the two-line row's second line (unknown parts are left out).
-    static func meta(_ row: LibraryRow, now: Date) -> String {
-        var parts: [String] = []
-        if row.length > 0 { parts.append(length(row)) }
-        if row.pixels > 0 { parts.append(resolution(row)) }
+    /// "video · 14.8 s · 720×1280 · 12.8 MB · today 21:04": the two-line row's second line (unknown parts are left out).
+    /// A gallery has no length of its own (its cover is one photo).
+    static func meta(_ row: LibraryRow, now: Date, withKind: Bool = true) -> String {
+        var parts: [String] = withKind ? [kind(row)] : []
+        if row.length > 0, row.kind != .gallery { parts.append(length(row)) }
+        if row.pixels > 0, row.kind != .gallery { parts.append(resolution(row)) }
         if row.bytes > 0 { parts.append(size(row)) }
         parts.append(Format.when(row.date, now: now))
         return parts.joined(separator: " · ")
@@ -57,8 +85,8 @@ enum LibraryRowCopy {
     static func type(_ row: LibraryRow) -> String {
         let item = row.item
         if item.face.isWebp { return Copy.Media.webpCount(row.webps) }
-        let video = item.video
-        for contentType in [video?.file?.contentType, video?.hosted?.contentType] {
+        let video = item.video ?? item.face
+        for contentType in [video.file?.contentType, video.hosted?.contentType] {
             guard let contentType = contentType?.lowercased() else { continue }
             switch contentType {
             case "video/quicktime": return "mov"
@@ -71,16 +99,17 @@ enum LibraryRowCopy {
             default: break
             }
         }
-        let name = video?.local?.name ?? video?.file?.name ?? ""
+        let name = video.local?.name ?? video.file?.name ?? ""
         let ext = (name as NSString).pathExtension.lowercased()
         if !ext.isEmpty, ext.count <= 4 { return ext }
-        return row.originalIsImage ? "photo" : "mp4"
+        return row.originalIsImage || row.kind == .photo ? "photo" : "mp4"
     }
 
     /// The type's symbol, for a tile too narrow for its word.
     static func typeSymbol(_ row: LibraryRow) -> String {
+        if row.kind == .gallery { return Symbol.Gallery.gallery }
         if row.item.face.isWebp { return Symbol.Library.typeWebp }
-        return row.originalIsImage ? Symbol.Library.typePhoto : Symbol.Library.typeVideo
+        return row.originalIsImage || row.kind == .photo ? Symbol.Library.typePhoto : Symbol.Library.typeVideo
     }
 }
 
@@ -96,10 +125,16 @@ enum FaceChain {
         func add(_ source: LibraryPictureSource) { if !out.contains(source) { out.append(source) } }
         let face = item.face
         if let url = face.local?.posterURL { add(.file(url)) }
-        if face.isWebp {
+        if face.playsAsWebp {
+            // a webp of a video, or a slideshow webp made from a gallery: ImageIO reads its first frame
             if let url = face.publicURL ?? item.webps.last(where: { $0.publicURL != nil })?.publicURL { add(.image(url)) }
             if let url = item.video?.local?.posterURL { add(.file(url)) }
-            if let url = item.video?.posterURL ?? item.post?.posterURL { add(.image(url)) }
+            if let url = face.posterURL ?? item.video?.posterURL ?? item.post?.posterURL { add(.image(url)) }
+        } else if face.isStill {
+            // a photo (or a gallery's first photo): its own file is the picture, else the server's thumb, else its public link
+            if let url = face.local?.fileURL { add(.file(url)) }
+            if let url = face.posterURL ?? item.post?.posterURL { add(.image(url)) }
+            if let url = face.publicURL { add(.image(url)) }
         } else {
             if let url = face.posterURL ?? item.post?.posterURL { add(.image(url)) }
             if let hosted = item.video?.hosted, let url = hosted.url {
@@ -110,6 +145,21 @@ enum FaceChain {
             if let url = item.local?.renditions.compactMap(\.posterURL).first { add(.file(url)) }
         }
         return out
+    }
+}
+
+extension Rendition {
+    /// Moves like a webp: a webp of a video, or a slideshow webp made from a gallery.
+    var playsAsWebp: Bool { isWebp || isAnimatedMade }
+
+    /// A still picture: a photo item, or an original whose file is an image (a single photo, an image upload).
+    var isStill: Bool {
+        if let type = itemType { return type == .photo }
+        guard kind == .video else { return false }
+        for type in [file?.contentType, hosted?.contentType] {
+            if let type { return type.lowercased().hasPrefix("image/") && type.lowercased() != "image/gif" }
+        }
+        return false
     }
 }
 
@@ -237,6 +287,46 @@ struct LibraryTitleText: View {
     }
 }
 
+/// A gallery's count: the stack glyph and the number of items (the board `Library-Mixed`). On a tile it is the dark
+/// badge top right (the place a video's type word has); in a row it is the quiet capsule beside the webp one.
+struct GalleryCountBadge: View {
+    enum Style { case tile, row }
+
+    let count: Int
+    var style: Style = .tile
+
+    var body: some View {
+        switch style {
+        case .tile:
+            HStack(spacing: 3) {
+                Image(systemName: Symbol.Gallery.gallery).font(.system(size: 9, weight: .semibold))
+                Text("\(count)").monospacedDigit()
+            }
+            .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))
+            .foregroundStyle(CobaltColor.badgeInk)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(CobaltColor.badgeBack, in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+            .accessibilityHidden(true)
+        case .row:
+            HStack(spacing: 3) {
+                Image(systemName: Symbol.Gallery.gallery).font(.system(size: 9, weight: .semibold))
+                Text("\(count)").monospacedDigit()
+            }
+            .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))
+            .foregroundStyle(CobaltColor.onText)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(CobaltColor.text))
+            .fixedSize()
+            .accessibilityHidden(true)
+        }
+    }
+}
+
 /// The `webp ×3` capsule, the offline mark and the public-link dot of a list row.
 struct LibraryRowBadges: View {
     let row: LibraryRow
@@ -244,6 +334,9 @@ struct LibraryRowBadges: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            if row.kind == .gallery {
+                GalleryCountBadge(count: row.itemCount, style: .row)
+            }
             if row.webps > 0 {
                 Text(Copy.Media.webpCount(row.webps))
                     .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))

@@ -42,6 +42,15 @@ enum ShareCopy {
     static let quickOpenCobalt = "open cobalt"
     static let quickExpandA11y = "show the full sheet"
 
+    // The compact gallery sheet (CONTRACT-GALLERY.md 1.12; the rest of its copy is `Copy.Gallery`).
+    /// Under `save now` while the sheet is still checking the link.
+    static let saveNowSub = "everything, into cobalt and Files"
+    static let closeLabel = "close"
+    static let crossfade = "crossfade"
+    /// The webp row's sub when the post has videos: their lengths are not known here, so the server decides.
+    static func webpSubWithVideos(_ sec: String) -> String { "\(sec) a photo · \(Copy.Gallery.videosPlayInFull) · \(crossfade)" }
+    static func layoutA11y(_ layout: String) -> String { "save and make a gallery image, \(layout)" }
+
     /// The instant share's one-line failure card (CONTRACT-SHARE-QUICK.md section 9). Lowercase, one line
     /// each: what happened, and the card's button says what to do (open cobalt).
     static func instantFailure(_ failure: InstantShare.Failure) -> String {

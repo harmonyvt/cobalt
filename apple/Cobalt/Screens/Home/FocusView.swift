@@ -56,6 +56,8 @@ struct FocusLayer: View {
     /// Room kept free at the top of a single-column layout for the tray's pill (JobTray.swift): the pill sits under
     /// the title while a planet is in focus and must not cover it.
     var topReserve: CGFloat = 0
+    /// A gallery's `open`: the home screen pushes the media's detail (by the media's id) over the focus.
+    var onOpen: (String) -> Void = { _ in }
     /// Close or swipe down.
     let onClose: () -> Void
 
@@ -65,6 +67,8 @@ struct FocusLayer: View {
     /// Plays the selection (looping) while the trim panel is open; the strip's playhead reads it.
     @State private var trimPreview = TrimPreview()
     @State private var showsWebp = false
+    /// The output a tap on `make from it` chose: the combine sheet is up with it (a gallery).
+    @State private var makeKind: GalleryMakeKind?
     @State private var shimmer = 0
     @State private var pulse = 0
     @State private var copiedWebp = false
@@ -92,6 +96,8 @@ struct FocusLayer: View {
     private var isFork: Bool { capabilities.studio && capabilities.kind != .plainCobalt && pipeline.sessionID != nil }
 
     private var localVideo: StoredVideo? {
+        // a gallery's stored items are photos (and clips) of its own, not the run's one video
+        if isGallery { return nil }
         if case .savedLocally(let video) = pipeline.state { return video }
         if let stored = pipeline.stored { return stored }
         guard let sid = pipeline.sessionID else { return nil }
@@ -105,7 +111,89 @@ struct FocusLayer: View {
         return model.store.videos.first { $0.kind == .webp && $0.remoteURL == url }
     }
 
+    // MARK: gallery
+
+    private var isGallery: Bool { if case .gallery = pipeline.state { return true } else { return false } }
+
+    /// This gallery's media on the device, once its first item is stored.
+    private var storedGallery: StoredMedia? { pipeline.mediaID.flatMap { model.store.media(id: $0) } }
+
+    /// What the gallery focus says; nil for every other run.
+    private var galleryFacts: GalleryFacts? {
+        isGallery ? GalleryFacts(model: model, pipeline: pipeline, title: title) : nil
+    }
+
+    /// The count and the cover the hero wears (the stack only from 2 items).
+    private var galleryHero: GalleryHero? {
+        guard isGallery else { return nil }
+        let items = pipeline.galleryItems
+        let count = max(pipeline.galleryRun?.total ?? 0, items.count, 1)
+        let stored = storedGallery?.items.first.flatMap { PlanetStills.picture(of: $0) }
+        return GalleryHero(count: count, cover: GalleryCoverSource(file: stored, remote: items.first?.thumb))
+    }
+
+    /// The cover's shape: the first item's, until the library says, a 4:5 post.
+    private var galleryAspect: CGFloat {
+        if let first = pipeline.galleryItems.first, let w = first.width, let h = first.height, w > 0, h > 0 {
+            return min(16.0 / 9.0, max(9.0 / 16.0, CGFloat(w) / CGFloat(h)))
+        }
+        return 4.0 / 5.0
+    }
+
+    /// The tick that says the gallery just landed (saved, or a make is done) or failed; the hero's shimmer and pulse follow it.
+    private var galleryBeat: String {
+        guard isGallery, let run = pipeline.galleryRun else { return "" }
+        var beat = ""
+        switch run.phase {
+        case .saving: break
+        case .saved: beat = "saved"
+        case .failed: beat = "failed"
+        }
+        switch run.make {
+        case .done(_, let result): beat += "|done:\(result.job)"
+        case .failed: beat += "|makefail"
+        default: break
+        }
+        return beat
+    }
+
+    private func chooseMake(_ kind: GalleryMakeKind) { makeKind = kind }
+
+    /// `open`: the detail of this gallery's media on the device, pushed over the focus.
+    private func openGallery() {
+        guard let id = storedGallery?.id else { return }
+        onOpen(id)
+    }
+
+    /// `try photo 7 again`: the post's failed items are fetched anew as a job of their own, and its run takes the
+    /// focus (the hero then says `fetching photo 7 again`).
+    private func retryGalleryItems() {
+        guard let run = pipeline.galleryRun, let sid = pipeline.sessionID, !run.failures.isEmpty else { return }
+        let queue = model.queue
+        let previous = queue.focusedID
+        let link: URL? = { if case .link(let info)? = pipeline.input { return info.url } else { return nil } }()
+        let job = queue.addGallery(
+            .retry(run.failures.keys.sorted()), session: sid, items: pipeline.galleryItems, media: pipeline.media, link: link,
+            mediaID: pipeline.mediaID, failures: run.failures)
+        GalleryRetry.mark(job.pipeline)
+        queue.focus(job.id)
+        if let previous { queue.dismiss(previous) }
+    }
+
+    /// The save failed for good (every item, the link, the server): the same link again.
+    private func retryGallerySave() {
+        guard let id = model.queue.focusedID else { return }
+        model.queue.retry(id)
+    }
+
+    /// The make failed: the same plan again (the photos and the plan are untouched).
+    private func remake() {
+        guard let request = pipeline.galleryRun?.make.request else { return }
+        Task { await pipeline.make(request) }
+    }
+
     private var aspect: CGFloat {
+        if isGallery { return galleryAspect }
         // a cropped webp has its own shape: the planet takes the real webp's aspect once it shows
         if showsWebp, let r = pipeline.webpResult, r.width > 0, r.height > 0 { return CGFloat(r.width) / CGFloat(r.height) }
         let w = pipeline.media?.width ?? localVideo?.width
@@ -178,6 +266,13 @@ struct FocusLayer: View {
     private var heroProgress: HeroProgress {
         // queued, not started: the planet does not breathe for work nobody is doing yet
         if pipeline.line != nil { return .none }
+        if isGallery, let run = pipeline.galleryRun {
+            // the ticks along the planet's edge light up as the items land; a make in flight makes it breathe
+            if case .saving = run.phase { return .decoding(done: run.done, total: max(1, run.total)) }
+            if case .making = run.make { return .working }
+            if case .sending = run.make { return .working }
+            return .none
+        }
         if case .rendering(let p) = pipeline.state {
             switch p {
             case .decoding(let done, let total): return .decoding(done: done, total: total)
@@ -214,6 +309,7 @@ struct FocusLayer: View {
 
     /// What VoiceOver says about the planet: its title, its file type and the badges it wears.
     private var a11yValue: String {
+        if let facts = galleryFacts { return [title, facts.countText].joined(separator: ", ") }
         var parts = [title, typeLabel]
         if hasLink { parts.append(Copy.linkBadgeA11y) }
         if hasWebp && showsWebp { parts.append(Copy.webpBadgeA11y) }
@@ -232,6 +328,10 @@ struct FocusLayer: View {
     }
 
     private var typeLabel: String {
+        if let hero = galleryHero {
+            if hero.count >= 2 { return "\(hero.count)" }
+            return storedGallery?.items.first.map { PlanetType($0).label } ?? "jpg"
+        }
         if showsWebp { return storedWebp.map { PlanetType($0).label } ?? "webp" }
         return localVideo.map { PlanetType($0).label } ?? "mp4"
     }
@@ -251,10 +351,12 @@ struct FocusLayer: View {
             fileName = pipeline.media?.name ?? localVideo?.name
         }
         return MediaTitle.text(MediaTitle.resolve(
-            custom: pipeline.runTitle ?? localVideo?.title, service: service, ref: ref, fileName: fileName))
+            custom: pipeline.runTitle ?? (isGallery ? storedGallery?.customTitle : localVideo?.title),
+            service: service, ref: ref, fileName: fileName))
     }
 
     private var meta: String {
+        if let facts = galleryFacts { return facts.countText }
         let m = pipeline.media
         let v = localVideo
         return Copy.focusMeta(seconds: m?.duration ?? v?.duration, width: m?.width ?? v?.width,
@@ -349,6 +451,15 @@ struct FocusLayer: View {
         .background { escapeShortcut }
         #endif
         .heroFullScreen(item: $fullScreen) { closedFullScreen(at: $0) }
+        .sheet(item: $makeKind) { GalleryCombineSheet(model: model, pipeline: pipeline, kind: $0) }
+        // a gallery lands (saved, a make done) or fails: the shimmer or the pulse
+        .onChange(of: galleryBeat) { old, new in
+            guard !warm, !new.isEmpty else { return }
+            let before = Set(old.split(separator: "|").map(String.init))
+            for beat in new.split(separator: "|").map(String.init) where !before.contains(beat) {
+                if beat == "failed" || beat == "makefail" { pulse += 1 } else { shimmer += 1 }
+            }
+        }
         // the bar follows the focused planet's player (made when the video first shows, handed away on the return)
         .onChange(of: player.player.map { ObjectIdentifier($0) }, initial: true) { _, _ in
             guard !warm else { return }
@@ -457,6 +568,52 @@ struct FocusLayer: View {
             try? await Task.sleep(for: .seconds(make))
             if !Task.isCancelled { pipeline.makeWebp() }
         }
+        // A gallery's drivers (evidence without a finger on the glass; the same functions the buttons call):
+        // `-previewGallerySheet webp|mp4|image` opens the combine sheet with that output once the planet has lifted;
+        // `-previewGalleryMake webp|mp4|image -previewGalleryMakeAt 2` chooses that make N s after the lift, the way
+        // the sheet does (`Pipeline.make`, held until the save is over); `-previewGalleryRetry 1` presses
+        // `try photo 7 again` N s after the save ended with a failure.
+        .task(id: lifted) {
+            let d = UserDefaults.standard
+            guard lifted, isGallery else { return }
+            if let raw = d.string(forKey: "previewGallerySheet"), let kind = GalleryMakeKind(rawValue: raw) {
+                try? await Task.sleep(for: .seconds(max(0.5, d.double(forKey: "previewGallerySheetAt"))))
+                if !Task.isCancelled { makeKind = kind }
+            }
+        }
+        .task(id: lifted) {
+            let d = UserDefaults.standard
+            guard lifted, isGallery, let raw = d.string(forKey: "previewGalleryMake"), let kind = GalleryMakeKind(rawValue: raw) else { return }
+            try? await Task.sleep(for: .seconds(d.double(forKey: "previewGalleryMakeAt")))
+            guard !Task.isCancelled else { return }
+            let items = pipeline.galleryItems
+            let ids = items.map(\.id)
+            switch kind {
+            case .webp: await pipeline.make(.slideshow(SlideshowPlan(format: .webp, items: ids)))
+            case .mp4: await pipeline.make(.slideshow(SlideshowPlan(format: .mp4, items: ids)))
+            case .image: await pipeline.make(.image(GalleryImagePlan(items: items.filter(\.isPhoto).map(\.id))))
+            }
+        }
+        .task(id: galleryBeat) {
+            let after = UserDefaults.standard.double(forKey: "previewGalleryRetry")
+            guard after > 0, galleryBeat == "saved", galleryFacts?.failed.isEmpty == false else { return }
+            try? await Task.sleep(for: .seconds(after))
+            if !Task.isCancelled { retryGalleryItems() }
+        }
+        // `-previewGalleryRemake 1`: presses the make's `try again` N s after a make failed.
+        .task(id: galleryBeat) {
+            let after = UserDefaults.standard.double(forKey: "previewGalleryRemake")
+            guard after > 0, galleryBeat.contains("makefail") else { return }
+            try? await Task.sleep(for: .seconds(after))
+            if !Task.isCancelled { remake() }
+        }
+        // `-previewGalleryOpen 1`: presses `open` N s after the gallery is saved (the detail of its media over the focus).
+        .task(id: galleryBeat) {
+            let after = UserDefaults.standard.double(forKey: "previewGalleryOpen")
+            guard after > 0, galleryBeat == "saved", galleryFacts?.failed.isEmpty == true else { return }
+            try? await Task.sleep(for: .seconds(after))
+            if !Task.isCancelled { openGallery() }
+        }
         // `-previewShimmerLoop YES` / `-previewPulseLoop YES`: replay the shimmer or the failure pulse every
         // 2.2 s so a screenshot can catch them mid-flight (design review only).
         .task {
@@ -483,8 +640,7 @@ struct FocusLayer: View {
                 heroSlot
                 VStack(spacing: Self.gap) {
                     Spacer(minLength: 0)
-                    infoCard
-                    controls
+                    underHero
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: 420)
@@ -494,8 +650,7 @@ struct FocusLayer: View {
         } else {
             VStack(spacing: Self.gap) {
                 heroSlot
-                infoCard
-                controls
+                underHero
             }
             .padding(.horizontal, Metrics.gutter)
             .padding(.top, 6 + topReserve)
@@ -505,6 +660,20 @@ struct FocusLayer: View {
             .padding(.bottom, 24)
             .frame(maxWidth: Metrics.columnMax)
             .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Everything under the planet: a video's info card and choices, or a gallery's card and `make from it` row.
+    @ViewBuilder
+    private var underHero: some View {
+        if let facts = galleryFacts {
+            GalleryInfoCard(
+                facts: facts, meta: meta, lineMax: model.capabilities.limits.lineMax, lifted: lifted,
+                retryItems: retryGalleryItems, tryAgain: retryGallerySave, makeAgain: remake)
+            GalleryControls(facts: facts, lifted: lifted, choose: chooseMake, open: openGallery, done: close)
+        } else {
+            infoCard
+            controls
         }
     }
 
@@ -586,13 +755,14 @@ struct FocusLayer: View {
 
     private func hero(pose: HeroPose) -> some View {
         HeroPlanet(
-            pose: pose, drag: dragY, reference: HeroPlanet.reference(aspect: aspect), posterImage: pipeline.posterFrame,
+            pose: pose, drag: dragY, reference: HeroPlanet.reference(aspect: aspect),
+            posterImage: isGallery ? nil : pipeline.posterFrame,
             posterURL: localVideo?.posterURL, original: originalURL, webp: webpSource, showsWebp: showsWebp,
             muted: muted || showsWebp || !visible, videoPlays: videoPlays, progress: heroProgress,
             sharing: heroSharing, typeLabel: typeLabel, hasWebp: hasWebp && showsWebp, hasLink: hasLink,
             shimmer: shimmer, pulse: pulse, sound: hasSoundToggle, player: player,
             trimPreview: trimPreviewActive ? trimPreview : nil, cropEditor: cropEditor,
-            controls: controlsSetup)
+            controls: controlsSetup, gallery: galleryHero)
     }
 
     // MARK: media controls
@@ -1008,6 +1178,8 @@ struct HeroPlanet: View, @preconcurrency Animatable {
     var cropEditor: CropEditorModel?
     /// The media controls over the picture (nil: none, the trim or the crop has the touches).
     var controls: Controls?
+    /// A gallery's cover and count: its picture is the cover, the planet wears two card edges and the count badge.
+    var gallery: GalleryHero?
 
     struct Controls {
         let mode: HeroControlsMode
@@ -1054,7 +1226,9 @@ struct HeroPlanet: View, @preconcurrency Animatable {
         let box = reference
         return ZStack {
             Rectangle().fill(FrameGradient.fill(1))
-            if let posterImage {
+            if let gallery {
+                GalleryPicture(source: gallery.cover).frame(width: box.width, height: box.height).clipped()
+            } else if let posterImage {
                 Color.clear.overlay { Image(decorative: posterImage, scale: 1).resizable().scaledToFill() }
                     .frame(width: box.width, height: box.height).clipped()
             } else if let posterURL {
@@ -1130,7 +1304,7 @@ struct HeroPlanet: View, @preconcurrency Animatable {
             .clipShape(innerShape)
             .overlay(alignment: .topTrailing) {
                 ZStack(alignment: .topTrailing) {
-                    HeroBadges(typeLabel: typeLabel, hasWebp: hasWebp, hasLink: hasLink)
+                    HeroBadges(typeLabel: typeLabel, hasWebp: hasWebp, hasLink: hasLink, stack: (gallery?.count ?? 0) >= 2)
                     ImplosionPulse(token: pulse).padding(.top, 2).padding(.trailing, 6)
                 }
                 .padding(8)
@@ -1153,6 +1327,14 @@ struct HeroPlanet: View, @preconcurrency Animatable {
                     .allowsHitTesting(false)
             }
             .frame(width: width, height: height)
+            .background {
+                // a gallery: two card edges peek out behind, up and to the right (the orbit's planet wears the same)
+                if let gallery, gallery.count >= 2 {
+                    CardEdges(
+                        size: CGSize(width: width, height: height), radius: outerRadius,
+                        step: CardEdges.step(forShort: min(width, height)))
+                }
+            }
             // a bare planet in its band has the orbit's own shadow; the lifted one is elevated
             .shadow(color: .black.opacity(mix(0.35, scheme == .dark ? 0.55 : 0.28)), radius: mix(8, 26), y: mix(5, 16))
             .shadow(color: .white.opacity(scheme == .dark && !lowPower ? 0.10 * chrome : 0), radius: 34)
@@ -1359,13 +1541,18 @@ private struct HeroBadges: View {
     let typeLabel: String
     let hasWebp: Bool
     let hasLink: Bool
+    /// A gallery: the stack symbol leads the count.
+    var stack = false
 
     var body: some View {
         GlassEffectContainer(spacing: 6) {
             HStack(spacing: 6) {
                 if hasLink { icon(Symbol.linkBadge, Copy.linkBadgeA11y).transition(.chip) }
                 if hasWebp { icon(Symbol.webpBadge, Copy.webpBadgeA11y).transition(.chip) }
-                Text(typeLabel)
+                HStack(spacing: 4) {
+                    if stack { Image(systemName: Symbol.Gallery.gallery).font(.system(size: 10, weight: .semibold)) }
+                    Text(typeLabel)
+                }
                     .font(Font.cobalt(11, .medium, relativeTo: .caption))
                     .dynamicTypeSize(...DynamicTypeSize.large)
                     .foregroundStyle(CobaltColor.badgeInk)

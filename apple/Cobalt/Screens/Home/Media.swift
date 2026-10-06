@@ -36,6 +36,11 @@ actor ImageLoader {
         init(_ box: ImageBox) { self.box = box }
     }
 
+    #if DEBUG
+    /// `-previewGalleryImages` swaps a file under a decoded picture: forget what was decoded of it.
+    func evict(_ url: URL) { cache.removeObject(forKey: url as NSURL) }
+    #endif
+
     func image(for url: URL, maxPixel: Int = 360) -> ImageBox? {
         if let hit = cache.object(forKey: url as NSURL) { return hit.box }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
@@ -120,6 +125,18 @@ struct StillImage: View {
     let url: URL
     @State private var image: ImageBox?
 
+    private struct Load: Hashable {
+        let url: URL
+        let generation: Int
+    }
+
+    #if DEBUG
+    /// Counts the files `-previewGalleryImages` has swapped: a picture decoded from the placeholder loads again.
+    private var generation: Int { GalleryPreviewGeneration.shared.value }
+    #else
+    private var generation: Int { 0 }
+    #endif
+
     var body: some View {
         Color.clear
             .overlay {
@@ -129,7 +146,14 @@ struct StillImage: View {
             }
             .clipped()
             .animation(.easeOut(duration: 0.25), value: image != nil)
-            .task(id: url) { image = await ImageLoader.shared.image(for: url) }
+            .task(id: Load(url: url, generation: generation)) {
+                image = await ImageLoader.shared.image(for: url)
+                // a file that is still being written (a kept photo landing) decodes on a second look
+                if image == nil, !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(1_200))
+                    if !Task.isCancelled { image = await ImageLoader.shared.image(for: url) }
+                }
+            }
     }
 }
 

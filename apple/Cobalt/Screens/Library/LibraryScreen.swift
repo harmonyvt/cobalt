@@ -55,6 +55,8 @@ struct LibraryScreen: View {
 enum LibraryPhase: Equatable {
     case rows, loading, failed, empty
     case noMatch(String)
+    /// A kind chip with nothing behind it (`no galleries kept on this iphone yet.`), with a way back to everything.
+    case emptyKind(LibraryKindFilter, kept: Bool)
 }
 
 private struct LibraryContent: View {
@@ -73,9 +75,20 @@ private struct LibraryContent: View {
     private var rows: [LibraryRow] {
         #if DEBUG
         if LibraryDebug.state != nil { return [] }
-        if !debugRows.isEmpty { return LibraryDebug.merged(model.libraryRows, with: debugRows, query: library.query) }
+        if !debugRows.isEmpty {
+            return LibraryDebug.merged(model.libraryRows, with: debugRows, query: library.query, kind: library.kindFilter, sort: library.sort)
+        }
         #endif
         return model.libraryRows
+    }
+
+    /// The preview's synthetic rows (none in a release build), counted by the kind chips.
+    private var debugExtra: [LibraryRow] {
+        #if DEBUG
+        return LibraryDebug.state == nil ? debugRows : []
+        #else
+        return []
+        #endif
     }
 
     private func phase(_ rows: [LibraryRow]) -> LibraryPhase {
@@ -93,6 +106,9 @@ private struct LibraryContent: View {
         if library.isLoading || library.loadingAll != nil { return .loading }
         let query = library.query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty { return .noMatch(query) }
+        if model.capabilities.gallery, library.kindFilter != .all {
+            return .emptyKind(library.kindFilter, kept: library.show == .offline)
+        }
         return .empty
     }
 
@@ -125,10 +141,16 @@ private struct LibraryContent: View {
             .navigationSubtitle(Copy.libraryCounts(posts: library.postCount, files: library.fileCount))
             .searchable(text: $library.query, placement: searchPlacement, prompt: Copy.Library2.searchPrompt)
             .toolbar { toolbar }
-            .safeAreaInset(edge: .top, spacing: 0) { loadingAllLine }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    if model.capabilities.gallery { LibraryKindChips(model: model, extra: debugExtra) }
+                    loadingAllLine
+                }
+            }
             .modifier(LibraryInspector(model: model, controller: controller, enabled: tier != .compact))
             .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: tier == .compact))
             .renameAlert(item: $controller.renaming, model: model)
+            .modifier(LibraryCombineSheet(model: model, controller: controller))
             .confirmationDialog(
                 Copy.Media.deleteEverythingTitle, isPresented: deletingPresented, titleVisibility: .visible,
                 presenting: controller.deleting
@@ -200,7 +222,7 @@ private struct LibraryContent: View {
         ToolbarItem(placement: .navigation) { LibraryViewSwitcher(library: library) }
         #endif
         ToolbarItemGroup(placement: .primaryAction) {
-            LibrarySortMenu(library: library, offersOffline: model.store.canKeep)
+            LibrarySortMenu(library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery)
             #if os(macOS)
             Button(Copy.Library2.refresh, systemImage: Symbol.Library.refresh) { Task { await controller.refresh() } }
                 .keyboardShortcut("r", modifiers: .command)
@@ -359,6 +381,20 @@ private struct LibraryPlaceholder: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
                         .padding(.vertical, 56)
+                case .emptyKind(let kind, let kept):
+                    VStack(spacing: 12) {
+                        Text(Copy.Library2.nothingOfKind(kind, kept: kept))
+                            .font(CobaltType.body)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button(Copy.Library2.showEverythingAgain) {
+                            controller.library.kindFilter = .all
+                            controller.library.show = .everything
+                        }
+                        .buttonStyle(.cobaltSecondary(fullWidth: false))
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 56)
                 case .failed:
                     LibraryProblem(state: .failed) { Task { await controller.refresh() } }
                 case .loading:

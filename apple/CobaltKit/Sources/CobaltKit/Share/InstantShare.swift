@@ -37,23 +37,35 @@ extension ShareInbox {
 }
 
 extension InstantShare {
-    /// The whole instant path for what the host shared. Call it from `viewDidLoad`.
-    ///
-    /// - `.saved`: the save is queued; the caller completes the request at once.
-    /// - `.needsSheet`: a file; the caller builds the full sheet.
-    /// - `.failed`: nothing could be queued; the caller shows its one-line card.
+    /// What the extension does with what was shared (the extension's entry point, called from `viewDidLoad`).
+    public enum Start: Sendable {
+        /// A link: the flow asks the server what it is. One item is saved and the extension closes without showing
+        /// anything; a gallery gets the compact sheet (`ShareGalleryFlow`).
+        case flow(ShareGalleryFlow)
+        /// A file, or anything the instant path cannot do: the caller builds the full sheet.
+        case needsSheet
+        /// Nothing could be queued: the caller shows its one-line card.
+        case failed(Failure)
+    }
+
+    /// What `run` and `start` share: the link, the settings and a client for this process's key.
+    private struct Prepared {
+        var link: LinkInfo
+        var settings: Settings
+        var client: HTTPCobaltClient
+    }
+
     @MainActor
-    public static func run(inputItems: [NSExtensionItem]) async -> Result {
-        let started = Date()
+    private static func prepare(inputItems: [NSExtensionItem]) async -> Either<Prepared, Result> {
         let intake = await ShareInbox.loadLinkOnly(inputItems)
         let link: LinkInfo
         switch intake {
-        case .file: return .needsSheet
+        case .file: return .right(.needsSheet)
         case .none:
             Telemetry.log(.info, .share, "share instant", data: ["result": "no-link"])
-            return .failed(.noLink)
+            return .right(.failed(.noLink))
         case .link(let url):
-            guard let info = LinkInfo(url) else { return .failed(.noLink) }
+            guard let info = LinkInfo(url) else { return .right(.failed(.noLink)) }
             link = info
         }
         let settings = Settings.shared()
@@ -63,9 +75,46 @@ extension InstantShare {
         // instead of queueing a request the server will refuse.
         guard Settings.apiKey(in: keychain, forServer: server) != nil else {
             Telemetry.log(.info, .share, "share instant", data: ["result": "no-key", "root": .string(AppGroup.location.kind.rawValue)])
-            return .failed(.noKey)
+            return .right(.failed(.noKey))
         }
         let client = HTTPCobaltClient(baseURL: server, apiKey: { Settings.apiKey(in: keychain, forServer: server) })
+        return .left(Prepared(link: link, settings: settings, client: client))
+    }
+
+    private enum Either<L, R> {
+        case left(L), right(R)
+    }
+
+    /// The extension's whole path for a link (CONTRACT-GALLERY.md 1.12): the flow is started and returned. A file shared
+    /// without a link is `.needsSheet`; no key or no link is `.failed`.
+    @MainActor
+    public static func start(inputItems: [NSExtensionItem]) async -> Start {
+        switch await prepare(inputItems: inputItems) {
+        case .right(.needsSheet): return .needsSheet
+        case .right(.failed(let failure)): return .failed(failure)
+        case .right(.saved): return .needsSheet
+        case .left(let prepared):
+            let flow = ShareGalleryFlow.live(link: prepared.link, client: prepared.client, settings: prepared.settings)
+            flow.begin()
+            return .flow(flow)
+        }
+    }
+
+    /// The whole instant path for what the host shared, with no gallery sheet: the link is saved at once, whatever it
+    /// is (what the owner's `show the full share sheet`-less 1.13 did). Kept for the debug harness and the tests.
+    ///
+    /// - `.saved`: the save is queued; the caller completes the request at once.
+    /// - `.needsSheet`: a file; the caller builds the full sheet.
+    /// - `.failed`: nothing could be queued; the caller shows its one-line card.
+    @MainActor
+    public static func run(inputItems: [NSExtensionItem]) async -> Result {
+        let started = Date()
+        let prepared: Prepared
+        switch await prepare(inputItems: inputItems) {
+        case .right(let result): return result
+        case .left(let value): prepared = value
+        }
+        let link = prepared.link, settings = prepared.settings, client = prepared.client
         let transport = URLSessionSaveTransport.current
         var engine = InstantShareEngine(transport: transport, directory: AppGroup.directory("Saves"))
         engine.makePublic = settings.newSavesPublic

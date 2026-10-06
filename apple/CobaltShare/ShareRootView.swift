@@ -149,9 +149,11 @@ struct ShareRootView: View {
                     PickerContent(pipeline: pipeline, items: items, webpAvailable: model.webpAvailable)
                 case .failed(let f) where !f.keepsTrim:
                     failure(f)
-                case .fetching, .saving, .rendering, .gallery:         // `.gallery`: lane A4 replaces this with the compact sheet
+                case .fetching, .saving, .rendering:
                     working
                     continueBlock
+                case .gallery(let items):
+                    galleryBody(items)
                 case .reading:
                     // the save is done, the frames are loading: a running countdown stays on screen
                     working
@@ -463,6 +465,37 @@ struct ShareRootView: View {
             stayFocused = true
             try? await Task.sleep(for: .milliseconds(450))
             UIAccessibility.post(notification: .announcement, argument: ShareCopy.continuingAnnouncement(seconds))
+        }
+    }
+
+    // MARK: a gallery in the full sheet
+
+    /// The full sheet is the owner's explicit choice (`show the full share sheet`) or a file; a link that turns out to be
+    /// a gallery is saved whole (this process only receives the post), and anything to make from it happens in cobalt.
+    /// The compact choice sheet is `ShareGallerySheet`, which the instant path uses.
+    @ViewBuilder
+    private func galleryBody(_ items: [GalleryItem]) -> some View {
+        let photos = items.filter(\.isPhoto).count
+        VStack(alignment: .leading, spacing: 12) {
+            Text(Copy.Gallery.count(photos: photos, videos: items.count - photos))
+                .font(CobaltType.bodySemibold)
+                .foregroundStyle(CobaltColor.text)
+            switch pipeline.galleryRun?.phase {
+            case .failed(let failure):
+                InlineStatus(message: Copy.failure(failure))
+            case .saved:
+                note(Copy.Gallery.makeLater)
+            default:
+                if let progress = pipeline.galleryProgress {
+                    ProgressView(value: Double(progress.done), total: Double(max(1, progress.total)))
+                        .tint(CobaltColor.text)
+                    note(Copy.Gallery.saving(progress.done, of: progress.total))
+                } else {
+                    note(Copy.Gallery.savingEverything)
+                }
+            }
+            Button(ShareCopy.quickOpenCobalt, systemImage: Symbol.openApp) { Task { await model.openCobalt() } }
+                .buttonStyle(.cobaltSecondary())
         }
     }
 

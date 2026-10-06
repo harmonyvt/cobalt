@@ -4,11 +4,13 @@ import SwiftUI
 import Synchronization
 import UIKit
 
-/// The share extension's principal class (CONTRACT-SHARE-QUICK.md section 9).
+/// The share extension's principal class (CONTRACT-SHARE-QUICK.md section 9, CONTRACT-GALLERY.md 1.12).
 ///
-/// By default it shows nothing that waits: `InstantShare.run` reads the shared link, queues
-/// `POST /studio` with a URLSession upload, posts a quiet "saving to cobalt" notification when the owner
-/// already allowed them, and the request completes at once. Only three things ever show a view:
+/// By default it shows nothing that waits: `InstantShare.start` reads the shared link and asks the server what it is
+/// (`ShareGalleryFlow`). One video or photo is queued as `POST /studio` with a URLSession upload, a quiet "saving to
+/// cobalt" notification is posted when the owner already allowed them, and the request completes at once. Only four things
+/// ever show a view:
+///  - the compact gallery sheet, when the link is a post with several items (one height for its whole life);
 ///  - the one-line failure card, when the save could not even be queued;
 ///  - the full sheet, for a file (its upload runs in this process), and when the owner turned on
 ///    "show the full share sheet";
@@ -18,6 +20,8 @@ import UIKit
 /// The view itself is clear: the host's system sheet may flash for the moment the request takes.
 final class ShareViewController: UIViewController, UIAdaptivePresentationControllerDelegate {
     private var model: ShareModel?
+    /// The gallery flow (the instant path); nil for the full sheet.
+    private var flow: ShareGalleryFlow?
     /// `complete` ran (the request is done) or a close is already under way: nothing left to save.
     private var closed = false
     /// Sizes the presented sheet to the content (no empty space around the card).
@@ -54,12 +58,61 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
         if await startDebugScenario(items) { return }
         #endif
         guard !Settings.shared().shareFullSheet else { await showFullSheet(items); return }
-        switch await InstantShare.run(inputItems: items) {
-        case .saved:
-            finish()
+        switch await InstantShare.start(inputItems: items) {
+        case .flow(let flow):
+            run(flow)
         case .needsSheet:
             await showFullSheet(items)
         case .failed(let failure):
+            showFailure(failure)
+        }
+    }
+
+    // MARK: - The gallery flow
+
+    /// The flow decides what the extension shows: nothing (a single item), the compact sheet (a gallery) or the one-line
+    /// card. This watches it and does what it says; every request is the flow's, never this controller's.
+    private func run(_ flow: ShareGalleryFlow) {
+        self.flow = flow
+        watch(flow)
+    }
+
+    private func watch(_ flow: ShareGalleryFlow) {
+        apply(flow)
+        guard flow.finish == nil else { return }
+        withObservationTracking {
+            _ = flow.sheetShown
+            _ = flow.finish
+            _ = flow.cardFailure
+            _ = flow.isSending
+        } onChange: { [weak self, weak flow] in
+            Task { @MainActor in
+                guard let self, let flow else { return }
+                self.watch(flow)
+            }
+        }
+    }
+
+    private func apply(_ flow: ShareGalleryFlow) {
+        // A request on its way cannot be swiped away: that would drop it.
+        isModalInPresentation = flow.isSending
+        if presentationController?.delegate == nil { presentationController?.delegate = self }
+        if let finish = flow.finish {
+            switch finish {
+            case .sent, .cancelled:
+                self.finish()
+            case .openCobalt:
+                Task { @MainActor in
+                    _ = await openHostApp(URL(string: "cobalt-apple://open")!)
+                    self.finish()
+                }
+            }
+            return
+        }
+        guard !showsContent else { return }
+        if flow.sheetShown {
+            host(ShareGallerySheet(flow: flow, onFit: { [weak self] height in self?.fitter.update(contentHeight: height) }))
+        } else if let failure = flow.cardFailure {
             showFailure(failure)
         }
     }
@@ -98,6 +151,11 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
         let openApp: @MainActor (URL) async -> Bool = { [weak self] url in await self?.openHostApp(url) ?? false }
         let complete: @MainActor () -> Void = { [weak self] in self?.finish() }
         ShareDebug.probeLiveActivity()
+        if let flow = ShareDebug.galleryFlow() {
+            flow.begin()
+            run(flow)
+            return true
+        }
         guard let model = await ShareDebug.model(inputItems: items, openApp: openApp, complete: complete) else { return false }
         self.model = model
         watchModality(model)
@@ -182,6 +240,11 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
     }
 
     private func closeSheet() {
+        if let flow {
+            // the gallery sheet: closing sends nothing (a request in flight is not closable, the flow ignores it)
+            if !flow.isSending { flow.cancel() }
+            return
+        }
         guard !closed, let model else { return }
         Telemetry.log(.info, .share, "share close requested")
         closed = true

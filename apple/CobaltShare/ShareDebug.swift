@@ -9,6 +9,7 @@ import Foundation
 ///   {"scenario": "coldStart"}       run the full sheet over `PreviewClient` (no server, no key needed)
 ///   {"quick": true}                 with a scenario: the quick card instead (it is not presented otherwise)
 ///   {"probeActivity": true}         also call `Activity.request` from the extension and log the answer
+///   {"gallery": "instagramCold", "hold": true}   the compact gallery sheet over a stand-in server (A4)
 ///
 /// Log lines carry `[sharequick]` (`xcrun simctl spawn <device> log stream --predicate 'eventMessage CONTAINS "[sharequick]"'`).
 @MainActor
@@ -18,6 +19,10 @@ enum ShareDebug {
         var probeActivity: Bool?
         /// Show the (no longer presented) quick card instead of the full sheet.
         var quick: Bool?
+        /// The compact gallery sheet over a stand-in server (`ShareGalleryPreview`'s raw value, e.g. "instagramCold").
+        var gallery: String?
+        /// With `gallery`: hold the state (no 8 s fallback, the request never completes) so a screenshot can look at it.
+        var hold: Bool?
     }
 
     private static let flags: Flags? = {
@@ -40,6 +45,14 @@ enum ShareDebug {
         let model = ShareModel.debugPreview(scenario, quick: quick, openApp: openApp, complete: complete)
         if let url = URL(string: scenario.pasteText) { model.pipeline.start(link: url) }
         return model
+    }
+
+    /// The compact gallery sheet over a stand-in server, when `{"gallery": "<scenario>"}` is set.
+    static func galleryFlow() -> ShareGalleryFlow? {
+        guard let raw = flags?.gallery, let scenario = ShareGalleryPreview(rawValue: raw) else { return nil }
+        log("debug gallery \(raw) hold=\(flags?.hold ?? false)")
+        let flow = ShareGalleryFlow.preview(scenario, holding: flags?.hold ?? false)
+        return flow
     }
 
     /// Asks ActivityKit for a Live Activity from inside the share extension and logs what it says

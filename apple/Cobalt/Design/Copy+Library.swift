@@ -14,7 +14,7 @@ extension Copy {
         static let sort = "sort"
         static let show = "show"
         static let sortDate = "date", sortTitle = "title", sortLength = "length", sortSize = "size"
-        static let sortResolution = "resolution", sortFiles = "files", sortPublic = "public"
+        static let sortResolution = "resolution", sortFiles = "files", sortPublic = "public", sortKind = "kind"
         static let newestFirst = "newest first", oldestFirst = "oldest first"   // a11y values for date
         static let ascending = "ascending", descending = "descending"           // a11y values otherwise
         static let showEverything = "everything", showPublic = "public", showPrivate = "private"
@@ -33,7 +33,7 @@ extension Copy {
         // table columns and cells
         static let colTitle = "title", colService = "service", colLength = "length"
         static let colResolution = "resolution", colFiles = "files", colSize = "size"
-        static let colPublic = "public", colDate = "date"
+        static let colPublic = "public", colDate = "date", colKind = "kind"
         static let serviceFile = "file"                                        // service cell of an upload
         static let isPublic = "public", isPrivate = "private"
         enum Original { case video, image }                                   // an uploaded png/jpg/heic/gif/webp is an image
@@ -48,8 +48,63 @@ extension Copy {
             }
         }
 
+        /// "10 photos", "2 photos + 2 videos", "10 photos + 2 made", "photo", "photo + 1 made": a gallery's or photo's `files`
+        /// cell (items first, then what was made from them).
+        static func photoFiles(photos: Int, videos: Int, made: Int) -> String {
+            let items = photos + videos
+            var out = items <= 1 && videos == 0 ? "photo" : Copy.Gallery.count(photos: photos, videos: videos)
+            if made > 0 { out += " + \(made) made" }
+            return out
+        }
+
+        // kind (apple/CONTRACT-GALLERY.md 1.21; board `Library-Mixed`)
+        static let kindFilter = "kind"                                         // the menu section and the chips' a11y label
+        static let showEverythingAgain = "show everything"                     // the way out of an empty kind
+        static func name(_ kind: LibraryKindFilter) -> String {
+            switch kind {
+            case .all: return Copy.Gallery.kindAll
+            case .videos: return Copy.Gallery.kindVideos
+            case .photos: return Copy.Gallery.kindPhotos
+            case .galleries: return Copy.Gallery.kindGalleries
+            case .webps: return Copy.Gallery.kindWebps
+            }
+        }
+        /// A chip's text: `galleries 3`; the bare word while the whole library is not loaded yet (a count of a page would lie).
+        static func chip(_ kind: LibraryKindFilter, count: Int?) -> String {
+            count.map { "\(name(kind)) \($0)" } ?? name(kind)
+        }
+        /// What one media is, in the kind column and the second line: `gallery · 10`, `photo`, `video`, `webp`.
+        static func kindWord(_ kind: MediaKind, items: Int) -> String {
+            switch kind {
+            case .gallery: return Copy.Gallery.galleryKind(items)
+            case .photo: return "photo"
+            case .video: return "video"
+            case .webp: return "webp"
+            }
+        }
+        /// "no galleries yet." / "no photos kept on this iphone yet.": a kind with nothing in it (the filter's own empty state).
+        static func nothingOfKind(_ kind: LibraryKindFilter, kept: Bool) -> String {
+            Copy.Gallery.nothingHere(kind == .all ? "saves" : name(kind), kept: kept)
+        }
+        /// VoiceOver on a tile or row of a photo or a gallery.
+        static func openPhoto(_ title: String) -> String { "open \(title), photo" }
+        static func openGallery(_ title: String, items: String) -> String { "open \(title), gallery, \(items)" }
+
         // context menu
         static let open = "open"
+        static let copyPhotoLink = Copy.Gallery.copyPhotoLink
+        static let copyAllLinks = Copy.Gallery.copyAllLinks
+        static let saveAllToPhotos = Copy.Gallery.saveAllToPhotos
+        static let makeFromPost = Copy.Gallery.makeFromThisPost
+        static func copiedLinks(_ n: Int) -> String { "copied \(n) \(n == 1 ? "link" : "links")." }
+        static let noPublicLinks = "no public links yet. make it public first."
+        /// The confirm of `delete everything…` for a photo or a gallery (the message of Copy.Media's is about a video).
+        static func deleteGalleryMessage(items: Int, made: Int) -> String {
+            var parts = [items == 1 ? "the photo" : "the \(items) items"]
+            if made > 0 { parts.append(made == 1 ? "the file you made" : "the \(made) files you made") }
+            let list = parts.joined(separator: " and ")
+            return "\(list) \(parts.count > 1 || items > 1 ? "are" : "is") deleted for everyone. links you shared stop working. this can't be undone."
+        }
         static let copyWebpLink = "copy webp link"
         static let copyVideoLink = "copy video link"
         static let share = "share"
@@ -91,6 +146,7 @@ extension Copy.Library2 {
         case .files: return sortFiles
         case .visibility: return sortPublic
         case .offline: return Copy.Offline.column
+        case .kind: return sortKind
         }
     }
 

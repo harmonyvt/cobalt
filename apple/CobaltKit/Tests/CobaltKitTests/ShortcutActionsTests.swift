@@ -73,6 +73,33 @@ struct ForwardingClient: CobaltClient {
     ) async throws -> UploadResult {
         try await base.upload(file: file, name: name, contentType: contentType, public: makePublic, queue: queue, title: title, progress: progress)
     }
+    // Photos and galleries: a plain create stays the plain create above; everything else goes to the preview server.
+    func createStudio(url: URL, options: StudioCreateOptions) async throws -> StudioCreated {
+        guard !options.isPlain else { return try await createStudio(link: url, public: options.makePublic, queue: options.queue, title: options.title) }
+        try createHook?(url)
+        let made = try await base.createStudio(url: url, options: options)
+        created.add(made.id, link: url)
+        return made
+    }
+    func makeSlideshow(session: String, plan: SlideshowPlan, items: [GalleryItem], focused: Bool, notify: Bool) async throws -> RenderAccepted {
+        try await base.makeSlideshow(session: session, plan: plan, items: items, focused: focused, notify: notify)
+    }
+    func makeGalleryImage(session: String, plan: GalleryImagePlan, focused: Bool, notify: Bool) async throws -> RenderAccepted {
+        try await base.makeGalleryImage(session: session, plan: plan, focused: focused, notify: notify)
+    }
+    func makeStatus(session: String, job: String, wait: Int) async throws -> MakeStatus {
+        try await base.makeStatus(session: session, job: job, wait: wait)
+    }
+    func retryItems(session: String, items: [Int]) async throws -> StudioCreated { try await base.retryItems(session: session, items: items) }
+    func deleteItem(_ itemID: String) async throws { try await base.deleteItem(itemID) }
+    func setPostVisibility(anchor itemID: String, public makePublic: Bool) async throws -> VisibilityResult {
+        try await base.setPostVisibility(anchor: itemID, public: makePublic)
+    }
+    func library(cursor: String?, limit: Int, v3: Bool) async throws -> LibraryPage {
+        reads.library()
+        if let libraryHook { return libraryHook() }
+        return try await base.library(cursor: cursor, limit: limit, v3: v3)
+    }
     func session(_ id: String, wait: Int) async throws -> StudioSession {
         reads.session(id)
         return try await base.session(id, wait: wait)

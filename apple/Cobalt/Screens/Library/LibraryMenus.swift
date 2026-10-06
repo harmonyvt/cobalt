@@ -4,9 +4,10 @@ import SwiftUI
 // The library's menus: the context menu of a tile, row or table line, the sort and show menu, and the view
 // switcher.
 
-/// The context menu (long press; right click on the Mac), in this order: open, copy webp link, copy video
-/// link, share, save to photos, the offline items (CONTRACT-OFFLINE decision 11), make public / make private…,
-/// rename, then `delete everything…` last and destructive. What the media cannot
+/// The context menu (long press; right click on the Mac), in this order: open, the links (copy webp link, copy video
+/// link; a photo's `copy photo link`; a gallery's `copy all links`), share, save to photos (a gallery: `save all to
+/// photos`), `make from this post…` (a gallery), the offline items (CONTRACT-OFFLINE decision 11), make public / make
+/// private…, rename, then `delete everything…` last and destructive. What the media cannot
 /// do is not shown (plain cobalt has no links; a media with nothing on the server cannot be deleted
 /// there). `delete everything…` asks the CONTRACT-MEDIA 1.12 confirm, and is off while this device runs
 /// something for the media.
@@ -26,10 +27,16 @@ struct LibraryMenuItems: View {
     var body: some View {
         let item = row.item
         Button(Copy.Library2.open, systemImage: Symbol.Library.open) { controller.open(row) }
+        if let url = controller.photoLink(item) {
+            Button(Copy.Library2.copyPhotoLink, systemImage: Symbol.Library.copyLink) { controller.copy(url) }
+        }
+        if controller.canCopyAllLinks(item) {
+            Button(Copy.Library2.copyAllLinks, systemImage: Symbol.Gallery.copyLinks) { controller.copyAllLinks(item) }
+        }
         if let url = controller.webpLink(item) {
             Button(Copy.Library2.copyWebpLink, systemImage: Symbol.Library.copyLink) { controller.copy(url) }
         }
-        if let url = controller.videoLink(item) {
+        if item.kind != .photo, let url = controller.videoLink(item) {
             Button(Copy.Library2.copyVideoLink, systemImage: Symbol.Library.copyLink) { controller.copy(url) }
         }
         if let url = controller.shareURL(item) {
@@ -43,6 +50,12 @@ struct LibraryMenuItems: View {
             #else
             Button(Copy.Library2.saveToPhotos, systemImage: Symbol.Library.savePhotos) { controller.save(item) }
             #endif
+        }
+        if controller.canSaveAll(item) {
+            Button(Copy.Library2.saveAllToPhotos, systemImage: Symbol.Library.savePhotos) { controller.saveAll(item) }
+        }
+        if controller.canMakeFromPost(item) {
+            Button(Copy.Library2.makeFromPost, systemImage: Symbol.Gallery.make) { controller.makeFromPost(item) }
         }
         OfflineMenuItems(item: item, controller: controller, askRemove: askRemove)
         ShowInFilesButton(model: controller.model, item: item)
@@ -217,17 +230,24 @@ struct LibrarySortMenu: View {
     @Bindable var library: LibraryModel
     /// False where nothing can be kept offline: the `offline` sort key and `show` case are not offered.
     var offersOffline = true
+    /// False on a server that has no photos or galleries: the `kind` sort key and the `kind` list are not offered.
+    var offersKinds = true
 
-    /// Dates and sizes first-largest; a title reads a to z.
+    /// Dates and sizes first-largest; a title reads a to z; kinds run galleries, photos, videos, webps.
     static func pick(_ key: LibrarySortKey, current: LibrarySort) -> LibrarySort {
         if current.key == key { return LibrarySort(key: key, ascending: !current.ascending) }
-        return LibrarySort(key: key, ascending: key == .title)
+        return LibrarySort(key: key, ascending: key == .title || key == .kind)
+    }
+
+    /// The keys the menu lists.
+    static func keys(offersOffline: Bool, offersKinds: Bool) -> [LibrarySortKey] {
+        LibrarySortKey.allCases.filter { ($0 != .offline || offersOffline) && ($0 != .kind || offersKinds) }
     }
 
     var body: some View {
         Menu {
             Section(Copy.Library2.sort) {
-                ForEach(LibrarySortKey.allCases.filter { offersOffline || $0 != .offline }, id: \.self) { key in
+                ForEach(Self.keys(offersOffline: offersOffline, offersKinds: offersKinds), id: \.self) { key in
                     Button {
                         library.sort = Self.pick(key, current: library.sort)
                     } label: {
@@ -247,6 +267,16 @@ struct LibrarySortMenu: View {
                     }
                 }
                 .pickerStyle(.inline)
+            }
+            if offersKinds {
+                Section(Copy.Library2.kindFilter) {
+                    Picker(Copy.Library2.kindFilter, selection: $library.kindFilter) {
+                        ForEach(LibraryKindFilter.allCases, id: \.self) { kind in
+                            Text(Copy.Library2.name(kind)).tag(kind)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                }
             }
         } label: {
             Label(Copy.Library2.sort, systemImage: Symbol.Library.sortMenu).labelStyle(.iconOnly)

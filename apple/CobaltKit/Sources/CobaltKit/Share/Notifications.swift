@@ -86,9 +86,15 @@ enum Notifications {
     /// "saving to cobalt" with the link's label under it: posted by the share extension the moment it has
     /// queued the save. Quiet (passive, no sound): the real news is Hark's "saved". Opens cobalt.
     static func instantSavingRequest(job: UUID, label: String) -> UNNotificationRequest {
+        instantSavingRequest(job: job, title: "saving to cobalt", body: label)
+    }
+
+    /// The same quiet notification with its own words: a gallery's choice reads `saving 10 photos to cobalt` with
+    /// `making a slideshow webp · <label>` under it (CONTRACT-GALLERY.md 1.12).
+    static func instantSavingRequest(job: UUID, title: String, body: String) -> UNNotificationRequest {
         let content = UNMutableNotificationContent()
-        content.title = "saving to cobalt"
-        content.body = label
+        content.title = title
+        content.body = body
         content.threadIdentifier = "cobalt-saves"
         content.interruptionLevel = .passive
         content.userInfo = ["url": openURL]
@@ -122,13 +128,17 @@ enum Notifications {
 
     /// Only when the owner already allowed notifications: the extension never prompts.
     static func postInstantSaving(job: UUID, label: String) async {
+        await postInstantSaving(job: job, title: "saving to cobalt", body: label)
+    }
+
+    static func postInstantSaving(job: UUID, title: String, body: String) async {
         guard runsInApp || Bundle.main.bundleURL.pathExtension == "appex" else { return }
         let center = UNUserNotificationCenter.current()
         switch await center.notificationSettings().authorizationStatus {
         case .authorized, .provisional, .ephemeral: break
         default: return
         }
-        try? await center.add(instantSavingRequest(job: job, label: label))
+        try? await center.add(instantSavingRequest(job: job, title: title, body: body))
     }
 
     static func removeInstantSaving(job: UUID) {

@@ -4,6 +4,11 @@ import SwiftUI
 // The table (CONTRACT-LIBRARY2 decision 13): on the iPad and Mac a real `Table` with sortable columns, on the
 // iPhone a dense two-line list.
 
+extension LibraryRow {
+    /// The table's `kind` column sorts by this (galleries, photos, videos, webps).
+    var kindRank: Int { kind.sortRank }
+}
+
 // MARK: - iPad and Mac: Table
 
 /// Nine sortable columns (title, service, length, resolution, files, size, public, offline, date); the default sort is
@@ -41,6 +46,7 @@ struct LibraryTable: View {
         case .files: return KeyPathComparator(\.fileCount, order: order)
         case .visibility: return KeyPathComparator(\.visibilityRank, order: order)
         case .offline: return KeyPathComparator(\.offline, order: order)
+        case .kind: return KeyPathComparator(\.kindRank, order: order)
         }
     }
 
@@ -55,6 +61,7 @@ struct LibraryTable: View {
         else if path == \LibraryRow.fileCount { key = .files }
         else if path == \LibraryRow.visibilityRank { key = .visibility }
         else if path == \LibraryRow.offline { key = .offline }
+        else if path == \LibraryRow.kindRank { key = .kind }
         else { return nil }
         return LibrarySort(key: key, ascending: comparator.order == .forward)
     }
@@ -78,9 +85,15 @@ struct LibraryTable: View {
                 }
                 .onAppear { if lastIDs.contains(row.id) { controller.loadMoreIfNeeded() } }
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel(Copy.Media.planetA11y(title: LibraryRowCopy.spoken(row), webps: row.webps, hasVideo: row.hasVideo))
+                .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
             }
             .width(min: 150, ideal: 280)
+            if controller.model.capabilities.gallery {
+                TableColumn(Copy.Library2.colKind, value: \.kindRank) { row in
+                    secondary(LibraryRowCopy.kind(row))
+                }
+                .width(min: 64, ideal: 88, max: 120)
+            }
             if wide {
                 TableColumn(Copy.Library2.colService, value: \.service) { row in
                     secondary(LibraryRowCopy.service(row))
@@ -161,7 +174,7 @@ struct LibraryListRow: View {
     private var stacked: Bool { typeSize.isAccessibilitySize }
 
     var body: some View {
-        let meta = LibraryRowCopy.meta(row, now: Date())
+        let meta = LibraryRowCopy.meta(row, now: Date(), withKind: model.capabilities.gallery)
         Group {
             if stacked {
                 VStack(alignment: .leading, spacing: 8) {
@@ -194,7 +207,7 @@ struct LibraryListRow: View {
         .frame(minHeight: stacked ? nil : 44)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Copy.Media.planetA11y(title: LibraryRowCopy.spoken(row), webps: row.webps, hasVideo: row.hasVideo))
+        .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
         .accessibilityValue(OfflineMark(item: row.item, model: model).spoken.map { "\(meta), \($0)" } ?? meta)
         .accessibilityAddTraits(.isButton)
     }

@@ -15,7 +15,9 @@ enum RenditionPhotos {
         r.hasFileHere || r.file != nil
     }
 
-    static func save(_ r: Rendition, model: AppModel) async throws {
+    /// One rendition. A gallery's item or made file goes through the gallery call, which records the key the album sync
+    /// reads (`g:<sid>:<n>`, `m:<library id>`); the rest is the video's and webp's call as before.
+    static func save(_ r: Rendition, in item: MediaItem? = nil, model: AppModel) async throws {
         #if os(macOS)
         if let file = r.file {
             try await saveWithPanel(source: model.library.localCopy(file), suggested: nil)
@@ -26,7 +28,40 @@ enum RenditionPhotos {
         }
         try saveWithPanel(source: url, suggested: url.lastPathComponent)
         #else
-        try await model.saveToPhotos(r)
+        if let item, r.isItem || r.isMade {
+            try await model.saveToPhotos([r], of: item)
+        } else {
+            try await model.saveToPhotos(r)
+        }
+        #endif
+    }
+
+    /// The ticked photos, or all of them: Photos on iOS and iPadOS (the owner asked); a folder the Mac owner picks, with
+    /// each file's own name (the Mac has no Photos sync).
+    static func save(_ renditions: [Rendition], of item: MediaItem, model: AppModel) async throws {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = Copy.Media.savePhotos
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        let fm = FileManager.default
+        for r in renditions {
+            let source: URL
+            if let url = r.local?.fileURL, fm.fileExists(atPath: url.path) {
+                source = url
+            } else if let file = r.file {
+                source = try await model.library.localCopy(file)
+            } else {
+                continue
+            }
+            let destination = folder.appendingPathComponent(source.lastPathComponent)
+            if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+            try fm.copyItem(at: source, to: destination)
+        }
+        #else
+        try await model.saveToPhotos(renditions, of: item)
         #endif
     }
 

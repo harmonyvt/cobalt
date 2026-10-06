@@ -94,9 +94,10 @@ struct MediaDetail: View {
         let selected = controller.selected(in: item)
         let context = DetailContext(
             controller: controller, item: item, rendition: selected,
+            // the selected tab: a rendition's id, or `items` for a gallery's or a photo's pager
             selection: Binding(
-                get: { selected.id },
-                set: { id in withAnimation(Motion.card) { controller.select(id) } }),
+                get: { controller.tabID(in: item) },
+                set: { id in withAnimation(Motion.card) { controller.selectTab(id, in: item) } }),
             leave: { dismiss() })
         Group {
             if gone {
@@ -155,12 +156,18 @@ struct MediaDetail: View {
             }
         }
         .detailDialogs(controller: controller, item: item) { ask in run(ask, item) }
+        .makeSheet(controller: controller, item: item, model: model)
         .renameAlert(item: item, isPresented: $renaming, model: model) { controller.notice = $0 }
         .background { tabShortcuts(item) }
         .onChange(of: resolved) { old, now in
             if let now { lastShown = now }
             // a webp that arrived (made here or on another device) takes the selection, like a new tab
-            if let old, let now, now.webpCount > old.webpCount { controller.selectedID = now.face.id }
+            if let old, let now, now.detailShape == .classic, now.webpCount > old.webpCount { controller.selectedID = now.face.id }
+            // a file made from the post (a slideshow, a gallery image) that arrived takes the selection: "added as a tab"
+            if let old, let now, now.detailShape != .classic,
+               let fresh = now.made.last(where: { r in !old.renditions.contains { $0.id == r.id } }) {
+                controller.selectedID = fresh.id
+            }
         }
         .onChange(of: resolved == nil) { _, vanished in
             if vanished { finishGone() }
@@ -169,6 +176,7 @@ struct MediaDetail: View {
             if live, model.library.posts.isEmpty, model.capabilities.library { await model.library.refresh() }
         }
         #if DEBUG
+        .task { await GalleryDebug.apply(to: controller, item: { resolved ?? lastShown }, leave: { dismiss() }) }
         .task {
             await DetailDebug.apply(to: controller, item: lastShown) { effect in
                 switch effect {
@@ -201,6 +209,13 @@ struct MediaDetail: View {
                 guard let r = item.rendition(id: id) else { return }
                 if case .deleteWebp = ask { await controller.deleteWebp(r, of: item, onServer: true) }
                 else { await controller.deleteWebp(r, of: item, onServer: false) }
+            case .deletePhoto(let index):
+                await controller.deletePhotos([index], of: item)
+            case .deletePhotos(let indices):
+                await controller.deletePhotos(indices, of: item)
+            case .deleteMade(let id):
+                guard let r = item.rendition(id: id) else { return }
+                await controller.deleteMade(r, of: item)
             case .removeMedia:
                 if await controller.removeFromDevice(item) {
                     if resolved == nil { finishGone() } else { dismiss() }
@@ -232,10 +247,11 @@ struct MediaDetail: View {
     /// ⌘1…⌘9 pick a tab (an iPad keyboard, the Mac).
     @ViewBuilder
     private func tabShortcuts(_ item: MediaItem) -> some View {
-        if item.renditions.count >= 2 {
+        let tabs = item.detailTabs
+        if tabs.count >= 2 {
             VStack {
-                ForEach(Array(item.renditions.prefix(9).enumerated()), id: \.element.id) { index, r in
-                    Button(r.tabName(of: item)) { withAnimation(Motion.card) { controller.select(r.id) } }
+                ForEach(Array(tabs.prefix(9).enumerated()), id: \.element.id) { index, tab in
+                    Button(tab.name) { withAnimation(Motion.card) { controller.selectTab(tab.id, in: item) } }
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
                 }
             }
@@ -268,6 +284,11 @@ struct DetailPreset {
     var placement: PhotosPlacement?
     /// The rename alert is already up (a preview of it).
     var renaming = false
+    /// A gallery's page on screen (the item's place in the post), `select photos` already on with these ticked, and the
+    /// combine sheet already up.
+    var page: Int?
+    var selecting: Set<Int>?
+    var makeSheet = false
 
     @MainActor func apply(to controller: DetailController) {
         controller.confirm = confirm
@@ -278,6 +299,12 @@ struct DetailPreset {
         controller.previewBusy = busy
         controller.previewFailsDeletes = failsDeletes
         controller.previewPlacement = placement
+        if let page { controller.pageIndex = page }
+        if let selecting {
+            controller.selecting = true
+            controller.picked = selecting
+        }
+        controller.showsMakeSheet = makeSheet
     }
 }
 
@@ -286,6 +313,11 @@ extension MediaDetail {
     /// Previews: a media the model does not necessarily hold (a hand-built set of renditions), shown as given.
     init(preview model: AppModel, item: MediaItem, initial: Rendition.ID? = nil, preset: DetailPreset? = nil) {
         self.init(model: model, item: item, initial: initial, live: false, preset: preset)
+    }
+
+    /// Previews over a media the model holds (a gallery pasted into a preview scenario): live, with a starting state.
+    init(live model: AppModel, item: MediaItem, initial: Rendition.ID? = nil, preset: DetailPreset) {
+        self.init(model: model, item: item, initial: initial, live: true, preset: preset)
     }
 }
 #endif

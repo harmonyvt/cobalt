@@ -19,7 +19,7 @@ private struct LibraryPreviewHost: View {
     init(
         _ scenario: PreviewScenario = .renditions, tier: Tier = .compact, mode: LibraryViewMode = .mosaic,
         query: String = "", sort: LibrarySort = .newest, show: LibraryShow = .everything, extra: Int = 36,
-        failing: Bool = false
+        failing: Bool = false, kind: LibraryKindFilter = .all, galleries: Bool = false
     ) {
         UserDefaults.standard.removeObject(forKey: "library.inspector")
         let model = AppModel.preview(scenario)
@@ -27,10 +27,15 @@ private struct LibraryPreviewHost: View {
         model.library.viewMode = mode
         model.library.sort = sort
         model.library.show = show
+        model.library.kindFilter = kind
         model.library.query = query
         _model = State(initialValue: model)
         self.tier = tier
-        self.extra = extra > 0 ? LibraryPreviewData.rows(count: extra, failing: failing) : []
+        if galleries {
+            self.extra = LibraryPreviewData.galleryRows()
+        } else {
+            self.extra = extra > 0 ? LibraryPreviewData.rows(count: extra, failing: failing) : []
+        }
     }
 
     var body: some View {
@@ -55,6 +60,37 @@ private struct LibraryPreviewHost: View {
 #Preview("mosaic · one picture fails", traits: .fixedLayout(width: 390, height: 844)) {
     LibraryPreviewHost(failing: true)
 }
+// The new kinds (apple/CONTRACT-GALLERY.md 1.21; board `Library-Mixed`): a server with `features.gallery` (the preview
+// scenario) and the gallery fixtures. The mosaic's gallery tiles carry the stack and the count (the first one moves: its
+// slideshow webp), a photo says jpg, the chips count, the table has a kind column.
+#Preview("kinds · mosaic", traits: .fixedLayout(width: 390, height: 844)) {
+    LibraryPreviewHost(.galleryInstagram, galleries: true)
+}
+#Preview("kinds · mosaic, dark", traits: .fixedLayout(width: 390, height: 844)) {
+    LibraryPreviewHost(.galleryInstagram, galleries: true).preferredColorScheme(.dark)
+}
+#Preview("kinds · galleries chip", traits: .fixedLayout(width: 390, height: 844)) {
+    LibraryPreviewHost(.galleryInstagram, kind: .galleries, galleries: true)
+}
+#Preview("kinds · sorted by kind", traits: .fixedLayout(width: 390, height: 844)) {
+    LibraryPreviewHost(.galleryInstagram, sort: LibrarySort(key: .kind, ascending: true), galleries: true)
+}
+#Preview("kinds · list (iPhone)", traits: .fixedLayout(width: 390, height: 844)) {
+    LibraryPreviewHost(.galleryInstagram, mode: .table, galleries: true)
+}
+#Preview("kinds · list, AX3 text", traits: .fixedLayout(width: 390, height: 844)) {
+    LibraryPreviewHost(.galleryInstagram, mode: .table, galleries: true).dynamicTypeSize(.accessibility3)
+}
+#Preview("kinds · table (iPad, Mac)", traits: .fixedLayout(width: 1100, height: 700)) {
+    LibraryPreviewHost(.galleryInstagram, tier: .regular, mode: .table, sort: LibrarySort(key: .kind, ascending: true), galleries: true)
+}
+#Preview("kinds · nothing of that kind", traits: .fixedLayout(width: 390, height: 844)) {
+    LibraryPreviewHost(.galleryInstagram, extra: 0, kind: .galleries)
+}
+#Preview("kinds · plain server (no chips)", traits: .fixedLayout(width: 390, height: 844)) {
+    LibraryPreviewHost(.renditions)
+}
+
 /// The first load: nine grey tiles at mixed aspects, static.
 @MainActor
 private struct SkeletonPreview: View {
@@ -110,14 +146,23 @@ private struct SkeletonPreview: View {
 }
 
 /// The context menu's items and the face preview above them, as a plain list (a `Menu` cannot be opened in a
-/// preview).
+/// preview). `row`: which of the fixtures; the gallery fixtures are `LibraryPreviewData.galleryRows()` (0 is the carousel
+/// of 10, 1 the photo with a crop).
 @MainActor
 private struct LibraryMenuPreview: View {
-    @State private var model = AppModel.preview(.renditions)
-    private let rows = LibraryPreviewData.rows(count: 3)
+    @State private var model: AppModel
+    private let rows: [LibraryRow]
+    private let at: Int
+
+    init(galleries: Bool = false, at: Int = 0) {
+        _model = State(initialValue: AppModel.preview(galleries ? .galleryInstagram : .renditions))
+        rows = galleries ? LibraryPreviewData.galleryRows() : LibraryPreviewData.rows(count: 3)
+        self.at = at
+    }
 
     var body: some View {
         let controller = LibraryController(model: model)
+        let rows = rows.indices.contains(at) ? [self.rows[at]] : self.rows
         VStack(spacing: 16) {
             if let row = rows.first { LibraryPreviewCard(row: row).clipShape(RoundedRectangle(cornerRadius: 14)) }
             if let row = rows.first {
@@ -130,6 +175,12 @@ private struct LibraryMenuPreview: View {
 }
 #Preview("context menu", traits: .fixedLayout(width: 390, height: 640)) {
     LibraryMenuPreview()
+}
+#Preview("context menu · gallery", traits: .fixedLayout(width: 390, height: 760)) {
+    LibraryMenuPreview(galleries: true, at: 0)
+}
+#Preview("context menu · photo", traits: .fixedLayout(width: 390, height: 700)) {
+    LibraryMenuPreview(galleries: true, at: 1)
 }
 
 /// The sort and show menu's content (the same buttons the toolbar menu holds), as a list.
@@ -150,6 +201,15 @@ private struct LibraryMenuPreview: View {
                     Text(Copy.Library2.name(show))
                     Spacer()
                     if show == .everything { Image(systemName: Symbol.checkmark) }
+                }
+            }
+        }
+        Section(Copy.Library2.kindFilter) {
+            ForEach(LibraryKindFilter.allCases, id: \.self) { kind in
+                HStack {
+                    Text(Copy.Library2.name(kind))
+                    Spacer()
+                    if kind == .all { Image(systemName: Symbol.checkmark) }
                 }
             }
         }

@@ -19,8 +19,48 @@ public enum ShortcutVisibility: String, Sendable, CaseIterable {
     }
 }
 
-/// "Get latest saves" filter (15.4).
-public enum ShortcutSaveKind: String, Sendable, CaseIterable { case anything, videos, webps }
+/// What "Save links" does with a post that holds several items (CONTRACT-GALLERY 1.13, the `Galleries` parameter):
+/// `everything` is the default (a post is saved whole, into cobalt, never into Photos); the two makes save everything
+/// first and then make one thing from it.
+public enum ShortcutGalleries: String, Sendable, CaseIterable {
+    /// Save every item (the default).
+    case everything
+    /// Today's rule: the post's first video only. A photo-only post then fails (the server says `error.webp.no_video`).
+    case firstVideo
+    /// Save everything, then make a slideshow webp of all of it (the app's standard plan: 2 s a photo, crossfade).
+    case slideshowWebp
+    /// Save everything, then make a gallery image of its photos (the `Layout` parameter picks the arrangement).
+    case galleryImage
+
+    /// What the job does behind the save. nil = `JobOptions`' own default (`.saveAll`).
+    public func handling(layout: GalleryLayout) -> GalleryHandling? {
+        switch self {
+        case .everything: return nil
+        case .firstVideo: return .firstVideo
+        case .slideshowWebp: return .slideshowWebp
+        case .galleryImage: return .galleryImage(layout)
+        }
+    }
+
+    /// A make follows the save.
+    public var makes: Bool { self == .slideshowWebp || self == .galleryImage }
+
+    /// What the make is called in words ("slideshow webp", "gallery image"); nil for the two that make nothing.
+    public var what: String? {
+        switch self {
+        case .slideshowWebp: return "slideshow webp"
+        case .galleryImage: return "gallery image"
+        case .everything, .firstVideo: return nil
+        }
+    }
+}
+
+/// "Get latest saves" filter (15.4; the chips of the library, CONTRACT-GALLERY 1.21). `videos`, `photos` and `galleries`
+/// are the post's kind; `webps` is a post that holds a webp (one made of a video, or a slideshow webp).
+public enum ShortcutSaveKind: String, Sendable, CaseIterable { case anything, videos, photos, galleries, webps }
+
+/// What a save is (`CobaltSave.kind`; the library's `MediaKind`, with a post that is only webps counted as a video).
+public enum ShortcutMediaKind: String, Sendable, CaseIterable { case video, photo, gallery }
 
 /// A save's state as Shortcuts shows it (15.4 `CobaltSaveState`).
 public enum ShortcutSaveState: String, Sendable, CaseIterable { case queued, saving, saved, failed }
@@ -47,12 +87,25 @@ public struct ShortcutSave: Sendable, Equatable, Identifiable {
     public var webpLinks: [URL]
     public var duration: Double?
     public var created: Date
-    /// A video original exists (what "Make webp" needs).
+    /// A video original exists (what "Make webp" needs). A gallery has one when one of its items is a video.
     public var hasVideo: Bool
+    /// What the save is. nil while it is not known: a save the server has only just taken (or has not finished) may turn
+    /// out to be a photo post or a gallery; once it is saved the library says.
+    public var kind: ShortcutMediaKind?
+    /// The items the post holds (1 for a video or a photo, the live items of a gallery); nil with `kind`.
+    public var itemCount: Int?
+    /// Public links of its items, in the post's order (a gallery's photos; a single video's or photo's own link). Empty
+    /// while the save is private or not finished.
+    public var itemLinks: [URL]
+    /// Public links of what was made from it (slideshow webp and mp4, gallery images, crops), newest first.
+    public var madeLinks: [URL]
+    /// Items the save could not fetch ("photo 7 couldn't be fetched"); the others are saved.
+    public var itemsFailed: Int
 
     public init(
         id: String, title: String, link: URL? = nil, service: String? = nil, state: ShortcutSaveState,
-        publicLink: URL? = nil, webpLinks: [URL] = [], duration: Double? = nil, created: Date, hasVideo: Bool = false
+        publicLink: URL? = nil, webpLinks: [URL] = [], duration: Double? = nil, created: Date, hasVideo: Bool = false,
+        kind: ShortcutMediaKind? = nil, itemCount: Int? = nil, itemLinks: [URL] = [], madeLinks: [URL] = [], itemsFailed: Int = 0
     ) {
         self.id = id
         self.title = title
@@ -64,6 +117,11 @@ public struct ShortcutSave: Sendable, Equatable, Identifiable {
         self.duration = duration
         self.created = created
         self.hasVideo = hasVideo
+        self.kind = kind
+        self.itemCount = itemCount
+        self.itemLinks = itemLinks
+        self.madeLinks = madeLinks
+        self.itemsFailed = itemsFailed
     }
 }
 
@@ -127,11 +185,18 @@ public struct ShortcutSaveOutcome: Sendable, Equatable {
     public var failures: [ShortcutFailure]
     /// Distinct links or files asked for.
     public var total: Int
+    /// Saves whose gallery was saved but whose make (slideshow webp, gallery image) could not be made: the save stands,
+    /// nothing was made. Only after a wait (`waitUntilSaved` is what follows the make).
+    public var makeFailures: [ShortcutMakeFailure] = []
     /// The jobs behind `saves`, same order (`nil` for none); the wait and the stop button act on them.
     var jobIDs: [UUID] = []
     /// The server session of each save, same order, to follow it with: nil for a save the server has not answered for
     /// and for an image upload (an image has no session).
     var sessions: [String?] = []
+    /// The links were saved with a make behind the save (`ShortcutGalleries.what`: "slideshow webp" or "gallery image"):
+    /// the wait follows it too.
+    var makeWhat: String?
+    var asksMake: Bool { makeWhat != nil }
 
     public init(saves: [ShortcutSave], failures: [ShortcutFailure], total: Int) {
         self.saves = saves
@@ -141,6 +206,21 @@ public struct ShortcutSaveOutcome: Sendable, Equatable {
 
     /// Some were sent, some were not (the dialog of 15.3 step 5).
     public var isPartial: Bool { !saves.isEmpty && !failures.isEmpty }
+}
+
+/// A gallery that was saved but whose make could not be made (the photos are saved and untouched).
+public struct ShortcutMakeFailure: Sendable, Equatable {
+    /// The save's title.
+    public var title: String
+    /// "slideshow webp" or "gallery image".
+    public var what: String
+    public var failure: PipelineFailure
+
+    public init(title: String, what: String, failure: PipelineFailure) {
+        self.title = title
+        self.what = what
+        self.failure = failure
+    }
 }
 
 /// A file as the action hands it over: the system's file URL (copied before the action returns, the temporary file

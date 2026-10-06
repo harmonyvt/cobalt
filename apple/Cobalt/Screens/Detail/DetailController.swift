@@ -14,6 +14,9 @@ final class DetailController {
         case removeWebp(Rendition.ID)       // the server cannot delete it with a key: only this device
         case removeMedia                    // whole media, from this device only
         case deleteEverything
+        case deletePhoto(Int)               // one item of a gallery, for everyone (its index in the post)
+        case deletePhotos([Int])            // the ticked items (`select photos`)
+        case deleteMade(Rendition.ID)       // a slideshow, a gallery image or a crop, for everyone
 
         var id: String {
             switch self {
@@ -21,6 +24,9 @@ final class DetailController {
             case .removeWebp(let id): return "removeWebp:\(id)"
             case .removeMedia: return "removeMedia"
             case .deleteEverything: return "deleteEverything"
+            case .deletePhoto(let index): return "deletePhoto:\(index)"
+            case .deletePhotos(let indices): return "deletePhotos:\(indices.map(String.init).joined(separator: ","))"
+            case .deleteMade(let id): return "deleteMade:\(id)"
             }
         }
     }
@@ -38,8 +44,26 @@ final class DetailController {
 
     let model: AppModel
 
-    /// The rendition shown; nil = the media's face. A stale id (its file went) falls back to the face.
+    /// The rendition shown; nil = the media's face (a gallery: its first photo). A stale id (its file went) falls back to
+    /// the face. On a gallery's `items` tab it is the shown photo's id (`item:3`), or nil on a page that was never saved.
     var selectedID: Rendition.ID?
+    /// A gallery's shown page, by the item's place in the post. A page that was deleted falls to the one after it.
+    var pageIndex: Int?
+    /// `select photos` is on: the strip shows ticks, the actions become share / to photos / delete.
+    var selecting = false
+    var picked: Set<Int> = []
+    /// A neutral line under the actions for a moment (`copied 12 links.`, `saved to Photos.`).
+    var flash: String?
+    /// A switch of the whole post is on its way.
+    var postVisibility: Step = .idle
+    /// Items whose `try again` was pressed and which have not landed yet.
+    var retrying: Set<Int> = []
+    /// A photo being read for its text (the rendition id).
+    var readingText: Rendition.ID?
+    /// A batch save to Photos (`save all`, the ticked ones).
+    var batchPhotos: Step = .idle
+    /// `make from this post…` is open (lane A2's combine sheet).
+    var showsMakeSheet = false
     var confirm: Confirm?
     var phase: Phase = .idle
     /// What "try again" repeats after a failure or a partial delete.
@@ -70,6 +94,8 @@ final class DetailController {
     // MARK: - selection
 
     func selected(in item: MediaItem) -> Rendition {
+        // a gallery or a photo opens on its first photo, not on the newest made file (the face is the planet's rule)
+        if item.detailShape != .classic { return galleryRendition(in: item) }
         if let selectedID, let r = item.rendition(id: selectedID) { return r }
         return item.face
     }
@@ -78,6 +104,8 @@ final class DetailController {
         guard id != selectedID else { return }
         selectedID = id
         notice = nil
+        flash = nil
+        endSelecting()
         // a failed webp delete belongs to its tab; a partial delete of everything belongs to the media
         if phase == .failed, retry != .deleteEverything { phase = .idle; retry = nil }
     }
@@ -93,7 +121,7 @@ final class DetailController {
 
     var isDeleting: Bool { phase == .deleting }
 
-    private var failsDeletes: Bool {
+    var failsDeletes: Bool {
         #if DEBUG
         if DetailDebug.failDeletes { return true }
         #endif
@@ -126,11 +154,14 @@ final class DetailController {
         return usesPostRoute(item) || deletableWebps(item) > 0
     }
 
-    func placement(of r: Rendition) -> PhotosPlacement {
+    /// Where the rendition is in the owner's Photos. A gallery's files are keyed by their place in the post, so they ask with
+    /// the media (`g:<sid>:<n>`, `m:<library id>`).
+    func placement(of r: Rendition, in item: MediaItem? = nil) -> PhotosPlacement {
         if let previewPlacement { return previewPlacement }
         #if DEBUG
         if let forced = DetailDebug.placement { return forced }
         #endif
+        if let item, r.isItem || r.isMade { return model.photosPlacement(of: r, in: item) }
         return model.photosPlacement(of: r)
     }
 
@@ -146,12 +177,12 @@ final class DetailController {
         }
     }
 
-    func savePhotos(_ r: Rendition) async {
+    func savePhotos(_ r: Rendition, in item: MediaItem? = nil) async {
         guard photos[r.id] != .working else { return }
         notice = nil
         photos[r.id] = .working
         do {
-            try await RenditionPhotos.save(r, model: model)
+            try await RenditionPhotos.save(r, in: item, model: model)
             photos[r.id] = .done
         } catch {
             photos[r.id] = .idle
@@ -294,6 +325,16 @@ final class DetailController {
             guard let r = item.rendition(id: id) else { phase = .idle; return .none }
             await deleteWebp(r, of: item, onServer: retry == .deleteWebp(id))
             return .none
+        case .deletePhoto(let index):
+            await deletePhotos([index], of: item)
+            return .none
+        case .deletePhotos(let indices):
+            await deletePhotos(indices, of: item)
+            return .none
+        case .deleteMade(let id):
+            guard let r = item.rendition(id: id) else { phase = .idle; return .none }
+            await deleteMade(r, of: item)
+            return .none
         default:
             phase = .idle
             return .none
@@ -302,7 +343,7 @@ final class DetailController {
 
     // MARK: - words
 
-    private static func isBusy(_ error: Error) -> Bool {
+    static func isBusy(_ error: Error) -> Bool {
         (error as? PipelineFailure) == .serverBusy
     }
 

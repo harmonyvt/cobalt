@@ -50,7 +50,7 @@ struct LibraryTile: View, Equatable {
 
     /// The file a moving tile plays: this device's webp, else its public link.
     private var animationURL: URL? {
-        guard face.isWebp else { return nil }
+        guard face.playsAsWebp else { return nil }
         return face.local?.fileURL ?? face.publicURL
     }
 
@@ -82,7 +82,7 @@ struct LibraryTile: View, Equatable {
             }
             .onAppear { if nearEnd { controller.loadMoreIfNeeded() } }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Copy.Media.planetA11y(title: LibraryRowCopy.spoken(row), webps: row.webps, hasVideo: row.hasVideo))
+            .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
             .accessibilityValue(accessibilityValue)
             .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
             // date order for VoiceOver, not column order
@@ -136,7 +136,7 @@ struct LibraryTile: View, Equatable {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             // bottom: the length, then the caption
             VStack(alignment: .leading, spacing: 1) {
-                if !face.isWebp, row.length > 0, size.height >= 80 {
+                if !face.playsAsWebp, row.kind != .gallery, row.length > 0, size.height >= 80 {
                     Text(Format.seconds(row.length))
                         .font(Font.cobalt(9.5, .regular, relativeTo: .caption2))
                         .monospacedDigit()
@@ -160,7 +160,10 @@ struct LibraryTile: View, Equatable {
 
     @ViewBuilder
     private var typeBadge: some View {
-        if narrow {
+        if row.kind == .gallery {
+            // a gallery: the stack and how many items it holds, however narrow the tile
+            GalleryCountBadge(count: row.itemCount, style: .tile)
+        } else if narrow {
             Image(systemName: LibraryRowCopy.typeSymbol(row))
                 .font(.system(size: 9.5, weight: .semibold))
                 .foregroundStyle(CobaltColor.badgeInk)

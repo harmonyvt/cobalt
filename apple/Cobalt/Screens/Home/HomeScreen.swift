@@ -114,7 +114,7 @@ struct HomeScreen: View {
             return photoImport?.failure != nil ? .failure : .idle
         case .fetching, .uploading, .saving, .reading: return .capsule
         case .ready, .rendering, .done, .savedLocally: return .focus
-        case .gallery: return .focus                       // lane A1 draws the gallery hero (CONTRACT-GALLERY.A0-API.md)
+        case .gallery: return .focus                       // the gallery hero, for the whole life of the post (FocusView, GalleryFocus)
         case .failed(let f):
             if isBlocking(f) { return .idle }
             return keepsFocus(f) ? .focus : .failure
@@ -307,7 +307,11 @@ struct HomeScreen: View {
         return 44
     }
 
-    private var canInspect: Bool { tier == .wide && stage == .focus && focusLifted }
+    /// The inspector is the trim's settings (quality, width, make webp): a gallery has none of them.
+    private var canInspect: Bool {
+        if case .gallery = pipeline.state { return false }
+        return tier == .wide && stage == .focus && focusLifted
+    }
 
     private var inspectorBinding: Binding<Bool> {
         Binding(
@@ -346,6 +350,7 @@ struct HomeScreen: View {
                     FocusLayer(
                         model: model, pipeline: pipeline, contentWidth: contentWidth, phase: focusPhase,
                         lifted: focusLifted, player: focusPlayer, visible: homeVisible, topReserve: topReserve,
+                        onOpen: { id in if let media = model.store.media(id: baseID(id)) { open(media) } },
                         onClose: closeFocus)
                         // a run that takes over (a share-sheet job resumed) is a new planet: new layer state
                         .id(pipeline.runID)
@@ -502,6 +507,8 @@ struct HomeScreen: View {
             guard UserDefaults.standard.bool(forKey: "previewOrbitSelfTest") else { return }
             OrbitSelfTest.write()
         }
+        // `-previewGalleryImages <dir>` gives a gallery's placeholder items real pictures (GalleryPreviewHooks).
+        .task { await GalleryPreviewImages.run(model) }
         // `-previewOpenFirst YES` opens the newest planet's detail once (design review, no tap needed).
         .task {
             guard UserDefaults.standard.bool(forKey: "previewOpenFirst"), !openedFirst else { return }
@@ -725,7 +732,9 @@ struct HomeScreen: View {
         case .idle: return .idle
         case .fetching, .uploading, .saving, .reading: return .working
         case .ready, .image, .savedLocally: return .landed
-        case .gallery: return pipeline.galleryIsSettled ? .landed : .working
+        // A gallery shows its hero at once and saves under it: the star (one video being read) has nothing to gather, so it
+        // lands the planet as soon as the post is known (CONTRACT-GALLERY 1.10).
+        case .gallery: return .landed
         case .picker: return .picker
         case .failed(let f): return f.keepsTrim ? .other : .failed
         case .rendering, .done: return .other
@@ -771,7 +780,8 @@ struct HomeScreen: View {
         case (_, .working): next = .alive
         case (.working, .landed):
             let m = pipeline.media
-            let aspect = (m?.width).flatMap { w in (m?.height).map { h in h > 0 ? CGFloat(w) / CGFloat(h) : 9.0 / 16 } } ?? 9.0 / 16
+            var aspect = (m?.width).flatMap { w in (m?.height).map { h in h > 0 ? CGFloat(w) / CGFloat(h) : 9.0 / 16 } } ?? 9.0 / 16
+            if case .gallery = pipeline.state { aspect = galleryCoverSize.width / galleryCoverSize.height }
             var lands = true
             if case .image = pipeline.state { lands = false }
             next = .morphing(aspect: aspect, lands: lands)
@@ -990,6 +1000,7 @@ struct HomeScreen: View {
         let m = pipeline.media
         let stored: StoredVideo? = pipeline.stored ?? { if case .savedLocally(let v) = pipeline.state { return v } else { return nil } }()
         var w = CGFloat(m?.width ?? stored?.width ?? 720), h = CGFloat(m?.height ?? stored?.height ?? 1280)
+        if case .gallery = pipeline.state { (w, h) = (galleryCoverSize.width, galleryCoverSize.height) }
         // on its way home the planet takes the shape of the face it will wear (a webp with a crop is square)
         if focusClosing, let face = pipeline.mediaID.flatMap({ model.store.media(id: $0) })?.face,
            let fw = face.width, let fh = face.height, fw > 0, fh > 0 {
@@ -1000,6 +1011,14 @@ struct HomeScreen: View {
         let bw = box.width * slot.scale, bh = box.height * slot.scale
         let ox = orbitFrame.minX - homeFrame.minX, oy = orbitFrame.minY - homeFrame.minY
         return CGRect(x: ox + slot.position.x - bw / 2, y: oy + slot.position.y - bh / 2, width: bw, height: bh)
+    }
+
+    /// A gallery's cover shape: its first item's size once the library has said, else a 4:5 post (the focus hero's rule).
+    private var galleryCoverSize: CGSize {
+        if let first = pipeline.galleryItems.first, let w = first.width, let h = first.height, w > 0, h > 0 {
+            return CGSize(width: w, height: h)
+        }
+        return CGSize(width: 1080, height: 1350)
     }
 
     /// The star's dot in this screen's space: where the planet is born.
@@ -1024,9 +1043,7 @@ struct HomeScreen: View {
     @ViewBuilder
     private var orbitActions: some View {
         ForEach(orbitMedia) { media in
-            Button(Copy.Media.planetA11y(
-                title: model.mediaItem(for: baseMedia(media)).titleText, webps: media.webps.count,
-                hasVideo: media.original != nil)) { open(media) }
+            Button(PlanetSpeak.text(title: model.mediaItem(for: baseMedia(media)).titleText, media: media)) { open(media) }
         }
     }
 
@@ -1060,6 +1077,8 @@ struct HomeScreen: View {
         // as its name without the extension, never as "upload"
         let title = item.titleText
         let face = media.face
+        // a photo reads its size, a gallery what is in it (no length: nothing plays)
+        if let line = PlanetSpeak.caption(media: media) { return (media.id, OrbitCaption(title: title, detail: line)) }
         var parts: [String] = []
         if let d = face.duration { parts.append(Format.seconds(d)) }
         if let w = face.width, let h = face.height { parts.append(Format.size(w, h)) }

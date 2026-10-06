@@ -80,7 +80,7 @@ struct DetailActions: View {
                 }
             }
             .disabled(locked)
-            status
+            DetailStatus(controller: controller, item: item, leave: leave)
         }
         .haptic(.success, trigger: controller.copiedID, enabled: haptics) { $0 != nil }
         .haptic(.error, trigger: controller.notice, enabled: haptics) { $0 != nil }
@@ -206,64 +206,6 @@ struct DetailActions: View {
         case .copyWebpLink, .makeWebp:
             EmptyView()
         }
-    }
-
-    // MARK: state under the actions
-
-    @ViewBuilder
-    private var status: some View {
-        let phase = controller.phase
-        VStack(spacing: 8) {
-            switch phase {
-            case .deleting:
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(Copy.Media.deleting).font(Font.cobalt(12, .regular, relativeTo: .footnote)).foregroundStyle(CobaltColor.caption)
-                }
-                .accessibilityElement(children: .combine)
-            case .failed:
-                problem(Copy.Media.deleteFailed, retry: true)
-            case .partial(let remaining):
-                problem(Copy.Media.deletePartial(remaining: remaining), retry: true)
-            case .busy:
-                problem(Copy.Media.deleteBusy, retry: false)
-            case .idle:
-                if let notice = controller.notice {
-                    problem(notice, retry: false)
-                } else if controller.canDeleteEverything(item), controller.isBusy(item) {
-                    // delete everything is off while this media's own run is going
-                    Text(Copy.Media.deleteBusy)
-                        .font(Font.cobalt(11.5, .regular, relativeTo: .caption)).foregroundStyle(CobaltColor.caption)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity)
-                }
-            }
-        }
-        .motion(Motion.rows, value: phase)
-        .frame(maxWidth: .infinity)
-    }
-
-    private func problem(_ text: String, retry: Bool) -> some View {
-        VStack(spacing: 8) {
-            Text(text)
-                .font(Font.cobalt(12, .regular, relativeTo: .caption))
-                .foregroundStyle(CobaltColor.errorText)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity)
-            if retry {
-                Button(Copy.Media.tryAgain, systemImage: Symbol.Media.retry) {
-                    Task {
-                        if case .popWithStatus(let message) = await controller.tryAgain(item) {
-                            shell.showStatus(message)
-                            leave()
-                        }
-                    }
-                }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-            }
-        }
-        .accessibilityElement(children: .contain)
     }
 
     // MARK: actions

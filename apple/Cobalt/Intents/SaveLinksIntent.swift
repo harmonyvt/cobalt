@@ -22,6 +22,51 @@ enum CobaltVisibility: String, AppEnum {
     }
 }
 
+/// What "Save links" does with a post that holds several photos or videos (CONTRACT-GALLERY.md 1.13): a gallery is saved
+/// whole into cobalt by default, never into Photos; the other two choices save it and then make one thing from it.
+enum CobaltGalleries: String, AppEnum {
+    case everything, firstVideo, webp, image
+
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Galleries")
+    static let caseDisplayRepresentations: [CobaltGalleries: DisplayRepresentation] = [
+        .everything: "Save everything",
+        .firstVideo: "First video only",
+        .webp: "Save + slideshow webp",
+        .image: "Save + gallery image",
+    ]
+
+    var shortcut: ShortcutGalleries {
+        switch self {
+        case .everything: return .everything
+        case .firstVideo: return .firstVideo
+        case .webp: return .slideshowWebp
+        case .image: return .galleryImage
+        }
+    }
+}
+
+/// How "Save + gallery image" arranges the photos (CONTRACT-GALLERY.md 1.13, 6.4): no gaps, no borders.
+enum CobaltGalleryLayout: String, AppEnum {
+    case strip, grid2, grid3, row
+
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Layout")
+    static let caseDisplayRepresentations: [CobaltGalleryLayout: DisplayRepresentation] = [
+        .strip: "Strip",
+        .grid2: "2 across",
+        .grid3: "3 across",
+        .row: "Side by side",
+    ]
+
+    var layout: GalleryLayout {
+        switch self {
+        case .strip: return .strip
+        case .grid2: return .grid2
+        case .grid3: return .grid3
+        case .row: return .row
+        }
+    }
+}
+
 /// "Save links" (CONTRACT-PARALLEL.md 15.4): hands links to cobalt's server, which holds the line and saves them with
 /// every client gone. Background by default; the server's line is what makes it finish well inside the system's 30
 /// seconds. `Wait until saved` (iOS and macOS 27) runs inside `performBackgroundTask`, so the system keeps the process
@@ -44,7 +89,19 @@ struct SaveLinksIntent: AppIntent, ProgressReportingIntent {
     @Parameter(title: "Visibility", default: .appDefault)
     var visibility: CobaltVisibility
 
-    @Parameter(title: "Wait until saved", description: "Returns when cobalt has saved them, with their public links. iOS and macOS 27.", default: false)
+    @Parameter(
+        title: "Galleries",
+        description: "What to do with a post that holds several photos or videos. Everything is saved to cobalt, not to Photos.",
+        default: .everything)
+    var galleries: CobaltGalleries
+
+    @Parameter(title: "Layout", description: "How Save + gallery image arranges the photos.", default: .grid3)
+    var layout: CobaltGalleryLayout
+
+    @Parameter(
+        title: "Wait until saved",
+        description: "Returns when cobalt has saved them, with their public links. Save + slideshow webp and Save + gallery image also wait for the file to be made. iOS and macOS 27.",
+        default: false)
     var waitUntilSaved: Bool
 
     @Parameter(title: "Open cobalt", description: "Brings cobalt forward and shows what is saving.", default: false)
@@ -52,12 +109,25 @@ struct SaveLinksIntent: AppIntent, ProgressReportingIntent {
 
     @Dependency var actions: ShortcutActions
 
+    /// The layout is asked only for the gallery image (a `When` wraps whole summaries, so the two are spelled out).
     static var parameterSummary: some ParameterSummary {
-        Summary("Save \(\.$links)") {
-            \.$saveTitle
-            \.$visibility
-            \.$waitUntilSaved
-            \.$openCobalt
+        When(\.$galleries, .equalTo, CobaltGalleries.image) {
+            Summary("Save \(\.$links)") {
+                \.$galleries
+                \.$layout
+                \.$saveTitle
+                \.$visibility
+                \.$waitUntilSaved
+                \.$openCobalt
+            }
+        } otherwise: {
+            Summary("Save \(\.$links)") {
+                \.$galleries
+                \.$saveTitle
+                \.$visibility
+                \.$waitUntilSaved
+                \.$openCobalt
+            }
         }
     }
 
@@ -71,16 +141,25 @@ struct SaveLinksIntent: AppIntent, ProgressReportingIntent {
                 guard await continueInForegroundIfNeeded(Copy.Shortcuts.continueForOldServer) else { throw ShortcutError.oldServer }
                 allowDeviceLine = true
             }
+            let makes = galleries.shortcut.makes
+            // The make behind the save is sent by cobalt once the save is over, so the action stays with it (iOS and macOS
+            // 27: the system keeps the process and shows its progress). Earlier systems cannot wait: they ask to bring cobalt
+            // forward instead, and a refusal leaves the make to the app's own line.
             var waits = false
-            if #available(iOS 27, macOS 27, *) { waits = waitUntilSaved }
+            if #available(iOS 27, macOS 27, *) { waits = waitUntilSaved || makes }
+            else if makes { _ = await continueInForegroundIfNeeded(Copy.Shortcuts.continueForMake) }
             let follow: ShortcutActions.FollowUp = waits ? .wait : (openCobalt ? .open : .leave)
             var outcome = try await actions.saveLinks(
-                links, title: saveTitle, visibility: visibility.shortcut, then: follow, allowDeviceLine: allowDeviceLine)
+                links, title: saveTitle, visibility: visibility.shortcut, galleries: galleries.shortcut, layout: layout.layout,
+                then: follow, allowDeviceLine: allowDeviceLine)
             if #available(iOS 27, macOS 27, *), waits {
                 outcome = try await waitInBackground(outcome)
             }
             if openCobalt, await continueInForegroundIfNeeded(nil) { actions.openTray() }
-            return IntentResults.saves(outcome.saves, dialog: outcome.isPartial ? Copy.Shortcuts.partial(outcome, noun: "link") : nil)
+            return IntentResults.saves(outcome.saves, dialog: Copy.Shortcuts.saveDialog(outcome))
+        } catch ShortcutError.failed(.unsupported) where galleries.shortcut.makes {
+            // a server that cannot make a slideshow webp or a gallery image: nothing was saved
+            throw CobaltIntentError(message: Copy.Gallery.serverCantMake)
         } catch {
             throw IntentErrors.map(error)
         }
