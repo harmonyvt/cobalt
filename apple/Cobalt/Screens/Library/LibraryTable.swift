@@ -6,7 +6,7 @@ import SwiftUI
 
 // MARK: - iPad and Mac: Table
 
-/// Eight sortable columns (title, service, length, resolution, files, size, public, date); the default sort is
+/// Nine sortable columns (title, service, length, resolution, files, size, public, offline, date); the default sort is
 /// date, newest first, and a header click sorts, again reverses. Below 860 pt of table width `service` and
 /// `resolution` drop out (the title of a link save already names its service, and the detail shows the
 /// resolution). The model sorts and filters (the server pages by date only, so a sort loads the whole library
@@ -17,6 +17,7 @@ struct LibraryTable: View {
     let footer: LibraryFooter
 
     @State private var width: CGFloat = 1000
+    @State private var removing: MediaItem?
 
     private var library: LibraryModel { controller.library }
 
@@ -39,6 +40,7 @@ struct LibraryTable: View {
         case .resolution: return KeyPathComparator(\.pixels, order: order)
         case .files: return KeyPathComparator(\.fileCount, order: order)
         case .visibility: return KeyPathComparator(\.visibilityRank, order: order)
+        case .offline: return KeyPathComparator(\.offline, order: order)
         }
     }
 
@@ -52,6 +54,7 @@ struct LibraryTable: View {
         else if path == \LibraryRow.pixels { key = .resolution }
         else if path == \LibraryRow.fileCount { key = .files }
         else if path == \LibraryRow.visibilityRank { key = .visibility }
+        else if path == \LibraryRow.offline { key = .offline }
         else { return nil }
         return LibrarySort(key: key, ascending: comparator.order == .forward)
     }
@@ -109,6 +112,12 @@ struct LibraryTable: View {
                     .lineLimit(1)
             }
             .width(min: 70, ideal: 84, max: 110)
+            if controller.model.store.canKeep {
+                TableColumn(Copy.Offline.column, value: \.offline) { row in
+                    OfflineCell(item: row.item, model: controller.model)
+                }
+                .width(min: 64, ideal: 78, max: 100)
+            }
             TableColumn(Copy.Library2.colDate, value: \.date) { row in
                 secondary(Format.when(row.date, now: Date()))
             }
@@ -116,7 +125,7 @@ struct LibraryTable: View {
         }
         .contextMenu(forSelectionType: String.self) { ids in
             if let id = ids.first, let row = rows.first(where: { $0.id == id }) {
-                LibraryMenuItems(row: row, controller: controller)
+                LibraryMenuItems(row: row, controller: controller) { removing = $0 }
             }
         } primaryAction: { ids in
             if let id = ids.first, let row = rows.first(where: { $0.id == id }) { controller.open(row) }
@@ -125,6 +134,7 @@ struct LibraryTable: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             LibraryFooterView(state: footer) { Task { await library.loadMore() } }
         }
+        .offlineRemoveConfirm($removing, model: controller.model)
         .refreshable { await controller.refresh() }
         .accessibilityLabel(Copy.postsA11y)
     }
@@ -144,6 +154,7 @@ struct LibraryTable: View {
 /// 720×1280 · 12.8 MB · today 21:04`. At accessibility sizes the picture goes above and the lines wrap.
 struct LibraryListRow: View {
     let row: LibraryRow
+    let model: AppModel
     let reload: Int
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -158,7 +169,7 @@ struct LibraryListRow: View {
                     VStack(alignment: .leading, spacing: 3) {
                         LibraryTitleText(row: row, size: 13).lineLimit(nil)
                         Text(meta).font(CobaltType.captionSmall).foregroundStyle(.secondary)
-                        LibraryRowBadges(row: row)
+                        LibraryRowBadges(row: row, model: model)
                     }
                 }
             } else {
@@ -168,7 +179,7 @@ struct LibraryListRow: View {
                         HStack(spacing: 6) {
                             LibraryTitleText(row: row)
                             Spacer(minLength: 4)
-                            LibraryRowBadges(row: row)
+                            LibraryRowBadges(row: row, model: model)
                         }
                         Text(meta)
                             .font(Font.cobalt(10.5, .regular, relativeTo: .caption2))
@@ -184,7 +195,7 @@ struct LibraryListRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Copy.Media.planetA11y(title: LibraryRowCopy.spoken(row), webps: row.webps, hasVideo: row.hasVideo))
-        .accessibilityValue(meta)
+        .accessibilityValue(OfflineMark(item: row.item, model: model).spoken.map { "\(meta), \($0)" } ?? meta)
         .accessibilityAddTraits(.isButton)
     }
 }
@@ -194,6 +205,7 @@ struct LibraryList: View {
     let controller: LibraryController
     let footer: LibraryFooter
     var zoom: Namespace.ID?
+    @State private var removing: MediaItem?
 
     private var lastIDs: Set<String> { Set(rows.suffix(6).map(\.id)) }
 
@@ -202,11 +214,11 @@ struct LibraryList: View {
             List {
                 Section {
                     ForEach(rows) { row in
-                        Button { controller.open(row) } label: { LibraryListRow(row: row, reload: controller.reload) }
+                        Button { controller.open(row) } label: { LibraryListRow(row: row, model: controller.model, reload: controller.reload) }
                             .buttonStyle(.plain)
                             .zoomSource(id: row.id, in: zoom)
                             .contextMenu {
-                                LibraryMenuItems(row: row, controller: controller)
+                                LibraryMenuItems(row: row, controller: controller) { removing = $0 }
                             } preview: {
                                 LibraryPreviewCard(row: row)
                             }
@@ -221,6 +233,7 @@ struct LibraryList: View {
             #if os(iOS)
             .listStyle(.insetGrouped)
             #endif
+            .offlineRemoveConfirm($removing, model: controller.model)
             .refreshable { await controller.refresh() }
             .accessibilityLabel(Copy.postsA11y)
             .onChange(of: controller.reveal, initial: true) { _, request in

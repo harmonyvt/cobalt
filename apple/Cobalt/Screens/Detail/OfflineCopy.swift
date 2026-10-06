@@ -1,87 +1,175 @@
 import CobaltKit
 import SwiftUI
 
-/// "Remove offline copy": `OfflineStore.evict(_:)` drops this entry's file and keeps its poster,
-/// flipbook and record (what the limit does to the oldest), so the planet stays on the orbit and
-/// "download again" takes its place. Nil, so the button is not shown, while a running pipeline is
-/// reading or playing the file (the store would refuse).
-@MainActor
-enum OfflineHooks {
-    static func evict(model: AppModel, video: StoredVideo) -> (@MainActor () async -> Bool)? {
-        guard !model.store.isInUse(video.id) else { return nil }
-        return { await model.store.evict(video.id) }
+/// The words for a model state (CONTRACT-OFFLINE section 3), kept beside the screens that draw them so
+/// `Copy+Offline.swift`, which the share extension and the widgets compile too, holds no model types.
+enum OfflineWords {
+    /// Why a download failed, in plain words.
+    static func failure(_ failure: OfflineFailure) -> String {
+        switch failure {
+        case .gone: return Copy.Offline.gone
+        case .unreachable: return Copy.failure(.unreachable)
+        case .auth: return Copy.Offline.authRefused
+        case .full: return Copy.Offline.full
+        case .other: return Copy.Offline.downloadFailed
+        }
+    }
+
+    /// The line under the detail's toggle: where the file is and its size, progress, waiting, the failure, or
+    /// that it is not here.
+    static func status(_ state: RenditionOffline) -> String {
+        switch state {
+        case .offline(let bytes): return Copy.Offline.kept(bytes: bytes)
+        case .cached(let bytes): return Copy.Offline.cached(bytes: bytes)
+        case .downloading(let progress): return Copy.Offline.downloading(bytes: progress.bytes, total: progress.total)
+        case .waiting: return Copy.Offline.waiting
+        case .failed(let failure): return Self.failure(failure)
+        case .none: return Copy.Offline.missing
+        case .unavailable: return Copy.Offline.unavailable
+        }
+    }
+
+    /// 0...1 when the total is known and positive.
+    static func fraction(_ progress: TransferProgress) -> Double? {
+        guard let total = progress.total, total > 0 else { return nil }
+        return min(1, max(0, Double(progress.bytes) / Double(total)))
+    }
+
+    /// The confirm of "remove offline copy": the server keeps its copy, or this is the only one.
+    static func removeTitle(onlyCopy: Bool) -> String {
+        onlyCopy ? Copy.Offline.onlyCopyTitle : Copy.Offline.removeCopyTitle
+    }
+
+    static func removeMessage(onlyCopy: Bool) -> String {
+        onlyCopy ? Copy.Offline.onlyCopyMessage : Copy.Offline.removeCopyMessage
     }
 }
 
-/// The detail's "on this iphone" section, for the selected rendition: whether the file is here, its size, and
-/// the two actions (remove the file, keep the record; download it again once the storage limit evicted it).
+/// The detail's "on this iphone" section for the selected tab (CONTRACT-OFFLINE decision 11): one toggle,
+/// "keep offline", and one line under it that says where the file is and its size, the progress, that it waits for
+/// the network, why it failed (with "try again"), or that it is not here. Switching it off asks first (the server
+/// keeps a copy, or this is the only one). The toggle is disabled, not hidden, when there is nothing to download
+/// the file from.
 struct OfflineCopySection: View {
     let model: AppModel
-    let video: StoredVideo
-    @State private var confirmRemove = false
-    @State private var failure: PipelineFailure?
-    @State private var onDisk: Bool?
+    private let source: Source
 
-    private var current: StoredVideo { model.store.videos.first { $0.id == video.id } ?? video }
-    /// Bytes so far while `LibraryModel.redownload` runs for this entry; nil otherwise.
-    private var progress: TransferProgress? { model.library.redownloads[video.id] }
-    private var busy: Bool { progress != nil }
-    private var evict: (@MainActor () async -> Bool)? { OfflineHooks.evict(model: model, video: current) }
-    private var isWebp: Bool { video.kind == .webp }
+    private enum Source {
+        case rendition(MediaItem, Rendition)
+        case record(StoredVideo)
+    }
 
-    private func typeLabel(_ entry: StoredVideo) -> String {
-        if entry.kind == .webp { return "webp" }
-        let ext = entry.fileURL?.pathExtension.lowercased() ?? ""
-        return ext.isEmpty || ext.count > 5 ? "mp4" : ext
+    /// The media and the tab on screen.
+    init(model: AppModel, item: MediaItem, rendition: Rendition) {
+        self.model = model
+        source = .rendition(item, rendition)
+    }
+
+    /// A tab that has a record on this device: the section finds its media itself.
+    init(model: AppModel, video: StoredVideo) {
+        self.model = model
+        source = .record(video)
     }
 
     var body: some View {
-        let entry = current
-        let here = onDisk ?? (entry.fileURL != nil)
+        if model.store.canKeep, let (item, rendition) = resolved {
+            OfflineToggleSection(model: model, item: item, rendition: rendition)
+        }
+    }
+
+    /// The tab the section is for, current: the model's record of the media wins over the value a view holds.
+    private var resolved: (MediaItem, Rendition)? {
+        switch source {
+        case .rendition(let item, let rendition):
+            return (item, rendition)
+        case .record(let video):
+            guard let local = model.store.media.first(where: { $0.renditions.contains { $0.id == video.id } }) else { return nil }
+            let item = model.mediaItem(for: local)
+            guard let rendition = item.renditions.first(where: { $0.local?.id == video.id }) else { return nil }
+            return (item, rendition)
+        }
+    }
+}
+
+private struct OfflineToggleSection: View {
+    let model: AppModel
+    let item: MediaItem
+    let rendition: Rendition
+    @State private var confirmRemove = false
+
+    private var state: RenditionOffline { model.offlineState(of: rendition) }
+
+    /// On while the file is kept, or on its way (a download or a wait for the network).
+    private var isOn: Bool {
+        switch state {
+        case .offline, .downloading, .waiting: return true
+        case .cached, .failed, .none, .unavailable: return false
+        }
+    }
+
+    private var isOffline: Bool {
+        if case .offline = state { return true }
+        return false
+    }
+
+    /// A running pipeline is reading or playing the file: the store would refuse to remove it.
+    private var inUse: Bool { rendition.local.map { model.store.isInUse($0.id) } ?? false }
+
+    private var disabled: Bool {
+        if case .unavailable = state { return true }
+        return isOffline && inUse
+    }
+
+    private var binding: Binding<Bool> {
+        Binding(
+            get: { isOn },
+            set: { on in
+                if on {
+                    model.keepOffline(item, rendition: rendition)
+                } else if isOffline {
+                    confirmRemove = true
+                } else {
+                    model.stopDownloading(item, rendition: rendition)
+                }
+            })
+    }
+
+    var body: some View {
+        let state = state
+        let onlyCopy = model.isOnlyCopy(rendition)
         Section {
-            LabeledContent {
+            Toggle(isOn: binding) {
                 HStack(spacing: 8) {
-                    Text(here ? Copy.Offline.bytes(entry.bytes) : "")
-                        .font(Font.cobalt(12.5)).foregroundStyle(.secondary).monospacedDigit()
-                    DetailTypeBadge(label: typeLabel(entry))
+                    Label(Copy.Offline.keep, systemImage: Symbol.keepOffline)
+                    Spacer(minLength: 4)
+                    DetailTypeBadge(label: OfflineWords.typeLabel(rendition))
                 }
-            } label: {
-                Label(here ? Copy.Offline.onDevice : Copy.Offline.missing, systemImage: here ? Symbol.offlineOn : Symbol.offlineMissing)
             }
-            if here {
-                if evict != nil {
-                    Button(Copy.Offline.removeCopy, systemImage: Symbol.removeOffline, role: .destructive) { confirmRemove = true }
-                        .confirmationDialog(
-                            isWebp ? Copy.Media.removeWebpTitle : Copy.Offline.removeTitle,
-                            isPresented: $confirmRemove, titleVisibility: .visible
-                        ) {
-                            Button(Copy.remove, role: .destructive) { remove() }
-                            Button(Copy.keep, role: .cancel) {}
-                        } message: {
-                            Text(isWebp ? Copy.Media.removeWebpMessage : Copy.Offline.removeMessage)
-                        }
+            .disabled(disabled)
+            .confirmationDialog(
+                OfflineWords.removeTitle(onlyCopy: onlyCopy), isPresented: $confirmRemove, titleVisibility: .visible
+            ) {
+                Button(Copy.remove, role: .destructive) { remove() }
+                Button(Copy.keep, role: .cancel) {}
+            } message: {
+                Text(OfflineWords.removeMessage(onlyCopy: onlyCopy))
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                statusLine(state)
+                if case .downloading(let progress) = state {
+                    if let fraction = OfflineWords.fraction(progress) {
+                        ProgressView(value: fraction)
+                            .progressViewStyle(.linear)
+                            .tint(CobaltColor.text)
+                            .padding(.leading, 34)
+                            .accessibilityHidden(true)
+                    } else {
+                        ProgressView().progressViewStyle(.linear).tint(CobaltColor.text)
+                            .padding(.leading, 34).accessibilityHidden(true)
+                    }
                 }
-            } else if model.settings.keepVideosOnDevice {
-                VStack(alignment: .leading, spacing: 10) {
-                    Button {
-                        fetch(entry)
-                    } label: {
-                        Label(busy ? Copy.Offline.downloading : Copy.Offline.downloadAgain, systemImage: Symbol.downloadAgain)
-                            .symbolEffect(.pulse, isActive: busy)
-                    }
-                    .disabled(busy)
-                    if let progress {
-                        if let total = progress.total, total > 0 {
-                            ProgressView(value: min(Double(progress.bytes), Double(total)), total: Double(total))
-                                .progressViewStyle(.linear)
-                                .tint(CobaltColor.text)
-                        } else {
-                            ProgressView().progressViewStyle(.linear).tint(CobaltColor.text)
-                        }
-                    }
-                    if let failure {
-                        Text(Copy.Offline.failure(failure)).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
-                    }
+                if case .failed = state {
+                    Button(Copy.tryAgain, systemImage: Symbol.retry) { model.keepOffline(item, rendition: rendition) }
                 }
             }
         } header: {
@@ -89,30 +177,44 @@ struct OfflineCopySection: View {
         }
         .labelStyle(DetailRowLabelStyle())
         .font(CobaltType.body)
-        .task(id: entry.fileURL) {
-            onDisk = entry.fileURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
-        }
+    }
+
+    @ViewBuilder
+    private func statusLine(_ state: RenditionOffline) -> some View {
+        let failed: Bool = {
+            if case .failed = state { return true }
+            return false
+        }()
+        Text(OfflineWords.status(state))
+            .font(Font.cobalt(12.5))
+            .foregroundStyle(failed ? CobaltColor.errorText : Color.secondary)
+            .monospacedDigit()
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, 34)
     }
 
     private func remove() {
-        guard let evict else { return }
-        Task {
-            // The evicted state at once; the task keyed on the file confirms it from the store.
-            if await evict() { onDisk = false }
-        }
+        Task { await model.removeOfflineCopy(item, rendition: rendition) }
     }
+}
 
-    private func fetch(_ entry: StoredVideo) {
-        failure = nil
-        Task {
-            do {
-                try await model.library.redownload(entry)
-            } catch let error as PipelineFailure {
-                failure = error
-            } catch {
-                failure = .unreachable
+extension OfflineWords {
+    /// `webp`, or the video's container (`mp4`, `mov`, ...): the small badge beside the toggle.
+    static func typeLabel(_ rendition: Rendition) -> String {
+        if rendition.isWebp { return "webp" }
+        let candidates = [rendition.local?.fileURL?.pathExtension, rendition.local?.name.split(separator: ".").last.map(String.init)]
+        for ext in candidates.compactMap({ $0?.lowercased() }) where !ext.isEmpty && ext.count <= 5 { return ext }
+        for contentType in [rendition.file?.contentType, rendition.hosted?.contentType] {
+            switch contentType?.lowercased() {
+            case "video/quicktime": return "mov"
+            case "image/gif": return "gif"
+            case "image/png": return "png"
+            case "image/jpeg": return "jpg"
+            case "image/heic", "image/heif": return "heic"
+            default: break
             }
         }
+        return "mp4"
     }
 }
 
@@ -125,3 +227,25 @@ private struct DetailRowLabelStyle: LabelStyle {
         }
     }
 }
+
+#if DEBUG
+/// The section for every state of the offline fixture, one under the other.
+@MainActor
+private struct OfflineSectionsPreview: View {
+    @State private var model = AppModel.preview(.offline)
+
+    var body: some View {
+        let items = (model.store.media.map { model.mediaItem(for: $0) } + model.library.posts.map { model.mediaItem(for: $0) })
+        let seen = items.reduce(into: [MediaItem]()) { out, item in if !out.contains(where: { $0.id == item.id }) { out.append(item) } }
+        Form {
+            ForEach(seen) { item in
+                OfflineCopySection(model: model, item: item, rendition: item.face)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+#Preview("offline · every state", traits: .fixedLayout(width: 390, height: 1400)) {
+    OfflineSectionsPreview()
+}
+#endif

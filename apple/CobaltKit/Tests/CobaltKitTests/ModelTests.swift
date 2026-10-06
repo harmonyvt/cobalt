@@ -390,7 +390,7 @@ struct AppAndLibraryTests {
                 p.makeWebp()
                 await h.driveToSettled()
                 #expect(p.state == .failed(scenario == .renderBusy ? .renderBusy : .renderLost), "\(scenario)")
-            case .happy, .coldStart, .shortClip, .legacyFork, .emptyOrbit, .renditions, .renditionsLegacy, .renameFails:
+            case .happy, .coldStart, .shortClip, .legacyFork, .emptyOrbit, .renditions, .renditionsLegacy, .renameFails, .offline:
                 p.start(link: URL(string: pastedLink)!)
                 await h.driveToSettled()
                 #expect(p.state == .ready, "\(scenario)")

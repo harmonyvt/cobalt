@@ -143,7 +143,7 @@ read on 2026-10-06 from this worktree (`e64973603` plus the uncommitted Screens/
 
    | the owner, in Files | the scan finds | the store does |
    |---|---|---|
-   | deletes a kept file | no file with that id under the root (`.Trash` is skipped) | `visiblePath = nil`, `keep = false`: **not offline**, poster and record stay, never re-downloaded |
+   | deletes a kept file | no file with that id under the root (`.Trash` is skipped) | `visiblePath = nil`, `keep = false`: **not offline**, never re-downloaded. The poster and record stay for now, but the media is a cache media from then on: like any evicted media, the limit's second pass may take its poster and record later (review fixes, below) |
    | restores it from recently deleted | the id again | adopts it: `visiblePath` = where it is, `keep = true` |
    | renames it, or moves it into a subfolder | the id at a new path | `visiblePath` follows; the media's title is not touched |
    | duplicates it | the id twice | the recorded path wins (else the first path in sorted order); the copy is left alone, and adopted later if the original goes |
@@ -281,11 +281,13 @@ read on 2026-10-06 from this worktree (`e64973603` plus the uncommitted Screens/
     - Owner's phone (no group): the extension has its own store, as today; the app downloads the share's original
       from the server (`OriginalFetcher.discoverShares`) and it lands kept.
 
-13. **(lane; owner question 2) Photos album: unchanged, an optional extra, still on by default.** It reads
-    `fileURL`, which now resolves into `Documents`; keys do not change; `shouldMoveFile = false` keeps Photos' own
-    copy. Deleting in Files never touches Photos, and a Photos deletion never touches Files. The only change: adds
-    with origin `.keepOffline` or `.adopted` are skipped (decision 9). Whether to keep it on now that Files is home
-    is the owner's call.
+13. **(lane; owner question 2, decided by the owner 2026-10-06) Photos album: an optional extra, off by default
+    for new saves ("Files only").** It reads `fileURL`, which now resolves into `Documents`; keys do not change;
+    `shouldMoveFile = false` keeps Photos' own copy. Deleting in Files never touches Photos, and a Photos deletion
+    never touches Files. Adds with origin `.keepOffline` or `.adopted` are skipped (decision 9).
+    - `Settings.photosAlbumSync` reads **false** when unset. Only the owner's taps ever wrote the key, so "unset"
+      means "never touched" and no migration is needed. An explicit on (`PhotosSync.enable()`) is respected, and
+      so is an explicit off. Nothing already in the album is removed by this default.
 
 14. **(lane) Backup.** Every file in either tier that has a server copy gets `isExcludedFromBackup = true` (the
     server is its backup; gigabytes of video must not fill the owner's iCloud backup). Files with no server copy
@@ -294,7 +296,11 @@ read on 2026-10-06 from this worktree (`e64973603` plus the uncommitted Screens/
 
 15. **(lane) Mac: same model, two waves.**
     - **Wave 1:** the Mac gets every surface (badge, filter, right-click, toggle, downloads, cache split) with
-      `visibleRoot == nil`, so kept files stay in the hidden `files/`. `FolderSync` keeps copying exactly as today.
+      `visibleRoot == nil`. **Keep means cache until wave M (review fix S3, decided by Fable):** `FolderSync`
+      already copies each save to `~/Movies/cobalt`, so a "kept" hidden copy would be a second, uncapped duplicate.
+      On the Mac `OfflineStore.canKeep` is false: `add`/`attach` store `keep = false` whatever the caller asked,
+      `setKeep(true)` is a no-op, and the hidden `files/` stay under the 5 GB cache limit. `FolderSync` keeps
+      copying exactly as today.
     - **Wave M** (later, own gate): the Mac's visible root becomes the `FolderDestination` folder (default
       `~/Movies/cobalt`) and `FolderSync` retires.
       - Adoption migration: each `FolderLedger` `done` entry whose file is in the folder at its recorded size is
@@ -607,9 +613,10 @@ iOS simulator and macOS builds as `CLAUDE.md` gives them; the share extension bu
    cobalt and stays until you delete it there or tap "remove offline copy"; the 5 GB limit then only applies to a
    small hidden cache. "No" means saves stay in the cache (and leave when it is full) and only what you mark "keep
    offline" goes to Files.
-2. **Photos album: keep adding new saves to the "cobalt" album too?** Default **yes, unchanged** (it works; a video
-   you delete in Photos is never added again). Each kept video then takes space twice (Files and Photos). "No" turns
-   the album off; what is already in Photos stays there.
+2. **Photos album: keep adding new saves to the "cobalt" album too?** **Decided by the owner, 2026-10-06: no, "Files
+   only".** The album sync is off by default for new saves; a video you delete in Photos is never added again; an
+   explicit on is respected and nothing is removed from the album. (Each kept video would take space twice, in Files
+   and in Photos.)
 
 ---
 
@@ -626,3 +633,49 @@ iOS simulator and macOS builds as `CLAUDE.md` gives them; the share extension bu
 
 Three gated waves for iPhone/iPad/Mac wave 1, roughly 5-7 lane-hours. Wave M is a separate ~2-3 lane-hours when
 the owner wants it.
+
+---
+
+## 12. Review fixes to wave 1 (2026-10-06, dated note)
+
+An adversarial review of `8121f0659` proved data-loss and unbounded-growth bugs with throwaway tests; each is now a
+regression test (`OfflineReviewFixTests.swift`, test names in brackets). All in `Store/**`.
+
+- **B1 deletes went by the remembered path** [`OfflineDeleteIdentityTests`]. "Remove offline copy", "remove from
+  this iphone", "delete everything" and the title-follow rename now re-read the record's path from the index inside
+  the gate and require the file's tag id to equal the record id (`OfflineFolder.removeVisibleChecked`,
+  `OfflineFolder.rename`). On a mismatch (or a missing file) one scan settles the paths and it is tried once more;
+  a file at the path that still is not provably the record's is left alone, the call returns false (the record
+  stays). A tag that cannot be read refuses as well.
+- **B2 a case-only rename overwrote a distinct file on a case-sensitive volume** [`OfflineCaseOnlyRenameTests`,
+  on a case-sensitive APFS disk image]. Renames are always exclusive (`RENAME_EXCL`); a case-only change that
+  answers "exists" is renamed plainly only when the destination is the same file (device and inode), else the
+  clash rule picks ` (2)`. The folder listing keeps case, so a distinct `Rome.mp4` is a clash.
+- **S1 an undecodable index was overwritten by the launch scan** [`OfflineUndecodableIndexTests`]. "Exists but does
+  not decode" is `IndexUnreadable`: `mutate` throws and writes nothing, the scan reports `indexUnreadable` and
+  changes nothing, promotion moves nothing. The bytes are kept as `index.unreadable-<date>-<fingerprint>.json` beside
+  the index (once per content) and one telemetry error is logged. A missing or empty index is still a fresh store.
+  While it lasts, writes (a new save) fail rather than lose the old index: that is the point.
+- **S2 an extension with no app group kept shares nobody could promote** [`OfflineUnpromotableStoreTests`]. A store
+  takes a save as kept only when `canKeep`: the process has a visible root, or it is an extension whose store the
+  app reads (app group). Otherwise `keep = false` (cache; the limit governs it), and `reload()` releases records an
+  earlier build left kept there. `OfflineStore.shared()` makes the call from the process
+  (`OfflineFolder.storeIsSharedWithApp()`); the initializer's `sharedWithApp` defaults to true, so stores built
+  directly (tests, `Preview/*`) keep as before.
+- **S3 the Mac until wave M** (see decision 15): the same rule, `canKeep == false` on macOS.
+- **S4 an unreadable tag read as "no tag"** [`OfflineUnreadableTagTests`]. `XAttr.read` separates ENOATTR (untagged)
+  from every other error; any other error aborts the scan as `rootMissing` and refuses a delete.
+- **S5 remove against promotion** [`OfflineRemoveVersusPromotionTests`]. "Remove offline copy" now runs entirely
+  inside the gate in both tiers; promotion's index write requires the record to still exist, still be `keep`, and
+  still point at the file it moved (else the moved file goes back out).
+- **S6 a Files duplicate resurrected removed media** [`OfflineRemovedMediaStaysRemovedTests`]. Ids cobalt removed
+  (a delete by identity, never the owner's own delete in Files) are kept as tombstones, newest 500, in
+  `<hidden root>/tombstones.json` (beside the index, not in `Sync/`, so they move with the store and exist where the
+  index does). The conservative rule: a tagged file whose id is tombstoned and that no record points at is the
+  owner's own file (counted `untracked`, never adopted, rebuilt, moved or deleted); it is **not** adopted as a new
+  media (import is not in this pass, decision 6). Keeping the id again (promotion) lifts its tombstone. A delete in
+  Files is not a tombstone: restoring from recently deleted still adopts.
+- Nits: a record whose cache file is gone adopts the tagged visible copy; `setKeep` no longer traps on an index
+  that names one id twice.
+- **Not changed:** an extension's remove of a record whose file is in the visible folder still cannot delete that
+  file (extensions never touch the root); the app's next scan sees the tagged file and, with no record, rebuilds it.

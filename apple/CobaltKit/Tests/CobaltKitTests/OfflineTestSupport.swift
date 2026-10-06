@@ -50,6 +50,8 @@ struct TestFileOps: OfflineFileOps {
     var crashAt: OfflineMoveStep?
     /// Every rename out of `files/` fails with EXDEV (another volume): the copy path.
     var crossVolume = false
+    /// Runs when the move reaches a step (before a crash at it): a test stages another writer between two steps.
+    var onCheckpoint: (@Sendable (OfflineMoveStep) -> Void)?
     private let dead = Dead()
     private var system: SystemFileOps { SystemFileOps() }
 
@@ -76,6 +78,7 @@ struct TestFileOps: OfflineFileOps {
     func remove(_ url: URL) throws { try alive(); try system.remove(url) }
     func checkpoint(_ step: OfflineMoveStep) throws {
         try alive()
+        onCheckpoint?(step)
         if step == crashAt {
             dead.flag.withLock { $0 = true }
             throw OfflineInterrupted(step: step)
@@ -118,11 +121,15 @@ final class OfflineRig {
         LimitDefaults.write(limit, to: defaults)
     }
 
-    /// `visible: false` is the share extension (and the Mac in wave 1).
-    func store(visible useVisible: Bool = true, ops: TestFileOps = TestFileOps(), posterBytes: Int = 50) -> OfflineStore {
+    /// `visible: false` is the share extension. `shared: true` (the default) is an extension whose store the app
+    /// also reads (the app group), so its kept files wait in `files/` for the app to promote; `shared: false` is a
+    /// store nobody promotes from: the extension with no app group (the owner's phone) and the Mac in wave 1.
+    func store(
+        visible useVisible: Bool = true, shared: Bool = true, ops: TestFileOps = TestFileOps(), posterBytes: Int = 50
+    ) -> OfflineStore {
         OfflineStore(
             root: hidden, tools: OfflineTools(posterBytes: posterBytes), defaults: defaults,
-            now: { Date() }, visibleRoot: useVisible ? visible : nil, ops: ops, syncDirectory: sync)
+            now: { Date() }, visibleRoot: useVisible ? visible : nil, ops: ops, syncDirectory: sync, sharedWithApp: shared)
     }
 
     static let instagram = URL(string: "https://www.instagram.com/reel/DeHC9jcpfQW/")!

@@ -35,6 +35,7 @@ struct LibraryTile: View, Equatable {
     let nearEnd: Bool
 
     @State private var failed = false
+    @State private var removing: MediaItem?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     nonisolated static func == (a: LibraryTile, b: LibraryTile) -> Bool {
@@ -58,6 +59,7 @@ struct LibraryTile: View, Equatable {
     /// The meta line, whether the link is public, and (when it is true) that the picture did not load.
     private var accessibilityValue: String {
         var parts = [LibraryRowCopy.meta(row, now: Date()), row.isPublic ? Copy.Library2.publicBadgeA11y : Copy.Library2.privateBadgeA11y]
+        if let offline = OfflineMark(item: row.item, model: controller.model).spoken { parts.append(offline) }
         if failed { parts.append(Copy.Library2.pictureFailed) }
         return parts.joined(separator: ", ")
     }
@@ -68,10 +70,11 @@ struct LibraryTile: View, Equatable {
             .frame(width: size.width, height: size.height)
             .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
             .contextMenu {
-                LibraryMenuItems(row: row, controller: controller)
+                LibraryMenuItems(row: row, controller: controller) { removing = $0 }
             } preview: {
                 LibraryPreviewCard(row: row)
             }
+            .offlineRemoveConfirm($removing, model: controller.model)
             .zoomSource(id: row.id, in: zoom)
             .onScrollVisibilityChange(threshold: 0.8) { visible in
                 guard animationURL != nil else { return }
@@ -114,15 +117,19 @@ struct LibraryTile: View, Equatable {
     private var overlays: some View {
         ZStack {
             // top left: the video's switch (CONTRACT-VISIBILITY decision 13): a globe while its link is public, a lock
-            // while it is private; never "some webp is public"
-            Image(systemName: row.isPublic ? Symbol.Library.isPublic : Symbol.Library.isPrivate)
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(CobaltColor.badgeInk)
-                .frame(width: 20, height: 20)
-                .background(CobaltColor.badgeBack, in: Circle())
-                .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
-                .padding(5)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            // while it is private; never "some webp is public". Beside it the offline badge (CONTRACT-OFFLINE
+            // decision 11): filled when all is kept, outline for some, a ring while it downloads, nothing otherwise.
+            HStack(spacing: 4) {
+                Image(systemName: row.isPublic ? Symbol.Library.isPublic : Symbol.Library.isPrivate)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(CobaltColor.badgeInk)
+                    .frame(width: 20, height: 20)
+                    .background(CobaltColor.badgeBack, in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+                OfflineBadge(item: row.item, model: controller.model, style: .tile)
+            }
+            .padding(5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             // top right: the face's type
             typeBadge
                 .padding(5)

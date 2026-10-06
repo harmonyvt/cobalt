@@ -58,7 +58,11 @@ extension LibraryModel {
                 let file = try await client.download(source, to: dest) { relay.push($0) }
                 try Task.checkCancellation()
                 do {
-                    return try await ctx.store.attach(file: file, to: video.id, move: true, keep: true)
+                    // not a new save: the photos album and the Mac folder never copy a refill (decision 9; the Mac's folder
+                    // is told by the store's `onAdd` origin)
+                    let record = ctx.store.videos.first { $0.id == video.id } ?? video
+                    ctx.photosSync?.markNotNew([PhotosKey.of(record)])
+                    return try await ctx.store.attach(file: file, to: video.id, move: true, keep: true, origin: .keepOffline)
                 } catch {
                     try? FileManager.default.removeItem(at: file)
                     throw error
@@ -66,25 +70,10 @@ extension LibraryModel {
             } catch {
                 if error is OfflineStoreError { throw error }       // the record was removed meanwhile: not a server matter
                 lastError = error
-                guard Self.sourceIsGone(error) else {
+                guard OfflineSources.isGone(error) else {
                     throw pipelineFailure(from: error, during: .saving, limits: ctx.capabilities.limits) ?? error
                 }
             }
-        }
-    }
-
-    /// The server (or the web) answered "not here": try the next place. Anything else (offline, a
-    /// revoked key, a full disk) would fail the same way again.
-    private static func sourceIsGone(_ error: Error) -> Bool {
-        guard let e = error as? CobaltError else { return false }
-        switch e {
-        case .api(let code, let status):
-            return [404, 409, 410].contains(status)
-                || ["error.studio.expired", "error.studio.not_found", "error.studio.not_ready"].contains(code)
-        case .invalidResponse(let status):
-            return [404, 410].contains(status)
-        default:
-            return false
         }
     }
 

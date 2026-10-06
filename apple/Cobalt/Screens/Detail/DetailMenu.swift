@@ -1,9 +1,10 @@
 import CobaltKit
 import SwiftUI
 
-/// The detail's `more` menu (CONTRACT-MEDIA 1.10, CONTRACT-LIBRARY2 decision 5), in the contract's order: rename
-/// (first, on every width), open in library (from the orbit,
-/// when the library has the post), remove from this iphone, delete this webp (webp tab only), delete everything
+/// The detail's `more` menu (CONTRACT-MEDIA 1.10, CONTRACT-LIBRARY2 decision 5, CONTRACT-OFFLINE decision 11), in the
+/// contract's order: rename (first, on every width), open in library (from the orbit,
+/// when the library has the post), show in finder / show in files, keep everything offline (only while some of
+/// the media is offline and the rest can be fetched), remove from this iphone, delete this webp (webp tab only), delete everything
 /// (destructive, last, only when the media has something on the server and a way to delete it).
 struct DetailMenu: View {
     let controller: DetailController
@@ -20,6 +21,13 @@ struct DetailMenu: View {
         model.capabilities.library && item.post != nil && model.selectedTab != .library
     }
 
+    /// Some of the media is kept offline and the rest can still be fetched (nothing runs for it right now).
+    private var showsKeepEverything: Bool {
+        guard model.store.canKeep, model.offlineState(of: item).offline == .some else { return false }
+        let plan = OfflinePlan(item: item, model: model)
+        return plan.canKeep && !plan.active
+    }
+
     var body: some View {
         let deleting = controller.isDeleting
         let busy = controller.isBusy(item)
@@ -30,6 +38,10 @@ struct DetailMenu: View {
                 Button(Copy.Media.openInLibrary, systemImage: Symbol.Media.openInLibrary, action: openInLibrary)
             }
             ShowInFinderButton(model: model, videos: rendition.local.map { [$0] } ?? [])
+            ShowInFilesButton(model: model, item: item)
+            if showsKeepEverything {
+                Button(Copy.Offline.keepEverything, systemImage: Symbol.keepOffline) { model.keepOffline(item) }
+            }
             if item.local != nil {
                 Button(Copy.Media.removeMedia, systemImage: Symbol.Media.removeFromDevice) { controller.confirm = .removeMedia }
                     .disabled(deleting)

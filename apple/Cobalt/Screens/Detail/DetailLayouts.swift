@@ -77,9 +77,7 @@ struct CompactDetail: View {
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
             }
-            if let local = c.rendition.local {
-                OfflineCopySection(model: c.model, video: local)
-            }
+            OfflineCopySection(model: c.model, item: c.item, rendition: c.rendition)
         }
         .formStyle(.grouped)
         .motion(Motion.card, value: c.rendition.id)
@@ -133,9 +131,7 @@ struct WideDetail: View {
                             .listRowInsets(EdgeInsets())
                             .listRowBackground(Color.clear)
                     }
-                    if let local = c.rendition.local {
-                        OfflineCopySection(model: c.model, video: local)
-                    }
+                    OfflineCopySection(model: c.model, item: c.item, rendition: c.rendition)
                 }
                 .formStyle(.grouped)
                 .frame(width: detailsWidth(geometry.size.width))

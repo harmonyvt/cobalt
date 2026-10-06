@@ -1,6 +1,15 @@
 import Foundation
 import Synchronization
 
+/// A client that can say what request a download makes, so a background `URLSession` can run it
+/// (CONTRACT-OFFLINE.md decision 9). A client that does not conform (`PreviewClient`) is fetched in the foreground
+/// with `download`.
+public protocol RemoteFileRequests: Sendable {
+    func urlRequest(for file: RemoteFile) throws -> URLRequest
+}
+
+extension HTTPCobaltClient: RemoteFileRequests {}
+
 /// The real client. Rules (section 4.3): the `Authorization` header goes only to keyed routes and
 /// only to `baseURL`'s host; `Accept: application/json` everywhere; long polls time out at
 /// `wait + 15` s; `POST /` carries `{"url": …}` and nothing else; a missing key on a keyed route
@@ -516,21 +525,27 @@ public struct HTTPCobaltClient: CobaltClient {
 
     // MARK: - Download
 
-    public func download(
-        _ file: RemoteFile, to destination: URL,
-        progress: @escaping @Sendable (TransferProgress) -> Void
-    ) async throws -> URL {
-        let req: URLRequest
+    /// The request a download of `file` makes (the same one `download` sends): a background session needs the
+    /// request, not the transfer. A keyed route carries the key, only to the server's own host; a public URL
+    /// is never sent it.
+    public func urlRequest(for file: RemoteFile) throws -> URLRequest {
         switch file {
         case .open(let url):
             var r = URLRequest(url: url, timeoutInterval: 60)
             r.httpMethod = "GET"
-            req = r                                            // never sent the key
+            return r                                           // never sent the key
         case .studioSource(let id):
-            req = try makeRequest("GET", "/studio/\(id)/source", keyed: false, timeout: 60)
+            return try makeRequest("GET", "/studio/\(id)/source", keyed: false, timeout: 60)
         case .libraryItem(let id):
-            req = try makeRequest("GET", "/library/items/\(id)/file", keyed: true, timeout: 60)
+            return try makeRequest("GET", "/library/items/\(id)/file", keyed: true, timeout: 60)
         }
+    }
+
+    public func download(
+        _ file: RemoteFile, to destination: URL,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> URL {
+        let req = try urlRequest(for: file)
         // A download task with its own delegate: the task-level delegate of `download(for:)` is
         // never told how many bytes have arrived (found with a loopback server, wave 1). The
         // per-call session copies the injected session's configuration, so stubs still apply.

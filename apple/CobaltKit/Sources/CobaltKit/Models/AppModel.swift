@@ -15,6 +15,10 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     case renditionsLegacy
     /// `.renditions` where the first `setTitle` for item `PrEvIeWitem000008` fails (rename revert path).
     case renameFails
+    /// "keep offline" (CONTRACT-OFFLINE.md): a media kept in full, one kept in part (its video kept, its webp
+    /// server-only), one downloading at 40 %, one that failed (gone), one that cannot be fetched (a plain save
+    /// with no server copy), and Settings numbers for the two tiers.
+    case offline
 }
 
 public struct ServerSummary: Sendable, Equatable {
@@ -37,6 +41,8 @@ public final class AppModel {
     /// "save to a folder" (macOS; the Mac's counterpart of the photos album, Folder/FolderSync.swift):
     /// unavailable on iOS and in previews, which get `FolderSync.preview(_:)`.
     public let folderSync: FolderSync
+    /// "keep offline" (CONTRACT-OFFLINE.md decision 9): the background downloads and their states.
+    public let offlineDownloads: OfflineDownloads
     public internal(set) var capabilities: Capabilities
     public internal(set) var isCheckingServer: Bool = false
     public internal(set) var pipeline: Pipeline           // the home pipeline
@@ -63,11 +69,24 @@ public final class AppModel {
 
     init(
         context: PipelineContext, library: LibraryModel, photosSync: PhotosSync? = nil, folderSync: FolderSync? = nil,
+        offlineDownloads: OfflineDownloads? = nil,
         makeClient: @escaping @MainActor (Settings) -> any CobaltClient
     ) {
         let sync = photosSync ?? PhotosSync.preview(.init(access: .notAsked, enabled: false))
         self.photosSync = sync
-        self.folderSync = folderSync ?? FolderSync.preview(.init(available: false, enabled: false))
+        let folder = folderSync ?? FolderSync.preview(.init(available: false, enabled: false))
+        self.folderSync = folder
+        // Previews and tests fetch in the foreground (no background session); the app passes its own engine.
+        let offline = offlineDownloads ?? OfflineDownloads(
+            store: context.store,
+            queue: OfflineQueue(directory: context.store.root.deletingLastPathComponent().appendingPathComponent("Sync", isDirectory: true)),
+            transport: nil, clock: context.clock, client: { context.client }, isPreview: context.isPreview)
+        offline.markNotNew = { [sync, folder] keys in
+            sync.markNotNew(keys)
+            await folder.markNotNew(keys)
+        }
+        offline.landed = { [sync] in await sync.refresh() }
+        self.offlineDownloads = offline
         context.photosSync = sync
         self.ctx = context
         self.settings = context.settings
@@ -119,8 +138,12 @@ public final class AppModel {
         #if os(macOS)
         folder.observeActivation()
         #endif
+        let offline = OfflineDownloads(
+            store: store, queue: OfflineQueue(directory: AppGroup.directory("Sync")), transport: URLSessionOfflineTransport(),
+            clock: ctx.clock, client: { [unowned ctx] in ctx.client })
         let model = AppModel(
-            context: ctx, library: LibraryModel(context: ctx), photosSync: sync, folderSync: folder, makeClient: factory)
+            context: ctx, library: LibraryModel(context: ctx), photosSync: sync, folderSync: folder,
+            offlineDownloads: offline, makeClient: factory)
         model.telemetry = TelemetryService.live(settings: settings, capabilities: { [unowned model] in model.capabilities })
         fetcher.isActive = { [unowned ctx] in ctx.background.activity.isActive }
         fetcher.serverHoldsRequests = { [unowned model] in model.capabilities.sourceWait }
@@ -151,11 +174,13 @@ public final class AppModel {
     static func makePreview(_ scenario: PreviewScenario, timeScale: Double, clock: any PipelineClock) -> AppModel {
         let ctx = PipelineContext.preview(scenario, timeScale: timeScale, clock: clock)
         let client = ctx.client
-        return AppModel(
+        let model = AppModel(
             context: ctx, library: LibraryModel(context: ctx, seed: PreviewData.libraryPage(now: clock.now())),
             photosSync: PhotosSync.preview(.init(access: .album, enabled: false)),
             folderSync: FolderSync.preview(.init(available: FolderSync.platformHasFolder, enabled: true, saved: 12, waiting: 0, existing: 0)),
             makeClient: { _ in client })
+        if scenario == .offline { model.seedOfflinePreviewStates() }
+        return model
     }
 
     public var serverSummary: ServerSummary {
@@ -254,12 +279,16 @@ public final class AppModel {
     public func pickUpSharedJobs() async {
         defer { liveManager?.foreground() }       // start token, push-started activities, orphans (after a handoff took its run)
         await store.reload()
+        store.startWatching()                      // the visible folder, while cobalt is in front (no-op without one)
         Telemetry.log(.info, .store, "store reloaded", data: ["media": .int(store.media.count), "videos": .int(store.videos.count)])
         takePendingJobs()
         if capabilities.titles { await ctx.titles.flush(client: ctx.client) }      // titles that failed to send (decision 4)
         // Then what the share sheet handed to the background download, then the photos album
         // (CONTRACT-SYNC.md): in this order, so a clip that just landed goes into Photos at once.
         await ctx.originals?.reconcile()
+        // "keep offline" downloads: what arrived is landed, what waits is restarted, what the system lost is started
+        // again (after the store's reload, which just re-read the visible folder).
+        await offlineDownloads.reconcile()
         await photosSync.refresh()
         await photosSync.reconcile()
     }
@@ -317,7 +346,11 @@ public final class AppModel {
     /// The system woke the app for a finished download of one of those sessions
     /// (`.backgroundTask(.urlSession(matching:))`): the files move into the store, then the photos sync runs.
     public func handleBackgroundDownloads(identifier: String) async {
-        await ctx.originals?.handleWake(identifier: identifier)
+        if identifier == OfflineDownloads.sessionIdentifier {
+            await offlineDownloads.handleWake(identifier: identifier)          // "keep offline" (`…bg.offline`)
+        } else {
+            await ctx.originals?.handleWake(identifier: identifier)            // share-sheet originals (`…bg.app`, `…bg.share.*`)
+        }
         await photosSync.refresh()
         await photosSync.reconcile()
     }

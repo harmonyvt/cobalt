@@ -113,7 +113,11 @@ public final class PhotosSync {
             isForeground: isForeground)
         base.access = available ? Self.access(of: library) : .unavailable
         // The app only: every add to the store (a finished download, a refill) runs the sync.
-        store.onAdd = { [weak self] _, _ in
+        store.onAdd = { [weak self] video, origin in
+            // Only a new save is the album's business. A "keep offline" download (an old post kept on this device),
+            // a record rebuilt from a tag and a migrated file are not: they are marked "already there" first, so the
+            // pass below never copies them (CONTRACT-OFFLINE.md decisions 9 and 13).
+            if origin != .save { self?.markNotNew([PhotosKey.of(video)]) }
             Task { @MainActor [weak self] in await self?.reconcile() }
         }
         recount()
@@ -231,6 +235,14 @@ public final class PhotosSync {
         base.access = engine.available ? Self.access(of: engine.library) : .unavailable
         recount()
         revision += 1
+    }
+
+    /// Marks these keys "already there" so no pass copies them: what "keep offline" lands is not a new save, and
+    /// an old library post kept on this iPad must not go to Photos and, through iCloud Photos, to every device.
+    /// An item that already has an entry (done, failed, claimed) keeps it. The manual "save to photos" is unaffected.
+    func markNotNew(_ keys: [String]) {
+        guard let engine, previewStatus == nil else { return }
+        engine.ledger.skipPreexisting(keys, now: engine.clock.now())
     }
 
     // MARK: - The pass

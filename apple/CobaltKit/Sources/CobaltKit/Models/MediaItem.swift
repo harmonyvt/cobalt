@@ -70,6 +70,10 @@ public struct Rendition: Sendable, Equatable, Identifiable {
     var serverFileIDs: [String] { [file?.id, hosted?.id].compactMap { $0 } }
 }
 
+/// How much of a media is kept on this device (CONTRACT-OFFLINE.md decision 3). Cached files do not count: the
+/// cache is plumbing that may leave on its own, and calling such a file "offline" would be a lie.
+public enum MediaOffline: Sendable, Equatable, Comparable { case none, some, all }
+
 /// One media as the owner sees it, everywhere (orbit, library, detail): the device's `StoredMedia`
 /// and the library's `LibraryPost` merged, so a webp made on another device shows on this one's tabs
 /// and a webp made here shows before the library reloads (CONTRACT-MEDIA 1.8, 4.2).
@@ -110,6 +114,14 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
     public var webpCount: Int { renditions.reduce(0) { $0 + ($1.isWebp ? 1 : 0) } }
 
     public var latestAt: Date { renditions.map(\.createdAt).max() ?? .distantPast }
+
+    /// `all` when every rendition (server-only webps included) is kept and its file is here; `some` when at least one
+    /// is; else `none`.
+    public var offline: MediaOffline {
+        let kept = renditions.filter { $0.local?.isOffline == true }.count
+        if kept == 0 { return .none }
+        return kept == renditions.count ? .all : .some
+    }
 
     /// The server holds something of this media: a library file, a hosted link, or a public webp.
     public var hasServerCopy: Bool {

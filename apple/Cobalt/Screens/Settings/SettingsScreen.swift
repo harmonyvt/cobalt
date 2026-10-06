@@ -9,13 +9,15 @@ struct SettingsScreen: View {
 
     @State private var keyError: String?
     @State private var serverError: String?
-    @State private var confirmRemove = false
     @State private var confirmClear = false
     @State private var featuresOpen = false
     /// A limit below what is stored asks first: the choice waits here for the dialog's answer.
     @State private var pendingLimit: StorageLimit?
     @State private var pendingFree: Int64 = 0
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    @Environment(\.openURL) private var openURL
+    #endif
 
     private var settings: CobaltKit.Settings { model.settings }
     private var summary: ServerSummary { model.serverSummary }
@@ -41,12 +43,6 @@ struct SettingsScreen: View {
         .task { await model.photosSync.refresh() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.photosSync.refresh() } }
-        }
-        .confirmationDialog(Copy.removeVideosTitle, isPresented: $confirmRemove, titleVisibility: .visible) {
-            Button(Copy.remove, role: .destructive) { Task { await model.store.dropFilesKeepingPosters() } }
-            Button(Copy.keep, role: .cancel) { settings.keepVideosOnDevice = true }
-        } message: {
-            Text(Copy.removeVideosMessage)
         }
     }
 
@@ -143,18 +139,34 @@ struct SettingsScreen: View {
         #endif
     }
 
-    /// "on this iphone": keep videos, how much, what is stored, and clear (CONTRACT-LIVE.md 4.3).
+    /// "on this iphone" (CONTRACT-OFFLINE decision 11): keep new saves offline, what is offline, what downloads,
+    /// the cache and its limit, and clear the cache. Turning the toggle off deletes nothing: it is a policy for
+    /// new saves.
     private var storageSection: some View {
-        let usage = model.store.usage
+        let usage = model.store.offlineUsage
         let limit = model.store.limitBytes
+        let downloads = model.offlineDownloads.summary
         return Section {
-            Toggle(isOn: Binding(
-                get: { settings.keepVideosOnDevice },
-                set: { newValue in
-                    settings.keepVideosOnDevice = newValue
-                    if !newValue, model.store.usage.count > 0 { confirmRemove = true }
-                })) {
-                Label(Copy.keepVideos, systemImage: Symbol.device)
+            if model.store.canKeep {
+                Toggle(isOn: Binding(get: { settings.keepVideosOnDevice }, set: { settings.keepVideosOnDevice = $0 })) {
+                    Label(Copy.Offline.keepNewSaves, systemImage: Symbol.device)
+                }
+                row(Copy.Offline.rowOffline, Symbol.offlineAll) {
+                    value(Copy.Storage.usage(count: usage.offline.mediaCount, bytes: usage.offline.bytes, limit: nil))
+                        .monospacedDigit()
+                }
+                #if os(iOS)
+                if let url = model.showInFilesURL(nil) {
+                    Button(Copy.Offline.openInFiles, systemImage: Symbol.showInFiles) { openURL(url) }
+                }
+                #endif
+                if downloads.left > 0 {
+                    row(Copy.Offline.rowDownloading, Symbol.keepOffline) {
+                        value(Copy.Offline.queueLine(left: downloads.left, bytes: downloads.bytes, total: downloads.total))
+                            .monospacedDigit()
+                    }
+                    Button(Copy.Offline.stopAll, systemImage: Symbol.stopDownloading) { stopAll() }
+                }
             }
             Picker(selection: Binding(get: { settings.storageLimit }, set: chooseLimit)) {
                 ForEach(StorageLimit.allCases, id: \.self) { choice in
@@ -164,7 +176,6 @@ struct SettingsScreen: View {
                 Label(Copy.Storage.limit, systemImage: Symbol.storage)
             }
             .pickerStyle(.menu)
-            .disabled(!settings.keepVideosOnDevice)
             .confirmationDialog(
                 Copy.Storage.lowerTitle(freeing: pendingFree),
                 isPresented: Binding(get: { pendingLimit != nil }, set: { if !$0 { pendingLimit = nil } }),
@@ -178,32 +189,33 @@ struct SettingsScreen: View {
             }
             VStack(alignment: .leading, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Label(Copy.Storage.stored, systemImage: Symbol.offlineOn)
-                    Text(Copy.Storage.usage(count: usage.count, bytes: usage.bytes, limit: limit))
+                    Label(Copy.Offline.rowCache, systemImage: Symbol.cache)
+                    Text(Copy.Storage.usage(count: usage.cache.mediaCount, bytes: usage.cache.bytes, limit: limit))
                         .font(Font.cobalt(12.5))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                         .padding(.leading, 34)
                 }
                 if let limit, limit > 0 {
-                    ProgressView(value: min(Double(usage.bytes), Double(limit)), total: Double(limit))
+                    ProgressView(value: min(Double(usage.cache.bytes), Double(limit)), total: Double(limit))
                         .progressViewStyle(.linear)
                         .tint(CobaltColor.text)
                         .accessibilityHidden(true)
                 }
             }
-            Button(Copy.Storage.clear, systemImage: Symbol.clearOffline, role: .destructive) { confirmClear = true }
-                .disabled(model.store.videos.isEmpty)
-                .confirmationDialog(Copy.Storage.clearTitle, isPresented: $confirmClear, titleVisibility: .visible) {
-                    Button(Copy.remove, role: .destructive) { Task { await model.store.clearAll() } }
+            .accessibilityElement(children: .combine)
+            Button(Copy.Offline.clearCache, systemImage: Symbol.clearOffline, role: .destructive) { confirmClear = true }
+                .disabled(usage.cache.count == 0)
+                .confirmationDialog(Copy.Offline.clearCacheTitle, isPresented: $confirmClear, titleVisibility: .visible) {
+                    Button(Copy.Offline.clear, role: .destructive) { Task { await model.store.clearCache() } }
                     Button(Copy.keep, role: .cancel) {}
                 } message: {
-                    Text(Copy.Storage.clearMessage)
+                    Text(Copy.Offline.clearCacheMessage)
                 }
         } header: {
             header(Copy.Storage.group)
         } footer: {
-            footer(Copy.Storage.footer)
+            footer(Copy.Offline.footer)
         }
     }
 
@@ -276,6 +288,16 @@ struct SettingsScreen: View {
         }
     }
 
+    /// "stop all": every media with a download running or queued. CONTRACT-OFFLINE section 5 pins no stop-all, so
+    /// this goes through `stopDownloading(_:)` for each media the model knows (the device's, and the library's).
+    private func stopAll() {
+        var seen = Set<String>()
+        let items = model.store.media.map { model.mediaItem(for: $0) } + model.library.posts.map { model.mediaItem(for: $0) }
+        for item in items where seen.insert(item.id).inserted {
+            if OfflinePlan(item: item, model: model).active { model.stopDownloading(item) }
+        }
+    }
+
     private func applyLimit(_ choice: StorageLimit) {
         settings.storageLimit = choice
         Task { await model.store.setLimit(choice.bytes) }
@@ -333,6 +355,9 @@ private struct SettingsRowLabelStyle: LabelStyle {
 }
 #Preview("settings · legacy fork") {
     PreviewHost(.legacyFork, tab: .settings) { SettingsScreen(model: $0) }
+}
+#Preview("settings · offline") {
+    PreviewHost(.offline, tab: .settings) { SettingsScreen(model: $0) }
 }
 #Preview("settings · empty store") {
     PreviewHost(.emptyOrbit, tab: .settings) { SettingsScreen(model: $0) }

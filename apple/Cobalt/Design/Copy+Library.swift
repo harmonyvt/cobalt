@@ -90,6 +90,7 @@ extension Copy.Library2 {
         case .resolution: return sortResolution
         case .files: return sortFiles
         case .visibility: return sortPublic
+        case .offline: return Copy.Offline.column
         }
     }
 
@@ -100,6 +101,7 @@ extension Copy.Library2 {
         case .publicOnly: return showPublic
         case .privateOnly: return showPrivate
         case .uploads: return showUploads
+        case .offline: return Copy.Offline.filter
         }
     }
 

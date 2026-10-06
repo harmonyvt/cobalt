@@ -163,6 +163,8 @@ enum PreviewData {
         switch scenario {
         case .happy, .renditions, .renditionsLegacy:
             return (orbit(now: now) + renditionSeeds(now: now)).sorted { $0.createdAt > $1.createdAt }
+        case .offline:
+            return PreviewOffline.seeds(now: now)
         default:
             // `.renameFails` is `.renditions` with a rename that fails once
             return scenario.failsRenames ? (orbit(now: now) + renditionSeeds(now: now)).sorted { $0.createdAt > $1.createdAt } : orbit(now: now)

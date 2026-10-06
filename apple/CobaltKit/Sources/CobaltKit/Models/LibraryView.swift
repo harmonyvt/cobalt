@@ -5,7 +5,7 @@ import Foundation
 
 public enum LibraryViewMode: String, Sendable, CaseIterable { case mosaic, table }
 
-public enum LibrarySortKey: String, Sendable, CaseIterable { case date, title, length, size, resolution, files, visibility }
+public enum LibrarySortKey: String, Sendable, CaseIterable { case date, title, length, size, resolution, files, visibility, offline }
 
 public struct LibrarySort: Sendable, Equatable {
     public var key: LibrarySortKey
@@ -30,7 +30,7 @@ public struct LibrarySort: Sendable, Equatable {
     }
 }
 
-public enum LibraryShow: String, Sendable, CaseIterable { case everything, publicOnly, privateOnly, uploads }
+public enum LibraryShow: String, Sendable, CaseIterable { case everything, publicOnly, privateOnly, uploads, offline }
 
 /// `UserDefaults` keys of the remembered view state.
 enum LibraryDefaults {
@@ -58,6 +58,8 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
     public let date: Date                // item.latestAt
     public let faceAspect: Double        // h / w of the face, 16:9 (landscape) when unknown
     public let isUpload: Bool
+    /// How much of the media is kept on this device (`MediaItem.offline`).
+    public let offline: MediaOffline
 
     public init(item: MediaItem) {
         self.item = item
@@ -67,6 +69,7 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
         isUpload = item.post.map { _ in postService == nil || postService == "" || postService == "upload" }
             ?? (item.service == nil)
         service = isUpload ? "file" : (item.service ?? "file")
+        offline = item.offline
 
         let source = item.video ?? item.face
         let duration = source.duration ?? item.face.duration ?? item.post?.duration
@@ -126,6 +129,7 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
         case .resolution: order = compare(a.pixels, b.pixels)
         case .files: order = compare(a.fileCount, b.fileCount)
         case .visibility: order = compare(a.visibilityRank, b.visibilityRank)
+        case .offline: order = compare(a.offline, b.offline)
         }
         if order != .orderedSame { return sort.ascending ? order == .orderedAscending : order == .orderedDescending }
         if sort.key != .date, a.date != b.date { return a.date > b.date }
@@ -142,6 +146,7 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
         case .publicOnly: isPublic
         case .privateOnly: !isPublic
         case .uploads: isUpload
+        case .offline: offline != .none
         }
     }
 

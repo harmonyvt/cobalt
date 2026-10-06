@@ -189,7 +189,7 @@ private struct LibraryContent: View {
         ToolbarItem(placement: .navigation) { LibraryViewSwitcher(library: library) }
         #endif
         ToolbarItemGroup(placement: .primaryAction) {
-            LibrarySortMenu(library: library)
+            LibrarySortMenu(library: library, offersOffline: model.store.canKeep)
             #if os(macOS)
             Button(Copy.Library2.refresh, systemImage: Symbol.Library.refresh) { Task { await controller.refresh() } }
                 .keyboardShortcut("r", modifiers: .command)

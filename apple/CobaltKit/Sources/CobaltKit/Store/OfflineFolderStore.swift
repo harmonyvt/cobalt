@@ -55,12 +55,14 @@ extension OfflineStore {
         let wanted = Set(ids)
         guard !wanted.isEmpty else { return [] }
         if keep {
+            // a store nobody promotes from has no kept files (`canKeep`): keeping is a no-op there, and nothing is downloaded
+            guard canKeep else { return [] }
             guard let merged = try? Self.mutate(root: root, { records in
                 for i in records.indices where wanted.contains(records[i].id) { records[i].keep = true }
             }) else { return [] }
             adopt(merged)
             if visibleRoot != nil { await promote(only: wanted) }
-            let have = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0.hasFile) })
+            let have = Dictionary(records.map { ($0.id, $0.hasFile) }, uniquingKeysWith: { first, _ in first })
             return ids.filter { have[$0] == false }
         }
         for id in ids { await removeOfflineCopy(id) }
@@ -79,6 +81,9 @@ extension OfflineStore {
         let (hidden, ops, stamp) = (root, ops, now())
         let result = await OfflineFolderGate.shared.exclusive {
             await OfflineFolder.scan(hiddenRoot: hidden, visibleRoot: visibleRoot, now: stamp, ops: ops)
+        }
+        if result.report.indexUnreadable {
+            return result.report                          // already in telemetry (once), with a copy of the index beside it
         }
         if result.report.rootMissing {
             Telemetry.log(.warn, .store, "offline scan root missing")

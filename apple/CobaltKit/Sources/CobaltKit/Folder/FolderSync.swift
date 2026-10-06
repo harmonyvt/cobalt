@@ -131,7 +131,13 @@ public final class FolderSync {
         let previous = store.onAdd
         store.onAdd = { [weak self] video, origin in
             previous?(video, origin)
-            Task { @MainActor [weak self] in await self?.reconcile() }
+            Task { @MainActor [weak self] in
+                // Only a new save is copied. A "keep offline" download, a rebuilt record and a migrated file are
+                // marked "already there" first (CONTRACT-OFFLINE.md decision 9): keeping an old post offline on
+                // the Mac must not fill the folder with it.
+                if origin != .save { await self?.markNotNew([PhotosKey.of(video)]) }
+                await self?.reconcile()
+            }
         }
         Task { @MainActor [weak self] in
             await self?.refresh()
@@ -252,6 +258,23 @@ public final class FolderSync {
         await recount()
         await reconcile()
         return .chosen(existing: existing)
+    }
+
+    /// Marks these keys "already there" in the current destination so no pass copies them (what "keep offline" lands
+    /// is not a new save). An item that already has an entry keeps it. When the destination has never been seen,
+    /// what cobalt already holds is marked first, as the first pass would have done (the first-run offer must not
+    /// be lost to this call creating the destination's section).
+    func markNotNew(_ keys: [String]) async {
+        guard let engine, engine.available, previewStatus == nil, !keys.isEmpty else { return }
+        let worker = currentWorker(engine)
+        let ledger = engine.ledger
+        let videos = engine.store.videos
+        let launchedAt = engine.launchedAt
+        let now = engine.clock.now()
+        await Task.detached(priority: .utility) {
+            if !ledger.hasSection(worker.id) { worker.markExisting(videos, before: launchedAt) }
+            ledger.skipPreexisting(worker.id, keys, path: worker.path, now: now)
+        }.value
     }
 
     /// Re-reads the ledger: foreground, and back to Settings.

@@ -15,12 +15,14 @@ extension PipelineContext {
         let client = PreviewClient(scenario: scenario, timeScale: timeScale, clock: clock)
         let tools = PreviewMediaTools(clock: clock, clip: PreviewData.clip(for: scenario))
         // stamps come from the preview clock, like the seeds (a virtual clock in tests, the real one in previews)
+        // `.offline` has a visible folder (a temp "Documents"), so kept files are read back like they are on a phone
         let store = OfflineStore(
             root: dir.appendingPathComponent("Videos", isDirectory: true), tools: tools, defaults: defaults,
-            now: { clock.now() })
+            now: { clock.now() }, visibleRoot: scenario == .offline ? dir.appendingPathComponent("Documents", isDirectory: true) : nil)
         if scenario != .emptyOrbit {
             store.seed(PreviewData.seeds(for: scenario, now: clock.now()))
             store.usageBase = PreviewData.usage
+            if scenario == .offline { store.seedOfflinePreview() }
         }
         let jobs = SharedJobStore(directory: dir.appendingPathComponent("Jobs", isDirectory: true))
         return PipelineContext(

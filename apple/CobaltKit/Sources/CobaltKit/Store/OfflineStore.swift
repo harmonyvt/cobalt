@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Observation
 import UniformTypeIdentifiers
 
@@ -155,6 +156,14 @@ public final class OfflineStore {
     /// Mac (wave 1), where kept files wait in `files/`. Tests inject a temp directory.
     @ObservationIgnored public let visibleRoot: URL?
     @ObservationIgnored let ops: any OfflineFileOps
+    /// Whether a kept file in this store can ever reach the visible folder: this process has one, or it is an
+    /// extension whose store the app also reads (the app group), where the app promotes. A store nobody
+    /// promotes from (the extension with no app group, the Mac until wave M) takes nothing as kept: kept files
+    /// are never evicted, so every one would stay forever (review fixes S2, S3). Its saves are cache.
+    /// `shared()` decides it from the process (`OfflineFolder.storeIsSharedWithApp`); a store built directly (tests,
+    /// previews) says so with `sharedWithApp` and defaults to a store that can keep.
+    /// The UI hides every keep-offline control and offline state when this is false.
+    @ObservationIgnored public let canKeep: Bool
     /// Where `offline.json` (the migration's marker) goes; nil in tests.
     @ObservationIgnored let syncDirectory: URL?
     /// Whether another part of the app still holds this studio session (a live share job or a pending
@@ -198,10 +207,11 @@ public final class OfflineStore {
     init(
         root: URL, tools: any MediaTools, defaults: UserDefaults = AppGroup.defaults(),
         now: @escaping @Sendable () -> Date = { Date() }, visibleRoot: URL? = nil,
-        ops: any OfflineFileOps = SystemFileOps(), syncDirectory: URL? = nil
+        ops: any OfflineFileOps = SystemFileOps(), syncDirectory: URL? = nil, sharedWithApp: Bool = true
     ) {
         self.root = root
         self.visibleRoot = visibleRoot
+        self.canKeep = visibleRoot != nil || sharedWithApp
         self.ops = ops
         self.syncDirectory = syncDirectory
         self.tools = tools
@@ -218,7 +228,7 @@ public final class OfflineStore {
         if let s = sharedInstance { return s }
         let s = OfflineStore(
             root: AppGroup.directory("Videos"), tools: SystemMediaTools(), visibleRoot: OfflineFolder.defaultVisibleRoot(),
-            syncDirectory: AppGroup.directory("Sync"))
+            syncDirectory: AppGroup.directory("Sync"), sharedWithApp: OfflineFolder.storeIsSharedWithApp())
         s.sessionIsHeld = { session in
             if PendingOriginals.shared().isLive(session: session) { return true }
             return SharedJobStore.shared().all().contains { job in
@@ -298,11 +308,12 @@ public final class OfflineStore {
     /// "clear cache" is `clearCache()`.
     public func clearAll() async {
         let keep = pinnedIDs
-        await purgeVisible(of: records.filter { !keep.contains($0.id) })
+        let refused = await purgeVisible(of: records.filter { !keep.contains($0.id) })      // a file not provably its own stays
+        let stay = keep.union(refused)
         var gone: [Record] = []
         guard let merged = try? Self.mutate(root: root, { records in
-            gone = records.filter { !keep.contains($0.id) }
-            records.removeAll { !keep.contains($0.id) }
+            gone = records.filter { !stay.contains($0.id) }
+            records.removeAll { !stay.contains($0.id) }
         }) else { return }
         Self.delete(
             Eviction(
@@ -382,6 +393,7 @@ public final class OfflineStore {
         mediaID: String? = nil, clip: WebpClip? = nil, keep: Bool, createdAt: Date? = nil,
         origin: AddOrigin = .save
     ) async throws -> StoredVideo {
+        let keep = keep && canKeep
         let fm = FileManager.default
         let id = UUID().uuidString.lowercased()
         let ext = file.pathExtension.isEmpty ? (kind == .webp ? "webp" : "mp4") : file.pathExtension.lowercased()
@@ -541,6 +553,7 @@ public final class OfflineStore {
     public func attach(
         file: URL, to id: String, move: Bool, keep: Bool, origin: AddOrigin = .save
     ) async throws -> StoredVideo {
+        let keep = keep && canKeep
         let fm = FileManager.default
         guard let existing = Self.readRecords(root: root).first(where: { $0.id == id }) else {
             Telemetry.log(.warn, .store, "store attach failed", data: ["step": "lookup", "reason": "not found"])
@@ -699,7 +712,7 @@ public final class OfflineStore {
     }
 
     public func remove(_ id: String) async {
-        await purgeVisible(of: records.filter { $0.id == id })
+        guard await purgeVisible(of: records.filter { $0.id == id }).isEmpty else { return }   // a file not provably its own stays
         var removed: Record?
         guard let records = try? Self.mutate(root: root, { records in
             guard let index = records.firstIndex(where: { $0.id == id }) else { return }
@@ -722,7 +735,7 @@ public final class OfflineStore {
     public func removeMedia(_ id: String) async -> Bool {
         let pinned = pinnedIDs
         let current = records.filter { $0.media == id }
-        if !current.contains(where: { pinned.contains($0.id) }) { await purgeVisible(of: current) }
+        if !current.contains(where: { pinned.contains($0.id) }), !(await purgeVisible(of: current)).isEmpty { return false }
         var gone: [Record] = []
         var blocked = false
         guard let merged = try? Self.mutate(root: root, { records in
@@ -826,49 +839,32 @@ public final class OfflineStore {
     /// wish to keep it is cleared all the same) and an entry in use.
     @discardableResult
     public func removeOfflineCopy(_ id: String) async -> Bool {
-        guard !isInUse(id), let current = records.first(where: { $0.id == id }) else { return false }
-        if let path = current.visiblePath {
-            guard let visibleRoot else { return false }               // an extension never touches the visible folder
-            // The file goes first: a record without a path but with a tagged file still in the root would be
-            // "restored" by the next scan.
-            let ops = ops
-            let removed = await OfflineFolderGate.shared.exclusive {
-                await OfflineFolder.removeVisibleOffMain(root: visibleRoot, path: path, ops: ops)
-            }
-            guard removed else { return false }
+        guard !isInUse(id), records.contains(where: { $0.id == id }) else { return false }
+        // Both tiers run inside the gate (a promotion's move and its index write are one step to this), and the
+        // visible file goes by identity, not by the path remembered (review fixes B1, S5).
+        let (hidden, visible, ops, stamp) = (root, visibleRoot, ops, now())
+        let outcome = await OfflineFolderGate.shared.exclusive {
+            await OfflineFolder.removeCopy(id: id, hiddenRoot: hidden, visibleRoot: visible, ops: ops, now: stamp)
         }
-        var name: String?
-        var had = false
-        guard let merged = try? Self.mutate(root: root, { records in
-            guard let i = records.firstIndex(where: { $0.id == id }) else { return }
-            had = records[i].fileName != nil || records[i].visiblePath != nil
-            name = records[i].fileName
-            records[i].fileName = nil
-            records[i].visiblePath = nil
-            records[i].givenName = nil
-            records[i].keep = false
-        }) else { return false }
-        // The index is written first; only then does the cache file go (a reader never sees a record
-        // pointing at a deleted file).
-        if let name { Self.delete(Eviction(files: [name]), root: root) }
-        adopt(merged)
-        return had
+        if let written = outcome.records { adopt(written) }
+        return outcome.had && !outcome.refused
     }
 
     /// The old name of `removeOfflineCopy(_:)`.
     @discardableResult
     public func evict(_ id: String) async -> Bool { await removeOfflineCopy(id) }
 
-    /// Deletes the visible files of `gone` (a record is being removed for good). Before the index write, never
-    /// after: a tagged file with no record would be rebuilt by the next scan.
-    private func purgeVisible(of gone: [Record]) async {
-        guard let visibleRoot else { return }
-        let paths = gone.compactMap(\.visiblePath)
-        guard !paths.isEmpty else { return }
-        let ops = ops
-        _ = await OfflineFolderGate.shared.exclusive {
-            for path in paths { _ = await OfflineFolder.removeVisibleOffMain(root: visibleRoot, path: path, ops: ops) }
-            return true
+    /// Deletes the visible files of `gone` (a record is being removed for good), each by identity (the file must carry
+    /// the record's own tag; see `OfflineFolder.removeVisibleChecked`). Before the index write, never after: a
+    /// tagged file with no record would be rebuilt by the next scan. Returns the ids whose file could not be
+    /// proved theirs, which the caller leaves in place.
+    private func purgeVisible(of gone: [Record]) async -> Set<String> {
+        guard let visibleRoot else { return [] }
+        let ids = gone.filter { $0.visiblePath != nil }.map(\.id)
+        guard !ids.isEmpty else { return [] }
+        let (hidden, ops, stamp) = (root, ops, now())
+        return await OfflineFolderGate.shared.exclusive {
+            await OfflineFolder.purge(ids: ids, hiddenRoot: hidden, visibleRoot: visibleRoot, ops: ops, now: stamp)
         }
     }
 
@@ -896,6 +892,7 @@ public final class OfflineStore {
         Self.purgeInbox(root: root, olderThan: Self.inboxLifetime)
         Self.purgeOrphanPreviews(
             root: root, referenced: Set(records.flatMap { $0.previewNames ?? [] }), olderThan: Self.inboxLifetime)
+        if !canKeep { releaseUnpromotableKeeps() }
         if visibleRoot != nil {
             // The scan comes first: a file the last run moved but did not get to index (section 2.3) is adopted
             // by its tag here, and must not be moved a second time.
@@ -904,6 +901,16 @@ public final class OfflineStore {
             await promote(only: nil, respectHolds: true)
         }
         await enforceLimit()
+    }
+
+    /// A store nobody promotes from (see `canKeep`) that an earlier build filled with kept files: they are cache
+    /// now, so the limit governs them again.
+    private func releaseUnpromotableKeeps() {
+        guard records.contains(where: { $0.keep == true && $0.visiblePath == nil }) else { return }
+        guard let merged = try? Self.mutate(root: root, { records in
+            for i in records.indices where records[i].keep == true && records[i].visiblePath == nil { records[i].keep = false }
+        }) else { return }
+        adopt(merged)
     }
 
     func adopt(_ merged: [Record]) {
@@ -1332,13 +1339,46 @@ public final class OfflineStore {
 
     nonisolated static func indexURL(root: URL) -> URL { root.appendingPathComponent("index.json") }
 
-    nonisolated static func decode(_ url: URL) -> [Record] {
+    /// The index exists but this build cannot decode it (a later build's new `Kind`, a torn write). It is never
+    /// written over and never read as empty: every caller that would write refuses, and a copy is kept beside it
+    /// (review fix S1).
+    struct IndexUnreadable: Error, Equatable { var bytes: Int }
+
+    /// Missing and empty are a store with no records yet; anything else that does not decode is `IndexUnreadable`.
+    nonisolated static func decodeChecked(_ url: URL, root: URL) throws -> [Record] {
         guard let data = try? Data(contentsOf: url), !data.isEmpty else { return [] }
-        return (try? JSONDecoder().decode([Record].self, from: data)) ?? []
+        do { return try JSONDecoder().decode([Record].self, from: data) } catch {
+            preserveUnreadable(data, root: root, error: error)
+            throw IndexUnreadable(bytes: data.count)
+        }
+    }
+
+    private nonisolated static let reportedUnreadable = Mutex(Set<String>())
+
+    /// Keeps the bytes of an index that cannot be decoded as `index.unreadable-<date>-<fingerprint>.json` (once per
+    /// content) and says so in telemetry (once per process per content).
+    private nonisolated static func preserveUnreadable(_ data: Data, root: URL, error: any Error) {
+        var hash: UInt64 = 0xcbf29ce484222325                                   // FNV-1a: a name for the content
+        for byte in data { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
+        let fingerprint = String(hash, radix: 16).prefix(8)
+        let stamp = ISO8601DateFormatter().string(from: Date()).prefix(10)
+        let existing = ((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [])
+            .contains { $0.hasPrefix("index.unreadable-") && $0.hasSuffix("-\(fingerprint).json") }
+        if !existing {
+            try? data.write(to: root.appendingPathComponent("index.unreadable-\(stamp)-\(fingerprint).json"), options: .atomic)
+        }
+        let first = reportedUnreadable.withLock { $0.insert(String(fingerprint)).inserted }
+        if first {
+            var info = Telemetry.errorData(error)
+            info["bytes"] = .int(data.count)
+            info["root"] = .string(AppGroup.location.kind.rawValue)
+            Telemetry.log(.error, .store, "store index unreadable", data: info)
+        }
     }
 
     /// Reads, lets `body` change the records, and writes them back, all under one coordinated
-    /// write so the app and the extension never lose each other's entries.
+    /// write so the app and the extension never lose each other's entries. Throws `IndexUnreadable`, writing
+    /// nothing, when the index is there and cannot be decoded.
     ///
     /// `nonisolated`: the new folder work (scan, moves) writes the index from `@concurrent` hops. Every write also
     /// holds the invariant `visiblePath != nil` implies `keep`.
@@ -1355,13 +1395,13 @@ public final class OfflineStore {
         var failure: Error?
         var coordination: NSError?
         NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: url, options: .forMerging, error: &coordination) { u in
-            var records = decode(u)
-            // Every coordinated write first gives a legacy index its media ids (deterministic, so the
-            // app and the extension agree), then applies the caller's change.
-            _ = assignLegacyMediaIDs(&records)
-            body(&records)
-            for i in records.indices where records[i].visiblePath != nil && records[i].keep != true { records[i].keep = true }
             do {
+                var records = try decodeChecked(u, root: root)
+                // Every coordinated write first gives a legacy index its media ids (deterministic, so the
+                // app and the extension agree), then applies the caller's change.
+                _ = assignLegacyMediaIDs(&records)
+                body(&records)
+                for i in records.indices where records[i].visiblePath != nil && records[i].keep != true { records[i].keep = true }
                 try JSONEncoder().encode(records).write(to: u, options: .atomic)
                 result = records
             } catch {
@@ -1369,19 +1409,30 @@ public final class OfflineStore {
             }
         }
         if let error = coordination ?? failure {
-            Telemetry.log(.error, .store, "store index write failed", data: failureData(step: coordination != nil ? "coordinate" : "write", error))
+            if !(error is IndexUnreadable) {
+                Telemetry.log(.error, .store, "store index write failed", data: failureData(step: coordination != nil ? "coordinate" : "write", error))
+            }
             throw error
         }
         return result
     }
 
-    nonisolated static func readRecords(root: URL) -> [Record] {
+    /// The records, or `IndexUnreadable` when the index is there and cannot be decoded.
+    nonisolated static func readRecordsChecked(root: URL) throws -> [Record] {
         var out: [Record] = []
+        var failure: Error?
         var coordination: NSError?
         NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: indexURL(root: root), options: [], error: &coordination) { u in
-            out = decode(u)
+            do { out = try decodeChecked(u, root: root) } catch { failure = error }
         }
+        if let failure { throw failure }
         return out
+    }
+
+    /// The records; an index that cannot be decoded reads as empty here (callers that would write go through
+    /// `mutate`, which refuses, and the scan checks `readRecordsChecked` first).
+    nonisolated static func readRecords(root: URL) -> [Record] {
+        (try? readRecordsChecked(root: root)) ?? []
     }
 
     /// The index with entries whose file or poster has vanished (a container restore, a manual

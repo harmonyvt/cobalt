@@ -1,8 +1,9 @@
 import CobaltKit
 import Foundation
 
-/// Copy for the Live Activity (CONTRACT-LIVE.md 2.7, 2.8), the offline-storage settings (4.3) and the
-/// detail's offline copy. All lowercase. Nested namespaces in their own file so this lane never
+/// Copy for the Live Activity (CONTRACT-LIVE.md 2.7, 2.8) and the base of the offline-storage settings (4.3) and
+/// the detail's offline copy (CONTRACT-OFFLINE retired "download again", "clear offline copies" and the keep-off
+/// confirm; the new words are in `Copy+Offline.swift`). All lowercase. Nested namespaces in their own file so this lane never
 /// edits `Copy.swift`; compiled into the widget extension too. Marked **new** unless the app
 /// already said it (`Copy.fetching`, `Copy.waking`, `Copy.uploading`, `Copy.savingPrivately`,
 /// `Copy.reading`, `Copy.decoding`, `Copy.packing`, `Copy.makingWebp`, `Copy.webpReady`,
@@ -99,7 +100,6 @@ extension Copy {
     enum Storage {
         /// Section header: "on this iphone".
         static var group: String { "on this \(Copy.device)" }                                // new
-        static let limit = "storage limit"                                                    // new
         static let noLimit = "no limit"                                                       // new
         static func limitName(_ l: StorageLimit) -> String {
             switch l {
@@ -126,29 +126,23 @@ extension Copy {
             return "\(head) of \(size(limit))"
         }
 
-        static let stored = "stored here"
-        static let clear = "clear offline copies"                                            // new (CONTRACT-LIVE.md 4.3 says "clear videos on this iphone")
-        static var clearTitle: String { "remove every video kept on this \(Copy.device)?" }  // new
-        static let clearMessage = "your server keeps its copies."                             // new
+        /// The cache limit's picker row. Offline (kept) videos never count against it (CONTRACT-OFFLINE decision 4).
+        static let limit = "cache limit"
+        /// The confirm of a lower cache limit: only cached videos go; the kept ones stay.
         static func lowerTitle(freeing bytes: Int64) -> String {
-            "this removes about \(size(bytes)) of the oldest videos from this \(Copy.device)."   // new
+            "this clears about \(size(bytes)) of the oldest cached videos from this \(Copy.device)."   // new
         }
-        static var footer: String {
-            "when it's full, the oldest videos leave this \(Copy.device) first. the server keeps them, and they download again when you open them."   // new
-        }
+        // The rest of the settings section (the toggle, the rows, clear cache, the footer) is in `Copy+Offline.swift`.
     }
 
     enum Offline {
         static var onDevice: String { "on this \(Copy.device)" }                              // new
         static var missing: String { "not on this \(Copy.device)" }                           // new
         static let removeCopy = "remove offline copy"                                         // new
-        static var removeTitle: String { "remove this video from this \(Copy.device)?" }     // new
-        static let removeMessage = "the server keeps its copy, and it downloads again when you open it."   // new
-        static let downloadAgain = "download again"                                           // new
         static let downloading = "downloading…"                                               // new
         static let downloadFailed = "couldn't download that. try again."                      // new
         static let gone = "the server no longer has this video."                              // new
-        /// Why "download again" failed: the server lost it, it can't be reached, or anything else.
+        /// Why a download failed: the server lost it, it can't be reached, or anything else.
         static func failure(_ f: PipelineFailure) -> String {
             switch f {
             case .expired: return gone
@@ -157,5 +151,6 @@ extension Copy {
             }
         }
         static func bytes(_ n: Int64) -> String { Copy.Storage.size(n) }
+        // Keep offline, stop downloading, the confirms, the status lines and the settings rows are in `Copy+Offline.swift`.
     }
 }

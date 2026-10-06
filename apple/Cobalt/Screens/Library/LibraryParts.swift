@@ -237,9 +237,10 @@ struct LibraryTitleText: View {
     }
 }
 
-/// The `webp ×3` capsule and the public-link dot of a list row.
+/// The `webp ×3` capsule, the offline mark and the public-link dot of a list row.
 struct LibraryRowBadges: View {
     let row: LibraryRow
+    let model: AppModel
 
     var body: some View {
         HStack(spacing: 6) {
@@ -252,6 +253,7 @@ struct LibraryRowBadges: View {
                     .background(Capsule().fill(CobaltColor.text))
                     .fixedSize()
             }
+            OfflineBadge(item: row.item, model: model, style: .row)
             Image(systemName: row.isPublic ? Symbol.Library.isPublic : Symbol.Library.isPrivate)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -259,3 +261,216 @@ struct LibraryRowBadges: View {
         .accessibilityHidden(true)
     }
 }
+
+// MARK: - offline (CONTRACT-OFFLINE decision 11)
+
+/// What the library draws for one media's offline state. `none` and `cached` draw nothing, so the default stays
+/// quiet: the cache is plumbing, and a file that may leave on its own is not "offline".
+enum OfflineMark: Equatable {
+    case quiet
+    case partly
+    case kept
+    /// A download is running; the fraction is nil while the total is unknown.
+    case downloading(Double?)
+    /// Queued, with no network yet.
+    case waiting
+    case failed
+
+    /// A download beats a failure, a failure beats a wait, and a wait beats the settled state.
+    @MainActor
+    init(item: MediaItem, model: AppModel) {
+        let state = model.offlineState(of: item)
+        let each = item.renditions.map { model.offlineState(of: $0) }
+        // the item's `downloading` is also set while a rendition only waits, so look at the renditions
+        let running = each.contains { if case .downloading = $0 { return true } else { return false } }
+        if running, let progress = state.downloading {
+            self = .downloading(OfflineWords.fraction(progress))
+        } else if state.failed {
+            self = .failed
+        } else if each.contains(.waiting) {
+            self = .waiting
+        } else {
+            switch state.offline {
+            case .all: self = .kept
+            case .some: self = .partly
+            case .none: self = .quiet
+            }
+        }
+    }
+
+    var isVisible: Bool { self != .quiet }
+
+    /// The glyph of the settled states; the ring (a download) and the wait draw their own.
+    var symbol: String? {
+        switch self {
+        case .kept: return Symbol.offlineAll
+        case .partly: return Symbol.offlineSome
+        case .failed: return Symbol.offlineFailed
+        case .waiting: return Symbol.offlineWaiting
+        case .quiet, .downloading: return nil
+        }
+    }
+
+    /// VoiceOver: `offline`, `partly offline`, `downloading, 40 percent`, `couldn't download`.
+    var spoken: String? {
+        switch self {
+        case .quiet: return nil
+        case .kept: return Copy.Offline.a11yAll
+        case .partly: return Copy.Offline.a11ySome
+        case .failed: return Copy.Offline.a11yFailed
+        case .waiting: return Copy.Offline.a11yWaiting
+        case .downloading(let fraction): return Copy.Offline.a11yDownloading(percent: fraction.map { Int(($0 * 100).rounded()) })
+        }
+    }
+
+    /// The table cell's word.
+    var cell: String? {
+        switch self {
+        case .quiet: return nil
+        case .kept: return Copy.Offline.cellAll
+        case .partly: return Copy.Offline.cellSome
+        case .failed: return Copy.Offline.cellFailed
+        case .waiting: return Copy.Offline.cellWaiting
+        case .downloading(let fraction): return fraction.map { "\(Int(($0 * 100).rounded()))%" } ?? Copy.Offline.cellWaiting
+        }
+    }
+}
+
+/// A determinate ring: the track, and the part done from 12 o'clock. With no total a quarter turn, still.
+struct OfflineRing: View {
+    let fraction: Double?
+    let size: CGFloat
+    let ink: Color
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(ink.opacity(0.3), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: max(0.04, fraction ?? 0.25))
+                .stroke(ink, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The offline badge of a media: on a tile a 20 pt dark disc beside the link dot (the same family as the other
+/// badges), in a list row a quiet glyph, and nothing at all while nothing is kept. The download is a 14 pt ring.
+/// A view of its own so a progress tick redraws this and not the tile.
+struct OfflineBadge: View {
+    enum Style { case tile, row }
+
+    let item: MediaItem
+    let model: AppModel
+    var style: Style = .tile
+
+    var body: some View {
+        let mark = OfflineMark(item: item, model: model)
+        if model.store.canKeep, mark.isVisible {
+            switch style {
+            case .tile: tile(mark)
+            case .row: row(mark)
+            }
+        }
+    }
+
+    private func tile(_ mark: OfflineMark) -> some View {
+        glyph(mark, size: 14, ink: mark == .failed ? Self.failedInk : CobaltColor.badgeInk)
+            .frame(width: 20, height: 20)
+            .background(CobaltColor.badgeBack, in: Circle())
+            .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+    }
+
+    private func row(_ mark: OfflineMark) -> some View {
+        glyph(mark, size: 12, ink: mark == .failed ? CobaltColor.errorText : Color.secondary)
+    }
+
+    @ViewBuilder
+    private func glyph(_ mark: OfflineMark, size: CGFloat, ink: Color) -> some View {
+        if case .downloading(let fraction) = mark {
+            OfflineRing(fraction: fraction, size: size, ink: ink)
+        } else if let symbol = mark.symbol {
+            Image(systemName: symbol).font(.system(size: size, weight: .regular)).foregroundStyle(ink)
+        }
+    }
+
+    /// Light red that holds on the badge's dark disc in either appearance.
+    private static let failedInk = Color(hex: 0xff5c6c)
+}
+
+/// The table's `offline` cell: the badge's glyph and a word, empty while nothing is kept.
+struct OfflineCell: View {
+    let item: MediaItem
+    let model: AppModel
+
+    var body: some View {
+        let mark = OfflineMark(item: item, model: model)
+        if model.store.canKeep, let word = mark.cell {
+            HStack(spacing: 5) {
+                OfflineBadge(item: item, model: model, style: .row)
+                Text(word)
+                    .font(CobaltType.caption)
+                    .foregroundStyle(mark == .failed ? CobaltColor.errorText : Color.secondary)
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(mark.spoken ?? word)
+        }
+    }
+}
+
+/// The confirm of "remove offline copy" from a context menu (a menu cannot hold a dialog, so the tile, the list
+/// and the table do): the server keeps a copy, or the file here is the only one.
+struct OfflineRemoveConfirm: ViewModifier {
+    @Binding var item: MediaItem?
+    let model: AppModel
+
+    private func onlyCopy(_ item: MediaItem?) -> Bool {
+        item?.renditions.contains { rendition in
+            if case .offline = model.offlineState(of: rendition) { return model.isOnlyCopy(rendition) }
+            return false
+        } ?? false
+    }
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            OfflineWords.removeTitle(onlyCopy: onlyCopy(item)),
+            isPresented: Binding(get: { item != nil }, set: { if !$0 { item = nil } }),
+            titleVisibility: .visible, presenting: item
+        ) { asked in
+            Button(Copy.remove, role: .destructive) { Task { await model.removeOfflineCopy(asked) } }
+            Button(Copy.keep, role: .cancel) {}
+        } message: { asked in
+            Text(OfflineWords.removeMessage(onlyCopy: onlyCopy(asked)))
+        }
+    }
+}
+
+extension View {
+    func offlineRemoveConfirm(_ item: Binding<MediaItem?>, model: AppModel) -> some View {
+        modifier(OfflineRemoveConfirm(item: item, model: model))
+    }
+}
+
+#if DEBUG
+// The offline badge and column on `AppModel.preview(.offline)`: one media kept, one partly, one downloading at 40 %,
+// one that failed, one waiting.
+#Preview("library · offline, mosaic", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.offline, tab: .library) { model in
+        NavigationStack { LibraryScreen(model: model, tier: .compact) }
+    }
+}
+#Preview("library · offline, list", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.offline, tab: .library) { model in
+        let _ = { model.library.viewMode = .table }()
+        NavigationStack { LibraryScreen(model: model, tier: .compact) }
+    }
+}
+#Preview("library · offline, table", traits: .fixedLayout(width: 1100, height: 700)) {
+    PreviewHost(.offline, tab: .library) { model in
+        let _ = { model.library.viewMode = .table }()
+        LibraryScreen(model: model, tier: .regular)
+    }
+}
+#endif
