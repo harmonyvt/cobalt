@@ -114,6 +114,7 @@ struct HomeScreen: View {
             return photoImport?.failure != nil ? .failure : .idle
         case .fetching, .uploading, .saving, .reading: return .capsule
         case .ready, .rendering, .done, .savedLocally: return .focus
+        case .gallery: return .focus                       // lane A1 draws the gallery hero (CONTRACT-GALLERY.A0-API.md)
         case .failed(let f):
             if isBlocking(f) { return .idle }
             return keepsFocus(f) ? .focus : .failure
@@ -724,6 +725,7 @@ struct HomeScreen: View {
         case .idle: return .idle
         case .fetching, .uploading, .saving, .reading: return .working
         case .ready, .image, .savedLocally: return .landed
+        case .gallery: return pipeline.galleryIsSettled ? .landed : .working
         case .picker: return .picker
         case .failed(let f): return f.keepsTrim ? .other : .failed
         case .rendering, .done: return .other

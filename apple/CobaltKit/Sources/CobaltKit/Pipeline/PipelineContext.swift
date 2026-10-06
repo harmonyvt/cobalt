@@ -104,6 +104,11 @@ final class PipelineContext {
     var keyRejected: (@MainActor () -> Void)?
     /// Set by `AppModel`: capabilities were re-read by the pipeline.
     var capabilitiesChanged: (@MainActor (Capabilities) -> Void)?
+    /// Set by `AppModel`: a gallery finished saving or something was made from one (R8: an older file may be gone), so
+    /// the library re-reads the post.
+    var galleryChanged: (@MainActor () -> Void)?
+    /// Set by `AppModel`: the server deleted these library files (a make replaced them), so the library drops them now.
+    var libraryDropped: (@MainActor ([String]) -> Void)?
 
     init(
         client: any CobaltClient, capabilities: Capabilities, settings: Settings, store: OfflineStore,
@@ -122,6 +127,13 @@ final class PipelineContext {
         self.clipboard = clipboard
         self.intake = intake
         self.isPreview = isPreview
+    }
+
+    /// One page of `GET /library` in the newest shape the server speaks: `v=3` with `features.gallery` (a gallery's items
+    /// and made files, each post's `kind`), else `v=2` with `features.visibility`, else the plain one.
+    func libraryPage(cursor: String?, limit: Int) async throws -> LibraryPage {
+        if capabilities.gallery { return try await client.library(cursor: cursor, limit: limit, v3: true) }
+        return try await client.library(cursor: cursor, limit: limit, v2: capabilities.visibility)
     }
 
     func refreshCapabilities() async -> Capabilities {

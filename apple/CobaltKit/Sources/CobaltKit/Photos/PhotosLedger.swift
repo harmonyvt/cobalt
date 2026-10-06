@@ -5,8 +5,16 @@ import Foundation
 /// brings an item back, and a refill (`attach`) has the same key.
 enum PhotosKey {
     static func of(_ v: StoredVideo) -> String {
-        of(kind: v.kind, sessionID: v.sessionID, remoteURL: v.remoteURL, storeID: v.id)
+        // A gallery's items and the files made from it (apple/CONTRACT-GALLERY.md 1.8): `g:<sid>:<n>`, `m:<library id>`.
+        if v.role == .item, let sid = v.sessionID, let n = v.itemIndex { return "g:\(sid):\(n)" }
+        if let role = v.role, role != .item, let id = v.libraryID { return "m:\(id)" }
+        return of(kind: v.kind, sessionID: v.sessionID, remoteURL: v.remoteURL, storeID: v.id)
     }
+
+    /// The key of item `index` of a gallery session.
+    static func item(session id: String, index: Int) -> String { "g:\(id):\(index)" }
+    /// The key of a made file's library row.
+    static func made(item id: String) -> String { "m:\(id)" }
 
     static func of(kind: StoredVideo.Kind, sessionID: String?, remoteURL: URL?, storeID: String) -> String {
         switch kind {

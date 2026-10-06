@@ -103,11 +103,21 @@ enum ContinuedProgress {
             case .packing(let since): return 0.8 + creep(from: since, ceiling: 0.17, over: 8)
             case .working(let since): return creep(from: since, ceiling: 0.5, over: 40)
             }
+        case .gallery:
+            guard let run = p.galleryRun else { return 0 }
+            switch run.make {
+            case .making(_, let progress): return 0.3 + 0.7 * progress.fraction
+            case .sending, .queued: return 0.3
+            default: break
+            }
+            guard run.total > 0 else { return 0 }
+            return run.isSaved ? 1 : 0.9 * min(1, Double(run.done) / Double(run.total))
         case .failed: return 1
         }
     }
 
     static func title(of p: Pipeline) -> String {
+        if case .gallery = p.state { return p.galleryRun?.make.isActive == true ? "making from your gallery" : "saving your gallery" }
         if case .rendering = p.state { return "making your webp" }
         if p.photos == .working { return "adding to photos" }
         if case .ready = p.state, p.keepRequest != nil { return "keeping a copy on this device" }

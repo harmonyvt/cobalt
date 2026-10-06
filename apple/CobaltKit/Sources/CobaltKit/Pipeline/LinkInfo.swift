@@ -4,7 +4,10 @@ public struct LinkInfo: Sendable, Equatable {
     public var url: URL
     /// The host's second-level label; "twitter" shows as "x".
     public var service: String
-    /// The last non-empty path component (the host when the path is empty).
+    /// What names the post: the author's handle when the link names one (`@ilokineedsleep` for
+    /// `x.com/ilokineedsleep/status/…`, `@user` for TikTok's `/@user/photo/…`), else the last non-empty path
+    /// component (the host when the path is empty). A title reads `x · @ilokineedsleep` and `instagram · Ddy0-gpGg5U`
+    /// (apple/CONTRACT-GALLERY.md 1.6).
     public var ref: String
 
     public init?(_ url: URL) {
@@ -15,8 +18,20 @@ public struct LinkInfo: Sendable, Equatable {
         let labels = host.lowercased().split(separator: ".").map(String.init)
         let label = labels.count >= 2 ? labels[labels.count - 2] : (labels.first ?? host)
         service = label == "twitter" ? "x" : label
-        let last = url.pathComponents.filter { $0 != "/" && !$0.isEmpty }.last
-        ref = last ?? host
+        let parts = url.pathComponents.filter { $0 != "/" && !$0.isEmpty }
+        ref = Self.handle(service: service, parts: parts) ?? parts.last ?? host
+    }
+
+    /// The author the link names, as `@handle`: X and Twitter name theirs first (`/<handle>/status/<id>`; `/i/status/<id>`
+    /// has none), TikTok and Threads put `@handle` first.
+    static func handle(service: String, parts: [String]) -> String? {
+        guard let first = parts.first, parts.count >= 2 else { return nil }
+        if first.hasPrefix("@"), first.count > 1 { return first }
+        if service == "x", ["status", "statuses"].contains(parts[1].lowercased()), first.lowercased() != "i",
+           first.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) {
+            return "@" + first
+        }
+        return nil
     }
 
     /// Same rule as `extractFirstUrl` in the API worker: the first `http(s)://` run up to

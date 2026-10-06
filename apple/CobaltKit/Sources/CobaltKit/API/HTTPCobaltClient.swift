@@ -184,6 +184,8 @@ public struct HTTPCobaltClient: CobaltClient {
                 var publicDefault: Bool?
                 var visibility: Bool?
                 var line: Bool?
+                var gallery: Bool?
+                var galleryMake: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -238,7 +240,9 @@ public struct HTTPCobaltClient: CobaltClient {
             titles: f?.titles ?? false,
             publicDefault: f?.publicDefault ?? false,
             visibility: f?.visibility ?? false,
-            line: f?.line ?? false)
+            line: f?.line ?? false,
+            gallery: f?.gallery ?? false,
+            galleryMake: (f?.gallery ?? false) && (f?.galleryMake ?? false))
     }
 
     // MARK: - Resolve and studio
@@ -279,14 +283,17 @@ public struct HTTPCobaltClient: CobaltClient {
     /// `queue: true` (17.3) makes the server answer `201` with `queued` and `queue_ahead` instead of `429
     /// error.studio.busy`; `title` is the post's custom title, stored with the create. Both are left out when nil/false.
     public func createStudio(link: URL, public makePublic: Bool?, queue: Bool, title: String?) async throws -> StudioCreated {
-        let req = try makeRequest("POST", "/studio", keyed: true)
-        var fields: [String: Any] = ["url": link.absoluteString]
-        if let makePublic { fields["public"] = makePublic }
-        if queue { fields["queue"] = true }
-        if let title { fields["title"] = title }
-        let wire = try await sendJSON(IDWire.self, req, body: Self.jsonBody(fields))
+        try await createStudio(url: link, options: StudioCreateOptions(makePublic: makePublic, queue: queue, title: title))
+    }
+
+    /// Everything the create takes (APP-API-CONTRACT 13.2, 14.1, 17.3, 18.2, 18.12). The answer's `make` is the chained
+    /// make's job (18.12).
+    public func createStudio(url: URL, options: StudioCreateOptions) async throws -> StudioCreated {
+        let req = try makeRequest("POST", "/studio", keyed: true, timeout: options.isPlain ? 30 : 60)
+        let wire = try await sendJSON(IDWire.self, req, body: Self.jsonBody(options.body(link: url)))
         return StudioCreated(
-            id: wire.id, pageURL: wire.url.flatMap(URL.init(string:)), queued: wire.queued ?? false, queueAhead: wire.queueAhead)
+            id: wire.id, pageURL: wire.url.flatMap(URL.init(string:)), queued: wire.queued ?? false, queueAhead: wire.queueAhead,
+            make: wire.make.map { StudioMake(job: $0.job, kind: $0.kind) })
     }
 
     // MARK: - Instant share (APP-API-CONTRACT section 14)
@@ -307,6 +314,17 @@ public struct HTTPCobaltClient: CobaltClient {
         ]
         if makePublic { fields["public"] = true }
         guard let body = Self.jsonBody(fields) else { throw CobaltError.invalidResponse(httpStatus: 0) }
+        return (req, body)
+    }
+
+    /// The share sheet's request for a gallery (APP-API-CONTRACT 18.12): `POST /studio` with whatever `options` carry
+    /// (`items: "all"`, `item_count`, `origin: "share"`, the Hark opt-in, and the chained `slideshow` or `gallery_image`),
+    /// returned apart from the request for a background `URLSession` like `shareSaveRequest(link:label:public:)`. Throws
+    /// `.noAPIKey` without a key for this server.
+    public func shareSaveRequest(link: URL, options: StudioCreateOptions) throws -> (request: URLRequest, body: Data) {
+        var req = try makeRequest("POST", "/studio", keyed: true, timeout: 60)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        guard let body = Self.jsonBody(options.body(link: link)) else { throw CobaltError.invalidResponse(httpStatus: 0) }
         return (req, body)
     }
 
@@ -394,6 +412,7 @@ public struct HTTPCobaltClient: CobaltClient {
             "width": request.width, "quality": request.quality.rawValue,
         ]
         if request.notify { fields["notify"] = true }
+        if let item = request.item { fields["item"] = item }                          // 18.13: the lead when absent
         if let crop = request.crop, !crop.isFull { fields["crop"] = crop.wire }
         if request.queue == true {
             fields["queue"] = true
@@ -454,9 +473,18 @@ public struct HTTPCobaltClient: CobaltClient {
     /// `v=2`: one entry per file, each with its `visibility` (APP-API-CONTRACT 16.5). Without it the server answers
     /// the shape older apps know (an original, and a synthesized hosted copy after a public one).
     public func library(cursor: String?, limit: Int, v2: Bool) async throws -> LibraryPage {
+        try await library(cursor: cursor, limit: limit, version: v2 ? 2 : nil)
+    }
+
+    /// `v=3` (APP-API-CONTRACT 18.3): `v=2` plus a gallery's items and made files, each post's `kind` and item counts.
+    public func library(cursor: String?, limit: Int, v3: Bool) async throws -> LibraryPage {
+        try await library(cursor: cursor, limit: limit, version: v3 ? 3 : nil)
+    }
+
+    private func library(cursor: String?, limit: Int, version: Int?) async throws -> LibraryPage {
         var query = [("limit", String(max(1, min(50, limit))))]
         if let cursor { query.append(("cursor", cursor)) }
-        if v2 { query.append(("v", "2")) }
+        if let version { query.append(("v", String(version))) }
         let req = try makeRequest("GET", "/library", query: query, keyed: true)
         let wire = try await sendJSON(LibraryWire.self, req)
         let posts = wire.posts.compactMap(\.value)
@@ -499,6 +527,87 @@ public struct HTTPCobaltClient: CobaltClient {
         case 502:
             if let env = try? JSONDecoder().decode(ErrorEnvelope.self, from: data), env.error?.code == "error.library.partial",
                let result = try? CobaltJSON.decoder().decode(PostDeleteResult.self, from: data) {
+                return result
+            }
+            throw apiError(data, status: http.statusCode)
+        default:
+            throw apiError(data, status: http.statusCode)
+        }
+    }
+
+    // MARK: - Galleries and made files (APP-API-CONTRACT 18.4, 18.5, 18.10-18.12; keyed)
+
+    public func makeSlideshow(
+        session: String, plan: SlideshowPlan, items: [GalleryItem], focused: Bool, notify: Bool
+    ) async throws -> RenderAccepted {
+        let req = try makeRequest("POST", "/studio/\(Self.encode(session))/slideshow", keyed: true, timeout: 30)
+        let body = plan.wireBody(items: items, includesQueue: true, focused: focused, notify: notify)
+        let wire = try await sendJSON(JobWire.self, req, body: Self.jsonBody(body))
+        return RenderAccepted(job: wire.job, queued: wire.queued ?? false, queueAhead: wire.queueAhead)
+    }
+
+    public func makeGalleryImage(
+        session: String, plan: GalleryImagePlan, focused: Bool, notify: Bool
+    ) async throws -> RenderAccepted {
+        let req = try makeRequest("POST", "/studio/\(Self.encode(session))/gallery-image", keyed: true, timeout: 30)
+        let body = plan.wireBody(items: [], includesQueue: true, focused: focused, notify: notify)
+        let wire = try await sendJSON(JobWire.self, req, body: Self.jsonBody(body))
+        return RenderAccepted(job: wire.job, queued: wire.queued ?? false, queueAhead: wire.queueAhead)
+    }
+
+    public func makeStatus(session: String, job: String, wait: Int) async throws -> MakeStatus {
+        let w = max(0, min(25, wait))
+        let req = try makeRequest(
+            "GET", "/studio/\(Self.encode(session))/render/\(Self.encode(job))", query: [("wait", String(w))], keyed: false,
+            timeout: TimeInterval(w + 15))
+        let wire = try await sendJSON(MakeWire.self, req)
+        switch wire.status {
+        case "pending":
+            return .pending(
+                phase: wire.phase.flatMap(MakePhase.init(rawValue:)), done: wire.framesDone, total: wire.framesTotal,
+                queueAhead: wire.queueAhead)
+        case "success":
+            return .success(MadeResult(
+                job: wire.job ?? job, itemID: wire.itemId, url: wire.url, bytes: wire.bytes, width: wire.width, height: wire.height,
+                seconds: wire.seconds, format: wire.format.flatMap(SlideshowPlan.Format.init(rawValue:)),
+                cropped: wire.cropped ?? [], upscaled: wire.upscaled ?? [], replaced: wire.replaced ?? []))
+        default:
+            return .failed(code: wire.error?.code ?? "error.api.generic")
+        }
+    }
+
+    public func retryItems(session: String, items: [Int]) async throws -> StudioCreated {
+        let req = try makeRequest("POST", "/studio/\(Self.encode(session))/items/retry", keyed: true, timeout: 30)
+        let wire = try await sendJSON(IDWire.self, req, body: Self.jsonBody(["items": items, "queue": true] as [String: Any]))
+        return StudioCreated(
+            id: wire.id.isEmpty ? session : wire.id, pageURL: wire.url.flatMap(URL.init(string:)), queued: wire.queued ?? false,
+            queueAhead: wire.queueAhead)
+    }
+
+    public func deleteItem(_ itemID: String) async throws {
+        let req = try makeRequest("DELETE", "/library/items/\(Self.encode(itemID))", keyed: true)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw apiError(data, status: http.statusCode) }
+    }
+
+    /// `200` → every file; `502 error.library.partial` → the files that switched and the ids that did not (a retry is
+    /// idempotent); any other error as the keyed calls throw it.
+    public func setPostVisibility(anchor itemID: String, public makePublic: Bool) async throws -> VisibilityResult {
+        let req = try makeRequest("PATCH", "/library/items/\(Self.encode(itemID))/visibility", keyed: true, timeout: 120)
+        let body = Self.jsonBody(["public": makePublic, "scope": "post"] as [String: Any])
+        let (data, http) = try await send(req, body: body)
+        let decode: () -> VisibilityResult? = {
+            guard let wire = try? CobaltJSON.decoder().decode(PostVisibilityWire.self, from: data) else { return nil }
+            return VisibilityResult(
+                files: (wire.items ?? []).compactMap(\.value), cacheCleared: wire.cacheCleared, remaining: wire.remaining ?? [])
+        }
+        switch http.statusCode {
+        case 200..<300:
+            guard let result = decode() else { throw CobaltError.invalidResponse(httpStatus: http.statusCode) }
+            return result
+        case 502:
+            if let env = try? JSONDecoder().decode(ErrorEnvelope.self, from: data), env.error?.code == "error.library.partial",
+               let result = decode() {
                 return result
             }
             throw apiError(data, status: http.statusCode)
@@ -674,13 +783,43 @@ private struct ResolveWire: Decodable {
     var error: ErrorEnvelope.Body?
 }
 
-private struct IDWire: Decodable { var id: String; var url: String?; var queued: Bool?; var queueAhead: Int? }
+private struct IDWire: Decodable {
+    struct Make: Decodable { var job: String; var kind: String }
+    var id: String; var url: String?; var queued: Bool?; var queueAhead: Int?
+    var make: Make?
+}
 private struct LiveRunWire: Decodable { var pushing: Bool?; var started: Bool?; var reason: String? }
 private struct LiveSelftestWire: Decodable {
     var configured: Bool?; var transport: String?; var host: String?; var jwt: String?
     var apnsStatus: Int?; var apnsReason: String?
 }
-private struct JobWire: Decodable { var job: String }
+private struct JobWire: Decodable { var job: String; var queued: Bool?; var queueAhead: Int? }
+
+private struct MakeWire: Decodable {
+    var status: String
+    var job: String?
+    var itemId: String?
+    var url: URL?
+    var bytes: Int64?
+    var width: Int?
+    var height: Int?
+    var seconds: Double?
+    var format: String?
+    var cropped: [Int]?
+    var upscaled: [Int]?
+    var replaced: [String]?
+    var phase: String?
+    var framesDone: Int?
+    var framesTotal: Int?
+    var queueAhead: Int?
+    var error: ErrorEnvelope.Body?
+}
+
+private struct PostVisibilityWire: Decodable {
+    var items: [Lossy<LibraryFile>]?
+    var cacheCleared: Bool?
+    var remaining: [String]?
+}
 
 private struct UploadWire: Decodable {
     var id: String?

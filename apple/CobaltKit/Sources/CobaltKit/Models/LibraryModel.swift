@@ -32,6 +32,10 @@ public final class LibraryModel {
     public var show: LibraryShow {
         didSet { if show != oldValue { defaults.set(show.rawValue, forKey: LibraryDefaults.show) } }
     }
+    /// The kind chip ("library.kind", `all` by default; apple/CONTRACT-GALLERY.md 1.21).
+    public var kindFilter: LibraryKindFilter {
+        didSet { if kindFilter != oldValue { defaults.set(kindFilter.rawValue, forKey: LibraryDefaults.kind) } }
+    }
     /// The search text; not persisted.
     public var query: String = ""
     /// While `loadAll` runs: pages in so far and the server's total (the quiet line above the results).
@@ -58,6 +62,7 @@ public final class LibraryModel {
         self.viewMode = defaults.string(forKey: LibraryDefaults.view).flatMap(LibraryViewMode.init(rawValue:)) ?? .mosaic
         self.sort = defaults.string(forKey: LibraryDefaults.sort).flatMap(LibrarySort.init(stored:)) ?? .newest
         self.show = defaults.string(forKey: LibraryDefaults.show).flatMap(LibraryShow.init(rawValue:)) ?? .everything
+        self.kindFilter = defaults.string(forKey: LibraryDefaults.kind).flatMap(LibraryKindFilter.init(rawValue:)) ?? .all
         if let seed { apply(seed, replacing: true) }
     }
 
@@ -106,7 +111,7 @@ public final class LibraryModel {
         do {
             let client = ctx.client
             if ctx.capabilities.titles { await ctx.titles.flush(client: client) }       // titles that failed to send, before the page reads them
-            let page = try await client.library(cursor: nil, limit: Self.pageSize, v2: ctx.capabilities.visibility)
+            let page = try await ctx.libraryPage(cursor: nil, limit: Self.pageSize)
             apply(page, replacing: true)
             failure = nil
         } catch {
@@ -119,8 +124,7 @@ public final class LibraryModel {
         isLoading = true
         defer { isLoading = false }
         do {
-            let client = ctx.client
-            let page = try await client.library(cursor: cursor, limit: Self.pageSize, v2: ctx.capabilities.visibility)
+            let page = try await ctx.libraryPage(cursor: cursor, limit: Self.pageSize)
             apply(page, replacing: false)
             failure = nil
         } catch {
@@ -162,11 +166,10 @@ public final class LibraryModel {
     /// The paging loop of `loadAll` and `locate`. `isLoading` is held by the caller.
     private func pages(cap: Int, progress: Bool, found: ([LibraryPost]) -> Bool) async {
         do {
-            let client = ctx.client
             var next = posts.isEmpty ? nil : cursor
             while posts.count < cap {
                 let limit = min(Self.wholePageSize, cap - posts.count)
-                let page = try await client.library(cursor: next, limit: limit, v2: ctx.capabilities.visibility)
+                let page = try await ctx.libraryPage(cursor: next, limit: limit)
                 apply(page, replacing: next == nil && posts.isEmpty)
                 failure = nil
                 if progress { loadingAll = (loaded: posts.count, total: max(postCount, posts.count)) }

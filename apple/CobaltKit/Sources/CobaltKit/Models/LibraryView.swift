@@ -32,11 +32,28 @@ public struct LibrarySort: Sendable, Equatable {
 
 public enum LibraryShow: String, Sendable, CaseIterable { case everything, publicOnly, privateOnly, uploads, offline }
 
+/// The kind chips (apple/CONTRACT-GALLERY.md 1.21): `all · videos · photos · galleries · webps`. A media is one kind
+/// (`MediaItem.kind`); `webps` is a media that holds nothing but webps. Remembered like the other view state.
+public enum LibraryKindFilter: String, Sendable, CaseIterable {
+    case all, videos, photos, galleries, webps
+
+    func passes(_ kind: MediaKind) -> Bool {
+        switch self {
+        case .all: return true
+        case .videos: return kind == .video
+        case .photos: return kind == .photo
+        case .galleries: return kind == .gallery
+        case .webps: return kind == .webp
+        }
+    }
+}
+
 /// `UserDefaults` keys of the remembered view state.
 enum LibraryDefaults {
     static let view = "library.view"
     static let sort = "library.sort"
     static let show = "library.show"
+    static let kind = "library.kind"
 }
 
 /// One media as the views show it: derived, value, sortable (table key paths are non-optional).
@@ -60,6 +77,10 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
     public let isUpload: Bool
     /// How much of the media is kept on this device (`MediaItem.offline`).
     public let offline: MediaOffline
+    /// What the media is (`MediaItem.kind`): the chips, the kind column, the gallery tile's stack.
+    public let kind: MediaKind
+    /// The items of a gallery (`MediaItem.itemCount`: the count badge); 0 for every other media.
+    public let itemCount: Int
 
     public init(item: MediaItem) {
         self.item = item
@@ -70,6 +91,8 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
             ?? (item.service == nil)
         service = isUpload ? "file" : (item.service ?? "file")
         offline = item.offline
+        kind = item.kind
+        itemCount = item.kind == .gallery ? item.itemCount : 0
 
         let source = item.video ?? item.face
         let duration = source.duration ?? item.face.duration ?? item.post?.duration
@@ -167,7 +190,7 @@ extension LibraryModel {
     /// A search, a filter other than `everything` or a sort other than newest first needs every post: the
     /// server pages by latest activity only (decision 14).
     public var needsWholeLibrary: Bool {
-        !trimmedQuery.isEmpty || show != .everything || sort != .newest
+        !trimmedQuery.isEmpty || show != .everything || sort != .newest || kindFilter != .all
     }
 
     var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -179,6 +202,7 @@ extension AppModel {
     public var libraryRows: [LibraryRow] {
         var rows = library.posts.map { LibraryRow(item: mediaItem(for: $0)) }
         if library.show != .everything { rows = rows.filter { $0.passes(library.show) } }
+        if library.kindFilter != .all { rows = rows.filter { library.kindFilter.passes($0.kind) } }
         let query = library.trimmedQuery
         if !query.isEmpty {
             let folded = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)

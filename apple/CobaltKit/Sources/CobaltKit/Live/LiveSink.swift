@@ -86,7 +86,9 @@ extension Pipeline {
         // The owner's title, else the clip's name without its media extension (decision 9).
         var title = runTitle ?? media.map { MediaTitle.stripExtension($0.name) }
         if title == nil, case .file(let name, _, _) = input { title = MediaTitle.stripExtension(name) }
-        return LiveSnapshot(
+        var snapshot = LiveSnapshot(
             title: title, duration: media?.duration, now: now.timeIntervalSince1970, previous: previous)
+        snapshot.gallerySaved = galleryRun?.isSaved == true
+        return snapshot
     }
 }

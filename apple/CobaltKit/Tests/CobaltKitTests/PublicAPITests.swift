@@ -54,7 +54,7 @@ private func touchPipeline(_ p: Pipeline) {
 
     switch p.state {
     case .idle, .fetching(since: _, waking: _), .uploading(_), .saving(bytes: _, total: _, since: _),
-         .reading(developed: _, of: _), .picker(items: _), .image(_), .ready, .rendering(_), .done(_),
+         .reading(developed: _, of: _), .picker(items: _), .gallery(items: _), .image(_), .ready, .rendering(_), .done(_),
          .savedLocally(_), .failed(_):
         break
     }

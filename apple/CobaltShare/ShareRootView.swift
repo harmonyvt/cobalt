@@ -149,7 +149,7 @@ struct ShareRootView: View {
                     PickerContent(pipeline: pipeline, items: items, webpAvailable: model.webpAvailable)
                 case .failed(let f) where !f.keepsTrim:
                     failure(f)
-                case .fetching, .saving, .rendering:
+                case .fetching, .saving, .rendering, .gallery:         // `.gallery`: lane A4 replaces this with the compact sheet
                     working
                     continueBlock
                 case .reading:

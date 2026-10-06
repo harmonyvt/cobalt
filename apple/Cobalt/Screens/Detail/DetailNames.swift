@@ -9,6 +9,7 @@ extension Rendition {
         switch kind {
         case .video: return Copy.Media.video
         case .webp(let n): return item.webpCount > 1 ? Copy.Media.webpTab(n) : Copy.Media.webp
+        case .item, .slideshow, .galleryImage, .crop: return self.tabName      // gallery tabs: lane A3 draws them (CONTRACT-GALLERY.A0-API.md)
         }
     }
 
@@ -69,7 +70,7 @@ enum DetailMeta {
         let bytes = r.bytes.map { Format.bytes($0) }
         let when = Format.when(r.createdAt, now: now)
         switch r.kind {
-        case .video:
+        case .video, .item, .slideshow, .galleryImage, .crop:         // gallery files: lane A3 words their own meta lines
             return Copy.Media.videoMeta(seconds: r.duration.map { Format.seconds($0) }, size: size(r), bytes: bytes, when: when)
         case .webp:
             return Copy.Media.webpMeta(range: range(r), crop: crop(r, in: item), size: size(r), bytes: bytes, when: when)

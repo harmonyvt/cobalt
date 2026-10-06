@@ -11,21 +11,42 @@ public enum JobInput: Sendable, Equatable {
     case shared(SharedJob)
 }
 
+/// What a link job does with a post that turns out to hold several items (apple/CONTRACT-GALLERY.md 1.13; the Shortcut's
+/// `Galleries` and `Layout` parameters). Only a server with `features.gallery` has galleries; any other server saves a
+/// post as it always did.
+public enum GalleryHandling: Sendable, Equatable, Codable {
+    /// Save every item (the default).
+    case saveAll
+    /// Save the post's first video only (today's behaviour); a photo-only post then fails `error.webp.no_video`.
+    case firstVideo
+    /// Save every item, then make a slideshow webp of all of them (the standard plan: 2 s a photo, crossfade).
+    case slideshowWebp
+    /// Save every item, then make a gallery image of its photos in this layout.
+    case galleryImage(GalleryLayout)
+}
+
 /// What a caller may ask of a save. Applies to every input of one `add`, except `title`, which is for one-input adds.
 public struct JobOptions: Sendable, Equatable, Codable {
     /// Sent with the create (APP-API-CONTRACT 17.3 `title`): the post's custom title. One-input adds only.
     public var title: String?
     /// nil = the app's "make new saves public" setting (`PipelineFlows.publicFlag`).
     public var makePublic: Bool?
+    /// What to do with a multi-item post; nil = `.saveAll`.
+    public var galleries: GalleryHandling?
 
-    public init(title: String? = nil, makePublic: Bool? = nil) {
+    public init(title: String? = nil, makePublic: Bool? = nil, galleries: GalleryHandling? = nil) {
         self.title = title
         self.makePublic = makePublic
+        self.galleries = galleries
     }
 }
 
 /// Where a job came from: tells the queue whether it may take the focus and how to count it.
-public enum JobVia: String, Sendable, Codable { case paste, drop, circle, review, relaunch, share, shortcut }
+public enum JobVia: String, Sendable, Codable {
+    case paste, drop, circle, review, relaunch, share, shortcut
+    /// Something made from, or retried for, a gallery that is already on the server (`JobQueue.addGallery`).
+    case make
+}
 
 /// What `JobQueue.accepted(_:timeout:)` says about a job: the server has it, it failed first, or it is still local.
 public enum JobAcceptance: Sendable, Equatable {
@@ -86,16 +107,19 @@ public struct Job: Identifiable {
 
     public var state: PipelineState { pipeline.state }
 
-    /// In flight (checking … packing), queued on the server included.
+    /// In flight (checking … packing), queued on the server included. A gallery is live while it saves and while
+    /// something is being made from it.
     public var isLive: Bool {
         switch pipeline.state {
         case .fetching, .uploading, .saving, .reading, .rendering: return true
+        case .gallery: return !pipeline.galleryIsSettled
         default: return false
         }
     }
 
     public var isFailed: Bool {
         if case .failed = pipeline.state { return true }
+        if case .gallery = pipeline.state, case .failed? = pipeline.galleryRun?.phase { return true }
         return false
     }
 
@@ -103,6 +127,7 @@ public struct Job: Identifiable {
     public var isFinished: Bool {
         switch pipeline.state {
         case .ready, .done, .savedLocally, .image: return true
+        case .gallery: return pipeline.galleryIsSettled && pipeline.galleryRun?.isSaved == true
         default: return false
         }
     }

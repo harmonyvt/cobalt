@@ -45,6 +45,20 @@ public struct StoredVideo: Sendable, Codable, Equatable, Identifiable {
     public var keep: Bool
     /// The file is here and the owner keeps it.
     public var isOffline: Bool { keep && place != nil }
+    /// Where this record sits in its media's post (apple/CONTRACT-GALLERY.md 4). Nil on everything that predates
+    /// galleries and on every plain original and webp.
+    /// `.item`: one original of a gallery (`itemIndex` is its place in the post); `.slideshow`, `.export` (a gallery
+    /// image) and `.crop`: a file made from the post (a slideshow webp is `kind .webp`, the rest `kind .original`).
+    public var role: GalleryRole?
+    /// The item's index in the post (0-based) for `.item`; nil otherwise.
+    public var itemIndex: Int?
+    /// The item indices a made file or a webp of an item was made from.
+    public var madeFrom: [Int]?
+    /// The JSON spec a made file was made with (`MadeSpec`); at most 512 bytes.
+    public var madeSpec: Data?
+    /// The server's library row for this file (an item or a made file), when known: what a download and a replace
+    /// are keyed by. Nil for everything else.
+    public var libraryID: String?
 
     public enum Place: String, Sendable, Codable { case cache, offline }
 
@@ -52,7 +66,8 @@ public struct StoredVideo: Sendable, Codable, Equatable, Identifiable {
         id: String, kind: Kind, fileURL: URL?, posterURL: URL?, name: String, duration: Double?,
         width: Int?, height: Int?, bytes: Int64, sessionID: String?, link: URL?, remoteURL: URL?,
         createdAt: Date, previewFrameURLs: [URL] = [], publicURL: URL? = nil, mediaID: String? = nil,
-        clip: WebpClip? = nil, title: String? = nil, place: Place? = nil, keep: Bool = false
+        clip: WebpClip? = nil, title: String? = nil, place: Place? = nil, keep: Bool = false,
+        role: GalleryRole? = nil, itemIndex: Int? = nil, madeFrom: [Int]? = nil, madeSpec: Data? = nil, libraryID: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -75,6 +90,17 @@ public struct StoredVideo: Sendable, Codable, Equatable, Identifiable {
         // a file with no stated place is a cache file (every pre-offline caller)
         self.place = place ?? (fileURL != nil ? .cache : nil)
         self.keep = keep
+        self.role = role
+        self.itemIndex = itemIndex
+        self.madeFrom = madeFrom
+        self.madeSpec = madeSpec
+        self.libraryID = libraryID
+    }
+
+    /// The kind of made file this is (the key a remake replaces); nil for anything else.
+    public var madeKind: MadeKind? {
+        guard let role, role != .item else { return nil }
+        return MadeKind(role: role, spec: madeSpec.flatMap { MadeSpec(data: $0) })
     }
 }
 
@@ -97,7 +123,12 @@ extension StoredVideo {
             clip: try c.decodeIfPresent(WebpClip.self, forKey: .clip),
             title: try c.decodeIfPresent(String.self, forKey: .title),
             place: try c.decodeIfPresent(Place.self, forKey: .place),
-            keep: try c.decodeIfPresent(Bool.self, forKey: .keep) ?? false)
+            keep: try c.decodeIfPresent(Bool.self, forKey: .keep) ?? false,
+            role: try c.decodeIfPresent(GalleryRole.self, forKey: .role),
+            itemIndex: try c.decodeIfPresent(Int.self, forKey: .itemIndex),
+            madeFrom: try c.decodeIfPresent([Int].self, forKey: .madeFrom),
+            madeSpec: try c.decodeIfPresent(Data.self, forKey: .madeSpec),
+            libraryID: try c.decodeIfPresent(String.self, forKey: .libraryID))
     }
 }
 
@@ -391,7 +422,8 @@ public final class OfflineStore {
         file: URL, kind: StoredVideo.Kind, media: MediaInfo, sessionID: String?,
         link: URL?, remoteURL: URL?, move: Bool, publicURL: URL? = nil,
         mediaID: String? = nil, clip: WebpClip? = nil, keep: Bool, createdAt: Date? = nil,
-        origin: AddOrigin = .save
+        origin: AddOrigin = .save,
+        role: GalleryRole? = nil, itemIndex: Int? = nil, madeFrom: [Int]? = nil, madeSpec: Data? = nil, libraryID: String? = nil
     ) async throws -> StoredVideo {
         let keep = keep && canKeep
         let fm = FileManager.default
@@ -399,7 +431,7 @@ public final class OfflineStore {
         let ext = file.pathExtension.isEmpty ? (kind == .webp ? "webp" : "mp4") : file.pathExtension.lowercased()
         var fileName = "\(id).\(ext)"
         var destination: URL
-        let backedUp = Self.hasServerCopy(kind: kind, sessionID: sessionID, remoteURL: remoteURL, publicURL: publicURL)
+        let backedUp = Self.hasServerCopy(kind: kind, sessionID: sessionID, remoteURL: remoteURL, publicURL: publicURL, libraryID: libraryID)
         do {
             destination = try await place(file, as: fileName, move: move, excludeFromBackup: backedUp)
         } catch {
@@ -434,7 +466,8 @@ public final class OfflineStore {
             addedAt: stamp, posterBytes: hasPoster ? Self.fileSize(posterURL) : nil,
             previewNames: flipbook.names.isEmpty ? nil : flipbook.names,
             previewBytes: flipbook.names.isEmpty ? nil : flipbook.bytes, publicURL: publicURL,
-            mediaID: nil, clip: kind == .webp ? clip : nil, keep: keep)
+            mediaID: nil, clip: kind == .webp ? clip : nil, keep: keep,
+            role: role, itemIndex: itemIndex, madeFrom: madeFrom, madeSpec: madeSpec, libraryID: libraryID)
 
         // The identity check runs inside the coordinated index write (re-read from disk first), so
         // two adds of the same item, in this process or the other one, can never both insert.
@@ -492,13 +525,25 @@ public final class OfflineStore {
     /// save, a picker item: two saves of the same link are two copies the owner asked for), and a
     /// webp with no `remoteURL`.
     static func duplicateIndex(of new: Record, in records: [Record]) -> Int? {
+        // A gallery's items and the files made from it (apple/CONTRACT-GALLERY.md 4): an item is the same item when its
+        // session and its index are; a made file when it is the same library row. Nothing else is ever folded in.
+        switch new.role {
+        case .item?:
+            guard let sid = new.sessionID, let index = new.itemIndex else { return nil }
+            return records.firstIndex { $0.role == .item && $0.sessionID == sid && $0.itemIndex == index }
+        case .some:
+            guard let id = new.libraryID else { return nil }
+            return records.firstIndex { $0.role == new.role && $0.libraryID == id }
+        case nil:
+            break
+        }
         switch new.kind {
         case .webp:
             guard let url = new.remoteURL else { return nil }
-            return records.firstIndex { $0.kind == .webp && $0.remoteURL == url }
+            return records.firstIndex { $0.kind == .webp && $0.role == nil && $0.remoteURL == url }
         case .original:
             guard let sid = new.sessionID else { return nil }
-            return records.firstIndex { $0.kind == .original && $0.sessionID == sid }
+            return records.firstIndex { $0.isPlainOriginal && $0.sessionID == sid }
         }
     }
 
@@ -516,6 +561,9 @@ public final class OfflineStore {
         old.remoteURL = old.remoteURL ?? new.remoteURL
         old.publicURL = old.publicURL ?? new.publicURL
         old.clip = old.clip ?? new.clip
+        old.libraryID = old.libraryID ?? new.libraryID
+        old.madeFrom = old.madeFrom ?? new.madeFrom
+        old.madeSpec = old.madeSpec ?? new.madeSpec
 
         var discard = Eviction()
         if old.fileName == nil, old.visiblePath == nil, let name = new.fileName {
@@ -875,7 +923,8 @@ public final class OfflineStore {
                 id: v.id, kind: v.kind, fileName: nil, posterName: nil, name: v.name, duration: v.duration,
                 width: v.width, height: v.height, bytes: v.bytes, sessionID: v.sessionID, link: v.link,
                 remoteURL: v.remoteURL, createdAt: v.createdAt, publicURL: v.publicURL, mediaID: v.mediaID, clip: v.clip,
-                title: v.title)
+                title: v.title, role: v.role, itemIndex: v.itemIndex, madeFrom: v.madeFrom, madeSpec: v.madeSpec,
+                libraryID: v.libraryID)
         }
         if let written = try? Self.mutate(root: root, { $0 = records }) {
             adopt(written)
@@ -1115,18 +1164,26 @@ public final class OfflineStore {
         /// The file name cobalt chose for the visible file (decision 8): while the file still has it, a rename of
         /// the media in cobalt renames the file; one the owner renamed is never renamed again.
         var givenName: String?
+        /// Gallery fields (apple/CONTRACT-GALLERY.md 4); nil in an index written before galleries.
+        var role: GalleryRole?
+        var itemIndex: Int?
+        var madeFrom: [Int]?
+        var madeSpec: Data?
+        var libraryID: String?
 
         /// The effective media id.
         var media: String { mediaID ?? id }
         var added: Date { addedAt ?? createdAt }
         /// There is a file on this device: in `files/` or in the visible folder.
         var hasFile: Bool { fileName != nil || visiblePath != nil }
+        /// The media's own original: not an item of a gallery and not a file made from one.
+        var isPlainOriginal: Bool { kind == .original && role == nil }
         /// Nothing may take this off the device: the owner keeps it, or a file of it is in the visible folder.
         var isAnchored: Bool { keep == true || visiblePath != nil }
         /// The server has its own copy (so the file may stay out of the owner's backup, decision 14): a hosted
         /// webp, an original of a studio session or a hosted one. A plain cobalt save or a picker item has none.
         var hasServerCopy: Bool {
-            OfflineStore.hasServerCopy(kind: kind, sessionID: sessionID, remoteURL: remoteURL, publicURL: publicURL)
+            OfflineStore.hasServerCopy(kind: kind, sessionID: sessionID, remoteURL: remoteURL, publicURL: publicURL, libraryID: libraryID)
         }
         /// What this entry costs on the device: its file (if any), its poster and its flipbook.
         var cost: Int64 {
@@ -1155,7 +1212,8 @@ public final class OfflineStore {
                 name: name, duration: duration, width: width, height: height, bytes: bytes,
                 sessionID: sessionID, link: link, remoteURL: remoteURL, createdAt: createdAt,
                 previewFrameURLs: (previewNames ?? []).map { root.appendingPathComponent("previews/\($0)") },
-                publicURL: publicURL, mediaID: media, clip: clip, title: title, place: place, keep: keep == true)
+                publicURL: publicURL, mediaID: media, clip: clip, title: title, place: place, keep: keep == true,
+                role: role, itemIndex: itemIndex, madeFrom: madeFrom, madeSpec: madeSpec, libraryID: libraryID)
         }
     }
 
@@ -1166,8 +1224,8 @@ public final class OfflineStore {
     ///    joins them; the same rule keeps a second original out of a media that has one);
     /// 3. else a new media, named by this record.
     static func resolveMediaID(for new: Record, explicit: String?, in records: [Record]) -> String {
-        func hasOriginal(_ media: String) -> Bool { records.contains { $0.media == media && $0.kind == .original } }
-        func accepts(_ media: String) -> Bool { !(new.kind == .original && hasOriginal(media)) }
+        func hasOriginal(_ media: String) -> Bool { records.contains { $0.media == media && $0.isPlainOriginal } }
+        func accepts(_ media: String) -> Bool { !(new.isPlainOriginal && hasOriginal(media)) }
         if let explicit, !explicit.isEmpty, records.contains(where: { $0.media == explicit }), accepts(explicit) {
             return explicit
         }
@@ -1253,7 +1311,10 @@ public final class OfflineStore {
 
     /// Whether the server holds its own copy of an item (decision 14), from what the record knows: a webp this
     /// device had hosted (`remoteURL`), an original that has a studio session or a public link.
-    nonisolated static func hasServerCopy(kind: StoredVideo.Kind, sessionID: String?, remoteURL: URL?, publicURL: URL?) -> Bool {
+    nonisolated static func hasServerCopy(
+        kind: StoredVideo.Kind, sessionID: String?, remoteURL: URL?, publicURL: URL?, libraryID: String? = nil
+    ) -> Bool {
+        if libraryID != nil { return true }                // a gallery item or a made file: the library row is its copy
         switch kind {
         case .webp: return remoteURL != nil
         case .original: return sessionID != nil || publicURL != nil

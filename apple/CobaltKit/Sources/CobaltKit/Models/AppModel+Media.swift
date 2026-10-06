@@ -168,6 +168,10 @@ extension AppModel {
     /// first fetches its stored copy: the library's file (as `LibraryModel.copy` does), else a webp's public
     /// link. The Mac saves with a panel in the UI and does not call this.
     public func saveToPhotos(_ rendition: Rendition) async throws {
+        try await saveToPhotos(rendition, key: photosKey(of: rendition))
+    }
+
+    func saveToPhotos(_ rendition: Rendition, key: String?) async throws {
         let fm = FileManager.default
         var source: URL?
         var temporary = false
@@ -186,7 +190,7 @@ extension AppModel {
             defer { if temporary { try? fm.removeItem(at: file) } }
             let type = UTType(filenameExtension: file.pathExtension.lowercased())
             let isImage = rendition.isWebp || (type?.conforms(to: .image) ?? false)
-            try await ctx.savePhoto(fileURL: file, isImage: isImage, key: photosKey(of: rendition))
+            try await ctx.savePhoto(fileURL: file, isImage: isImage, key: key)
         } catch {
             if let mapped = pipelineFailure(from: error, during: .saving, limits: ctx.capabilities.limits) { throw mapped }
             throw error
@@ -223,6 +227,8 @@ extension AppModel {
         if relates(pipeline) {
             if case .idle = pipeline.state {
                 if pipeline.keepRequest != nil || pipeline.hostRequest != nil { return true }
+            } else if case .gallery = pipeline.state, pipeline.galleryIsSettled {
+                // a saved gallery on screen is not work in flight
             } else {
                 return true
             }

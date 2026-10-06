@@ -119,6 +119,7 @@ struct Harness {
     func isTerminalOrReady() -> Bool {
         switch pipeline.state {
         case .ready, .failed, .done, .savedLocally, .image, .picker: return true
+        case .gallery: return pipeline.galleryIsSettled
         default: return false
         }
     }
@@ -135,6 +136,7 @@ struct Harness {
         case .saving(let bytes, _, _): return bytes == nil ? "saving(degraded)" : "saving"
         case .reading: return "reading"
         case .picker: return "picker"
+        case .gallery: return "gallery"
         case .image: return "image"
         case .ready: return "ready"
         case .rendering(.working): return "rendering.working"

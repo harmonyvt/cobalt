@@ -558,6 +558,9 @@ public final class PhotosSync {
     /// video the owner picked from Photos is adopted in the ledger first, so it is never added twice).
     /// The file must be on this phone: an evicted one has nothing to add until a refill brings it back.
     static func isEligible(_ video: StoredVideo, includeWebps: Bool) -> Bool {
+        // Photos only on request (apple/CONTRACT-GALLERY.md, owner answer 1): a gallery's items and the files made from
+        // it are never added by the album sync; `save to photos` in the detail is the only way they get there.
+        if video.role != nil { return false }
         if video.kind == .webp, !includeWebps { return false }
         guard let file = video.fileURL else { return false }
         return FileManager.default.fileExists(atPath: file.path)

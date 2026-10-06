@@ -9,6 +9,8 @@ struct LiveSnapshot: Sendable {
     var now: Double
     /// The content this builder produced last for the run (the merge base).
     var previous: LiveContentState?
+    /// A gallery run whose save is over (`.gallery` says "saving" until then).
+    var gallerySaved = false
 }
 
 extension LiveContentState {
@@ -43,6 +45,9 @@ extension LiveContentState {
             return finish(.reading, rail: 2) { $0.framesDone = developed; $0.framesTotal = of }
         case .picker:
             return finish(.ready, rail: 0) { $0.duration = nil }
+        case .gallery:
+            // no counts the widget could word as bytes: "saving" until the save is over, then "done"
+            return snap.gallerySaved ? finish(.done, rail: 1) { $0.duration = nil } : finish(.saving, rail: 1) { $0.duration = nil }
         case .image:
             return finish(.ready, rail: 3) { $0.duration = nil }
         case .ready:

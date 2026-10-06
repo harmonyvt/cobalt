@@ -98,17 +98,25 @@ extension Pipeline {
     /// place, and never `429 busy` (a full line is `error.studio.line_full`). Without it, a job `JobQueue.add` made
     /// first takes its turn in the device line and waits out a busy server for 10 minutes; any other run keeps the
     /// 3 s / 60 s busy retry. The device line's slot stays held until the caller releases it (the save is done).
-    func openStudioRetrying(_ client: any CobaltClient, link: URL?, item: String?) async throws -> StudioCreated {
+    func openStudioRetrying(
+        _ client: any CobaltClient, link: URL?, item: String?, gallery: GalleryCreate? = nil
+    ) async throws -> StudioCreated {
         let makePublic = publicFlag                              // read here: the closures below are not on the main actor
         let title = jobOptions.title
         let key = lineKey
+        // A gallery asks for every item at once (APP-API-CONTRACT 18.2); the count is what the client saw, when it saw one.
+        func options(queue: Bool) -> StudioCreateOptions {
+            StudioCreateOptions(
+                makePublic: makePublic, queue: queue, title: title, items: gallery?.choice, itemCount: gallery?.count)
+        }
         if let line = ctx.line, ctx.capabilities.line {
             try await line.enter(key, kind: .save, priority: .batch)          // returns at once on a server line
+            let opts = options(queue: true)
             let created = try await ctx.gates.create.withSlot {               // one create at a time: order = paste order
                 try await self.watched {
                     if let item { return try await client.openStudio(item: item, queue: true) }
                     guard let link else { throw PipelineFailure.noLink }
-                    return try await client.createStudio(link: link, public: makePublic, queue: true, title: title)
+                    return try await client.createStudio(url: link, options: opts)
                 }
             }
             line.observe(key, queueAhead: created.queued ? max(1, created.queueAhead ?? 1) : nil)
@@ -117,11 +125,13 @@ extension Pipeline {
         let managed = usesDeviceLine
         if managed, let line = ctx.line { try await line.enter(key, kind: .save, priority: .batch) }
         let deadline = ctx.clock.now().addingTimeInterval(managed ? 600 : 60)
+        let opts = options(queue: false)
         while true {
             do {
                 let created = try await watched {
                     if let item { return try await client.openStudio(item: item) }
                     guard let link else { throw PipelineFailure.noLink }
+                    if gallery != nil { return try await client.createStudio(url: link, options: opts) }
                     return try await client.createStudio(link: link, public: makePublic)
                 }
                 if managed { ctx.line?.clearBusyElsewhere() }
@@ -422,7 +432,7 @@ extension Pipeline {
         // trip the app must be alive for, and the server resolves the link itself (a multi-item post gives its first
         // video). Only with a server line; without one the check comes first, as for any other link.
         if skipCheck, caps.studio, usesServerLine {
-            try await forkSave(client, info)
+            try await forkSave(client, info, savesGalleries: caps.gallery)
             return
         }
         let resolved = try await ctx.gates.check.withSlot {         // at most 3 link checks at once
@@ -434,10 +444,18 @@ extension Pipeline {
             throw PipelineFailure.unsupported
         case .picker(let items, _):
             guard !items.isEmpty else { throw PipelineFailure.unsupported }
-            setState(.picker(items: items))
+            // A server that saves galleries saves the whole post at once, with no choice first (CONTRACT-GALLERY 1.10); a
+            // single video is today's flow, a single photo a gallery of one. Plain cobalt keeps the picker.
+            if caps.gallery, caps.studio {
+                if jobOptions.galleries == .firstVideo { try await forkSave(client, info, savesGalleries: true) }     // today's rule, asked for
+                else if items.count == 1, items[0].type != .photo { try await forkSave(client, info, savesGalleries: false) }
+                else { try await runGalleryLink(info, picker: items) }
+            } else {
+                setState(.picker(items: items))
+            }
         case .file(let url, let filename):
             if caps.studio {
-                try await forkSave(client, info)
+                try await forkSave(client, info, savesGalleries: caps.gallery)
             } else {
                 try await plainSave(client, url: url, filename: filename, info: info)
             }
@@ -445,9 +463,13 @@ extension Pipeline {
     }
 
     /// Fork / legacy fork: `POST /studio`, poll until saved, read the frames from the source.
-    func forkSave(_ client: any CobaltClient, _ info: LinkInfo) async throws {
+    ///
+    /// `savesGalleries` (a server with `features.gallery`): the create asks for every item, so a post that turns out to be
+    /// a gallery (a photo carousel, an X post of photos) is saved whole whatever the link was; a link that is one file
+    /// still saves as one file. A gallery found at the end continues as `.gallery` (CONTRACT-GALLERY 1.13).
+    func forkSave(_ client: any CobaltClient, _ info: LinkInfo, savesGalleries: Bool = false) async throws {
         let created: StudioCreated
-        do { created = try await openStudioRetrying(client, link: info.url, item: nil) }
+        do { created = try await openStudioRetrying(client, link: info.url, item: nil, gallery: savesGalleries ? GalleryCreate(count: nil, choice: jobOptions.galleries == .firstVideo ? .firstVideo : .all) : nil) }
         catch { releaseLine(); throw error }
         sessionID = created.id
         noteAccepted(session: created.id, postKey: created.id, queued: created.queued, ahead: created.queueAhead)
@@ -456,6 +478,10 @@ extension Pipeline {
         do { s = try await pollSaving(client, id: created.id) }
         catch { releaseLine(); throw error }
         releaseLine()                                             // the server is free for the next save
+        if savesGalleries, !s.items.isEmpty {
+            try await finishUnfocusedGallery(client, session: s, link: info.url)
+            return
+        }
         let m = mediaInfo(s, fallbackName: info.ref)
         media = m
         keepOriginalInBackground(client, session: created.id, media: m)
@@ -841,7 +867,7 @@ extension Pipeline {
                 let request = RenderRequest(
                     start: round3(trim.start), length: round3(min(trim.length, maxClipSeconds)),
                     width: ctx.settings.webpWidth, quality: ctx.settings.webpQuality, crop: sentCrop,
-                    queue: serverLine ? true : nil, priority: serverLine ? "focused" : nil)
+                    queue: serverLine ? true : nil, priority: serverLine ? "focused" : nil, item: renderItem)
                 let waitsOutBusy = usesDeviceLine
                 post = Task { @MainActor in try await self.sendRender(client, session: sid, request, waitsOutBusy: waitsOutBusy) }
                 renderRequest = post
@@ -922,7 +948,8 @@ extension Pipeline {
                 }
                 _ = try await ctx.store.add(
                     file: file, kind: .webp, media: info, sessionID: sid, link: linkURL, remoteURL: r.url, move: true,
-                    mediaID: targetMediaID, clip: clip, keep: ctx.settings.keepVideosOnDevice)
+                    mediaID: targetMediaID, clip: clip, keep: ctx.settings.keepVideosOnDevice,
+                    madeFrom: renderItem.map { [$0] })
                 syncStoreTitle()
             }
         } catch is CancellationError {
@@ -1079,6 +1106,11 @@ extension Pipeline {
                     do { s = try await p.pollSaving(client, id: sid) }
                     catch { p.releaseLine(); throw error }
                     p.releaseLine()
+                    // a gallery the share sheet (or a relaunch) was saving: it finishes as a gallery
+                    if p.ctx.capabilities.gallery, !s.items.isEmpty {
+                        try await p.finishUnfocusedGallery(client, session: s, link: linkInfo?.url)
+                        return
+                    }
                     let m = p.mediaInfo(s, fallbackName: linkInfo?.ref ?? sid)
                     // The sheet that started this save closed before it finished: the original still
                     // belongs on this phone (CONTRACT-SYNC.md, the second gap).

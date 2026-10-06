@@ -80,6 +80,10 @@ struct OfflineTag: Codable, Equatable, Sendable {
     var created: Double
     /// The owner's custom title of the media, when there is one.
     var title: String?
+    /// Gallery fields (apple/CONTRACT-GALLERY.md 4), so a lost index can rebuild an item or a made file as what it is.
+    var role: GalleryRole?
+    var item: Int?
+    var lib: String?
 
     /// The JSON, under `maxBytes`: the title goes first when it does not fit, then the link, then the remote URL.
     func encoded() -> Data {
@@ -414,11 +418,21 @@ enum OfflineFolder {
         guard FileManager.default.fileExists(atPath: url.path) else { return true }
         do {
             try ops.remove(url)
+            removeEmptyGalleryFolder(url.deletingLastPathComponent())
             return true
         } catch {
             XAttr.remove(OfflineTag.attribute, at: url)
             return !FileManager.default.fileExists(atPath: url.path)
         }
+    }
+
+    /// The last file of a gallery's folder went: the folder goes too, when it is one cobalt made (it carries the folder
+    /// tag) and holds nothing else. A folder the owner made, or one with their files in it, is never touched.
+    static func removeEmptyGalleryFolder(_ folder: URL) {
+        guard XAttr.get(folderAttribute, at: folder) != nil,
+              let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path),
+              names.allSatisfy({ $0 == ".DS_Store" }) else { return }
+        try? FileManager.default.removeItem(at: folder)
     }
 
     /// The same file (device and inode), not just the same name: a case-insensitive volume answers one file for
@@ -440,6 +454,10 @@ enum OfflineFolder {
         /// The name `FolderNaming` chose; a clash gets ` (2)`.
         var preferredName: String
         var excludeFromBackup: Bool
+        /// A gallery's folder (apple/CONTRACT-GALLERY.md 1.8): the folder the file goes into, named by `FolderNaming`;
+        /// nil = the root. One folder per media: a folder that already carries this media's tag is reused.
+        var folder: String?
+        var media: String = ""
     }
 
     enum MoveOutcome: Sendable, Equatable {
@@ -460,6 +478,7 @@ enum OfflineFolder {
     ) throws -> [(id: String, outcome: MoveOutcome)] {
         purgeStaleParts(root: root, now: now)
         var taken = names(in: root)
+        var folders: [String: String] = [:]
         var results: [(id: String, outcome: MoveOutcome)] = []
         for request in requests {
             guard ops.size(of: request.source) != nil else {
@@ -467,10 +486,11 @@ enum OfflineFolder {
                 continue
             }
             do {
-                let name = try moveOne(request, root: root, taken: &taken, ops: ops)
-                let destination = root.appendingPathComponent(name)
+                let path = try moveOne(request, root: root, taken: &taken, folders: &folders, ops: ops)
+                let destination = root.appendingPathComponent(path)
                 if request.excludeFromBackup { excludeFromBackup(destination) }
-                results.append((request.id, .moved(path: name, name: name, bytes: ops.size(of: destination) ?? 0)))
+                results.append((request.id, .moved(
+                    path: path, name: (path as NSString).lastPathComponent, bytes: ops.size(of: destination) ?? 0)))
             } catch let interrupted as OfflineInterrupted {
                 throw interrupted
             } catch {
@@ -480,21 +500,60 @@ enum OfflineFolder {
         return results
     }
 
+    /// The extended attribute on a gallery's folder: the media it holds. `rename(2)` keeps it, so the owner may rename
+    /// the folder in Files and the next file of the media still goes into it.
+    static let folderAttribute = "com.capybaraharmony.cobalt.folder"
+
+    /// The folder of a gallery media: one already carrying its tag, else a new one named `preferred` (a clash gets
+    /// ` (2)`), tagged. `taken` holds the root's names, lowercased; `folders` what this pass already chose.
+    static func galleryFolder(
+        media: String, preferred: String, root: URL, taken: inout Set<String>, folders: inout [String: String]
+    ) throws -> String {
+        let fm = FileManager.default
+        if let known = folders[media], fm.fileExists(atPath: root.appendingPathComponent(known).path) { return known }
+        if !media.isEmpty, let names = try? fm.contentsOfDirectory(atPath: root.path) {
+            for name in names.sorted() {
+                let url = root.appendingPathComponent(name, isDirectory: true)
+                var isDirectory: ObjCBool = false
+                guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue,
+                      let data = XAttr.get(folderAttribute, at: url), String(decoding: data, as: UTF8.self) == media else { continue }
+                folders[media] = name
+                return name
+            }
+        }
+        let name = FolderNaming.unique(preferred, among: taken)
+        let url = root.appendingPathComponent(name, isDirectory: true)
+        try fm.createDirectory(at: url, withIntermediateDirectories: false)
+        try? XAttr.set(folderAttribute, Data(media.utf8), at: url)
+        taken.insert(name.lowercased())
+        folders[media] = name
+        return name
+    }
+
     private static func moveOne(
-        _ request: MoveRequest, root: URL, taken: inout Set<String>, ops: any OfflineFileOps
+        _ request: MoveRequest, root: URL, taken: inout Set<String>, folders: inout [String: String], ops: any OfflineFileOps
     ) throws -> String {
         try ops.setTag(request.tag, at: request.source)                                  // step 1
         try ops.checkpoint(.tagged)
         var lastError: (any Error)?
         for _ in 0..<6 {
-            let name = FolderNaming.unique(request.preferredName, among: taken)         // step 2
-            let destination = root.appendingPathComponent(name)
+            var directory = root
+            var prefix = ""
+            var inDirectory = taken
+            if let folder = request.folder {
+                let chosen = try galleryFolder(media: request.media, preferred: folder, root: root, taken: &taken, folders: &folders)
+                directory = root.appendingPathComponent(chosen, isDirectory: true)
+                prefix = chosen + "/"
+                inDirectory = names(in: directory)
+            }
+            let name = FolderNaming.unique(request.preferredName, among: inDirectory)         // step 2
+            let destination = directory.appendingPathComponent(name)
             do {
                 try place(request, at: destination, root: root, ops: ops)               // step 3
-                taken.insert(name.lowercased())
-                return name
+                if request.folder == nil { taken.insert(name.lowercased()) }
+                return prefix + name
             } catch let error as POSIXError where error.code == .EEXIST {
-                taken.insert(name.lowercased())                                           // someone took it meanwhile
+                if request.folder == nil { taken.insert(name.lowercased()) }              // someone took it meanwhile
                 lastError = error
             }
         }
@@ -605,8 +664,8 @@ enum OfflineFolder {
             let explicit = tag.media
             var media = explicit
             if records.contains(where: { $0.media == explicit }) {
-                let hasOriginal = records.contains { $0.media == explicit && $0.kind == .original }
-                if tag.kind == .original && hasOriginal { media = id }
+                let hasOriginal = records.contains { $0.media == explicit && $0.isPlainOriginal }
+                if tag.kind == .original && tag.role == nil && hasOriginal { media = id }
             }
             let posterName = "\(id).jpg"
             let hasPoster = FileManager.default.fileExists(atPath: hiddenRoot.appendingPathComponent("posters/\(posterName)").path)
@@ -617,7 +676,8 @@ enum OfflineFolder {
                 createdAt: Date(timeIntervalSince1970: tag.created), addedAt: now,
                 posterBytes: hasPoster ? fileSize(hiddenRoot.appendingPathComponent("posters/\(posterName)")) : nil,
                 previewNames: nil, previewBytes: nil, publicURL: nil, mediaID: media, clip: nil, title: tag.title,
-                keep: true, visiblePath: entry.path, givenName: nil)
+                keep: true, visiblePath: entry.path, givenName: nil,
+                role: tag.role, itemIndex: tag.item, libraryID: tag.lib)
             records.append(rebuilt)
             out.rebuilt.append(id)
             out.report.rebuilt += 1

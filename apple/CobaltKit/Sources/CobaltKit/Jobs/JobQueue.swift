@@ -180,7 +180,7 @@ public final class JobQueue {
         let focusing: Bool
         switch via {
         case .paste, .drop, .circle, .relaunch: focusing = allowsFocus && !batch && quiet
-        case .review, .share, .shortcut: focusing = false
+        case .review, .share, .shortcut, .make: focusing = false
         }
         // A send straight into the server's line: no "checking the link" first (a batch, a drop of several, a Shortcut).
         let skipCheck = batch || via == .shortcut || via == .review || via == .relaunch
@@ -210,6 +210,54 @@ public final class JobQueue {
         ]))
         changed()
         return out
+    }
+
+    /// What a job on a gallery that is already on the server does (`addGallery`).
+    public enum GalleryWork: Sendable, Equatable {
+        /// Make a slideshow or a gallery image from the post's items.
+        case make(GalleryMake)
+        /// Fetch the items that could not be saved, again (`POST /studio/<sid>/items/retry`).
+        case retry([Int])
+    }
+
+    /// A make from a saved gallery, or a retry of its missing items, as a job of its own: the tray shows it, closing the
+    /// sheet that asked never stops it, and it goes into the server's line ahead of every waiting save (focused). It
+    /// never takes the focus. `session` is the post's studio session (`LibraryPost.session`), `items` the post's items as
+    /// known (types give the plan's `seconds`).
+    @discardableResult
+    public func addGallery(
+        _ work: GalleryWork, session: String, items: [GalleryItem], media: MediaInfo?, link: URL?, mediaID: String?,
+        failures: [Int: String] = [:]
+    ) -> Job {
+        pruneFinished()
+        let id = UUID()
+        let p = Pipeline(context: ctx)
+        p.nextLiveRunID = id
+        p.jobKey = id
+        p.takesPartInDeviceLine = true
+        attach(p)
+        ctx.liveRouter.mute(p)
+        addCounter += 1
+        var m = Meta(input: nil, options: JobOptions())
+        m.addedMonotonic = addCounter
+        meta[id] = m
+        let job = Job(id: id, pipeline: p, origin: .app, addedAt: ctx.clock.now(), via: .make)
+        jobs.append(job)
+        p.startGallery(work, session: session, items: items, media: media, link: link, mediaID: mediaID, failures: failures)
+        Telemetry.log(.info, .pipeline, "job added", data: tele([
+            "input": "gallery", "via": "make", "batch": 1,
+        ]))
+        changed()
+        return job
+    }
+
+    /// The saved gallery of `session` that a job of this queue holds (so a make asked for it goes to that job, not to a
+    /// second one).
+    public func galleryJob(session: String) -> Job? {
+        jobs.first { job in
+            guard job.pipeline.sessionID == session, case .gallery = job.pipeline.state else { return false }
+            return job.pipeline.galleryRun != nil
+        }
     }
 
     private func start(_ input: JobInput, via: JobVia, options: JobOptions, focus: Bool, skipCheck: Bool) -> Job {
@@ -322,18 +370,23 @@ public final class JobQueue {
         case .failed, .picker, .image, .done, .savedLocally, .ready, .idle:
             dismiss(id)
             return
+        case .gallery where p.galleryIsSettled:
+            dismiss(id)
+            return
         case .reading:
             // the save is done; stop reading the frames
             notice = JobNotice(kind: .stoppedReading, title: title)
             answer = "reading"
             p.detach()
-        case .fetching, .uploading, .saving, .rendering:
+        case .fetching, .uploading, .saving, .rendering, .gallery:
             if queuedOnServer, let sid = p.sessionID {
                 do {
+                    // a render, or a make from a gallery: the save stays and only that is cancelled
+                    let isMake: Bool = { if case .gallery = p.state { return p.galleryRun?.make.isActive == true } else { return false } }()
                     let isRender: Bool
-                    if case .rendering = p.state { isRender = true } else { isRender = false }
+                    if case .rendering = p.state { isRender = true } else { isRender = isMake }
                     let result: QueueCancel
-                    if isRender, let renderJob = p.renderJobID {
+                    if isRender, let renderJob = p.renderJobID ?? p.makeJobID {
                         result = try await ctx.client.cancelQueued(session: sid, job: renderJob)
                     } else {
                         result = try await ctx.client.cancelQueued(session: sid)
@@ -342,6 +395,12 @@ public final class JobQueue {
                     case .cancelled:
                         answer = "cancelled"
                         notice = JobNotice(kind: isRender ? .cancelledWebp : .cancelled, title: title)
+                        if isMake {
+                            p.cancelMake()
+                            Telemetry.log(.info, .pipeline, "job cancel", data: tele(["phase": .string("make"), "onServer": true, "answer": .string(answer)]))
+                            changed()
+                            return
+                        }
                         if isRender {
                             // the save stays: the trim is back
                             p.cancel()
@@ -355,6 +414,7 @@ public final class JobQueue {
                         p.cancel()
                         p.reset()
                     case .started:
+                        if isMake { return }                       // the make started first: it is followed to its end
                         answer = "started"
                         notice = JobNotice(kind: .stoppedFollowing, title: title)
                         p.detach()

@@ -79,6 +79,29 @@ public protocol CobaltClient: Sendable {
     func cancelNotify(session id: String) async throws                                          // DELETE /studio/<id>/notify
     func download(_ file: RemoteFile, to destination: URL,
                   progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> URL
+    // Photos and galleries (APP-API-CONTRACT 18.2, 18.4, 18.5, 18.10-18.13; `features.gallery`, `features.gallery_make`).
+    // Defaults forward to the calls above or say the server cannot, so a client that predates galleries still compiles.
+    /// `POST /studio` with everything `options` carries: `items`, `item_count`, the share sheet's chained `slideshow`
+    /// or `gallery_image` (18.12), `origin`, `notify`. Without gallery fields it is the plain create.
+    func createStudio(url: URL, options: StudioCreateOptions) async throws -> StudioCreated
+    /// `POST /studio/<sid>/slideshow` (keyed): a slideshow webp or mp4 of the post's items. `items` are the post's items
+    /// as known (their types make the wire's `seconds`: a number for a photo, `null` for a video or gif). `focused`
+    /// puts it ahead of every waiting save (`priority: "focused"`, only with the server's line).
+    func makeSlideshow(session: String, plan: SlideshowPlan, items: [GalleryItem], focused: Bool, notify: Bool) async throws -> RenderAccepted
+    /// `POST /studio/<sid>/gallery-image` (keyed): the borderless gallery image. `plan.items` must be photos.
+    func makeGalleryImage(session: String, plan: GalleryImagePlan, focused: Bool, notify: Bool) async throws -> RenderAccepted
+    /// `GET /studio/<sid>/render/<job>` of a slideshow or gallery-image make: the phase, then the made file's row.
+    func makeStatus(session: String, job: String, wait: Int) async throws -> MakeStatus
+    /// `POST /studio/<sid>/items/retry` (keyed): fetch only these indices again (a save job in the line).
+    func retryItems(session: String, items: [Int]) async throws -> StudioCreated
+    /// `DELETE /library/items/<id>` (keyed): one item, slideshow, crop or export. The last item of a post is
+    /// `409 error.library.last_item` (use `deletePost`).
+    func deleteItem(_ itemID: String) async throws
+    /// `PATCH /library/items/<id>/visibility {"public", "scope": "post"}` (keyed): the whole post's files at once.
+    func setPostVisibility(anchor itemID: String, public makePublic: Bool) async throws -> VisibilityResult
+    /// `GET /library` with `v=3` when `v3` (only when the server has `features.gallery`): `v=2` plus gallery items,
+    /// made files and each post's `kind`.
+    func library(cursor: String?, limit: Int, v3: Bool) async throws -> LibraryPage
 }
 
 extension CobaltClient {
@@ -116,10 +139,40 @@ extension CobaltClient {
     public func cancelLineNotify() async throws {}
     public func setNotify(session id: String, _ optIn: NotifyOptIn) async throws {}
     public func cancelNotify(session id: String) async throws {}
+    public func createStudio(url: URL, options: StudioCreateOptions) async throws -> StudioCreated {
+        guard options.isPlain else { throw PipelineFailure.unsupported }
+        return try await createStudio(link: url, public: options.makePublic, queue: options.queue, title: options.title)
+    }
+    public func makeSlideshow(session: String, plan: SlideshowPlan, items: [GalleryItem], focused: Bool, notify: Bool) async throws -> RenderAccepted {
+        throw PipelineFailure.unsupported
+    }
+    public func makeGalleryImage(session: String, plan: GalleryImagePlan, focused: Bool, notify: Bool) async throws -> RenderAccepted {
+        throw PipelineFailure.unsupported
+    }
+    public func makeStatus(session: String, job: String, wait: Int) async throws -> MakeStatus { throw PipelineFailure.unsupported }
+    public func retryItems(session: String, items: [Int]) async throws -> StudioCreated { throw PipelineFailure.unsupported }
+    public func deleteItem(_ itemID: String) async throws { throw PipelineFailure.unsupported }
+    public func setPostVisibility(anchor itemID: String, public makePublic: Bool) async throws -> VisibilityResult {
+        throw PipelineFailure.unsupported
+    }
+    public func library(cursor: String?, limit: Int, v3: Bool) async throws -> LibraryPage {
+        try await library(cursor: cursor, limit: limit, v2: v3)
+    }
     /// A client that predates the route says the server cannot do it.
     public func deletePost(anchor itemID: String) async throws -> PostDeleteResult { throw PipelineFailure.unsupported }
     /// Likewise: a client that predates titles says the server cannot do it.
     public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult { throw PipelineFailure.unsupported }
+}
+
+extension CobaltClient {
+    /// `makeSlideshow` without a Hark opt-in.
+    public func makeSlideshow(session: String, plan: SlideshowPlan, items: [GalleryItem], focused: Bool) async throws -> RenderAccepted {
+        try await makeSlideshow(session: session, plan: plan, items: items, focused: focused, notify: false)
+    }
+    /// `makeGalleryImage` without a Hark opt-in.
+    public func makeGalleryImage(session: String, plan: GalleryImagePlan, focused: Bool) async throws -> RenderAccepted {
+        try await makeGalleryImage(session: session, plan: plan, focused: focused, notify: false)
+    }
 }
 
 /// What `PATCH /library/items/<id>/post` answers: `{"status":"success","post":"<post key>","title":"…"|null}`.

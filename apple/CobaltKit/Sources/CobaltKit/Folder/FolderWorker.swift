@@ -11,6 +11,10 @@ struct FolderWorker: Sendable {
         /// The name it would get in an empty folder (`FolderNaming`); a clash adds ` (2)` at copy time.
         var name: String
         var createdAt: Date
+        /// A gallery's folder inside the destination (apple/CONTRACT-GALLERY.md 1.8); nil = the destination itself.
+        var folder: String?
+        /// The media the file belongs to: one folder per media, found again by its tag.
+        var media: String = ""
     }
 
     enum Outcome: Sendable, Equatable {
@@ -93,9 +97,10 @@ struct FolderWorker: Sendable {
             let key = PhotosKey.of(v)
             if let e = items[key], e.state == .done || e.state == .skipped { continue }
             guard seen.insert(key).inserted, fm.fileExists(atPath: file.path) else { continue }
+            let placement = FolderNaming.placement(for: v, in: byID[v.id])
             out.append(Candidate(
-                key: key, source: file, bytes: Self.size(of: file),
-                name: FolderNaming.fileName(for: v, in: byID[v.id]), createdAt: v.createdAt))
+                key: key, source: file, bytes: Self.size(of: file), name: placement.name, createdAt: v.createdAt,
+                folder: placement.folder, media: v.mediaID))
         }
         return out.sorted { $0.createdAt < $1.createdAt }
     }
@@ -165,9 +170,24 @@ struct FolderWorker: Sendable {
         let size = Self.size(of: c.source)
         var lastError: (any Error)?
         for _ in 0..<5 {
-            let name = FolderNaming.unique(c.name) { fm.fileExists(atPath: destination.appendingPathComponent($0).path) }
-            let final = destination.appendingPathComponent(name)
-            ledger.recordPlan(id, c.key, file: name, bytes: size)
+            var directory = destination
+            var prefix = ""
+            if let folder = c.folder {
+                // a gallery's files go into one folder of its own, found again by its tag
+                var taken = OfflineFolder.names(in: destination)
+                var chosen: [String: String] = [:]
+                do {
+                    let name = try OfflineFolder.galleryFolder(media: c.media, preferred: folder, root: destination, taken: &taken, folders: &chosen)
+                    directory = destination.appendingPathComponent(name, isDirectory: true)
+                    prefix = name + "/"
+                } catch {
+                    lastError = error
+                    break
+                }
+            }
+            let name = FolderNaming.unique(c.name) { fm.fileExists(atPath: directory.appendingPathComponent($0).path) }
+            let final = directory.appendingPathComponent(name)
+            ledger.recordPlan(id, c.key, file: prefix + name, bytes: size)
             let part = destination.appendingPathComponent(
                 "\(Self.partPrefix)\(FolderLedger.launchID.prefix(8))-\(UUID().uuidString.prefix(8))\(Self.partSuffix)")
             do {
@@ -179,7 +199,7 @@ struct FolderWorker: Sendable {
                     if code == EEXIST { continue }
                     throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
                 }
-                ledger.finish(id, c.key, file: name, now: clock.now())
+                ledger.finish(id, c.key, file: prefix + name, now: clock.now())
                 return .copied
             } catch {
                 try? fm.removeItem(at: part)

@@ -1000,7 +1000,7 @@ extension PipelineState {
     var isLiveInFlight: Bool {
         switch self {
         case .fetching, .uploading, .saving, .reading, .rendering: return true
-        default: return false
+        default: return false         // a `.gallery` run says its own progress (`Job.isLive`); the state alone cannot
         }
     }
 }

@@ -174,6 +174,22 @@ struct JobCardFacts: Equatable {
             stepText = ""
             failureOpens = f.keepsTrim && p.media != nil && p.sessionID != nil
             canRetry = TrayCopy.isRetryable(f)
+        case .gallery:
+            // minimal card so the tray compiles; lane A1 draws the real one (CONTRACT-GALLERY.A0-API.md)
+            let run = p.galleryRun
+            if p.galleryIsSettled {
+                kind = .saved
+                headline = TrayCopy.saved
+                detail = .text(TrayCopy.savedWhere)
+                stepText = Copy.stepDone
+            } else {
+                kind = p.line != nil ? .waiting : .running
+                headline = run.map { Copy.Gallery.saving($0.done, of: $0.total) } ?? title
+                stepText = ""
+                showsBar = true
+                fraction = run.map { $0.total > 0 ? Double($0.done) / Double($0.total) : 0 }
+                exit = Self.exit(for: p, lineMode: lineMode)
+            }
         case .idle:
             break
         }

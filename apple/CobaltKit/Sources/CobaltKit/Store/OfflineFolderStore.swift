@@ -24,13 +24,16 @@ extension OfflineStore {
             if isInUse(r.id) { continue }
             if respectHolds, let session = r.sessionID, sessionIsHeld?(session) == true { continue }
             guard let video = videos.first(where: { $0.id == r.id }), let name = r.fileName else { continue }
-            let preferred = FolderNaming.fileName(for: video, in: media(containing: r.id))
+            let owner = media(containing: r.id)
+            let placement = FolderNaming.placement(for: video, in: owner)
+            let preferred = placement.name
             let tag = OfflineTag(
                 id: r.id, media: r.media, kind: r.kind, session: r.sessionID, remote: r.remoteURL?.absoluteString,
-                link: r.link?.absoluteString, created: r.createdAt.timeIntervalSince1970, title: r.title)
+                link: r.link?.absoluteString, created: r.createdAt.timeIntervalSince1970, title: r.title,
+                role: r.role, item: r.itemIndex, lib: r.libraryID)
             requests.append(OfflineFolder.MoveRequest(
                 id: r.id, source: root.appendingPathComponent("files/\(name)"), tag: tag, preferredName: preferred,
-                excludeFromBackup: r.hasServerCopy))
+                excludeFromBackup: r.hasServerCopy, folder: placement.folder, media: r.media))
         }
         guard !requests.isEmpty else { return OfflineFolder.PromoteOutcome() }
         let (hidden, ops, stamp, work) = (root, ops, now(), requests)

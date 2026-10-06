@@ -162,6 +162,8 @@ public struct PreviewClient: CobaltClient {
     /// How this "server" holds the line (`AppModel.previewLine(_:)`): a server with `features.line`, one that is busy
     /// with something the app does not know (device line), or neither (every other preview).
     let lineMode: LinePreviewMode
+    /// What the "server" holds for the galleries this client created (`PreviewGallery.swift`).
+    let galleries = PreviewGalleryServer()
 
     public var baseURL: URL { PreviewData.base }
 
@@ -204,6 +206,10 @@ public struct PreviewClient: CobaltClient {
             throw CobaltError.api(code: "error.api.fetch.empty", httpStatus: 400)
         case .picker:
             return .picker(items: PreviewData.pickerItems(), audio: nil)
+        case _ where scenario.isGallery:
+            guard let post = galleryPost else { throw PipelineFailure.unsupported }
+            try await clock.sleep(seconds: PreviewData.fetchSeconds * timeScale * 0.3)
+            return .picker(items: PreviewData.galleryPickerItems(post), audio: nil)
         case .plainCobalt:
             // plain cobalt has no studio: the fetch is the response itself
             try await clock.sleep(seconds: PreviewData.fetchSeconds * timeScale)
@@ -340,6 +346,7 @@ public struct PreviewClient: CobaltClient {
     }
 
     public func session(_ id: String, wait: Int) async throws -> StudioSession {
+        if let gallery = try await gallerySession(id, wait: wait) { return gallery }
         guard let s = knownSession(id) else { throw CobaltError.api(code: "error.studio.not_found", httpStatus: 404) }
         if server.isCancelled(id) { return cancelledSession(s) }
         var snap = snapshot(of: s, at: clock.now())
@@ -442,6 +449,14 @@ public struct PreviewClient: CobaltClient {
     public func render(session id: String, _ request: RenderRequest) async throws -> String {
         guard let s = knownSession(id) else { throw CobaltError.api(code: "error.studio.not_found", httpStatus: 404) }
         if scenario == .renderBusy { throw CobaltError.api(code: "error.webp.busy", httpStatus: 429) }
+        if let g = galleries.gallery(id), let item = request.item {
+            // a render of one item of a gallery (APP-API-CONTRACT 18.13): a photo has no video to make a webp from
+            guard item >= 0, item < g.post.items.count, !g.deleted.contains(item) else {
+                throw CobaltError.api(code: "error.studio.not_found", httpStatus: 404)
+            }
+            guard g.post.items[item].type != .photo else { throw CobaltError.api(code: "error.studio.not_video", httpStatus: 409) }
+            galleries.record("render", "item=\(item)")
+        }
         let now = clock.now()
         try throwIfBusy(queue: request.queue == true, render: true, at: now)
         if request.notify { server.setNotify(id, NotifyOptIn(on: [.rendered, .failed], label: s.name ?? s.clip.title)) }
@@ -459,6 +474,11 @@ public struct PreviewClient: CobaltClient {
             }
         }
         return job
+    }
+
+    public func makeStatus(session: String, job: String, wait: Int) async throws -> MakeStatus {
+        if let status = try await galleryMakeStatus(session, job: job, wait: wait) { return status }
+        throw CobaltError.api(code: "error.studio.not_found", httpStatus: 404)
     }
 
     public func renderStatus(session id: String, job: String, wait: Int) async throws -> RenderStatus {
@@ -704,12 +724,17 @@ public struct PreviewClient: CobaltClient {
         switch file {
         case .studioSource(let id): total = server.session(id)?.clip.bytes ?? clip.bytes
         case .open(let url): total = url == clip.webpURL ? clip.webpBytes : 2_000_000
-        case .libraryItem: total = clip.bytes
+        case .libraryItem(let id):
+            total = galleries.gallery(forRow: id).map { g in
+                g.made.first { $0.id == id }?.bytes ?? (Int(id.suffix(2)).flatMap { $0 < g.post.items.count ? g.post.items[$0].bytes : nil } ?? 200_000)
+            } ?? clip.bytes
         }
         // the finished webp is small and already hosted: it must not delay "webp ready"
         let isWebp: Bool
         if case .open(let url) = file, url == clip.webpURL || url.pathExtension == "webp" { isWebp = true } else { isWebp = false }
-        let duration = (isWebp ? 0.1 : PreviewData.saveSeconds) * timeScale
+        var seconds = isWebp ? 0.1 : PreviewData.saveSeconds
+        if case .libraryItem(let id) = file, galleries.gallery(forRow: id) != nil { seconds = 0.12 }       // a photo is small
+        let duration = seconds * timeScale
         let steps = 5
         for i in 1...steps {
             try await clock.sleep(seconds: duration / Double(steps))

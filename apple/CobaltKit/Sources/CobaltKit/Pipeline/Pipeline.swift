@@ -73,6 +73,8 @@ public final class Pipeline: Identifiable {
         didSet { if line != oldValue { jobEvent?(self, .line) } }
     }
     public internal(set) var result: WebpResult?
+    /// The save and the makes of a gallery (`.gallery` state); nil for every other run.
+    public internal(set) var galleryRun: GalleryRun?
     public internal(set) var stored: StoredVideo?             // the local original, once downloaded
     /// Where this run came from when it was resumed from a `SharedJob`: `.shareExtension` for a
     /// handoff from the share sheet, `.app` for the app's own run followed after a relaunch; nil
@@ -123,6 +125,11 @@ public final class Pipeline: Identifiable {
     /// Set by `adoptPhotosAsset`, taken by the next `start(file:)` of that file.
     @ObservationIgnored var pendingPhotosAsset: (path: String, id: String)?
     @ObservationIgnored var renderJobID: String?
+    /// The video or gif item of a gallery this run makes a webp of (`resume(session:media:item:…)`): sent as `item` with the
+    /// render (APP-API-CONTRACT 18.13) and kept as the webp's `madeFrom`. Nil = the session's lead, as always.
+    @ObservationIgnored var renderItem: Int?
+    /// The server's job id of the make in flight (`.gallery`), for a cancel of a queued one.
+    @ObservationIgnored var makeJobID: String?
     @ObservationIgnored var localFile: URL?
     /// Files this run downloaded only to read frames from or to add to Photos: removed with the run.
     @ObservationIgnored var temporaryFiles: [URL] = []
@@ -202,10 +209,12 @@ public final class Pipeline: Identifiable {
         let isImage: Bool
         if case .image = state { isImage = true } else { isImage = media?.isImage == true }
         let first: Rail.Step = isFile ? .upload : .fetch
-        let steps: [Rail.Step] = plain ? [first, .save, .read] : [first, .save, .read, isImage ? .host : .webp]
+        var steps: [Rail.Step] = plain ? [first, .save, .read] : [first, .save, .read, isImage ? .host : .webp]
+        if case .gallery = state { steps = [first, .save] }                    // a gallery has nothing to read
         let finished: Bool
         switch state {
         case .done, .savedLocally: finished = true
+        case .gallery: finished = galleryRun?.isSaved == true
         default: finished = false
         }
         return Rail(steps: steps, index: min(lastRailIndex, steps.count - 1), finished: finished)
@@ -248,7 +257,7 @@ public final class Pipeline: Identifiable {
         defer { ctx.continued?.pipelineChanged(self) }
         switch new {
         case .idle, .fetching, .uploading, .picker: lastRailIndex = 0
-        case .saving: lastRailIndex = 1
+        case .saving, .gallery: lastRailIndex = 1
         case .reading, .savedLocally: lastRailIndex = 2
         case .image, .ready, .rendering, .done: lastRailIndex = 3
         case .failed: break
@@ -335,6 +344,18 @@ public final class Pipeline: Identifiable {
         ctx.continued?.pipelineChanged(self)
     }
 
+    /// The gallery run changed: told to the queue (state), the Live Activity and the continued task.
+    func setGalleryRun(_ edit: (inout GalleryRun) -> Void) {
+        guard var run = galleryRun else { return }
+        let before = run
+        edit(&run)
+        guard run != before else { return }
+        galleryRun = run
+        if run.phase != before.phase || run.make != before.make { ctx.live?.stateChanged(self) }
+        jobEvent?(self, .state)
+        ctx.continued?.pipelineChanged(self)
+    }
+
     /// Removes the copies of the original this run fetched only for itself (the stored original,
     /// if any, is never touched).
     func removeTemporaryFiles() {
@@ -359,6 +380,7 @@ public final class Pipeline: Identifiable {
         opensOnTrim = false
         targetMediaID = nil
         lastRenderRequest = nil
+        galleryRun = nil
         self.input = input
         media = nil
         frames = Array(repeating: nil, count: Pipeline.frameCount)
@@ -381,6 +403,8 @@ public final class Pipeline: Identifiable {
         titleUnsent = false
         runTitle = nil
         renderJobID = nil
+        makeJobID = nil
+        renderItem = nil
         localFile = nil
         activeHandle = nil
         errorPhase = .saving

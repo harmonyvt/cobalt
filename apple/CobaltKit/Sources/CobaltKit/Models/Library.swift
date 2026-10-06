@@ -42,6 +42,20 @@ public struct LibraryFile: Sendable, Codable, Equatable, Identifiable {
     public var wireVisibility: Visibility?
     /// `visibility_toggle`: `PATCH …/visibility` takes this file (an original, or a webp). False when absent.
     public var canToggleVisibility: Bool = false
+    // GET /library?v=3 (APP-API-CONTRACT 18.3): what the file is within its post. All nil/empty from an older server
+    // and for every file that is not part of a gallery or made from one.
+    /// `role`: `item` (an original of a gallery), `slideshow`, `export` (a gallery image), `crop`; nil for a file that
+    /// is none of these (a single file, a webp of a video).
+    public var galleryRole: GalleryRole?
+    /// `item_index`: the item's place in its post (0-based); nil for a file that is not an item.
+    public var itemIndex: Int?
+    /// `made_from`: the library file ids a made file was made from.
+    public var madeFrom: [String] = []
+    /// `made_spec`: the spec a made file was made with.
+    public var madeSpec: MadeSpec?
+
+    /// What a made file is (the key a remake replaces); nil for anything else.
+    public var madeKind: MadeKind? { MadeKind(role: galleryRole, spec: madeSpec) }
 
     /// The file's visibility: the server's word, else derived from `kind` (a legacy server: a `public` file is a
     /// public link, a `private` one has none). On `GET /library?v=2` an original that is public has `kind
@@ -65,6 +79,8 @@ extension LibraryFile {
         case posterURL = "posterUrl"           // `poster_url` after convertFromSnakeCase
         case visibility
         case canToggleVisibility = "visibilityToggle"   // `visibility_toggle`
+        case galleryRole = "role"
+        case itemIndex, madeFrom, madeSpec               // `item_index`, `made_from`, `made_spec`
     }
 
     public init(from decoder: Decoder) throws {
@@ -86,6 +102,11 @@ extension LibraryFile {
         posterURL = try? c.decodeIfPresent(URL.self, forKey: .posterURL)      // a bad poster never loses the file
         wireVisibility = (try? c.decodeIfPresent(Visibility.self, forKey: .visibility)) ?? nil   // a word we do not know reads as unsaid
         canToggleVisibility = (try? c.decodeIfPresent(Bool.self, forKey: .canToggleVisibility)) ?? false
+        // v=3 fields: a word this build does not know reads as unsaid, and never loses the file
+        galleryRole = (try? c.decodeIfPresent(GalleryRole.self, forKey: .galleryRole)) ?? nil
+        itemIndex = (try? c.decodeIfPresent(Int.self, forKey: .itemIndex)) ?? nil
+        madeFrom = ((try? c.decodeIfPresent([String].self, forKey: .madeFrom)) ?? nil) ?? []
+        madeSpec = ((try? c.decodeIfPresent(JSONValue.self, forKey: .madeSpec)) ?? nil)?.object.flatMap(MadeSpec.init(object:))
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -106,6 +127,56 @@ extension LibraryFile {
         try c.encodeIfPresent(posterURL, forKey: .posterURL)
         try c.encodeIfPresent(wireVisibility, forKey: .visibility)
         try c.encode(canToggleVisibility, forKey: .canToggleVisibility)
+        try c.encodeIfPresent(galleryRole, forKey: .galleryRole)
+        try c.encodeIfPresent(itemIndex, forKey: .itemIndex)
+        if !madeFrom.isEmpty { try c.encode(madeFrom, forKey: .madeFrom) }
+        if let data = madeSpec?.data, let value = try? JSONDecoder().decode(JSONValue.self, from: data) {
+            try c.encode(value, forKey: .madeSpec)
+        }
+    }
+}
+
+/// Any JSON value, for the one field the wire leaves open (`made_spec`).
+enum JSONValue: Codable, Equatable {
+    case null, bool(Bool), number(Double), string(String), array([JSONValue]), dictionary([String: JSONValue])
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null }
+        else if let v = try? c.decode(Bool.self) { self = .bool(v) }
+        else if let v = try? c.decode(Double.self) { self = .number(v) }
+        else if let v = try? c.decode(String.self) { self = .string(v) }
+        else if let v = try? c.decode([JSONValue].self) { self = .array(v) }
+        else { self = .dictionary(try c.decode([String: JSONValue].self)) }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .null: try c.encodeNil()
+        case .bool(let v): try c.encode(v)
+        case .number(let v): try c.encode(v)
+        case .string(let v): try c.encode(v)
+        case .array(let v): try c.encode(v)
+        case .dictionary(let v): try c.encode(v)
+        }
+    }
+
+    /// The Foundation value (for `JSONSerialization`).
+    var any: Any {
+        switch self {
+        case .null: return NSNull()
+        case .bool(let v): return v
+        case .number(let v): return v
+        case .string(let v): return v
+        case .array(let v): return v.map(\.any)
+        case .dictionary(let v): return v.mapValues(\.any)
+        }
+    }
+
+    var object: [String: Any]? {
+        if case .dictionary(let v) = self { return v.mapValues(\.any) }
+        return nil
     }
 }
 
@@ -141,6 +212,12 @@ public struct LibraryPost: Sendable, Codable, Equatable, Identifiable {
     /// `visibility` on the post (`GET /library?v=2`): its original's, else public when any file is; nil from a
     /// server that does not say.
     public var visibility: Visibility?
+    /// `kind` (`GET /library?v=3`, 18.3): what the post is; nil from an older server.
+    public var kind: MediaKind?
+    /// `item_count` (v=3): the live items of a gallery.
+    public var itemCount: Int?
+    /// `items_failed` (v=3): indices of the items the save could not fetch.
+    public var itemsFailed: [Int] = []
 
     /// `LinkInfo(link).ref`
     public var ref: String? { link.flatMap { LinkInfo($0)?.ref } }
@@ -160,6 +237,7 @@ extension LibraryPost {
     enum CodingKeys: String, CodingKey {
         case id, service, link, title, duration, width, height, createdAt, session, files
         case customTitle, visibility
+        case kind, itemCount, itemsFailed      // `kind`, `item_count`, `items_failed`
         case posterURL = "posterUrl"           // `poster_url` after convertFromSnakeCase
     }
 
@@ -178,6 +256,9 @@ extension LibraryPost {
         customTitle = try? c.decodeIfPresent(String.self, forKey: .customTitle)
         posterURL = try? c.decodeIfPresent(URL.self, forKey: .posterURL)
         visibility = (try? c.decodeIfPresent(Visibility.self, forKey: .visibility)) ?? nil
+        kind = (try? c.decodeIfPresent(MediaKind.self, forKey: .kind)) ?? nil
+        itemCount = (try? c.decodeIfPresent(Int.self, forKey: .itemCount)) ?? nil
+        itemsFailed = ((try? c.decodeIfPresent([Int].self, forKey: .itemsFailed)) ?? nil) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -195,6 +276,9 @@ extension LibraryPost {
         try c.encodeIfPresent(customTitle, forKey: .customTitle)
         try c.encodeIfPresent(posterURL, forKey: .posterURL)
         try c.encodeIfPresent(visibility, forKey: .visibility)
+        try c.encodeIfPresent(kind, forKey: .kind)
+        try c.encodeIfPresent(itemCount, forKey: .itemCount)
+        if !itemsFailed.isEmpty { try c.encode(itemsFailed, forKey: .itemsFailed) }
     }
 }
 

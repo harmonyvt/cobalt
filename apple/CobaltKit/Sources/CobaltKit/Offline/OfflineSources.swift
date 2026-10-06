@@ -100,6 +100,12 @@ struct OfflineJob: Codable, Equatable, Sendable {
         var title: String?
         /// The device's media this joins (its other renditions), when it has one.
         var mediaID: String?
+        /// A gallery's item or a file made from it (apple/CONTRACT-GALLERY.md 4); nil on every other rendition.
+        var role: GalleryRole?
+        var itemIndex: Int?
+        var madeFrom: [Int]?
+        var madeSpec: Data?
+        var libraryID: String?
     }
 
     enum Target: Codable, Equatable, Sendable {
@@ -159,6 +165,11 @@ enum OfflineSources {
             if !isPrivate, let url = r.file?.url ?? r.publicURL { add(.open(url)) }
             if let file = r.file, file.canToggleVisibility || isPrivate { add(.libraryItem(id: file.id)) }
             if !isPrivate, let url = r.local?.remoteURL { add(.open(url)) }
+        case .item, .slideshow, .galleryImage, .crop:
+            // a gallery's item or a file made from it: the post's own row (keyed, either visibility), then its public link
+            if let file = r.file { add(.libraryItem(id: file.id)) }
+            if let url = r.publicURL { add(.open(url)) }
+            if let url = r.local?.remoteURL { add(.open(url)) }
         }
         return out
     }
@@ -181,10 +192,19 @@ enum OfflineSources {
             let info = MediaInfo(
                 name: name, duration: r.duration, width: r.width, height: r.height, bytes: r.bytes,
                 isImage: !r.isWebp && isImage(r))
-            target = .new(OfflineJob.NewRecord(
-                kind: r.isWebp ? .webp : .original, media: info, sessionID: sessionID, link: item.link ?? item.post?.link,
+            var record = OfflineJob.NewRecord(
+                kind: r.isWebp || r.isAnimatedMade ? .webp : .original, media: info, sessionID: sessionID,
+                link: item.link ?? item.post?.link,
                 remoteURL: remote, publicURL: r.isWebp ? nil : (r.isPublic ? r.publicURL : nil),
-                createdAt: r.createdAt, title: item.customTitle, mediaID: item.local?.id))
+                createdAt: r.createdAt, title: item.customTitle, mediaID: item.local?.id)
+            if let file = r.file, r.isItem || r.isMade {
+                record.role = r.isItem ? .item : file.galleryRole
+                record.itemIndex = r.itemIndex
+                record.madeFrom = r.isMade ? item.itemIndices(of: file.madeFrom) : nil
+                record.madeSpec = file.madeSpec?.data
+                record.libraryID = file.id
+            }
+            target = .new(record)
         }
         return OfflineJob(
             key: key, aliases: OfflineKey.aliases(of: r), target: target, sources: sources, expectedBytes: r.bytes,
@@ -208,7 +228,7 @@ enum OfflineSources {
     private static let knownExtensions: Set<String> = ["mp4", "mov", "m4v", "gif", "webp", "png", "jpg", "jpeg", "heic"]
 
     static func fileExtension(of r: Rendition) -> String {
-        if r.isWebp { return "webp" }
+        if r.isWebp || r.isAnimatedMade { return "webp" }
         for name in [r.local?.name, r.file?.name, r.hosted?.name] {
             if let name {
                 let ext = (name as NSString).pathExtension.lowercased()

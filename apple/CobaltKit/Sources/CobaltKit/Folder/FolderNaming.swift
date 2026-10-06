@@ -7,7 +7,11 @@ import Foundation
 ///   reads `instagram · DeHC9jcpfQW.mp4` and a file the owner uploaded keeps its own name;
 /// - a webp: `<title> · webp <n>.webp`, `n` being the webp's 1-based place among the media's webps
 ///   (creation order, as the detail's tabs number them);
-/// - a clash with a file already in the folder: ` (2)`, ` (3)` ... before the extension.
+/// - a clash with a file already in the folder: ` (2)`, ` (3)` ... before the extension;
+/// - a **gallery** (apple/CONTRACT-GALLERY.md 1.8) is a folder named by the title, holding `01.jpg` ... (an item, its
+///   place in the post: a video item `03.mp4`), `slideshow.webp`, `slideshow.mp4`, `gallery image · 3 across.jpg`,
+///   `03 · webp 1.webp` (a webp of an item, numbered as today) and `03 · crop 9:16.jpg`. A made file is replaced when it
+///   is made again (R8), never numbered; the ` (2)` only covers a clash with the owner's own file.
 ///
 /// The name is decided once, when the file is copied. Renaming the media in cobalt later does NOT rename
 /// the file in the Mac's `FolderSync` (the owner may have renamed or moved it in Finder already). The offline
@@ -18,8 +22,60 @@ enum FolderNaming {
     /// room for ` (99)` and the extension.
     static let maxStemBytes = 200
 
+    /// Whether `video` lives in a gallery's folder: an item or a made file, or a webp of a media that has items.
+    static func isInGalleryFolder(_ video: StoredVideo, in media: StoredMedia?) -> Bool {
+        video.role != nil || media?.items.isEmpty == false
+    }
+
+    /// Where `video` goes: the folder (nil = the root) and the file name inside it.
+    struct Placement: Equatable {
+        var folder: String?
+        var name: String
+    }
+
+    static func placement(for video: StoredVideo, in media: StoredMedia?) -> Placement {
+        Placement(
+            folder: isInGalleryFolder(video, in: media) ? folderName(for: video, in: media) : nil,
+            name: fileName(for: video, in: media))
+    }
+
+    /// The gallery's folder name: the media's title, as a safe single path component.
+    static func folderName(for video: StoredVideo, in media: StoredMedia?) -> String {
+        assemble(stem: baseTitle(for: video, in: media), ext: "")
+    }
+
+    /// `NN` of an item: its place in the post, from 1, two digits at least.
+    static func itemNumber(_ index: Int) -> String { String(format: "%02d", index + 1) }
+
+    /// The leaf name of a file in a gallery's folder; nil for a file that is not part of one.
+    private static func galleryLeaf(for video: StoredVideo, in media: StoredMedia?) -> String? {
+        guard isInGalleryFolder(video, in: media) else { return nil }
+        let ext = fileExtension(of: video)
+        switch video.role {
+        case .item?:
+            return assemble(stem: itemNumber(video.itemIndex ?? 0), ext: ext)
+        case .slideshow?:
+            return assemble(stem: "slideshow", ext: ext)
+        case .export?:
+            if case .galleryImage(let layout)? = video.madeKind { return assemble(stem: "gallery image · \(layout.label)", ext: ext) }
+            return assemble(stem: "export", ext: ext)
+        case .crop?:
+            let n = video.madeFrom?.first.map { itemNumber($0) }
+            let aspect = video.madeSpec.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }?["aspect"] as? String
+            return assemble(stem: [n, "crop" + (aspect.map { " \($0)" } ?? "")].compactMap { $0 }.joined(separator: " · "), ext: ext)
+        case nil:
+            guard video.kind == .webp, let media else { return nil }
+            // a webp of one item of the gallery: `03 · webp 1`, numbered among the media's webps as the tabs are
+            let number = (media.webps.firstIndex { $0.id == video.id }).map { $0 + 1 } ?? 1
+            let item = video.madeFrom?.first
+                ?? media.items.first { !StoredMedia.isStill($0) }?.itemIndex ?? media.items.first?.itemIndex ?? 0
+            return assemble(stem: "\(itemNumber(item)) · webp \(number)", ext: ext)
+        }
+    }
+
     /// The file name for `video`, a rendition of `media`.
     static func fileName(for video: StoredVideo, in media: StoredMedia?) -> String {
+        if let leaf = galleryLeaf(for: video, in: media) { return leaf }
         let title = baseTitle(for: video, in: media)
         let ext = fileExtension(of: video)
         var stem = title

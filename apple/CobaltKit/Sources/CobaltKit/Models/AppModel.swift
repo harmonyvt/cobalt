@@ -19,6 +19,13 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// server-only), one downloading at 40 %, one that failed (gone), one that cannot be fetched (a plain save
     /// with no server copy), and Settings numbers for the two tiers.
     case offline
+    /// Galleries (apple/CONTRACT-GALLERY.md; boards `Gallery-Paste`, `Gallery-Combine`): the server has `features.gallery`
+    /// and `gallery_make`, and resolves a multi-item post. `galleryInstagram`: 10 photos (`instagram.com/p/Ddy0-gpGg5U`);
+    /// `galleryX`: 4 photos of an X post; `galleryMixed`: 2 photos, a 12.4 s video and a 3.2 s gif; `galleryOne`: a single
+    /// photo; `galleryPartial`: 10 photos of which the 7th cannot be fetched until `retryItems`; `galleryNoMake`: a server
+    /// with `gallery` but not `gallery_make`; `galleryMakeFails`: 10 photos, and the first make fails
+    /// (`error.webp.encode_failed`), the second works.
+    case galleryInstagram, galleryX, galleryMixed, galleryOne, galleryPartial, galleryNoMake, galleryMakeFails
 }
 
 public struct ServerSummary: Sendable, Equatable {
@@ -111,6 +118,12 @@ public final class AppModel {
         self.makeClient = makeClient
         context.keyRejected = { [weak self] in self?.markKeyInvalid() }
         context.capabilitiesChanged = { [weak self] caps in self?.apply(caps) }
+        // a gallery saved, or something made from one: the library re-reads the post (its items, its tabs)
+        context.galleryChanged = { [weak self] in
+            guard let self, self.capabilities.library, self.capabilities.gallery else { return }
+            Task { await self.library.refresh() }
+        }
+        context.libraryDropped = { [weak self] ids in self?.library.drop(files: Set(ids)) }
     }
 
     /// The real app: app-group stores, the keychain, the configured server.

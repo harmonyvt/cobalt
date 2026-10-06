@@ -101,6 +101,39 @@ public struct StudioSession: Sendable, Codable, Equatable, Identifiable {
     /// it, **the running one included** (`1` = next; the app says "2nd in line"). Nil otherwise, and from a server
     /// without `features.line`.
     public var queueAhead: Int?
+    /// `item_count` (APP-API-CONTRACT 18.2): how many items the post had when it was resolved; nil for a single file.
+    public var itemCount: Int?
+    /// `items`: what became of each item (`GET /studio/<sid>` of a gallery); empty for a single file.
+    public var items: [SessionItem] = []
+}
+
+/// What became of one item of a gallery save (`items` on `GET /studio/<sid>`, 18.2).
+public struct SessionItem: Sendable, Codable, Equatable, Identifiable {
+    public enum Status: String, Sendable, Codable { case ready, error }
+    /// The item's index in the post.
+    public var i: Int
+    public var type: MediaType?
+    public var status: Status
+    /// The error code of a failed item (`error.api.fetch.*`, `error.studio.*`).
+    public var code: String?
+    public var id: Int { i }
+
+    public init(i: Int, type: MediaType?, status: Status, code: String? = nil) {
+        self.i = i
+        self.type = type
+        self.status = status
+        self.code = code
+    }
+
+    enum CodingKeys: String, CodingKey { case i, type, status, code }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        i = try c.decode(Int.self, forKey: .i)
+        type = (try? c.decodeIfPresent(MediaType.self, forKey: .type)) ?? nil
+        status = (try? c.decodeIfPresent(Status.self, forKey: .status)) ?? .error
+        code = (try? c.decodeIfPresent(String.self, forKey: .code)) ?? nil
+    }
 }
 
 extension StudioSession {
@@ -110,6 +143,7 @@ extension StudioSession {
         case itemID = "itemId"                // `item_id` after convertFromSnakeCase
         case visibility
         case queueAhead                       // `queue_ahead`
+        case itemCount, items                 // `item_count`, `items`
     }
 
     struct ErrorBody: Codable, Equatable { var code: String? }
@@ -137,6 +171,8 @@ extension StudioSession {
         itemID = (try? c.decodeIfPresent(String.self, forKey: .itemID)) ?? nil
         visibility = (try? c.decodeIfPresent(Visibility.self, forKey: .visibility)) ?? nil
         queueAhead = (try? c.decodeIfPresent(Int.self, forKey: .queueAhead)) ?? nil
+        itemCount = (try? c.decodeIfPresent(Int.self, forKey: .itemCount)) ?? nil
+        items = ((try? c.decodeIfPresent([Lossy<SessionItem>].self, forKey: .items)) ?? nil)?.compactMap(\.value) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -161,6 +197,8 @@ extension StudioSession {
         try c.encodeIfPresent(itemID, forKey: .itemID)
         try c.encodeIfPresent(visibility, forKey: .visibility)
         try c.encodeIfPresent(queueAhead, forKey: .queueAhead)
+        try c.encodeIfPresent(itemCount, forKey: .itemCount)
+        if !items.isEmpty { try c.encode(items, forKey: .items) }
     }
 }
 
@@ -171,6 +209,20 @@ public struct StudioCreated: Sendable, Equatable {
     /// started at once, an old server and a caller that did not ask all read `false` / nil.
     public var queued: Bool = false
     public var queueAhead: Int?
+    /// `make: {job, kind}` (18.12): the make the create chained after the save (the share sheet's slideshow or gallery
+    /// image); nil when the create carried none.
+    public var make: StudioMake?
+}
+
+/// The make a `POST /studio` chained (18.12): its job id and kind (`slideshow` | `gallery_image`).
+public struct StudioMake: Sendable, Equatable {
+    public var job: String
+    public var kind: String
+
+    public init(job: String, kind: String) {
+        self.job = job
+        self.kind = kind
+    }
 }
 
 public struct UploadResult: Sendable, Equatable {
@@ -201,10 +253,13 @@ public struct RenderRequest: Sendable, Equatable {
     /// `"priority": "focused"`: a render the owner asked for from the screen goes ahead of every waiting save.
     /// Only valid with `queue`.
     public var priority: String?
+    /// `item` on `POST /studio/<sid>/render` (APP-API-CONTRACT 18.13): the `item_index` of the video or gif of a gallery
+    /// to make the webp from. Nil sends nothing (the session's lead item, as always).
+    public var item: Int?
 
     public init(
         start: Double, length: Double, width: Int, quality: WebpQuality, notify: Bool = false, crop: CropRect? = nil,
-        queue: Bool? = nil, priority: String? = nil
+        queue: Bool? = nil, priority: String? = nil, item: Int? = nil
     ) {
         self.start = start
         self.length = length
@@ -214,6 +269,7 @@ public struct RenderRequest: Sendable, Equatable {
         self.crop = crop
         self.queue = queue
         self.priority = priority
+        self.item = item
     }
 }
 

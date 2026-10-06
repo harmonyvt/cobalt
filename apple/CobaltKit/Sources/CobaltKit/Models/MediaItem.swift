@@ -2,7 +2,18 @@ import Foundation
 
 /// One tab of a media's detail screen (CONTRACT-MEDIA 1.9): the video, or one of its webps.
 public struct Rendition: Sendable, Equatable, Identifiable {
-    public enum Kind: Sendable, Equatable { case video, webp(number: Int) }   // number: 1-based, creation order
+    /// `video`: the media's original (a video, or a single photo). `item`: one original of a gallery. `webp`: a webp of a
+    /// video (`number`: 1-based, creation order). `slideshow`, `galleryImage` and `crop`: files made from a gallery
+    /// (apple/CONTRACT-GALLERY.md 1.19); `number` is 1 unless an older server left several of one kind (R8 keeps one).
+    public enum Kind: Sendable, Equatable {
+        case video
+        case webp(number: Int)
+        case item(index: Int, type: MediaType)
+        case slideshow(number: Int, format: SlideshowPlan.Format)
+        case galleryImage(layout: GalleryLayout, number: Int)
+        /// A crop of item `of` (A7). `spec` is what the server stored (`aspect`, `fill`); the typed `FrameSpec` arrives with the tools wave.
+        case crop(of: Int, spec: MadeSpec?)
+    }
 
     public var id: String               // "video", else the local record id, else "f:<library file id>"
     public var kind: Kind
@@ -54,6 +65,7 @@ public struct Rendition: Sendable, Equatable, Identifiable {
     /// The link is public right now.
     public var isPublic: Bool { visibility == .public }
 
+    /// An animated webp of a video (a tab of `webp n`). A slideshow webp is a made file (`isMade`), not this.
     public var isWebp: Bool {
         if case .webp = kind { return true }
         return false
@@ -63,6 +75,65 @@ public struct Rendition: Sendable, Equatable, Identifiable {
     public var webpNumber: Int? {
         if case .webp(let n) = kind { return n }
         return nil
+    }
+
+    /// A gallery's item (`index` is its place in the post).
+    public var isItem: Bool {
+        if case .item = kind { return true }
+        return false
+    }
+
+    public var itemIndex: Int? {
+        if case .item(let index, _) = kind { return index }
+        return nil
+    }
+
+    public var itemType: MediaType? {
+        if case .item(_, let type) = kind { return type }
+        return nil
+    }
+
+    var isCrop: Bool {
+        if case .crop = kind { return true }
+        return false
+    }
+
+    /// A slideshow, a gallery image or a crop: made from the post, stored and deleted as a library row of its own.
+    public var isMade: Bool {
+        switch kind {
+        case .slideshow, .galleryImage, .crop: return true
+        default: return false
+        }
+    }
+
+    /// A made slideshow webp: stored as an animated webp record (`StoredVideo.Kind.webp`, `role .slideshow`).
+    public var isAnimatedMade: Bool {
+        if case .slideshow(_, .webp) = kind { return true }
+        return false
+    }
+
+    /// What a remake replaces (R8); nil for anything that is not a made file.
+    public var madeKind: MadeKind? {
+        switch kind {
+        case .slideshow(_, let format): return .slideshow(format)
+        case .galleryImage(let layout, _): return .galleryImage(layout)
+        case .crop: return .crop
+        default: return nil
+        }
+    }
+
+    /// The tab's name: `video`, `webp 1`, `photo 3`, `slideshow webp`, `slideshow`, `gallery image · 3 across`, `crop`
+    /// (a second of one kind, from a server older than R8, says its number).
+    public var tabName: String {
+        switch kind {
+        case .video: return "video"
+        case .webp(let n): return "webp \(n)"
+        case .item(let index, let type): return "\(type == .photo ? "photo" : type.rawValue) \(index + 1)"
+        case .slideshow(let n, let format): return n > 1 ? "\(MadeKind.slideshow(format).tabName) \(n)" : MadeKind.slideshow(format).tabName
+        case .galleryImage(let layout, let n):
+            return n > 1 ? "\(MadeKind.galleryImage(layout).tabName) \(n)" : MadeKind.galleryImage(layout).tabName
+        case .crop: return "crop"
+        }
     }
 
     /// Every library file id this rendition has on the server (a webp's file; the video's private copy
@@ -102,14 +173,52 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
         self.renditions = renditions
     }
 
-    /// The video rendition, when the media has one.
-    public var video: Rendition? { renditions.first { !$0.isWebp } }
+    /// The video rendition, when the media has one (the original of a video post or a single photo; a gallery has items
+    /// instead).
+    public var video: Rendition? { renditions.first { $0.kind == .video } }
 
-    /// The webps, oldest to newest.
+    /// The webps of a video, oldest to newest.
     public var webps: [Rendition] { renditions.filter(\.isWebp) }
 
-    /// The newest webp, else the video (CONTRACT-MEDIA 1.4).
-    public var face: Rendition { renditions.last(where: \.isWebp) ?? renditions[0] }
+    /// A gallery's items, in the post's order.
+    public var items: [Rendition] { renditions.filter(\.isItem) }
+
+    /// What was made from the post: slideshows, gallery images, crops (the tab order of 1.19).
+    public var made: [Rendition] { renditions.filter(\.isMade) }
+
+    /// The post's live items (the server's count, else what is known here); 0 for a media that is not a gallery.
+    public var itemCount: Int { max(post?.itemCount ?? 0, items.count) }
+
+    /// Item indices the save could not fetch (the post's `items_failed`), that no live item stands in for.
+    public var missing: [Int] {
+        let have = Set(items.compactMap(\.itemIndex))
+        return (post?.itemsFailed ?? []).filter { !have.contains($0) }.sorted()
+    }
+
+    /// What this media is (the library's kind chips): the server's word for the post, else derived from the renditions.
+    public var kind: MediaKind {
+        if items.count >= 2 || (post?.kind == .gallery) { return .gallery }
+        if let kind = post?.kind, kind != .gallery { return kind }
+        if let only = items.first ?? video {
+            let image = only.itemType.map { $0 == .photo }
+                ?? (only.local.map { StoredMedia.isStill($0) } ?? (only.file?.contentType?.lowercased().hasPrefix("image/") == true))
+            return image ? .photo : .video
+        }
+        return .webp
+    }
+
+    /// The newest animated webp (a slideshow webp counts), else the newest made video, else the first item, else the video
+    /// (CONTRACT-MEDIA 1.4, CONTRACT-GALLERY 1.22).
+    public var face: Rendition {
+        let animated = renditions.filter { r in
+            if case .webp = r.kind { return true }
+            if case .slideshow(_, .webp) = r.kind { return true }
+            return false
+        }.max { $0.createdAt < $1.createdAt }
+        if let animated { return animated }
+        if let slideshow = renditions.last(where: { if case .slideshow = $0.kind { return true } else { return false } }) { return slideshow }
+        return items.first ?? renditions[0]
+    }
 
     public var webpCount: Int { renditions.reduce(0) { $0 + ($1.isWebp ? 1 : 0) } }
 
@@ -129,6 +238,11 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
     }
 
     public func rendition(id: String) -> Rendition? { renditions.first { $0.id == id } }
+
+    /// The item indices of the items whose library file ids are `ids` (what a made file's `made_from` names).
+    func itemIndices(of ids: [String]) -> [Int] {
+        ids.compactMap { id in items.first { $0.file?.id == id }?.itemIndex }
+    }
 
     /// A local media and a library post are one item when any local session is the post's id or its
     /// session's id, or any local webp's public URL is one of the post's files (CONTRACT-MEDIA 4.2).
@@ -158,9 +272,13 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
         let linkInfo = link.flatMap { LinkInfo($0) }
         var renditions: [Rendition] = []
 
+        // GET /library?v=3: a gallery's items and the files made from it are rows of their own (`galleryRole`); the video
+        // rendition and the webps below read only the rows that are neither.
+        let allFiles = post?.files ?? []
+        let plainFiles = allFiles.filter { $0.galleryRole == nil }
         let original = local?.original
-        let privateFile = post?.files.first { $0.role == .privateCopy }
-        let hostedFile = post?.files.first { $0.role == .hostedLink }
+        let privateFile = plainFiles.first { $0.role == .privateCopy }
+        let hostedFile = plainFiles.first { $0.role == .hostedLink }
         if original != nil || privateFile != nil || hostedFile != nil {
             // The server's word on the original beats whatever this device recorded (a stale `publicURL` never
             // wins). A legacy listing carries the visibility on the original too, but its link on the separate
@@ -190,6 +308,10 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
                 visibility: visibility, canToggleVisibility: privateFile?.canToggleVisibility ?? false))
         }
 
+        renditions.append(contentsOf: itemRenditions(local: local, files: allFiles.filter { $0.galleryRole == .item }, post: post))
+        let made = madeRenditions(local: local, files: allFiles.filter { $0.galleryRole != nil && $0.galleryRole != .item }, renditions: renditions)
+        renditions.append(contentsOf: made.filter { !$0.isCrop })
+
         struct WebpPair {
             var order: Int
             var local: StoredVideo?
@@ -197,7 +319,7 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
             var at: Date { file?.createdAt ?? local?.createdAt ?? .distantPast }
         }
         var pairs: [WebpPair] = []
-        var unmatched = (post?.files ?? []).filter { $0.role == .webp }
+        var unmatched = plainFiles.filter { $0.role == .webp }
         for webp in local?.webps ?? [] {
             var file: LibraryFile?
             if let url = webp.remoteURL, let i = unmatched.firstIndex(where: { Self.isSameWebp($0, url) }) {
@@ -225,6 +347,8 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
                 canToggleVisibility: file?.canToggleVisibility ?? false))
         }
 
+        renditions.append(contentsOf: made.filter(\.isCrop))
+
         if renditions.isEmpty {
             // a post whose files are all unknown kinds: still one tab, from the post's own numbers
             renditions.append(Rendition(
@@ -237,6 +361,85 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
             renditions: renditions)
         item.localTitle = local.flatMap(Self.localTitle(of:))
         return item
+    }
+
+    // MARK: - Gallery renditions (apple/CONTRACT-GALLERY.md 1.19)
+
+    /// One rendition per item of the post, in the post's order: this device's original and the library's row of the
+    /// same `item_index` are one.
+    static func itemRenditions(local: StoredMedia?, files: [LibraryFile], post: LibraryPost?) -> [Rendition] {
+        let indices = Set((local?.items ?? []).compactMap(\.itemIndex)).union(files.compactMap(\.itemIndex)).sorted()
+        return indices.map { index in
+            let stored = local?.items.first { $0.itemIndex == index }
+            let file = files.first { $0.itemIndex == index }
+            let type = MediaType(contentType: file?.contentType)
+                ?? stored.map { StoredMedia.isStill($0) ? MediaType.photo : MediaType.video } ?? .photo
+            let url = file.flatMap { $0.wireVisibility == .private ? nil : $0.url } ?? stored?.publicURL
+            return Rendition(
+                id: "item:\(index)", kind: .item(index: index, type: type), local: stored, file: file, publicURL: url,
+                width: stored?.width ?? file?.width, height: stored?.height ?? file?.height,
+                duration: stored?.duration ?? file?.duration, bytes: stored.map(\.bytes) ?? file?.bytes,
+                createdAt: file?.createdAt ?? stored?.createdAt ?? post?.createdAt ?? .distantPast,
+                deletableName: nil, posterURL: file?.posterURL,
+                visibility: file?.wireVisibility ?? (url == nil ? nil : .public),
+                canToggleVisibility: file?.canToggleVisibility ?? false)
+        }
+    }
+
+    /// The files made from the post, this device's and the library's joined by the library row's id: slideshow webps
+    /// first, then slideshow mp4s, then gallery images, then crops, each oldest to newest (the tab order of 1.19). An
+    /// export that is not a gallery image (a long image or a PDF made by an older build) is not a tab.
+    static func madeRenditions(local: StoredMedia?, files: [LibraryFile], renditions items: [Rendition]) -> [Rendition] {
+        struct Entry { var kind: MadeKind; var local: StoredVideo?; var file: LibraryFile?; var at: Date }
+        var entries: [Entry] = []
+        var unmatched = local?.made ?? []
+        for file in files {
+            guard let kind = file.madeKind else { continue }
+            var stored: StoredVideo?
+            if let i = unmatched.firstIndex(where: { $0.libraryID == file.id }) { stored = unmatched.remove(at: i) }
+            entries.append(Entry(kind: kind, local: stored, file: file, at: file.createdAt))
+        }
+        for stored in unmatched {
+            guard let kind = stored.madeKind else { continue }
+            entries.append(Entry(kind: kind, local: stored, file: nil, at: stored.createdAt))
+        }
+        func rank(_ kind: MadeKind) -> Int {
+            switch kind {
+            case .slideshow(.webp): return 0
+            case .slideshow(.mp4): return 1
+            case .galleryImage(let layout): return 2 + (GalleryLayout.allCases.firstIndex(of: layout) ?? 0)
+            case .crop: return 10
+            }
+        }
+        entries.sort { a, b in
+            let (x, y) = (rank(a.kind), rank(b.kind))
+            return x != y ? x < y : a.at < b.at
+        }
+        var seen: [MadeKind: Int] = [:]
+        func itemIndex(_ ids: [String]?, _ numbers: [Int]?) -> Int {
+            if let id = ids?.first, let index = items.first(where: { $0.file?.id == id })?.itemIndex { return index }
+            return numbers?.first ?? 0
+        }
+        return entries.map { entry in
+            seen[entry.kind, default: 0] += 1
+            let number = seen[entry.kind] ?? 1
+            let kind: Rendition.Kind
+            switch entry.kind {
+            case .slideshow(let format): kind = .slideshow(number: number, format: format)
+            case .galleryImage(let layout): kind = .galleryImage(layout: layout, number: number)
+            case .crop: kind = .crop(of: itemIndex(entry.file?.madeFrom, entry.local?.madeFrom), spec: entry.file?.madeSpec ?? entry.local?.madeSpec.flatMap { MadeSpec(data: $0) })
+            }
+            let file = entry.file, stored = entry.local
+            let url = file.flatMap { $0.wireVisibility == .private ? nil : $0.url } ?? stored?.publicURL
+            return Rendition(
+                id: file.map { "m:\($0.id)" } ?? stored.map { $0.libraryID.map { "m:\($0)" } ?? "l:\($0.id)" } ?? "m:",
+                kind: kind, local: stored, file: file, publicURL: url,
+                width: stored?.width ?? file?.width, height: stored?.height ?? file?.height,
+                duration: stored?.duration ?? file?.duration, bytes: stored.map(\.bytes) ?? file?.bytes,
+                createdAt: entry.at, posterURL: file?.posterURL,
+                visibility: file?.wireVisibility ?? (url == nil ? nil : .public),
+                canToggleVisibility: file?.canToggleVisibility ?? false)
+        }
     }
 
     /// This device's custom title of a media: `StoredVideo.title` (decision 8). A rename of a post this

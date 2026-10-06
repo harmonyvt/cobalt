@@ -15,6 +15,7 @@ extension PipelineState {
         case .saving: return "saving"
         case .reading: return "reading"
         case .picker: return "picker"
+        case .gallery: return "gallery"
         case .image: return "image"
         case .ready: return "ready"
         case .rendering: return "rendering"
@@ -156,6 +157,7 @@ extension Pipeline {
             if let bytes { data["bytes"] = .bytes(bytes) }
             if let total { data["total"] = .bytes(total) }
         case .picker(let items): data["items"] = .int(items.count)
+        case .gallery(let items): data["items"] = .int(items.count)
         case .image(let m): data["width"] = .int(m.width ?? 0); data["height"] = .int(m.height ?? 0)
         case .done(let r):
             data["bytes"] = .bytes(r.bytes)

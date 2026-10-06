@@ -409,7 +409,8 @@ public final class OfflineDownloads {
                 let video = try await store.add(
                     file: file, kind: n.kind, media: n.media, sessionID: n.sessionID, link: n.link, remoteURL: n.remoteURL,
                     move: true, publicURL: n.publicURL, mediaID: n.mediaID, clip: nil, keep: true, createdAt: n.createdAt,
-                    origin: .keepOffline)
+                    origin: .keepOffline, role: n.role, itemIndex: n.itemIndex, madeFrom: n.madeFrom, madeSpec: n.madeSpec,
+                    libraryID: n.libraryID)
                 if let title = n.title { await store.setTitle(title, media: video.mediaID) }
             }
         } catch OfflineStoreError.notFound {

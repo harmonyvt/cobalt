@@ -95,6 +95,11 @@ public enum PipelineState: Sendable, Equatable {
     case saving(bytes: Int64?, total: Int64?, since: Date)   // bytes nil = degraded "saving"
     case reading(developed: Int, of: Int)
     case picker(items: [PickerItem])
+    /// A multi-item post saved whole (apple/CONTRACT-GALLERY.md 1.10), on a server with `features.gallery`: entering this
+    /// state starts the save of every item at once, with no choice first; `Pipeline.galleryRun` says how far it is and
+    /// what was made. The payload is the post's items as known so far (types and thumbs from the picker, sizes and
+    /// lengths once the library lists them). Plain cobalt keeps `.picker`.
+    case gallery(items: [GalleryItem])
     case image(MediaInfo)
     case ready
     case rendering(RenderProgress)

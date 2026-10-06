@@ -76,6 +76,14 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// with `queue: true` and starts when its turn comes, polled or not. False when absent: the app then keeps its
     /// own line on the device (`LineMode.device`) and sends no `queue`.
     public var line: Bool = false
+    /// `features.gallery` (APP-API-CONTRACT 18.8): `POST /studio` takes `items`, a gallery is saved whole, and
+    /// `GET /library?v=3` lists its items and made files. False when absent: the app keeps today's picker (save to
+    /// Photos) for a multi-item post, and the share sheet says the server cannot save photo posts yet.
+    public var gallery: Bool = false
+    /// `features.gallery_make` (18.13): the slideshow webp, the gallery image, `item` on renders and the share sheet's
+    /// chained make exist (needs `gallery`). False when absent: the three makes are hidden and the share sheet draws only
+    /// `save all`.
+    public var galleryMake: Bool = false
 
     public static let unknown = Capabilities(
         kind: .unreachable, cobaltVersion: nil, studio: false, upload: false, library: false,

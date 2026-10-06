@@ -109,6 +109,12 @@ enum PreviewData {
         default:
             break
         }
+        if scenario.isGallery {
+            caps.gallery = true
+            caps.galleryMake = scenario != .galleryNoMake
+            caps.visibility = true
+            caps.line = true
+        }
         return caps
     }
 
