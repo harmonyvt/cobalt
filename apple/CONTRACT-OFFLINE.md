@@ -636,6 +636,15 @@ the owner wants it.
 
 ---
 
+## 11a. Galleries (2026-10-07, dated note; `CONTRACT-GALLERY.md` 1.8 is the rule)
+
+A kept gallery is a folder named by the media's title (`instagram · Ddy0-gpGg5U/`) holding its items (`01.jpg … 10.jpg`, a video item
+`03.mp4`) and every file made from it on this device's account: `slideshow.webp`, `slideshow.mp4`, `gallery image · 3 across.jpg`,
+`03 · webp 1.webp`, `03 · crop 9:16.jpg` (FolderNaming's ` 2` on a clash). Made files are kept renditions: "keep new saves offline"
+keeps them, the cache limit never takes them, the folder's extended attribute follows a rename (decision 6). The Mac's `FolderSync`
+writes the same tree under `~/Movies/cobalt`. Photos: still off by default; a gallery reaches Photos only through the owner's
+`save to photos`.
+
 ## 12. Review fixes to wave 1 (2026-10-06, dated note)
 
 An adversarial review of `8121f0659` proved data-loss and unbounded-growth bugs with throwaway tests; each is now a

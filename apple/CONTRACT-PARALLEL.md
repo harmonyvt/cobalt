@@ -39,6 +39,11 @@ the pinned shape for the implementation lanes, not code that exists.
 5. **(owner, 2026-10-06, `CONTRACT-GALLERY.md` owner decision 5) Galleries in a batch or a Shortcut save everything**, reversing
    question 3's "first video" default (section 14). Interim: until the gallery server (`APP-API-CONTRACT.md` section 18,
    `features.gallery`) is deployed, a batch and a Shortcut keep today's first-video behaviour; nothing in this file's lanes changes.
+6. **(owner interview 2026-10-07, `CONTRACT-GALLERY.md`)** The gallery server is deployed. The interim server fix (`APP-API-CONTRACT.md`
+   18.9) makes a photo-only gallery from a client that sends no `items` (1.13's batch paste, Shortcuts and share sheet) save whole
+   instead of failing `no_video`; a post with a video still gives its first video to those clients. The new build sends
+   `items: "all"`. A make (slideshow webp / mp4, gallery image) is a line job like a render (`kind: "slideshow"` /
+   `"gallery_image"`); from the app's screen it is focused, from the share sheet class 1. Nothing in this file's shipped lanes changes.
 
 ## 0. What the request means (interpretation, to confirm)
 

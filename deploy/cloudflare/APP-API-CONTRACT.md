@@ -1876,7 +1876,9 @@ re-runs it if the object was evicted); real gaps between jobs on the deployed al
 
 Owner (2026-10-06): an Instagram carousel (`/p/Ddy0-gpGg5U`, 10 photos) and an X post (4 photos) cannot be saved; photos should be
 first-class; a gallery saves whole, in part, or as one video; v1 also stores **crops** and **exports** (long image, PDF) made on the
-device. **Pinned; built by lanes GS1 (helper) and GS2 (API) from the briefs in `apple/CONTRACT-GALLERY.md` 8.1-8.2.** Code read on
+device. **Pinned; 18.1-18.8 built by lanes GS1 (helper) and GS2 (API) at `a43d88d4b` (their briefs are in that commit's
+`apple/CONTRACT-GALLERY.md` 8.1-8.2). Owner interview 2026-10-07: 18.9 (interim fix, lane S0) and 18.10-18.13 (makes, lane S1) added; their
+briefs are the reworked `apple/CONTRACT-GALLERY.md` 8.1-8.2.** Code read on
 2026-10-06 (`helper/lib.js`, `helper/server.js`, `studio.ts`, `app-routes.ts`, `poster.ts`, migrations 0003-0008). Everything is
 **additive**: a client that sends nothing new gets today's behaviour, with two deliberate fixes (18.2): a single photo is stored as a
 photo instead of a 0.04 s `video/mp4`, and an image gets a poster.
@@ -2033,4 +2035,99 @@ CREATE INDEX idx_media_items_post_key ON media_items (post_key);
   `error.library.bad_request`, `error.library.partial`, `error.library.not_found`.
 - Deploy (owner): remote migration 0009 first, then the API (`prepare-git-info.sh`, `cf deploy`; the container image changes with
   the helper), then the web Worker (its `POST_KEY_SQL` line). No new secret.
-- Tests and files: the lane briefs (`apple/CONTRACT-GALLERY.md` 8.1 GS1, 8.2 GS2) are the list.
+- Tests and files: the GS1/GS2 briefs in `a43d88d4b`'s `apple/CONTRACT-GALLERY.md` 8.1-8.2 were the list for 18.1-18.8; the S0/S1
+  briefs in today's 8.1-8.2 are the list for 18.9-18.13.
+
+### 18.9 Interim: a photo-only gallery from a client that sends no `items` saves whole (lane S0; owner interview 2026-10-07)
+
+Why: the 1.13 app sends no `items` from its share sheet, a batch paste or a Shortcut, so 18.2's "absent = today" answers a photo-only
+carousel with `error.webp.no_video` (`helper/lib.js:188-202`, `server.js:582`). The owner hit it sharing an X 4-photo post.
+
+- **Rule (exact):** when `POST /studio` (and the helper's `POST /fetch`) has **no `items`** and cobalt answers a **picker of 2 or
+  more entries none of which is `video` or `gif`**, the save behaves as `items: "all"`: every entry up to 20, one after another, a
+  failed item recorded (18.2), stored as a gallery (N `role 'item'` rows, `item_count` = the picker's length, lead = item 0). In
+  every other case "absent" keeps 18.2's meaning: a 1-item picker saves that item; a picker with a video or gif saves the first video,
+  else the first gif; a plain answer saves the file. An explicit `"first-video"` is unchanged (a photo-only post still fails
+  `no_video`: that client asked for a video). `item_count` absent: no `gallery_changed` check.
+- **Where:** `helper/lib.js` gains `effectiveItems(entries, items)` (returns `items` when given; `"all"` for the case above; else
+  `undefined`); the fetch job uses it before `selectPickerItems` and before choosing the one-file branch, so the answer carries
+  `items` and `picker_count` and the Durable Object's existing `finalizeItems` path (`studio.ts:2379`) stores the rows. No API
+  change outside the helper.
+- **What old clients see:** `GET /library` without `v=3` lists the post as its first photo (18.3's legacy shape); `GET
+  /studio/<sid>` answers the lead (a photo: `image/jpeg`, `duration: null`) plus `item_count`/`items`. A notification opted in for
+  `saved` fires once. What the 1.13 app draws for an image session is not verified (V checks it).
+- **Tests:** `apple/CONTRACT-GALLERY.md` 8.1. **Deploy:** the helper changes, so the container image changes (owner).
+
+### 18.10 The slideshow webp, and 0.5 s photos (lane S1)
+
+- **`POST /studio/<sid>/slideshow`** body gains `"format": "mp4" | "webp"` (absent = `"mp4"`), and for `webp` only `"quality":
+  "low" | "med" | "high"` (absent = `"med"`) and `"width": 320 | 480` (absent = 480); `quality`/`width` with `mp4` → `400
+  error.webp.invalid_params`. `seconds` of a photo: **0.5 to 15**, one decimal (was 1 to 15). `sound` must be `"none"` with `webp`
+  (else 400). Totals: `webp` ≤ **60 s** (`400 error.webp.too_long` when the photos alone exceed it; with videos the helper decides
+  after probing), `mp4` ≤ 180 s as before; videos and gifs ≤ 60 s together in both (helper, `error.webp.too_long`).
+- **Frame**: `mp4` as 18.5. `webp`: width = `width`, height = even(width / aspect) with the aspect of `keep` (18.5's most common size),
+  `9:16` or `1:1` (480 → 480×600 for 4:5, 480×854, 480×480).
+- **Helper**: `POST /slideshow/:id/start` gains `format`, `quality`, `fps` (15; webp only); `seconds` 0.5-15. The webp recipe is
+  `apple/CONTRACT-GALLERY.md` 6.2 (a frame list encoded by one `img2webp` run with today's `-kmin 3 -kmax 5`). `GET /slideshow/:id`
+  done answers `{bytes, duration, width, height, format}`; `GET /slideshow/:id/file` → `image/webp` or `video/mp4`; new `GET
+  /slideshow/:id/poster` → `image/jpeg` (the first frame; webp and mp4). Output ≤ 25 MB for webp (`error.webp.too_large`).
+- **Result row**: as 18.5 with `r2_key originals/<sid>-s<job>.webp`, `content_type image/webp`, `made_spec` = the plan including
+  `format`, `quality`, `width`; its poster is the helper's poster JPEG stored as 13.3's public unguessable JPEG (no poster job).
+- **Replace (owner-approved 2026-10-07, `apple/CONTRACT-GALLERY.md` R8)**: a post holds one slideshow per `format`. When the new row
+  is stored, any other live `role 'slideshow'` row of the post with the same `made_spec.format` (absent = `"mp4"`, so rows made
+  before 18.10 count as mp4) is deleted as 18.4 (R2 object, mirror, unshared poster, purge). The render's done answer lists it in
+  `replaced: ["<id>"]`. This also changes 18.5's mp4 slideshows, which accumulated.
+  `GET /studio/<sid>/render/<job>` done adds `format`. Library `v=3` lists it with `role 'slideshow'` and its `content_type`.
+
+### 18.11 The gallery image: `POST /studio/<sid>/gallery-image` (keyed; lane S1)
+
+- **Body** (≤ 2 KB): `{"items":[…], "layout":"strip"|"grid2"|"grid3"|"row", "queue":true, "priority":"focused"|null,
+  "notify":true|false}`. `items`: 2-20 unique `item_index` values of live `item` rows of the post, in the order to draw, every one a
+  photo (`image/*` other than `image/gif`; a video or gif → `400 error.webp.invalid_params`); fewer than 2 live photo items in the
+  post → `409 error.studio.too_few_photos`; malformed → `400 error.webp.invalid_params`; `priority` without `queue` → 400; an
+  expired session → 410.
+- **Line**: a `LineEntry` (17.2) of `kind: "gallery_image"`, class 0 with `priority: "focused"`, else 1; a `studio_renders` row
+  `kind 'gallery_image'`, `plan` = the body's items and layout, `status 'pending'`. Answer `202 {status:"pending", job, queued,
+  queue_ahead}`; progress on `GET /studio/<sid>/render/<job>` with `phase` `queued` | `uploading` | `composing`; done
+  `{status:"success", url?, item_id, bytes, width, height, cropped:[index…], upscaled:[index…]}`.
+- **Helper**: `PUT /gallery/:id/inputs/:n` (n 0-19; ≤ 200 MB each, ≤ 500 MB a job; holds the helper like `/slideshow`, 5 min idle
+  reap, 429 busy), `POST /gallery/:id/start {layout, slides:[{n}]}` (the helper probes the sizes and runs
+  `apple/CONTRACT-GALLERY.md` 6.3-6.4) → 202 | 400 | 409 (an input missing); `GET /gallery/:id` → pending `{phase:"composing"}` |
+  done `{bytes, width, height, cropped:[n…], upscaled:[n…]}` | error; `GET /gallery/:id/file` → `image/jpeg`; `DELETE` → 204.
+  Errors: `error.webp.invalid_params` (an input that is not a still), `error.webp.encode_failed`, `error.webp.too_large` (> 50 MB),
+  `error.webp.timeout` (10 min).
+- **Result row**: `originals/<sid>-g<job>.jpg`, `kind 'private'`, `source 'studio'`, `role 'export'`, `made_from` = the item ids,
+  `made_spec` = `{"kind":"gallery","layout":"grid3","items":[…]}` (≤ 512 bytes), `post_key`, width/height, the post's visibility
+  (its lead's), a poster job (image). **Replace** (R8): another live `export` row of the post with `made_spec.kind "gallery"` and the
+  same `layout` is deleted (as 18.4) after the new row is stored, listed in the done answer's `replaced`; other layouts stay. `notify` as 9.3 (`rendered` copy:
+  `gallery image ready · <w>×<h> · <size>`).
+
+### 18.12 The share sheet's one request: `slideshow.format` and `gallery_image` on `POST /studio` (lane S1)
+
+- `POST /studio` (with `items`) takes `slideshow` as 18.2 plus 18.10's `format`/`quality`/`width`, **or** `gallery_image: {items,
+  layout}` (18.11's fields), not both (400). `slideshow.seconds` carries `null` for every video and gif item (its own length) and the
+  photo time for every photo, in the plan's order (the approved boards' shape); a number for a video or `null` for a photo → 400. The make's render row is created with the session (its job id is in the answer as
+  `make: {job, kind}`) and joins the line (class 1) when the save is ready, over the asked items **that were saved** (a failed item is
+  dropped from the plan; for a gallery image, fewer than 2 photos left → the render ends `error.studio.too_few_photos`, the save
+  stays; for a slideshow, fewer than 2 items left → `error.studio.not_gallery`).
+- **One message.** With a make, the client sends `notify: {on: ["rendered", "failed"], label}`: exactly one Hark message when the
+  make ends (`<label> · slideshow webp ready` / `<label> · slideshow ready` / `<label> · gallery image ready`, with the 9.4 size and
+  URL line), or when the save fails (9.4's save failure), or when the save succeeds and the make fails (`<label> · saved <n> items.
+  <what> couldn't be made — <reason>`; for a webp over 60 s: `<label> · saved <n> items. the slideshow webp would be <m:ss> and
+  webps stop at 60 s. open cobalt to make the mp4.`). `saved` is not sent unless asked. The message's URL opens the session.
+- Bodies the share sheet sends (pinned for lane A4; `public` and `label` as today's instant share):
+  `{"url", "items":"all", "item_count":10, "public":true, "origin":"share", "queue":true, "notify":{"on":["saved","failed"],"label"}}`
+  (save all); the same plus `"slideshow":{"items":[0,…,9], "seconds":[2,…,null], "fade":true, "frame":"keep", "sound":"none",
+  "format":"webp", "quality":"med", "width":480}` and `notify.on: ["rendered","failed"]`; or plus `"gallery_image":{"items":[photo
+  indices], "layout":"grid3"}` and `notify.on: ["rendered","failed"]`.
+
+### 18.13 Renders of one item: `item` on `POST /studio/<sid>/render` (lane S1)
+
+- Optional integer `item`: the `item_index` of a live `item` row of the session whose type is a video or gif; the render reads that
+  row's `r2_key` instead of the session's lead. A photo item → `409 error.studio.not_video`; an unknown or deleted index → `404
+  error.studio.not_found`; on a session without items → 400 `error.webp.invalid_params`. Absent = the lead (today). The webp is
+  stored as today (public `media` bucket) and listed in `v=3` with `made_from` = that item's id.
+
+**Capability (18.10-18.13):** `features.gallery_make: true` when the running helper answers `x-cobalt-helper: gallery=1,make=1`
+(checked as `gallery=1` is, `studio.ts:812-836`); without it the app hides the three makes and the share sheet draws only `save all`.
+New code: `error.studio.too_few_photos`. Reused: `error.studio.not_video`, `error.studio.not_gallery`, `error.webp.*` as above.
