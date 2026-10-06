@@ -17,6 +17,9 @@
 //                             event with a record is never started again, whichever of a client
 //                             poll or the sweep sees it first. Kept SESSION_TTL_MS (7 days).
 //
+//   notify:line:<keyId>       the line summary (APP-API-CONTRACT.md section 17.8): {members, webps, at,
+//                             expires_at}; one Hark message when every member has settled.
+//
 // Nothing here runs after a response: every send is awaited by the poll or the sweep that
 // caused it, raced against our own 3 s ceiling (AbortSignal timeouts are not honoured inside
 // the Durable Object). A failed send (5xx, network error, timeout) is retried at most twice,
@@ -58,6 +61,10 @@ export type NotifyEvent = (typeof NOTIFY_EVENTS)[number];
 const OPTIN_PREFIX = "notify:optin:";
 const JOB_PREFIX = "notify:job:";
 const EV_PREFIX = "notify:ev:";
+const LINE_PREFIX = "notify:line:";
+
+// What a tap on the line summary opens: the app's job list (section 17.8).
+export const JOBS_URL = "cobalt-apple://jobs";
 
 // ---- config -----------------------------------------------------------------------
 
@@ -188,6 +195,8 @@ type EventRecord = {
     // the message while the event is being sent / retried; dropped once it is done
     title?: string;
     body?: string;
+    // what a tap opens; absent = this session's run (`cobalt-apple://session/<sid>`)
+    url?: string;
     // sends started so far (written BEFORE each send, so a Durable Object that dies mid-send
     // still counts it and the retries stay bounded)
     tries: number;
@@ -202,12 +211,22 @@ export type NotifyRenderEvent =
     | ({ kind: "success" } & RenderSuccess)
     | { kind: "failed"; code: string };
 
+// How a job in the line settled (section 17.8). A cancelled member is dropped from the summary.
+export type LineOutcome =
+    | { kind: "saved" }
+    | ({ kind: "rendered" } & RenderSuccess)
+    | { kind: "failed"; code: string }
+    | { kind: "cancelled" };
+
 export type NotifyHooks = {
     onSaved(sid: string): Promise<void>;
     onSaveFailed(sid: string, code: string): Promise<void>;
     onRender(sid: string, job: string, e: NotifyRenderEvent): Promise<void>;
     // `"notify": true` on a render: this job only (its success or its failure)
     optInJob(sid: string, job: string): Promise<void>;
+    // A save or render settled (ready, failed or cancelled): updates the caller's line summary
+    // (`PUT /studio/line/notify`) and sends it when no member is pending (section 17.8).
+    onLineSettle(sid: string, job: string | null, outcome: LineOutcome): Promise<void>;
 };
 
 export type SweepNotify = {
@@ -267,6 +286,80 @@ export function parseOptIn(raw: string): { on: NotifyEvent[]; label: string | nu
         label = t === "" ? null : t;
     }
     return { on, label };
+}
+
+// PUT /studio/line/notify takes no body: empty, or an empty JSON object (section 17.8).
+export function isEmptyLineBody(raw: string): boolean {
+    if (raw.trim() === "") return true;
+    try {
+        const b: unknown = JSON.parse(raw);
+        return isRecord(b) && Object.keys(b).length === 0;
+    } catch {
+        return false;
+    }
+}
+
+// ---- the line summary (section 17.8) -------------------------------------------------
+
+// What the line summary keeps: a member is "<sid>" (a save) or "<sid>:<job>" (a render), its
+// state "pending" | "saved" | "rendered" | "failed:<code>". `webps` carries what a finished
+// render made (the summary names the url when exactly one was made).
+type LineRecord = {
+    members: Record<string, string>;
+    webps: Record<string, RenderSuccess>;
+    at: number;
+    expires_at: number;
+};
+
+const memberParts = (m: string): { sid: string; job: string | null } => {
+    const i = m.indexOf(":");
+    return i < 0 ? { sid: m, job: null } : { sid: m.slice(0, i), job: m.slice(i + 1) };
+};
+
+type SummaryRow = { service: string | null; link: string | null; title: string | null; duration: number | null } | null;
+
+// The one message for everything a key left behind. One member: exactly the message that event
+// has on its own (section 9.4). Several: a count line, up to three failure lines, and the url of
+// the webp when exactly one was made.
+export function lineSummaryMessage(
+    rec: Pick<LineRecord, "members" | "webps">,
+    rows: Map<string, SummaryRow>,
+): { title: string; body: string; url: string; sid: string } {
+    const entries = Object.entries(rec.members).map(([key, state]) => ({ key, state, ...memberParts(key) }));
+    const first = entries[0]!;
+    const saveWhat = (sid: string) => describeJob(null, rows.get(sid) ?? null);
+    if (entries.length === 1) {
+        const url = sessionUrl(first.sid);
+        const { state } = first;
+        if (state === "saved") {
+            const row = rows.get(first.sid) ?? null;
+            return { ...savedMessage(saveWhat(first.sid), row?.duration ?? null), url, sid: first.sid };
+        }
+        if (state === "rendered" && rec.webps[first.key]) {
+            return { ...renderedMessage(rec.webps[first.key]!), url, sid: first.sid };
+        }
+        const code = state.startsWith("failed:") ? state.slice("failed:".length) : "error.api.generic";
+        const m = first.job
+            ? failedMessage("rendering", describeJob(null, null), code)
+            : failedMessage("saving", saveWhat(first.sid), code);
+        return { ...m, url, sid: first.sid };
+    }
+    const saved = entries.filter((e) => e.state === "saved").length;
+    const webps = entries.filter((e) => e.state === "rendered");
+    const failed = entries.filter((e) => e.state.startsWith("failed:"));
+    const parts = ["done"];
+    if (saved > 0) parts.push(`${saved} saved`);
+    if (webps.length > 0) parts.push(`${webps.length} ${webps.length === 1 ? "webp" : "webps"} ready`);
+    if (failed.length > 0) parts.push(`${failed.length} couldn't finish`);
+    const lines = [parts.join(" · ")];
+    for (const f of failed.slice(0, 3)) {
+        const code = f.state.slice("failed:".length);
+        lines.push(
+            (f.job ? failedMessage("rendering", describeJob(null, null), code) : failedMessage("saving", saveWhat(f.sid), code)).body,
+        );
+    }
+    if (webps.length === 1 && rec.webps[webps[0]!.key]) lines.push(rec.webps[webps[0]!.key]!.url);
+    return { title: "cobalt", body: lines.join("\n"), url: JOBS_URL, sid: first.sid };
 }
 
 // ---- the service (Durable Object) -----------------------------------------------------
@@ -412,6 +505,137 @@ export class NotifyService implements NotifyHooks, SweepNotify {
         await this.fire(`${EV_PREFIX}${sid}:r:${job}`, sid, msg);
     }
 
+    // ---- the line summary (section 17.8) ----
+
+    // PUT /studio/line/notify: `members` is what the caller has in flight right now (the Durable
+    // Object's snapshot of the line and the running work). Sessions and jobs with their own opt-in
+    // announce themselves and are left out. A repeat adds the work in flight now to the members
+    // still pending and keeps the outcomes already in; nothing in flight and nothing watched stores
+    // nothing.
+    async putLine(keyId: string, members: string[]): Promise<NotifyReply> {
+        if (!this.enabled()) {
+            return { status: 200, body: { status: "success", bridge: false, watching: 0, expires_at: null } };
+        }
+        const now = this.d.now();
+        const own = async (m: string): Promise<boolean> => {
+            const { sid, job } = memberParts(m);
+            const opt = await this.d.storage.get<OptIn>(`${OPTIN_PREFIX}${sid}`);
+            if (opt && opt.expiresAt > now) return true;
+            if (job) {
+                const j = await this.d.storage.get<JobOptIn>(`${JOB_PREFIX}${sid}:${job}`);
+                if (j && j.expiresAt > now) return true;
+            }
+            return false;
+        };
+        const keep: string[] = [];
+        for (const m of members) if (!(await own(m))) keep.push(m);
+
+        const key = `${LINE_PREFIX}${keyId}`;
+        return this.withEvent(key, async () => {
+            let found = await this.d.storage.get<LineRecord>(key);
+            // a round whose members all settled but whose message was never sent (a restart in between)
+            // is sent now, before a new round starts
+            if (found && found.expires_at > now && Object.keys(found.members).length > 0 && !Object.values(found.members).some((v) => v === "pending")) {
+                await this.finishLineRound(key, found);
+                found = undefined;
+            }
+            // a finished round (every member settled, its message already fired) is over
+            const live =
+                found && found.expires_at > now && Object.values(found.members).some((v) => v === "pending") ? found : undefined;
+            if (!live && keep.length === 0) {
+                return { status: 200, body: { status: "success", bridge: true, watching: 0, expires_at: null } };
+            }
+            let at = now;
+            if (!live) {
+                // the round's message is `notify:ev:line:<keyId>:<at>`: a new round never reuses the key of one already sent
+                while (await this.d.storage.get(`${EV_PREFIX}line:${keyId}:${at}`)) at++;
+            }
+            const rec: LineRecord = live ?? { members: {}, webps: {}, at, expires_at: now + NOTIFY_TTL_MS };
+            for (const m of keep) if (!(m in rec.members)) rec.members[m] = "pending";
+            rec.expires_at = now + NOTIFY_TTL_MS;
+            await this.d.storage.put(key, rec);
+            return {
+                status: 200,
+                body: { status: "success", bridge: true, watching: Object.keys(rec.members).length, expires_at: rec.expires_at },
+            };
+        });
+    }
+
+    // DELETE /studio/line/notify: the owner is back. Drops the summary and cancels its message when
+    // that is waiting for a retry (the marker stays, so nothing is ever sent twice).
+    async removeLine(keyId: string): Promise<NotifyReply> {
+        await this.withEvent(`${LINE_PREFIX}${keyId}`, async () => {
+            await this.d.storage.delete(`${LINE_PREFIX}${keyId}`);
+        });
+        for (const [k, rec] of await this.d.storage.list<EventRecord>({ prefix: `${EV_PREFIX}line:${keyId}:` })) {
+            if (rec && !rec.done) {
+                await this.withEvent(k, async () => {
+                    const cur = await this.d.storage.get<EventRecord>(k);
+                    if (cur && !cur.done) await this.d.storage.put(k, this.marker(cur, "cancelled"));
+                });
+            }
+        }
+        return { status: 204, body: null };
+    }
+
+    // A save or render settled. Every line summary that watches it takes the outcome; the one that
+    // has no member left pending sends its message, once (the event's own record: a poll and the
+    // sweep may both get here, the second finds the member already settled).
+    async onLineSettle(sid: string, job: string | null, outcome: LineOutcome): Promise<void> {
+        if (!this.enabled()) return;
+        const member = job ? `${sid}:${job}` : sid;
+        for (const [key, listed] of await this.d.storage.list<LineRecord>({ prefix: LINE_PREFIX })) {
+            if (!listed || !(member in listed.members)) continue;
+            const keyId = key.slice(LINE_PREFIX.length);
+            await this.withEvent(key, async () => {
+                const cur = await this.d.storage.get<LineRecord>(key);
+                if (!cur || cur.members[member] !== "pending") return;
+                if (cur.expires_at <= this.d.now()) {
+                    await this.d.storage.delete(key);
+                    return;
+                }
+                if (outcome.kind === "cancelled") {
+                    delete cur.members[member];
+                } else if (outcome.kind === "saved") {
+                    cur.members[member] = "saved";
+                } else if (outcome.kind === "rendered") {
+                    cur.members[member] = "rendered";
+                    cur.webps[member] = { url: outcome.url, bytes: outcome.bytes, width: outcome.width, height: outcome.height };
+                } else {
+                    cur.members[member] = `failed:${outcome.code}`;
+                }
+                const states = Object.values(cur.members);
+                if (states.length === 0) {
+                    // every member was cancelled: nothing to say
+                    await this.d.storage.delete(key);
+                    return;
+                }
+                if (states.some((v) => v === "pending")) {
+                    await this.d.storage.put(key, cur);
+                    return;
+                }
+                // all settled: the state is stored FIRST (a restart between here and the send must not
+                // leave the last member "pending" for ever), then the one message, then the round is over
+                await this.d.storage.put(key, cur);
+                await this.finishLineRound(key, cur);
+            });
+        }
+    }
+
+    // The round's one message (the event's own record makes a repeat a no-op), then the round ends.
+    // The caller holds the summary's chain.
+    private async finishLineRound(key: string, cur: LineRecord): Promise<void> {
+        const keyId = key.slice(LINE_PREFIX.length);
+        const rows = new Map<string, SummaryRow>();
+        for (const m of Object.keys(cur.members)) {
+            const { sid: s } = memberParts(m);
+            if (!rows.has(s)) rows.set(s, await this.sessionRow(s));
+        }
+        const msg = lineSummaryMessage(cur, rows);
+        await this.fire(`${EV_PREFIX}line:${keyId}:${cur.at}`, msg.sid, msg);
+        await this.d.storage.delete(key);
+    }
+
     // ---- sending ----
 
     private marker(rec: EventRecord, outcome: NonNullable<EventRecord["outcome"]>): EventRecord {
@@ -419,7 +643,7 @@ export class NotifyService implements NotifyHooks, SweepNotify {
     }
 
     // Starts an event unless it already has a record (then it is only a retry when one is due).
-    private fire(key: string, sid: string, msg: { title: string; body: string }): Promise<void> {
+    private fire(key: string, sid: string, msg: { title: string; body: string; url?: string }): Promise<void> {
         return this.withEvent(key, async () => {
             const existing = await this.d.storage.get<EventRecord>(key);
             if (existing) {
@@ -430,6 +654,7 @@ export class NotifyService implements NotifyHooks, SweepNotify {
                 sid,
                 title: clip(msg.title, HARK_MAX_TITLE),
                 body: clip(msg.body, HARK_MAX_BODY),
+                ...(msg.url ? { url: msg.url } : {}),
                 tries: 0,
                 retryAt: null,
                 done: false,
@@ -454,7 +679,7 @@ export class NotifyService implements NotifyHooks, SweepNotify {
         const next: EventRecord = { ...rec, tries, retryAt: delay === undefined ? null : now + delay };
         await this.d.storage.put(key, next);
 
-        const r = await this.send(rec.title, rec.body, rec.sid);
+        const r = await this.send(rec.title, rec.body, rec.sid, rec.url);
         if (r.kind === "ok") {
             this.logLine(rec.sid, "sent", r.status);
             await this.d.storage.put(key, this.marker(next, "sent"));
@@ -475,16 +700,16 @@ export class NotifyService implements NotifyHooks, SweepNotify {
         }
     }
 
-    private async send(title: string, body: string, sid: string): Promise<SendResult> {
-        const url = this.d.webhookUrl;
-        if (!url) return { kind: "retry", status: "network" };
+    private async send(title: string, body: string, sid: string, url?: string): Promise<SendResult> {
+        const hook = this.d.webhookUrl;
+        if (!hook) return { kind: "retry", status: "network" };
         const ac = new AbortController();
         try {
             const res = await raceCeiling(
-                this.d.fetch(url, {
+                this.d.fetch(hook, {
                     method: "POST",
                     headers: { "content-type": "application/json" },
-                    body: JSON.stringify({ title, body, url: sessionUrl(sid) }),
+                    body: JSON.stringify({ title, body, url: url ?? sessionUrl(sid) }),
                     redirect: "manual",
                     signal: ac.signal,
                 }),
@@ -511,7 +736,23 @@ export class NotifyService implements NotifyHooks, SweepNotify {
                 if (rec && typeof rec.expiresAt === "number" && rec.expiresAt <= now) await this.d.storage.delete(k);
             }
         }
+        for (const [k, rec] of await this.d.storage.list<{ expires_at?: number }>({ prefix: LINE_PREFIX })) {
+            if (rec && typeof rec.expires_at === "number" && rec.expires_at <= now) await this.d.storage.delete(k);
+        }
         if (!this.enabled()) return { nextInMs: null };
+
+        // rounds whose members all settled but whose message did not go out (the object restarted between
+        // the last settle and the send): sent now
+        for (const [k, listed] of await this.d.storage.list<LineRecord>({ prefix: LINE_PREFIX })) {
+            if (!listed || Object.keys(listed.members).length === 0) continue;
+            if (Object.values(listed.members).some((v) => v === "pending")) continue;
+            await this.withEvent(k, async () => {
+                const cur = await this.d.storage.get<LineRecord>(k);
+                if (cur && Object.keys(cur.members).length > 0 && !Object.values(cur.members).some((v) => v === "pending")) {
+                    await this.finishLineRound(k, cur);
+                }
+            });
+        }
 
         let sent = 0;
         let next: number | null = null;

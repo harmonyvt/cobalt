@@ -89,7 +89,7 @@ Response `200`:
 
 - Later additions to `features` (a missing key = `false`): `live_activity_push` (section 8.5),
   `notify_bridge` (section 9.1), `crop` (section 10; `true` on any server that has it), `delete_post` (section 12), `source_wait`
-  (section 11), `poster` and `public_default` (section 13).
+  (section 11), `poster` and `public_default` (section 13), `line` (section 17, with `limits.line_max` and `limits.line_wait_ms`).
 - `server` is the fork marker. The app treats any 200 JSON with `server == "cobalt-cloudflare"`
   as this fork and reads `features` / `limits` from it (missing feature keys = `false`, missing
   limits = the values above).
@@ -1597,3 +1597,277 @@ Rollback order: `undo` until `remaining: 0`, THEN redeploy the old Workers.
 Tests: `api/test/{visibility,visibility-migrate,migration-0008}.test.ts` (+ `visibility-fixture.ts`, `d1-batch.ts`), `replay-prod.test.ts` (skipped
 unless `VIS_REPLAY_DIR` holds a D1 export and two bucket listings). **Unverified until deployed:** real R2-to-R2 copy time for a large file
 inside a Worker request, that a zone purge by URL clears R2 custom-domain cache for mp4s, the real D1 `batch`.
+
+## 17. The server's line: queued saves and renders that finish with every client gone (addendum, pinned 2026-10-06; `apple/CONTRACT-PARALLEL.md` section 7)
+
+Owner (2026-10-06): the links waiting when he leaves cobalt must finish with the app closed, and "2nd in line" must count every
+client. The helper does one save, probe, encode or poster at a time (`helper/server.js:178` `busy()`), and there is exactly one
+Durable Object for everything (`src/index.ts:331`, `getContainer(env.COBALT, "main")`), so that one object can hold one honest line
+for the share sheet, the app on every device, the app's Shortcuts actions and the web studio page. Design lane; **built 2026-10-06
+(lane S1, not yet deployed; where the build differs from this text, `README.md` "The server's line" says so)**. Code read on 2026-10-06 (`studio.ts`, `webp.ts`, `studio-edge.ts`, `sweep.ts`, `notify.ts`, `gate.ts`, `worker.ts`,
+`app-routes.ts`, `helper/server.js`, `helper/lib.js`); line numbers are from that read.
+
+All of it is **additive and backward compatible**: a client that sends nothing new sees what it saw before (one exception, the share
+sheet, which is better off: 17.3). No D1 migration: the line lives in Durable Object storage, the rows it creates are ordinary
+`studio_sessions` / `studio_renders` rows.
+
+### 17.1 What changes, per caller
+
+| caller | today | with the line |
+|---|---|---|
+| app with `features.line` (`"queue": true`) | `429 error.studio.busy`, retries every 3 s for 60 s (`PipelineFlows.swift:69-84`) | `201` at once with `queued: true` and its place; the save starts when its turn comes, polled or not |
+| share sheet (`origin: "share"`) | never refused; its `save:` record retries the helper every 2 s for up to 120 s, first to retry wins (`studio.ts:761-766`, `:1102-1115`), then `error.studio.busy` | implicitly queued: the same `201` (plus `queued`, `queue_ahead`), first in first out, 30 min ceiling (17.6) |
+| app render with `"queue": true` | `429 error.webp.busy` while a save runs (`studio.ts:1617`); the app fails `renderBusy` at once | `202` with the job id at once, `phase: "queued"` until it starts |
+| old app, web studio page, the macOS Shortcuts in `shortcuts/` (no `queue`) | `429` while a save or encode runs | `429` while the helper is held **or anything waits in the line** (fairness: they never jump it). Same codes, same shapes |
+| `PUT /studio/upload` / `POST /library/items/<id>/studio` | busy adopt → `201` with `studio_error` / `429` | with `?queue=1`: the adopted session joins the line instead |
+| `/library/adopt` (web Worker, service) | unchanged | unchanged (never queues) |
+| `POST /webp` (URL jobs) | unchanged | unchanged (not in the line; its `job:` record still counts as the helper being held, 17.2) |
+
+### 17.2 Storage, order, and "held"
+
+- **Entries**: DO storage key `line:<class>:<seq>` → `LineEntry`. `<class>` is `0` for a render asked with `"priority": "focused"`,
+  `1` for everything else; `<seq>` is a 12-digit zero-padded counter kept under `lineseq` (not under the `line:` prefix). Durable
+  Object `list()` returns keys "in ascending sorted order based on the keys' UTF-8 encodings" (Cloudflare storage API docs, read
+  2026-10-06), so `list({prefix: "line:"})` IS the order: focused renders first, then everything else first in first out. No index:
+  every lookup lists and scans (at most `LINE_MAX` = 50 entries).
+
+```ts
+// src/line.ts (new, no Cloudflare imports: runs under plain node in the tests)
+export type LineEntry = {
+    kind: "save" | "render";
+    sid: string;                       // the studio session (a queued save's row exists, status 'saving')
+    job: string | null;                // render: the job id, minted at enqueue (webp.ts `mintId`, 20 base62)
+    keyId: string;                     // who asked (api_keys.id; the share sheet's key)
+    at: number;                        // enqueued, ms
+    origin: "share" | null;
+    adopt: boolean;                    // a save that is an adopted upload: it starts in phase "probing"
+    render: { params: WebpParams; effectiveWidth: number; quality: string; start: number; length: number } | null;
+    starting: number | null;           // a render whose upload into the helper began at this time (17.5)
+    attempts: number;                  // starts that met a foreign 429
+};
+export const LINE_MAX = 50;
+export const LINE_WAIT_MS = 30 * 60 * 1000;
+export const LINE_BUSY_WAIT_MS = 10 * 60 * 1000;
+export const LINE_START_STALE_MS = 6 * 60 * 1000;   // = SWEEP_RENDER_MS
+export class LineStore {               // over the DO's KV (`StudioDeps.storage`)
+    constructor(storage: KV, now: () => number);
+    list(): Promise<Array<{ key: string; entry: LineEntry }>>;
+    enqueue(e: Omit<LineEntry, "starting" | "attempts">, focused: boolean): Promise<{ key: string } | { full: true }>;
+    find(sid: string, job?: string | null): Promise<{ key: string; entry: LineEntry; index: number } | null>;
+    remove(key: string): Promise<void>;
+    put(key: string, e: LineEntry): Promise<void>;
+}
+```
+
+- **Held** (`StudioService.held()`, replacing the `saveActive() || encoding()` pair at `studio.ts:764`, `:1460`, `:1617` for the
+  free/not-free decision): any `save:<sid>` record; any `job:<id>` record without `result:<id>` accepted within `SWEEP_RENDER_MS`
+  (durable, so it survives an eviction, unlike the in-memory `encodes` map, which is still consulted); a poster in flight (the
+  `PosterService` reports it); a render entry with `starting` younger than `LINE_START_STALE_MS`. Returns what holds it:
+  `{kind: "save"|"render"|"webp"|"poster", sid?, job?} | null`.
+- **Free for a request** = not held AND no entry that would go before it: for a save or an unprioritised render, an empty line; for a
+  focused render, no class-`0` entry. Only then does a request take today's immediate path. A share-origin save that finds the
+  helper free still takes today's path (a `save:` record and the 1.2 s kick).
+- Since every non-free create now waits in the line instead of writing a `save:` record, there is at most one `save:` record at a time
+  (the busy retry in `startFetch` stays for a race with a `/webp` job or a poster, 17.5).
+- **Posters yield**: the poster service's `helperBusy` (`studio.ts:571`) also answers true while the line is not empty, so a poster is
+  never cut while somebody waits.
+
+### 17.3 Joining the line
+
+**`POST /studio`** gains three optional fields (validated before anything is created; anything invalid creates nothing):
+
+```json
+{ "url": "https://www.instagram.com/reel/Dd7P496wolG/", "public": true, "queue": true,
+  "title": "the good part", "notify": { "on": ["saved", "failed"] } }
+```
+
+- `queue`: boolean (absent, `null`, `false` = today). Any other type: `400 error.studio.invalid_params`. `origin: "share"` implies it.
+- `title`: optional string or `null`, the rules of section 15.2 (trimmed, no control characters, at most 80 code points; empty or
+  whitespace = none). Invalid: `400 error.library.bad_title`. Stored at create as the post's custom title (`media_titles`, post key =
+  the new session id, which is the post key of a saved link's original, `POST_KEY_SQL`): a title row with no live file shows nowhere
+  (15.3), so the row is written at once and deleted when the save fails or is cancelled. Exists for the Shortcuts actions, which may
+  not live long enough to send `PATCH .../post` after the save.
+- Not free and queued: the `studio_sessions` row is inserted (`status 'saving'`, as today), the opt-in of `notify` is registered as
+  today (14.1), a line entry is written, **no** `save:` record, **no** kick, `scheduleSweep()`. Answer `201`:
+  `{status, id, url, queued: true, queue_ahead: <n>, notify?}`. Free: today's path and `{..., queued: false, queue_ahead: null}`.
+- Line full (`LINE_MAX` entries, all keys): `429 error.studio.line_full`, nothing created (also for a share; the extension already
+  shows a failed share, `CobaltShare/InstantFailure.swift`).
+- Not free, not queued: `429 error.studio.busy` (today's code).
+
+**`POST /studio/<sid>/render`** gains `queue` (boolean, same rule) and `priority` (`"focused"` or absent/`null`; anything else, or
+`priority` without `queue`, is `400 error.webp.invalid_params`). Validation is today's (`validateRender`, crop included) and happens
+first. Not free and queued: the job id is minted here, the `studio_renders` row is inserted `pending` (as today at `studio.ts:1647`),
+`"notify": true` registers the job's opt-in now (`optInJob`, the job id is known), and the entry carries the validated params. Answer
+`202 {status: "pending", job, queued: true, queue_ahead}`. Free: today's path plus `queued: false, queue_ahead: null`. Not free, not
+queued: `429 error.webp.busy`. `WebpService.createFromUpload` (`webp.ts:362`) takes an optional pre-minted `id` (else `mintId` as
+today, `webp.ts:375`). With `queue`, a `429` from the helper on the free path (a race with a `/webp` job or a poster that `held()`
+did not see) does not reach the client: the request is enqueued instead (`202`, `queued: true`), in its class's order. A queued save
+needs no such rule (its started save retries the helper inside `startFetch`).
+
+The focused rule: **a render the owner asked for from the screen goes ahead of every waiting save** (and behind earlier focused
+renders); it never interrupts what runs. The app sends `priority: "focused"` for every render it starts from a planet (renders exist
+only for the focused job, `apple/CONTRACT-PARALLEL.md` 5.3); its Shortcuts action does not.
+
+**Uploads**: `PUT /studio/upload?...&queue=1` and `POST /library/items/<id>/studio?queue=1` pass `queue: true` into the internal adopt
+body (`/studio/upload/adopt`; the public gate still answers 404 for it). `adopt()` (`studio.ts:1423`): free → today; not free and
+queued → the session row (`service 'upload'`) and an entry with `adopt: true`; the upload answer is `201` with `id` = that session,
+`studio_error: null`, plus `queued: true, queue_ahead`; the item route answers `201 {status, id, url, queued, queue_ahead}`. Without
+`queue=1` both behave as today. `PUT /studio/upload` also takes `title=<url-encoded>` (15.2 rules, judged with the other query checks
+before the body is read: `400 error.library.bad_title`); it is written for the post key of the new upload row (its item id) right
+after the row insert, best effort (logged, never fails the upload).
+
+### 17.4 Reading the line
+
+- **`GET /studio/<sid>`** (and every session body: the DO's advance reply, `/studio/recent`) gains `queue_ahead: number | null`;
+  `step` gains the value `"queued"`. For a session whose save waits in the line: `status: "saving"`, `step: "queued"`, `step_bytes` /
+  `step_total` null, `waking: false`, `queue_ahead` = the jobs that will run before it, **the one running now included** (`1` = it is
+  next; the app shows "2nd in line"). Otherwise `queue_ahead: null`. Old apps decode an unknown `step` as "not said"
+  (`apple/CobaltKit/.../Models/Wire.swift:127`).
+- **Render pending** (`GET /studio/<sid>/render/<job>`): `{status: "pending", job, phase: "queued", frames_done: null, frames_total:
+  null, queue_ahead}`; `queue_ahead` is null on every other pending answer. Old apps map an unknown `phase` to nil
+  (`HTTPCobaltClient.swift:371`).
+- **`GET /studio/recent`** (14.2): unchanged rules (share-origin sessions of this key); a queued one shows `step: "queued"` and its
+  `queue_ahead`. App-queued sessions are not listed: the app knows its own session ids.
+- **`GET /studio/line`** (new, keyed; the library-service credential and other methods: 404; `cache-control: no-store`; never wakes the
+  container):
+
+```json
+{ "status": "success", "now": 1790000000000,
+  "running": { "kind": "save", "mine": false, "sid": null, "job": null, "origin": "share", "key_name": "iphone" },
+  "entries": [
+    { "position": 2, "kind": "save", "mine": true, "sid": "<sid>", "job": null, "at": 1789999990000,
+      "origin": null, "priority": null, "key_name": "mac", "link": "https://www.instagram.com/reel/Dd7P496wolG/" },
+    { "position": 3, "kind": "render", "mine": false, "sid": null, "job": null, "at": 1789999995000,
+      "origin": null, "priority": null, "key_name": "iphone", "link": null }
+  ],
+  "max": 50, "wait_ms": 1800000 }
+```
+
+  `running` is `held()` (null when free; `kind` `"save" | "render" | "webp" | "poster"`). `position` counts the running job as 1st.
+  `sid`, `job` and `link` only for the caller's own work (`mine`, by key id); `key_name` is `api_keys.name` (one `SELECT id, name FROM
+  api_keys WHERE id IN (...)`), `null` for the service key or an unknown key. D1 failure: the answer still comes, with `key_name: null`.
+
+### 17.5 Starting the next one (the pump)
+
+`StudioService.pumpLine()`: if `held()` → nothing. Else take the first entry:
+
+1. **Stale**: older than `LINE_WAIT_MS` → expire it (17.6) and look at the next. Its session row gone, expired or no longer `saving`
+   (a save) / its render row not `pending` → drop the entry silently and look at the next.
+2. **Save**: write `save:<sid>` = `{phase: adopt ? "probing" : "starting", startedAt: now, attempts: 0, lastAdvance: now, lined: true,
+   queuedAt: entry.at}`, THEN remove the entry (a crash in between leaves a started save and an entry the next pump drops because the
+   row's `save:` record exists), then `kick(sid)` (capped at `KICK_MS`). From here it is an ordinary save: the sweep advances it, a poll
+   advances it, every existing rule applies. One difference: a `lined` record that meets a foreign `429` at `startFetch`
+   (`studio.ts:1110-1114`) or `probeStep` (`:1541-1548`) keeps retrying for `LINE_BUSY_WAIT_MS` (10 min) instead of `BUSY_WAIT_MS`.
+3. **Render**: persist `starting: now` on the entry (and remember it in memory), then `createFromUpload("studio:<sid>", params, getUpload,
+   {id: job})` exactly as `render()` does (keep-awake renew included). `202` → `encodes.set(job)`, remove the entry, `liveRender accepted`.
+   `429` → clear `starting`, `attempts + 1`, leave it at the head (the next pass retries; the 30 min ceiling bounds it). Any other
+   failure → `UPDATE studio_renders SET status 'error', error_code` (the code from the reply, else `error.webp.unavailable`), the
+   render's notify/live failed hooks, remove the entry, continue with the next.
+   A `starting` entry older than `LINE_START_STALE_MS` with no in-memory mark (the DO was evicted mid-upload) is started again.
+4. At most **one start per pump call**; one call per place below.
+
+Where it runs: **at the end of every sweep pass** (`StudioService.sweep()`, `studio.ts:1800`, before the posters), and a non-empty line
+counts as pending, so the sweep keeps re-arming every `SWEEP_DELAY_S` (5 s, `sweep.ts`) while anything waits. Every transition that
+frees the helper (save ready or failed, render result recorded, cancel) calls `scheduleSweep()`, which it already does or can do
+cheaply; the gap between two jobs is therefore at most about one sweep interval when nobody polls. No pump runs inside a client's
+request except the free-path start that create/render already do today.
+
+**Guards** (these would silently jump the line or lose a job):
+- `advance()` (`studio.ts:983`) and `step()` (`:1017`): a session with a save entry in the line is answered (`step: "queued"`), never
+  stepped. Without this, the first poll of a queued session would start it (`step()` builds a missing record from the row, `:1039-1052`).
+- `renderStatusInner()` (`:1669`): a pending render row whose job is in the line is answered `phase: "queued"` **before**
+  `this.d.webp.status(...)`, which would answer 404 for a job with no `job:` record, i.e. `error.webp.job_lost` (`:1740-1742`).
+
+### 17.6 Ceiling and expiry
+
+- `LINE_MAX` = 50 entries in all (the app's paste takes at most 20 links). Over it: `429 error.studio.line_full`.
+- `LINE_WAIT_MS` = 30 minutes from `at` (20 links at about 45 s each, twice over). An entry past it is ended by the pump or the sweep:
+  a save → `markError(sid, "error.studio.busy")`, the title row deleted, the `failed` notification (per-session opt-in) and the live
+  `failed` hook, i.e. exactly what `fail()` does today for a busy save; a render → its row `error` with `error.webp.busy` and its
+  failed hooks. Old and new clients already have words for both codes; `plainReason` says "the server was busy".
+- Nothing else expires an entry: the session's 7-day life is far longer than the ceiling.
+
+### 17.7 Cancel what has not started (new routes, keyed)
+
+- `DELETE /studio/<sid>/line`: cancels the session's queued save. `DELETE /studio/<sid>/render/<job>`: cancels a queued render.
+  `Authorization: Api-Key`; the key must be the one that created the session (`row.key_id`), else, like an unknown session or job,
+  `404 error.studio.not_found`; the service credential: 404. No CORS (the web page does not cancel).
+- In the line → remove the entry; a save: `UPDATE studio_sessions SET status 'error', error_code 'error.studio.cancelled'` (and its
+  title row deleted); a render: its row `error`, `error.webp.cancelled`. The live hooks get `failed` with that code (a registered run
+  ends); **no Hark message** for a cancel (the owner did it); the line summary (17.8) drops the member. `200 {"status":"success",
+  "cancelled": true}`.
+- Already cancelled: the same `200` (idempotent). Already started, finished or failed: `409 error.studio.started` (the client says
+  "stopped following": a running save or encode cannot be stopped; `DELETE /fetch/<id>` on the helper only forgets the job while its
+  download keeps going, `helper/server.js:733-736`, so v1 does not pretend).
+
+### 17.8 Notifications
+
+- Per-session opt-ins (sections 9 and 14) are unchanged and fire when a queued job finishes, through the same hooks, so a share-sheet save
+  that waited in the line is announced exactly as today.
+- **One message for everything left behind**: `PUT /studio/line/notify` (keyed; body empty or `{}`; anything else `400
+  error.notify.invalid`). The server takes a snapshot of the caller's work in flight: its line entries, its sessions with a `save:` record,
+  and the unfinished `job:` records of its sessions, **minus** any session or job with its own opt-in (those announce themselves). Stored as
+  `notify:line:<keyId>` = `{members: {"<sid>" | "<sid>:<job>": "pending" | "saved" | "rendered" | "failed:<code>"}, at, expires_at}` (24 h).
+  A repeat PUT adds the work in flight now to the members still pending and keeps the outcomes already in. Answer `200 {status, bridge,
+  watching: <members>, expires_at}`; nothing in flight → `watching: 0`, nothing stored, `expires_at: null`; bridge off → `bridge: false`,
+  nothing stored. `DELETE /studio/line/notify` → `204`, idempotent (removes the record and cancels its pending retries).
+- A new hook `NotifyHooks.onLineSettle(sid, job | null, outcome)` is called at every settle: save ready (link and adopted upload), save
+  failed, cancelled, render success, render failed. It updates the member; a cancelled member is removed. When no member is pending, one
+  message is sent (exactly once, `notify:ev:line:<keyId>:<at>`; retries and logs as 9.5); all members cancelled → nothing, record deleted.
+- Copy: **one member** → exactly 9.4's message for that event (url `cobalt-apple://session/<sid>`). **Several** → title `cobalt`, body
+  `done · 4 saved · 1 webp ready · 1 couldn't finish` (zero counts left out; `webps` for more than one), then for up to 3 failures a line
+  each with 9.4's failure wording (`couldn't save <service · ref> — <reason>` / `couldn't make the webp — <reason>`), then, when exactly one
+  webp was made, its URL on the last line. url: `cobalt-apple://jobs` (new: the app opens its job list). Lowercase, 80/2000 caps as 9.4.
+
+### 17.9 Capability
+
+`GET /capabilities`: `features.line: true` (absent = false: the app keeps its own line on the device and sends no `queue`), and
+`limits.line_max: 50`, `limits.line_wait_ms: 1800000` (imported from `line.ts`, not retyped).
+
+### 17.10 Gate and Worker
+
+- `gate.ts` `decideStudio`, next to `/studio/recent` (`gate.ts:321`; neither path segment is a 22-char session id):
+  `/studio/line` `GET` → `lookupThen(req, "studio_line")`; `/studio/line/notify` `PUT|DELETE` → `lookupThen(req, "studio_line_notify")`;
+  other methods 404. In the session block: `/studio/<sid>/line` `DELETE` → `lookupThen(req, "studio_cancel", {sid})`;
+  `/studio/<sid>/render/<job>` `DELETE` → `lookupThen(req, "studio_cancel", {sid, job})` (its `GET` stays unkeyed, `render_status`).
+- `worker.ts`: the three new decisions are forwarded to the Durable Object like `studio_recent` (`worker.ts:356-366`: no body read, no
+  `request_log` row, `Authorization` dropped, the key id header set). The DO routes them in `handleStudioRoute` (`studio.ts:1925`),
+  requiring the key id header (403 without it), and refuses the service key id with 404.
+- `POST /studio` and `POST .../render` keep their current Worker path (the body reaches the DO unchanged; `normalizeUrlField` only
+  touches `url`).
+
+### 17.11 Files and tests
+
+New: `src/line.ts`, `test/line.test.ts`, `test/line-notify.test.ts`. Edited: `src/studio.ts` (create, render, adopt, `held`, `pumpLine`,
+the two guards, sweep, cancel, `line` route, session body), `src/webp.ts` (`createFromUpload` optional id; export `mintId` if needed),
+`src/notify.ts` (`onLineSettle`, the line opt-in, the summary copy), `src/gate.ts`, `src/worker.ts`, `src/app-routes.ts` (capability,
+`queue` and `title` on upload and the item studio route), `README.md` (App routes: the line).
+Tests (fakes from `test/studio-fakes.ts`, fake clock):
+- order: three saves queued in order run in order; a focused render queued after them runs before the 2nd; two focused renders keep
+  their order; nothing running is ever interrupted;
+- free path unchanged: an empty line and a free helper give exactly today's replies (`queued: false`), byte-for-byte for the old keys;
+- not queued while waiting: an old client's `POST /studio` gets `429 error.studio.busy` while the helper is free but the line is not
+  empty; the web page path likewise;
+- share: `origin: "share"` while busy is queued (no `save:` record, no 2 s busy retry), announced on finish through its opt-in, listed by
+  `/studio/recent` with `step: "queued"`;
+- polls never start: `GET /studio/<sid>` of a queued save answers `queued` and does not create a `save:` record; a queued render's
+  status is `phase: "queued"`, never `job_lost`;
+- the pump: starts the head when the running save ends (sweep only, no client polling); a render start that meets `429` stays at the
+  head; a render start that fails ends that render and starts the next; an evicted `starting` render is restarted after
+  `LINE_START_STALE_MS`; at most one start per call; posters never cut while the line has entries;
+- `queue_ahead` and `GET /studio/line` (positions, `mine`, `key_name`, `running` kinds, other keys' links never shown);
+- ceiling: `line_full` creates nothing; an entry past 30 min ends with `error.studio.busy` / `error.webp.busy` and the failed hooks;
+- cancel: in line → cancelled codes, no Hark, idempotent; started → 409; another key / service → 404; gate methods;
+- `title` and `queue` validation on all three create paths (400 creates nothing); the title row of a failed or cancelled save is gone;
+- line notify: snapshot excludes sessions with their own opt-in; one message after the last member settles; single member uses 9.4
+  copy; repeat PUT merges; DELETE cancels; bridge off stores nothing; exactly once under a poll racing the sweep;
+- capability object (`test/library.test.ts`).
+
+### 17.12 Deploy (owner; not run by the lane) and what stays unverified
+
+API deploy only: `deploy/cloudflare/api/prepare-git-info.sh`, then `cd deploy/cloudflare/api && cf deploy --secrets-file
+~/.config/cobalt/secrets.json`. No migration, no web deploy, no new secret, no helper change (the image is unchanged).
+**Unverified until deployed:** that `schedule()` fires the sweep while no request is in flight (already section 6's caveat; the line
+depends on it to drain with every client gone); that a render start begun inside a sweep pass with a large original (the stream into
+the helper, up to 200 MB) completes when it outlasts the pass's 30 s item ceiling (abandoned, not cancelled; the stale-start rule
+re-runs it if the object was evicted); real gaps between jobs on the deployed alarm cadence.

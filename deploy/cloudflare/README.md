@@ -545,11 +545,12 @@ migration, no new binding, no web change. The Worker-side code is `api/src/app-r
 | route | auth | answered by |
 |---|---|---|
 | `GET /capabilities` | none (a key, if sent, is reported) | Worker (D1 for the key at most) |
-| `PUT /studio/upload?name=` | key | Worker (R2 + D1), then the DO's internal `POST /studio/upload/adopt` for a video |
+| `PUT /studio/upload?name=[&queue=1][&title=]` | key | Worker (R2 + D1), then the DO's internal `POST /studio/upload/adopt` for a video |
 | `GET /library?limit=&cursor=` | key | Worker (D1) |
 | `GET\|HEAD /library/items/<id>/file` | key | Worker (D1 + R2) |
 | `POST /library/items/<id>/publish` | key | Worker (D1 + R2) |
-| `POST /library/items/<id>/studio` | key | Worker (D1), then the DO's internal adopt (or reopens a ready session) |
+| `POST /library/items/<id>/studio[?queue=1]` | key | Worker (D1), then the DO's internal adopt (or reopens a ready session) |
+| `GET /studio/line`, `PUT\|DELETE /studio/line/notify`, `DELETE /studio/<sid>/line`, `DELETE /studio/<sid>/render/<job>` | key | the DO (storage and D1; never wakes the container), see below |
 | `PATCH /library/items/<id>/post` | key | Worker (D1 only): set or clear the post's custom title |
 
 - **`/capabilities`** reports `server: "cobalt-cloudflare"`, the upstream `cobalt.version` (the one `version` field of the
@@ -612,6 +613,65 @@ answers the recorded success when its own D1 update finds the row already settle
 
 `GET|HEAD /library/items/<id>/file` and `POST /library/items/<id>/studio` take the object's size from R2 (`head`), not the row:
 a stale or missing `bytes` no longer gives a 200 for a missing object, a wrong `Content-Range`, or an adopt refused for size 0.
+
+### The server's line (queued saves and renders, `APP-API-CONTRACT.md` section 17)
+
+The helper does one save, probe, encode or poster at a time and there is exactly one Durable Object, so that object holds one
+honest line for every client (share sheet, the app on each device, its Shortcuts actions, the web page). The line lives in DO
+storage under `line:<class>:<12-digit seq>` (`src/line.ts`, no Cloudflare imports); DO `list()` returns keys in ascending order,
+so the list IS the order: class `0` (a render sent with `"priority": "focused"`) first, then everything else first in first out.
+No D1 migration: a queued job's rows are the ordinary `studio_sessions` / `studio_renders` rows.
+
+- **Opt-in, so old clients are unchanged.** `"queue": true` on `POST /studio` and `POST /studio/<sid>/render`, `?queue=1` on
+  `PUT /studio/upload` and `POST /library/items/<id>/studio`. Without it a client gets `429 error.studio.busy` /
+  `error.webp.busy` while the helper is held **or anything waits** (so it can never jump the line). `origin: "share"` implies it
+  (never refused; first in first out, 30 minutes, replacing the 2 s / 2 min retry). `/library/adopt` (the web Worker) never queues.
+  The queued answer is `201` / `202` with `queued` and `queue_ahead` (the jobs that run first, the running one included); a
+  caller that did not opt in sees today's keys exactly. `POST /studio` also takes `title` (stored for the new session's post key,
+  deleted if the save fails or is cancelled) and the upload takes `?title=`; `priority` needs `queue`.
+- **Held** (`StudioService.held()`): a `save:` record, a render or `/webp` `job:` record without a result accepted within 6 min,
+  a poster in flight, a render entry of the line whose upload into the helper began less than 6 min ago. Free = not held and no
+  entry that would go before the request.
+- **The pump** (`pumpLine()`, the end of every sweep pass, before the posters; a non-empty line counts as pending so the sweep
+  re-arms every 5 s): starts the head when the helper is free, **one start per pass**. A save gets its `save:` record
+  (`lined: true`, so a foreign 429 is waited out for 10 min instead of 2) and is kicked; a render is uploaded into the helper with
+  its pre-minted job id (a 429 leaves it at the head, any other failure ends that render and the next entry is looked at; an entry
+  whose upload began in an evicted Durable Object is started again after 6 min). Entries older than 30 min end with
+  `error.studio.busy` / `error.webp.busy` and the usual failure notification; an entry whose row is gone, expired or no longer
+  saving / pending is dropped silently.
+- **Two guards** (silent failures otherwise): `step()` and `advance()` never step a session that has a save entry in the line
+  and no `save:` record (`step()` builds a missing record from the row, so the first poll would start it, jumping the line); a
+  render status poll answers `phase: "queued"` for a pending row whose job is in the line *before* asking the webp service (it
+  would 404, i.e. `error.webp.job_lost`).
+- **Reading it**: every session body has `queue_ahead` (`step: "queued"` while the save waits); a pending render answer has
+  `phase: "queued"` and `queue_ahead` (null on every other pending answer); `GET /studio/recent` shows queued shares;
+  `GET /studio/line` (key; never wakes the container, `no-store`) lists the running job and the waiting entries with `position`
+  (the running job is 1st), `mine`, `origin`, `priority` and `key_name`, and `sid` / `job` / `link` only for the caller's own work.
+- **Cancel** what has not started: `DELETE /studio/<sid>/line`, `DELETE /studio/<sid>/render/<job>` (key; the key that created
+  the session, else 404). `200 {cancelled: true}` (idempotent) or `409 error.studio.started`. The session / render row ends
+  `error.studio.cancelled` / `error.webp.cancelled`, no Hark message.
+- **Hark summary**: `PUT /studio/line/notify` (key, empty body or `{}`) snapshots the caller's work in flight, minus sessions and
+  jobs with their own opt-in, as `notify:line:<keyId>`; one message (`cobalt-apple://jobs`) when every member has settled, the
+  single-job wording of section 9.4 when only one member is left. `DELETE` removes it. A cancelled member is dropped; a record
+  whose members were all cancelled sends nothing.
+- `GET /capabilities`: `features.line`, `limits.line_max` (50), `limits.line_wait_ms` (1 800 000).
+
+Where the build differs from section 17 (all small): `queued` / `queue_ahead` are on the create, render, adopt and upload answers only
+for a caller that opted in (`queue`, or a share), so an old client's answer has exactly today's keys (`queue_ahead` is on every
+*session* body, as written); a queued render's entry belongs to the session's owner (the render route is a capability URL with no
+key id); a poster in flight is tracked in `StudioService` around `PosterService.sweep()` (poster.ts is not touched); an adopted
+upload leaving the line is first stepped by the next sweep pass, not kicked (its first step carries the whole video into the
+helper); `notify:line:<keyId>` also keeps `webps` (the urls of finished renders) and the event record may carry the `url` to
+open; a render waiting in the line is not pushed to a Live Activity until it starts; the line-full code for a render is also
+`error.studio.line_full`.
+
+After review: the pass that starts the last queued job reports it pending (the pump runs at the end of a pass, after the loops that count saves and jobs) and arms the sweep itself; the free check, the session row and the claim of a create or adopt are one step under the line lock (concurrent `queue: true` creates cannot all take the free path); a line entry whose job the helper already took (its `job:` record exists) is treated as a running render and dropped by the pump; a lined save waiting out a foreign 429 is budgeted by `LINE_BUSY_WAIT_MS` from its first 429, not by the 8-minute download budget, and ends `error.studio.busy`; a queued render's 503 / `error.webp.unavailable` start failure stays at the head like a 429; an old client's refusal while the line is not empty arms the sweep; a cancel marks the session before removing its entry; a queued save or render whose post was deleted ends silently (`error.studio.expired`, no Hark message) and leaves the line summary; a summary round is stored settled before it is sent and a stranded one is sent by the sweep's notify pass.
+
+Product call, left as is: `LINE_MAX` 50 entries at about 45 s each is 37 minutes of work, longer than the 30-minute wait, so a full line cannot all finish before its tail entries end `error.studio.busy` / `error.webp.busy`.
+
+Not verified before deploy: that the sweep drains the line on the deployed runtime with every client gone (the same `schedule()`
+caveat as above), and that a render started inside a sweep pass whose upload outlasts the pass's 30 s item ceiling completes (the
+pass abandons it, it is not cancelled; the 6 min stale-start rule re-runs it only if the object was evicted).
 
 ### Verified and unverified (app routes)
 

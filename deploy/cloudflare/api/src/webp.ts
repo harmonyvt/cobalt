@@ -363,6 +363,9 @@ export class WebpService {
         keyId: string,
         params: WebpParams,
         getUpload: () => Promise<{ body: ReadableStream; size: number } | null>,
+        // A job id minted earlier (a queued render has its id from the moment it joined the line,
+        // APP-API-CONTRACT.md section 17); absent = minted here.
+        opts: { id?: string } = {},
     ): Promise<Reply> {
         try {
             await this.d.ensureRunning();
@@ -372,7 +375,7 @@ export class WebpService {
 
         await this.prune();
 
-        const id = mintId(this.d.randomBytes);
+        const id = opts.id ?? mintId(this.d.randomBytes);
         let upload: { body: ReadableStream; size: number } | null;
         try {
             upload = await getUpload();

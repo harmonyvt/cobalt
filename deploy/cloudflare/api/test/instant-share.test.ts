@@ -212,7 +212,9 @@ describe("POST /studio with notify", () => {
         await bare.addKey();
         const r = await bare.studio.create(KEY_ID, json(shareBody()));
         expect(r.status).toBe(201);
-        expect(Object.keys(r.body as object).sort()).toEqual(["id", "status", "url"]);
+        // a share answers its place in the line too (APP-API-CONTRACT.md section 17.3): free here
+        expect(Object.keys(r.body as object).sort()).toEqual(["id", "queue_ahead", "queued", "status", "url"]);
+        expect(asBody(r)).toMatchObject({ queued: false, queue_ahead: null });
     });
 
     it("the capability flag is announced", async () => {

@@ -108,7 +108,6 @@ describe("methods", () => {
         ["GET", `/studio/${SID}/render`],
         ["PUT", `/studio/${SID}/render`],
         ["POST", `/studio/${SID}/render/${JOB}`],
-        ["DELETE", `/studio/${SID}/render/${JOB}`],
         ["HEAD", `/studio/${SID}`],
     ])("%s %s is a 404", (method, pathname) => {
         expect(d({ method, pathname })).toMatchObject(notFound);

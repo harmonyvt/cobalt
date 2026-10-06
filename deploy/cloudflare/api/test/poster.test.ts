@@ -355,9 +355,14 @@ describe("a render, save or upload arriving while a poster is being made waits f
         void impatient.sweep();
         await until(() => w.helper.posterIds.length === 1);
         const t0 = Date.now();
+        // still being made when the wait ends: the helper is held (section 17.2), so a client that
+        // did not ask to queue is refused at once, and one that did waits in the line
         const created = await impatient.create(KEY_ID, json({ url: LINK }));
-        expect(created.status).toBe(201);
+        expect(created.status).toBe(429);
         expect(Date.now() - t0).toBeLessThan(15_000); // not the 20 s default, let alone for ever
+        const lined = await impatient.create(KEY_ID, json({ url: LINK, queue: true }));
+        expect(lined.status).toBe(201);
+        expect(asBody(lined)).toMatchObject({ queued: true });
     });
 });
 

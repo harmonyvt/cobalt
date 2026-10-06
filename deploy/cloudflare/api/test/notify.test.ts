@@ -489,9 +489,10 @@ describe("rendered", () => {
         const w = wire();
         const sid = await savedSession(w);
         w.hark.calls.length = 0;
+        // one at a time (the helper is held until a render's result is collected, section 17.2)
         const j1 = await startRender(w, sid);
-        const j2 = await startRender(w, sid, { start: 1 });
         await w.studio.renderStatus(sid, j1, 0);
+        const j2 = await startRender(w, sid, { start: 1 });
         await w.studio.renderStatus(sid, j2, 0);
         expect(w.hark.calls).toHaveLength(2);
     });
@@ -772,6 +773,7 @@ describe("retries (5xx, network, timeout) go through the sweep, at most twice; a
                     throw new Error("boom");
                 },
                 optInJob: () => new Promise<void>(() => {}),
+                onLineSettle: async () => {},
             },
         });
         const t = Date.now();

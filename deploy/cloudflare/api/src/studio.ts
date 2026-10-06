@@ -19,13 +19,23 @@
 // session id is a capability: the routes that use it need no API key.
 
 import { raceCeiling } from "./ceiling";
-import { Crop, JobRecord, KV, Quality, WebpParams, WebpService, num, randomBase62, serviceFromUrl } from "./webp";
+import { Crop, JobRecord, KV, Quality, WebpParams, WebpService, mintId, num, randomBase62, serviceFromUrl } from "./webp";
 import { KEY_ID_HEADER } from "./headers";
 import { cropToPixels, parseCrop } from "../helper/crop.js";
 import { STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "./gate";
 import { SERVICE_KEY_ID, insertMediaItem, mediaNameFromUrl, pageLink } from "./library";
 import { LIVE_PUSH_MS, type LiveHooks, type LiveRenderEvent } from "./live";
-import { NOTIFY_MAX_BODY_BYTES, parseOptIn, type NotifyHooks, type NotifyRenderEvent } from "./notify";
+import {
+    LINE_BUSY_WAIT_MS,
+    LINE_MAX,
+    LINE_WAIT_MS,
+    LineStore,
+    isFocusedKey,
+    parseFlag,
+    startingFresh,
+    type LineEntry,
+} from "./line";
+import { NOTIFY_MAX_BODY_BYTES, isEmptyLineBody, parseOptIn, type LineOutcome, type NotifyHooks, type NotifyRenderEvent } from "./notify";
 import { PosterService, POSTER_BATCH, type MediaStore } from "./poster";
 import { publishStudio } from "./publish";
 import { sessionItem, type PurgeFn } from "./visibility";
@@ -202,9 +212,13 @@ export function sessionBody(
     progress?: SaveProgress | null,
     // the session's original in the library (section 16): its row id and visibility, null = none
     item?: { item_id: string; visibility: "public" | "private" } | null,
+    // jobs that run before this save, the one running now included (section 17.4); a number only
+    // for a save waiting in the server's line, which then answers `step: "queued"`
+    queueAhead?: number | null,
 ) {
     // progress only means something while the session is saving
-    const p = row.status === "saving" ? (progress ?? null) : null;
+    const queued = row.status === "saving" && typeof queueAhead === "number";
+    const p = row.status === "saving" && !queued ? (progress ?? null) : null;
     return {
         status: row.status,
         id: row.id,
@@ -224,10 +238,11 @@ export function sessionBody(
         item_id: item?.item_id ?? null,
         visibility: item?.visibility ?? null,
         // save progress (null / false when the DO does not know)
-        step: p?.step ?? null,
+        step: queued ? "queued" : (p?.step ?? null),
         step_bytes: p?.bytes ?? null,
         step_total: p?.total ?? null,
         waking: p?.waking ?? false,
+        queue_ahead: queued ? queueAhead : null,
         created_at: row.created_at,
         expires_at: row.expires_at,
         error: row.error_code ? { code: row.error_code } : null,
@@ -394,6 +409,38 @@ export function linkFrom(u: unknown): string | null {
     }
 }
 
+// --- custom titles (section 15.2, shared by POST /studio and the upload) -----------------------------
+
+export const MAX_TITLE_CODE_POINTS = 80;
+
+// U+0000-U+001F, U+007F-U+009F, U+2028, U+2029, and unpaired surrogates (which no
+// well-formed JSON text from a client should carry and D1 would mangle).
+const BAD_TITLE_CHARS =
+    /[\u0000-\u001F\u007F-\u009F\u2028\u2029]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+// The rules of section 15.2: a string or null; trimmed, no control characters, at most 80 code
+// points; empty or whitespace = none (null).
+export function cleanTitle(raw: unknown): { ok: true; title: string | null } | { ok: false } {
+    if (raw === null) return { ok: true, title: null };
+    if (typeof raw !== "string") return { ok: false };
+    const title = raw.trim();
+    if (title === "") return { ok: true, title: null };
+    if (BAD_TITLE_CHARS.test(title)) return { ok: false };
+    if (Array.from(title).length > MAX_TITLE_CODE_POINTS) return { ok: false };
+    return { ok: true, title };
+}
+
+// The post's custom title (`media_titles`, post key = a new session's id, or an upload's item id).
+export async function upsertTitle(db: D1Database, postKey: string, title: string, keyId: string, now: number): Promise<void> {
+    await db
+        .prepare(
+            `INSERT INTO media_titles (post_key, title, key_id, updated_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(post_key) DO UPDATE SET title = excluded.title, key_id = excluded.key_id, updated_at = excluded.updated_at`,
+        )
+        .bind(postKey, title, keyId, now)
+        .run();
+}
+
 // --- the Durable Object half ------------------------------------------------------
 
 export interface OriginalsBucket {
@@ -521,7 +568,17 @@ type SaveRecord = {
     missSince?: number;
     // old records (before the poll-driven save) only had this
     createdAt?: number;
+    // started from the server's line (section 17.5): a foreign 429 is waited out for
+    // LINE_BUSY_WAIT_MS instead of BUSY_WAIT_MS; `queuedAt` is when it joined
+    lined?: boolean;
+    queuedAt?: number;
 };
+
+// What holds the helper right now (section 17.2). `owner` is an api_keys.id when the record
+// itself says (a /webp job, a render being started from the line); else it is looked up.
+export type Held = { kind: "save" | "render" | "webp" | "poster"; sid?: string; job?: string; owner?: string | null };
+type LineItem = { key: string; entry: LineEntry };
+type LineView = { held: Held | null; entries: LineItem[]; waiting: LineItem[] };
 
 export class StudioService {
     // sid -> the advance step running right now (in memory only): two polls of
@@ -551,12 +608,25 @@ export class StudioService {
     // sid -> when the copy into R2 last told the live service its byte count
     private lastStoringPush = new Map<string, number>();
 
+    // The server's line (section 17): what waits for the helper, in order.
+    private line: LineStore;
+    // The decisions that would jump the line or lose a job (start the head, cancel, expire) run one
+    // at a time; the slow work (a render's upload into the helper) never holds this.
+    private lineChain: Promise<unknown> = Promise.resolve();
+    // job -> when this Durable Object began uploading that queued render into the helper (in memory
+    // only: after an eviction the entry's own `starting` ages out, LINE_START_STALE_MS)
+    private startingJobs = new Map<string, number>();
+    // poster sweeps running (counted around PosterService.sweep, which runs a job to its end; a count,
+    // not a flag, so a later pass ending never clears an earlier poster that is still running)
+    private posterRuns = 0;
+
     // Server-made posters (section 13); undefined when no public bucket is wired.
     private posters?: PosterService;
     // sid -> its public copy is being made right now (in memory only)
     private hosting = new Set<string>();
 
     constructor(private d: StudioDeps) {
+        this.line = new LineStore(d.storage, d.now);
         if (d.media && d.mediaBaseUrl) {
             this.posters = new PosterService({
                 db: d.db,
@@ -568,7 +638,10 @@ export class StudioService {
                 randomBytes: d.randomBytes,
                 ensureRunning: d.ensureRunning,
                 callHelper: (path, init, ms) => this.callHelper(path, init, ms),
-                helperBusy: async () => (await this.saveActive()) || this.encoding(),
+                // a poster never cuts what waits: busy while anything holds the helper (its own
+                // in-flight flag excluded: this is asked from inside the poster's sweep) or the
+                // line is not empty
+                helperBusy: async () => (await this.held({ ignorePoster: true })) !== null || (await this.line.size()) > 0,
                 scheduleSweep: () => this.scheduleSweep(),
                 renew: d.renew,
             });
@@ -646,6 +719,8 @@ export class StudioService {
         } else if (b.status === "error" && typeof b.error?.code === "string") {
             await this.liveRender(sid, job, { kind: "failed", code: b.error.code });
         } else if (b.status === "pending") {
+            // a render still waiting in the line is not rendering: the run hears `accepted` when it starts
+            if (b.phase === "queued") return;
             await this.liveRender(sid, job, {
                 kind: "pending",
                 phase: b.phase === "fetching" || b.phase === "decode" || b.phase === "pack" ? b.phase : null,
@@ -690,11 +765,15 @@ export class StudioService {
         if (b.status === "success" && typeof b.url === "string") {
             e = { kind: "success", url: b.url, bytes: finite(b.bytes), width: finite(b.width), height: finite(b.height) };
         } else if (b.status === "error" && typeof b.error?.code === "string") {
+            // a cancelled render (section 17.7) is the owner's own doing: no Hark message, however
+            // often it is polled again
+            if (b.error.code === "error.webp.cancelled") return;
             e = { kind: "failed", code: b.error.code };
         }
         if (e) {
             const ev = e;
             await this.notifyCall("render", (n) => n.onRender(sid, job, ev));
+            await this.settleLine(sid, job, ev.kind === "success" ? { ...ev, kind: "rendered" } : ev);
         }
     }
 
@@ -714,6 +793,584 @@ export class StudioService {
         return this.encodes.size > 0;
     }
 
+    // ---- the server's line (APP-API-CONTRACT.md section 17) ---------------------------------
+
+    // Runs `fn` after every earlier line decision has finished (never rejects the chain).
+    private withLine<T>(fn: () => Promise<T>): Promise<T> {
+        const p = this.lineChain.then(fn, fn);
+        this.lineChain = p.catch(() => {});
+        return p;
+    }
+
+    private async settleLine(sid: string, job: string | null, outcome: LineOutcome): Promise<void> {
+        await this.notifyCall("line settle", (n) => n.onLineSettle(sid, job, outcome));
+    }
+
+    // What holds the helper (17.2): a `save:` record; a render or /webp job record accepted within
+    // SWEEP_RENDER_MS with no result yet (durable, unlike the in-memory `encodes`, which is still
+    // consulted); a poster in flight; a render entry of the line whose upload is under way.
+    // null = the helper is free.
+    private async held(opts: { ignorePoster?: boolean } = {}): Promise<Held | null> {
+        const now = this.d.now();
+        for (const key of (await this.d.storage.list<unknown>({ prefix: "save:" })).keys()) {
+            return { kind: "save", sid: key.slice("save:".length) };
+        }
+        for (const [key, rec] of await this.d.storage.list<JobRecord>({ prefix: "job:" })) {
+            if (!rec || now - rec.createdAt >= SWEEP_RENDER_MS) continue;
+            const id = key.slice("job:".length);
+            if (await this.d.storage.get(`result:${id}`)) continue;
+            return rec.keyId.startsWith("studio:")
+                ? { kind: "render", sid: rec.keyId.slice("studio:".length), job: id }
+                : { kind: "webp", job: id, owner: rec.keyId };
+        }
+        if (this.encoding()) {
+            const [job] = [...this.encodes.keys()];
+            return { kind: "render", job };
+        }
+        if (!opts.ignorePoster && this.posterRuns > 0) return { kind: "poster" };
+        for (const { entry } of await this.line.list()) {
+            if (await this.uploading(entry, now)) {
+                return { kind: "render", sid: entry.sid, job: entry.job ?? undefined, owner: entry.keyId };
+            }
+        }
+        return null;
+    }
+
+    // A render entry whose upload into the helper is (presumably) still going on. Once the helper has
+    // taken it its `job:` record exists and the entry is only a leftover (the object died before
+    // removing it): the pump drops it, and it must not keep the helper "held" until it ages out.
+    private async uploading(entry: LineEntry, now: number): Promise<boolean> {
+        if (entry.kind !== "render" || !startingFresh(entry, now)) return false;
+        return !(entry.job && (await this.d.storage.get(`job:${entry.job}`)));
+    }
+
+    // Free for a request = not held AND no entry that would go before it: for a save or an
+    // unprioritised render, an empty line; for a focused render, no focused entry.
+    private async isFree(focusedRender = false): Promise<boolean> {
+        if (await this.held()) return false;
+        const entries = await this.line.list();
+        return focusedRender ? !entries.some((e) => isFocusedKey(e.key)) : entries.length === 0;
+    }
+
+    private async lineView(): Promise<LineView> {
+        const held = await this.held();
+        const entries = await this.line.list();
+        const now = this.d.now();
+        // an entry being started IS the running job (`held`), not a waiting one
+        const waiting: LineItem[] = [];
+        for (const e of entries) if (!(await this.uploading(e.entry, now))) waiting.push(e);
+        return { held, entries, waiting };
+    }
+
+    // Jobs that run before the entry: the one running now, then the waiting entries ahead of it.
+    private aheadOf(view: LineView, key: string): number {
+        const i = view.waiting.findIndex((e) => e.key === key);
+        return i < 0 ? 0 : (view.held ? 1 : 0) + i;
+    }
+
+    // `queue_ahead` of a save waiting in the line; null when it is not (a save that has its `save:`
+    // record is started, whatever an entry the pump has not removed yet says).
+    private async saveQueueAhead(sid: string): Promise<number | null> {
+        const hit = await this.line.find(sid, null);
+        if (!hit) return null;
+        if (await this.d.storage.get(`save:${sid}`)) return null;
+        return this.aheadOf(await this.lineView(), hit.key);
+    }
+
+    // A session with a save entry in the line and no `save:` record: it is answered, never stepped
+    // (`step()` would build the missing record from the row and start it, jumping the line).
+    private async waitingInLine(sid: string): Promise<boolean> {
+        if (!(await this.line.find(sid, null))) return false;
+        return !(await this.d.storage.get(`save:${sid}`));
+    }
+
+    private async dropTitle(sid: string): Promise<void> {
+        try {
+            await this.d.db.prepare("DELETE FROM media_titles WHERE post_key = ?1").bind(sid).run();
+        } catch (e) {
+            console.error("[studio] could not drop the title of", sid, String(e));
+        }
+    }
+
+    // Ending a queued job is two steps so the line lock is never held across a notification: the
+    // row is marked first (`markEnd`, D1 only, safe under the lock; it is also what makes a poll that
+    // races the removal of the entry see a finished session, never a startable one), then the hooks
+    // run (`endHooks`) once the lock is released. A `silent` end is the owner's doing (a cancel, a
+    // deleted post): no Hark message, and the line summary drops the member.
+    private async markEnd(sid: string, job: string | null, code: string): Promise<boolean> {
+        if (job === null) return await this.markError(sid, code);
+        try {
+            const upd = await this.d.db
+                .prepare("UPDATE studio_renders SET status = 'error', error_code = ?1 WHERE id = ?2 AND status = 'pending'")
+                .bind(code, job)
+                .run();
+            return Number(upd.meta?.changes ?? 0) > 0;
+        } catch (e) {
+            console.error("[studio] could not end the queued render", job, String(e));
+            return false;
+        }
+    }
+
+    private async endHooks(sid: string, job: string | null, code: string, silent: boolean, changed: boolean): Promise<void> {
+        if (job === null) {
+            await this.dropTitle(sid);
+            this.progress.delete(sid);
+            await this.liveCall("save failed", (l) => l.onSave(sid, { kind: "failed", code }));
+            if (!changed) return;
+            if (!silent) await this.notifyCall("save failed", (n) => n.onSaveFailed(sid, code));
+            await this.settleLine(sid, null, silent ? { kind: "cancelled" } : { kind: "failed", code });
+            return;
+        }
+        this.encodes.delete(job);
+        await this.liveRender(sid, job, { kind: "failed", code });
+        if (!changed) return;
+        if (!silent) await this.notifyCall("render", (n) => n.onRender(sid, job, { kind: "failed", code }));
+        await this.settleLine(sid, job, silent ? { kind: "cancelled" } : { kind: "failed", code });
+    }
+
+    // Both steps at once, for callers that do not hold the line lock.
+    private async endQueuedSave(sid: string, code: string, silent: boolean): Promise<void> {
+        await this.endHooks(sid, null, code, silent, await this.markEnd(sid, null, code));
+    }
+    private async endQueuedRender(sid: string, job: string, code: string, silent: boolean): Promise<void> {
+        await this.endHooks(sid, job, code, silent, await this.markEnd(sid, job, code));
+    }
+
+    // Under the line lock: removes the entry and marks its row; returns the hooks to run after the
+    // lock is released. `code` / `silent` as for an end; an entry that waited past LINE_WAIT_MS is
+    // `error.studio.busy` / `error.webp.busy`.
+    private async endEntry(key: string, entry: LineEntry, code: string, silent: boolean): Promise<() => Promise<void>> {
+        const job = entry.kind === "render" ? entry.job : null;
+        if (entry.kind === "render" && !job) {
+            await this.line.remove(key);
+            return async () => {};
+        }
+        const changed = await this.markEnd(entry.sid, job, code);
+        await this.line.remove(key);
+        return () => this.endHooks(entry.sid, job, code, silent, changed);
+    }
+
+    private async expireStale(): Promise<void> {
+        const after: Array<() => Promise<void>> = [];
+        await this.withLine(async () => {
+            const now = this.d.now();
+            for (const { key, entry } of await this.line.list()) {
+                if (now - entry.at <= LINE_WAIT_MS) continue;
+                if (await this.uploading(entry, now)) continue;
+                after.push(await this.endEntry(key, entry, entry.kind === "save" ? "error.studio.busy" : "error.webp.busy", false));
+            }
+        });
+        for (const run of after) await run();
+    }
+
+    // Starts the head of the line when the helper is free: ONE start per call (17.5). A save gets
+    // its `save:` record and is kicked; a render is uploaded into the helper. Entries that cannot
+    // run any more (session gone, expired, not saving; render not pending) are dropped, and a
+    // render whose start failed for good ends that render and the next entry is looked at.
+    async pumpLine(): Promise<void> {
+        for (let i = 0; i <= LINE_MAX; i++) {
+            if ((await this.pumpOnce()) !== "again") return;
+        }
+    }
+
+    private async pumpOnce(): Promise<"done" | "again"> {
+        let kickSid: string | null = null;
+        let start: { key: string; entry: LineEntry; r2Key: string; title: string | null; duration: number | null } | null = null;
+        // the hooks of entries that ended in here run after the lock is released
+        const after: Array<() => Promise<void>> = [];
+        await this.withLine(async () => {
+            if (await this.held()) return;
+            const now = this.d.now();
+            for (const { key, entry } of await this.line.list()) {
+                if (now - entry.at > LINE_WAIT_MS) {
+                    after.push(await this.endEntry(key, entry, entry.kind === "save" ? "error.studio.busy" : "error.webp.busy", false));
+                    continue;
+                }
+                if (entry.kind === "save") {
+                    let row: SessionRow | null;
+                    try {
+                        row = await getSession(this.d.db, entry.sid);
+                    } catch {
+                        return; // a D1 blip: the next pass
+                    }
+                    if (row && row.status === "saving" && row.expires_at <= now) {
+                        // its post was deleted while it waited: the row ends, silently (the owner did
+                        // it), so the line summary does not wait on it for a day
+                        after.push(await this.endEntry(key, entry, "error.studio.expired", true));
+                        continue;
+                    }
+                    if (!row || row.status !== "saving") {
+                        await this.line.remove(key);
+                        continue;
+                    }
+                    // started already (a crash between the pump's two writes)
+                    if (await this.d.storage.get(`save:${entry.sid}`)) {
+                        await this.line.remove(key);
+                        continue;
+                    }
+                    // the record first, THEN the entry goes (a crash in between leaves a started
+                    // save and an entry the next pump drops, never a lost save)
+                    const rec: SaveRecord = {
+                        phase: entry.adopt ? "probing" : "starting",
+                        startedAt: now,
+                        attempts: 0,
+                        lastAdvance: now,
+                        lined: true,
+                        queuedAt: entry.at,
+                    };
+                    await this.d.storage.put(`save:${entry.sid}`, rec);
+                    await this.line.remove(key);
+                    // an adopted upload's first step carries the whole video into the helper: it is
+                    // left to the next sweep pass (locked), not run unlocked after a cap
+                    kickSid = entry.adopt ? null : entry.sid;
+                    return;
+                }
+                // a render
+                const job = entry.job;
+                if (!job) {
+                    await this.line.remove(key);
+                    continue;
+                }
+                let render: RenderRow | null;
+                let session: SessionRow | null;
+                try {
+                    render = await getRender(this.d.db, entry.sid, job);
+                    session = await getSession(this.d.db, entry.sid);
+                } catch {
+                    return;
+                }
+                if (!render || render.status !== "pending") {
+                    await this.line.remove(key);
+                    continue;
+                }
+                // started already (the helper took it and `job:` was written, then the object died
+                // before the entry was removed): it is collected like any running render
+                if (await this.d.storage.get(`job:${job}`)) {
+                    await this.line.remove(key);
+                    continue;
+                }
+                if (!session || session.expires_at <= now || session.status !== "ready" || !session.r2_key || !entry.render) {
+                    // an expired session means its post was deleted: the owner's doing, no message
+                    const gone = !session || session.expires_at <= now;
+                    after.push(await this.endEntry(key, entry, gone ? "error.studio.expired" : "error.studio.not_ready", gone));
+                    continue;
+                }
+                // an upload this very object began and has not finished: leave it
+                if (this.startingJobs.has(job)) return;
+                const marked: LineEntry = { ...entry, starting: now };
+                await this.line.put(key, marked);
+                this.startingJobs.set(job, now);
+                start = { key, entry: marked, r2Key: session.r2_key, title: session.title, duration: session.duration };
+                return;
+            }
+        });
+        for (const run of after) await run();
+        // whatever the pump started must be seen to: the sweep re-arms itself while it runs (an
+        // adopted upload has no kick, its first step is the next pass)
+        if (kickSid || start) await this.scheduleSweep();
+        if (kickSid) await this.kick(kickSid);
+        if (start) return await this.startQueuedRender(start);
+        return "done";
+    }
+
+    // Uploads a queued render into the helper exactly as render() does (17.5 step 3).
+    private async startQueuedRender(s: {
+        key: string;
+        entry: LineEntry;
+        r2Key: string;
+        title: string | null;
+        duration: number | null;
+    }): Promise<"done" | "again"> {
+        const { key, entry } = s;
+        const job = entry.job!;
+        const keepAwake = this.d.renew ? setInterval(this.d.renew, 20_000) : undefined;
+        let reply;
+        try {
+            this.d.renew?.();
+            reply = await this.d.webp.createFromUpload(
+                `studio:${entry.sid}`,
+                entry.render!.params,
+                async () => {
+                    const obj = await this.d.originals.get(s.r2Key);
+                    return obj ? { body: obj.body, size: obj.size } : null;
+                },
+                { id: job },
+            );
+        } catch (e) {
+            console.error("[studio] starting a queued render threw", job, String(e));
+            reply = null;
+        } finally {
+            if (keepAwake !== undefined) clearInterval(keepAwake);
+            this.startingJobs.delete(job);
+        }
+        const body = reply?.body as { status?: string; id?: string; error?: { code?: string } } | undefined;
+        if (reply && reply.status === 202 && body?.status === "pending") {
+            this.encodes.set(job, this.d.now());
+            await this.line.remove(key);
+            await this.liveRender(entry.sid, job, { kind: "accepted", title: s.title, duration: s.duration });
+            return "done";
+        }
+        // a foreign 429 (a /webp job or a poster `held()` did not see), a container that could not be
+        // reached (503, or 502 error.webp.unavailable) or a call that threw: it stays at the head and
+        // the next pass tries again; the 30 min ceiling bounds it. (Nobody is waiting to retry it.)
+        const transient =
+            !reply ||
+            reply.status === 429 ||
+            reply.status === 503 ||
+            (reply.status === 502 && (body?.error?.code ?? "error.webp.unavailable") === "error.webp.unavailable");
+        if (transient) {
+            await this.line.put(key, { ...entry, starting: null, attempts: entry.attempts + 1 });
+            return "done";
+        }
+        const code = typeof body?.error?.code === "string" ? body.error.code : "error.webp.unavailable";
+        await this.line.remove(key);
+        await this.endQueuedRender(entry.sid, job, code, false);
+        return "again";
+    }
+
+    // One pass of the line for the sweep (before the posters): stale entries end, a save stuck
+    // holding the helper is reaped, then the head starts. Returns how many entries still wait (a
+    // non-empty line counts as pending, so the sweep re-arms every SWEEP_DELAY_S while anything waits).
+    private async lineSweep(): Promise<number> {
+        try {
+            if ((await this.line.size()) === 0) return 0;
+        } catch (e) {
+            // storage that cannot list counts as nothing waiting, like the other lists of the sweep
+            console.error("[studio] sweep: listing the line failed", String(e));
+            return 0;
+        }
+        await this.expireStale();
+        await this.reapOrphans();
+        await this.pumpLine();
+        // What still waits, plus whatever the pump has just started (it runs at the END of the pass,
+        // after the loops that count saves and jobs: without this, the pass that starts the last
+        // queued job reports nothing pending and the sweep is never re-armed for it).
+        return (await this.line.size()) + ((await this.held()) ? 1 : 0);
+    }
+
+    // ---- POST /studio/<sid>/line cancel ---------------------------------------------------------
+
+    private async ownedSession(keyId: string, sid: string): Promise<{ row: SessionRow } | { reply: StudioReply }> {
+        let row: SessionRow | null;
+        try {
+            row = await getSession(this.d.db, sid);
+        } catch {
+            return { reply: studioErr(503, "error.api.generic") };
+        }
+        // an unknown session and somebody else's look the same
+        if (!row || row.key_id !== keyId) return { reply: studioErr(404, "error.studio.not_found") };
+        return { row };
+    }
+
+    // DELETE /studio/<sid>/line: cancels the session's queued save (section 17.7).
+    async cancelSave(keyId: string, sid: string): Promise<StudioReply> {
+        const owned = await this.ownedSession(keyId, sid);
+        if ("reply" in owned) return owned.reply;
+        // under the line lock the session is marked cancelled BEFORE its entry goes, so a poll that
+        // lands in between sees a finished session, never one it could start
+        let hooks: (() => Promise<void>) | null = null;
+        await this.withLine(async () => {
+            const found = await this.line.find(sid, null);
+            // started (it has its `save:` record) or no longer saving: not ours to stop
+            if (!found || (await this.d.storage.get(`save:${sid}`))) return;
+            hooks = await this.endEntry(found.key, found.entry, "error.studio.cancelled", true);
+        });
+        if (hooks) {
+            await (hooks as () => Promise<void>)();
+            return { status: 200, body: { status: "success", cancelled: true } };
+        }
+        // a repeat is the same answer
+        let row = owned.row;
+        try {
+            row = (await getSession(this.d.db, sid)) ?? row;
+        } catch {
+            // the row read before stands
+        }
+        if (row.status === "error" && row.error_code === "error.studio.cancelled") {
+            return { status: 200, body: { status: "success", cancelled: true } };
+        }
+        return studioErr(409, "error.studio.started");
+    }
+
+    // DELETE /studio/<sid>/render/<job>: cancels a queued render (section 17.7).
+    async cancelRender(keyId: string, sid: string, job: string): Promise<StudioReply> {
+        const owned = await this.ownedSession(keyId, sid);
+        if ("reply" in owned) return owned.reply;
+        let render: RenderRow | null;
+        try {
+            render = await getRender(this.d.db, sid, job);
+        } catch {
+            return studioErr(503, "error.api.generic");
+        }
+        if (!render) return studioErr(404, "error.studio.not_found");
+        let hooks: (() => Promise<void>) | null = null;
+        await this.withLine(async () => {
+            const found = await this.line.find(sid, job);
+            if (!found || render!.status !== "pending") return;
+            // its upload into the helper has begun (or the helper already took it): it runs
+            if (startingFresh(found.entry, this.d.now()) || this.startingJobs.has(job)) return;
+            if (await this.d.storage.get(`job:${job}`)) return;
+            hooks = await this.endEntry(found.key, found.entry, "error.webp.cancelled", true);
+        });
+        if (hooks) {
+            await (hooks as () => Promise<void>)();
+            return { status: 200, body: { status: "success", cancelled: true } };
+        }
+        let now = render;
+        try {
+            now = (await getRender(this.d.db, sid, job)) ?? render;
+        } catch {
+            // the row read before stands
+        }
+        if (now.status === "error" && now.error_code === "error.webp.cancelled") {
+            return { status: 200, body: { status: "success", cancelled: true } };
+        }
+        return studioErr(409, "error.studio.started");
+    }
+
+    // ---- GET /studio/line ---------------------------------------------------------------------
+
+    async lineStatus(keyId: string): Promise<StudioReply> {
+        let view: LineView;
+        try {
+            view = await this.lineView();
+        } catch {
+            return studioErr(503, "error.api.generic");
+        }
+        const { held, waiting } = view;
+        // who owns the running job: a save's or a render's session row, else the record itself
+        const sessionRows = new Map<string, { key_id: string | null; link: string | null }>();
+        const wanted = new Set<string>();
+        for (const { entry } of waiting) if (entry.keyId === keyId) wanted.add(entry.sid);
+        if (held?.sid) wanted.add(held.sid);
+        let dbOk = true;
+        try {
+            if (wanted.size > 0) {
+                const ids = [...wanted];
+                const marks = ids.map((_, i) => `?${i + 1}`).join(", ");
+                const { results } = await this.d.db
+                    .prepare(`SELECT id, key_id, link FROM studio_sessions WHERE id IN (${marks})`)
+                    .bind(...ids)
+                    .all<{ id: string; key_id: string | null; link: string | null }>();
+                for (const r of results) sessionRows.set(r.id, r);
+            }
+        } catch {
+            dbOk = false;
+        }
+        const runningOwner: string | null = held?.owner ?? (held?.sid ? (sessionRows.get(held.sid)?.key_id ?? null) : null);
+        const names = new Map<string, string>();
+        try {
+            const ids = new Set<string>();
+            if (runningOwner) ids.add(runningOwner);
+            for (const { entry } of waiting) ids.add(entry.keyId);
+            if (ids.size > 0) {
+                const list = [...ids];
+                const marks = list.map((_, i) => `?${i + 1}`).join(", ");
+                const { results } = await this.d.db
+                    .prepare(`SELECT id, name FROM api_keys WHERE id IN (${marks})`)
+                    .bind(...list)
+                    .all<{ id: string; name: string }>();
+                for (const r of results) names.set(r.id, r.name);
+            }
+        } catch {
+            // the answer still comes, with no names
+        }
+        const nameOf = (id: string | null) => (id && id !== SERVICE_KEY_ID ? (names.get(id) ?? null) : null);
+
+        let running: unknown = null;
+        if (held) {
+            const mine = runningOwner !== null && runningOwner === keyId && (held.sid !== undefined ? dbOk : true);
+            let origin: "share" | null = null;
+            if (held.kind === "save" && held.sid && (await this.d.storage.get(`${SHARE_PREFIX}${held.sid}`))) origin = "share";
+            running = {
+                kind: held.kind,
+                mine,
+                sid: mine ? (held.sid ?? null) : null,
+                job: mine ? (held.job ?? null) : null,
+                origin,
+                key_name: nameOf(runningOwner),
+            };
+        }
+        const base = held ? 2 : 1;
+        const entries = waiting.map(({ key, entry }, i) => {
+            const mine = entry.keyId === keyId;
+            return {
+                position: base + i,
+                kind: entry.kind,
+                mine,
+                sid: mine ? entry.sid : null,
+                job: mine ? entry.job : null,
+                at: entry.at,
+                origin: entry.origin,
+                priority: entry.kind === "render" && isFocusedKey(key) ? "focused" : null,
+                key_name: nameOf(entry.keyId),
+                link: mine ? (sessionRows.get(entry.sid)?.link ?? null) : null,
+            };
+        });
+        return {
+            status: 200,
+            body: { status: "success", now: this.d.now(), running, entries, max: LINE_MAX, wait_ms: LINE_WAIT_MS },
+        };
+    }
+
+    // ---- PUT|DELETE /studio/line/notify (the line summary, section 17.8) -------------------------
+
+    // What the key has in flight: its line entries, its sessions with a `save:` record and the
+    // unfinished render jobs of its sessions.
+    private async lineMembers(keyId: string): Promise<string[]> {
+        const members = new Set<string>();
+        for (const { entry } of await this.line.list()) {
+            if (entry.keyId === keyId) members.add(entry.kind === "save" || !entry.job ? entry.sid : `${entry.sid}:${entry.job}`);
+        }
+        for (const key of (await this.d.storage.list<unknown>({ prefix: "save:" })).keys()) {
+            const sid = key.slice("save:".length);
+            const row = await getSession(this.d.db, sid);
+            if (row && row.key_id === keyId && row.status === "saving") members.add(sid);
+        }
+        const now = this.d.now();
+        for (const [key, rec] of await this.d.storage.list<JobRecord>({ prefix: "job:" })) {
+            if (!rec || !rec.keyId.startsWith("studio:") || now - rec.createdAt > SWEEP_RENDER_MS) continue;
+            const id = key.slice("job:".length);
+            if (await this.d.storage.get(`result:${id}`)) continue;
+            const sid = rec.keyId.slice("studio:".length);
+            const row = await getSession(this.d.db, sid);
+            if (row && row.key_id === keyId) members.add(`${sid}:${id}`);
+        }
+        return [...members];
+    }
+
+    async lineNotifyPut(keyId: string, rawBody: string): Promise<StudioReply> {
+        if (!isEmptyLineBody(rawBody)) return studioErr(400, "error.notify.invalid");
+        const notify = this.d.notify as (NotifyHooks & { putLine?: unknown }) | undefined;
+        if (!notify || typeof notify.putLine !== "function") {
+            // no Hark service in this Durable Object: nothing stored, nothing will be sent
+            return { status: 200, body: { status: "success", bridge: false, watching: 0, expires_at: null } };
+        }
+        let members: string[];
+        try {
+            members = await this.lineMembers(keyId);
+        } catch {
+            return studioErr(503, "error.api.generic");
+        }
+        const put = notify as unknown as { putLine(keyId: string, members: string[]): Promise<StudioReply> };
+        try {
+            return await raceCeiling(put.putLine(keyId, members), this.d.notifyMs ?? NOTIFY_CALL_MS, "notify line");
+        } catch {
+            return studioErr(503, "error.api.generic");
+        }
+    }
+
+    async lineNotifyDelete(keyId: string): Promise<StudioReply> {
+        const notify = this.d.notify as { removeLine?: (keyId: string) => Promise<StudioReply> } | undefined;
+        if (!notify || typeof notify.removeLine !== "function") return { status: 204, body: null };
+        try {
+            await raceCeiling(notify.removeLine(keyId), this.d.notifyMs ?? NOTIFY_CALL_MS, "notify line");
+        } catch {
+            return studioErr(503, "error.api.generic");
+        }
+        return { status: 204, body: null };
+    }
+
     // ---- POST /studio ------------------------------------------------------------
 
     async create(keyId: string, rawBody: string): Promise<StudioReply> {
@@ -721,6 +1378,8 @@ export class StudioService {
         let publicFlag: unknown;
         let originField: unknown;
         let notifyField: unknown;
+        let queueField: unknown;
+        let titleField: unknown;
         try {
             if (rawBody.length <= MAX_BODY_BYTES) {
                 const parsed = JSON.parse(rawBody);
@@ -729,6 +1388,8 @@ export class StudioService {
                     publicFlag = (parsed as { public?: unknown }).public;
                     originField = (parsed as { origin?: unknown }).origin;
                     notifyField = (parsed as { notify?: unknown }).notify;
+                    queueField = (parsed as { queue?: unknown }).queue;
+                    titleField = (parsed as { title?: unknown }).title;
                 }
             }
         } catch {
@@ -755,44 +1416,68 @@ export class StudioService {
             }
             optIn = text;
         }
+        // `queue: true` (section 17.3): wait in the server's line instead of the `429`. A share
+        // sheet has no one to retry a refusal, so `origin: "share"` implies it.
+        const queueFlag = parseFlag(queueField);
+        if (queueFlag === null) return studioErr(400, "error.studio.invalid_params");
+        const wantsQueue = queueFlag || fromShare;
+        // `title` (section 17.3): the rules of section 15.2, judged before anything is created
+        let title: string | null = null;
+        if (titleField !== undefined) {
+            const t = cleanTitle(titleField);
+            if (!t.ok) return studioErr(400, "error.library.bad_title");
+            title = t.title;
+        }
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.reapOrphans();
-        // A share sheet has no one to retry a refusal: its save queues behind the one running (a
-        // save waits for the helper up to BUSY_WAIT_MS, then fails with error.studio.busy, which
-        // the opt-in announces).
-        if (!fromShare && ((await this.saveActive()) || this.encoding())) {
-            return studioErr(429, "error.studio.busy");
-        }
-
-        const sid = mintSid(this.d.randomBytes);
-        const now = this.d.now();
-        try {
-            await this.d.db
-                .prepare(
-                    "INSERT INTO studio_sessions (id, key_id, link, service, status, created_at, expires_at, public_state) VALUES (?1, ?2, ?3, ?4, 'saving', ?5, ?6, ?7)",
-                )
-                .bind(sid, keyId, link, serviceFromUrl(link), now, now + SESSION_TTL_MS, wantsPublic ? "pending" : null)
-                .run();
-        } catch {
-            return studioErr(503, "error.api.generic");
-        }
-        try {
-            const rec: SaveRecord = { phase: "starting", startedAt: now, attempts: 0, lastAdvance: now };
-            await this.d.storage.put(`save:${sid}`, rec);
-        } catch {
-            // advance() starts the save from the D1 row when there is no record
+        // Free = the helper is not held and nobody waits ahead (section 17.2). Not free: a client that
+        // did not ask to queue gets today's 429 (while anything waits too, so it never jumps the
+        // line); a client that did, waits in the line (also a share, which is never refused). The
+        // check, the row and the claim (a `save:` record, or the line entry) are one step.
+        const claim = await this.claimSlot({
+            keyId,
+            wantsQueue,
+            busyCode: "error.studio.busy",
+            adopt: false,
+            origin: fromShare ? "share" : null,
+            insert: async (sid, now) => {
+                await this.d.db
+                    .prepare(
+                        "INSERT INTO studio_sessions (id, key_id, link, service, status, created_at, expires_at, public_state) VALUES (?1, ?2, ?3, ?4, 'saving', ?5, ?6, ?7)",
+                    )
+                    .bind(sid, keyId, link, serviceFromUrl(link), now, now + SESSION_TTL_MS, wantsPublic ? "pending" : null)
+                    .run();
+            },
+        });
+        if (!claim.ok) return claim.reply;
+        const { sid, now, free } = claim;
+        // the custom title is written at once (a row with no live file shows nowhere, section 15.3);
+        // it is deleted when the save fails or is cancelled. Best effort.
+        if (title !== null) {
+            try {
+                await upsertTitle(this.d.db, sid, title, keyId, now);
+            } catch (e) {
+                console.error("[studio] could not store the title", sid, String(e));
+            }
         }
         if (fromShare) await this.rememberShare(keyId, sid, now);
         // The opt-in goes in before the save can move, so even an instant save is announced.
         const notifyBody = optIn === null ? undefined : await this.optInAtCreate(keyId, sid, optIn);
 
-        // Nothing runs after this response: the save only moves while the
-        // studio page polls GET /studio/<sid> (-> advance), or the job sweep
-        // (scheduled below) runs. Try once now to have the helper accept the
-        // fetch, but never hold the 201 for long.
-        await this.scheduleSweep();
-        await this.kick(sid, fromShare ? SHARE_KICK_MS : undefined);
+        // Not free: the save is in the line (no `save:` record, no kick): the sweep starts it when
+        // its turn comes, polled or not.
+        const ahead = claim.ahead;
+        if (!free) {
+            await this.scheduleSweep();
+        } else {
+            // Nothing runs after this response: the save only moves while the
+            // studio page polls GET /studio/<sid> (-> advance), or the job sweep
+            // (scheduled below) runs. Try once now to have the helper accept the
+            // fetch, but never hold the 201 for long.
+            await this.scheduleSweep();
+            await this.kick(sid, fromShare ? SHARE_KICK_MS : undefined);
+        }
 
         const base = this.d.webBaseUrl.replace(/\/+$/, "");
         return {
@@ -801,9 +1486,94 @@ export class StudioService {
                 status: "success",
                 id: sid,
                 url: `${base}/studio/${sid}`,
+                // only for a caller that opted in (a share, or `queue: true`): the rest see today's shape
+                ...(wantsQueue ? { queued: !free, queue_ahead: ahead } : {}),
                 ...(notifyBody ? { notify: notifyBody } : {}),
             },
         };
+    }
+
+    // The free check, the session row and the claim are ONE step under the line lock: two creates
+    // that both find the helper free would otherwise both take the free path (the check and the
+    // `save:` record used to be split by a D1 insert). Free: the row and the `save:` record. Not
+    // free and queuing: the row and a line entry. Otherwise a refusal, with nothing created.
+    private async claimSlot(o: {
+        keyId: string;
+        wantsQueue: boolean;
+        busyCode: string;
+        adopt: boolean;
+        origin: "share" | null;
+        insert: (sid: string, now: number) => Promise<void>;
+    }): Promise<
+        | { ok: true; sid: string; now: number; free: boolean; ahead: number | null }
+        | { ok: false; reply: StudioReply }
+    > {
+        const sid = mintSid(this.d.randomBytes);
+        const now = this.d.now();
+        type Out = { kind: "refused"; code: string } | { kind: "failed" } | { kind: "free" } | { kind: "queued"; key: string };
+        const out = await this.withLine(async (): Promise<Out> => {
+            const free = await this.isFree();
+            if (!free) {
+                if (!o.wantsQueue) return { kind: "refused", code: o.busyCode };
+                if ((await this.line.size()) >= LINE_MAX) return { kind: "refused", code: "error.studio.line_full" };
+            }
+            try {
+                await o.insert(sid, now);
+            } catch {
+                return { kind: "failed" };
+            }
+            if (free) {
+                try {
+                    const rec: SaveRecord = { phase: o.adopt ? "probing" : "starting", startedAt: now, attempts: 0, lastAdvance: now };
+                    await this.d.storage.put(`save:${sid}`, rec);
+                } catch {
+                    // step() starts the save from the D1 row when there is no record
+                }
+                return { kind: "free" };
+            }
+            const q = await this.line.enqueue(
+                { kind: "save", sid, job: null, keyId: o.keyId, at: now, origin: o.origin, adopt: o.adopt, render: null },
+                false,
+            );
+            if ("full" in q) {
+                await this.undoCreate(sid);
+                return { kind: "refused", code: "error.studio.line_full" };
+            }
+            return { kind: "queued", key: q.key };
+        });
+        if (out.kind === "refused") return { ok: false, reply: await this.refuse(out.code) };
+        if (out.kind === "failed") return { ok: false, reply: studioErr(503, "error.api.generic") };
+        if (out.kind === "free") return { ok: true, sid, now, free: true, ahead: null };
+        return { ok: true, sid, now, free: false, ahead: this.aheadOf(await this.lineView(), out.key) };
+    }
+
+    // A refusal while the line is not empty also arms the sweep: if its chain ever died (an eviction
+    // between two passes), the next client that is turned away restarts it.
+    private async refuse(code: string, status = 429): Promise<StudioReply> {
+        try {
+            if ((await this.line.size()) > 0) await this.scheduleSweep();
+        } catch {
+            // the refusal stands
+        }
+        return studioErr(status, code);
+    }
+
+    // Adds an entry to the line and answers how many jobs run before it (the one running now
+    // included); null = the line is full. The count and the write are one step.
+    private async joinLine(e: Omit<LineEntry, "starting" | "attempts">, focused: boolean): Promise<number | null> {
+        const q = await this.withLine(() => this.line.enqueue(e, focused));
+        if ("full" in q) return null;
+        return this.aheadOf(await this.lineView(), q.key);
+    }
+
+    // A session row that never got into the line (it was full): as if it had not been created.
+    private async undoCreate(sid: string): Promise<void> {
+        try {
+            await this.d.db.prepare("DELETE FROM studio_sessions WHERE id = ?1").bind(sid).run();
+        } catch (e) {
+            console.error("[studio] could not undo a refused create", sid, String(e));
+        }
+        await this.dropTitle(sid);
     }
 
     // The session was made by a share sheet: `GET /studio/recent` lists it for its key. Records
@@ -865,7 +1635,15 @@ export class StudioService {
                 const row = await getSession(this.d.db, sid);
                 // an expired session is gone for the app too; a row of another key never shows
                 if (!row || row.key_id !== keyId || row.expires_at <= now) continue;
-                sessions.push(sessionBody(row, [], this.progress.get(row.id), await sessionItem(this.d.db, row.r2_key)));
+                sessions.push(
+                    sessionBody(
+                        row,
+                        [],
+                        this.progress.get(row.id),
+                        await sessionItem(this.d.db, row.r2_key),
+                        row.status === "saving" ? await this.saveQueueAhead(row.id) : null,
+                    ),
+                );
             }
         } catch {
             return studioErr(503, "error.api.generic");
@@ -961,7 +1739,12 @@ export class StudioService {
         this.progress.delete(sid);
         this.lastStoringPush.delete(sid);
         await this.liveCall("save failed", (l) => l.onSave(sid, { kind: "failed", code }));
-        if (changed) await this.notifyCall("save failed", (n) => n.onSaveFailed(sid, code));
+        if (changed) {
+            await this.notifyCall("save failed", (n) => n.onSaveFailed(sid, code));
+            // a failed save leaves no title behind (section 17.3), and settles the line summary
+            await this.dropTitle(sid);
+            await this.settleLine(sid, null, { kind: "failed", code });
+        }
         return POLL_INTERVAL_MS;
     }
 
@@ -970,7 +1753,11 @@ export class StudioService {
     private async sessionReply(row: SessionRow): Promise<StudioReply> {
         try {
             const renders = row.status === "ready" ? await listSuccessfulRenders(this.d.db, row.id) : [];
-            return { status: 200, body: sessionBody(row, renders, this.progress.get(row.id), await sessionItem(this.d.db, row.r2_key)) };
+            const ahead = row.status === "saving" ? await this.saveQueueAhead(row.id) : null;
+            return {
+                status: 200,
+                body: sessionBody(row, renders, this.progress.get(row.id), await sessionItem(this.d.db, row.r2_key), ahead),
+            };
         } catch {
             return studioErr(503, "error.api.generic");
         }
@@ -987,6 +1774,16 @@ export class StudioService {
             if ("reply" in found) return found.reply;
             const row = found.row;
             if (row.status !== "saving") return this.sessionReply(row);
+
+            // Waiting in the server's line: answered (`step: "queued"`), never stepped. A step would
+            // build the missing `save:` record from the row and start it: the first poll would jump
+            // the line (section 17.5). The long-poll waits for the sweep to start it.
+            if (await this.waitingInLine(sid)) {
+                const remaining = deadline - this.d.now();
+                if (remaining <= 0) return this.sessionReply(row);
+                await this.d.sleep(Math.min(remaining, POLL_INTERVAL_MS));
+                continue;
+            }
 
             let running = this.advancing.get(sid);
             if (running && this.d.now() - (this.advancingSince.get(sid) ?? 0) > LOCK_STALE_MS) {
@@ -1027,6 +1824,13 @@ export class StudioService {
         if (!row || row.status !== "saving") {
             await this.d.storage.delete(`save:${sid}`).catch(() => {});
             this.progress.delete(sid);
+            return POLL_INTERVAL_MS;
+        }
+        // in the server's line, not started: never stepped (every path to a step, a poll, the kick
+        // and the sweep, comes through here)
+        try {
+            if (!rec && (await this.line.find(sid, null))) return POLL_INTERVAL_MS;
+        } catch {
             return POLL_INTERVAL_MS;
         }
 
@@ -1109,7 +1913,9 @@ export class StudioService {
             }
             if (!accepted) {
                 const since = rec.busySince ?? this.d.now();
-                if (this.d.now() - since >= BUSY_WAIT_MS) return await this.fail(sid, "error.studio.busy");
+                if (this.d.now() - since >= (rec.lined ? LINE_BUSY_WAIT_MS : BUSY_WAIT_MS)) {
+                    return await this.fail(sid, "error.studio.busy");
+                }
                 await this.d.storage.put(`save:${sid}`, { ...rec, busySince: since, missSince: undefined });
                 return BUSY_RETRY_MS;
             }
@@ -1281,6 +2087,7 @@ export class StudioService {
             });
             // the save is ready: the owner who walked away is told (once: the event's record)
             await this.notifyCall("saved", (n) => n.onSaved(sid));
+            await this.settleLine(sid, null, { kind: "saved" });
             becameReady = true;
         }
         await this.dropHelperCopy(sid);
@@ -1420,7 +2227,7 @@ export class StudioService {
     // (POST /probe) and the row turns ready with duration/width/height. Nothing
     // runs after this response, so there is no kick here either (a step started
     // now would die with the response, taking its upload with it).
-    async adopt(keyId: string, rawBody: string): Promise<StudioReply> {
+    async adopt(keyId: string, rawBody: string, opts: { allowQueue?: boolean } = {}): Promise<StudioReply> {
         const invalid = () => studioErr(400, "error.studio.invalid_params");
         let b: Record<string, unknown>;
         try {
@@ -1436,6 +2243,11 @@ export class StudioService {
         // `public: true` (section 13): host the original publicly once it is ready
         if (b.public !== undefined && b.public !== null && typeof b.public !== "boolean") return invalid();
         const wantsPublic = b.public === true;
+        // `queue: true` (section 17.3, from `?queue=1`): join the line when the helper is not free.
+        // The web Worker's /library/adopt never queues.
+        const queueFlag = parseFlag(b.queue);
+        if (queueFlag === null) return invalid();
+        const wantsQueue = queueFlag && opts.allowQueue !== false;
         // Uploads AND saved studio originals: the library's "open in studio" on a
         // saved original sent originals/<sid>.<ext> and got invalid_params
         // (live, 2026-10-02).
@@ -1457,39 +2269,40 @@ export class StudioService {
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.reapOrphans();
-        if ((await this.saveActive()) || this.encoding()) {
-            return studioErr(429, "error.studio.busy");
-        }
-
-        const sid = mintSid(this.d.randomBytes);
-        const now = this.d.now();
-        try {
-            // (a reopened original that already has a poster hands it to its new session)
-            await this.d.db
-                .prepare(
-                    `INSERT INTO studio_sessions (id, key_id, link, service, title, status, r2_key, content_type, bytes, created_at, expires_at, public_state, poster, public_url)
-                     VALUES (?1, ?2, ?3, 'upload', ?4, 'saving', ?5, ?6, ?7, ?8, ?9,
-                             COALESCE(?10, (SELECT CASE WHEN visibility = 'public' AND url IS NOT NULL THEN 'ready' END FROM media_items WHERE bucket = 'originals' AND r2_key = ?5 AND deleted_at IS NULL LIMIT 1)),
-                             (SELECT poster FROM media_items WHERE bucket = 'originals' AND r2_key = ?5 AND deleted_at IS NULL LIMIT 1),
-                             (SELECT CASE WHEN visibility = 'public' THEN url END FROM media_items WHERE bucket = 'originals' AND r2_key = ?5 AND deleted_at IS NULL LIMIT 1))`,
-                )
-                .bind(sid, keyId, `upload:${itemId}`, name.trim(), r2Key, contentType, bytes, now, now + SESSION_TTL_MS, wantsPublic ? "pending" : null)
-                .run();
-        } catch {
-            return studioErr(503, "error.api.generic");
-        }
-        try {
-            const rec: SaveRecord = { phase: "probing", startedAt: now, attempts: 0, lastAdvance: now };
-            await this.d.storage.put(`save:${sid}`, rec);
-        } catch {
-            // step() recognises an upload session without a record
-        }
+        // the free check, the row and the claim are one step (see claimSlot)
+        const claim = await this.claimSlot({
+            keyId,
+            wantsQueue,
+            busyCode: "error.studio.busy",
+            adopt: true,
+            origin: null,
+            insert: async (sid, now) => {
+                // (a reopened original that already has a poster hands it to its new session)
+                await this.d.db
+                    .prepare(
+                        `INSERT INTO studio_sessions (id, key_id, link, service, title, status, r2_key, content_type, bytes, created_at, expires_at, public_state, poster, public_url)
+                         VALUES (?1, ?2, ?3, 'upload', ?4, 'saving', ?5, ?6, ?7, ?8, ?9,
+                                 COALESCE(?10, (SELECT CASE WHEN visibility = 'public' AND url IS NOT NULL THEN 'ready' END FROM media_items WHERE bucket = 'originals' AND r2_key = ?5 AND deleted_at IS NULL LIMIT 1)),
+                                 (SELECT poster FROM media_items WHERE bucket = 'originals' AND r2_key = ?5 AND deleted_at IS NULL LIMIT 1),
+                                 (SELECT CASE WHEN visibility = 'public' THEN url END FROM media_items WHERE bucket = 'originals' AND r2_key = ?5 AND deleted_at IS NULL LIMIT 1))`,
+                    )
+                    .bind(sid, keyId, `upload:${itemId}`, name.trim(), r2Key, contentType, bytes, now, now + SESSION_TTL_MS, wantsPublic ? "pending" : null)
+                    .run();
+            },
+        });
+        if (!claim.ok) return claim.reply;
+        const { sid, free, ahead } = claim;
         await this.scheduleSweep();
 
         const base = this.d.webBaseUrl.replace(/\/+$/, "");
         return {
             status: 201,
-            body: { status: "success", id: sid, url: `${base}/studio/${sid}` },
+            body: {
+                status: "success",
+                id: sid,
+                url: `${base}/studio/${sid}`,
+                ...(wantsQueue ? { queued: !free, queue_ahead: ahead } : {}),
+            },
         };
     }
 
@@ -1542,7 +2355,9 @@ export class StudioService {
             // the helper is doing something else (one job at a time)
             await obj.body.cancel().catch(() => {});
             const since = rec.busySince ?? this.d.now();
-            if (this.d.now() - since >= BUSY_WAIT_MS) return await this.fail(sid, "error.studio.busy");
+            if (this.d.now() - since >= (rec.lined ? LINE_BUSY_WAIT_MS : BUSY_WAIT_MS)) {
+                return await this.fail(sid, "error.studio.busy");
+            }
             await this.d.storage.put(`save:${sid}`, { ...rec, busySince: since, missSince: undefined });
             return BUSY_RETRY_MS;
         }
@@ -1568,7 +2383,10 @@ export class StudioService {
             .run();
         await this.d.storage.delete(`save:${sid}`).catch(() => {});
         this.progress.delete(sid);
-        if (Number(ready.meta?.changes ?? 0) > 0) await this.afterReady(sid, row.public_state === "pending", key);
+        if (Number(ready.meta?.changes ?? 0) > 0) {
+            await this.settleLine(sid, null, { kind: "saved" });
+            await this.afterReady(sid, row.public_state === "pending", key);
+        }
         return POLL_INTERVAL_MS;
     }
 
@@ -1607,14 +2425,22 @@ export class StudioService {
         // `"notify": true`: tell the owner about this render's result (section 9.3)
         const notifyFlag = isPlainObject(parsed) ? parsed.notify : undefined;
         if (notifyFlag !== undefined && typeof notifyFlag !== "boolean") return studioErr(400, "error.webp.invalid_params");
+        // `queue` and `priority` (section 17.3): wait in the line instead of the 429; the render the
+        // owner asked for from the screen is `"priority": "focused"`, which needs `queue`.
+        const queueFlag = parseFlag(isPlainObject(parsed) ? parsed.queue : undefined);
+        if (queueFlag === null) return studioErr(400, "error.webp.invalid_params");
+        const priority = isPlainObject(parsed) ? parsed.priority : undefined;
+        if (priority !== undefined && priority !== null && priority !== "focused") return studioErr(400, "error.webp.invalid_params");
+        if (priority === "focused" && !queueFlag) return studioErr(400, "error.webp.invalid_params");
+        const focused = priority === "focused";
         const check = validateRender(parsed, { duration: row.duration, width: row.width, height: row.height });
         if (!check.ok) return studioErr(check.status, check.code);
         const p = check.params;
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.reapOrphans();
-        // a save is running: the helper is not free (one job at a time)
-        if (await this.saveActive()) return studioErr(429, "error.webp.busy");
+        // the helper is held (one job at a time), or somebody waits ahead of this render
+        const free = await this.isFree(focused);
 
         const r2Key = row.r2_key;
         const params: WebpParams = {
@@ -1626,6 +2452,11 @@ export class StudioService {
             quality: p.quality,
             ...(p.crop ? { crop: p.crop } : {}),
         };
+        const joinOpts = { sid, row, params, p, focused, notifyFlag: notifyFlag === true };
+        if (!free) {
+            if (!queueFlag) return await this.refuse("error.webp.busy");
+            return await this.enqueueRender(joinOpts);
+        }
         const keepAwake = this.d.renew ? setInterval(this.d.renew, 20_000) : undefined;
         let reply;
         try {
@@ -1638,6 +2469,9 @@ export class StudioService {
         }
 
         const body = reply.body as { status: string; id?: string; error?: { code: string } };
+        // a 429 from the helper that `held()` did not see (a /webp job, a poster): a client that
+        // asked to queue never sees it, the render waits in the line instead
+        if (reply.status === 429 && queueFlag) return await this.enqueueRender(joinOpts);
         if (reply.status !== 202 || body.status !== "pending" || !body.id) {
             return { status: reply.status, body: reply.body };
         }
@@ -1656,7 +2490,63 @@ export class StudioService {
         // accepted: the run (if one is registered for this session) is now rendering
         await this.liveRender(sid, job, { kind: "accepted", title: row.title, duration: row.duration });
         if (notifyFlag === true) await this.notifyCall("render opt-in", (n) => n.optInJob(sid, job));
-        return { status: 202, body: { status: "pending", job } };
+        return { status: 202, body: { status: "pending", job, ...(queueFlag ? { queued: false, queue_ahead: null } : {}) } };
+    }
+
+    // A render that waits: its id is minted here, its row inserted `pending` as on the free path, its
+    // `notify` opt-in registered now, and the entry carries the validated params (17.3).
+    private async enqueueRender(o: {
+        sid: string;
+        row: SessionRow;
+        params: WebpParams;
+        p: RenderParams;
+        focused: boolean;
+        notifyFlag: boolean;
+    }): Promise<StudioReply> {
+        if ((await this.line.size()) >= LINE_MAX) return studioErr(429, "error.studio.line_full");
+        const job = mintId(this.d.randomBytes);
+        const now = this.d.now();
+        try {
+            await this.d.db
+                .prepare(
+                    "INSERT INTO studio_renders (id, session_id, status, start, length, width, quality, created_at) VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ?7)",
+                )
+                .bind(job, o.sid, o.p.start, o.p.length, o.p.effectiveWidth, o.p.quality, now)
+                .run();
+        } catch {
+            return studioErr(503, "error.api.generic");
+        }
+        if (o.notifyFlag) await this.notifyCall("render opt-in", (n) => n.optInJob(o.sid, job));
+        const joined = await this.joinLine(
+            {
+                kind: "render",
+                sid: o.sid,
+                job,
+                // the render route is a capability URL (no key): the session's owner is who asked
+                keyId: o.row.key_id ?? "",
+                at: now,
+                origin: null,
+                adopt: false,
+                render: {
+                    params: o.params,
+                    effectiveWidth: o.p.effectiveWidth,
+                    quality: o.p.quality,
+                    start: o.p.start,
+                    length: o.p.length,
+                },
+            },
+            o.focused,
+        );
+        if (joined === null) {
+            try {
+                await this.d.db.prepare("DELETE FROM studio_renders WHERE id = ?1").bind(job).run();
+            } catch {
+                // a pending row with no entry: the sweep never starts it and the client's poll sees job_lost
+            }
+            return studioErr(429, "error.studio.line_full");
+        }
+        await this.scheduleSweep();
+        return { status: 202, body: { status: "pending", job, queued: true, queue_ahead: joined } };
     }
 
     async renderStatus(sid: string, job: string, waitSeconds: number): Promise<StudioReply> {
@@ -1680,6 +2570,19 @@ export class StudioService {
         if (row.status === "success") return { status: 200, body: this.successBody(row) };
         if (row.status === "error") {
             return studioErr(200, row.error_code ?? "error.webp.encode_failed");
+        }
+
+        // A render waiting in the line has no `job:` record: webp.status would answer 404, which
+        // this method turns into error.webp.job_lost. Answered here first (section 17.5).
+        // (An entry whose `job:` record exists was taken by the helper: the object died before the
+        // entry was removed. It is a running render, collected below, never "queued" for ever.)
+        const waiting = (await this.d.storage.get(`job:${job}`)) ? null : await this.line.find(sid, job);
+        if (waiting) {
+            const ahead = startingFresh(waiting.entry, this.d.now()) ? 0 : this.aheadOf(await this.lineView(), waiting.key);
+            return {
+                status: 200,
+                body: { status: "pending", job, phase: "queued", frames_done: null, frames_total: null, queue_ahead: ahead },
+            };
         }
 
         const r = await this.d.webp.status(`studio:${sid}`, job, waitSeconds);
@@ -1772,6 +2675,7 @@ export class StudioService {
                     phase: p.phase ?? null,
                     frames_done: p.frames_done ?? null,
                     frames_total: p.frames_total ?? null,
+                    queue_ahead: null,
                 },
             };
         }
@@ -1841,8 +2745,13 @@ export class StudioService {
                 // The budget first: a save past it is never advanced and never
                 // counts as pending, even with a (hung) step still holding its
                 // lock, or the sweep would re-arm every 5 s for ever.
-                const started = rec?.startedAt ?? rec?.createdAt ?? 0;
-                if (now - started > SAVE_BUDGET_MS + SWEEP_SAVE_SLACK_MS) continue;
+                // A lined save that is still waiting for the helper to take it (a foreign 429) has no
+                // fetch yet: its budget is its own busy wait (LINE_BUSY_WAIT_MS from the first 429),
+                // not the download budget counted from the pump's start.
+                const waitingBusy = !!rec?.lined && rec.busySince !== undefined && rec.phase !== "fetching";
+                const started = waitingBusy ? rec!.busySince! : (rec?.startedAt ?? rec?.createdAt ?? 0);
+                const budget = waitingBusy ? LINE_BUSY_WAIT_MS : SAVE_BUDGET_MS;
+                if (now - started > budget + SWEEP_SAVE_SLACK_MS) continue;
                 // A poll is advancing it right now: leave it be, unless that
                 // lock is stale (a hung helper call): then advance() drops it
                 // and starts a fresh step, exactly as a client poll would.
@@ -1877,11 +2786,27 @@ export class StudioService {
             }
         }
 
+        // the line (section 17.5): start the head when the helper is free; what still waits is pending,
+        // so the sweep re-arms every SWEEP_DELAY_S for as long as anything does
+        try {
+            pending += await raceCeiling(this.lineSweep(), itemMs, "sweep of the line");
+        } catch (e) {
+            console.error("[studio] sweep: the line failed", String(e));
+            pending++;
+        }
+
         // posters: one per pass, only while nothing else needs the helper (the poster service
         // checks that itself and counts what is still queued)
         if (this.posters) {
             try {
-                pending += await raceCeiling(this.posters.sweep(), itemMs, "sweep of posters");
+                // in flight until the job ends, even when this pass stops waiting for it
+                this.posterRuns++;
+                const run = this.posters.sweep();
+                const done = () => {
+                    this.posterRuns--;
+                };
+                void run.then(done, done);
+                pending += await raceCeiling(run, itemMs, "sweep of posters");
             } catch (e) {
                 console.error("[studio] sweep: poster failed", String(e));
                 pending++;
@@ -1912,10 +2837,12 @@ export const isStudioRoute = (pathname: string) =>
     pathname === "/posters/kick";
 
 const toResponse = (r: StudioReply) =>
-    new Response(JSON.stringify(r.body), {
-        status: r.status,
-        headers: { "content-type": "application/json" },
-    });
+    r.status === 204
+        ? new Response(null, { status: 204 })
+        : new Response(JSON.stringify(r.body), {
+              status: r.status,
+              headers: { "content-type": "application/json" },
+          });
 
 // POST /studio (needs the key id the Worker set after its D1 lookup),
 // GET /studio/<sid>/advance (a saving session's poll), POST /studio/<sid>/render
@@ -1942,6 +2869,28 @@ export async function handleStudioRoute(
         const res = toResponse(await service.recent(keyId, url.searchParams.get("since"), url.searchParams.get("limit")));
         res.headers.set("cache-control", "no-store");
         return res;
+    }
+
+    // The server's line (section 17): GET /studio/line, PUT|DELETE /studio/line/notify. The key id
+    // header is the Worker's word (403 without it); the library-service key id is a 404.
+    if (p === "/studio/line" || p === "/studio/line/notify") {
+        const keyId = request.headers.get(KEY_ID_HEADER);
+        if (!keyId) return new Response(null, { status: 403 });
+        if (keyId === SERVICE_KEY_ID) return new Response(null, { status: 404 });
+        if (p === "/studio/line" && request.method === "GET") {
+            const res = toResponse(await service.lineStatus(keyId));
+            res.headers.set("cache-control", "no-store");
+            return res;
+        }
+        if (p === "/studio/line/notify" && request.method === "DELETE") return toResponse(await service.lineNotifyDelete(keyId));
+        if (p === "/studio/line/notify" && request.method === "PUT") {
+            const declared = Number(request.headers.get("content-length"));
+            if (Number.isFinite(declared) && declared > NOTIFY_MAX_BODY_BYTES) return toResponse(studioErr(400, "error.notify.invalid"));
+            const text = await request.text();
+            if (new TextEncoder().encode(text).length > NOTIFY_MAX_BODY_BYTES) return toResponse(studioErr(400, "error.notify.invalid"));
+            return toResponse(await service.lineNotifyPut(keyId, text));
+        }
+        return new Response(null, { status: 404 });
     }
 
     // POST /studio/upload/adopt: the Worker's own call after PUT /studio/upload
@@ -1971,7 +2920,7 @@ export async function handleStudioRoute(
         if (request.headers.get(KEY_ID_HEADER) !== SERVICE_KEY_ID) {
             return new Response(null, { status: 403 });
         }
-        return toResponse(await service.adopt(SERVICE_KEY_ID, await request.text()));
+        return toResponse(await service.adopt(SERVICE_KEY_ID, await request.text(), { allowQueue: false }));
     }
 
     const parts = p.split("/"); // "", "studio", sid, "render", job?
@@ -1981,6 +2930,19 @@ export async function handleStudioRoute(
         const sid = parts[2];
         if (!STUDIO_SID_REGEX.test(sid)) return toResponse(studioErr(404, "error.studio.not_found"));
         return toResponse(await service.advance(sid, parseStudioWait(url.searchParams.get("wait"))));
+    }
+    // DELETE /studio/<sid>/line and DELETE /studio/<sid>/render/<job>: cancel what has not started
+    // (section 17.7). Keyed, the creating key only; the service key id and a missing key id are refused.
+    if (request.method === "DELETE" && parts[1] === "studio" && (parts.length === 4 ? parts[3] === "line" : parts.length === 5 && parts[3] === "render")) {
+        const keyId = request.headers.get(KEY_ID_HEADER);
+        if (!keyId) return new Response(null, { status: 403 });
+        if (keyId === SERVICE_KEY_ID) return new Response(null, { status: 404 });
+        const sid = parts[2];
+        if (!STUDIO_SID_REGEX.test(sid)) return toResponse(studioErr(404, "error.studio.not_found"));
+        if (parts.length === 4) return toResponse(await service.cancelSave(keyId, sid));
+        const job = parts[4];
+        if (!STUDIO_JOB_REGEX.test(job)) return toResponse(studioErr(404, "error.studio.not_found"));
+        return toResponse(await service.cancelRender(keyId, sid, job));
     }
     if (parts.length >= 4 && parts[1] === "studio" && parts[3] === "render") {
         const sid = parts[2];

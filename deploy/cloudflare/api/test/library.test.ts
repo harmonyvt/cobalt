@@ -10,6 +10,7 @@ import { decide, type GateRequest } from "../src/gate";
 import { KEY_ID_HEADER, PORT_HEADER, SERVICE_HEADER } from "../src/headers";
 import { hashKey } from "../src/keys";
 import { SERVICE_KEY_ID } from "../src/library";
+import { LINE_MAX, LINE_WAIT_MS } from "../src/line";
 import { serviceAuthorized } from "../src/service-auth";
 import {
     BUSY_WAIT_MS,
@@ -966,6 +967,7 @@ describe("GET /capabilities", () => {
                 create_notify: true,
                 titles: true,
                 visibility: true,
+                line: true,
             },
             limits: {
                 max_webp_seconds: 10,
@@ -976,6 +978,8 @@ describe("GET /capabilities", () => {
                 max_upload_bytes: 100000000,
                 max_source_bytes: 209715200,
                 session_ttl_ms: 604800000,
+                line_max: 50,
+                line_wait_ms: 1800000,
             },
             media_base_url: "https://media.capybaraharmony.com/",
             key: "missing",
@@ -997,6 +1001,8 @@ describe("GET /capabilities", () => {
             max_upload_bytes: MAX_UPLOAD_BYTES,
             max_source_bytes: MAX_SOURCE_BYTES,
             session_ttl_ms: SESSION_TTL_MS,
+            line_max: LINE_MAX,
+            line_wait_ms: LINE_WAIT_MS,
         });
     });
     it("a valid key: key valid with its name, and the use is stamped like on any keyed call", async () => {
@@ -2945,7 +2951,7 @@ describe("the rest of the Worker, with the app routes in place", () => {
         w.helper.jobPolls = 1e9;
         w.helper.jobPendingFields = { phase: "decode", frames_done: 12, frames_total: 75 };
         const pending = (await (await w.call(`/studio/${SID}/render/${job}?wait=0`)).json()) as any;
-        expect(pending).toEqual({ status: "pending", job, phase: "decode", frames_done: 12, frames_total: 75 });
+        expect(pending).toEqual({ status: "pending", job, phase: "decode", frames_done: 12, frames_total: 75, queue_ahead: null });
     });
     it("a render that nobody polls is collected by the sweep and the next GET .../render/<job> just returns it", async () => {
         w.seed();

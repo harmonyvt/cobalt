@@ -6,19 +6,21 @@
 // runs under plain node in the tests.
 //
 //   GET  /capabilities                       what this server can do + the key's state
-//   PUT  /studio/upload?name=                a file into R2 + library (+ a studio session)
+//   PUT  /studio/upload?name=[&queue=1][&title=]  a file into R2 + library (+ a studio session; `queue=1`
+//                                            joins the server's line when the helper is busy, section 17)
 //   GET  /library                            the library grouped into posts
 //   GET|HEAD /library/items/<id>/file        a private file's bytes (Range aware)
 //   POST /library/items/<id>/publish         make a file public (legacy spelling of the toggle)
 //   PATCH /library/items/<id>/visibility     the public/private toggle (section 16)
 //   POST /library/visibility/migrate         the one-row-per-file data step (section 16)
-//   POST /library/items/<id>/studio          open a studio session for a private video
+//   POST /library/items/<id>/studio[?queue=1] open a studio session for a private video
 //   DELETE /library/items/<id>/post          delete a whole post: every file and its sessions (section 12)
 
 // Read at bundle time from upstream's package.json (reading is fine, editing is
 // not); the fork's Worker bundles this one field.
 import { version as apiVersion } from "../../../../api/package.json";
 
+import { LINE_MAX, LINE_WAIT_MS, parseQueryFlag } from "./line";
 import { lookupKey } from "./keys";
 import { SERVICE_KEY_ID, mintItemId, readCapped, releasePoster } from "./library";
 import { POSTER_COOLDOWN_MS, isPosterType } from "./poster";
@@ -45,14 +47,17 @@ import {
 import {
     MAX_RENDER_SECONDS,
     MAX_SOURCE_BYTES,
+    MAX_TITLE_CODE_POINTS as TITLE_MAX_CODE_POINTS,
     MIN_RENDER_SECONDS,
     RENDER_FPS,
     RENDER_QUALITIES,
     RENDER_WIDTHS,
     SESSION_TTL_MS,
+    cleanTitle,
     getSession,
     parseRange,
     studioErr,
+    upsertTitle,
     type OriginalsBucket,
     type StudioReply,
 } from "./studio";
@@ -190,6 +195,10 @@ export async function capabilities(
                 // one file per rendition: PATCH /library/items/<id>/visibility, `v=2` on GET /library
                 // (APP-API-CONTRACT.md section 16)
                 visibility: true,
+                // the server's line: `queue` on POST /studio, POST .../render, PUT /studio/upload and
+                // POST /library/items/<id>/studio, GET /studio/line, the cancel routes and
+                // PUT|DELETE /studio/line/notify (APP-API-CONTRACT.md section 17)
+                line: true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,
@@ -200,6 +209,8 @@ export async function capabilities(
                 max_upload_bytes: MAX_UPLOAD_BYTES,
                 max_source_bytes: MAX_SOURCE_BYTES,
                 session_ttl_ms: SESSION_TTL_MS,
+                line_max: LINE_MAX,
+                line_wait_ms: LINE_WAIT_MS,
             },
             media_base_url: withSlash(d.mediaBaseUrl),
             key: state.key,
@@ -257,6 +268,17 @@ export async function studioUpload(
         if (rawPublic === "1" || rawPublic === "true") wantsPublic = true;
         else if (rawPublic !== "0" && rawPublic !== "false") return reject(400, "error.library.bad_request");
     }
+    // `?queue=1` (section 17.3): when the helper is not free the adopted session joins the server's
+    // line instead of the studio_error. Anything but 1/true/0/false is refused before the body is read.
+    const wantsQueue = parseQueryFlag(q.get("queue"));
+    if (wantsQueue === null) return reject(400, "error.library.bad_request");
+    // `?title=<url-encoded>` (section 17.3): the post's custom title, the rules of section 15.2
+    let title: string | null = null;
+    if (q.has("title")) {
+        const t = cleanTitle(q.get("title"));
+        if (!t.ok) return reject(400, "error.library.bad_title");
+        title = t.title;
+    }
 
     const declared = request.headers.get("content-length");
     if (declared === null || !/^\d{1,15}$/.test(declared)) return reject(411, "error.library.length_required");
@@ -310,12 +332,22 @@ export async function studioUpload(
         }
     }
 
+    // the post's custom title, for the upload's own item id (its post key); best effort
+    if (title !== null) {
+        try {
+            await upsertTitle(d.db, id, title, keyId, now);
+        } catch (e) {
+            console.error("[upload] could not store the title", String(e));
+        }
+    }
+
     // A video (or gif) continues into a studio session through the same adopt
     // path as a pasted link's session. Images stop here (the app offers to host
     // them as they are, route 5c).
     let sid: string | null = null;
     let url: string | null = null;
     let studioError: { code: string } | null = null;
+    let lineState: { queued: boolean; queue_ahead: number | null } | null = null;
     if (type.startsWith("video/") || type === "image/gif") {
         try {
             const a = await d.adopt(keyId, {
@@ -326,11 +358,25 @@ export async function studioUpload(
                 item_id: id,
                 // the Durable Object hosts the original when the session is ready
                 ...(wantsPublic ? { public: true } : {}),
+                ...(wantsQueue ? { queue: true } : {}),
             });
-            const b = a.body as { status?: string; id?: unknown; url?: unknown; error?: { code?: unknown } };
+            const b = a.body as {
+                status?: string;
+                id?: unknown;
+                url?: unknown;
+                queued?: unknown;
+                queue_ahead?: unknown;
+                error?: { code?: unknown };
+            };
             if (a.status === 201 && b.status === "success" && typeof b.id === "string") {
                 sid = b.id;
                 url = typeof b.url === "string" ? b.url : `${noSlash(d.webUrl)}/studio/${b.id}`;
+                if (wantsQueue) {
+                    lineState = {
+                        queued: b.queued === true,
+                        queue_ahead: typeof b.queue_ahead === "number" ? b.queue_ahead : null,
+                    };
+                }
             } else {
                 // refused (busy, not a video, too large...): the file IS stored
                 studioError = { code: typeof b.error?.code === "string" ? b.error.code : "error.api.generic" };
@@ -380,6 +426,8 @@ export async function studioUpload(
             studio_error: studioError,
             public_state: publicState,
             public_url: publicUrl,
+            // only for a caller that asked for the line (`?queue=1`): today's shape for the rest
+            ...(wantsQueue ? { queued: lineState?.queued ?? false, queue_ahead: lineState?.queue_ahead ?? null } : {}),
         },
     };
 }
@@ -879,7 +927,9 @@ export async function libraryVisibilityMigrate(d: AppDeps, q: URLSearchParams): 
 
 // ---- 5d. POST /library/items/<id>/studio --------------------------------------------------
 
-export async function libraryStudio(d: AppDeps, id: string, keyId: string): Promise<StudioReply> {
+// `queue` (`?queue=1`, section 17.3): the adopted session joins the server's line when the helper is
+// not free; the answer then also says `queued` and `queue_ahead`.
+export async function libraryStudio(d: AppDeps, id: string, keyId: string, queue = false): Promise<StudioReply> {
     let row: MediaRow | null;
     try {
         row = await getItem(d.db, id);
@@ -899,7 +949,12 @@ export async function libraryStudio(d: AppDeps, id: string, keyId: string): Prom
             if (open && open.status === "ready" && open.expires_at > d.now() && open.r2_key === row.r2_key) {
                 return {
                     status: 200,
-                    body: { status: "success", id: open.id, url: `${noSlash(d.webUrl)}/studio/${open.id}` },
+                    body: {
+                        status: "success",
+                        id: open.id,
+                        url: `${noSlash(d.webUrl)}/studio/${open.id}`,
+                        ...(queue ? { queued: false, queue_ahead: null } : {}),
+                    },
                 };
             }
         } catch {
@@ -932,8 +987,16 @@ export async function libraryStudio(d: AppDeps, id: string, keyId: string): Prom
             // names that id: its renders then land in the same card instead of
             // splitting the post in two. Anything else is its own post: its item id.
             item_id: row.source === "saved" && row.session_id && /^[A-Za-z0-9]{1,64}$/.test(row.session_id) ? row.session_id : row.id,
+            ...(queue ? { queue: true } : {}),
         });
-        const b = a.body as { status?: string; id?: unknown; url?: unknown; error?: { code?: unknown } };
+        const b = a.body as {
+            status?: string;
+            id?: unknown;
+            url?: unknown;
+            queued?: unknown;
+            queue_ahead?: unknown;
+            error?: { code?: unknown };
+        };
         if (a.status === 201 && b.status === "success" && typeof b.id === "string") {
             return {
                 status: 201,
@@ -941,6 +1004,7 @@ export async function libraryStudio(d: AppDeps, id: string, keyId: string): Prom
                     status: "success",
                     id: b.id,
                     url: typeof b.url === "string" ? b.url : `${noSlash(d.webUrl)}/studio/${b.id}`,
+                    ...(queue ? { queued: b.queued === true, queue_ahead: typeof b.queue_ahead === "number" ? b.queue_ahead : null } : {}),
                 },
             };
         }
@@ -1098,13 +1162,9 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
 
 // ---- 15. PATCH /library/items/<id>/post ------------------------------------------------------
 
-export const MAX_TITLE_CODE_POINTS = 80;
+// The rules live in studio.ts (cleanTitle), shared with POST /studio and the upload's `?title=`.
+export const MAX_TITLE_CODE_POINTS = TITLE_MAX_CODE_POINTS;
 const MAX_TITLE_BODY_BYTES = 1024;
-
-// U+0000-U+001F, U+007F-U+009F, U+2028, U+2029, and unpaired surrogates (which no
-// well-formed JSON text from a client should carry and D1 would mangle).
-const BAD_TITLE_CHARS =
-    /[\u0000-\u001F\u007F-\u009F\u2028\u2029]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 // "valid" carries the cleaned title, null = clear.
 export function parseTitle(text: string | null): { ok: true; title: string | null } | { ok: false } {
@@ -1118,15 +1178,7 @@ export function parseTitle(text: string | null): { ok: true; title: string | nul
     if (typeof body !== "object" || body === null || Array.isArray(body) || !Object.hasOwn(body, "title")) {
         return { ok: false };
     }
-    const raw = (body as { title: unknown }).title;
-    if (raw === null) return { ok: true, title: null };
-    if (typeof raw !== "string") return { ok: false };
-    // trim() takes whitespace and line breaks off both ends (including U+2028/2029)
-    const title = raw.trim();
-    if (title === "") return { ok: true, title: null };
-    if (BAD_TITLE_CHARS.test(title)) return { ok: false };
-    if (Array.from(title).length > MAX_TITLE_CODE_POINTS) return { ok: false };
-    return { ok: true, title };
+    return cleanTitle((body as { title: unknown }).title);
 }
 
 // Sets (or, with null / empty, clears) the custom title of the post the anchor file belongs

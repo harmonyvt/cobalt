@@ -311,7 +311,12 @@ async function handleInner(
             if (r) return json(r.status, r.body, allowOrigin);
         }
         if (decision.then === "library_studio") {
-            const r = await libraryStudio(appDeps(env, container, edge), decision.params!.id, keyId);
+            // `?queue=1`: the adopted session joins the server's line (section 17.3)
+            const queue = url.searchParams.get("queue");
+            if (queue !== null && queue !== "" && !["1", "true", "0", "false"].includes(queue)) {
+                return json(400, { status: "error", error: { code: "error.library.bad_request" } }, allowOrigin);
+            }
+            const r = await libraryStudio(appDeps(env, container, edge), decision.params!.id, keyId, queue === "1" || queue === "true");
             return json(r.status, r.body, allowOrigin);
         }
         // DELETE /library/items/<id>/post: D1 + R2 only, no CORS (the web page does not call it).
@@ -357,7 +362,12 @@ async function handleInner(
             // the Hark opt-in (also DO-only: D1 ownership check and DO storage)
             decision.then === "studio_notify" ||
             // the share sheet's recent saves (DO storage for the list, D1 for the rows)
-            decision.then === "studio_recent"
+            decision.then === "studio_recent" ||
+            // the server's line (section 17): the line, its Hark summary and the cancel routes. DO
+            // storage and D1; never wake the container
+            decision.then === "studio_line" ||
+            decision.then === "studio_line_notify" ||
+            decision.then === "studio_cancel"
         ) {
             const headers = new Headers(request.headers);
             headers.delete("Authorization");

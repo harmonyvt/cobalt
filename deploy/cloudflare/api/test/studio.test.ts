@@ -799,7 +799,7 @@ describe("GET /studio/<sid>/render/<job> (render lifecycle)", () => {
         s.helper.jobPolls = 1;
         expect(await s.studio.renderStatus(SID, job, 0)).toEqual({
             status: 200,
-            body: { status: "pending", job, phase: null, frames_done: null, frames_total: null },
+            body: { status: "pending", job, phase: null, frames_done: null, frames_total: null, queue_ahead: null },
         });
         s.clock.t += 5000;
         const done = await s.studio.renderStatus(SID, job, 0);
@@ -845,7 +845,7 @@ describe("GET /studio/<sid>/render/<job> (render lifecycle)", () => {
         s.helper.jobPolls = 1e9;
         expect(await s.studio.renderStatus(SID, job, 3)).toEqual({
             status: 200,
-            body: { status: "pending", job, phase: null, frames_done: null, frames_total: null },
+            body: { status: "pending", job, phase: null, frames_done: null, frames_total: null, queue_ahead: null },
         });
     });
 

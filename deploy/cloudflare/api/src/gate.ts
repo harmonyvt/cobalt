@@ -80,6 +80,9 @@ export type LookupThen =
     | "live_selftest"
     | "studio_notify"
     | "studio_recent"
+    | "studio_line"
+    | "studio_line_notify"
+    | "studio_cancel"
     | "telemetry_ingest";
 
 export type StudioOp =
@@ -322,6 +325,17 @@ function decideStudio(req: GateRequest): GateDecision {
         if (req.service) return reject(404);
         return req.method === "GET" ? lookupThen(req, "studio_recent") : reject(404);
     }
+    // The server's line (APP-API-CONTRACT.md section 17): GET /studio/line, PUT|DELETE
+    // /studio/line/notify. Keyed; the library-service credential and every other method are 404.
+    // Neither path segment is a session id.
+    if (req.pathname === "/studio/line") {
+        if (req.service) return reject(404);
+        return req.method === "GET" ? lookupThen(req, "studio_line") : reject(404);
+    }
+    if (req.pathname === "/studio/line/notify") {
+        if (req.service) return reject(404);
+        return req.method === "PUT" || req.method === "DELETE" ? lookupThen(req, "studio_line_notify") : reject(404);
+    }
     const parts = req.pathname.slice("/studio/".length).split("/");
     const [sid, sub, job, ...rest] = parts;
     if (!STUDIO_SID_REGEX.test(sid ?? "") || rest.length > 0) return reject(404);
@@ -357,7 +371,16 @@ function decideStudio(req: GateRequest): GateDecision {
             ? { action: "studio", op: "render_create", sid }
             : reject(404);
     }
+    // Cancel what has not started (section 17.7): keyed, the creating key only (the Durable Object
+    // checks the owner). The library service credential never reaches it.
+    if (sub === "line" && job === undefined) {
+        if (req.service) return reject(404);
+        return req.method === "DELETE" ? lookupThen(req, "studio_cancel", { sid }) : reject(404);
+    }
     if (sub === "render" && job !== undefined && STUDIO_JOB_REGEX.test(job)) {
+        if (req.method === "DELETE") {
+            return req.service ? reject(404) : lookupThen(req, "studio_cancel", { sid, job });
+        }
         return req.method === "GET"
             ? { action: "studio", op: "render_status", sid, job }
             : reject(404);
