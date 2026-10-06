@@ -618,6 +618,8 @@ a stale or missing `bytes` no longer gives a 200 for a missing object, a wrong `
 
 `POST /studio` takes `items` / `item_count` / `slideshow`, a photo is stored as a photo, `POST /studio/<sid>/items/retry` and `/slideshow`, `GET /library?v=3`, `DELETE /library/items/<id>`, `PUT /library/items/<id>/made`, `scope: "post"` on the visibility toggle, `features.gallery`. Needs migration `d1/migrations/0009_gallery.sql` applied BEFORE the API and web Workers are deployed (additive; not applied by any test or lane).
 
+Behaviour change (18.9): a save with no `items` (an older app, a Shortcut, a batch paste) of a photo-only picker of 2 or more entries is now stored whole as a gallery (as `items: "all"`, first 20) instead of failing `error.webp.no_video`; a post with a video or gif, a 1-item picker, a plain link and an explicit `items: "first-video"` behave as before. The helper image changes (`helper/lib.js` `effectiveItems`).
+
 ### The server's line (queued saves and renders, `APP-API-CONTRACT.md` section 17)
 
 The helper does one save, probe, encode or poster at a time and there is exactly one Durable Object, so that object holds one

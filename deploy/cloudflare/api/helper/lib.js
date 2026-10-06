@@ -174,6 +174,22 @@ export function parseFetchSelection(b) {
 }
 
 /**
+ * The `items` a fetch really runs with (APP-API-CONTRACT 18.9). A client that sent `items` gets it unchanged
+ * (an explicit "first-video" on a photo-only post keeps failing: that is what it asked for). A client that sent
+ * none (the 1.13 share sheet, a batch paste, a Shortcut) gets "all" exactly when cobalt answered a picker of 2+
+ * entries none of which is a video or a gif, so a photo-only gallery is saved whole instead of failing
+ * error.webp.no_video; every other case stays undefined (a 1-item picker, a mixed post's first video, a plain link).
+ * @param {{type: string | null}[]} entries
+ * @param {undefined | "all" | "first-video" | number[]} items
+ * @returns {undefined | "all" | "first-video" | number[]}
+ */
+export function effectiveItems(entries, items) {
+    if (items !== undefined) return items;
+    if (entries.length >= 2 && entries.every((e) => e?.type !== "video" && e?.type !== "gif")) return "all";
+    return undefined;
+}
+
+/**
  * Which picker entries a fetch saves. `entries` is `[{type, url}]` in cobalt's order; `type` is
  * null for a plain (non-picker) answer, which counts as a one-item picker of unknown type.
  *  - no `items`: a picker of exactly one saves that item whatever its type; 2+ keep the old rule

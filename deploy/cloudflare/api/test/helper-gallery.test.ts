@@ -714,7 +714,7 @@ real("POST /fetch: pickers, with and without items", () => {
         expect((await call(`/fetch/${id}/thumb`)).status).toBe(200);
     });
 
-    it("a two-item picker, no items: today's rule (first video), and photos only is still no_video", async () => {
+    it("a two-item picker, no items: today's rule (first video); photos only asked as \"first-video\" is still no_video (no items at all now saves whole: 18.9, helper-legacy-picker.test.ts)", async () => {
         setup();
         resolveBody = async () => pickerOf(["photo", "a.jpg"], ["video", "v.mp4"]);
         const id = rid();
@@ -723,7 +723,7 @@ real("POST /fetch: pickers, with and without items", () => {
         expect(hits).toEqual(["/v.mp4"]); // only the video was fetched
         resolveBody = async () => pickerOf(["photo", "a.jpg"], ["photo", "b.jpg"]);
         const id2 = rid();
-        await post("/fetch", { id: id2, url: LINK });
+        await post("/fetch", { id: id2, url: LINK, items: "first-video" });
         expect(await until(`/fetch/${id2}`)).toEqual({ status: "error", error: { code: "error.webp.no_video" } });
     });
 

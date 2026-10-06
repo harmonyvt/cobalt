@@ -100,6 +100,7 @@ import {
     THUMB_MAX_SIDE,
     VIDEO_TYPES,
     downloadToFile,
+    effectiveItems,
     encodeAnimatedWebp,
     keyMatches,
     parseFetchSelection,
@@ -571,7 +572,9 @@ export function createHelper(opts = {}) {
             if (p.item_count !== undefined && p.item_count !== entries.length) {
                 throw new JobError("error.studio.gallery_changed");
             }
-            const sel = selectPickerItems(entries, p.items);
+            // a client that sent no `items` and a photo-only picker of 2+ saves it whole (18.9)
+            const items = effectiveItems(entries, p.items);
+            const sel = selectPickerItems(entries, items);
             if (!sel.ok) throw new JobError(sel.code);
             const service = serviceFromUrl(p.url);
             const title = picker ? null : titleFromFilename(src.filename);
@@ -581,7 +584,7 @@ export function createHelper(opts = {}) {
 
             // `items` absent, "first-video", or a link that is not a picker at all ("all" on a plain video):
             // one file, exactly today's job and answer (no `items` list, so the API stores `originals/<sid>.<ext>`)
-            if (p.items === undefined || p.items === "first-video" || !picker) {
+            if (items === undefined || items === "first-video" || !picker) {
                 // one file: today's job (a one-item picker included)
                 const index = sel.indices[0];
                 const e = entries[index];
