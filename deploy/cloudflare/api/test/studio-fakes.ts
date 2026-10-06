@@ -25,6 +25,9 @@ const collect = async (s: ReadableStream): Promise<Uint8Array> =>
 
 // R2 `cobalt-originals`: put() only accepts a stream (never a buffer), like the
 // production code path.
+export const UPLOADED = new Date(Date.UTC(2026, 0, 2, 3, 4, 5));
+export const etagOf = (key: string, n: number) => `"${key}:${n}"`;
+
 export class MemoryOriginals implements OriginalsBucket {
     objects = new Map<string, { bytes: Uint8Array; contentType: string; meta: Record<string, string> }>();
     putValueTypes: string[] = [];
@@ -65,6 +68,8 @@ export class MemoryOriginals implements OriginalsBucket {
             body,
             size: o.bytes.length,
             httpMetadata: { contentType: o.contentType },
+            httpEtag: etagOf(key, o.bytes.length),
+            uploaded: UPLOADED,
         };
     }
     heads: string[] = [];
@@ -73,7 +78,9 @@ export class MemoryOriginals implements OriginalsBucket {
         this.heads.push(key);
         if (this.failHead) throw new Error("R2 head down");
         const o = this.objects.get(key);
-        return o ? { size: o.bytes.length, httpMetadata: { contentType: o.contentType } } : null;
+        return o
+            ? { size: o.bytes.length, httpMetadata: { contentType: o.contentType }, httpEtag: etagOf(key, o.bytes.length), uploaded: UPLOADED }
+            : null;
     }
     async delete(key: string) {
         this.objects.delete(key);

@@ -379,10 +379,26 @@ describe("GET /studio/<sid>/source", () => {
         expect(res.headers.get("accept-ranges")).toBe("bytes");
         expect(res.headers.get("cache-control")).toBe("private, max-age=3600");
         expect(res.headers.get("content-length")).toBe(String(SIZE));
-        expect(res.headers.get("access-control-expose-headers")).toBe("content-range, content-length, accept-ranges");
+        expect(res.headers.get("access-control-expose-headers")).toBe("content-range, content-length, accept-ranges, etag, last-modified");
         expect(res.headers.has("content-range")).toBe(false);
         expect(seen).toHaveLength(0);
         expect(originals.gets[0].range).toBeUndefined();
+    });
+    it("etag and last-modified on full, ranged and HEAD, stable across requests; If-Range mismatch serves the whole file", async () => {
+        const full = await get();
+        const etag = full.headers.get("etag")!;
+        const lm = full.headers.get("last-modified")!;
+        expect(etag).toBeTruthy();
+        expect(lm).toBe("Fri, 02 Jan 2026 03:04:05 GMT");
+        for (const r of [await get({ range: "bytes=0-9" }), await get({}, "HEAD"), await get({ range: "bytes=0-9" }, "HEAD"), await get()]) {
+            expect(r.headers.get("etag")).toBe(etag);
+            expect(r.headers.get("last-modified")).toBe(lm);
+        }
+        expect((await get({ range: "bytes=0-9", "if-range": etag })).status).toBe(206);
+        const stale = await get({ range: "bytes=0-9", "if-range": '"other"' });
+        expect(stale.status).toBe(200);
+        expect(stale.headers.has("content-range")).toBe(false);
+        expect(await body(stale)).toEqual(bytes);
     });
     it("uses the object's stored content type", async () => {
         db.raw.prepare("UPDATE studio_sessions SET content_type='video/webm'").run();

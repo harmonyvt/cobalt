@@ -1991,6 +1991,22 @@ describe("GET|HEAD /library/items/<id>/file", () => {
         expect(await bytes(res)).toEqual(data);
         expect(w.seen).toHaveLength(0); // never the container
     });
+    it("etag and last-modified on full, ranged and HEAD, stable across requests; If-Range mismatch serves the whole file", async () => {
+        seedFile();
+        const full = await get();
+        const etag = full.headers.get("etag")!;
+        expect(etag).toBeTruthy();
+        expect(full.headers.get("last-modified")).toBe("Fri, 02 Jan 2026 03:04:05 GMT");
+        for (const r of [await get("bytes=0-9"), await get(undefined, auth, "HEAD"), await get("bytes=0-9", auth, "HEAD"), await get()]) {
+            expect(r.headers.get("etag")).toBe(etag);
+            expect(r.headers.get("last-modified")).toBe("Fri, 02 Jan 2026 03:04:05 GMT");
+        }
+        const ok = await w.call(`/library/items/${ID}/file`, { headers: { ...auth, range: "bytes=0-9", "if-range": etag } });
+        expect(ok.status).toBe(206);
+        const stale = await w.call(`/library/items/${ID}/file`, { headers: { ...auth, range: "bytes=0-9", "if-range": '"other"' } });
+        expect(stale.status).toBe(200);
+        expect(await bytes(stale)).toEqual(data);
+    });
     it("works long after a session's seven days (it is not a session route)", async () => {
         seedFile();
         w.clock.t += 400 * 24 * 3600 * 1000;

@@ -101,7 +101,7 @@ export const NOTIFY_CALL_MS = 5000;
 
 export const CORS_METHODS = "GET, POST, OPTIONS";
 export const CORS_HEADERS = "content-type, range";
-export const CORS_EXPOSE = "content-range, content-length, accept-ranges";
+export const CORS_EXPOSE = "content-range, content-length, accept-ranges, etag, last-modified";
 
 export type StudioReply = { status: number; body: unknown };
 
@@ -413,11 +413,15 @@ export interface OriginalsBucket {
         body: ReadableStream;
         size: number;
         httpMetadata?: { contentType?: string };
+        httpEtag?: string;
+        uploaded?: Date;
     } | null>;
     // Metadata only (no body): the object's real size, null when it is missing.
     head(key: string): Promise<{
         size: number;
         httpMetadata?: { contentType?: string };
+        httpEtag?: string;
+        uploaded?: Date;
     } | null>;
     delete(key: string): Promise<void>;
 }

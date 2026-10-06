@@ -759,7 +759,11 @@ export async function libraryFile(d: AppDeps, id: string, request: Request): Pro
     if (!known) return jsonResponse(err(404, "error.library.missing"));
     const total = known.size;
 
-    const range = parseRange(request.headers.get("range"), total);
+    // If-Range that no longer matches the object: the whole file, not a stale slice
+    const ifRange = request.headers.get("if-range");
+    const lastModified = known.uploaded ? known.uploaded.toUTCString() : null;
+    const stale = ifRange !== null && ifRange !== known.httpEtag && ifRange !== lastModified;
+    const range = parseRange(stale ? null : request.headers.get("range"), total);
     if (range.kind === "unsatisfiable") {
         return jsonResponse(err(416, "error.studio.bad_range"), {
             "content-range": `bytes */${total}`,
@@ -774,6 +778,8 @@ export async function libraryFile(d: AppDeps, id: string, request: Request): Pro
         "cache-control": "private, max-age=3600",
         "content-length": String(length),
     });
+    if (known.httpEtag) headers.set("etag", known.httpEtag);
+    if (lastModified) headers.set("last-modified", lastModified);
     if (partial) {
         headers.set("content-range", `bytes ${range.offset}-${range.offset + range.length - 1}/${total}`);
     }

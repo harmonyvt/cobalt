@@ -225,7 +225,20 @@ export async function studioSource(
         "access-control-expose-headers": CORS_EXPOSE,
     };
 
-    const range = parseRange(request.headers.get("range"), size);
+    // validators come from the object itself
+    // (best effort: a failed or empty head just means no validators; the get
+    // below still decides 404/502 exactly as before)
+    let known: Awaited<ReturnType<OriginalsBucket["head"]>> = null;
+    try {
+        known = await bucket.head(row.r2_key);
+    } catch {
+        known = null;
+    }
+    const lastModified = known?.uploaded ? known.uploaded.toUTCString() : null;
+    const ifRange = request.headers.get("if-range");
+    const stale = ifRange !== null && ifRange !== known?.httpEtag && ifRange !== lastModified;
+
+    const range = parseRange(stale ? null : request.headers.get("range"), size);
     if (range.kind === "unsatisfiable") {
         return jsonResponse(studioErr(416, "error.studio.bad_range"), {
             "content-range": `bytes */${size}`,
@@ -238,6 +251,8 @@ export async function studioSource(
     const length = partial ? range.length : size;
     const headers = new Headers(base);
     headers.set("content-length", String(length));
+    if (known?.httpEtag) headers.set("etag", known.httpEtag);
+    if (lastModified) headers.set("last-modified", lastModified);
     if (partial) {
         headers.set(
             "content-range",
