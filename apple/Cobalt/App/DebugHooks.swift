@@ -54,7 +54,7 @@ enum DebugHooks {
             do {
                 let stored = try await model.store.add(
                     file: URL(fileURLWithPath: path), kind: .original, media: info, sessionID: nil, link: nil,
-                    remoteURL: nil, move: false)
+                    remoteURL: nil, move: false, keep: false)
                 log("seeded video \(stored.id) file=\(stored.fileURL != nil)")
             } catch {
                 log("seeding video failed: \(error)")
@@ -201,7 +201,7 @@ enum DetailDebug {
                 for (i, record) in media.renditions.enumerated() {
                     let wanted = isShowcase ? indexes.contains(i) : others
                     guard wanted, record.fileURL == nil else { continue }
-                    _ = try? await model.store.attach(file: record.kind == .webp ? webp : clip, to: record.id, move: false)
+                    _ = try? await model.store.attach(file: record.kind == .webp ? webp : clip, to: record.id, move: false, keep: false)
                 }
             }
             DebugHooks.log("detail files attached \(indexes.sorted())")

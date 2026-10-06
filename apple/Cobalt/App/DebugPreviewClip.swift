@@ -60,7 +60,7 @@ enum PreviewClip {
                    let media = model.pipeline.media {
                     kept.insert(sid)
                     _ = try? await model.store.add(
-                        file: clip, kind: .original, media: media, sessionID: sid, link: nil, remoteURL: nil, move: false)
+                        file: clip, kind: .original, media: media, sessionID: sid, link: nil, remoteURL: nil, move: false, keep: false)
                 }
                 try? await Task.sleep(for: .milliseconds(5))
             }

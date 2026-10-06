@@ -10,8 +10,9 @@ import Foundation
 /// - a clash with a file already in the folder: ` (2)`, ` (3)` ... before the extension.
 ///
 /// The name is decided once, when the file is copied. Renaming the media in cobalt later does NOT rename
-/// the file: the owner may have renamed or moved it in Finder already, and a file that changes name under
-/// the owner is worse than one that kept the name it was given.
+/// the file in the Mac's `FolderSync` (the owner may have renamed or moved it in Finder already). The offline
+/// store's visible folder (CONTRACT-OFFLINE.md decision 8) follows a rename only while the file still has the
+/// name cobalt gave it (`Record.givenName`); a file the owner renamed is never renamed again.
 enum FolderNaming {
     /// The longest stem (before the extension) in UTF-8 bytes; APFS takes 255 per name, and this leaves
     /// room for ` (99)` and the extension.
@@ -56,6 +57,12 @@ enum FolderNaming {
         while let last = clean.last, last == "." || last == " " { clean.removeLast() }
         if clean.isEmpty { clean = "cobalt" }
         return ext.isEmpty ? clean : "\(clean).\(ext)"
+    }
+
+    /// `unique` against the names already in a folder, compared case-insensitively (APFS and Files do): `taken`
+    /// holds those names lowercased (`OfflineFolder.names(in:)`).
+    static func unique(_ name: String, among taken: Set<String>) -> String {
+        unique(name) { taken.contains($0.lowercased()) }
     }
 
     /// `name`, or `stem (2).ext`, `stem (3).ext` ... the first one `taken` does not claim.

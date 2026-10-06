@@ -251,7 +251,7 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
         let media = await enriched(entry.media ?? MediaInfo(name: id, duration: nil, width: nil, height: nil, bytes: nil, isImage: false), session: id)
         do {
             let video = try await store.add(
-                file: file, kind: .original, media: media, sessionID: id, link: entry.link, remoteURL: nil, move: true)
+                file: file, kind: .original, media: media, sessionID: id, link: entry.link, remoteURL: nil, move: true, keep: true)
             pending.update(id, now: clock.now()) { $0.state = .stored(id: video.id) }
             await landed?()
         } catch {

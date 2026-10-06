@@ -129,8 +129,8 @@ public final class FolderSync {
         // The app only: every add to the store (a finished download, a refill) runs a pass. Whatever was
         // listening before (the photos album) keeps listening.
         let previous = store.onAdd
-        store.onAdd = { [weak self] video in
-            previous?(video)
+        store.onAdd = { [weak self] video, origin in
+            previous?(video, origin)
             Task { @MainActor [weak self] in await self?.reconcile() }
         }
         Task { @MainActor [weak self] in

@@ -180,6 +180,23 @@ struct StorageEvictionTests {
         #expect(rig.exists(only) && rig.exists(second))                      // both in the newest twelve
     }
 
+    @Test func keptFilesWaitingInTheCacheFolderAreNeverEvictedAndDoNotCountAgainstTheLimit() async throws {
+        // decision 4: the limit becomes the cache limit; a kept file (here still in files/) is exempt
+        let rig = try Rig(limit: 1_500)
+        var kept: [StoredVideo] = []
+        for _ in 0..<5 {
+            kept.append(try await rig.store.add(
+                file: try makeTempFile("k.mp4", bytes: 1_000), kind: .original, media: media, sessionID: nil, link: nil,
+                remoteURL: nil, move: true, keep: true))
+        }
+        _ = try await rig.addMany(20, bytes: 100)                            // 2 000 cache bytes against 1 500
+        #expect(kept.allSatisfy { v in rig.store.videos.first { $0.id == v.id }.map(rig.exists) == true })
+        let usage = rig.store.offlineUsage
+        #expect(usage.offline.bytes == 5_000 && usage.offline.count == 5)
+        #expect(usage.cache.bytes <= 1_500, "the cache obeys the limit by itself")
+        #expect(rig.store.usage.bytes == usage.offline.bytes + usage.cache.bytes)
+    }
+
     @Test func unlimitedNeverEvicts() async throws {
         let rig = try Rig(limit: nil)
         _ = try await rig.addMany(30, bytes: 1_000)

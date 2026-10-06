@@ -74,6 +74,10 @@ targets:
         # Live Activities (CONTRACT-LIVE.md 2.7); ignored on the Mac.
         NSSupportsLiveActivities: true
         NSSupportsLiveActivitiesFrequentUpdates: true
+        # The app's Documents folder is where kept videos live (CONTRACT-OFFLINE.md decision 2): Files labels it
+        # "On My iPhone › cobalt". Both keys are needed for the folder to show; ignored on the Mac.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         # iOS 26 continued processing: a run goes on after the owner leaves the app. The identifier
         # is `<bundle id>.run.*`; the launch handler registers the wildcard (ContinuedProcessing.swift).
         BGTaskSchedulerPermittedIdentifiers:

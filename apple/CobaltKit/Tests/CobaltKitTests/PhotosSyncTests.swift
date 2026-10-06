@@ -15,7 +15,8 @@ struct PhotosEnv {
     let directory: URL
 
     /// The sync starts off (an explicit "off" and "no webps"), so adding videos does not race the test: turn it
-    /// on with `settings.photosAlbumSync`. `defaultsOn` leaves both unset instead, as a fresh install is.
+    /// on with `settings.photosAlbumSync`. `defaultsOn` is an owner who turned the album on in Settings and left
+    /// "include webps" at its default (a fresh install now has the album OFF: `PhotosAlbumDefaultTests`).
     init(rw: PhotosReadWrite = .authorized, addOnly: PhotosAccess = .authorized, available: Bool = true,
          library sharedLibrary: FakePhotoLibrary? = nil, directory shared: URL? = nil,
          defaultsOn: Bool = false, isForeground: @escaping @MainActor () -> Bool = { true }) throws {
@@ -25,7 +26,9 @@ struct PhotosEnv {
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         settings = Settings(defaults: defaults, keychain: .memory())
-        if !defaultsOn {
+        if defaultsOn {
+            settings.photosAlbumSync = true
+        } else {
             settings.photosAlbumSync = false
             settings.photosSyncWebps = false
         }

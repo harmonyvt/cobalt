@@ -14,11 +14,11 @@ struct SyncSettingsTests {
         return Settings(defaults: defaults, keychain: .memory())
     }
 
-    @Test func defaultsAreOnFiveSecondsAndAlbumOn() {
+    @Test func defaultsAreOnFiveSecondsAndAlbumOff() {
         let s = settings()
         #expect(s.autoContinue == true)
         #expect(s.autoContinueSeconds == 5)
-        #expect(s.photosAlbumSync == true, "automatic is the owner's expectation (2026-10-05)")
+        #expect(s.photosAlbumSync == false, "kept videos live in Files; the album is opt-in (owner, 2026-10-06)")
         #expect(s.photosSyncWebps == true)
         #expect(Settings.autoContinueChoices == [3, 5, 10])
     }

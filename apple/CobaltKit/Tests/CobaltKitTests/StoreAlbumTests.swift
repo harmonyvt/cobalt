@@ -92,11 +92,11 @@ struct StoreLocationTests {
     }
 }
 
-// MARK: - The album is on by default and asks at the first save
+// MARK: - The album, once the owner has turned it on, asks at the first save
 
 @MainActor
 struct DefaultAlbumTests {
-    @Test func aFreshInstallIsOnAndExplicitAnswersSurvive() throws {
+    @Test func anOwnerWhoTurnedItOnHasItOnAndCanTurnItOff() throws {
         let env = try PhotosEnv(defaultsOn: true)
         #expect(env.settings.photosAlbumSync && env.settings.photosSyncWebps)
         #expect(env.sync.status.enabled)

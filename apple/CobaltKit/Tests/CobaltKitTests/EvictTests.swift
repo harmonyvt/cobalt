@@ -162,4 +162,18 @@ struct EvictTests {
         #expect(refilled.posterURL == stored.posterURL)
         #expect(rig.store.videos.count == 1 && rig.store.usage.count == 1)
     }
+
+    @Test func evictingAKeptEntryDropsItsFileToo() async throws {
+        // decision 10: "remove offline copy" is the owner's own choice, kept or cached
+        let rig = try Rig()
+        let kept = try await rig.store.add(
+            file: try makeTempFile("clip.mp4", bytes: 800), kind: .original, media: info, sessionID: nil, link: nil,
+            remoteURL: nil, move: true, keep: true)
+        #expect(kept.keep && kept.isOffline && kept.place == .cache, "no visible root here: kept and waiting in files/")
+        let file = try #require(kept.fileURL)
+        #expect(await rig.store.evict(kept.id))
+        let after = try #require(rig.store.videos.first { $0.id == kept.id })
+        #expect(!rig.exists(file) && after.fileURL == nil && !after.keep && !after.isOffline && after.posterURL != nil)
+        #expect(rig.store.offlineUsage.offline.count == 0)
+    }
 }

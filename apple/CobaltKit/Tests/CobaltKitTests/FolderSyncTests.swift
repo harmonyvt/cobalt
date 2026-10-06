@@ -400,7 +400,7 @@ struct FolderSyncTests {
         let env = try await FolderEnv(launchedLongAgo: true)
         var heard = 0
         let ours = env.store.onAdd
-        env.store.onAdd = { v in ours?(v); heard += 1 }
+        env.store.onAdd = { v, o in ours?(v, o); heard += 1 }
         try await env.add(session: "S1")
         #expect(heard == 1)
         await env.sync.reconcile()

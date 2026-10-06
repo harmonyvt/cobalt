@@ -458,7 +458,7 @@ extension Pipeline {
             guard !Task.isCancelled else { try? FileManager.default.removeItem(at: file); return nil }
             return try? await store.add(
                 file: file, kind: .original, media: m, sessionID: id, link: linkURL, remoteURL: nil, move: true,
-                mediaID: target)
+                mediaID: target, keep: true)
         }
         keepRequest = request
         ctx.continued?.pipelineChanged(self)
@@ -508,7 +508,8 @@ extension Pipeline {
         setState(.reading(developed: 0, of: Pipeline.frameCount))
         try await runFrames(.local(local), duration: m.duration)
         let video = try await ctx.store.add(
-            file: local, kind: .original, media: m, sessionID: nil, link: info.url, remoteURL: nil, move: true)
+            file: local, kind: .original, media: m, sessionID: nil, link: info.url, remoteURL: nil, move: true,
+            keep: ctx.settings.keepVideosOnDevice)                         // off: the cache (decision 5)
         stored = video
         pinStored(video.id)
         syncStoreTitle()
@@ -629,7 +630,7 @@ extension Pipeline {
             do {
                 return try await store.add(
                     file: source, kind: .original, media: info, sessionID: id, link: nil, remoteURL: nil, move: true,
-                    mediaID: target)
+                    mediaID: target, keep: true)
             } catch {
                 return nil                                        // `store.add` logged why
             }
@@ -670,7 +671,8 @@ extension Pipeline {
                             name: "\(base)-\(item.id)", duration: probed?.duration, width: probed?.width,
                             height: probed?.height, bytes: p.fileBytes(local), isImage: false)
                         _ = try? await p.ctx.store.add(
-                            file: local, kind: .original, media: m, sessionID: nil, link: runLink, remoteURL: item.url, move: true)
+                            file: local, kind: .original, media: m, sessionID: nil, link: runLink, remoteURL: item.url, move: true,
+                            keep: true)
                     } else {
                         try? FileManager.default.removeItem(at: local)
                     }
@@ -787,7 +789,7 @@ extension Pipeline {
                 }
                 _ = try await ctx.store.add(
                     file: file, kind: .webp, media: info, sessionID: sid, link: linkURL, remoteURL: r.url, move: true,
-                    mediaID: targetMediaID, clip: clip)
+                    mediaID: targetMediaID, clip: clip, keep: ctx.settings.keepVideosOnDevice)
                 syncStoreTitle()
             }
         } catch is CancellationError {

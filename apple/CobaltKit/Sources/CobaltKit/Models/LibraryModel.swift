@@ -339,7 +339,7 @@ public final class LibraryModel {
         // An evicted entry takes the download back (and becomes the newest for eviction) instead of
         // leaving a second copy behind; with "keep videos on this iphone" off it stays a temp file.
         if let stored, ctx.settings.keepVideosOnDevice,
-           let refilled = try? await ctx.store.attach(file: downloaded, to: stored.id, move: true),
+           let refilled = try? await ctx.store.attach(file: downloaded, to: stored.id, move: true, keep: true),
            let url = refilled.fileURL {
             return (url, false)
         }

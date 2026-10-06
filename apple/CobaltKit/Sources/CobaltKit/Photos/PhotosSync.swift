@@ -113,7 +113,7 @@ public final class PhotosSync {
             isForeground: isForeground)
         base.access = available ? Self.access(of: library) : .unavailable
         // The app only: every add to the store (a finished download, a refill) runs the sync.
-        store.onAdd = { [weak self] _ in
+        store.onAdd = { [weak self] _, _ in
             Task { @MainActor [weak self] in await self?.reconcile() }
         }
         recount()

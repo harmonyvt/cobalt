@@ -209,6 +209,10 @@ public final class Settings {
         set { withMutation(keyPath: \.webpWidth) { defaults.set(newValue, forKey: "webpWidth") } }
     }
 
+    /// "keep new saves offline" (CONTRACT-OFFLINE.md decision 5; the key keeps its old name so the owner's answer
+    /// carries over). ON by default. On: every original and webp this device saves lands kept (in Files on
+    /// iOS). Off: originals are not downloaded, and webps and plain-cobalt saves land in the cache.
+    /// Turning it off deletes nothing.
     public var keepVideosOnDevice: Bool {
         get {
             access(keyPath: \.keepVideosOnDevice)
@@ -217,8 +221,9 @@ public final class Settings {
         set { withMutation(keyPath: \.keepVideosOnDevice) { defaults.set(newValue, forKey: "keepVideosOnDevice") } }
     }
 
-    /// How much the device keeps offline; .gb5 by default. Stored in the app-group defaults, where
-    /// `OfflineStore` re-reads it inside every enforcement (so the share extension obeys it too).
+    /// The CACHE limit (CONTRACT-OFFLINE.md decision 4); .gb5 by default. It bounds only files nobody asked
+    /// to keep: kept files are never evicted and do not count against it. Stored in the app-group defaults,
+    /// where `OfflineStore` re-reads it inside every enforcement (so the share extension obeys it too).
     public var storageLimit: StorageLimit {
         get {
             access(keyPath: \.storageLimit)
@@ -280,14 +285,18 @@ public final class Settings {
 
     nonisolated public static let autoContinueChoices: [Int] = [3, 5, 10]
 
-    /// "save to a photos album": ON until the owner turns it off (2026-10-05: automatic is what the owner
-    /// expects). An install that never touched the toggle has no stored value and so reads on; the
-    /// system's permission prompt appears the first time something is about to be saved
-    /// (`PhotosSync`), not at launch. `PhotosSync.enable()` / `disable()` store an explicit answer.
+    /// "save to a photos album": OFF until the owner turns it on (CONTRACT-OFFLINE.md decision 13, owner's
+    /// call 2026-10-06: kept videos live in Files, so new saves no longer go to Photos by themselves; the
+    /// manual "save to photos" stays, and nothing already in the album is touched). Before 2026-10-06 an
+    /// install with no stored value read ON. That needs no migration: only `PhotosSync.enable()` and
+    /// `disable()` (the owner's own taps) ever wrote this key, so a stored `true` is always an explicit
+    /// "on" (it stays on) and a stored `false` an explicit "off", while an install that never touched the
+    /// toggle has no value and now reads off. The system's permission prompt appears when the owner turns
+    /// it on, not at launch. Kept as a key so it can be switched back on.
     public var photosAlbumSync: Bool {
         get {
             access(keyPath: \.photosAlbumSync)
-            return defaults.object(forKey: "photosAlbumSync") as? Bool ?? true
+            return defaults.object(forKey: "photosAlbumSync") as? Bool ?? false
         }
         set { withMutation(keyPath: \.photosAlbumSync) { defaults.set(newValue, forKey: "photosAlbumSync") } }
     }

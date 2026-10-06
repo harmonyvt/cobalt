@@ -34,12 +34,24 @@ public struct StoredVideo: Sendable, Codable, Equatable, Identifiable {
     /// the same value (`OfflineStore.setTitle(_:media:)`); nil = no custom title, the default shows.
     /// `decodeIfPresent`: an index written before titles existed decodes as nil.
     public var title: String?
+    /// Where the file is (CONTRACT-OFFLINE.md decision 3): `.cache` is the hidden `files/` folder (a kept file
+    /// that is waiting to move in is there too), `.offline` the visible folder (Files on iOS). Nil: there is
+    /// no file on this device. `fileURL` can be nil while `place == .offline`: the share extension cannot open
+    /// the app's Documents.
+    public var place: Place?
+    /// The owner wants this on the device: never evicted by the cache limit. A record can be kept and have no
+    /// file yet (a download is on its way).
+    public var keep: Bool
+    /// The file is here and the owner keeps it.
+    public var isOffline: Bool { keep && place != nil }
+
+    public enum Place: String, Sendable, Codable { case cache, offline }
 
     public init(
         id: String, kind: Kind, fileURL: URL?, posterURL: URL?, name: String, duration: Double?,
         width: Int?, height: Int?, bytes: Int64, sessionID: String?, link: URL?, remoteURL: URL?,
         createdAt: Date, previewFrameURLs: [URL] = [], publicURL: URL? = nil, mediaID: String? = nil,
-        clip: WebpClip? = nil, title: String? = nil
+        clip: WebpClip? = nil, title: String? = nil, place: Place? = nil, keep: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -59,6 +71,9 @@ public struct StoredVideo: Sendable, Codable, Equatable, Identifiable {
         self.mediaID = mediaID.flatMap { $0.isEmpty ? nil : $0 } ?? id
         self.clip = clip
         self.title = title
+        // a file with no stated place is a cache file (every pre-offline caller)
+        self.place = place ?? (fileURL != nil ? .cache : nil)
+        self.keep = keep
     }
 }
 
@@ -79,7 +94,9 @@ extension StoredVideo {
             publicURL: try c.decodeIfPresent(URL.self, forKey: .publicURL),
             mediaID: try c.decodeIfPresent(String.self, forKey: .mediaID),
             clip: try c.decodeIfPresent(WebpClip.self, forKey: .clip),
-            title: try c.decodeIfPresent(String.self, forKey: .title))
+            title: try c.decodeIfPresent(String.self, forKey: .title),
+            place: try c.decodeIfPresent(Place.self, forKey: .place),
+            keep: try c.decodeIfPresent(Bool.self, forKey: .keep) ?? false)
     }
 }
 
@@ -107,6 +124,13 @@ public enum OfflineStoreError: Error, Sendable, Equatable {
 /// `root/posters`, incoming files under `root/inbox`, and the index in `root/index.json` (file
 /// names are stored relative to `root` so a moved container still resolves).
 ///
+/// **Two tiers** (CONTRACT-OFFLINE.md decision 3). A record the owner keeps (`keep`) has its file in the
+/// **visible root** (`visibleRoot`: the app's `Documents`, "On My iPhone › cobalt" in Files; `visiblePath`,
+/// relative to it) or, until it can move in, in `files/`. Anything else is **cache** in `files/`, which the
+/// storage limit may take. `fileName` and `visiblePath` are never both set; `visiblePath != nil` implies
+/// `keep`. A file in the visible root carries an extended attribute with its id (`OfflineTag`), so the
+/// owner's renames and moves in Files are followed (`scanVisibleRoot()`, `OfflineFolder.reconcile`).
+///
 /// Next to each video's poster sits its **flipbook**: `root/previews/<id>-NN.jpg`, ~12 evenly spaced
 /// frames (<= 160 px long edge) the orbit plays for items that are not worth a real player. They are
 /// made when a video is added (animated webps too; still images get none), or later by
@@ -127,6 +151,16 @@ public enum OfflineStoreError: Error, Sendable, Equatable {
 @MainActor @Observable
 public final class OfflineStore {
     @ObservationIgnored let root: URL
+    /// The visible folder for kept files: `Documents` in the iOS app process; nil in every extension and on the
+    /// Mac (wave 1), where kept files wait in `files/`. Tests inject a temp directory.
+    @ObservationIgnored public let visibleRoot: URL?
+    @ObservationIgnored let ops: any OfflineFileOps
+    /// Where `offline.json` (the migration's marker) goes; nil in tests.
+    @ObservationIgnored let syncDirectory: URL?
+    /// Whether another part of the app still holds this studio session (a live share job or a pending
+    /// original): promotion leaves such a record where it is. Set by `shared()`.
+    @ObservationIgnored var sessionIsHeld: (@MainActor (String) -> Bool)?
+    @ObservationIgnored var watcher: OfflineFolderWatcher?
     @ObservationIgnored let tools: any MediaTools
     /// Where the effective limit is read (the app group's defaults in the app and the extension).
     @ObservationIgnored let defaults: UserDefaults
@@ -134,13 +168,15 @@ public final class OfflineStore {
     @ObservationIgnored let now: @Sendable () -> Date
     /// Previews show "13 videos · 54 MB" without 13 files on disk: this is added to what is.
     @ObservationIgnored var usageBase: StorageUsage?
+    /// Previews: what `offlineUsage` shows without files on disk (added to what is).
+    @ObservationIgnored var offlineUsageBase: OfflineUsage?
     /// Called after every `add` and `attach` that landed (the app's photos sync hooks in here; the
     /// share extension never sets it).
-    @ObservationIgnored var onAdd: (@MainActor (StoredVideo) -> Void)?
+    @ObservationIgnored var onAdd: (@MainActor (StoredVideo, AddOrigin) -> Void)?
     /// Entries a running pipeline reads frames from or plays: never evicted while pinned.
-    @ObservationIgnored private var pins: [String: Int] = [:]
+    @ObservationIgnored private(set) var pins: [String: Int] = [:]
     /// The index as last read or written; `usage` sums it, with no disk I/O.
-    @ObservationIgnored private var records: [Record] = []
+    @ObservationIgnored private(set) var records: [Record] = []
     /// Flipbooks being made right now, by entry id: a second `ensurePreviewFrames` joins the first.
     @ObservationIgnored private var previewJobs: [String: Task<Void, Never>] = [:]
     /// Entries whose flipbook could not be made this session (an unreadable file): not retried on every ask.
@@ -161,9 +197,13 @@ public final class OfflineStore {
 
     init(
         root: URL, tools: any MediaTools, defaults: UserDefaults = AppGroup.defaults(),
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() }, visibleRoot: URL? = nil,
+        ops: any OfflineFileOps = SystemFileOps(), syncDirectory: URL? = nil
     ) {
         self.root = root
+        self.visibleRoot = visibleRoot
+        self.ops = ops
+        self.syncDirectory = syncDirectory
         self.tools = tools
         self.defaults = defaults
         self.now = now
@@ -176,7 +216,19 @@ public final class OfflineStore {
     /// `<app group>/Videos`, else `Application Support/Videos`.
     public static func shared() -> OfflineStore {
         if let s = sharedInstance { return s }
-        let s = OfflineStore(root: AppGroup.directory("Videos"))
+        let s = OfflineStore(
+            root: AppGroup.directory("Videos"), tools: SystemMediaTools(), visibleRoot: OfflineFolder.defaultVisibleRoot(),
+            syncDirectory: AppGroup.directory("Sync"))
+        s.sessionIsHeld = { session in
+            if PendingOriginals.shared().isLive(session: session) { return true }
+            return SharedJobStore.shared().all().contains { job in
+                guard job.sessionID == session else { return false }
+                switch job.stage {
+                case .saving, .rendering, .uploadInterrupted: return true
+                default: return false
+                }
+            }
+        }
         sharedInstance = s
         s.logRoot()
         return s
@@ -212,6 +264,18 @@ public final class OfflineStore {
         return u
     }
 
+    /// The two tiers, from the index (no disk I/O): `offline` is the kept files wherever they wait, `cache` what
+    /// the limit governs (files nobody asked to keep, and the posters and flipbooks of media with nothing kept).
+    public var offlineUsage: OfflineUsage {
+        _ = videos                                              // registers the observation
+        var u = Self.offlineUsage(of: records)
+        if let base = offlineUsageBase {
+            u.offline.count += base.offline.count; u.offline.bytes += base.offline.bytes; u.offline.mediaCount += base.offline.mediaCount
+            u.cache.count += base.cache.count; u.cache.bytes += base.cache.bytes; u.cache.mediaCount += base.cache.mediaCount
+        }
+        return u
+    }
+
     /// What the store enforces now (the defaults' `storageLimit`); nil = no limit.
     public var limitBytes: Int64? { LimitDefaults.bytes(defaults) }
 
@@ -224,15 +288,17 @@ public final class OfflineStore {
     /// What `setLimit(limit)` would evict right now, in bytes (the "this removes about 1.2 GB" confirm).
     public func bytesToFree(for limit: Int64?) -> Int64 {
         var copy = Self.readRecords(root: root)
-        let before = Self.usage(of: copy).bytes
+        let before = Self.offlineUsage(of: copy).cache.bytes
         _ = Self.enforce(&copy, limit: limit, protecting: pinnedIDs)
-        return max(0, before - Self.usage(of: copy).bytes)
+        return max(0, before - Self.offlineUsage(of: copy).cache.bytes)
     }
 
-    /// Removes every video, poster and record (except entries a running pipeline pins). The server
-    /// keeps its copies.
+    /// "delete everything": removes every video, poster and record (except entries a running pipeline pins),
+    /// the kept files in the visible folder included. The server keeps its copies. The cache's own
+    /// "clear cache" is `clearCache()`.
     public func clearAll() async {
         let keep = pinnedIDs
+        await purgeVisible(of: records.filter { !keep.contains($0.id) })
         var gone: [Record] = []
         guard let merged = try? Self.mutate(root: root, { records in
             gone = records.filter { !keep.contains($0.id) }
@@ -243,6 +309,23 @@ public final class OfflineStore {
                 files: gone.compactMap(\.fileName), posters: gone.compactMap(\.posterName),
                 previews: gone.flatMap { $0.previewNames ?? [] }),
             root: root)
+        adopt(merged)
+    }
+
+    /// "clear cache" (decision 4): drops the files nobody asked to keep. Every record, poster and flipbook and
+    /// every kept file (in the visible folder or waiting in `files/`) stays. Entries a running pipeline pins stay.
+    public func clearCache() async {
+        let pinned = pinnedIDs
+        var names: [String] = []
+        guard let merged = try? Self.mutate(root: root, { records in
+            for i in records.indices where records[i].keep != true && !pinned.contains(records[i].id) {
+                if let name = records[i].fileName {
+                    names.append(name)
+                    records[i].fileName = nil
+                }
+            }
+        }) else { return }
+        Self.delete(Eviction(files: names), root: root)
         adopt(merged)
     }
 
@@ -287,18 +370,26 @@ public final class OfflineStore {
 
     // MARK: adding
 
+    /// Stores a file as a new record, or folds it into the record that is the same item (`duplicateIndex`).
+    /// `keep` (no default: every caller decides) is the owner's intent (decision 5): kept files never leave
+    /// to the limit, and with a visible root the file is moved in before this returns (tagged, `fileName == nil`);
+    /// without one (the extension, the Mac) it waits in `files/` and `reload()` promotes it. `createdAt` is the
+    /// item's own date when it has one (a library post kept offline keeps the server's, so an old post does not
+    /// jump to the front of the orbit); `origin` is passed on to `onAdd`.
     public func add(
         file: URL, kind: StoredVideo.Kind, media: MediaInfo, sessionID: String?,
         link: URL?, remoteURL: URL?, move: Bool, publicURL: URL? = nil,
-        mediaID: String? = nil, clip: WebpClip? = nil
+        mediaID: String? = nil, clip: WebpClip? = nil, keep: Bool, createdAt: Date? = nil,
+        origin: AddOrigin = .save
     ) async throws -> StoredVideo {
         let fm = FileManager.default
         let id = UUID().uuidString.lowercased()
         let ext = file.pathExtension.isEmpty ? (kind == .webp ? "webp" : "mp4") : file.pathExtension.lowercased()
         var fileName = "\(id).\(ext)"
         var destination: URL
+        let backedUp = Self.hasServerCopy(kind: kind, sessionID: sessionID, remoteURL: remoteURL, publicURL: publicURL)
         do {
-            destination = try await place(file, as: fileName, move: move)
+            destination = try await place(file, as: fileName, move: move, excludeFromBackup: backedUp)
         } catch {
             Telemetry.log(.error, .store, "store add failed", data: Self.failureData(step: "place", error))
             throw error
@@ -327,11 +418,11 @@ public final class OfflineStore {
         let record = Record(
             id: id, kind: kind, fileName: fileName, posterName: hasPoster ? posterName : nil,
             name: media.name, duration: media.duration, width: media.width, height: media.height,
-            bytes: size, sessionID: sessionID, link: link, remoteURL: remoteURL, createdAt: stamp,
+            bytes: size, sessionID: sessionID, link: link, remoteURL: remoteURL, createdAt: createdAt ?? stamp,
             addedAt: stamp, posterBytes: hasPoster ? Self.fileSize(posterURL) : nil,
             previewNames: flipbook.names.isEmpty ? nil : flipbook.names,
             previewBytes: flipbook.names.isEmpty ? nil : flipbook.bytes, publicURL: publicURL,
-            mediaID: nil, clip: kind == .webp ? clip : nil)
+            mediaID: nil, clip: kind == .webp ? clip : nil, keep: keep)
 
         // The identity check runs inside the coordinated index write (re-read from disk first), so
         // two adds of the same item, in this process or the other one, can never both insert.
@@ -364,12 +455,16 @@ public final class OfflineStore {
             throw error
         }
         Self.delete(discard, root: root)
-        let added = result.video(root: root)
+        // A kept file goes into the visible folder now (decision 3); where that cannot happen (no root, a record
+        // in use, a failure) it stays kept in `files/` and `reload()` tries again.
+        if keep, visibleRoot != nil { await promote(only: [survivor]) }
+        let added = videos.first { $0.id == survivor } ?? result.video(root: root, visibleRoot: visibleRoot)
         Telemetry.log(.info, .store, survivor == id ? "store add" : "store add merged", data: [
             "kind": .string(kind.rawValue), "bytes": .bytes(size), "session": .bool(sessionID != nil),
             "poster": .bool(hasPoster), "records": .int(records.count), "root": .string(AppGroup.location.kind.rawValue),
+            "keep": .bool(keep), "origin": .string("\(origin)"),
         ])
-        onAdd?(added)
+        onAdd?(added, origin)
         return added
     }
 
@@ -411,13 +506,16 @@ public final class OfflineStore {
         old.clip = old.clip ?? new.clip
 
         var discard = Eviction()
-        if old.fileName == nil, let name = new.fileName {
+        if old.fileName == nil, old.visiblePath == nil, let name = new.fileName {
             old.fileName = name
             old.bytes = new.bytes
             old.addedAt = new.addedAt
+            if old.keep == nil { old.keep = new.keep ?? false }       // a new-build save is never "legacy"
         } else if let name = new.fileName {
             discard.files.append(name)
         }
+        // keeping is the owner's intent: it is never lost to a duplicate that was not kept
+        if new.keep == true { old.keep = true }
         if old.posterName == nil, let name = new.posterName {
             old.posterName = name
             old.posterBytes = new.posterBytes
@@ -436,18 +534,32 @@ public final class OfflineStore {
     /// Refills an evicted entry with a fresh download (library "save", local playback) and makes it
     /// the newest for eviction. The entry keeps its id, poster and metadata; the file goes under a
     /// new name, so a delete queued by another process for the old one can never hit it.
-    public func attach(file: URL, to id: String, move: Bool) async throws -> StoredVideo {
+    ///
+    /// `keep` is the owner's intent, as in `add` (a kept file moves into the visible folder before this returns);
+    /// a record that was already kept stays kept. A record that already has its file in the visible folder is left
+    /// as it is (the new file is dropped when `move`): attaching never replaces a kept file.
+    public func attach(
+        file: URL, to id: String, move: Bool, keep: Bool, origin: AddOrigin = .save
+    ) async throws -> StoredVideo {
         let fm = FileManager.default
         guard let existing = Self.readRecords(root: root).first(where: { $0.id == id }) else {
             Telemetry.log(.warn, .store, "store attach failed", data: ["step": "lookup", "reason": "not found"])
             throw OfflineStoreError.notFound
+        }
+        if existing.visiblePath != nil, let current = videos.first(where: { $0.id == id }) {
+            if move { try? fm.removeItem(at: file) }
+            Telemetry.log(.info, .store, "store attach skipped", data: ["reason": "already kept"])
+            return current
         }
         let ext = file.pathExtension.isEmpty
             ? (existing.kind == .webp ? "webp" : "mp4") : file.pathExtension.lowercased()
         var fileName = "\(id)-\(UUID().uuidString.prefix(6).lowercased()).\(ext)"
         var destination: URL
         do {
-            destination = try await place(file, as: fileName, move: move)
+            destination = try await place(
+                file, as: fileName, move: move,
+                excludeFromBackup: Self.hasServerCopy(
+                    kind: existing.kind, sessionID: existing.sessionID, remoteURL: existing.remoteURL, publicURL: existing.publicURL))
         } catch {
             Telemetry.log(.error, .store, "store attach failed", data: Self.failureData(step: "place", error))
             throw error
@@ -485,6 +597,8 @@ public final class OfflineStore {
                 found = true
                 replaced = records[i].fileName
                 records[i].fileName = fileName
+                records[i].visiblePath = nil
+                records[i].keep = keep ? true : (records[i].keep ?? false)
                 records[i].bytes = size
                 records[i].addedAt = stamp
                 records[i].posterName = posterName
@@ -507,9 +621,12 @@ public final class OfflineStore {
         if let replaced, replaced != fileName {
             try? fm.removeItem(at: root.appendingPathComponent("files/\(replaced)"))
         }
-        let refilled = result.video(root: root)
-        Telemetry.log(.info, .store, "store attach", data: ["kind": .string(existing.kind.rawValue), "bytes": .bytes(size)])
-        onAdd?(refilled)
+        if keep, visibleRoot != nil { await promote(only: [id]) }
+        let refilled = videos.first { $0.id == id } ?? result.video(root: root, visibleRoot: visibleRoot)
+        Telemetry.log(.info, .store, "store attach", data: [
+            "kind": .string(existing.kind.rawValue), "bytes": .bytes(size), "keep": .bool(keep), "origin": .string("\(origin)"),
+        ])
+        onAdd?(refilled, origin)
         return refilled
     }
 
@@ -525,7 +642,7 @@ public final class OfflineStore {
 
     /// Moves or copies `file` to `root/files/<name>` off the main actor: a 200 MB copy must not
     /// stall the orbit.
-    private func place(_ file: URL, as name: String, move: Bool) async throws -> URL {
+    private func place(_ file: URL, as name: String, move: Bool, excludeFromBackup: Bool = false) async throws -> URL {
         let filesDir = root.appendingPathComponent("files", isDirectory: true)
         try FileManager.default.createDirectory(at: filesDir, withIntermediateDirectories: true)
         let destination = filesDir.appendingPathComponent(name)
@@ -541,6 +658,8 @@ public final class OfflineStore {
             } else {
                 try FileManager.default.copyItem(at: file, to: destination)
             }
+            // the server is this file's backup (decision 14)
+            if excludeFromBackup { OfflineFolder.excludeFromBackup(destination) }
         }.value
         return destination
     }
@@ -580,6 +699,7 @@ public final class OfflineStore {
     }
 
     public func remove(_ id: String) async {
+        await purgeVisible(of: records.filter { $0.id == id })
         var removed: Record?
         guard let records = try? Self.mutate(root: root, { records in
             guard let index = records.firstIndex(where: { $0.id == id }) else { return }
@@ -601,6 +721,8 @@ public final class OfflineStore {
     @discardableResult
     public func removeMedia(_ id: String) async -> Bool {
         let pinned = pinnedIDs
+        let current = records.filter { $0.media == id }
+        if !current.contains(where: { pinned.contains($0.id) }) { await purgeVisible(of: current) }
         var gone: [Record] = []
         var blocked = false
         guard let merged = try? Self.mutate(root: root, { records in
@@ -646,14 +768,24 @@ public final class OfflineStore {
     /// extension may write too). `title` is cleaned (`MediaTitle.clean`); nil, empty or blank clears it.
     /// Unchanged records are not rewritten; an unknown media is a no-op. `videos` and `media` update
     /// only when something changed.
+    ///
+    /// The kept files of the media follow the new title (decision 8): see `followTitle(media:)`.
     public func setTitle(_ title: String?, media id: String) async {
-        writeTitle(title, media: id)
+        let (_, changed) = applyTitle(title, media: id)
+        if changed { await followTitle(media: id) }
     }
 
     /// `setTitle` for callers that must not suspend (an optimistic rename, a run). False when the index
-    /// could not be written (the caller keeps the title in memory).
+    /// could not be written (the caller keeps the title in memory). A change renames the kept files in a
+    /// task of its own.
     @discardableResult
     func writeTitle(_ title: String?, media id: String) -> Bool {
+        let (written, changed) = applyTitle(title, media: id)
+        if changed, visibleRoot != nil { Task { await followTitle(media: id) } }
+        return written
+    }
+
+    private func applyTitle(_ title: String?, media id: String) -> (written: Bool, changed: Bool) {
         let cleaned = title.flatMap(MediaTitle.clean)
         var touched = 0
         guard let merged = try? Self.mutate(root: root, { records in
@@ -661,16 +793,17 @@ public final class OfflineStore {
                 records[i].title = cleaned
                 touched += 1
             }
-        }) else { return false }
+        }) else { return (false, false) }
         if touched > 0 { adopt(merged) }
-        return true
+        return (true, touched > 0)
     }
 
-    /// "keep videos on this iphone" turned off.
+    /// Drops every file nobody asked to keep and keeps every record and poster (the old "keep videos" off). Kept
+    /// files stay: turning "keep new saves offline" off deletes nothing (decision 5).
     public func dropFilesKeepingPosters() async {
         var names: [String] = []
         guard let records = try? Self.mutate(root: root, { records in
-            for i in records.indices {
+            for i in records.indices where records[i].keep != true {
                 if let name = records[i].fileName {
                     names.append(name)
                     records[i].fileName = nil
@@ -684,27 +817,59 @@ public final class OfflineStore {
     /// An entry a running pipeline reads frames from or plays right now (its file must stay).
     public func isInUse(_ id: String) -> Bool { pins[id] != nil }
 
-    /// "remove offline copy": drops the video file of one entry and keeps its record, poster and
-    /// flipbook, exactly what the storage limit does to the oldest entries (the library and the orbit
-    /// still show it; `attach` refills it with a fresh download). It is the owner's own choice, so the
-    /// newest-entries protection of the limit does not apply; an entry a running pipeline pins
-    /// (`isInUse`) is never evicted. `videos` and `usage` update.
-    /// Returns whether a file was dropped: false for an unknown id, an entry with no file (already
-    /// evicted, nothing to free) and an entry in use.
+    /// "remove offline copy": drops the video file of one entry, kept or cached, in the visible folder or hidden
+    /// (`removeItem`, not the trash), and keeps its record, poster and flipbook (the library and the orbit still
+    /// show it; `attach` refills it with a fresh download). `keep` becomes false. It is the owner's own choice,
+    /// so the newest-entries protection of the limit does not apply; an entry a running pipeline pins
+    /// (`isInUse`) is never removed.
+    /// Returns whether a file was dropped: false for an unknown id, an entry with no file (nothing to free; a
+    /// wish to keep it is cleared all the same) and an entry in use.
     @discardableResult
-    public func evict(_ id: String) async -> Bool {
-        guard !isInUse(id) else { return false }
+    public func removeOfflineCopy(_ id: String) async -> Bool {
+        guard !isInUse(id), let current = records.first(where: { $0.id == id }) else { return false }
+        if let path = current.visiblePath {
+            guard let visibleRoot else { return false }               // an extension never touches the visible folder
+            // The file goes first: a record without a path but with a tagged file still in the root would be
+            // "restored" by the next scan.
+            let ops = ops
+            let removed = await OfflineFolderGate.shared.exclusive {
+                await OfflineFolder.removeVisibleOffMain(root: visibleRoot, path: path, ops: ops)
+            }
+            guard removed else { return false }
+        }
         var name: String?
+        var had = false
         guard let merged = try? Self.mutate(root: root, { records in
-            guard let i = records.firstIndex(where: { $0.id == id }), let file = records[i].fileName else { return }
-            name = file
+            guard let i = records.firstIndex(where: { $0.id == id }) else { return }
+            had = records[i].fileName != nil || records[i].visiblePath != nil
+            name = records[i].fileName
             records[i].fileName = nil
+            records[i].visiblePath = nil
+            records[i].givenName = nil
+            records[i].keep = false
         }) else { return false }
-        // The index is written first; only then does the file go (a reader never sees a record
+        // The index is written first; only then does the cache file go (a reader never sees a record
         // pointing at a deleted file).
         if let name { Self.delete(Eviction(files: [name]), root: root) }
         adopt(merged)
-        return name != nil
+        return had
+    }
+
+    /// The old name of `removeOfflineCopy(_:)`.
+    @discardableResult
+    public func evict(_ id: String) async -> Bool { await removeOfflineCopy(id) }
+
+    /// Deletes the visible files of `gone` (a record is being removed for good). Before the index write, never
+    /// after: a tagged file with no record would be rebuilt by the next scan.
+    private func purgeVisible(of gone: [Record]) async {
+        guard let visibleRoot else { return }
+        let paths = gone.compactMap(\.visiblePath)
+        guard !paths.isEmpty else { return }
+        let ops = ops
+        _ = await OfflineFolderGate.shared.exclusive {
+            for path in paths { _ = await OfflineFolder.removeVisibleOffMain(root: visibleRoot, path: path, ops: ops) }
+            return true
+        }
     }
 
     /// Previews: writes poster-less, file-less entries into the index so `reload()` keeps them.
@@ -723,17 +888,27 @@ public final class OfflineStore {
 
     /// Re-reads the index (the share extension may have written), tidies leftovers and enforces the
     /// limit (the app calls this on every foreground, so it also covers app launch).
+    ///
+    /// With a visible root it also runs, in this order: the scan of the visible folder (decision 7), the
+    /// migration (section 2) and the promotion of kept files that wait in `files/`.
     public func reload() async {
         adopt(Self.reconciled(root: root))
         Self.purgeInbox(root: root, olderThan: Self.inboxLifetime)
         Self.purgeOrphanPreviews(
             root: root, referenced: Set(records.flatMap { $0.previewNames ?? [] }), olderThan: Self.inboxLifetime)
+        if visibleRoot != nil {
+            // The scan comes first: a file the last run moved but did not get to index (section 2.3) is adopted
+            // by its tag here, and must not be moved a second time.
+            await scanVisibleRoot()
+            await runMigrationIfNeeded()
+            await promote(only: nil, respectHolds: true)
+        }
         await enforceLimit()
     }
 
-    private func adopt(_ merged: [Record]) {
+    func adopt(_ merged: [Record]) {
         records = merged
-        videos = merged.map { $0.video(root: root) }
+        videos = merged.map { $0.video(root: root, visibleRoot: visibleRoot) }
         media = StoredMedia.build(from: videos)
     }
 
@@ -741,7 +916,7 @@ public final class OfflineStore {
     /// limit is applied to the result, all before the index is written. The evicted files are
     /// deleted only after that write.
     @discardableResult
-    private func commit(
+    func commit(
         protecting extra: @autoclosure () -> Set<String> = [], enforce: Bool = true, _ body: (inout [Record]) -> Void
     ) throws -> [Record] {
         let pinned = pinnedIDs
@@ -772,14 +947,14 @@ public final class OfflineStore {
         let id = video.id
         if let job = previewJobs[id] { await job.value; return }
         guard let record = records.first(where: { $0.id == id }), record.previewNames?.isEmpty != false,
-              let fileName = record.fileName, !previewFailures.contains(id) else { return }
+              let file = record.video(root: root, visibleRoot: visibleRoot).fileURL, !previewFailures.contains(id)
+        else { return }
         let animated: Bool
-        switch Self.previewSource(kind: record.kind, isImage: Self.looksLikeImage(fileName)) {
+        switch Self.previewSource(kind: record.kind, isImage: Self.looksLikeImage(file.lastPathComponent)) {
         case .none: return
         case .animatedImage: animated = true
         case .video: animated = false
         }
-        let file = root.appendingPathComponent("files/\(fileName)")
         pin(id)                                                // the file stays until the frames are read
         let job = Task {
             let book = await Self.renderFlipbook(tools: tools, file: file, animated: animated, id: id, root: root)
@@ -891,7 +1066,7 @@ public final class OfflineStore {
 
     // MARK: index on disk
 
-    struct Record: Codable {
+    struct Record: Codable, Equatable {
         var id: String
         var kind: StoredVideo.Kind
         var fileName: String?
@@ -923,27 +1098,57 @@ public final class OfflineStore {
         var clip: WebpClip?
         /// The owner's title of the media (same value on every record of it); nil in an older index.
         var title: String?
+        /// The owner keeps this on the device (decision 3). Nil in an index written before offline existed: a
+        /// legacy record, which the migration keeps and moves into the visible folder. A build that saves a file
+        /// always writes true or false.
+        var keep: Bool?
+        /// Where the kept file is, relative to the visible root (it may be in a subfolder the owner made); nil when
+        /// the file is in `files/` (`fileName`) or there is none. Never set together with `fileName`; implies `keep`.
+        var visiblePath: String?
+        /// The file name cobalt chose for the visible file (decision 8): while the file still has it, a rename of
+        /// the media in cobalt renames the file; one the owner renamed is never renamed again.
+        var givenName: String?
 
         /// The effective media id.
         var media: String { mediaID ?? id }
         var added: Date { addedAt ?? createdAt }
-        /// What this entry costs on the device: its file (if kept), its poster and its flipbook.
+        /// There is a file on this device: in `files/` or in the visible folder.
+        var hasFile: Bool { fileName != nil || visiblePath != nil }
+        /// Nothing may take this off the device: the owner keeps it, or a file of it is in the visible folder.
+        var isAnchored: Bool { keep == true || visiblePath != nil }
+        /// The server has its own copy (so the file may stay out of the owner's backup, decision 14): a hosted
+        /// webp, an original of a studio session or a hosted one. A plain cobalt save or a picker item has none.
+        var hasServerCopy: Bool {
+            OfflineStore.hasServerCopy(kind: kind, sessionID: sessionID, remoteURL: remoteURL, publicURL: publicURL)
+        }
+        /// What this entry costs on the device: its file (if any), its poster and its flipbook.
         var cost: Int64 {
-            (fileName != nil ? bytes : 0) + (posterName != nil ? posterBytes ?? 0 : 0)
+            (hasFile ? bytes : 0) + (posterName != nil ? posterBytes ?? 0 : 0)
                 + (previewNames?.isEmpty == false ? previewBytes ?? 0 : 0)
         }
         /// What is left of the entry when its file goes: poster and flipbook.
-        var keptCost: Int64 { cost - (fileName != nil ? bytes : 0) }
+        var keptCost: Int64 { cost - (hasFile ? bytes : 0) }
 
-        func video(root: URL) -> StoredVideo {
-            StoredVideo(
-                id: id, kind: kind,
-                fileURL: fileName.map { root.appendingPathComponent("files/\($0)") },
+        func video(root: URL, visibleRoot: URL? = nil) -> StoredVideo {
+            let fileURL: URL?
+            let place: StoredVideo.Place?
+            if let fileName {
+                fileURL = root.appendingPathComponent("files/\(fileName)")
+                place = .cache
+            } else if let visiblePath {
+                fileURL = visibleRoot.map { $0.appendingPathComponent(visiblePath) }
+                place = .offline
+            } else {
+                fileURL = nil
+                place = nil
+            }
+            return StoredVideo(
+                id: id, kind: kind, fileURL: fileURL,
                 posterURL: posterName.map { root.appendingPathComponent("posters/\($0)") },
                 name: name, duration: duration, width: width, height: height, bytes: bytes,
                 sessionID: sessionID, link: link, remoteURL: remoteURL, createdAt: createdAt,
                 previewFrameURLs: (previewNames ?? []).map { root.appendingPathComponent("previews/\($0)") },
-                publicURL: publicURL, mediaID: media, clip: clip, title: title)
+                publicURL: publicURL, mediaID: media, clip: clip, title: title, place: place, keep: keep == true)
         }
     }
 
@@ -977,7 +1182,7 @@ public final class OfflineStore {
     ///    ambiguous or no link: it stays its own media;
     /// 3. records with no session (plain saves, picker items) are their own media.
     @discardableResult
-    static func assignLegacyMediaIDs(_ records: inout [Record]) -> Bool {
+    nonisolated static func assignLegacyMediaIDs(_ records: inout [Record]) -> Bool {
         let lacking = records.indices.filter { records[$0].mediaID == nil }
         guard !lacking.isEmpty else { return false }
         let ordered = lacking.sorted {
@@ -1019,9 +1224,33 @@ public final class OfflineStore {
         return true
     }
 
+    /// Every file, both tiers, plus every poster and flipbook (what `usage` has always meant).
     static func usage(of records: [Record]) -> StorageUsage {
-        let kept = records.filter { $0.fileName != nil }
+        let kept = records.filter(\.hasFile)
         return StorageUsage(count: kept.count, bytes: records.reduce(0) { $0 + $1.cost }, mediaCount: Set(kept.map(\.media)).count)
+    }
+
+    /// The two tiers. `offline`: kept files (the bytes of the files only). `cache`: files nobody asked to keep,
+    /// and the posters and flipbooks of media with nothing kept: exactly what `enforce` can free.
+    static func offlineUsage(of records: [Record]) -> OfflineUsage {
+        let anchored = Set(records.filter(\.isAnchored).map(\.media))
+        let keptFiles = records.filter { $0.hasFile && $0.isAnchored }
+        let cacheFiles = records.filter { $0.hasFile && !$0.isAnchored }
+        let offline = StorageUsage(
+            count: keptFiles.count, bytes: keptFiles.reduce(0) { $0 + $1.bytes }, mediaCount: Set(keptFiles.map(\.media)).count)
+        var cacheBytes = cacheFiles.reduce(Int64(0)) { $0 + $1.bytes }
+        for r in records where !anchored.contains(r.media) { cacheBytes += r.keptCost }
+        let cache = StorageUsage(count: cacheFiles.count, bytes: cacheBytes, mediaCount: Set(cacheFiles.map(\.media)).count)
+        return OfflineUsage(offline: offline, cache: cache)
+    }
+
+    /// Whether the server holds its own copy of an item (decision 14), from what the record knows: a webp this
+    /// device had hosted (`remoteURL`), an original that has a studio session or a public link.
+    nonisolated static func hasServerCopy(kind: StoredVideo.Kind, sessionID: String?, remoteURL: URL?, publicURL: URL?) -> Bool {
+        switch kind {
+        case .webp: return remoteURL != nil
+        case .original: return sessionID != nil || publicURL != nil
+        }
     }
 
     /// Files, posters and flipbook frames to delete once the index no longer names them.
@@ -1042,7 +1271,7 @@ public final class OfflineStore {
     static func enforce(_ records: inout [Record], limit: Int64?, protecting: Set<String>) -> Eviction {
         var plan = Eviction()
         guard let limit else { return plan }
-        var total = usage(of: records).bytes
+        var total = offlineUsage(of: records).cache.bytes
         guard total > limit else { return plan }
 
         // Index order is newest first, so a later index means older when two stamps tie.
@@ -1053,7 +1282,8 @@ public final class OfflineStore {
             recency[records[i].media] = key
         }
         let newestMedia = Set(recency.sorted { $0.value > $1.value }.prefix(protectedNewest).map(\.key))
-        func isProtected(_ r: Record) -> Bool { protecting.contains(r.id) || newestMedia.contains(r.media) }
+        // kept files are never evicted (decision 4), however far over the limit the cache is
+        func isProtected(_ r: Record) -> Bool { protecting.contains(r.id) || newestMedia.contains(r.media) || r.isAnchored }
         let oldestFirst = records.indices
             .filter { !isProtected(records[$0]) }
             .sorted { (records[$0].added, -$0) < (records[$1].added, -$1) }
@@ -1070,7 +1300,8 @@ public final class OfflineStore {
             let droppable = members.keys
                 .filter { media in
                     guard !newestMedia.contains(media), let rows = members[media] else { return false }
-                    return rows.allSatisfy { records[$0].fileName == nil && !protecting.contains(records[$0].id) }
+                    // never a media with anything kept (it would take the poster and record of kept files) or a file
+                    return rows.allSatisfy { !records[$0].hasFile && !records[$0].isAnchored && !protecting.contains(records[$0].id) }
                         && rows.reduce(0, { $0 + records[$1].keptCost }) > 0
                 }
                 .sorted { (recency[$0] ?? (.distantPast, 0)) < (recency[$1] ?? (.distantPast, 0)) }
@@ -1088,28 +1319,31 @@ public final class OfflineStore {
         return plan
     }
 
-    nonisolated private static func delete(_ plan: Eviction, root: URL) {
+    nonisolated static func delete(_ plan: Eviction, root: URL) {
         let fm = FileManager.default
         for name in plan.files { try? fm.removeItem(at: root.appendingPathComponent("files/\(name)")) }
         for name in plan.posters { try? fm.removeItem(at: root.appendingPathComponent("posters/\(name)")) }
         for name in plan.previews { try? fm.removeItem(at: root.appendingPathComponent("previews/\(name)")) }
     }
 
-    nonisolated private static func fileSize(_ url: URL) -> Int64? {
+    nonisolated static func fileSize(_ url: URL) -> Int64? {
         ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? NSNumber)?.int64Value
     }
 
-    private static func indexURL(root: URL) -> URL { root.appendingPathComponent("index.json") }
+    nonisolated static func indexURL(root: URL) -> URL { root.appendingPathComponent("index.json") }
 
-    private static func decode(_ url: URL) -> [Record] {
+    nonisolated static func decode(_ url: URL) -> [Record] {
         guard let data = try? Data(contentsOf: url), !data.isEmpty else { return [] }
         return (try? JSONDecoder().decode([Record].self, from: data)) ?? []
     }
 
     /// Reads, lets `body` change the records, and writes them back, all under one coordinated
     /// write so the app and the extension never lose each other's entries.
+    ///
+    /// `nonisolated`: the new folder work (scan, moves) writes the index from `@concurrent` hops. Every write also
+    /// holds the invariant `visiblePath != nil` implies `keep`.
     @discardableResult
-    private static func mutate(root: URL, _ body: (inout [Record]) -> Void) throws -> [Record] {
+    nonisolated static func mutate(root: URL, _ body: (inout [Record]) -> Void) throws -> [Record] {
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         } catch {
@@ -1126,6 +1360,7 @@ public final class OfflineStore {
             // app and the extension agree), then applies the caller's change.
             _ = assignLegacyMediaIDs(&records)
             body(&records)
+            for i in records.indices where records[i].visiblePath != nil && records[i].keep != true { records[i].keep = true }
             do {
                 try JSONEncoder().encode(records).write(to: u, options: .atomic)
                 result = records
@@ -1140,7 +1375,7 @@ public final class OfflineStore {
         return result
     }
 
-    private static func readRecords(root: URL) -> [Record] {
+    nonisolated static func readRecords(root: URL) -> [Record] {
         var out: [Record] = []
         var coordination: NSError?
         NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: indexURL(root: root), options: [], error: &coordination) { u in

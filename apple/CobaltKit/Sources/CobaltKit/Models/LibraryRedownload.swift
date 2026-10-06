@@ -58,7 +58,7 @@ extension LibraryModel {
                 let file = try await client.download(source, to: dest) { relay.push($0) }
                 try Task.checkCancellation()
                 do {
-                    return try await ctx.store.attach(file: file, to: video.id, move: true)
+                    return try await ctx.store.attach(file: file, to: video.id, move: true, keep: true)
                 } catch {
                     try? FileManager.default.removeItem(at: file)
                     throw error
