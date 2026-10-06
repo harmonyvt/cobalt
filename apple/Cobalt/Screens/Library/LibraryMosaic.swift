@@ -99,18 +99,28 @@ struct LibraryMosaic: View {
         let byColumn = Dictionary(grouping: plan.slots, by: \.column)
         ScrollView {
             VStack(spacing: 0) {
-                HStack(alignment: .top, spacing: Self.gap) {
-                    ForEach(0..<plan.columns, id: \.self) { column in
-                        LazyVStack(spacing: Self.gap) {
-                            ForEach(byColumn[column] ?? [], id: \.index) { slot in
-                                tileView(slot, plan: plan)
+                // The columns are an overlay of a spacer that only has the plan's height. A row of fixed-width
+                // columns as the content itself reports its own width as the content's minimum, and that width is
+                // measured from the very column it sizes: on the Mac the split view's detail column read it as its
+                // minimum width, changed it every layout pass and AppKit threw "more Update Constraints passes than
+                // there are views". The spacer's width is flexible, so the minimum no longer depends on the plan.
+                Color.clear
+                    .frame(height: plan.height + Self.topInset)
+                    .overlay(alignment: .topLeading) {
+                        HStack(alignment: .top, spacing: Self.gap) {
+                            ForEach(0..<plan.columns, id: \.self) { column in
+                                LazyVStack(spacing: Self.gap) {
+                                    ForEach(byColumn[column] ?? [], id: \.index) { slot in
+                                        tileView(slot, plan: plan)
+                                    }
+                                }
+                                .frame(width: plan.columnWidth)
                             }
                         }
-                        .frame(width: plan.columnWidth)
+                        .padding(.horizontal, Self.margin)
+                        .padding(.top, Self.topInset)
+                        .frame(maxHeight: .infinity, alignment: .top)
                     }
-                }
-                .padding(.horizontal, Self.margin)
-                .padding(.top, Self.topInset)
                 if !skeleton { LibraryFooterView(state: footer) { Task { await controller.library.loadMore() } } }
                 Color.clear.frame(height: 24)
             }

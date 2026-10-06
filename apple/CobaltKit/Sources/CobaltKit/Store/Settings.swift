@@ -302,6 +302,19 @@ public final class Settings {
         set { withMutation(keyPath: \.photosSyncWebps) { defaults.set(newValue, forKey: "photosSyncWebps") } }
     }
 
+    // MARK: save to a folder (the Mac; Folder/FolderSync.swift)
+
+    /// "save to a folder" (macOS): every video and webp that lands in the offline store is copied into the
+    /// owner's folder once. ON until the owner turns it off; an install that never touched it has no stored
+    /// value and reads on. Which folder, and what was copied, live in the folder ledger, not here.
+    public var folderSync: Bool {
+        get {
+            access(keyPath: \.folderSync)
+            return defaults.object(forKey: "folderSync") as? Bool ?? true
+        }
+        set { withMutation(keyPath: \.folderSync) { defaults.set(newValue, forKey: "folderSync") } }
+    }
+
     // MARK: diagnostics
 
     /// "send crash reports and logs to your server": on by default (it is the owner's own server). Off

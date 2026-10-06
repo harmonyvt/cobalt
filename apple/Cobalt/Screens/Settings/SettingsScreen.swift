@@ -28,6 +28,7 @@ struct SettingsScreen: View {
             shareSheetSection
             storageSection
             PhotosSettingsSection(model: model)
+            FolderSettingsSection(model: model)
             liveSection
             TelemetrySettingsSection(model: model)
             feelSection

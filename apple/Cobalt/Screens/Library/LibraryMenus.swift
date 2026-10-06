@@ -42,6 +42,7 @@ struct LibraryMenuItems: View {
             }
         }
         Button(Copy.Library2.rename, systemImage: Symbol.Library.rename) { controller.renaming = item }
+        ShowInFinderButton(model: controller.model, videos: item.local?.renditions ?? [])
         if controller.canDelete(item) {
             Divider()
             Button(Copy.Library2.deleteEverything, systemImage: Symbol.Library.deleteEverything, role: .destructive) {

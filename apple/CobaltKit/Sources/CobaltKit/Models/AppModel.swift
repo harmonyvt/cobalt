@@ -34,6 +34,9 @@ public final class AppModel {
     public let library: LibraryModel
     /// The photos album (CONTRACT-SYNC.md): `PhotosSync.preview(_:)` in previews.
     public let photosSync: PhotosSync
+    /// "save to a folder" (macOS; the Mac's counterpart of the photos album, Folder/FolderSync.swift):
+    /// unavailable on iOS and in previews, which get `FolderSync.preview(_:)`.
+    public let folderSync: FolderSync
     public internal(set) var capabilities: Capabilities
     public internal(set) var isCheckingServer: Bool = false
     public internal(set) var pipeline: Pipeline           // the home pipeline
@@ -59,11 +62,12 @@ public final class AppModel {
     @ObservationIgnored let makeClient: @MainActor (Settings) -> any CobaltClient
 
     init(
-        context: PipelineContext, library: LibraryModel, photosSync: PhotosSync? = nil,
+        context: PipelineContext, library: LibraryModel, photosSync: PhotosSync? = nil, folderSync: FolderSync? = nil,
         makeClient: @escaping @MainActor (Settings) -> any CobaltClient
     ) {
         let sync = photosSync ?? PhotosSync.preview(.init(access: .notAsked, enabled: false))
         self.photosSync = sync
+        self.folderSync = folderSync ?? FolderSync.preview(.init(available: false, enabled: false))
         context.photosSync = sync
         self.ctx = context
         self.settings = context.settings
@@ -109,7 +113,14 @@ public final class AppModel {
             identifier: BackgroundSessionID.app, transport: URLSessionBackgroundTransport(), pending: .shared(),
             store: store, clock: ctx.clock)
         ctx.originals = fetcher
-        let model = AppModel(context: ctx, library: LibraryModel(context: ctx), photosSync: sync, makeClient: factory)
+        // The Mac's folder: created after the photos sync so it chains onto the store's `onAdd` (macOS only;
+        // on iOS it is unavailable and never runs).
+        let folder = FolderSync(settings: settings, store: store, ledger: FolderLedger.shared())
+        #if os(macOS)
+        folder.observeActivation()
+        #endif
+        let model = AppModel(
+            context: ctx, library: LibraryModel(context: ctx), photosSync: sync, folderSync: folder, makeClient: factory)
         model.telemetry = TelemetryService.live(settings: settings, capabilities: { [unowned model] in model.capabilities })
         fetcher.isActive = { [unowned ctx] in ctx.background.activity.isActive }
         fetcher.serverHoldsRequests = { [unowned model] in model.capabilities.sourceWait }
@@ -143,6 +154,7 @@ public final class AppModel {
         return AppModel(
             context: ctx, library: LibraryModel(context: ctx, seed: PreviewData.libraryPage(now: clock.now())),
             photosSync: PhotosSync.preview(.init(access: .album, enabled: false)),
+            folderSync: FolderSync.preview(.init(available: FolderSync.platformHasFolder, enabled: true, saved: 12, waiting: 0, existing: 0)),
             makeClient: { _ in client })
     }
 

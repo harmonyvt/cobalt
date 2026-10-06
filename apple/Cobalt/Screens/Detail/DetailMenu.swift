@@ -29,6 +29,7 @@ struct DetailMenu: View {
             if showsOpenInLibrary {
                 Button(Copy.Media.openInLibrary, systemImage: Symbol.Media.openInLibrary, action: openInLibrary)
             }
+            ShowInFinderButton(model: model, videos: rendition.local.map { [$0] } ?? [])
             if item.local != nil {
                 Button(Copy.Media.removeMedia, systemImage: Symbol.Media.removeFromDevice) { controller.confirm = .removeMedia }
                     .disabled(deleting)
