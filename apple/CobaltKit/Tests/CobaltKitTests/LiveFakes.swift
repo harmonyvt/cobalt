@@ -100,12 +100,18 @@ final class FakeLiveHandle: LiveActivityHandle {
     }
 }
 
+enum FakeActivityError: Error { case visibility }
+
 @MainActor
 final class FakeLiveAdapter: LiveActivityAdapter {
     var isAvailable = true
     var handles: [FakeLiveHandle] = []
     private(set) var requests: [(attributes: LiveRunAttributes, state: LiveContentState, staleDate: Date, push: Bool)] = []
     var requestError: (any Error)?
+    /// ActivityKit refuses `Activity.request` from the background (the system says "visibility"): flip to `false` to
+    /// make the fake do the same. Every try is counted, refused ones too.
+    var inForeground = true
+    private(set) var requestAttempts = 0
     var currentStartToken: String?
     var clock: @MainActor () -> Date = { Date() }
     private var startContinuations: [AsyncStream<String>.Continuation] = []
@@ -116,6 +122,8 @@ final class FakeLiveAdapter: LiveActivityAdapter {
     func request(
         _ attributes: LiveRunAttributes, state: LiveContentState, staleDate: Date, push: Bool
     ) throws -> any LiveActivityHandle {
+        requestAttempts += 1
+        if !inForeground { throw FakeActivityError.visibility }
         if let requestError { throw requestError }
         requests.append((attributes, state, staleDate, push))
         let handle = FakeLiveHandle(attributes: attributes, state: state, staleDate: staleDate, clock: clock)

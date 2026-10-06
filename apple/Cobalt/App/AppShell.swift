@@ -478,7 +478,7 @@ private final class WindowBox {
 
     private func takes(_ event: NSEvent) -> Bool {
         guard let window, event.window === window, window.isKeyWindow, window.attachedSheet == nil,
-              event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+              event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock) == .command,   // Caps Lock is on and ⌘V is still paste
               event.charactersIgnoringModifiers?.lowercased() == "v"
         else { return false }
         if let responder = window.firstResponder, responder is NSText || responder is NSTextInputClient { return false }

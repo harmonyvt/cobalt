@@ -165,7 +165,7 @@ public final class ShortcutActions {
                 let bytes = Self.size(of: file)
                 if limit > 0, bytes > limit { throw ShortcutError.fileTooLarge(limit: limit) }
             }
-            staged = try await stage(files)
+            staged = try await stage(files, limit: limit)
         } catch {
             logRun(action: "upload", inputs: files.count, accepted: 0, failed: 0, began: began, outcome: "refused")
             throw error
@@ -309,30 +309,43 @@ public final class ShortcutActions {
 
     /// Copies each file into the inbox (coordinated, off the main thread). The pipeline sees a file already under the
     /// inbox and does not copy it again; the ledger records this copy, so a relaunch can still send it.
-    private func stage(_ files: [ShortcutFile]) async throws -> [(file: URL, name: String, bytes: Int64)] {
+    ///
+    /// One file at a time: a `.deferred` file's bytes are read here, checked against `limit`, written straight to the
+    /// inbox and let go before the next file is touched.
+    private func stage(_ files: [ShortcutFile], limit: Int64) async throws -> [(file: URL, name: String, bytes: Int64)] {
         var out: [(URL, String, Int64)] = []
         for file in files {
             let name = SafeFileName.clean(file.name, fallback: "file")
             let destination = ctx.store.inboxURL(for: name)
             let source = file.source
             do {
-                let bytes = try await Task.detached(priority: .userInitiated) { try Self.copy(source, to: destination) }.value
+                let bytes = try await Task.detached(priority: .userInitiated) { try Self.copy(source, to: destination, limit: limit) }.value
                 out.append((destination, destination.lastPathComponent, bytes))
             } catch {
                 for staged in out { try? FileManager.default.removeItem(at: staged.0) }
+                if let refused = error as? ShortcutError, case .fileTooLarge = refused { throw refused }
                 throw ShortcutError.failed(.server(code: "error.app.file_unreadable"))
             }
         }
         return out
     }
 
-    nonisolated private static func copy(_ source: ShortcutFile.Source, to destination: URL) throws -> Int64 {
+    nonisolated private static func copy(_ source: ShortcutFile.Source, to destination: URL, limit: Int64) throws -> Int64 {
         let fm = FileManager.default
         try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         switch source {
         case .data(let data):
             try data.write(to: destination, options: .atomic)
             return Int64(data.count)
+        case .deferred(let read):
+            // the bytes live only inside this scope: written, then gone
+            let count = try {
+                let data = read()
+                if limit > 0, Int64(data.count) > limit { throw ShortcutError.fileTooLarge(limit: limit) }
+                try data.write(to: destination, options: .atomic)
+                return Int64(data.count)
+            }()
+            return count
         case .url(let url):
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -354,6 +367,7 @@ public final class ShortcutActions {
     nonisolated static func size(of file: ShortcutFile) -> Int64 {
         switch file.source {
         case .data(let data): return Int64(data.count)
+        case .deferred: return 0                                        // unknown until it is read (`stage` checks it then)
         case .url(let url):
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }

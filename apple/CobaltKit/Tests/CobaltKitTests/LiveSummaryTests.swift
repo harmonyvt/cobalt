@@ -337,6 +337,74 @@ struct LiveSummaryTests {
     }
 }
 
+// MARK: - a busy period that begins while the app is away
+
+@MainActor
+@Suite(.serialized)
+struct LiveSummaryBackgroundTests {
+    @Test func aPeriodOverAPushActivityWaitsForTheForegroundAndKeepsTheActivity() async throws {
+        let rig = LiveRig(.shortClip, push: true, environment: .sandbox)
+        let queue = rig.h.app.queue
+        let first = queue.add([.link(URL(string: shortLink)!)], via: .paste)[0]
+        await rig.drive { if case .saving = first.pipeline.state { true } else { false } }
+        let firstHandle = try #require(rig.handle)
+        firstHandle.sendToken(hexToken)
+        await rig.settle()
+        #expect(rig.log.runs.count == 1)
+        let attemptsBefore = rig.adapter.requestAttempts
+
+        rig.manager.didEnterBackground()
+        rig.adapter.inForeground = false                              // ActivityKit would refuse a request now
+        _ = queue.add([.link(linkC)], via: .shortcut)
+        await rig.settle()
+        #expect(!rig.manager.inBusyPeriod, "the period waits: it would have to end the push activity and ask for a new one")
+        #expect(!firstHandle.ended && rig.log.ends.isEmpty, "the first activity and its server run are left alone")
+        #expect(rig.adapter.requestAttempts == attemptsBefore, "nothing is requested from the background")
+
+        rig.adapter.inForeground = true
+        rig.manager.foreground()
+        await rig.settle()
+        #expect(rig.manager.inBusyPeriod, "foreground begins the period")
+        #expect(rig.log.ends == [first.pipeline.liveRunID], "now the server stops writing the first run")
+        #expect(firstHandle.ended)
+        let summary = try #require(rig.manager.summaryHandle as? FakeLiveHandle)
+        #expect(summary !== firstHandle && summary.state.jobs == 2)
+    }
+
+    @Test func aRefusedSummaryRequestIsNotMarkedTriedAndTheForegroundAsksAgain() async throws {
+        let rig = SummaryRig()
+        rig.manager.didEnterBackground()
+        rig.adapter.inForeground = false
+        _ = rig.queue.add([.link(linkA), .link(linkB)], via: .review)
+        await rig.settle()
+        #expect(rig.manager.inBusyPeriod && rig.manager.summaryHandle == nil, "no activity could be started from the background")
+        #expect(rig.adapter.requests.isEmpty)
+
+        rig.adapter.inForeground = true
+        rig.manager.foreground()
+        await rig.settle()
+        let summary = try #require(rig.manager.summaryHandle as? FakeLiveHandle, "foreground() asked again")
+        #expect(summary.state.jobs == 2 && summary.state.isSummary)
+        #expect(rig.adapter.requests.count == 1)
+    }
+
+    @Test func aRefusalInTheForegroundIsRetriedAfterAPauseNotOnEveryEvent() async throws {
+        let rig = SummaryRig(.serverBusyWithShare)                   // the jobs wait in the server's line: they are still live later
+        rig.adapter.inForeground = false                             // refused although the app thinks it is in front
+        _ = rig.queue.add([.link(linkA), .link(linkB)], via: .review)
+        await rig.settle()
+        let tries = rig.adapter.requestAttempts
+        #expect(tries >= 1 && rig.manager.summaryHandle == nil)
+        rig.manager.jobsChanged(rig.queue)
+        rig.manager.jobsChanged(rig.queue)
+        #expect(rig.adapter.requestAttempts == tries, "a refused request waits before it is tried again")
+        rig.adapter.inForeground = true
+        rig.line.clock.jump(by: LiveActivityManager.requestRetrySeconds + 1)
+        rig.manager.jobsChanged(rig.queue)
+        #expect(rig.manager.summaryHandle != nil, "it came through on the next try")
+    }
+}
+
 // MARK: - push mode: the first job's server run
 
 @MainActor

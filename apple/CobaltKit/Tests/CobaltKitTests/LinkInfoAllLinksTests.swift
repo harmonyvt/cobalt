@@ -54,4 +54,52 @@ struct LinkInfoAllLinksTests {
     @Test func schemeIsCaseInsensitive() {
         #expect(strings("HTTPS://X.COM/i/status/1").count == 1)
     }
+
+    // MARK: a huge clipboard
+
+    private func clock(_ body: () -> Void) -> Double {
+        let start = ContinuousClock.now
+        body()
+        let d = ContinuousClock.now - start
+        return Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
+    }
+
+    @Test func aMultiMegabyteClipboardWithManyLinksIsReadInOnePassWithinBounds() {
+        // 6 MB of prose, a link every ~100 characters: a loop that re-copied the rest of the text per link would take
+        // minutes; one pass over the first 200 000 characters takes milliseconds. The bound is loose on purpose.
+        let line = "some words on the clipboard that are not a link at all, then https://x.com/i/status/%d and on\n"
+        var big = ""
+        var n = 0
+        while big.utf8.count < 6_000_000 { n += 1; big += String(format: line, n) }
+        var all: [URL] = []
+        let seconds = clock { all = LinkInfo.allLinks(in: big, limit: 1000) }
+        #expect(all.count == 1000, "the cap still fills from the part that is read")
+        #expect(all.first?.absoluteString == "https://x.com/i/status/1")
+        #expect(seconds < 3, "took \(seconds) s")
+    }
+
+    @Test func aMultiMegabyteClipboardWithNoLinkAndOneWithOnlyBrokenOnesAreFast() {
+        let prose = String(repeating: "no links here, just words and http:// halves. ", count: 150_000)       // ~7 MB
+        var found = [URL]()
+        let none = clock { found = LinkInfo.allLinks(in: prose, limit: 1000) }
+        #expect(found.isEmpty && none < 3, "took \(none) s")
+        let broken = String(repeating: "https://%% https://%%%% ", count: 400_000)                                   // ~7 MB of matches that are not links
+        let slow = clock { found = LinkInfo.allLinks(in: broken, limit: 1000) }
+        #expect(found.isEmpty && slow < 5, "took \(slow) s")
+    }
+
+    @Test func onlyTheFirstScanLimitCharactersAreReadAndALinkCutByTheEdgeIsDropped() {
+        let head = "https://x.com/i/status/1 "
+        let filler = String(repeating: "a ", count: (LinkInfo.scanLimit - head.count) / 2)
+        let edge = head + filler                                            // ends right at the limit
+        let link = "https://x.com/i/status/2"
+        // a link wholly beyond the limit is not read
+        #expect(strings(edge + " " + link, limit: 1000) == ["https://x.com/i/status/1"])
+        // a link straddling the limit is dropped rather than read half
+        let straddling = String(edge.dropLast(10)) + link + " tail"
+        #expect(!strings(straddling, limit: 1000).contains(link))
+        #expect(strings(straddling, limit: 1000).first == "https://x.com/i/status/1")
+        // inside the limit nothing changes
+        #expect(strings(head + link) == ["https://x.com/i/status/1", link])
+    }
 }

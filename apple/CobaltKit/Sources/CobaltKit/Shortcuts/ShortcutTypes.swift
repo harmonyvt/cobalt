@@ -144,11 +144,17 @@ public struct ShortcutSaveOutcome: Sendable, Equatable {
 }
 
 /// A file as the action hands it over: the system's file URL (copied before the action returns, the temporary file
-/// may go as soon as it does) or its bytes (`IntentFile.data`, in memory, written to the inbox).
+/// may go as soon as it does), its bytes already in memory, or a reader that produces the bytes only when the file's
+/// turn comes (`IntentFile.data` for a file with no URL: a big Photos video must never sit in memory next to the other
+/// files, or before the size limit has had its say).
 public struct ShortcutFile: Sendable {
     public enum Source: Sendable {
         case url(URL)
         case data(Data)
+        /// Read when this file is staged, one file at a time, off the main thread; released as soon as it is written to
+        /// the inbox. Its size is checked after the read (there is nothing to ask before), and a file over the limit is
+        /// never written.
+        case deferred(@Sendable () -> Data)
     }
 
     public var name: String

@@ -73,13 +73,15 @@ struct UploadFilesIntent: AppIntent, LongRunningIntent, CancellableIntent {
         }
     }
 
-    /// The system's file URL when it gives one (copied before the action returns), else its bytes. A name with no
+    /// The system's file URL when it gives one (copied before the action returns), else a reader for its bytes that runs
+    /// later, inside the background task, one file at a time (`IntentFile.data` loads the whole file into memory: a big
+    /// Photos video read up front, with its neighbours and before the size limit, is a memory kill). A name with no
     /// extension takes its type's, so the server's own type check has something to go on.
     private static func shortcutFile(_ file: IntentFile) -> ShortcutFile {
         var name = file.filename
         if (name as NSString).pathExtension.isEmpty, let ext = file.type?.preferredFilenameExtension { name += ".\(ext)" }
         if let url = file.fileURL { return ShortcutFile(name: name, source: .url(url)) }
-        return ShortcutFile(name: name, source: .data(file.data))
+        return ShortcutFile(name: name, source: .deferred { file.data })
     }
 
     @MainActor

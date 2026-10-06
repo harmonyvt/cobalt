@@ -33,18 +33,42 @@ public struct LinkInfo: Sendable, Equatable {
     /// `firstLink`'s rule for every link in `text`, in order, repeats folded (the same URL once), at most `limit`
     /// (CONTRACT-PARALLEL.md section 4.2). A link glued to the text before it by a newline is still found; one glued by
     /// nothing at all is read up to the next whitespace, like the API reads it.
+    ///
+    /// A clipboard can hold megabytes: only the first `scanLimit` characters are read (a link cut off by that edge is
+    /// dropped with its half word), in one pass of one compiled expression, so the time is linear in what is read and
+    /// never grows with the number of links.
     public static func allLinks(in text: String, limit: Int = 20) -> [URL] {
-        guard limit > 0 else { return [] }
+        guard limit > 0, !text.isEmpty else { return [] }
+        var scanned = Substring(text)
+        if let cut = text.index(text.startIndex, offsetBy: scanLimit, limitedBy: text.endIndex), cut < text.endIndex {
+            scanned = text[..<cut]
+            if !text[cut].isWhitespace {
+                scanned = scanned.lastIndex(where: \.isWhitespace).map { scanned[..<$0] } ?? scanned
+            }
+        }
+        let string = String(scanned)
+        let whole = NSRange(string.startIndex..., in: string)
+        let ns = string as NSString
         var found: [URL] = []
         var seen = Set<String>()
-        var rest = text[...]
-        while found.count < limit, let range = rest.range(of: "https?://[^\\s<>\"'`]+", options: [.regularExpression, .caseInsensitive]) {
-            var candidate = String(rest[range])
-            rest = rest[range.upperBound...]
+        linkExpression.enumerateMatches(in: string, options: [], range: whole) { match, _, stop in
+            guard let match else { return }
+            var candidate = ns.substring(with: match.range)
             while let last = candidate.last, "),.;:!?]}".contains(last) { candidate.removeLast() }
-            guard let url = URL(string: candidate), LinkInfo(url) != nil, seen.insert(url.absoluteString).inserted else { continue }
-            found.append(url)
+            if let url = URL(string: candidate), LinkInfo(url) != nil, seen.insert(url.absoluteString).inserted {
+                found.append(url)
+                if found.count >= limit { stop.pointee = true }
+            }
         }
         return found
     }
+
+    /// How much of a paste `allLinks` reads (characters).
+    public static let scanLimit = 200_000
+
+    private static let linkExpression: NSRegularExpression = {
+        // The same expression as `firstLink`; it is a constant, so it always compiles.
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(pattern: "https?://[^\\s<>\"'`]+", options: [.caseInsensitive])
+    }()
 }

@@ -171,6 +171,9 @@ public final class Pipeline: Identifiable {
     /// Created by `JobQueue.add`: takes turns in the device line when the server has none, and waits out a busy server
     /// (10 minutes) instead of failing at 60 s. The pipeline the owner started by hand keeps today's flow.
     @ObservationIgnored var takesPartInDeviceLine = false
+    /// False for a share-sheet save the queue follows (`.share` jobs): the share sheet's own Live Activity (server
+    /// push-started) already speaks for it, so the run never asks ActivityKit for another. It only counts in a summary.
+    @ObservationIgnored var requestsLiveActivity = true
     /// A batch, a drop of several links, a Shortcut: sent straight to the server's line, no "checking the link" first.
     @ObservationIgnored var skipsLinkCheck = false
     /// The queue's ear: state, session, line and acceptance changes.

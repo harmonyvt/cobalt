@@ -33,6 +33,12 @@ public final class JobQueue {
     @ObservationIgnored let serverLine: ServerLine
     @ObservationIgnored private var meta: [UUID: Meta] = [:]
     @ObservationIgnored private var restored = false
+    /// Jobs whose cancel is in flight (a second tap on the same x is ignored: it would ask the server again and be told
+    /// the first one had already worked, "couldn't cancel").
+    @ObservationIgnored private var cancelling: Set<UUID> = []
+    /// Finished jobs that left the queue after their time in the tray (`retireLapsed`): still counted in `summary`.
+    @ObservationIgnored private var retiredFinished = 0
+    @ObservationIgnored private var retireTask: Task<Void, Never>?
 
     /// What the pipelines wait in right now.
     var activeLine: any JobLine { lineMode == .server ? serverLine : localLine }
@@ -129,6 +135,7 @@ public final class JobQueue {
             case .other: break
             }
         }
+        s.finished += retiredFinished
         return s
     }
 
@@ -224,6 +231,7 @@ public final class JobQueue {
         p.jobOptions = options
         p.takesPartInDeviceLine = true
         p.skipsLinkCheck = skipCheck
+        p.requestsLiveActivity = via != .share                           // a share's activity is the share sheet's (CONTRACT-PARALLEL 6)
         attach(p)
         if !focus { ctx.liveRouter.mute(p) }
         addCounter += 1
@@ -264,6 +272,7 @@ public final class JobQueue {
         guard let job = job(id), focusedID != id else { return }
         if let current = focused { loseFocus(current) }
         focusedID = id
+        scheduleRetire()
         ctx.liveRouter.unmute(job.pipeline)
         // A saved job that was never looked at: its filmstrip is read now, for the trim.
         let p = job.pipeline
@@ -279,6 +288,7 @@ public final class JobQueue {
         guard let job = focused else { return }
         loseFocus(job)
         focusedID = nil
+        scheduleRetire()
         changed()
     }
 
@@ -302,7 +312,8 @@ public final class JobQueue {
 
     /// 3.4: what x does depends on where the job is.
     public func cancel(_ id: Job.ID) async {
-        guard let job = job(id) else { return }
+        guard let job = job(id), cancelling.insert(id).inserted else { return }
+        defer { cancelling.remove(id) }
         let p = job.pipeline
         let title = MediaTitle.text(p.resolvedTitle, limit: MediaTitle.notifyLength)
         let queuedOnServer = lineMode == .server && p.sessionID != nil && { if case .inLine? = p.line { return true } else { return false } }()
@@ -415,6 +426,50 @@ public final class JobQueue {
     /// Takes the finished jobs (saved, webp ready) off the tray. Failed ones stay until retried or dismissed.
     public func clearFinished() {
         for job in jobs where job.isFinished && job.id != focusedID { dismiss(job.id) }
+        retiredFinished = 0
+    }
+
+    // MARK: - Letting finished jobs go
+
+    /// A finished job (saved, webp ready) is a card in the tray for `finishedLinger`, then a planet in the library: its
+    /// pipeline (filmstrip, trim, crop, session state) has nothing left to say, so it leaves the queue and the memory.
+    /// What the tray and Live still need is kept: `summary.finished` keeps its count, and a busy period remembers what
+    /// each of its jobs did (`LiveActivityManager.updateMembers`: a job that left keeps what it had finished).
+    /// Failed jobs stay until retried or dismissed; the focused job stays while it is focused.
+    private func scheduleRetire() {
+        guard retireTask == nil else { return }
+        let now = ctx.clock.now()
+        var wait: Double?
+        for job in jobs where job.isFinished && job.id != focusedID {
+            let remaining = job.finishedAt.map { Self.finishedLinger - now.timeIntervalSince($0) } ?? Self.finishedLinger
+            wait = min(wait ?? remaining, max(remaining, 1))
+        }
+        guard let wait else { return }
+        let clock = ctx.clock
+        retireTask = Task { @MainActor [weak self] in
+            try? await clock.sleep(seconds: wait)
+            guard !Task.isCancelled, let self else { return }
+            self.retireTask = nil
+            self.retireLapsed()
+        }
+    }
+
+    func retireLapsed() {
+        let now = ctx.clock.now()
+        var released = false
+        for job in jobs where job.isFinished && job.id != focusedID {
+            guard let at = job.finishedAt, now.timeIntervalSince(at) >= Self.finishedLinger else { continue }
+            // The keep-original download, a host or a "save to photos" still running belongs to this pipeline: it goes
+            // on, and the job is let go once they are done. The pipeline itself is not touched (no `detach`, no reset):
+            // whoever still holds it (a Shortcut waiting on it, a view mid-transition) keeps reading its final state.
+            let p = job.pipeline
+            if p.keepRequest != nil || p.hosting == .working || p.photos == .working { continue }
+            retiredFinished += 1
+            remove(job.id)
+            released = true
+        }
+        if released { changed() }
+        scheduleRetire()                                                // the ones whose time has not come yet
     }
 
     public func clearNotice() { notice = nil }
@@ -512,6 +567,7 @@ public final class JobQueue {
         } else if jobs[i].finishedAt == nil, jobs[i].isFinished || jobs[i].isFailed {
             jobs[i].finishedAt = ctx.clock.now()
             settled(jobs[i])
+            if jobs[i].isFinished { scheduleRetire() }
         }
         if !live, meta[id]?.liveDetached == true, let sink = ctx.liveRouter.sink, !ctx.liveRouter.hearsEveryJob {
             sink.detachedSettled(p)
@@ -551,6 +607,7 @@ public final class JobQueue {
             p.jobOptions = JobOptions()
             p.takesPartInDeviceLine = false
             p.skipsLinkCheck = false
+            p.requestsLiveActivity = true
             ctx.liveRouter.unmute(p)
             attach(p)
             idlePipeline.jobEvent = nil
@@ -657,6 +714,10 @@ public final class JobQueue {
         }
         jobs = []
         meta = [:]
+        retireTask?.cancel()
+        retireTask = nil
+        retiredFinished = 0
+        cancelling = []
         ledger?.removeAll()
         serverLine.reset()
         localLine.reset()
@@ -674,6 +735,10 @@ public final class JobQueue {
         let onServer = jobs.filter { $0.isLive && $0.pipeline.sessionID != nil }
         guard !onServer.isEmpty else { return }
         if lineMode == .server {
+            // One leave, one PUT: the scene resigns active first and enters the background a moment later (and a Mac
+            // window closing can follow a resign), each asking. The summary covers everything the server holds, and
+            // coming back takes it back (`appForegrounded`, `appBecameActive`).
+            guard ctx.notify.lineSource == nil else { return }
             if ctx.queueLineNotify() != nil {
                 Telemetry.log(.info, .pipeline, "line notify", data: tele(["watching": .int(onServer.count)]))
             }

@@ -29,6 +29,9 @@ final class LiveActivityManager: JobLiveSink {
     /// A busy period with nothing new to say (every job waits in a line) is written again this often, so the card is not
     /// marked stale ("waiting for cobalt…") while the app is alive and well.
     static let summaryKeepalive: Double = 60
+    /// A refused summary request (the system said no) is asked again after this long at the earliest, so a refusal does
+    /// not log and retry on every pipeline event.
+    static let requestRetrySeconds: Double = 10
     static let readyStaleSeconds: Double = 30 * 60
     static let doneDismissSeconds: Double = 15 * 60
     static let failedDismissSeconds: Double = 5 * 60
@@ -80,7 +83,10 @@ final class LiveActivityManager: JobLiveSink {
     final class Summary {
         var handle: (any LiveActivityHandle)?
         var attributes: LiveRunAttributes?
+        /// Set only once an activity exists (a failed request is tried again: on the next foreground, and after
+        /// `requestRetrySeconds` while the app is in the foreground).
         var activityTried = false
+        var lastRequestAttempt: Double?
         var sent: LiveContentState?
         var sentAt: Double = 0
         var pending: LiveContentState?
@@ -179,6 +185,10 @@ final class LiveActivityManager: JobLiveSink {
         inBackground = false
         grace.end()
         if let t = adapter.currentStartToken { startTokenArrived(t) } else { flushStartToken() }
+        // ActivityKit only takes a request from the foreground: a busy period that began (or waited to begin) while the
+        // app was away gets its activity now.
+        summary?.lastRequestAttempt = nil
+        if let queue = jobQueue { syncPeriod(queue) } else { refreshSummary() }
         reconcile()
     }
 
@@ -258,12 +268,26 @@ final class LiveActivityManager: JobLiveSink {
     /// pipeline event is handled, so a second live job never asks ActivityKit for an activity of its own.
     private func syncPeriod(_ queue: JobQueue) {
         pruneRuns()
-        if summary == nil, queue.live.count >= 2 { beginPeriod(queue) }
+        if summary == nil, queue.live.count >= 2, !periodNeedsForeground { beginPeriod(queue) }
         if summary != nil {
             refreshSummary()
         } else {
             retireIdleActivities(queue)
         }
+    }
+
+    /// The run whose activity a busy period would keep, if any (the oldest unfinished one, `beginPeriod`).
+    private var periodHolder: Run? {
+        runs.values.filter { $0.handle != nil && !$0.ended && !$0.detached }.min { $0.order < $1.order }
+    }
+
+    /// A busy period that begins while the app is away, over a run the server pushes to, would end that run's activity
+    /// (deleting the server run ends it, APP-API-CONTRACT 8.2) and ask ActivityKit for a new one, which only a foreground
+    /// app may do. So it waits: the push activity keeps speaking for the first job, the other jobs ask for nothing, and
+    /// `foreground()` begins the period.
+    private var periodNeedsForeground: Bool {
+        guard inBackground, summary == nil, let first = periodHolder else { return false }
+        return first.registerAttempted && !first.disabled
     }
 
     private func pruneRuns() {
@@ -445,9 +469,12 @@ final class LiveActivityManager: JobLiveSink {
     /// owner opens in the app, or this app's own run after a relaunch).
     private func ensureActivity(_ r: Run, _ p: Pipeline) {
         guard r.handle == nil, !r.activityTried, !r.folded, let ctx, let content = r.built else { return }
+        if inBackground, summary == nil, (jobQueue?.live.count ?? 0) >= 2, periodHolder != nil { return }   // the period will speak for it
         // Capabilities are unknown only until the run's first request has gone out (a cold launch
         // pasting at once): a moment later `capabilitiesChanged()` creates it, with the right push type.
         if ctx.capabilities.kind == .unreachable, case .fetching = p.state { return }
+        // A share-sheet save the queue follows takes over the activity the server started for it (below), never asks for one.
+        if !p.requestsLiveActivity, !adapter.activities.contains(where: { $0.attributes.run == r.idString && !$0.isEnded }) { return }
         r.activityTried = true
         guard adapter.isAvailable else { return }
         let id = r.idString
@@ -747,17 +774,21 @@ final class LiveActivityManager: JobLiveSink {
     /// request this period makes.
     private func ensureSummaryActivity(_ s: Summary, _ content: LiveContentState, lead: Pipeline) {
         guard s.handle == nil, !s.activityTried else { return }
-        s.activityTried = true
-        guard adapter.isAvailable else { return }
+        // ActivityKit refuses a request from the background: wait for `foreground()` (nothing is marked as tried).
+        guard !inBackground, adapter.isAvailable else { return }
+        let t = now.timeIntervalSince1970
+        if let last = s.lastRequestAttempt, t - last < Self.requestRetrySeconds { return }
+        s.lastRequestAttempt = t
         // Its own run id: the server never hears of it (a push to it would overwrite the summary).
         let origin = lead.liveAttributes(origin: "app")
         let attributes = LiveRunAttributes(run: UUID(), input: origin.input, service: origin.service, ref: origin.ref, origin: "app")
         do {
             let stale = now.addingTimeInterval(Self.staleSeconds)
             s.handle = try adapter.request(attributes, state: content, staleDate: stale, push: false)
+            s.activityTried = true
             s.attributes = attributes
             s.sent = content
-            s.sentAt = now.timeIntervalSince1970
+            s.sentAt = t
             scheduleKeepalive(s)
             Telemetry.log(.info, .live, "live activity started", data: ["run": .string(String(attributes.run.prefix(8))), "push": false, "summary": true])
         } catch {
