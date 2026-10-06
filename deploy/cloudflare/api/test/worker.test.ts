@@ -161,7 +161,10 @@ describe("the app's routes (capabilities, upload, library)", () => {
             expect(res.status).toBe(200);
             expect(((await res.json()) as any).server).toBe("cobalt-cloudflare");
         }
-        expect(seen).toHaveLength(0);
+        // the one call into the Durable Object is its stored answer to "has the helper said it has the slideshow routes?"
+        // (internal, never reaches the container; APP-API-CONTRACT.md 18.8): the request itself is not forwarded
+        expect(seen.map((r) => new URL(r.url).pathname)).toEqual(Array(4).fill("/helper/caps"));
+        expect(seen.every((r) => r.method === "GET" && !r.headers.has("authorization") && r.headers.get(KEY_ID_HEADER) === "worker:capabilities")).toBe(true);
     });
     it("key states: missing, invalid (unknown and malformed), valid with its name, unknown when D1 is down", async () => {
         const key = async (headers: Record<string, string>) => ((await (await call("/capabilities", { headers })).json()) as any).key;

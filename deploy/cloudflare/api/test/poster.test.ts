@@ -4,7 +4,7 @@
 // (node:sqlite over every migration) run together; the helper (its /poster endpoint) and both
 // R2 buckets are fakes. The real ffmpeg is in poster-helper.test.ts.
 import { beforeEach, describe, expect, it } from "vitest";
-import { POSTER_BATCH, POSTER_COOLDOWN_MS, POSTER_MAX_ATTEMPTS, POSTER_PREFIX } from "../src/poster";
+import { POSTER_BATCH, POSTER_COOLDOWN_MS, POSTER_MAX_ATTEMPTS, POSTER_PREFIX, isPosterType, posterEligible } from "../src/poster";
 import { SERVICE_KEY_ID } from "../src/library";
 import { SESSION_TTL_MS, sessionBody, getSession, type SessionRow } from "../src/studio";
 import { LINK, KEY_ID, MEDIA_BASE, POSTER_URL, asBody, auth, json, svc, world, type World } from "./poster-world";
@@ -299,9 +299,9 @@ describe("the sweep: one job at a time, retries, give-ups", () => {
         expect(records(w)).toEqual([]);
     });
 
-    it("rows that are deleted, already postered or not videos are dropped from the queue without a helper call", async () => {
+    it("rows that are deleted, already postered or have no frame (a pdf) are dropped from the queue without a helper call", async () => {
         await queue();
-        w.db.raw.prepare("UPDATE media_items SET content_type = 'image/png' WHERE id = ?").run(itemId);
+        w.db.raw.prepare("UPDATE media_items SET content_type = 'application/pdf' WHERE id = ?").run(itemId);
         expect(await w.studio.sweep()).toEqual({ pending: 0 });
         expect(posterCalls(w)).toEqual([]);
         expect(records(w)).toEqual([]);
@@ -367,11 +367,11 @@ describe("a render, save or upload arriving while a poster is being made waits f
 });
 
 describe("the lazy kick (what backfills the library that existed before posters)", () => {
-    it("queues the originals that are videos or gifs and have no poster; skips everything else", async () => {
+    it("queues the originals that are videos, gifs or still images and have no poster; skips everything else", async () => {
         w.seed(); // 1 video
         w.seed({ content_type: "image/gif", r2_key: `originals/${"g".repeat(22)}.gif`, id: "g".repeat(22) }); // 2 gif
-        const png = w.seed({}, { object: false });
-        w.db.raw.prepare("UPDATE media_items SET content_type = 'image/png' WHERE id = ?").run(png.itemId);
+        const pdf = w.seed({}, { object: false });
+        w.db.raw.prepare("UPDATE media_items SET content_type = 'application/pdf' WHERE id = ?").run(pdf.itemId);
         const del = w.seed();
         w.db.raw.prepare("UPDATE media_items SET deleted_at = 1 WHERE id = ?").run(del.itemId);
         const have = w.seed();
@@ -392,6 +392,35 @@ describe("the lazy kick (what backfills the library that existed before posters)
         expect(asBody(await w.studio.kickPosters())).toMatchObject({ queued: 0, eligible: 2 });
         // the container is not touched by queueing
         expect(w.helper.calls).toEqual([]);
+    });
+
+    it("a still image gets a poster too (APP-API-CONTRACT.md 18.2); a webp rendition switched private does not (it is its own picture), nor does a HEIC (the container's ffmpeg cannot decode it)", async () => {
+        const jpg = w.seed({}, { object: false });
+        w.db.raw.prepare("UPDATE media_items SET content_type = 'image/jpeg' WHERE id = ?").run(jpg.itemId);
+        const heic = w.seed({}, { object: false });
+        w.db.raw.prepare("UPDATE media_items SET content_type = 'image/heic' WHERE id = ?").run(heic.itemId);
+        // a switched-private webp: private bucket, source studio, image/webp
+        w.db.raw
+            .prepare("INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, created_at, visibility, public_key) VALUES ('SwitchedWebp0001','public','studio','originals','webps/Abcdefghij.webp',NULL,'a.webp','image/webp',1,'private','Abcdefghij.webp')")
+            .run();
+        // ... and an uploaded still webp, which has no animation to be afraid of
+        w.db.raw
+            .prepare("INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, created_at, visibility) VALUES ('UploadWebp00001','private','upload','originals','uploads/UploadWebp00001.webp',NULL,'a.webp','image/webp',1,'private')")
+            .run();
+        const r = await w.studio.kickPosters();
+        expect(r).toEqual({ status: 200, body: { status: "success", queued: 2, eligible: 2 } });
+        expect(records(w).sort()).toEqual([`${POSTER_PREFIX}${jpg.itemId}`, `${POSTER_PREFIX}UploadWebp00001`].sort());
+        void heic;
+    });
+
+    it("isPosterType / posterEligible", () => {
+        for (const t of ["video/mp4", "image/gif", "image/jpeg", "image/png", "image/webp"]) expect(isPosterType(t), t).toBe(true);
+        for (const t of [null, undefined, "", "application/pdf", "text/html", "image/svg+xml", "image/heic"]) expect(isPosterType(t), String(t)).toBe(false);
+        expect(posterEligible({ content_type: "image/webp", source: "studio" })).toBe(false);
+        expect(posterEligible({ content_type: "image/webp", source: "webp" })).toBe(false);
+        expect(posterEligible({ content_type: "image/webp", source: "upload" })).toBe(true);
+        // a slideshow is a studio-sourced video: it has a frame
+        expect(posterEligible({ content_type: "video/mp4", source: "studio" })).toBe(true);
     });
 
     it("limit: at most that many are queued (newest first), the rest are counted; the default is the batch size", async () => {

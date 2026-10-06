@@ -13,6 +13,7 @@ import { MEDIA_NAME_REGEX, WEBP_ID_REGEX } from "./gate";
 import { KEY_ID_HEADER } from "./headers";
 import { randomBase62 } from "./ids";
 import { insertMediaItem, markMediaDeleted } from "./library";
+import type { SlideshowRun } from "./line";
 import { cropToWire, parseCrop } from "../helper/crop.js";
 
 export const WEBP_ID_LENGTH = 20;
@@ -209,6 +210,9 @@ export type JobRecord = {
     keyId: string;
     createdAt: number;
     params: WebpParams;
+    // a slideshow job the helper is running (APP-API-CONTRACT.md section 18.5): it is collected by the studio
+    // (never by this service), `params` is a placeholder
+    slideshow?: SlideshowRun;
 };
 
 export interface KV {

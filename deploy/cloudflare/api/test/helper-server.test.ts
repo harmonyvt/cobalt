@@ -185,7 +185,8 @@ describe("POST /fetch", () => {
         const res = await post("/fetch", { id: FID, url: LINK });
         expect(res.status).toBe(202);
         expect(await json(res)).toEqual({ status: "pending", id: FID });
-        expect(await json(await call(`/fetch/${FID}`))).toEqual({ status: "pending", stage: "downloading", bytes: 0, total: null });
+        // (the poll waits for cobalt's answer: items_total is null until then, 18.7)
+        expect(await until(`/fetch/${FID}`, (b) => b.items_total !== null)).toEqual({ status: "pending", stage: "downloading", bytes: 0, total: null, item: 0, items_done: 0, items_total: 1 });
         release();
         const done = await until(`/fetch/${FID}`);
         expect(done).toEqual({
@@ -198,6 +199,7 @@ describe("POST /fetch", () => {
             height: 560,
             title: "twitter_2105237035271258436",
             service: "x",
+            picker_count: null,
         });
         expect(ctl.resolveCalls[0]).toMatchObject({ url: LINK, internalKey: KEY });
         expect(existsSync(path.join(dirs.fetch, FID, "in"))).toBe(true);
@@ -540,7 +542,7 @@ describe("progress while pending (APP-API-CONTRACT.md sections 2 and 4)", () => 
         };
         await post("/fetch", { id: FID, url: LINK });
         const first = await until(`/fetch/${FID}`, (b) => b.status !== "pending" || b.bytes === 500);
-        expect(first).toEqual({ status: "pending", stage: "downloading", bytes: 500, total: 1000 });
+        expect(first).toEqual({ status: "pending", stage: "downloading", bytes: 500, total: 1000, item: 0, items_done: 0, items_total: 1 });
         release();
         expect(await until(`/fetch/${FID}`)).toMatchObject({ status: "done", bytes: 1234 });
     });
@@ -558,7 +560,7 @@ describe("progress while pending (APP-API-CONTRACT.md sections 2 and 4)", () => 
         await post("/fetch", { id: FID, url: LINK });
         const probing = await until(`/fetch/${FID}`, (b) => b.status !== "pending" || b.stage === "probing");
         // the bytes are the finished download's size; the probe has no count
-        expect(probing).toEqual({ status: "pending", stage: "probing", bytes: 1234, total: null });
+        expect(probing).toEqual({ status: "pending", stage: "probing", bytes: 1234, total: null, item: 0, items_done: 0, items_total: 1 });
         probeGate.release();
         expect((await until(`/fetch/${FID}`)).status).toBe("done");
     });
@@ -569,7 +571,8 @@ describe("progress while pending (APP-API-CONTRACT.md sections 2 and 4)", () => 
             return { url: "http://127.0.0.1:1/v", filename: "v.mp4" };
         };
         await post("/fetch", { id: FID, url: LINK });
-        expect(await json(await call(`/fetch/${FID}`))).toEqual({ status: "pending", stage: "downloading", bytes: 0, total: null });
+        // (APP-API-CONTRACT 18.7: item / items_done / items_total are null / 0 / null until cobalt has answered)
+        expect(await json(await call(`/fetch/${FID}`))).toEqual({ status: "pending", stage: "downloading", bytes: 0, total: null, item: null, items_done: 0, items_total: null });
         release();
         await until(`/fetch/${FID}`);
     });

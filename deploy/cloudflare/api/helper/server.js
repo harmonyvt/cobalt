@@ -21,13 +21,20 @@
 //   DELETE /jobs/:id          -> removes the job and its files
 //
 // cobalt studio (saving a source video for later renders):
-//   POST   /fetch {id,url}    -> 202 | 429 busy   (resolve via cobalt, download at
-//                      most 200 MB to /tmp/fetch/<id>/in, probe duration/size)
-//   GET    /fetch/:id         -> {status:"pending", stage:"downloading"|"probing", bytes, total} |
-//                      {status:"done", bytes, contentType,
-//                      ext, duration, width, height, title, service} | {status:"error",error:{code}}
-//   GET    /fetch/:id/file    -> the video bytes with content-length (once done)
-//   DELETE /fetch/:id         -> removes it and its file
+//   POST   /fetch {id,url,items?,item_count?}
+//                      -> 202 | 400 | 429 busy   (resolve via cobalt, download at most 200 MB per
+//                      file / 500 MB per job to /tmp/fetch/<id>, type each file by its BYTES
+//                      (jpeg png webp heic gif, else video), probe duration/size, a 480 px JPEG
+//                      thumb for a photo). `items` ("all" | "first-video" | [0,3]) saves several
+//                      picker items one after another; a failed item is recorded and the job goes
+//                      on (APP-API-CONTRACT 18.2 / 18.7)
+//   GET    /fetch/:id         -> {status:"pending", stage:"downloading"|"probing", bytes, total,
+//                      item, items_done, items_total} | {status:"done", bytes, contentType, ext,
+//                      duration, width, height, title, service, picker_count, items?} (the lead:
+//                      the first saved video, else the first saved item) | {status:"error",error:{code}}
+//   GET    /fetch/:id/file?i= -> the bytes with content-length (once done; no i = the lead)
+//   GET    /fetch/:id/thumb?i= -> image/jpeg, longer side <= 480 (404 when the file has none)
+//   DELETE /fetch/:id         -> removes it and its files
 //
 // Live Activity push fallback (APP-API-CONTRACT.md section 8.4, text binding
 // APNS_VIA="helper"): a dumb HTTP/2 relay to Apple. The Durable Object signs the
@@ -48,7 +55,20 @@
 //                      (duration may be null) | 400 error.studio.not_video (no
 //                      video stream, or empty) | 413 | 429 busy
 //
-// Poster frames (APP-API-CONTRACT.md section 13): a thumbnail for a stored video.
+// Slideshow (APP-API-CONTRACT.md 18.5 / 18.7, apple/CONTRACT-GALLERY.md 6): photos and videos of one
+// gallery into one video. The first input holds the helper (like an upload) until DELETE, or until
+// 5 minutes pass with no request for it:
+//   PUT    /slideshow/:id/inputs/:n   body = the file (n 0-19, <= 200 MB each, <= 500 MB a job)
+//                      -> 204 | 400 | 413 | 429 busy
+//   POST   /slideshow/:id/start {width,height,fade,sound,slides:[{n,seconds|null}]}
+//                      -> 202 | 400 | 404 | 409 (an input missing, or already started)
+//   GET    /slideshow/:id     -> {status:"pending", phase:"composing"|"encoding"|null, done, total} |
+//                      {status:"done", bytes, duration, width, height} | {status:"error",error:{code}}
+//   GET    /slideshow/:id/file -> video/mp4 (once done)
+//   DELETE /slideshow/:id     -> 204
+//
+// Poster frames (APP-API-CONTRACT.md section 13): a thumbnail for a stored video (or the picture itself,
+// for an image: frame 0).
 //   POST   /poster?id=        body = the video bytes (streamed to /tmp/poster/<id>, at most
 //                      200 MB); ffmpeg writes ONE JPEG (frame at 10 % of the duration, at most
 //                      3 s in; longer side at most 720 px, never upscaled; rotation applied),
@@ -59,7 +79,7 @@
 
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, open, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import http from "node:http";
 import http2 from "node:http2";
 import { createRequire } from "node:module";
@@ -73,40 +93,46 @@ import {
     ID_RE,
     JobError,
     MAX_FETCH_BYTES,
+    MAX_JOB_BYTES,
     MAX_OUTPUT_BYTES,
     MAX_POSTER_BYTES,
+    SLIDESHOW_N_RE,
+    THUMB_MAX_SIDE,
     VIDEO_TYPES,
     downloadToFile,
     encodeAnimatedWebp,
-    isGifHead,
     keyMatches,
+    parseFetchSelection,
+    parseHasAudio,
     parseVideoInfo,
     buildPosterArgs,
     parseWebp,
     planClip,
     posterTime,
+    readFileHead as readHead,
+    renderSlideshow,
     runProcess,
     resolveSource,
+    selectPickerItems,
     serviceFromUrl,
+    sniffType,
     studioCode,
     titleFromFilename,
     validateEncodeFields,
     validateFetchInput,
     validateJobInput,
+    validateSlideshowStart,
     videoExt,
 } from "./lib.js";
 
-/** The first `n` bytes of a file (fewer when it is shorter). */
-async function readHead(file, n) {
-    const fh = await open(file, "r");
-    try {
-        const buf = Buffer.alloc(n);
-        const { bytesRead } = await fh.read(buf, 0, n, 0);
-        return buf.subarray(0, bytesRead);
-    } finally {
-        await fh.close();
-    }
-}
+/** Sent on every answer (see `createServer`): the Durable Object's `features.gallery` follows it. */
+export const HELPER_CAPS_HEADER = "x-cobalt-helper";
+export const HELPER_CAPS = "gallery=1";
+
+/** A slideshow nobody has asked about for this long is dropped (the helper is freed). */
+export const SLIDESHOW_IDLE_MS = 5 * 60_000;
+/** One slideshow job's whole budget (composing and encoding). */
+export const SLIDESHOW_TIMEOUT_MS = 10 * 60_000;
 
 // The relay's whole budget for one push (see APNS_TIMEOUT_MS inside createHelper).
 export const APNS_DEFAULT_TIMEOUT_MS = 2000;
@@ -116,7 +142,16 @@ export const APNS_DEFAULT_TIMEOUT_MS = 2000;
  *   dir: string, error?: {code: string}, result?: any,
  *   proc?: import("node:child_process").ChildProcess,
  *   progress?: {phase: "fetching"|"decode"|"pack", total: number|null, frames?: number, framesDir?: string},
- *   fetchProgress?: {stage: "downloading"|"probing", bytes: number, total: number|null}}} Job
+ *   fetchProgress?: {stage: "downloading"|"probing", bytes: number, total: number|null,
+ *                    item: number|null, itemsDone: number, itemsTotal: number|null},
+ *   files?: Map<number, {file: string, thumb: string|null, contentType: string}>,
+ *   lead?: number}} Job
+ *
+ * @typedef {{id: string, status: "pending"|"done"|"error", started: boolean, createdAt: number,
+ *   touched: number, dir: string, files: Map<number, string>, sizes: Map<number, number>,
+ *   phase: "composing"|"encoding"|null, done: number, total: number,
+ *   error?: {code: string}, result?: {bytes: number, duration: number|null, width: number|null, height: number|null},
+ *   proc?: import("node:child_process").ChildProcess}} SlideshowJob
  */
 
 /**
@@ -125,7 +160,9 @@ export const APNS_DEFAULT_TIMEOUT_MS = 2000;
  *   posterDir?: string, posterTimeoutMs?: number,
  *   cobaltOrigin?: string, apiOrigin?: string,
  *   ffmpegTimeoutMs?: number, downloadTimeoutMs?: number, fetchTimeoutMs?: number,
- *   maxFetchBytes?: number, keepJobs?: number, jobTtlMs?: number,
+ *   maxFetchBytes?: number, maxJobBytes?: number, keepJobs?: number, jobTtlMs?: number,
+ *   slideshowDir?: string, slideshowIdleMs?: number, slideshowTimeoutMs?: number,
+ *   probeAV?: (input: string) => Promise<{duration: number|null, width: number|null, height: number|null, hasAudio: boolean}>,
  *   ffmpegPath?: () => string, img2webpPath?: () => string,
  *   probe?: (input: string) => Promise<{duration: number|null, width: number|null, height: number|null}>,
  *   waitForCobalt?: () => Promise<void>,
@@ -152,6 +189,10 @@ export function createHelper(opts = {}) {
     // 200 MB over the container's network takes longer than a 720p clip
     const FETCH_TIMEOUT_MS = opts.fetchTimeoutMs ?? 240_000;
     const MAX_FETCH = opts.maxFetchBytes ?? MAX_FETCH_BYTES;
+    const MAX_JOB = opts.maxJobBytes ?? MAX_JOB_BYTES;
+    const SLIDESHOW_DIR = opts.slideshowDir ?? "/tmp/slideshow";
+    const SLIDESHOW_IDLE = opts.slideshowIdleMs ?? SLIDESHOW_IDLE_MS;
+    const SLIDESHOW_TIMEOUT = opts.slideshowTimeoutMs ?? SLIDESHOW_TIMEOUT_MS;
     const KEEP_JOBS = opts.keepJobs ?? 20;
     const JOB_TTL_MS = opts.jobTtlMs ?? 30 * 60_000;
     const apiOrigin = opts.apiOrigin;
@@ -175,9 +216,34 @@ export function createHelper(opts = {}) {
     /** probes and poster frames in flight (POST /probe, POST /poster): they hold the helper like a job does */
     const probing = new Set();
 
-    const busy = () =>
-        probing.size > 0 ||
-        [...jobs.values(), ...fetches.values()].some((j) => j.status === "pending");
+    /** @type {Map<string, SlideshowJob>} a slideshow holds the helper from its first input until DELETE or idle */
+    const slideshows = new Map();
+
+    const busy = () => {
+        reapSlideshows();
+        return (
+            probing.size > 0 ||
+            // a slideshow holds the helper while it is being filled, started and encoded; one that has finished (or
+            // failed, a timeout included) stays only to be collected and no longer keeps anything else out
+            [...slideshows.values()].some((j) => j.status === "pending") ||
+            [...jobs.values(), ...fetches.values()].some((j) => j.status === "pending")
+        );
+    };
+
+    /** @param {SlideshowJob} job */
+    async function dropSlideshow(job) {
+        // out of the map first, synchronously: the helper is free as soon as this returns
+        if (slideshows.get(job.id) === job) slideshows.delete(job.id);
+        job.proc?.kill("SIGKILL");
+        await rm(job.dir, { recursive: true, force: true }).catch(() => {});
+    }
+
+    function reapSlideshows() {
+        const now = Date.now();
+        for (const job of [...slideshows.values()]) {
+            if (now - job.touched > SLIDESHOW_IDLE) void dropSlideshow(job);
+        }
+    }
 
     /** @param {Map<string, Job>} map @param {Job} job */
     async function drop(map, job) {
@@ -202,6 +268,8 @@ export function createHelper(opts = {}) {
     }
     const evictTimer = setInterval(evictOld, 60_000);
     evictTimer.unref();
+    const reapTimer = setInterval(reapSlideshows, Math.max(50, Math.min(SLIDESHOW_IDLE / 2, 30_000)));
+    reapTimer.unref();
 
     const waitForCobalt =
         opts.waitForCobalt ??
@@ -227,36 +295,47 @@ export function createHelper(opts = {}) {
     const img2webpPath = opts.img2webpPath ?? (() => process.env.IMG2WEBP_PATH || "img2webp");
 
     /**
+     * What `ffmpeg -i file` says about a file: its stderr (stream info), "" when ffmpeg cannot run.
+     * With no output ffmpeg exits 1; that is expected.
+     * @param {string} input
+     * @returns {Promise<string>}
+     */
+    const probeRaw = (input) =>
+        new Promise((resolve) => {
+            const ff = spawn(
+                ffmpegPath(),
+                ["-nostdin", "-hide_banner", "-protocol_whitelist", "file,pipe", "-i", input],
+                { stdio: ["ignore", "ignore", "pipe"] },
+            );
+            let err = "";
+            // The stream info sits in the first lines; keep the head.
+            ff.stderr.on("data", (d) => {
+                if (err.length < 65536) err += d;
+            });
+            const timer = setTimeout(() => ff.kill("SIGKILL"), 15_000);
+            ff.on("error", () => {
+                clearTimeout(timer);
+                resolve("");
+            });
+            ff.on("close", () => {
+                clearTimeout(timer);
+                resolve(err);
+            });
+        });
+
+    /**
      * Duration, width and height of a video, or nulls when ffmpeg cannot say.
-     * `ffmpeg -i file` with no output prints the stream info to stderr and
-     * exits 1; that is expected.
      * @param {string} input
      */
-    const probe =
-        opts.probe ??
-        ((input) =>
-            new Promise((resolve) => {
-                const ff = spawn(
-                    ffmpegPath(),
-                    ["-nostdin", "-hide_banner", "-protocol_whitelist", "file,pipe", "-i", input],
-                    { stdio: ["ignore", "ignore", "pipe"] },
-                );
-                let err = "";
-                // The stream info sits in the first lines; keep the head.
-                ff.stderr.on("data", (d) => {
-                    if (err.length < 65536) err += d;
-                });
-                const timer = setTimeout(() => ff.kill("SIGKILL"), 15_000);
-                const empty = { duration: null, width: null, height: null };
-                ff.on("error", () => {
-                    clearTimeout(timer);
-                    resolve(empty);
-                });
-                ff.on("close", () => {
-                    clearTimeout(timer);
-                    resolve(parseVideoInfo(err));
-                });
-            }));
+    const probe = opts.probe ?? (async (input) => parseVideoInfo(await probeRaw(input)));
+
+    /** `probe` plus whether there is an audio stream (the slideshow keeps a video's own sound). */
+    const probeAV =
+        opts.probeAV ??
+        (async (input) => {
+            const err = await probeRaw(input);
+            return { ...parseVideoInfo(err), hasAudio: parseHasAudio(err) };
+        });
 
     // --- WebP jobs ---------------------------------------------------------------
 
@@ -378,10 +457,100 @@ export function createHelper(opts = {}) {
 
     // --- studio fetches -----------------------------------------------------------
 
-    /** @param {Job} job @param {{id: string, url: string}} p */
+    /**
+     * One 480 px JPEG thumb of a saved photo. Best effort: false when ffmpeg cannot read it
+     * (a HEIC without a decoder): the photo is saved all the same.
+     * @param {string} input @param {string} output
+     */
+    async function makeThumb(input, output) {
+        try {
+            await runProcess({
+                bin: ffmpegPath(),
+                args: buildPosterArgs({ input, output, side: THUMB_MAX_SIDE }),
+                timeoutMs: POSTER_TIMEOUT_MS,
+                label: "thumb",
+            });
+        } catch {
+            await rm(output, { force: true }).catch(() => {});
+            return false;
+        }
+        return ((await stat(output).catch(() => null))?.size ?? 0) > 0;
+    }
+
+    /**
+     * Downloads one file to `input`, types it by its bytes and probes it. A still image (jpeg png
+     * webp heic) keeps its real type, `duration: null`, and gets a thumb at `thumbOut`; a GIF is
+     * `image/gif`; everything else is a video, as it has always been (it must have a video stream).
+     * @param {Job} job
+     * @param {{url: string, input: string, thumbOut: string, filename: string | null, maxBytes: number,
+     *          index: number, itemsDone: number}} o
+     */
+    async function fetchOne(job, o) {
+        /** @type {string | null} */
+        let contentType = null;
+        const progress = (stage, bytes, total) => {
+            job.fetchProgress = {
+                stage,
+                bytes,
+                total,
+                item: o.index,
+                itemsDone: o.itemsDone,
+                itemsTotal: job.fetchProgress?.itemsTotal ?? null,
+            };
+        };
+        progress("downloading", 0, null);
+        const bytes = await doDownload({
+            url: o.url,
+            dest: o.input,
+            maxBytes: o.maxBytes,
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+            onResponse: (res) => {
+                contentType = res.headers.get("content-type");
+            },
+            onProgress: (done, total) => progress("downloading", done, total),
+        });
+
+        progress("probing", bytes, null);
+        const sniffed = sniffType(await readHead(o.input, 12));
+        const info = await probe(o.input);
+        if (sniffed?.type === "image") {
+            // a still: its type comes from its bytes, never from what cobalt or the CDN called it.
+            // A jpeg, png or webp that ffmpeg cannot size is broken; a HEIC may just lack a decoder.
+            if (sniffed.ext !== "heic" && (info.width === null || info.height === null)) {
+                throw new JobError("error.webp.bad_source");
+            }
+            const thumb = await makeThumb(o.input, o.thumbOut);
+            return {
+                bytes,
+                contentType: sniffed.contentType,
+                ext: sniffed.ext,
+                duration: null,
+                width: info.width,
+                height: info.height,
+                thumb,
+            };
+        }
+        // no video stream: audio or a broken file is no use here
+        if (info.width === null || info.height === null) throw new JobError("error.webp.bad_source");
+        // a real GIF is labelled as one (the studio already takes `image/gif` from uploads),
+        // not as an mp4 that no video player can open
+        const gif = sniffed?.type === "gif";
+        const ext = gif ? "gif" : videoExt({ contentType, filename: o.filename });
+        return {
+            bytes,
+            contentType: gif ? "image/gif" : VIDEO_TYPES[ext],
+            ext,
+            duration: info.duration,
+            width: info.width,
+            height: info.height,
+            thumb: false,
+        };
+    }
+
+    /** @param {Job} job @param {{id: string, url: string, items?: "all"|"first-video"|number[], item_count?: number}} p */
     async function runFetch(job, p) {
-        const input = path.join(job.dir, "in");
-        job.fetchProgress = { stage: "downloading", bytes: 0, total: null };
+        job.fetchProgress = { stage: "downloading", bytes: 0, total: null, item: null, itemsDone: 0, itemsTotal: null };
+        const nn = (i) => String(i).padStart(2, "0");
         try {
             await mkdir(job.dir, { recursive: true });
             await waitForCobalt();
@@ -392,42 +561,110 @@ export function createHelper(opts = {}) {
                 origin: COBALT,
                 apiOrigin,
                 signal: AbortSignal.timeout(60_000),
+                picker: true,
             });
 
-            /** @type {string | null} */
-            let contentType = null;
-            const bytes = await doDownload({
-                url: src.url,
-                dest: input,
-                maxBytes: MAX_FETCH,
-                signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-                onResponse: (res) => {
-                    contentType = res.headers.get("content-type");
-                },
-                onProgress: (done, total) => {
-                    job.fetchProgress = { stage: "downloading", bytes: done, total };
-                },
-            });
-
-            job.fetchProgress = { stage: "probing", bytes, total: null };
-            const info = await probe(input);
-            // no video stream: an image, audio or a broken file is no use here
-            if (info.width === null || info.height === null) {
-                throw new JobError("error.webp.bad_source");
+            // A plain answer (tunnel / redirect) is a picker of one of unknown type. The count the
+            // client saw must be the count here, or the indices would name the wrong items.
+            const picker = Array.isArray(src.picker) ? src.picker : null;
+            const entries = picker ?? [{ i: 0, type: null, url: src.url }];
+            if (p.item_count !== undefined && p.item_count !== entries.length) {
+                throw new JobError("error.studio.gallery_changed");
             }
-            // a real GIF is labelled as one (the studio already takes `image/gif` from uploads),
-            // not as an mp4 that no video player can open
-            const gif = isGifHead(await readHead(input, 6));
-            const ext = gif ? "gif" : videoExt({ contentType, filename: src.filename });
+            const sel = selectPickerItems(entries, p.items);
+            if (!sel.ok) throw new JobError(sel.code);
+            const service = serviceFromUrl(p.url);
+            const title = picker ? null : titleFromFilename(src.filename);
+            const pickerCount = picker ? entries.length : null;
+            job.files = new Map();
+            job.fetchProgress = { ...job.fetchProgress, itemsTotal: sel.indices.length };
+
+            // `items` absent, "first-video", or a link that is not a picker at all ("all" on a plain video):
+            // one file, exactly today's job and answer (no `items` list, so the API stores `originals/<sid>.<ext>`)
+            if (p.items === undefined || p.items === "first-video" || !picker) {
+                // one file: today's job (a one-item picker included)
+                const index = sel.indices[0];
+                const e = entries[index];
+                if (!e.url) throw new JobError("error.webp.bad_source");
+                const input = path.join(job.dir, "in");
+                const thumbOut = path.join(job.dir, "thumb.jpg");
+                const r = await fetchOne(job, {
+                    url: e.url,
+                    input,
+                    thumbOut,
+                    filename: src.filename,
+                    maxBytes: MAX_FETCH,
+                    index,
+                    itemsDone: 0,
+                });
+                job.files.set(index, { file: input, thumb: r.thumb ? thumbOut : null, contentType: r.contentType });
+                job.lead = index;
+                job.result = {
+                    bytes: r.bytes,
+                    contentType: r.contentType,
+                    ext: r.ext,
+                    duration: r.duration,
+                    width: r.width,
+                    height: r.height,
+                    title,
+                    service,
+                    picker_count: pickerCount,
+                };
+                job.status = "done";
+                return;
+            }
+
+            // several (or "all", or "first-video"): one after another, a failed item recorded
+            /** @type {any[]} */
+            const list = [];
+            let total = 0;
+            for (const index of sel.indices) {
+                const e = entries[index];
+                const input = path.join(job.dir, `item-${nn(index)}`);
+                const thumbOut = path.join(job.dir, `thumb-${nn(index)}.jpg`);
+                try {
+                    if (!e.url) throw new JobError("error.webp.bad_source");
+                    const room = MAX_JOB - total;
+                    if (room <= 0) throw new JobError("error.webp.too_large");
+                    const r = await fetchOne(job, {
+                        url: e.url,
+                        input,
+                        thumbOut,
+                        filename: src.filename,
+                        maxBytes: Math.min(MAX_FETCH, room),
+                        index,
+                        itemsDone: list.length,
+                    });
+                    total += r.bytes;
+                    job.files.set(index, { file: input, thumb: r.thumb ? thumbOut : null, contentType: r.contentType });
+                    list.push({ i: index, status: "done", ...r });
+                } catch (err) {
+                    if (!(err instanceof JobError)) console.error("[webp-helper] fetch item failed:", err);
+                    await rm(input, { force: true }).catch(() => {});
+                    await rm(thumbOut, { force: true }).catch(() => {});
+                    list.push({
+                        i: index,
+                        status: "error",
+                        code: err instanceof JobError ? studioCode(err.code) : "error.webp.download_failed",
+                    });
+                }
+            }
+            const done = list.filter((it) => it.status === "done");
+            // the job fails only when nothing was saved, with the first item's code
+            if (done.length === 0) throw new JobError(list[0].code);
+            const lead = done.find((it) => it.contentType.startsWith("video/")) ?? done[0];
+            job.lead = lead.i;
             job.result = {
-                bytes,
-                contentType: gif ? "image/gif" : VIDEO_TYPES[ext],
-                ext,
-                duration: info.duration,
-                width: info.width,
-                height: info.height,
-                title: titleFromFilename(src.filename),
-                service: serviceFromUrl(p.url),
+                bytes: lead.bytes,
+                contentType: lead.contentType,
+                ext: lead.ext,
+                duration: lead.duration,
+                width: lead.width,
+                height: lead.height,
+                title,
+                service,
+                picker_count: pickerCount,
+                items: list,
             };
             job.status = "done";
         } catch (e) {
@@ -634,7 +871,7 @@ export function createHelper(opts = {}) {
                 else cb(null, chunk);
             },
         });
-        /** @param {number} at */
+        /** @param {number | null} at null = no seek (an image) */
         const frame = async (at) => {
             await rm(output, { force: true });
             try {
@@ -658,12 +895,18 @@ export function createHelper(opts = {}) {
             await mkdir(dir, { recursive: true });
             await pipeline(req, counter, createWriteStream(input));
             if (n === 0) throw new JobError("error.studio.not_video");
-            const info = await probe(input);
-            // no video stream: audio, a document or a broken file has no frame to show
-            if (info.width === null || info.height === null) throw new JobError("error.studio.not_video");
-            const at = posterTime(info.duration);
-            let made = await frame(at);
-            if (!made && at > 0) made = await frame(0);
+            let made;
+            if (sniffType(await readHead(input, 12))?.type === "image") {
+                // a picture has one frame, frame 0: no seek (a 0.004 s seek past it writes nothing)
+                made = await frame(null);
+            } else {
+                const info = await probe(input);
+                // no video stream: audio, a document or a broken file has no frame to show
+                if (info.width === null || info.height === null) throw new JobError("error.studio.not_video");
+                const at = posterTime(info.duration);
+                made = await frame(at);
+                if (!made && at > 0) made = await frame(0);
+            }
             if (!made) throw new JobError("error.poster.failed");
             const { size } = await stat(output);
             if (size > MAX_POSTER_BYTES) throw new JobError("error.poster.failed");
@@ -695,11 +938,14 @@ export function createHelper(opts = {}) {
         );
     }
 
-    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {string} pathname */
-    async function handleFetchRoute(req, res, pathname) {
-        const m = pathname.match(/^\/fetch(?:\/([A-Za-z0-9]+)(\/file)?)?$/);
+    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {URL} url */
+    async function handleFetchRoute(req, res, url) {
+        const { pathname } = url;
+        const m = pathname.match(/^\/fetch(?:\/([A-Za-z0-9]+)(\/file|\/thumb)?)?$/);
         if (!m) return fail(res, 404, "error.webp.not_found");
-        const [, id, file] = m;
+        const [, id, sub] = m;
+        const file = sub === "/file";
+        const thumb = sub === "/thumb";
 
         if (!id) {
             if (req.method !== "POST") return fail(res, 405, "error.webp.bad_request");
@@ -709,8 +955,12 @@ export function createHelper(opts = {}) {
             } catch {
                 return fail(res, 400, "error.webp.invalid_params");
             }
-            const p = validateFetchInput(body);
-            if (!p) return fail(res, 400, "error.webp.invalid_params");
+            const base = validateFetchInput(body);
+            if (!base) return fail(res, 400, "error.webp.invalid_params");
+            const sel = parseFetchSelection(body);
+            if (!sel.ok) return fail(res, 400, "error.studio.invalid_params");
+            const { ok: _ok, ...gallery } = sel;
+            const p = { ...base, ...gallery };
             if (busy() || fetches.has(p.id)) return fail(res, 429, "error.webp.busy");
 
             /** @type {Job} */
@@ -736,23 +986,34 @@ export function createHelper(opts = {}) {
         }
         if (req.method !== "GET") return fail(res, 405, "error.webp.bad_request");
 
-        if (file) {
+        if (file || thumb) {
             if (job.status !== "done") return fail(res, 409, "error.webp.not_ready");
-            const src = path.join(job.dir, "in");
-            const { size } = await stat(src);
+            // ?i= names an item; none = the lead (the single file of a plain save)
+            const iq = url.searchParams.get("i");
+            if (iq !== null && !/^\d{1,2}$/.test(iq)) return fail(res, 404, "error.webp.not_found");
+            const entry = job.files?.get(iq === null ? (job.lead ?? 0) : Number(iq));
+            if (!entry) return fail(res, 404, "error.webp.not_found");
+            const target = thumb ? entry.thumb : entry.file;
+            if (!target) return fail(res, 404, "error.webp.not_found");
+            const st = await stat(target).catch(() => null);
+            if (!st) return fail(res, 404, "error.webp.not_found");
             res.writeHead(200, {
-                "content-type": job.result.contentType,
-                "content-length": size,
+                "content-type": thumb ? "image/jpeg" : entry.contentType,
+                "content-length": st.size,
             });
-            return void pipeline(createReadStream(src), res).catch(() => res.destroy());
+            return void pipeline(createReadStream(target), res).catch(() => res.destroy());
         }
 
         if (job.status === "pending") {
+            const fp = job.fetchProgress;
             return send(res, 200, {
                 status: "pending",
-                stage: job.fetchProgress?.stage ?? "downloading",
-                bytes: job.fetchProgress?.bytes ?? 0,
-                total: job.fetchProgress?.total ?? null,
+                stage: fp?.stage ?? "downloading",
+                bytes: fp?.bytes ?? 0,
+                total: fp?.total ?? null,
+                item: fp?.item ?? null,
+                items_done: fp?.itemsDone ?? 0,
+                items_total: fp?.itemsTotal ?? null,
             });
         }
         if (job.status === "error") return send(res, 200, { status: "error", error: job.error });
@@ -955,8 +1216,200 @@ export function createHelper(opts = {}) {
         }
     }
 
+    // ---- slideshow (APP-API-CONTRACT 18.7) ----------------------------------------------
+
+    /** @param {SlideshowJob} job */
+    async function runSlideshow(job, plan) {
+        const output = path.join(job.dir, "out.mp4");
+        // the whole job's budget, probing included: whatever is still running then is killed and the job fails with
+        // error.webp.timeout (renderSlideshow's own budget covers its ffmpeg runs; this covers a hung probe too)
+        const watchdog = setTimeout(() => {
+            if (job.status !== "pending" || slideshows.get(job.id) !== job) return;
+            job.error = { code: "error.webp.timeout" };
+            job.status = "error";
+            job.proc?.kill("SIGKILL");
+            void rm(job.dir, { recursive: true, force: true }).catch(() => {});
+        }, SLIDESHOW_TIMEOUT + 2000);
+        try {
+            const r = await renderSlideshow({
+                ffmpegBin: ffmpegPath(),
+                dir: job.dir,
+                output,
+                files: job.files,
+                plan,
+                probeAV,
+                timeoutMs: SLIDESHOW_TIMEOUT,
+                maxOutputBytes: MAX_FETCH,
+                onChild: (c) => {
+                    job.proc = c;
+                },
+                onPhase: (phase, { done, total }) => {
+                    job.phase = phase;
+                    job.done = done;
+                    job.total = total;
+                },
+            });
+            // the inputs and the composed stills are no longer needed; only the result stays
+            for (const f of [...job.files.values()]) await rm(f, { force: true }).catch(() => {});
+            for (const f of await readdir(job.dir).catch(() => [])) {
+                if (/^s-\d+\.jpg$/.test(f)) await rm(path.join(job.dir, f), { force: true }).catch(() => {});
+            }
+            if (job.status === "pending") {
+                job.result = r;
+                job.status = "done";
+            }
+        } catch (e) {
+            if (!(e instanceof JobError)) console.error("[webp-helper] slideshow failed:", e);
+            // a dropped job (DELETE, reaped) has nothing left to record; a timed-out one already says so
+            if (slideshows.get(job.id) === job && job.status === "pending") {
+                await rm(job.dir, { recursive: true, force: true }).catch(() => {});
+                job.error = { code: e instanceof JobError ? e.code : "error.webp.encode_failed" };
+                job.status = "error";
+            }
+        } finally {
+            clearTimeout(watchdog);
+            job.proc = undefined;
+        }
+    }
+
+    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {string} pathname */
+    async function handleSlideshowRoute(req, res, pathname) {
+        const m = pathname.match(/^\/slideshow\/([A-Za-z0-9]+)(?:\/(start|file)|\/inputs\/([^/]*))?$/);
+        if (!m) return fail(res, 404, "error.webp.not_found");
+        const [, id, sub, nRaw] = m;
+        const isInput = nRaw !== undefined;
+
+        // PUT /slideshow/:id/inputs/:n
+        if (isInput) {
+            if (req.method !== "PUT") return failAndClose(req, res, 405, "error.webp.bad_request");
+            if (!ID_RE.test(id) || !SLIDESHOW_N_RE.test(nRaw)) return failAndClose(req, res, 400, "error.webp.invalid_params");
+            const n = Number(nRaw);
+            let job = slideshows.get(id);
+            if (!job && busy()) return failAndClose(req, res, 429, "error.webp.busy");
+            if (job?.started) return failAndClose(req, res, 409, "error.webp.bad_request");
+            const others = job ? [...job.sizes].filter(([k]) => k !== n).reduce((t, [, v]) => t + v, 0) : 0;
+            const declared = Number(req.headers["content-length"]);
+            if (Number.isFinite(declared) && (declared > MAX_FETCH || others + declared > MAX_JOB)) {
+                return failAndClose(req, res, 413, "error.studio.too_large");
+            }
+            let created = false;
+            if (!job) {
+                created = true;
+                job = {
+                    id,
+                    status: "pending",
+                    started: false,
+                    createdAt: Date.now(),
+                    touched: Date.now(),
+                    dir: path.join(SLIDESHOW_DIR, id),
+                    files: new Map(),
+                    sizes: new Map(),
+                    phase: null,
+                    done: 0,
+                    total: 0,
+                };
+                slideshows.set(id, job);
+            }
+            const mine = job;
+            mine.touched = Date.now();
+            const file = path.join(mine.dir, `input-${n}`);
+            let got = 0;
+            const counter = new Transform({
+                transform(chunk, _e, cb) {
+                    got += chunk.length;
+                    mine.sizes.set(n, got);
+                    mine.touched = Date.now();
+                    if (got > MAX_FETCH || others + got > MAX_JOB) cb(new JobError("error.studio.too_large"));
+                    else cb(null, chunk);
+                },
+            });
+            let code = "";
+            try {
+                await mkdir(mine.dir, { recursive: true });
+                mine.files.delete(n);
+                mine.sizes.delete(n);
+                await pipeline(req, counter, createWriteStream(file));
+                if (got === 0) throw new JobError("error.webp.bad_source");
+                if (slideshows.get(id) !== mine) throw new JobError("error.webp.not_found");
+                mine.files.set(n, file);
+                mine.sizes.set(n, got);
+                mine.touched = Date.now();
+            } catch (e) {
+                code = e instanceof JobError ? e.code : "error.webp.download_failed";
+                mine.sizes.delete(n);
+                await rm(file, { force: true }).catch(() => {});
+                // a request that created the job and saved nothing must not keep the helper
+                if (created && mine.files.size === 0) await dropSlideshow(mine);
+            }
+            if (res.headersSent || res.destroyed) return;
+            if (code) return failAndClose(req, res, code === "error.studio.too_large" ? 413 : code === "error.webp.not_found" ? 404 : 400, code);
+            res.writeHead(204);
+            return void res.end();
+        }
+
+        if (!ID_RE.test(id)) return fail(res, 404, "error.webp.not_found");
+
+        // DELETE /slideshow/:id (idempotent: a job already reaped is still a 204)
+        if (!sub && req.method === "DELETE") {
+            const job = slideshows.get(id);
+            if (job) await dropSlideshow(job);
+            res.writeHead(204);
+            return void res.end();
+        }
+
+        const job = slideshows.get(id);
+        if (!job) return fail(res, 404, "error.webp.not_found");
+
+        // POST /slideshow/:id/start
+        if (sub === "start") {
+            if (req.method !== "POST") return fail(res, 405, "error.webp.bad_request");
+            job.touched = Date.now();
+            let body;
+            try {
+                body = JSON.parse(await readBody(req));
+            } catch {
+                return fail(res, 400, "error.webp.invalid_params");
+            }
+            const plan = validateSlideshowStart(body);
+            if (!plan) return fail(res, 400, "error.webp.invalid_params");
+            if (job.started) return fail(res, 409, "error.webp.bad_request");
+            // every slide needs its input on disk
+            if (plan.slides.some((sl) => !job.files.has(sl.n))) return fail(res, 409, "error.webp.not_ready");
+            job.started = true;
+            job.phase = "composing";
+            job.done = 0;
+            job.total = plan.slides.filter((sl) => sl.seconds !== null).length;
+            send(res, 202, { status: "pending", id });
+            void runSlideshow(job, plan);
+            return;
+        }
+
+        if (req.method !== "GET") return fail(res, 405, "error.webp.bad_request");
+        job.touched = Date.now();
+
+        // GET /slideshow/:id/file
+        if (sub === "file") {
+            if (job.status !== "done") return fail(res, 409, "error.webp.not_ready");
+            const out = path.join(job.dir, "out.mp4");
+            const st = await stat(out).catch(() => null);
+            if (!st) return fail(res, 404, "error.webp.not_found");
+            res.writeHead(200, { "content-type": "video/mp4", "content-length": st.size });
+            return void pipeline(createReadStream(out), res).catch(() => res.destroy());
+        }
+
+        // GET /slideshow/:id
+        if (job.status === "pending") {
+            return send(res, 200, { status: "pending", phase: job.phase, done: job.done, total: job.total });
+        }
+        if (job.status === "error") return send(res, 200, { status: "error", error: job.error });
+        return send(res, 200, { status: "done", ...job.result });
+    }
+
     const server = http.createServer(async (req, res) => {
         try {
+            // what this helper can do, on every answer: the Durable Object reads it so the API advertises
+            // `features.gallery` only while the container really runs a helper with the slideshow routes
+            res.setHeader(HELPER_CAPS_HEADER, HELPER_CAPS);
             if (!keyMatches(req.headers["x-internal-key"], INTERNAL_KEY)) {
                 return fail(res, 403, "error.webp.forbidden");
             }
@@ -968,8 +1421,9 @@ export function createHelper(opts = {}) {
             if (pathname === "/probe") return await handleProbe(req, res, url);
             if (pathname === "/poster") return await handlePoster(req, res, url);
             if (pathname === "/fetch" || pathname.startsWith("/fetch/")) {
-                return await handleFetchRoute(req, res, pathname);
+                return await handleFetchRoute(req, res, url);
             }
+            if (pathname.startsWith("/slideshow/")) return await handleSlideshowRoute(req, res, pathname);
 
             const m = pathname.match(/^\/jobs(?:\/([A-Za-z0-9]+)(\/file)?)?$/);
             if (!m) return fail(res, 404, "error.webp.not_found");
@@ -1039,12 +1493,14 @@ export function createHelper(opts = {}) {
         server,
         jobs,
         fetches,
+        slideshows,
         /** SIGKILL every running child (cobalt died: nothing can finish). */
         killAll() {
-            for (const job of [...jobs.values(), ...fetches.values()]) job.proc?.kill("SIGKILL");
+            for (const job of [...jobs.values(), ...fetches.values(), ...slideshows.values()]) job.proc?.kill("SIGKILL");
         },
         close() {
             clearInterval(evictTimer);
+            clearInterval(reapTimer);
             for (const session of apnsSessions.values()) session.destroy();
             apnsSessions.clear();
             server.close();

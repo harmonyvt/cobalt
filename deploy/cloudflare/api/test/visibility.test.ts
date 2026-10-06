@@ -622,7 +622,7 @@ describe("GET /library: visibility on every entry", () => {
     it("an unknown v is the legacy shape", async () => {
         const a = w.seed();
         await patchVisibility(w, a.itemId, { public: true });
-        const l = await listAll(w, "v=3");
+        const l = await listAll(w, "v=9");
         expect(l.files).toHaveLength(2);
     });
 });

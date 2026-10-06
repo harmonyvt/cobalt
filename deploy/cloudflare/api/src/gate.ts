@@ -83,6 +83,11 @@ export type LookupThen =
     | "studio_line"
     | "studio_line_notify"
     | "studio_cancel"
+    // photos and galleries (APP-API-CONTRACT.md section 18)
+    | "studio_slideshow"
+    | "studio_items_retry"
+    | "library_item_delete"
+    | "library_made"
     | "telemetry_ingest";
 
 export type StudioOp =
@@ -215,6 +220,14 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     if (req.pathname.startsWith("/library/items/")) {
         const [id, sub, ...rest] = req.pathname.slice("/library/items/".length).split("/");
         if (!ITEM_ID_REGEX.test(id ?? "") || rest.length > 0) return reject(404);
+        // Delete one item or made file of a post (section 18.4): DELETE on the bare item path only
+        if (sub === undefined) {
+            return req.method === "DELETE" ? lookupThen(req, "library_item_delete", { id: id! }) : reject(404);
+        }
+        // A crop or an export made on the device (section 18.6): PUT only
+        if (sub === "made") {
+            return req.method === "PUT" ? lookupThen(req, "library_made", { id: id! }) : reject(404);
+        }
         if (sub === "file") {
             return req.method === "GET" || req.method === "HEAD"
                 ? lookupThen(req, "library_file", { id: id! })
@@ -376,6 +389,17 @@ function decideStudio(req: GateRequest): GateDecision {
     if (sub === "line" && job === undefined) {
         if (req.service) return reject(404);
         return req.method === "DELETE" ? lookupThen(req, "studio_cancel", { sid }) : reject(404);
+    }
+    // A slideshow made from the items of a gallery, and the retry of the items that failed to save
+    // (section 18.5, 18.2): keyed POST, the session's creating key only (the Durable Object checks the
+    // owner). The library service credential never reaches them.
+    if (sub === "slideshow" && job === undefined) {
+        if (req.service) return reject(404);
+        return req.method === "POST" ? lookupThen(req, "studio_slideshow", { sid }) : reject(404);
+    }
+    if (sub === "items" && job === "retry") {
+        if (req.service) return reject(404);
+        return req.method === "POST" ? lookupThen(req, "studio_items_retry", { sid }) : reject(404);
     }
     if (sub === "render" && job !== undefined && STUDIO_JOB_REGEX.test(job)) {
         if (req.method === "DELETE") {

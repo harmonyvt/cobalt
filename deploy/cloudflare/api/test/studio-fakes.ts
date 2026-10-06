@@ -220,8 +220,44 @@ const json = (status: number, body: unknown) =>
 // A scriptable container helper. Default: /fetch is accepted, finishes on the
 // first poll, and serves `videoBytes`; uploads are accepted and their bodies
 // consumed (length recorded); jobs finish on the first poll.
+// One item of a post as the fake helper's cobalt "resolves" it (APP-API-CONTRACT.md 18.7)
+export type GalleryItemSpec = {
+    type: "photo" | "video" | "gif";
+    // answers this code instead of the item (an expired signed link)
+    fail?: string;
+    bytes?: Uint8Array;
+    width?: number;
+    height?: number;
+    duration?: number | null;
+    // a photo with no thumb (the helper could not make one)
+    noThumb?: boolean;
+};
+export const JPEG_HEAD = [0xff, 0xd8, 0xff, 0xe0];
+export const fakeJpeg = (n: number, fill = 3) => Uint8Array.from([...JPEG_HEAD, ...new Array(n).fill(fill), 0xff, 0xd9]);
+
 export class FakeHelper {
     calls: string[] = []; // "METHOD /path"
+    // photos and galleries (18.7): the post a link resolves to, and what is asked of it
+    gallery: GalleryItemSpec[] | null = null;
+    fetchRequests = new Map<string, Record<string, any>>();
+    fileQueries: string[] = []; // the `?i=` of every GET /fetch/:id/file (null = none)
+    thumbQueries: string[] = [];
+    singleThumb: Uint8Array | null = null; // GET /fetch/:id/thumb (no i) for a single file
+    thumbFails = false;
+    // the slideshow (18.7)
+    slideBusy = false; // PUT inputs answer 429
+    slideInputStatus: number | null = null; // PUT inputs answer this (413, 400)
+    slideInputs = new Map<string, Map<number, number>>(); // job -> n -> bytes
+    slideStarts: { job: string; body: any }[] = [];
+    slideStartStatus: number | null = null; // POST start answers this (409, 400, ...)
+    slidePolls = 0; // GET /slideshow/:id answers pending this many times first
+    slidePendingFields: Record<string, unknown> = { phase: "composing", done: 1, total: 3 };
+    slideError: string | null = null;
+    slideGone = false;
+    slideResult: Record<string, unknown> = { bytes: 5000, duration: 12.3, width: 1080, height: 1350 };
+    slideFile = new Uint8Array(5000).fill(4);
+    slideDeletes: string[] = [];
+    slideGate: Promise<void> | null = null; // holds PUT inputs (an upload "in progress")
     videoBytes = new Uint8Array(4096).fill(7);
     busyFetchStarts = 0; // this many POST /fetch answer 429 first
     fetchPolls = 0; // this many GET /fetch/:id answer pending first
@@ -264,7 +300,54 @@ export class FakeHelper {
     webp = new Uint8Array(1500).fill(9);
     unreachable = false;
 
+    itemBytes(i: number, spec: GalleryItemSpec): Uint8Array {
+        if (spec.bytes) return spec.bytes;
+        return spec.type === "photo" ? fakeJpeg(120 + i, i + 1) : new Uint8Array(600 + i).fill(i + 1);
+    }
+
+    // the done answer of a save of several items (18.7)
+    galleryDone(choice: "all" | number[]): Record<string, unknown> {
+        const g = this.gallery!;
+        const chosen = choice === "all" ? g.map((_, i) => i) : choice;
+        const items = chosen.map((i) => {
+            const spec = g[i];
+            if (!spec) return { i, status: "error", code: "error.studio.unavailable" };
+            if (spec.fail) return { i, status: "error", code: spec.fail };
+            const bytes = this.itemBytes(i, spec).length;
+            return {
+                i,
+                status: "done",
+                bytes,
+                contentType: spec.type === "photo" ? "image/jpeg" : spec.type === "gif" ? "image/gif" : "video/mp4",
+                ext: spec.type === "photo" ? "jpg" : spec.type === "gif" ? "gif" : "mp4",
+                duration: spec.type === "photo" ? null : (spec.duration ?? 4.5),
+                width: spec.width ?? 1080,
+                height: spec.height ?? 1350,
+                thumb: spec.type === "photo" && !spec.noThumb,
+            };
+        });
+        const done = items.filter((x: any) => x.status === "done") as any[];
+        const lead = done.find((x) => x.contentType.startsWith("video/")) ?? done[0];
+        return {
+            status: "done",
+            ...(lead ?? { bytes: 0 }),
+            title: "ig_Ddy0-gpGg5U",
+            service: "instagram",
+            picker_count: g.length,
+            items,
+        };
+    }
+
+    // every answer says what this helper can do, like the real one (helper/server.js HELPER_CAPS_HEADER); an
+    // "older helper image" is `advertise = false`
+    advertise = true;
     helper = async (path: string, init?: RequestInit): Promise<Response> => {
+        const res = await this.answer(path, init);
+        if (this.advertise) res.headers.set("x-cobalt-helper", "gallery=1");
+        return res;
+    };
+
+    private answer = async (path: string, init?: RequestInit): Promise<Response> => {
         if (this.unreachable) throw new Error("container down");
         const method = init?.method ?? "GET";
         this.calls.push(`${method} ${path.split("?")[0]}`);
@@ -278,6 +361,7 @@ export class FakeHelper {
             }
             const b = JSON.parse(String(init?.body));
             this.fetchBodies.push(b);
+            this.fetchRequests.set(b.id, b);
             this.fetchStarted.add(b.id);
             return json(202, { status: "pending", id: b.id });
         }
@@ -295,6 +379,13 @@ export class FakeHelper {
                 return json(200, { status: "pending", ...this.fetchPendingFields });
             }
             if (this.fetchError) return json(200, { status: "error", error: { code: this.fetchError } });
+            const asked = this.fetchRequests.get(id);
+            if (this.gallery && asked && asked.items !== undefined && asked.items !== "first-video") {
+                if (asked.item_count !== undefined && asked.item_count !== this.gallery.length) {
+                    return json(200, { status: "error", error: { code: "error.studio.gallery_changed" } });
+                }
+                return json(200, this.galleryDone(asked.items));
+            }
             return json(200, {
                 status: "done",
                 bytes: this.videoBytes.length,
@@ -309,9 +400,65 @@ export class FakeHelper {
             });
         }
         if (method === "GET" && /^\/fetch\/[A-Za-z0-9]+\/file$/.test(p)) {
-            return new Response(this.videoBytes, {
-                headers: { "content-length": String(this.fetchFileLength ?? this.videoBytes.length) },
+            const i = u.searchParams.get("i");
+            this.fileQueries.push(String(i));
+            const spec = this.gallery && i !== null ? this.gallery[Number(i)] : undefined;
+            if (i !== null && this.gallery && (!spec || spec.fail)) return json(404, { status: "error", error: { code: "error.webp.not_found" } });
+            const bytes = spec ? this.itemBytes(Number(i), spec) : this.videoBytes;
+            return new Response(bytes, {
+                headers: { "content-length": String(this.fetchFileLength ?? bytes.length) },
             });
+        }
+        if (method === "GET" && /^\/fetch\/[A-Za-z0-9]+\/thumb$/.test(p)) {
+            const i = u.searchParams.get("i");
+            this.thumbQueries.push(String(i));
+            if (this.thumbFails) return json(404, { status: "error", error: { code: "error.webp.not_found" } });
+            if (i === null) {
+                return this.singleThumb ? new Response(this.singleThumb, { headers: { "content-type": "image/jpeg" } }) : json(404, { status: "error", error: { code: "error.webp.not_found" } });
+            }
+            const spec = this.gallery?.[Number(i)];
+            if (!spec || spec.fail || spec.type !== "photo" || spec.noThumb) return json(404, { status: "error", error: { code: "error.webp.not_found" } });
+            return new Response(fakeJpeg(40, Number(i) + 1), { headers: { "content-type": "image/jpeg" } });
+        }
+
+        // the slideshow
+        if (p.startsWith("/slideshow/")) {
+            const [, , job, sub, n] = p.split("/");
+            if (method === "PUT" && sub === "inputs") {
+                if (this.slideGate) await this.slideGate;
+                if (this.slideBusy) return json(429, { status: "error", error: { code: "error.webp.busy" } });
+                const len = (await collect(init?.body as ReadableStream)).length;
+                if (this.slideInputStatus) return json(this.slideInputStatus, { status: "error", error: { code: "error.studio.too_large" } });
+                const m = this.slideInputs.get(job!) ?? new Map<number, number>();
+                m.set(Number(n), len);
+                this.slideInputs.set(job!, m);
+                return new Response(null, { status: 204 });
+            }
+            if (method === "POST" && sub === "start") {
+                const body = JSON.parse(String(init?.body));
+                if (this.slideStartStatus) return json(this.slideStartStatus, { status: "error", error: { code: "error.webp.invalid_params" } });
+                const have = this.slideInputs.get(job!);
+                if (!have || body.slides.some((sl: any) => !have.has(sl.n))) return json(409, { status: "error", error: { code: "error.studio.missing" } });
+                this.slideStarts.push({ job: job!, body });
+                return json(202, { status: "pending" });
+            }
+            if (method === "GET" && sub === undefined) {
+                if (this.slideGone || !this.slideStarts.some((x) => x.job === job)) return json(404, { status: "error", error: { code: "error.webp.not_found" } });
+                if (this.slidePolls > 0) {
+                    this.slidePolls--;
+                    return json(200, { status: "pending", ...this.slidePendingFields });
+                }
+                if (this.slideError) return json(200, { status: "error", error: { code: this.slideError } });
+                return json(200, { status: "done", ...this.slideResult });
+            }
+            if (method === "GET" && sub === "file") {
+                return new Response(this.slideFile, { headers: { "content-length": String(this.slideFile.length) } });
+            }
+            if (method === "DELETE") {
+                this.slideDeletes.push(job!);
+                this.slideInputs.delete(job!);
+                return new Response(null, { status: 204 });
+            }
         }
         if (method === "DELETE") {
             if (p.startsWith("/jobs/")) {

@@ -26,8 +26,31 @@ const PREFIX = "line:";
 const SEQ_KEY = "lineseq";
 const SEQ_DIGITS = 12;
 
+// What a queued slideshow job (APP-API-CONTRACT.md section 18.5) carries: the validated plan with its
+// inputs resolved (the stored originals) and the frame the Durable Object decided.
+export type SlideshowInput = {
+    // the input slot in the helper (`PUT /slideshow/<job>/inputs/<n>`), 0-19
+    n: number;
+    // media_items.item_index of the chosen item
+    index: number;
+    itemId: string;
+    r2Key: string;
+    type: "photo" | "video" | "gif";
+    // a still's seconds; null = the item's own length (a video or a gif)
+    seconds: number | null;
+};
+export type SlideshowRun = {
+    width: number;
+    height: number;
+    fade: boolean;
+    sound: "none" | "own";
+    inputs: SlideshowInput[];
+};
+
 export type LineEntry = {
-    kind: "save" | "render";
+    // "slideshow" (section 18.5) behaves as a render everywhere it is observed from outside (`GET
+    // /studio/line` reports it as one): only the Durable Object tells them apart
+    kind: "save" | "render" | "slideshow";
     // the studio session (a queued save's row exists, status 'saving')
     sid: string;
     // render: the job id, minted at enqueue (webp.ts `mintId`, 20 base62)
@@ -40,11 +63,21 @@ export type LineEntry = {
     // a save that is an adopted upload: it starts in phase "probing"
     adopt: boolean;
     render: { params: WebpParams; effectiveWidth: number; quality: string; start: number; length: number } | null;
+    // slideshow: what to run
+    slideshow?: SlideshowRun | null;
+    // a save of a post's items (section 18.2): which, and how many the client saw; `retry` = the session
+    // is ready already and only these indices are fetched again (18.2 `items/retry`)
+    items?: ItemsChoice;
+    itemCount?: number;
+    retry?: boolean;
     // a render whose upload into the helper began at this time
     starting: number | null;
     // starts that met a foreign 429
     attempts: number;
 };
+
+// `items` of POST /studio (section 18.2)
+export type ItemsChoice = "all" | "first-video" | number[];
 
 export const classOf = (focused: boolean): "0" | "1" => (focused ? "0" : "1");
 
@@ -117,7 +150,7 @@ export class LineStore {
         for (let index = 0; index < all.length; index++) {
             const { key, entry } = all[index]!;
             if (entry.sid !== sid) continue;
-            if (job ? entry.kind === "render" && entry.job === job : entry.kind === "save") return { key, entry, index };
+            if (job ? entry.kind !== "save" && entry.job === job : entry.kind === "save") return { key, entry, index };
         }
         return null;
     }

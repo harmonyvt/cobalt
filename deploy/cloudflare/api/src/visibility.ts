@@ -526,7 +526,7 @@ export async function deleteSwitchedWebp(d: VisDeps, name: string): Promise<Stud
     try {
         row = await d.db
             .prepare(
-                `SELECT ${ITEM_COLUMNS} FROM media_items WHERE bucket = 'originals' AND public_key = ?1 AND source IN ('webp', 'studio') AND deleted_at IS NULL LIMIT 1`,
+                `SELECT ${ITEM_COLUMNS} FROM media_items WHERE bucket = 'originals' AND public_key = ?1 AND source IN ('webp', 'studio') AND role IS NULL AND deleted_at IS NULL LIMIT 1`,
             )
             .bind(name)
             .first<MediaRow>();
@@ -704,7 +704,8 @@ async function baseReport(db: D1Database) {
         rows_live: await count(db, "deleted_at IS NULL"),
         originals: await count(db, "deleted_at IS NULL AND bucket = 'originals' AND source IN ('saved', 'upload')"),
         hosts_live: await count(db, "deleted_at IS NULL AND bucket = 'media' AND source = 'host'"),
-        webps: await count(db, "deleted_at IS NULL AND source IN ('webp', 'studio')"),
+        // (a slideshow row is source 'studio' too, section 18.5, but it has a role: it is not a webp)
+        webps: await count(db, "deleted_at IS NULL AND role IS NULL AND source IN ('webp', 'studio')"),
     };
 }
 
@@ -835,7 +836,7 @@ async function undoMerge(d: VisDeps, o: MigrateOptions): Promise<StudioReply> {
               ORDER BY o.created_at, o.id`,
         )
         .all<MediaRow>();
-    const webpsSwitched = await count(db, "deleted_at IS NULL AND bucket = 'originals' AND source IN ('webp', 'studio')");
+    const webpsSwitched = await count(db, "deleted_at IS NULL AND bucket = 'originals' AND role IS NULL AND source IN ('webp', 'studio')");
 
     const todo = [
         ...tombs.map((t) => ({ kind: "tombstone" as const, id: t.tomb, orig: t.orig })),
@@ -884,7 +885,8 @@ async function undoMerge(d: VisDeps, o: MigrateOptions): Promise<StudioReply> {
         // switched private lives in the private bucket now and keeps its explicit value)
         const res = await db
             .prepare(
-                "UPDATE media_items SET visibility = NULL WHERE visibility IS NOT NULL AND NOT (source IN ('webp', 'studio') AND bucket = 'originals')",
+                // (a switched webp keeps its explicit value; so do the rows made after 0009, which have no pre-0008 shape)
+                "UPDATE media_items SET visibility = NULL WHERE visibility IS NOT NULL AND NOT (bucket = 'originals' AND (role IS NOT NULL OR source IN ('webp', 'studio', 'made')))",
             )
             .run();
         cleared = Number(res.meta?.changes ?? 0);

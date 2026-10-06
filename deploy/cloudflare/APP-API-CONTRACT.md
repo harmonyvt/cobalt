@@ -1871,3 +1871,166 @@ API deploy only: `deploy/cloudflare/api/prepare-git-info.sh`, then `cd deploy/cl
 depends on it to drain with every client gone); that a render start begun inside a sweep pass with a large original (the stream into
 the helper, up to 200 MB) completes when it outlasts the pass's 30 s item ceiling (abandoned, not cancelled; the stale-start rule
 re-runs it if the object was evicted); real gaps between jobs on the deployed alarm cadence.
+
+## 18. Photos and galleries: several items per save, photos stored as photos, made files, and a slideshow job (addendum, pinned 2026-10-06, owner decisions the same day; `apple/CONTRACT-GALLERY.md`)
+
+Owner (2026-10-06): an Instagram carousel (`/p/Ddy0-gpGg5U`, 10 photos) and an X post (4 photos) cannot be saved; photos should be
+first-class; a gallery saves whole, in part, or as one video; v1 also stores **crops** and **exports** (long image, PDF) made on the
+device. **Pinned; built by lanes GS1 (helper) and GS2 (API) from the briefs in `apple/CONTRACT-GALLERY.md` 8.1-8.2.** Code read on
+2026-10-06 (`helper/lib.js`, `helper/server.js`, `studio.ts`, `app-routes.ts`, `poster.ts`, migrations 0003-0008). Everything is
+**additive**: a client that sends nothing new gets today's behaviour, with two deliberate fixes (18.2): a single photo is stored as a
+photo instead of a 0.04 s `video/mp4`, and an image gets a poster.
+
+### 18.1 Migration `d1/migrations/0009_gallery.sql` (additive: nullable columns, two indexes)
+
+```sql
+-- Photos and galleries (APP-API-CONTRACT.md section 18, apple/CONTRACT-GALLERY.md). Additive only. Apply BEFORE deploying.
+-- A gallery is one studio session whose items are N media_items rows sharing its session_id (one post).
+ALTER TABLE media_items ADD COLUMN item_index INTEGER;   -- 0-based position in the source post; NULL = not a gallery item
+ALTER TABLE media_items ADD COLUMN role TEXT;            -- 'item' | 'slideshow' | 'crop' | 'export'; NULL = legacy meaning (by source)
+ALTER TABLE media_items ADD COLUMN made_from TEXT;       -- slideshow/crop/export: JSON array of the media_items ids it was made from
+ALTER TABLE media_items ADD COLUMN made_spec TEXT;       -- crop/export/slideshow: the JSON spec it was made with (<= 512 bytes)
+ALTER TABLE media_items ADD COLUMN post_key TEXT;        -- set on made rows (and gallery items): the post they belong to
+ALTER TABLE studio_sessions ADD COLUMN item_count INTEGER;   -- picker items when it was resolved (NULL = single)
+ALTER TABLE studio_sessions ADD COLUMN items TEXT;           -- JSON [{"i":0,"type":"photo","status":"ready"|"error","code":null}]
+ALTER TABLE studio_renders ADD COLUMN kind TEXT;             -- NULL = 'webp' (today); 'slideshow'
+ALTER TABLE studio_renders ADD COLUMN plan TEXT;             -- slideshow: the validated plan (18.5) as JSON
+CREATE INDEX idx_media_items_session_item ON media_items (session_id, item_index);
+CREATE INDEX idx_media_items_post_key ON media_items (post_key);
+```
+
+- **Post key**: every copy of the post-key expression gains a first branch: `COALESCE(m.post_key, <today's expression>)` —
+  `POST_KEY_SQL` (`api/src/app-routes.ts:440`) and the web Worker's copy (`web/src/library.ts:101`). A made row of an image upload
+  (whose post key is its own row id, no session) therefore joins that post. Rows written before 0009 have `post_key NULL`: nothing
+  regroups.
+- **Lead item**: `studio_sessions.r2_key` of a gallery names the first saved video item, else the first saved item, so every
+  reader of "the session's original" (renders, reopen, `GET /studio/<sid>/source`, posters) keeps working on one file.
+
+### 18.2 Saving: `POST /studio` takes `items` and `item_count`; photos are photos
+
+- **`items`** (optional): `"all"` | `"first-video"` | an array of 1-20 unique ascending integers (picker indices). Absent = today
+  (a picker gives its first video, else gif, else `error.webp.no_video`), **except** a 1-item picker, which saves that item whatever
+  its type. Anything else → `400 error.studio.invalid_params`. **`item_count`** (optional integer 1-50, what the client saw): when
+  the server's own resolve finds another count the session fails with `error.studio.gallery_changed` before anything is stored.
+- **`slideshow`** (optional, only with `items`): a plan as 18.5 without `queue`/`priority`; when the save is ready a `slideshow`
+  job joins the line (class `1`): the share sheet's and Shortcuts' "make a video".
+- **Helper** (internal wire 18.7): one fetch job saves the chosen items one after another, each typed **by its bytes** and probed;
+  a photo gets a 480 px JPEG thumb; a failed item is recorded and the job goes on (the job fails only when every item failed, with
+  the first item's code).
+- **Durable Object finalize** (`studio.ts:1983`): each saved item goes to `originals/<sid>-<nn>.<ext>` (`nn` = two-digit index)
+  with one row: `kind 'private'`, `source 'saved'`, `role 'item'`, `item_index`, `post_key` = `<sid>`, `poster` = the thumb stored
+  as a public unguessable JPEG (13.3's naming) for a photo, the usual poster job for a video; `public: true` applies 16.2's "on" per
+  row. The session gets `item_count`, `items`, and `r2_key` = the lead. The adopt key regex (`studio.ts:2256`) widens to
+  `originals/[A-Za-z0-9]{22}(-[0-9]{2})?\.[a-z0-9]{1,8}`.
+- **Single files** (no `items`): the content type check at `studio.ts:1989-1993` keeps a helper-reported `image/jpeg|png|webp|heic`
+  (instead of coercing to `video/mp4`) and stores `originals/<sid>.<ext>` with `role NULL`, `duration NULL`, a thumb as poster.
+- **`POST /studio/<sid>/items/retry`** (keyed) `{"items":[6], "queue": true}`: re-resolves the session's link and fetches only those
+  indices (a save job in the line, 17.3 rules); `202 {status, id, queued, queue_ahead}`; `409 error.studio.gallery_changed` when the
+  count differs; `404 error.studio.not_found`; indices already `ready` are ignored; `400 error.studio.invalid_params` otherwise.
+- **`GET /studio/<sid>`** gains `item_count` and `items` (parsed); the old fields describe the lead item.
+- **Posters of images**: `isPosterType` (`poster.ts:45`) takes `image/jpeg|png|webp|heic`; the helper's `/poster` answers an image
+  with its frame 0 (18.7). An image upload (`PUT /studio/upload`) therefore gets a poster too.
+
+### 18.3 What a gallery post looks like: `GET /library?v=3`
+
+- **`v=3`** (sent by builds with `features.gallery`): `v=2` (16.5) plus, on every file, `role`, `item_index`, `made_from` (array),
+  `made_spec` (object); on every post `kind` (`"video" | "photo" | "gallery" | "webp"`: gallery = 2+ live `item` rows), `item_count`
+  (live items), `items_failed` (indices from the session's `items`). Files ordered: items by `item_index`, then slideshows, crops,
+  exports, webps, each by `created_at`.
+- **Without `v=3`** (old apps 1.0-1.7, the old web page): a gallery post is emitted as its lead item (16.5's shape, legacy host
+  synthesis when public) and its webps; other items and made rows are omitted. Single photos, crops and exports of a single photo:
+  the photo only. `counts` unchanged.
+
+### 18.4 Deleting and visibility
+
+- **`DELETE /library/items/<id>`** (keyed; `DELETE` on the bare item path, which `gate.ts:215-240` answers 404 today since `sub` is undefined): a live row with `role`
+  `item`, `slideshow`, `crop` or `export`. Deletes its R2 object, its mirror (`public_key`), an unshared poster (refcount, 13.4),
+  soft-deletes the row, purges its public URL (best effort). The **last live item** of a post → `409 error.library.last_item` (use
+  section 12). Any other row → `409 error.library.not_deletable` (webps keep `DELETE /media/<name>`). `200 {"status":"success",
+  "deleted":{"files":1,"bytes":…}}`; a deleted or unknown id → `404 error.library.not_found`. Made rows keep working when the
+  item they were made from is deleted.
+- **`DELETE /library/items/<id>/post`** (12): covers every row of the post (same post key, `post_key` included); unchanged otherwise.
+- **`PATCH /library/items/<id>/visibility`** (16.2) takes `"scope": "post"` (absent = `"row"`): applies on/off to every live
+  `bucket 'originals'` row of the post that is not a switched webp, in `item_index` then `created_at` order, each step as 16.2;
+  `200 {status, items: [<v3 file>…], cache_cleared}`; rows that fail are listed in `remaining` with `502 error.library.partial`
+  (retry is idempotent).
+
+### 18.5 The slideshow job: `POST /studio/<sid>/slideshow` (keyed)
+
+- **Body** (≤ 4 KB): `{"items":[0,1,…], "seconds":[3,5.6,…,null], "fade":true, "frame":"keep"|"9:16"|"1:1", "sound":"none"|"own",
+  "queue":true, "priority":"focused"|null, "notify":true|false}`. `items`: 2-20 `item_index` values of live `item` rows of the
+  session's post, any order (the play order), no repeats; `seconds`: same length, a number 1-15 (one decimal) for a photo, `null`
+  for a video or gif (own length; a gif plays once); total ≤ 180 s → else `400 error.webp.too_long`; `sound: "own"` without a video
+  item, or anything else malformed → `400 error.webp.invalid_params`; `priority` without `queue` → `400`. Fewer than 2 live items in
+  the post → `409 error.studio.not_gallery`; an expired session → `410` as renders.
+- **Frame** (decided by the DO from the rows): `keep` = the most common `width×height` among the chosen items (ties: the first),
+  scaled to 1080 on the short side; `9:16` = 1080×1920; `1:1` = 1080×1080; both sides rounded down to even.
+- **Line**: a `LineEntry` (17.2) of `kind: "slideshow"` carrying the validated plan; class `0` with `priority: "focused"`, else `1`;
+  a `studio_renders` row `kind 'slideshow'`, `plan`, `status 'pending'`. Answer as a render: `202 {status: "pending", job, queued,
+  queue_ahead}`. Progress on `GET /studio/<sid>/render/<job>` (section 4) with `phase` `"queued"`, `"uploading"` (inputs into the
+  helper), `"composing"` (`frames_done` = stills done, `frames_total` = stills), `"encoding"` (`frames_done` = seconds encoded,
+  `frames_total` = total seconds); on done `{status:"success", url?, item_id, bytes, width, height, seconds}`.
+- **Start**: the DO streams each chosen original from R2 into the helper (`PUT /slideshow/<job>/inputs/<n>`, 18.7), then `POST
+  /slideshow/<job>/start`; when done it stores `GET /slideshow/<job>/file` at `originals/<sid>-s<job>.mp4` as a row (`kind
+  'private'`, `source 'studio'`, `role 'slideshow'`, `made_from` = the item ids, `made_spec` = the plan, `post_key`), applies the post's
+  visibility (its lead item's), queues a poster, writes `result:<job>`, `DELETE`s the helper job; `notify` as 9.3.
+- **Failures**: helper error → the render row `error` with its code (`error.webp.encode_failed`, `error.webp.timeout`); an input
+  missing in R2 → `error.studio.missing`; the line's ceilings (17.6) apply. The items are never touched.
+
+### 18.6 Made on the device: `PUT /library/items/<id>/made` (keyed)
+
+- **Query**: `role=crop|export`, `name=<url-encoded, cleanName rules, ≤ 120>`, `spec=<url-encoded JSON object, ≤ 512 bytes>`.
+  Headers: `content-type` `image/jpeg` (crop; export with `spec.kind = "long"`) or `application/pdf` (export with `spec.kind =
+  "pdf"`); `content-length` required, ≤ 50 MB (`413 error.studio.too_large`). Judged before the body is read; any mismatch → `400
+  error.library.bad_request`. Body streamed to R2 by the Worker (no container).
+- **Anchor `<id>`** (id or `public_id`, live): for `crop` a live `item` row (or a single photo, `role NULL`) whose `content_type` is
+  an image (else `409 error.library.not_photo`); for `export` any live row of the post. Unknown → `404 error.library.not_found`.
+- **Row**: id 16 base62; `kind 'private'`, `source 'made'`, `bucket 'originals'`, `r2_key made/<row id>.<jpg|pdf>`, `role`,
+  `made_from` (crop: `[anchor id]`; export: the ids of the post's live image items at that moment), `made_spec` = `spec`, `post_key`
+  = the anchor's post key, `session_id` = the anchor's, `link` = the anchor's, `width`/`height` from the JPEG header (null for a PDF),
+  `name`. Visibility = the post's (its lead item's): when public, 16.2's "on" runs for the new row. A poster job is queued for a JPEG
+  (none for a PDF).
+- **Replace**: for `export`, any other live `export` row of the post with the same `spec.kind` is deleted (as 18.4) **after** the
+  new row is stored. Crops accumulate.
+- **Answer**: `201 {"status":"success","item":<v3 file>,"replaced":["<id>"]}`; `503 error.api.generic` when D1/R2 fail before the
+  row exists (the object, if written, is deleted).
+
+### 18.7 Helper internal wire (port 9100, `x-internal-key`; pinned so GS1 and GS2 build in parallel)
+
+- **`POST /fetch {id, url, items?, item_count?}`**: `items` and `item_count` as 18.2 (else `400 {error:{code:"error.studio.
+  invalid_params"}}`). Without `items`: today's job, plus type by bytes (below) and the 1-item-picker rule.
+- **`GET /fetch/:id`**: pending `{status:"pending", stage:"downloading"|"probing", bytes, total, item: <index>|null, items_done,
+  items_total}`; done: today's fields describing the **lead**, plus `picker_count` (null when not a picker), and with `items`:
+  `items: [{i, status:"done"|"error", code?, bytes?, contentType?, ext?, duration?, width?, height?, thumb: boolean}]`; error
+  `{status:"error", error:{code}}` (`error.studio.gallery_changed` when `item_count` differs from the picker's length).
+- **`GET /fetch/:id/file?i=<n>`** (no `i` = the lead): the bytes with content-length; unknown or failed `i` → 404.
+  **`GET /fetch/:id/thumb?i=<n>`** (no `i` = the single file): `image/jpeg`, longer side ≤ 480 px; none → 404.
+- **Type by bytes** (`lib.js`, new `sniffType(head)`): JPEG `FF D8 FF`; PNG `89 50 4E 47 0D 0A 1A 0A`; WebP `RIFF????WEBP`; HEIC/HEIF
+  `????ftyp` + `heic|heix|hevc|mif1|msf1`; GIF as today; anything else → the video path as today (`videoExt`). An image gets
+  `contentType` `image/jpeg|png|webp|heic`, `ext` `jpg|png|webp|heic`, `duration: null`, width/height from the probe. An animated
+  WebP or GIF stays what it is (a GIF keeps today's `image/gif` meaning: animated).
+- **`POST /poster?id=`**: an image body (sniffed) is answered from frame 0 (no `-ss`; today `posterTime(0.04)` = 0.004 s seeks past
+  the only frame and ffmpeg writes nothing: checked locally with ffmpeg 9.0.1, so an image gets `422 error.poster.failed` today).
+- **Slideshow** (holds the helper like an upload from the first input until `DELETE` or a 5 min idle reap):
+  - `PUT /slideshow/:id/inputs/:n` (n 0-19) body = the file (≤ 200 MB each, ≤ 500 MB per job) → `204` | `413` | `429 busy`
+    (another job holds the helper) | `400` (bad n).
+  - `POST /slideshow/:id/start {width, height, fade, sound, slides:[{n, seconds|null}]}` (`width`/`height` even, ≤ 1920; `seconds`
+    1-15 for a still, `null` for a video/gif input; total ≤ 180) → `202` | `400 error.webp.invalid_params` | `409` (an input missing).
+  - `GET /slideshow/:id` → `{status:"pending", phase:"composing"|"encoding", done, total}` | `{status:"done", bytes, duration, width,
+    height}` | `{status:"error", error:{code}}`; `GET /slideshow/:id/file` → `video/mp4`; `DELETE /slideshow/:id` → `204`.
+  - The recipe is `apple/CONTRACT-GALLERY.md` section 6 (compose each still once with the blurred fill, `xfade` 0.3 s or `concat`,
+    `mpdecimate=…:max=15`, `-fps_mode vfr`, `libx264 veryfast stillimage crf 20`, `+faststart`); video inputs are scaled/padded
+    with the same fill, their audio kept with `sound: "own"` (`anullsrc` under stills), else `-an`. Job timeout 10 min →
+    `error.webp.timeout`; ffmpeg failure → `error.webp.encode_failed`.
+
+### 18.8 Capability, errors, deploy
+
+- `GET /capabilities`: `features.gallery: true` (needs `features.line`). Absent: the app keeps today's picker; the share extension
+  shows its one-line card; batches and Shortcuts keep first-video (CONTRACT-GALLERY owner decision 5, interim).
+- New codes: `error.studio.gallery_changed`, `error.studio.not_gallery`, `error.studio.missing`, `error.library.last_item`,
+  `error.library.not_deletable`, `error.library.not_photo`. Reused: `error.webp.too_long`, `error.webp.encode_failed`,
+  `error.webp.timeout`, `error.webp.invalid_params`, `error.studio.invalid_params`, `error.studio.too_large`,
+  `error.library.bad_request`, `error.library.partial`, `error.library.not_found`.
+- Deploy (owner): remote migration 0009 first, then the API (`prepare-git-info.sh`, `cf deploy`; the container image changes with
+  the helper), then the web Worker (its `POST_KEY_SQL` line). No new secret.
+- Tests and files: the lane briefs (`apple/CONTRACT-GALLERY.md` 8.1 GS1, 8.2 GS2) are the list.

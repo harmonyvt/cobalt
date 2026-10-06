@@ -1097,6 +1097,32 @@ describe("DELETE /api/library/items/<id>", () => {
         expect(list.usage.public_bytes).toBe(0);
     });
 
+    it("an item of a gallery (migration 0009): the lead moves on, the session stays open; the last one is refused (zz review, web delete)", async () => {
+        const sid = "Gg1gggggggggggggggggggg".slice(0, 22);
+        const mk = (n: number, type: string, key: string) => {
+            const row = seedItem({ kind: "private", source: "saved", r2_key: key, session_id: sid, content_type: type });
+            db.raw.prepare("UPDATE media_items SET role = 'item', item_index = ?, post_key = ? WHERE id = ?").run(n, sid, row.id);
+            originals.objects.set(key, { bytes: bytesOf(5), size: 5 });
+            return row;
+        };
+        const a = mk(0, "image/jpeg", `originals/${sid}-00.jpg`);
+        const b = mk(1, "image/jpeg", `originals/${sid}-01.jpg`);
+        seedStudio({ id: sid, r2_key: a.r2_key, link: "https://www.instagram.com/p/x/" });
+        // the lead goes: the session now names the next item and is still open (before: expires_at = now closed it)
+        const r = await call("DELETE", `/api/library/items/${a.id}`);
+        expect(r.status).toBe(200);
+        expect(rowOf(a.id).deleted_at).toBe(NOW);
+        expect(sessionOf(sid).r2_key).toBe(b.r2_key);
+        expect(sessionOf(sid).expires_at).toBeGreaterThan(NOW);
+        // the last one is refused: the post's own delete is the way to remove everything
+        const last = await call("DELETE", `/api/library/items/${b.id}`);
+        expect(last.status).toBe(409);
+        expect(((await json(last)) as any).error.code).toBe("error.library.last_item");
+        expect(rowOf(b.id).deleted_at).toBeNull();
+        expect(originals.objects.has(b.r2_key)).toBe(true);
+        expect(sessionOf(sid).expires_at).toBeGreaterThan(NOW);
+    });
+
     it("a private original: removes the ORIGINALS object and expires exactly the studios that read it", async () => {
         const sidA = "Aa1aaaaaaaaaaaaaaaaaaa", sidB = "Bb2bbbbbbbbbbbbbbbbbbb", sidC = "Cc3cccccccccccccccccc", sidD = "Dd4dddddddddddddddddd";
         const key = "uploads/up0000000000000a.mp4";
@@ -1373,6 +1399,18 @@ describe("server-made posters", () => {
             expect(by[other.id].custom_title).toBeNull();
             // `name` (the file name, which downloads use) is untouched
             expect(by[up.id].name).toBe("IMG_0412.mov");
+        });
+        it("a row that names its post (post_key, migration 0009) takes that post's title: a crop made from an upload; a NULL post_key groups as ever", async () => {
+            const up = seedItem({ kind: "private", source: "upload", name: "IMG_0412.jpg" });
+            const crop = seedItem({ kind: "private", source: "made", name: "crop.jpg", session_id: null, link: null });
+            db.raw.prepare("UPDATE media_items SET post_key = ?, role = 'crop' WHERE id = ?").run(up.id, crop.id);
+            const lonely = seedItem({ kind: "private", source: "saved", name: "lonely" });
+            setTitle(up.id, "Kyoto, day 2");
+            const b = await json(await call("GET", "/api/library"));
+            const by = Object.fromEntries(b.items.map((i: any) => [i.id, i]));
+            expect(by[crop.id].custom_title).toBe("Kyoto, day 2");
+            expect(by[up.id].custom_title).toBe("Kyoto, day 2");
+            expect(by[lonely.id].custom_title).toBeNull();
         });
         it("works without the table (0007 not applied yet): file names only, still a 200", async () => {
             seedItem({ kind: "private", source: "saved", name: "clip" });

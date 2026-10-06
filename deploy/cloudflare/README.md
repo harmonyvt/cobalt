@@ -614,6 +614,10 @@ answers the recorded success when its own D1 update finds the row already settle
 `GET|HEAD /library/items/<id>/file` and `POST /library/items/<id>/studio` take the object's size from R2 (`head`), not the row:
 a stale or missing `bytes` no longer gives a 200 for a missing object, a wrong `Content-Range`, or an adopt refused for size 0.
 
+### Photos and galleries (`APP-API-CONTRACT.md` section 18, `apple/CONTRACT-GALLERY.md`)
+
+`POST /studio` takes `items` / `item_count` / `slideshow`, a photo is stored as a photo, `POST /studio/<sid>/items/retry` and `/slideshow`, `GET /library?v=3`, `DELETE /library/items/<id>`, `PUT /library/items/<id>/made`, `scope: "post"` on the visibility toggle, `features.gallery`. Needs migration `d1/migrations/0009_gallery.sql` applied BEFORE the API and web Workers are deployed (additive; not applied by any test or lane).
+
 ### The server's line (queued saves and renders, `APP-API-CONTRACT.md` section 17)
 
 The helper does one save, probe, encode or poster at a time and there is exactly one Durable Object, so that object holds one

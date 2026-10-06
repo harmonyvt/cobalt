@@ -13,7 +13,11 @@ export const ITEM_ID_LENGTH = 16;
 // contract's "Internal service auth").
 export const SERVICE_KEY_ID = "service:library";
 
-export type MediaSource = "webp" | "studio" | "host" | "upload" | "saved";
+// 'made' = a crop or an export made on the device (section 18.6)
+export type MediaSource = "webp" | "studio" | "host" | "upload" | "saved" | "made";
+
+// migration 0009 (section 18.1)
+export type MediaRole = "item" | "slideshow" | "crop" | "export";
 
 export type MediaItemInput = {
     kind: "public" | "private";
@@ -32,6 +36,13 @@ export type MediaItemInput = {
     key_id?: string | null;
     // public URL of the row's poster JPEG (section 13), when it already has one
     poster?: string | null;
+    // migration 0009 (section 18): the gallery / made-file columns. Absent = NULL (every row before 0009).
+    role?: MediaRole | null;
+    item_index?: number | null;
+    // a JSON array of media_items ids / the JSON spec (as text)
+    made_from?: string | null;
+    made_spec?: string | null;
+    post_key?: string | null;
     created_at: number;
 };
 
@@ -53,8 +64,8 @@ export async function insertMediaItem(
     try {
         const res = await db
             .prepare(
-                "INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, poster, visibility) " +
-                    "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18 " +
+                "INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, poster, visibility, role, item_index, made_from, made_spec, post_key) " +
+                    "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23 " +
                     "WHERE NOT EXISTS (SELECT 1 FROM media_items WHERE bucket = ?4 AND r2_key = ?5)",
             )
             .bind(
@@ -77,6 +88,11 @@ export async function insertMediaItem(
                 orNull(item.poster),
                 // one row per file (section 16): an original is private until toggled, a public-bucket file is public
                 item.bucket === "media" ? "public" : "private",
+                orNull(item.role),
+                orNull(item.item_index),
+                orNull(item.made_from),
+                orNull(item.made_spec),
+                orNull(item.post_key),
             )
             .run();
         return Number(res.meta?.changes ?? 0) > 0 ? id : null;

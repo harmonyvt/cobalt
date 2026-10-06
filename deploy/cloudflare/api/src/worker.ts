@@ -4,7 +4,9 @@
 import {
     capabilities,
     libraryFile,
+    libraryItemDelete,
     libraryList,
+    libraryMade,
     libraryPostDelete,
     libraryPostTitle,
     libraryPostersBackfill,
@@ -208,6 +210,7 @@ async function handleInner(
             decision.key,
             livePushConfigured(env),
             harkConfigured(env),
+            await helperHasGallery(container),
         );
         return new Response(JSON.stringify(r.body), {
             status: r.status,
@@ -328,6 +331,23 @@ async function handleInner(
             });
         }
 
+        // DELETE /library/items/<id> (one item or made file, section 18.4) and PUT /library/items/<id>/made (a crop or an
+        // export made on the device, 18.6): D1 + R2 only, no CORS. The made body is streamed to R2, never read here.
+        if (decision.then === "library_item_delete") {
+            const r = await libraryItemDelete(appDeps(env, container, edge), decision.params!.id);
+            return new Response(JSON.stringify(r.body), {
+                status: r.status,
+                headers: { "content-type": "application/json", "cache-control": "no-store" },
+            });
+        }
+        if (decision.then === "library_made") {
+            const r = await libraryMade(appDeps(env, container, edge), decision.params!.id, request, keyId, url.searchParams);
+            return new Response(JSON.stringify(r.body), {
+                status: r.status,
+                headers: { "content-type": "application/json", "cache-control": "no-store" },
+            });
+        }
+
         // PATCH /library/items/<id>/post: a post's custom title (section 15). D1 only, no CORS.
         if (decision.then === "library_post_title") {
             const r = await libraryPostTitle(appDeps(env, container, edge), decision.params!.id, request, keyId);
@@ -367,7 +387,11 @@ async function handleInner(
             // storage and D1; never wake the container
             decision.then === "studio_line" ||
             decision.then === "studio_line_notify" ||
-            decision.then === "studio_cancel"
+            decision.then === "studio_cancel" ||
+            // a slideshow made from a gallery's items and the retry of the items that failed to save (section 18):
+            // the Durable Object owns the line and the helper
+            decision.then === "studio_slideshow" ||
+            decision.then === "studio_items_retry"
         ) {
             const headers = new Headers(request.headers);
             headers.delete("Authorization");
@@ -422,6 +446,17 @@ async function handleInner(
     // One named instance for everything: tunnels created by POST / live in
     // that process's memory and must be served by the same one.
     return container.fetch(request);
+}
+
+// Whether the container's helper has said it has the slideshow routes (the Durable Object keeps what it last
+// answered; it never wakes the container for this). Any failure is "not yet": the capability is simply not offered.
+async function helperHasGallery(container: ContainerStub): Promise<boolean> {
+    try {
+        const res = await container.fetch(new Request("https://do.internal/helper/caps", { headers: { [KEY_ID_HEADER]: "worker:capabilities" } }));
+        return res.status === 200 && ((await res.json()) as { gallery?: unknown })?.gallery === true;
+    } catch {
+        return false;
+    }
 }
 
 // What the app's routes need, wired to this request's bindings. The one call

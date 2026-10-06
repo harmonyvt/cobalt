@@ -19,7 +19,7 @@
 // session id is a capability: the routes that use it need no API key.
 
 import { raceCeiling } from "./ceiling";
-import { Crop, JobRecord, KV, Quality, WebpParams, WebpService, mintId, num, randomBase62, serviceFromUrl } from "./webp";
+import { Crop, HELPER_UPLOAD_MS, JobRecord, KV, MEDIA_NAME_LENGTH, Quality, WebpParams, WebpService, mintId, num, randomBase62, serviceFromUrl } from "./webp";
 import { KEY_ID_HEADER } from "./headers";
 import { cropToPixels, parseCrop } from "../helper/crop.js";
 import { STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "./gate";
@@ -33,12 +33,15 @@ import {
     isFocusedKey,
     parseFlag,
     startingFresh,
+    type ItemsChoice,
     type LineEntry,
+    type SlideshowInput,
+    type SlideshowRun,
 } from "./line";
 import { NOTIFY_MAX_BODY_BYTES, isEmptyLineBody, parseOptIn, type LineOutcome, type NotifyHooks, type NotifyRenderEvent } from "./notify";
-import { PosterService, POSTER_BATCH, type MediaStore } from "./poster";
+import { MAX_POSTER_BYTES, PosterService, POSTER_BATCH, type MediaStore } from "./poster";
 import { publishStudio } from "./publish";
-import { sessionItem, type PurgeFn } from "./visibility";
+import { ITEM_COLUMNS, getRow, makePublic, publishOriginal, sessionItem, effectiveVisibility, type MediaRow, type PurgeFn } from "./visibility";
 
 export const SID_LENGTH = 22;
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -99,6 +102,9 @@ export const RENDER_QUALITIES = ["low", "med", "high"] as const;
 // into R2); a save is advanced by it while its current helper fetch is younger
 // than SAVE_BUDGET_MS plus this slack.
 export const SWEEP_RENDER_MS = 6 * 60 * 1000;
+// A slideshow job (section 18.5) has the helper's 10 minute budget: it is collected by the sweep for this long.
+export const SWEEP_SLIDESHOW_MS = 12 * 60 * 1000;
+const jobWindowMs = (rec: { slideshow?: unknown }) => (rec.slideshow ? SWEEP_SLIDESHOW_MS : SWEEP_RENDER_MS);
 export const SWEEP_SAVE_SLACK_MS = 60_000;
 // Ceiling on one item of a sweep pass (one render poll or one save step): the
 // Containers library awaits the whole pass inside alarm() before it checks
@@ -108,6 +114,9 @@ export const SWEEP_ITEM_MS = 30_000;
 
 // One notification call (the webhook call inside is capped at 3 s by notify.ts).
 export const NOTIFY_CALL_MS = 5000;
+
+// The header the helper puts on every answer to say what it can do (helper/server.js HELPER_CAPS_HEADER)
+export const HELPER_CAPS_HEADER = "x-cobalt-helper";
 
 export const CORS_METHODS = "GET, POST, OPTIONS";
 export const CORS_HEADERS = "content-type, range";
@@ -148,6 +157,10 @@ export type SessionRow = {
     // (public_url) or 'failed'; null when it was never asked for.
     public_state?: PublicState | null;
     public_url?: string | null;
+    // migration 0009 (section 18): how many items the post had when it was resolved (null = a single file) and
+    // the JSON [{i, type, status: "ready" | "error", code}]; absent on rows seeded without them
+    item_count?: number | null;
+    items?: string | null;
 };
 
 export type PublicState = "pending" | "ready" | "failed";
@@ -167,6 +180,9 @@ export type RenderRow = {
     out_height: number | null;
     seconds: number | null;
     created_at: number;
+    // migration 0009: null = a webp (today), 'slideshow' (section 18.5) and its validated plan as JSON
+    kind?: string | null;
+    plan?: string | null;
 };
 
 export async function getSession(db: D1Database, sid: string): Promise<SessionRow | null> {
@@ -180,7 +196,7 @@ export async function getSession(db: D1Database, sid: string): Promise<SessionRo
 export async function listSuccessfulRenders(db: D1Database, sid: string): Promise<RenderRow[]> {
     const res = await db
         .prepare(
-            "SELECT * FROM studio_renders WHERE session_id = ?1 AND status = 'success' ORDER BY created_at DESC, id DESC LIMIT 100",
+            "SELECT * FROM studio_renders WHERE session_id = ?1 AND status = 'success' AND (kind IS NULL OR kind <> 'slideshow') ORDER BY created_at DESC, id DESC LIMIT 100",
         )
         .bind(sid)
         .all<RenderRow>();
@@ -204,7 +220,33 @@ export type SaveProgress = {
     bytes: number | null;
     total: number | null;
     waking: boolean;
+    // a save of several items (section 18): how many are done of how many (the helper's own count)
+    itemsDone?: number | null;
+    itemsTotal?: number | null;
 };
+
+// `items` of a session row (section 18.2): [{i, type, status, code}] as written by a gallery save. Never throws.
+export type ItemRecord = { i: number; type: "photo" | "video" | "gif" | null; status: "ready" | "error"; code: string | null };
+export function parseItemRecords(raw: string | null | undefined): ItemRecord[] | null {
+    if (!raw) return null;
+    try {
+        const v: unknown = JSON.parse(raw);
+        if (!Array.isArray(v)) return null;
+        const out: ItemRecord[] = [];
+        for (const e of v as Record<string, unknown>[]) {
+            if (!e || typeof e !== "object" || typeof e.i !== "number") continue;
+            out.push({
+                i: e.i,
+                type: e.type === "photo" || e.type === "video" || e.type === "gif" ? e.type : null,
+                status: e.status === "error" ? "error" : "ready",
+                code: typeof e.code === "string" ? e.code : null,
+            });
+        }
+        return out;
+    } catch {
+        return null;
+    }
+}
 
 export function sessionBody(
     row: SessionRow,
@@ -243,6 +285,10 @@ export function sessionBody(
         step_total: p?.total ?? null,
         waking: p?.waking ?? false,
         queue_ahead: queued ? queueAhead : null,
+        // photos and galleries (section 18.2): only a session that has items says so, so every other
+        // session reads byte for byte as before
+        ...(typeof row.item_count === "number" ? { item_count: row.item_count, items: parseItemRecords(row.items) } : {}),
+        ...(p?.itemsTotal != null ? { items_done: p.itemsDone ?? 0, items_total: p.itemsTotal } : {}),
         created_at: row.created_at,
         expires_at: row.expires_at,
         error: row.error_code ? { code: row.error_code } : null,
@@ -441,6 +487,141 @@ export async function upsertTitle(db: D1Database, postKey: string, title: string
         .run();
 }
 
+// --- photos and galleries (APP-API-CONTRACT.md section 18) -------------------------------------------
+
+export const MAX_ITEMS = 20;
+export const MAX_ITEM_COUNT = 50;
+// a slideshow's total length, and the body of its route
+export const MAX_SLIDESHOW_SECONDS = 180;
+export const MAX_SLIDESHOW_BODY_BYTES = 4096;
+// the videos and gifs of one slideshow together (stills are not counted)
+export const MAX_SLIDESHOW_MOTION_SECONDS = 60;
+// the helper's own limit on a frame side
+const MAX_FRAME_SIDE = 1920;
+// a slideshow job whose helper job and line entry are both gone is lost after this (its `result:` never came)
+const SLIDESHOW_ORPHAN_MS = 60 * 60 * 1000;
+
+const isIndex = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0 && v < MAX_ITEM_COUNT;
+
+// `items` of POST /studio and /items/retry: "all" | "first-video" | 1-20 unique ascending picker indices.
+// Absent or null = not given (today's behaviour).
+export function parseItemsField(raw: unknown): { ok: true; items: ItemsChoice | undefined } | { ok: false } {
+    if (raw === undefined || raw === null) return { ok: true, items: undefined };
+    if (raw === "all" || raw === "first-video") return { ok: true, items: raw };
+    if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_ITEMS) return { ok: false };
+    let last = -1;
+    for (const v of raw) {
+        if (!isIndex(v) || v <= last) return { ok: false };
+        last = v;
+    }
+    return { ok: true, items: [...(raw as number[])] };
+}
+
+// `item_count` (what the client saw): an integer 1-50
+export function parseItemCountField(raw: unknown): { ok: true; count: number | undefined } | { ok: false } {
+    if (raw === undefined || raw === null) return { ok: true, count: undefined };
+    return typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= MAX_ITEM_COUNT ? { ok: true, count: raw } : { ok: false };
+}
+
+export type SlideshowPlan = {
+    items: number[];
+    // a still's seconds (1-15, one decimal); null = its own length (a video or a gif)
+    seconds: (number | null)[];
+    fade: boolean;
+    frame: "keep" | "9:16" | "1:1";
+    sound: "none" | "own";
+};
+
+// The shape of a slideshow plan (18.5), judged before anything is created. Which items are stills and what the
+// whole adds up to is decided against the stored rows (`slideshowRun`).
+export function parseSlideshowPlan(
+    raw: unknown,
+    invalidCode: string,
+): { ok: true; plan: SlideshowPlan } | { ok: false; status: 400; code: string } {
+    const bad = (code = invalidCode) => ({ ok: false as const, status: 400 as const, code });
+    if (!isPlainObject(raw)) return bad();
+    const { items, seconds, fade, frame, sound } = raw;
+    if (!Array.isArray(items) || items.length < 2 || items.length > MAX_ITEMS) return bad();
+    if (!items.every(isIndex) || new Set(items).size !== items.length) return bad();
+    if (!Array.isArray(seconds) || seconds.length !== items.length) return bad();
+    let known = 0;
+    for (const s of seconds) {
+        if (s === null) continue;
+        if (typeof s !== "number" || !Number.isFinite(s) || s < 1 || s > 15 || Math.abs(s * 10 - Math.round(s * 10)) > 1e-9) return bad();
+        known += s;
+    }
+    if (fade !== undefined && typeof fade !== "boolean") return bad();
+    if (frame !== undefined && frame !== "keep" && frame !== "9:16" && frame !== "1:1") return bad();
+    if (sound !== undefined && sound !== "none" && sound !== "own") return bad();
+    if (known > MAX_SLIDESHOW_SECONDS) return bad("error.webp.too_long");
+    return {
+        ok: true,
+        plan: {
+            items: [...(items as number[])],
+            seconds: [...(seconds as (number | null)[])],
+            fade: fade !== false,
+            frame: (frame as SlideshowPlan["frame"] | undefined) ?? "keep",
+            sound: (sound as SlideshowPlan["sound"] | undefined) ?? "none",
+        },
+    };
+}
+
+// What an item is by its stored type
+export const itemTypeOf = (contentType: string | null): "photo" | "video" | "gif" =>
+    contentType === "image/gif" ? "gif" : (contentType ?? "").startsWith("image/") ? "photo" : "video";
+
+const even = (n: number) => Math.max(2, Math.floor(n) - (Math.floor(n) % 2));
+
+// The output frame (18.5): `keep` = the most common width x height among the chosen items (ties: the first),
+// scaled to 1080 on the short side (and to 1920 on the long side when that is bigger); both sides rounded
+// down to even. `9:16` = 1080x1920, `1:1` = 1080x1080.
+export function slideshowFrame(frame: SlideshowPlan["frame"], dims: { width: number | null; height: number | null }[]): { width: number; height: number } {
+    if (frame === "9:16") return { width: 1080, height: 1920 };
+    if (frame === "1:1") return { width: 1080, height: 1080 };
+    const counts = new Map<string, { w: number; h: number; n: number }>();
+    for (const d of dims) {
+        if (!d.width || !d.height || d.width <= 0 || d.height <= 0) continue;
+        const k = `${d.width}x${d.height}`;
+        const e = counts.get(k);
+        if (e) e.n++;
+        else counts.set(k, { w: d.width, h: d.height, n: 1 });
+    }
+    let best: { w: number; h: number; n: number } | null = null;
+    for (const e of counts.values()) if (!best || e.n > best.n) best = e;
+    if (!best) return { width: 1080, height: 1080 };
+    const scale = Math.min(1080 / Math.min(best.w, best.h), MAX_FRAME_SIDE / Math.max(best.w, best.h));
+    return { width: even(best.w * scale), height: even(best.h * scale) };
+}
+
+// A gallery's lead item (18.1): its first video, else its first item.
+export function pickLead<T extends { content_type: string | null }>(rowsByIndex: T[]): T | undefined {
+    return rowsByIndex.find((r) => (r.content_type ?? "").startsWith("video/")) ?? rowsByIndex[0];
+}
+
+// The session's original is its lead item (18.1): after the lead changed (a delete, a retry that brought a
+// video) the session row names the new one. D1 only.
+export async function repointLead(db: D1Database, sid: string): Promise<void> {
+    const { results } = await db
+        .prepare(
+            "SELECT r2_key, content_type, bytes, duration, width, height, poster, visibility, url FROM media_items WHERE session_id = ?1 AND role = 'item' AND deleted_at IS NULL ORDER BY item_index, id",
+        )
+        .bind(sid)
+        .all<{ r2_key: string; content_type: string | null; bytes: number | null; duration: number | null; width: number | null; height: number | null; poster: string | null; visibility: string | null; url: string | null }>();
+    const lead = pickLead(results);
+    if (!lead) return;
+    // the session mirrors its original's link too (section 16, I5): the new lead's, when it is public
+    const publicUrl = lead.visibility === "public" && lead.url ? lead.url : null;
+    await db
+        .prepare(
+            `UPDATE studio_sessions SET r2_key = ?1, content_type = ?2, bytes = ?3, duration = ?4, width = ?5, height = ?6, poster = ?7,
+                    public_state = CASE WHEN ?8 IS NOT NULL THEN 'ready' WHEN public_state = 'pending' THEN public_state ELSE NULL END,
+                    public_url = ?8
+              WHERE id = ?9 AND (r2_key IS NULL OR r2_key <> ?1)`,
+        )
+        .bind(lead.r2_key, lead.content_type, lead.bytes, lead.duration, lead.width, lead.height, lead.poster, publicUrl, sid)
+        .run();
+}
+
 // --- the Durable Object half ------------------------------------------------------
 
 export interface OriginalsBucket {
@@ -536,6 +717,20 @@ export const MAX_PUBLIC_ATTEMPTS = 4;
 type PublicJob = { attempts: number; at: number };
 const PUBLIC_PREFIX = "public:";
 
+// One entry of a helper save of several items (APP-API-CONTRACT.md 18.7)
+type FetchItem = {
+    i: number;
+    status: "done" | "error";
+    code?: string;
+    bytes?: number;
+    contentType?: string;
+    ext?: string;
+    duration?: number | null;
+    width?: number | null;
+    height?: number | null;
+    thumb?: boolean;
+};
+
 type FetchDone = {
     status: "done";
     bytes: number;
@@ -545,7 +740,13 @@ type FetchDone = {
     width?: number | null;
     height?: number | null;
     title?: string | null;
+    // the post's item count when the link was a picker (null = it was not); with `items` the answer lists each one
+    picker_count?: number | null;
+    items?: FetchItem[];
 };
+
+// the still image types a save keeps as they are (section 18.2) and the extension each is stored under
+const IMAGE_EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic" };
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
     typeof v === "object" && v !== null && !Array.isArray(v);
@@ -572,6 +773,11 @@ type SaveRecord = {
     // LINE_BUSY_WAIT_MS instead of BUSY_WAIT_MS; `queuedAt` is when it joined
     lined?: boolean;
     queuedAt?: number;
+    // a save of a post's items (section 18.2): which, how many the client saw; `retry` = the session is
+    // ready already and only those indices are being fetched again
+    items?: ItemsChoice;
+    itemCount?: number;
+    retry?: boolean;
 };
 
 // What holds the helper right now (section 17.2). `owner` is an api_keys.id when the record
@@ -597,9 +803,37 @@ export class StudioService {
         const timeout = new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(new Error(`helper ${path} timed out after ${ms} ms`)), ms);
         });
-        return Promise.race([this.d.helper(path, init), timeout]).finally(() => {
+        return Promise.race([this.d.helper(path, init).then((res) => this.noteHelper(res)), timeout]).finally(() => {
             if (timer !== undefined) clearTimeout(timer);
         });
+    }
+
+    // What the container's helper says it can do (APP-API-CONTRACT.md 18.8): every answer carries it, and the last
+    // one seen is kept in storage, so `features.gallery` is advertised only while the helper that runs has the
+    // slideshow routes (an older image answers without the header). Unknown until the first call.
+    private helperGallery: boolean | undefined;
+    private noteHelper(res: Response): Response {
+        try {
+            const g = (res.headers.get(HELPER_CAPS_HEADER) ?? "").includes("gallery=1");
+            if (g !== this.helperGallery) {
+                this.helperGallery = g;
+                void Promise.resolve(this.d.storage.put("helper:caps", { gallery: g, at: this.d.now() })).catch(() => {});
+            }
+        } catch {
+            // a response whose headers cannot be read says nothing
+        }
+        return res;
+    }
+    async helperCaps(): Promise<StudioReply> {
+        let gallery = this.helperGallery;
+        if (gallery === undefined) {
+            try {
+                gallery = (await this.d.storage.get<{ gallery?: boolean }>("helper:caps"))?.gallery === true;
+            } catch {
+                gallery = false;
+            }
+        }
+        return { status: 200, body: { status: "success", gallery } };
     }
     // helper job id -> when this DO started it; used only for the busy answer.
     private encodes = new Map<string, number>();
@@ -816,7 +1050,7 @@ export class StudioService {
             return { kind: "save", sid: key.slice("save:".length) };
         }
         for (const [key, rec] of await this.d.storage.list<JobRecord>({ prefix: "job:" })) {
-            if (!rec || now - rec.createdAt >= SWEEP_RENDER_MS) continue;
+            if (!rec || now - rec.createdAt >= jobWindowMs(rec)) continue;
             const id = key.slice("job:".length);
             if (await this.d.storage.get(`result:${id}`)) continue;
             return rec.keyId.startsWith("studio:")
@@ -840,7 +1074,7 @@ export class StudioService {
     // taken it its `job:` record exists and the entry is only a leftover (the object died before
     // removing it): the pump drops it, and it must not keep the helper "held" until it ages out.
     private async uploading(entry: LineEntry, now: number): Promise<boolean> {
-        if (entry.kind !== "render" || !startingFresh(entry, now)) return false;
+        if (entry.kind === "save" || !startingFresh(entry, now)) return false;
         return !(entry.job && (await this.d.storage.get(`job:${entry.job}`)));
     }
 
@@ -940,10 +1174,20 @@ export class StudioService {
     // lock is released. `code` / `silent` as for an end; an entry that waited past LINE_WAIT_MS is
     // `error.studio.busy` / `error.webp.busy`.
     private async endEntry(key: string, entry: LineEntry, code: string, silent: boolean): Promise<() => Promise<void>> {
-        const job = entry.kind === "render" ? entry.job : null;
-        if (entry.kind === "render" && !job) {
+        const job = entry.kind !== "save" ? entry.job : null;
+        if (entry.kind !== "save" && !job) {
             await this.line.remove(key);
             return async () => {};
+        }
+        // a retry of a post's items is a save of a session that was ready: whatever ends it, the session stays
+        if (entry.kind === "save" && entry.retry) {
+            await this.d.db
+                .prepare("UPDATE studio_sessions SET status = 'ready', error_code = NULL WHERE id = ?1 AND status = 'saving'")
+                .bind(entry.sid)
+                .run()
+                .catch(() => {});
+            await this.line.remove(key);
+            return () => this.settleLine(entry.sid, null, silent ? { kind: "cancelled" } : { kind: "failed", code });
         }
         const changed = await this.markEnd(entry.sid, job, code);
         await this.line.remove(key);
@@ -976,6 +1220,7 @@ export class StudioService {
     private async pumpOnce(): Promise<"done" | "again"> {
         let kickSid: string | null = null;
         let start: { key: string; entry: LineEntry; r2Key: string; title: string | null; duration: number | null } | null = null;
+        let startSlide: { key: string; entry: LineEntry } | null = null;
         // the hooks of entries that ended in here run after the lock is released
         const after: Array<() => Promise<void>> = [];
         await this.withLine(async () => {
@@ -992,6 +1237,23 @@ export class StudioService {
                         row = await getSession(this.d.db, entry.sid);
                     } catch {
                         return; // a D1 blip: the next pass
+                    }
+                    // a retry of a post's items waits with its session ready (readers see no `saving` for up to 30
+                    // minutes): it is marked saving only now, when it really starts
+                    if (entry.retry && row && row.status === "ready") {
+                        if (row.expires_at <= now) {
+                            await this.line.remove(key);
+                            continue;
+                        }
+                        const upd = await this.d.db
+                            .prepare("UPDATE studio_sessions SET status = 'saving', error_code = NULL WHERE id = ?1 AND status = 'ready' AND expires_at > ?2")
+                            .bind(entry.sid, now)
+                            .run();
+                        if (Number(upd.meta?.changes ?? 0) === 0) {
+                            await this.line.remove(key);
+                            continue;
+                        }
+                        row = { ...row, status: "saving" };
                     }
                     if (row && row.status === "saving" && row.expires_at <= now) {
                         // its post was deleted while it waited: the row ends, silently (the owner did
@@ -1017,6 +1279,9 @@ export class StudioService {
                         lastAdvance: now,
                         lined: true,
                         queuedAt: entry.at,
+                        ...(entry.items !== undefined ? { items: entry.items } : {}),
+                        ...(entry.itemCount !== undefined ? { itemCount: entry.itemCount } : {}),
+                        ...(entry.retry ? { retry: true } : {}),
                     };
                     await this.d.storage.put(`save:${entry.sid}`, rec);
                     await this.line.remove(key);
@@ -1049,6 +1314,19 @@ export class StudioService {
                     await this.line.remove(key);
                     continue;
                 }
+                if (entry.kind === "slideshow") {
+                    if (!entry.slideshow || !session || session.expires_at <= now || session.status !== "ready") {
+                        const gone = !session || session.expires_at <= now;
+                        after.push(await this.endEntry(key, entry, gone ? "error.studio.expired" : "error.studio.not_ready", gone));
+                        continue;
+                    }
+                    if (this.startingJobs.has(job)) return;
+                    const marked: LineEntry = { ...entry, starting: now };
+                    await this.line.put(key, marked);
+                    this.startingJobs.set(job, now);
+                    startSlide = { key, entry: marked };
+                    return;
+                }
                 if (!session || session.expires_at <= now || session.status !== "ready" || !session.r2_key || !entry.render) {
                     // an expired session means its post was deleted: the owner's doing, no message
                     const gone = !session || session.expires_at <= now;
@@ -1067,9 +1345,10 @@ export class StudioService {
         for (const run of after) await run();
         // whatever the pump started must be seen to: the sweep re-arms itself while it runs (an
         // adopted upload has no kick, its first step is the next pass)
-        if (kickSid || start) await this.scheduleSweep();
+        if (kickSid || start || startSlide) await this.scheduleSweep();
         if (kickSid) await this.kick(kickSid);
         if (start) return await this.startQueuedRender(start);
+        if (startSlide) return await this.startQueuedSlideshow(startSlide);
         return "done";
     }
 
@@ -1296,13 +1575,14 @@ export class StudioService {
             const mine = entry.keyId === keyId;
             return {
                 position: base + i,
-                kind: entry.kind,
+                // a slideshow is a render to everything outside this object (older builds decode two kinds only)
+                kind: entry.kind === "slideshow" ? "render" : entry.kind,
                 mine,
                 sid: mine ? entry.sid : null,
                 job: mine ? entry.job : null,
                 at: entry.at,
                 origin: entry.origin,
-                priority: entry.kind === "render" && isFocusedKey(key) ? "focused" : null,
+                priority: entry.kind !== "save" && isFocusedKey(key) ? "focused" : null,
                 key_name: nameOf(entry.keyId),
                 link: mine ? (sessionRows.get(entry.sid)?.link ?? null) : null,
             };
@@ -1329,7 +1609,7 @@ export class StudioService {
         }
         const now = this.d.now();
         for (const [key, rec] of await this.d.storage.list<JobRecord>({ prefix: "job:" })) {
-            if (!rec || !rec.keyId.startsWith("studio:") || now - rec.createdAt > SWEEP_RENDER_MS) continue;
+            if (!rec || !rec.keyId.startsWith("studio:") || now - rec.createdAt > jobWindowMs(rec)) continue;
             const id = key.slice("job:".length);
             if (await this.d.storage.get(`result:${id}`)) continue;
             const sid = rec.keyId.slice("studio:".length);
@@ -1380,6 +1660,9 @@ export class StudioService {
         let notifyField: unknown;
         let queueField: unknown;
         let titleField: unknown;
+        let itemsField: unknown;
+        let itemCountField: unknown;
+        let slideshowField: unknown;
         try {
             if (rawBody.length <= MAX_BODY_BYTES) {
                 const parsed = JSON.parse(rawBody);
@@ -1390,6 +1673,9 @@ export class StudioService {
                     notifyField = (parsed as { notify?: unknown }).notify;
                     queueField = (parsed as { queue?: unknown }).queue;
                     titleField = (parsed as { title?: unknown }).title;
+                    itemsField = (parsed as { items?: unknown }).items;
+                    itemCountField = (parsed as { item_count?: unknown }).item_count;
+                    slideshowField = (parsed as { slideshow?: unknown }).slideshow;
                 }
             }
         } catch {
@@ -1428,6 +1714,25 @@ export class StudioService {
             if (!t.ok) return studioErr(400, "error.library.bad_title");
             title = t.title;
         }
+        // `items`, `item_count` and `slideshow` (section 18.2): several items of a picker, judged before anything is created
+        const itemsCheck = parseItemsField(itemsField);
+        const countCheck = parseItemCountField(itemCountField);
+        if (!itemsCheck.ok || !countCheck.ok) return studioErr(400, "error.studio.invalid_params");
+        const items = itemsCheck.items;
+        const itemCount = countCheck.count;
+        if (Array.isArray(items) && itemCount !== undefined && items.some((i) => i >= itemCount)) {
+            return studioErr(400, "error.studio.invalid_params");
+        }
+        let plan: SlideshowPlan | null = null;
+        if (slideshowField !== undefined && slideshowField !== null) {
+            // only with `items`, and only over items that will be saved
+            if (items === undefined) return studioErr(400, "error.studio.invalid_params");
+            const p = parseSlideshowPlan(slideshowField, "error.studio.invalid_params");
+            if (!p.ok) return studioErr(p.status, p.code);
+            if (Array.isArray(items) && p.plan.items.some((i) => !items.includes(i))) return studioErr(400, "error.studio.invalid_params");
+            plan = p.plan;
+        }
+        const slideshowJob = plan ? mintId(this.d.randomBytes) : null;
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.reapOrphans();
@@ -1441,6 +1746,7 @@ export class StudioService {
             busyCode: "error.studio.busy",
             adopt: false,
             origin: fromShare ? "share" : null,
+            ...(items !== undefined || itemCount !== undefined ? { extra: { items, itemCount } } : {}),
             insert: async (sid, now) => {
                 await this.d.db
                     .prepare(
@@ -1448,6 +1754,19 @@ export class StudioService {
                     )
                     .bind(sid, keyId, link, serviceFromUrl(link), now, now + SESSION_TTL_MS, wantsPublic ? "pending" : null)
                     .run();
+                // the slideshow of the share sheet and the Shortcuts (18.2): its render row now, so the client
+                // has a job id to poll; the job joins the line when the save is ready
+                if (plan && slideshowJob) {
+                    try {
+                        await this.d.db
+                            .prepare("INSERT INTO studio_renders (id, session_id, status, created_at, kind, plan) VALUES (?1, ?2, 'pending', ?3, 'slideshow', ?4)")
+                            .bind(slideshowJob, sid, now, JSON.stringify(plan))
+                            .run();
+                    } catch (e) {
+                        await this.d.db.prepare("DELETE FROM studio_sessions WHERE id = ?1").bind(sid).run().catch(() => {});
+                        throw e;
+                    }
+                }
             },
         });
         if (!claim.ok) return claim.reply;
@@ -1489,6 +1808,7 @@ export class StudioService {
                 // only for a caller that opted in (a share, or `queue: true`): the rest see today's shape
                 ...(wantsQueue ? { queued: !free, queue_ahead: ahead } : {}),
                 ...(notifyBody ? { notify: notifyBody } : {}),
+                ...(slideshowJob ? { slideshow: { job: slideshowJob } } : {}),
             },
         };
     }
@@ -1504,6 +1824,8 @@ export class StudioService {
         adopt: boolean;
         origin: "share" | null;
         insert: (sid: string, now: number) => Promise<void>;
+        // a save of a post's items (section 18.2): carried by the `save:` record, or by the entry that waits
+        extra?: { items?: ItemsChoice; itemCount?: number; retry?: boolean };
     }): Promise<
         | { ok: true; sid: string; now: number; free: boolean; ahead: number | null }
         | { ok: false; reply: StudioReply }
@@ -1524,7 +1846,7 @@ export class StudioService {
             }
             if (free) {
                 try {
-                    const rec: SaveRecord = { phase: o.adopt ? "probing" : "starting", startedAt: now, attempts: 0, lastAdvance: now };
+                    const rec: SaveRecord = { phase: o.adopt ? "probing" : "starting", startedAt: now, attempts: 0, lastAdvance: now, ...(o.extra ?? {}) };
                     await this.d.storage.put(`save:${sid}`, rec);
                 } catch {
                     // step() starts the save from the D1 row when there is no record
@@ -1532,7 +1854,7 @@ export class StudioService {
                 return { kind: "free" };
             }
             const q = await this.line.enqueue(
-                { kind: "save", sid, job: null, keyId: o.keyId, at: now, origin: o.origin, adopt: o.adopt, render: null },
+                { kind: "save", sid, job: null, keyId: o.keyId, at: now, origin: o.origin, adopt: o.adopt, render: null, ...(o.extra ?? {}) },
                 false,
             );
             if ("full" in q) {
@@ -1688,6 +2010,25 @@ export class StudioService {
         return p;
     }
 
+    // The lock of a save that is storing (a long copy into R2 makes no other call) is kept fresh, or the next poll
+    // would call it abandoned after LOCK_STALE_MS and finalize in parallel (section 18 review).
+    private touchLock(sid: string): void {
+        if (this.advancing.has(sid)) this.advancingSince.set(sid, this.d.now());
+    }
+
+    // Did another finalize of this save win (the session is ready and alive)? Then the objects this one wrote have
+    // the winner's names and are the winner's: nothing is deleted. Otherwise (marked lost, expired, deleted) they
+    // belong to nobody.
+    private async finalizedElsewhere(sid: string): Promise<boolean> {
+        try {
+            const row = await getSession(this.d.db, sid);
+            return !!row && row.status === "ready" && row.expires_at > this.d.now();
+        } catch {
+            // cannot tell: keep the objects (an orphan costs bytes, a deleted original costs the save)
+            return true;
+        }
+    }
+
     // Is any save in flight (the helper does one job at a time)?
     private async saveActive(): Promise<boolean> {
         const records = await this.d.storage.list<unknown>({ prefix: "save:" });
@@ -1716,7 +2057,16 @@ export class StudioService {
                 )
                 .bind(code, sid)
                 .run();
-            return Number(res.meta?.changes ?? 0) > 0;
+            const changed = Number(res.meta?.changes ?? 0) > 0;
+            // a slideshow asked for with the save (18.2) cannot be made from a save that failed
+            if (changed) {
+                await this.d.db
+                    .prepare("UPDATE studio_renders SET status = 'error', error_code = ?1 WHERE session_id = ?2 AND kind = 'slideshow' AND status = 'pending'")
+                    .bind(code, sid)
+                    .run()
+                    .catch(() => {});
+            }
+            return changed;
         } catch (e) {
             console.error("[studio] could not record save error", sid, String(e));
             return false;
@@ -1731,8 +2081,35 @@ export class StudioService {
         }
     }
 
+    // A retry of a post's missing items (section 18.2) that did not work: the session was ready before it and is
+    // ready again, with the codes of the items that failed again (`records`, else `code` for each it asked for).
+    private async failRetry(sid: string, rec: SaveRecord, code: string, records?: ItemRecord[]): Promise<number> {
+        try {
+            const row = await getSession(this.d.db, sid);
+            const asked = Array.isArray(rec.items) ? rec.items : [];
+            const prev = parseItemRecords(row?.items) ?? [];
+            const noted = new Map((records ?? []).map((r) => [r.i, r]));
+            const failed: ItemRecord[] = asked.map((i) => noted.get(i) ?? { i, type: prev.find((p) => p.i === i)?.type ?? null, status: "error", code });
+            const merged = [...prev.filter((p) => !asked.includes(p.i)), ...failed].sort((a, b) => a.i - b.i);
+            await this.d.db
+                .prepare("UPDATE studio_sessions SET status = 'ready', error_code = NULL, items = ?1 WHERE id = ?2 AND status = 'saving'")
+                .bind(JSON.stringify(merged), sid)
+                .run();
+        } catch (e) {
+            console.error("[studio] could not restore the session after a failed retry", sid, String(e));
+        }
+        await this.dropHelperCopy(sid);
+        await this.d.storage.delete(`save:${sid}`).catch(() => {});
+        this.progress.delete(sid);
+        this.lastStoringPush.delete(sid);
+        await this.settleLine(sid, null, { kind: "failed", code });
+        return POLL_INTERVAL_MS;
+    }
+
     // Ends the save with an error: the row, the helper copy and the record.
-    private async fail(sid: string, code: string): Promise<number> {
+    private async fail(sid: string, code: string, records?: ItemRecord[]): Promise<number> {
+        const rec = await this.d.storage.get<SaveRecord>(`save:${sid}`).catch(() => undefined);
+        if (rec?.retry) return await this.failRetry(sid, rec, code, records);
         const changed = await this.markError(sid, code);
         await this.dropHelperCopy(sid);
         await this.d.storage.delete(`save:${sid}`).catch(() => {});
@@ -1834,6 +2211,15 @@ export class StudioService {
             return POLL_INTERVAL_MS;
         }
 
+        // a retry of the items of a post that was deleted meanwhile (its sessions are expired): nothing is
+        // fetched or stored for it any more
+        if (rec?.retry && row.expires_at <= now) {
+            await this.dropHelperCopy(sid);
+            await this.d.storage.delete(`save:${sid}`).catch(() => {});
+            this.progress.delete(sid);
+            return POLL_INTERVAL_MS;
+        }
+
         // A save nobody advanced for 10 minutes is lost. With no record at all
         // (DO storage lost, or a session from before this scheme) the row's age
         // stands in for it.
@@ -1896,7 +2282,13 @@ export class StudioService {
             res = await this.callHelper("/fetch", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
-                body: JSON.stringify({ id: sid, url: row.link }),
+                body: JSON.stringify({
+                    id: sid,
+                    url: row.link,
+                    // a save of a post's items (section 18.2): which ones, and how many the client saw
+                    ...(rec.items !== undefined ? { items: rec.items } : {}),
+                    ...(rec.itemCount !== undefined ? { item_count: rec.itemCount } : {}),
+                }),
             });
         } catch {
             return await this.miss(sid, rec);
@@ -1965,31 +2357,39 @@ export class StudioService {
             // what the helper says it is doing; an old helper says nothing
             const bytes = finite(body.bytes);
             const total = finite(body.total);
+            // a save of several items says how far it is (section 18.7); a single file says nothing
+            const many = finite(body.items_total) !== null ? { itemsDone: finite(body.items_done) ?? 0, itemsTotal: finite(body.items_total) } : {};
             await this.setProgress(
                 sid,
                 body.stage === "probing"
-                    ? { step: "reading", bytes, total: null, waking: false }
+                    ? { step: "reading", bytes, total: null, waking: false, ...many }
                     : body.stage === "downloading"
-                      ? { step: "fetching", bytes, total, waking: false }
-                      : { step: "fetching", bytes: null, total: null, waking: false },
+                      ? { step: "fetching", bytes, total, waking: false, ...many }
+                      : { step: "fetching", bytes: null, total: null, waking: false, ...many },
             );
             return POLL_INTERVAL_MS;
         }
-        return await this.finalize(sid, row, body as FetchDone);
+        return await this.finalize(sid, row, body as FetchDone, rec);
     }
 
     // The helper has the file: stream it into R2 (within this request), mark the
     // row ready and drop the helper copy.
-    private async finalize(sid: string, row: SessionRow, done: FetchDone): Promise<number> {
+    private async finalize(sid: string, row: SessionRow, done: FetchDone, rec?: SaveRecord): Promise<number> {
+        // a save of a post's items has its own path (section 18.2)
+        if (Array.isArray(done.items)) return await this.finalizeItems(sid, row, done, rec);
         const link = row.link ?? "";
         const keyId = row.key_id ?? "";
         const bytes = finite(done.bytes);
         if (bytes === null || bytes <= 0) return await this.fail(sid, "error.studio.unavailable");
         if (bytes > MAX_SOURCE_BYTES) return await this.fail(sid, "error.studio.too_large");
-        const ext = typeof done.ext === "string" && /^[a-z0-9]{2,4}$/.test(done.ext) ? done.ext : "mp4";
+        // A still image the helper recognised by its bytes stays what it is (section 18.2: a single photo was
+        // coerced to a 0.04 s "video/mp4" before); anything else that is not a video or a gif is coerced as ever.
+        const stillExt = typeof done.contentType === "string" ? IMAGE_EXT[done.contentType] : undefined;
+        const ext =
+            typeof done.ext === "string" && /^[a-z0-9]{2,4}$/.test(done.ext) ? done.ext : (stillExt ?? "mp4");
         const contentType =
             typeof done.contentType === "string" &&
-            (/^video\/[a-z0-9.+-]+$/i.test(done.contentType) || done.contentType === "image/gif")
+            (/^video\/[a-z0-9.+-]+$/i.test(done.contentType) || done.contentType === "image/gif" || stillExt !== undefined)
                 ? done.contentType
                 : "video/mp4";
         const key = `originals/${sid}.${ext}`;
@@ -2017,6 +2417,7 @@ export class StudioService {
                 key,
                 this.d.fixedLength(file.body, bytes, (n) => {
                     progress.bytes = (progress.bytes ?? 0) + n;
+                    this.touchLock(sid);
                     // The copy can run for a minute inside this one request and
                     // nothing else reports it (the sweep leaves a locked save
                     // alone), so it tells the live service its byte count itself,
@@ -2047,9 +2448,12 @@ export class StudioService {
 
         const title =
             typeof done.title === "string" && done.title.trim() ? done.title.trim().slice(0, 200) : null;
+        // a still's thumb becomes its poster (section 18.2); none (an old helper, no public bucket) leaves the
+        // poster job to make it
+        const thumb = stillExt !== undefined && stillExt !== "heic" && contentType === done.contentType ? await this.storeThumb(sid, null) : null;
         const res = await this.d.db
             .prepare(
-                "UPDATE studio_sessions SET status = 'ready', error_code = NULL, r2_key = ?1, content_type = ?2, bytes = ?3, duration = ?4, width = ?5, height = ?6, title = ?7 WHERE id = ?8 AND status = 'saving'",
+                "UPDATE studio_sessions SET status = 'ready', error_code = NULL, r2_key = ?1, content_type = ?2, bytes = ?3, duration = ?4, width = ?5, height = ?6, title = ?7 WHERE id = ?8 AND status = 'saving' AND expires_at > ?9",
             )
             .bind(
                 key,
@@ -2060,13 +2464,19 @@ export class StudioService {
                 finite(done.height),
                 title,
                 sid,
+                this.d.now(),
             )
             .run();
         let becameReady = false;
         if (Number(res.meta?.changes ?? 0) === 0) {
-            // Marked lost meanwhile: do not keep an object nothing points at.
-            await this.d.originals.delete(key).catch(() => {});
+            // Marked lost meanwhile: do not keep an object nothing points at. But when another finalize of this very
+            // save won (the lock went stale during a long copy), the object is THE original: it is not touched.
+            if (!(await this.finalizedElsewhere(sid))) await this.d.originals.delete(key).catch(() => {});
+            if (thumb) await this.d.media?.delete(thumb.name).catch(() => {});
         } else {
+            if (thumb) {
+                await this.d.db.prepare("UPDATE studio_sessions SET poster = ?1 WHERE id = ?2").bind(thumb.url, sid).run().catch(() => {});
+            }
             // the private original is now a library item (an adopted upload is
             // not: it already is the upload's item)
             await insertMediaItem(this.d.db, {
@@ -2084,6 +2494,7 @@ export class StudioService {
                 session_id: sid,
                 key_id: keyId || null,
                 created_at: this.d.now(),
+                poster: thumb?.url ?? null,
             });
             // the save is ready: the owner who walked away is told (once: the event's record)
             await this.notifyCall("saved", (n) => n.onSaved(sid));
@@ -2097,8 +2508,259 @@ export class StudioService {
         // The poster and, when asked for, the public copy (section 13). `ready` is already recorded
         // and the helper and the save record are already free, so neither can delay what else wants
         // them, and a failure of either never fails the save.
-        if (becameReady) await this.afterReady(sid, row.public_state === "pending", key);
+        if (becameReady) {
+            await this.afterReady(sid, row.public_state === "pending", [key]);
+            // a slideshow asked for with the save (18.2) can only be refused here: this save is not a gallery
+            await this.startSlideshowAfterSave(sid);
+        }
         return POLL_INTERVAL_MS;
+    }
+
+    // A photo's thumb out of the helper into the public bucket, as a poster (`<10 base62>.jpg`, section 13's
+    // naming). `index` null = the single file. null when there is none (no public bucket, an old helper, a thumb that
+    // is not a JPEG): the poster job then makes one. Never throws.
+    private async storeThumb(sid: string, index: number | null): Promise<{ url: string; name: string } | null> {
+        if (!this.d.media || !this.d.mediaBaseUrl) return null;
+        try {
+            const res = await this.callHelper(`/fetch/${sid}/thumb${index === null ? "" : `?i=${index}`}`);
+            if (!res.ok) {
+                await res.body?.cancel().catch(() => {});
+                return null;
+            }
+            const jpeg = await res.arrayBuffer();
+            const head = new Uint8Array(jpeg, 0, Math.min(2, jpeg.byteLength));
+            if (jpeg.byteLength === 0 || jpeg.byteLength > MAX_POSTER_BYTES || head[0] !== 0xff || head[1] !== 0xd8) return null;
+            const name = `${randomBase62(MEDIA_NAME_LENGTH, this.d.randomBytes)}.jpg`;
+            await this.d.media.put(name, jpeg, {
+                httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" },
+                customMetadata: { poster: "1", sessionId: sid, createdAt: String(this.d.now()) },
+            });
+            const base = this.d.mediaBaseUrl.endsWith("/") ? this.d.mediaBaseUrl : `${this.d.mediaBaseUrl}/`;
+            return { url: base + name, name };
+        } catch (e) {
+            console.error("[studio] storing a thumb failed", sid, String(e));
+            return null;
+        }
+    }
+
+    // The helper saved several items of a post (section 18.2): each goes to `originals/<sid>-<nn>.<ext>` with its
+    // own library row (`role 'item'`, `item_index`, `post_key`), a photo with its thumb as poster. An item that
+    // failed is recorded in the session's `items` and the rest stay (the save fails only when none was kept). A
+    // retry (`rec.retry`) adds the missing items to a session that is ready already.
+    private async finalizeItems(sid: string, row: SessionRow, done: FetchDone, rec?: SaveRecord): Promise<number> {
+        const link = row.link ?? "";
+        const keyId = row.key_id ?? "";
+        const retry = rec?.retry === true;
+        const list = (done.items ?? []).filter((e): e is FetchItem => !!e && isIndex(e.i)).sort((a, b) => a.i - b.i);
+        type Kept = {
+            i: number;
+            key: string;
+            contentType: string;
+            bytes: number;
+            duration: number | null;
+            width: number | null;
+            height: number | null;
+            thumb: { url: string; name: string } | null;
+        };
+        const kept: Kept[] = [];
+        const records: ItemRecord[] = [];
+        let firstCode: string | null = null;
+        const keepAwake = this.d.renew ? setInterval(this.d.renew, 20_000) : undefined;
+        try {
+            for (const it of list) {
+                this.touchLock(sid);
+                const type = typeof it.contentType === "string" ? itemTypeOf(it.contentType) : null;
+                const failed = (code: string) => {
+                    records.push({ i: it.i, type, status: "error", code });
+                    firstCode ??= code;
+                };
+                if (it.status !== "done") {
+                    failed(typeof it.code === "string" ? it.code : "error.studio.unavailable");
+                    continue;
+                }
+                const bytes = finite(it.bytes);
+                if (bytes === null || bytes <= 0) {
+                    failed("error.studio.unavailable");
+                    continue;
+                }
+                if (bytes > MAX_SOURCE_BYTES) {
+                    failed("error.studio.too_large");
+                    continue;
+                }
+                const stillExt = typeof it.contentType === "string" ? IMAGE_EXT[it.contentType] : undefined;
+                const ext = typeof it.ext === "string" && /^[a-z0-9]{2,4}$/.test(it.ext) ? it.ext : (stillExt ?? "mp4");
+                const contentType =
+                    typeof it.contentType === "string" &&
+                    (/^video\/[a-z0-9.+-]+$/i.test(it.contentType) || it.contentType === "image/gif" || stillExt !== undefined)
+                        ? it.contentType
+                        : "video/mp4";
+                const key = `originals/${sid}-${String(it.i).padStart(2, "0")}.${ext}`;
+                try {
+                    this.d.renew?.();
+                    const file = await this.callHelper(`/fetch/${sid}/file?i=${it.i}`);
+                    const declared = Number(file.headers.get("content-length"));
+                    if (!file.ok || !file.body || declared !== bytes) {
+                        await file.body?.cancel().catch(() => {});
+                        failed("error.studio.storage");
+                        continue;
+                    }
+                    const progress: SaveProgress = {
+                        step: "storing",
+                        bytes: 0,
+                        total: bytes,
+                        waking: false,
+                        itemsDone: kept.length + records.length,
+                        itemsTotal: list.length,
+                    };
+                    await this.setProgress(sid, progress);
+                    const stored = await this.d.originals.put(
+                        key,
+                        this.d.fixedLength(file.body, bytes, (n) => {
+                            progress.bytes = (progress.bytes ?? 0) + n;
+                            this.touchLock(sid);
+                        }),
+                        {
+                            httpMetadata: { contentType },
+                            customMetadata: { keyId, source: link.slice(0, 1000), sessionId: sid, itemIndex: String(it.i), createdAt: String(this.d.now()) },
+                        },
+                    );
+                    kept.push({
+                        i: it.i,
+                        key,
+                        contentType,
+                        bytes: stored?.size ?? bytes,
+                        duration: finite(it.duration),
+                        width: finite(it.width),
+                        height: finite(it.height),
+                        thumb: stillExt !== undefined && stillExt !== "heic" && it.thumb !== false ? await this.storeThumb(sid, it.i) : null,
+                    });
+                } catch (e) {
+                    console.error("[studio] R2 put failed", sid, it.i, String(e));
+                    await this.d.originals.delete(key).catch(() => {});
+                    failed("error.studio.storage");
+                }
+            }
+        } finally {
+            if (keepAwake !== undefined) clearInterval(keepAwake);
+        }
+        if (kept.length === 0) return await this.fail(sid, firstCode ?? "error.studio.unavailable", records);
+
+        // the items of this session as the rows know them (a retry) and the lead among them all
+        type LeadFields = { index: number; key: string; content_type: string | null; bytes: number | null; duration: number | null; width: number | null; height: number | null; poster: string | null };
+        let all: LeadFields[] = kept.map((k) => ({ index: k.i, key: k.key, content_type: k.contentType, bytes: k.bytes, duration: k.duration, width: k.width, height: k.height, poster: k.thumb?.url ?? null }));
+        if (retry) {
+            const { results } = await this.d.db
+                .prepare(
+                    "SELECT item_index AS idx, r2_key, content_type, bytes, duration, width, height, poster FROM media_items WHERE session_id = ?1 AND role = 'item' AND deleted_at IS NULL",
+                )
+                .bind(sid)
+                .all<{ idx: number; r2_key: string; content_type: string | null; bytes: number | null; duration: number | null; width: number | null; height: number | null; poster: string | null }>();
+            const have = new Set(all.map((a) => a.index));
+            for (const r of results) {
+                if (!have.has(r.idx)) all.push({ index: r.idx, key: r.r2_key, content_type: r.content_type, bytes: r.bytes, duration: r.duration, width: r.width, height: r.height, poster: r.poster });
+            }
+        }
+        all = all.sort((a, b) => a.index - b.index);
+        const lead = pickLead(all)!;
+        const newRecords: ItemRecord[] = [
+            ...records,
+            ...kept.map((k): ItemRecord => ({ i: k.i, type: itemTypeOf(k.contentType), status: "ready", code: null })),
+        ];
+        const touched = new Set(newRecords.map((r) => r.i));
+        const merged = [...(retry ? (parseItemRecords(row.items) ?? []).filter((r) => !touched.has(r.i)) : []), ...newRecords].sort((a, b) => a.i - b.i);
+        const title = typeof done.title === "string" && done.title.trim() ? done.title.trim().slice(0, 200) : null;
+        const count = retry ? (row.item_count ?? merged.length) : (finite(done.picker_count) ?? merged.length);
+
+        const res = await this.d.db
+            .prepare(
+                "UPDATE studio_sessions SET status = 'ready', error_code = NULL, r2_key = ?1, content_type = ?2, bytes = ?3, duration = ?4, width = ?5, height = ?6, title = COALESCE(?7, title), item_count = ?8, items = ?9 WHERE id = ?10 AND status = 'saving' AND expires_at > ?11",
+            )
+            .bind(lead.key, lead.content_type, lead.bytes, lead.duration, lead.width, lead.height, title, count, JSON.stringify(merged), sid, this.d.now())
+            .run();
+        let becameReady = false;
+        if (Number(res.meta?.changes ?? 0) === 0) {
+            // Marked lost (or its post deleted) meanwhile: do not keep objects nothing points at. When another
+            // finalize of this save won (the lock went stale during a long copy) the objects carry its names and
+            // are its originals: only this one's own thumbs (random names) go.
+            const theirs = await this.finalizedElsewhere(sid);
+            for (const k of kept) {
+                if (!theirs) await this.d.originals.delete(k.key).catch(() => {});
+                if (k.thumb) await this.d.media?.delete(k.thumb.name).catch(() => {});
+            }
+        } else {
+            for (const k of kept) {
+                await insertMediaItem(this.d.db, {
+                    kind: "private",
+                    source: "saved",
+                    bucket: "originals",
+                    r2_key: k.key,
+                    // the lead is named as a plain save ever was; the others carry their position
+                    name: k.key === lead.key ? (title ?? `${sid}.${k.key.split(".").pop()}`) : `${title ?? sid}-${String(k.i).padStart(2, "0")}.${k.key.split(".").pop()}`,
+                    content_type: k.contentType,
+                    bytes: k.bytes,
+                    width: k.width,
+                    height: k.height,
+                    duration: k.duration,
+                    link: pageLink(link),
+                    session_id: sid,
+                    key_id: keyId || null,
+                    created_at: this.d.now(),
+                    poster: k.thumb?.url ?? null,
+                    role: "item",
+                    item_index: k.i,
+                    post_key: sid,
+                });
+            }
+            if (lead.poster) {
+                await this.d.db.prepare("UPDATE studio_sessions SET poster = ?1 WHERE id = ?2").bind(lead.poster, sid).run().catch(() => {});
+            }
+            if (!retry) await this.notifyCall("saved", (n) => n.onSaved(sid));
+            await this.settleLine(sid, null, { kind: "saved" });
+            becameReady = true;
+        }
+        await this.dropHelperCopy(sid);
+        await this.d.storage.delete(`save:${sid}`).catch(() => {});
+        this.progress.delete(sid);
+        this.lastStoringPush.delete(sid);
+        if (becameReady) {
+            await this.afterReady(sid, !retry && row.public_state === "pending", kept.map((k) => k.key));
+            if (retry) await this.followPostVisibility(sid);
+            else await this.startSlideshowAfterSave(sid);
+        }
+        return POLL_INTERVAL_MS;
+    }
+
+    // A retry brought items into a post that may be public: they take its lead item's visibility (best effort).
+    private async followPostVisibility(sid: string): Promise<void> {
+        const vis = this.visDeps();
+        if (!vis) return;
+        try {
+            const { results } = await this.d.db
+                .prepare(`SELECT ${ITEM_COLUMNS} FROM media_items WHERE session_id = ?1 AND role = 'item' AND deleted_at IS NULL AND bucket = 'originals' ORDER BY item_index, id`)
+                .bind(sid)
+                .all<MediaRow>();
+            const lead = pickLead(results.map((r) => ({ ...r, content_type: r.content_type })));
+            if (!lead || effectiveVisibility(lead) !== "public") return;
+            for (const r of results) {
+                if (effectiveVisibility(r) !== "public") await publishOriginal(vis, r, results[0]?.key_id ?? SERVICE_KEY_ID);
+            }
+        } catch (e) {
+            console.error("[studio] making the retried items public failed", sid, String(e));
+        }
+    }
+
+    // The deps visibility.ts needs; undefined without the public bucket.
+    private visDeps() {
+        if (!this.d.media || !this.d.mediaBaseUrl) return undefined;
+        return {
+            db: this.d.db,
+            originals: this.d.originals,
+            media: this.d.media,
+            mediaBaseUrl: this.d.mediaBaseUrl,
+            now: this.d.now,
+            randomBytes: this.d.randomBytes,
+            purge: this.d.purge,
+        };
     }
 
     // ---- after a save is ready: the poster, and the public copy (section 13) ------------------
@@ -2106,9 +2768,9 @@ export class StudioService {
     // Both are bookkeeping that must never fail or delay the save: the poster is only queued
     // (the sweep makes it), the public copy is made here when asked for, with a record for the
     // sweep to finish it if this attempt does not (a Durable Object eviction, an R2 hiccup).
-    private async afterReady(sid: string, wantsPublic: boolean, r2Key: string): Promise<void> {
+    private async afterReady(sid: string, wantsPublic: boolean, r2Keys: string[]): Promise<void> {
         try {
-            await this.posters?.onReady(r2Key);
+            for (const k of r2Keys) await this.posters?.onReady(k);
             if (!wantsPublic) return;
             await this.d.storage.put(`${PUBLIC_PREFIX}${sid}`, { attempts: 0, at: this.d.now() } satisfies PublicJob);
             await this.scheduleSweep();
@@ -2141,7 +2803,10 @@ export class StudioService {
         const key = `${PUBLIC_PREFIX}${sid}`;
         try {
             const row = await getSession(this.d.db, sid);
-            if (!row || row.public_state !== "pending" || row.status !== "ready") {
+            // (a post of several items turns its session's state 'ready' with its lead's mirror, before the rest
+            // have theirs: the record stays until every one has)
+            const unfinished = row?.public_state === "ready" && typeof row.item_count === "number";
+            if (!row || (row.public_state !== "pending" && !unfinished) || row.status !== "ready") {
                 await this.d.storage.delete(key).catch(() => {});
                 return;
             }
@@ -2152,6 +2817,7 @@ export class StudioService {
                 return;
             }
             let url: string | null = null;
+            let counted = false;
             // the original is already public (one row per file, section 16): just record it
             const have = row.r2_key
                 ? await this.d.db
@@ -2169,6 +2835,7 @@ export class StudioService {
                     return;
                 }
                 // counted when it starts: an attempt that takes the Durable Object down still ends
+                counted = true;
                 await this.d.storage.put(key, { attempts: rec.attempts + 1, at: this.d.now() } satisfies PublicJob);
                 const reply = await publishStudio(
                     {
@@ -2197,6 +2864,17 @@ export class StudioService {
                     return;
                 }
             }
+            // a post of several items has one mirror per item (section 18.2): the rest follow the lead. One that
+            // fails is tried again by the sweep, within the same attempts
+            if (typeof row.item_count === "number" && !(await this.hostRestOfItems(row))) {
+                if (rec.attempts + (counted ? 1 : 0) >= MAX_PUBLIC_ATTEMPTS) {
+                    await this.setPublic(sid, "failed", null);
+                    await this.d.storage.delete(key).catch(() => {});
+                } else if (!counted) {
+                    await this.d.storage.put(key, { attempts: rec.attempts + 1, at: this.d.now() } satisfies PublicJob);
+                }
+                return;
+            }
             await this.setPublic(sid, "ready", url);
             await this.d.storage.delete(key).catch(() => {});
         } catch (e) {
@@ -2204,6 +2882,26 @@ export class StudioService {
         } finally {
             this.hosting.delete(sid);
         }
+    }
+
+    // Every other live item of a gallery goes public too (one mirror per file, section 16). true = all are.
+    private async hostRestOfItems(row: SessionRow): Promise<boolean> {
+        const vis = this.visDeps();
+        if (!vis) return false;
+        const { results } = await this.d.db
+            .prepare(`SELECT ${ITEM_COLUMNS} FROM media_items WHERE session_id = ?1 AND role = 'item' AND deleted_at IS NULL AND bucket = 'originals' ORDER BY item_index, id`)
+            .bind(row.id)
+            .all<MediaRow>();
+        let all = true;
+        for (const r of results) {
+            if (effectiveVisibility(r) === "public" && r.url) continue;
+            const reply = await publishOriginal(vis, r, row.key_id ?? SERVICE_KEY_ID);
+            if (reply.status !== 201) {
+                console.error("[studio] public copy of an item failed", row.id, r.id, reply.status);
+                all = false;
+            }
+        }
+        return all;
     }
 
     // POST /posters/kick (the Worker's call: the library read, the cron, the backfill route):
@@ -2253,7 +2951,7 @@ export class StudioService {
         // (live, 2026-10-02).
         if (
             typeof r2Key !== "string" ||
-            !/^(?:uploads\/[A-Za-z0-9]{1,64}|originals\/[A-Za-z0-9]{22})\.[a-z0-9]{1,8}$/.test(r2Key)
+            !/^(?:uploads\/[A-Za-z0-9]{1,64}|originals\/[A-Za-z0-9]{22}(?:-[0-9]{2})?)\.[a-z0-9]{1,8}$/.test(r2Key)
         ) {
             return invalid();
         }
@@ -2385,7 +3083,7 @@ export class StudioService {
         this.progress.delete(sid);
         if (Number(ready.meta?.changes ?? 0) > 0) {
             await this.settleLine(sid, null, { kind: "saved" });
-            await this.afterReady(sid, row.public_state === "pending", key);
+            await this.afterReady(sid, row.public_state === "pending", [key]);
         }
         return POLL_INTERVAL_MS;
     }
@@ -2549,6 +3247,593 @@ export class StudioService {
         return { status: 202, body: { status: "pending", job, queued: true, queue_ahead: joined } };
     }
 
+    // ---- POST /studio/<sid>/slideshow (section 18.5) -----------------------------------------------
+
+    // Validates a plan against the session's stored items: which are stills and which are videos, the total
+    // length, the frame. The run it returns is what the line entry carries.
+    private async buildSlideshow(
+        sid: string,
+        plan: SlideshowPlan,
+    ): Promise<{ ok: true; run: SlideshowRun } | { ok: false; status: number; code: string }> {
+        const bad = (code = "error.webp.invalid_params") => ({ ok: false as const, status: 400, code });
+        let rows: { id: string; item_index: number; r2_key: string; content_type: string | null; width: number | null; height: number | null; duration: number | null }[];
+        try {
+            rows = (
+                await this.d.db
+                    .prepare(
+                        "SELECT id, item_index, r2_key, content_type, width, height, duration FROM media_items WHERE session_id = ?1 AND role = 'item' AND deleted_at IS NULL ORDER BY item_index, id",
+                    )
+                    .bind(sid)
+                    .all<{ id: string; item_index: number; r2_key: string; content_type: string | null; width: number | null; height: number | null; duration: number | null }>()
+            ).results;
+        } catch {
+            return { ok: false, status: 503, code: "error.api.generic" };
+        }
+        if (rows.length < 2) return { ok: false, status: 409, code: "error.studio.not_gallery" };
+        const byIndex = new Map(rows.map((r) => [r.item_index, r]));
+        const chosen: typeof rows = [];
+        const inputs: SlideshowInput[] = [];
+        let total = 0;
+        let motion = 0;
+        let hasVideo = false;
+        for (let n = 0; n < plan.items.length; n++) {
+            const r = byIndex.get(plan.items[n]!);
+            if (!r) return bad();
+            const type = itemTypeOf(r.content_type);
+            const seconds = plan.seconds[n] ?? null;
+            // a still has the seconds it is shown for; a video or a gif plays its own length (a gif once)
+            if (type === "photo" ? seconds === null : seconds !== null) return bad();
+            // HEIC stays as it was uploaded: the container's ffmpeg has no HEIF still decoder
+            if (r.content_type === "image/heic") return { ok: false, status: 400, code: "error.studio.unsupported_image" };
+            total += type === "photo" ? seconds! : (r.duration ?? 0);
+            if (type !== "photo") motion += r.duration ?? 0;
+            if (type === "video") hasVideo = true;
+            chosen.push(r);
+            inputs.push({ n, index: r.item_index, itemId: r.id, r2Key: r.r2_key, type, seconds });
+        }
+        if (total > MAX_SLIDESHOW_SECONDS) return bad("error.webp.too_long");
+        // the videos inside it cost decode time per second (the stills are made once): a cap of their own
+        if (motion > MAX_SLIDESHOW_MOTION_SECONDS) return bad("error.webp.too_long");
+        if (plan.sound === "own" && !hasVideo) return bad();
+        const { width, height } = slideshowFrame(plan.frame, chosen);
+        return { ok: true, run: { width, height, fade: plan.fade, sound: plan.sound, inputs } };
+    }
+
+    async slideshow(keyId: string, sid: string, rawBody: string): Promise<StudioReply> {
+        const invalid = (code = "error.webp.invalid_params") => studioErr(400, code);
+        const owned = await this.ownedSession(keyId, sid);
+        if ("reply" in owned) return owned.reply;
+        const row = owned.row;
+        if (this.d.now() > row.expires_at) return studioErr(410, "error.studio.expired");
+        let parsed: unknown;
+        try {
+            if (new TextEncoder().encode(rawBody).length > MAX_SLIDESHOW_BODY_BYTES) return invalid();
+            parsed = JSON.parse(rawBody);
+        } catch {
+            return invalid();
+        }
+        if (!isPlainObject(parsed)) return invalid();
+        const queueFlag = parseFlag(parsed.queue);
+        if (queueFlag === null) return invalid();
+        if (parsed.priority !== undefined && parsed.priority !== null && parsed.priority !== "focused") return invalid();
+        if (parsed.priority === "focused" && !queueFlag) return invalid();
+        const focused = parsed.priority === "focused";
+        if (parsed.notify !== undefined && typeof parsed.notify !== "boolean") return invalid();
+        const checked = parseSlideshowPlan(parsed, "error.webp.invalid_params");
+        if (!checked.ok) return studioErr(checked.status, checked.code);
+        if (row.status !== "ready") return studioErr(409, "error.studio.not_ready");
+        const built = await this.buildSlideshow(sid, checked.plan);
+        if (!built.ok) return studioErr(built.status, built.code);
+
+        await this.posters?.idle(this.d.posterIdleMs);
+        await this.reapOrphans();
+        const free = await this.isFree(focused);
+        if (!free && !queueFlag) return await this.refuse("error.webp.busy");
+        const job = mintId(this.d.randomBytes);
+        const now = this.d.now();
+        try {
+            await this.d.db
+                .prepare("INSERT INTO studio_renders (id, session_id, status, created_at, kind, plan) VALUES (?1, ?2, 'pending', ?3, 'slideshow', ?4)")
+                .bind(job, sid, now, JSON.stringify(checked.plan))
+                .run();
+        } catch {
+            return studioErr(503, "error.api.generic");
+        }
+        if (parsed.notify === true) await this.notifyCall("render opt-in", (n) => n.optInJob(sid, job));
+        const joined = await this.joinLine(
+            { kind: "slideshow", sid, job, keyId: row.key_id ?? "", at: now, origin: null, adopt: false, render: null, slideshow: built.run },
+            focused,
+        );
+        if (joined === null) {
+            await this.d.db.prepare("DELETE FROM studio_renders WHERE id = ?1").bind(job).run().catch(() => {});
+            return studioErr(429, "error.studio.line_full");
+        }
+        await this.scheduleSweep();
+        // a free helper starts it now (the upload of the inputs is this request, as a render's is)
+        if (free) await this.pumpLine();
+        const waiting = await this.line.find(sid, job);
+        const queued = !!waiting && !startingFresh(waiting.entry, this.d.now());
+        return {
+            status: 202,
+            body: { status: "pending", job, queued, queue_ahead: queued && waiting ? this.aheadOf(await this.lineView(), waiting.key) : null },
+        };
+    }
+
+    // The slideshow asked for with a save (POST /studio `slideshow`, 18.2): once the save is ready its job joins
+    // the line (or ends with the reason the plan cannot be made). Idempotent; a poll of the job calls it too.
+    private async startSlideshowAfterSave(sid: string): Promise<void> {
+        try {
+            const { results } = await this.d.db
+                .prepare("SELECT * FROM studio_renders WHERE session_id = ?1 AND kind = 'slideshow' AND status = 'pending' ORDER BY created_at, id LIMIT 5")
+                .bind(sid)
+                .all<RenderRow>();
+            for (const render of results) await this.ensureSlideshowQueued(sid, render);
+        } catch (e) {
+            console.error("[studio] queueing the slideshow of a save failed", sid, String(e));
+        }
+    }
+
+    // "waiting": the save is not ready; "queued": it is in the line or running; "ended": it was refused
+    private async ensureSlideshowQueued(sid: string, render: RenderRow): Promise<"waiting" | "queued" | "ended"> {
+        const job = render.id;
+        if ((await this.d.storage.get(`job:${job}`)) || (await this.line.find(sid, job))) return "queued";
+        const session = await getSession(this.d.db, sid);
+        if (!session || session.status !== "ready") return "waiting";
+        let plan: SlideshowPlan | null = null;
+        try {
+            const p = parseSlideshowPlan(JSON.parse(render.plan ?? "null"), "error.webp.invalid_params");
+            plan = p.ok ? p.plan : null;
+        } catch {
+            plan = null;
+        }
+        const built = plan ? await this.buildSlideshow(sid, plan) : ({ ok: false, status: 400, code: "error.webp.invalid_params" } as const);
+        if (!built.ok) {
+            await this.endQueuedRender(sid, job, built.code, false);
+            return "ended";
+        }
+        const joined = await this.withLine(async () => {
+            if (await this.line.find(sid, job)) return "dup" as const;
+            const q = await this.line.enqueue(
+                { kind: "slideshow", sid, job, keyId: session.key_id ?? "", at: this.d.now(), origin: null, adopt: false, render: null, slideshow: built.run },
+                false,
+            );
+            return "full" in q ? ("full" as const) : ("ok" as const);
+        });
+        if (joined === "full") {
+            await this.endQueuedRender(sid, job, "error.studio.line_full", false);
+            return "ended";
+        }
+        await this.scheduleSweep();
+        await this.pumpLine();
+        return "queued";
+    }
+
+    private async dropSlideshowJob(job: string): Promise<void> {
+        try {
+            await this.callHelper(`/slideshow/${job}`, { method: "DELETE" });
+        } catch {
+            // the helper reaps an idle job on its own
+        }
+    }
+
+    // Streams each chosen original into the helper and starts the job (18.7). "transient": the helper is busy or did
+    // not answer, the entry stays at the head; "fatal": it cannot be made, with the code.
+    private async uploadSlideshow(
+        sid: string,
+        job: string,
+        run: SlideshowRun,
+    ): Promise<{ kind: "started" } | { kind: "transient" } | { kind: "fatal"; code: string }> {
+        try {
+            await this.d.ensureRunning();
+        } catch {
+            return { kind: "transient" };
+        }
+        for (const input of run.inputs) {
+            let obj: Awaited<ReturnType<OriginalsBucket["get"]>>;
+            try {
+                obj = await this.d.originals.get(input.r2Key);
+            } catch {
+                return { kind: "transient" };
+            }
+            if (!obj) return { kind: "fatal", code: "error.studio.missing" };
+            let res: Response;
+            try {
+                res = await this.callHelper(
+                    `/slideshow/${job}/inputs/${input.n}`,
+                    {
+                        method: "PUT",
+                        headers: { "content-type": "application/octet-stream", "content-length": String(obj.size) },
+                        body: obj.body,
+                    },
+                    HELPER_UPLOAD_MS,
+                );
+            } catch {
+                await obj.body.cancel().catch(() => {});
+                await this.d.ensureRunning().catch(() => {});
+                return { kind: "transient" };
+            }
+            if (res.status === 204) continue;
+            await obj.body.cancel().catch(() => {});
+            if (res.status === 413) return { kind: "fatal", code: "error.studio.too_large" };
+            if (res.status === 400) return { kind: "fatal", code: "error.webp.invalid_params" };
+            // only a helper that is busy (429) or not up (503) is worth waiting for, as for a render; a helper that
+            // does not know the route (404: an older image still running) or fails for good (409, 5xx) must not hold
+            // the head of the line for the 30 minutes of its ceiling
+            if (res.status === 429 || res.status === 503) return { kind: "transient" };
+            return { kind: "fatal", code: "error.webp.unavailable" };
+        }
+        let res: Response;
+        try {
+            res = await this.callHelper(`/slideshow/${job}/start`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                    width: run.width,
+                    height: run.height,
+                    fade: run.fade,
+                    sound: run.sound,
+                    slides: run.inputs.map((i) => ({ n: i.n, seconds: i.seconds })),
+                }),
+            });
+        } catch {
+            return { kind: "transient" };
+        }
+        if (res.status === 202) return { kind: "started" };
+        if (res.status === 409) {
+            // `error.webp.bad_request`: it was started already (an earlier start whose answer was lost); anything
+            // else (`error.webp.not_ready`) is an input that is not there
+            const body = await this.readJson(res);
+            if (body?.error?.code === "error.webp.bad_request") return { kind: "started" };
+            return { kind: "fatal", code: "error.studio.missing" };
+        }
+        if (res.status === 400) {
+            const body = await this.readJson(res);
+            return { kind: "fatal", code: typeof body?.error?.code === "string" ? body.error.code : "error.webp.invalid_params" };
+        }
+        if (res.status === 429 || res.status === 503) return { kind: "transient" };
+        return { kind: "fatal", code: "error.webp.unavailable" };
+    }
+
+    // Starts a queued slideshow the way startQueuedRender starts a render (section 17.5 step 3).
+    private async startQueuedSlideshow(s: { key: string; entry: LineEntry }): Promise<"done" | "again"> {
+        const { key, entry } = s;
+        const job = entry.job!;
+        const keepAwake = this.d.renew ? setInterval(this.d.renew, 20_000) : undefined;
+        let out: Awaited<ReturnType<StudioService["uploadSlideshow"]>>;
+        try {
+            this.d.renew?.();
+            out = await this.uploadSlideshow(entry.sid, job, entry.slideshow!);
+        } catch (e) {
+            console.error("[studio] starting a queued slideshow threw", job, String(e));
+            out = { kind: "transient" };
+        } finally {
+            if (keepAwake !== undefined) clearInterval(keepAwake);
+            this.startingJobs.delete(job);
+        }
+        if (out.kind === "started") {
+            const rec: JobRecord = {
+                keyId: `studio:${entry.sid}`,
+                createdAt: this.d.now(),
+                params: { url: "", start: 0, length: 0, width: 480, fps: RENDER_FPS, quality: "med" },
+                slideshow: entry.slideshow!,
+            };
+            await this.d.storage.put(`job:${job}`, rec);
+            this.encodes.set(job, this.d.now());
+            await this.line.remove(key);
+            await this.liveRender(entry.sid, job, { kind: "accepted", title: null, duration: null });
+            return "done";
+        }
+        // a partly uploaded job must not keep holding the helper
+        await this.dropSlideshowJob(job);
+        if (out.kind === "transient") {
+            await this.line.put(key, { ...entry, starting: null, attempts: entry.attempts + 1 });
+            return "done";
+        }
+        await this.line.remove(key);
+        await this.endQueuedRender(entry.sid, job, out.code, false);
+        return "again";
+    }
+
+    // a slideshow job's last word from the helper (in memory only)
+    private slideProgress = new Map<string, { phase: "composing" | "encoding"; done: number | null; total: number | null }>();
+    private slideInflight = new Map<string, Promise<StudioReply>>();
+
+    private slidePending(job: string, phase: "queued" | "uploading" | "composing" | "encoding", ahead: number | null = null): StudioReply {
+        const p = phase === "composing" || phase === "encoding" ? this.slideProgress.get(job) : undefined;
+        return {
+            status: 200,
+            body: { status: "pending", job, phase, frames_done: p?.done ?? null, frames_total: p?.total ?? null, queue_ahead: ahead },
+        };
+    }
+
+    private async slideshowSuccess(row: RenderRow): Promise<StudioReply> {
+        let item: { id: string; url: string | null } | null = null;
+        try {
+            // the stored file is named by the job (`originals/<sid>-s<job>.mp4`)
+            item = await this.d.db
+                .prepare("SELECT id, url FROM media_items WHERE bucket = 'originals' AND r2_key = ?1 AND deleted_at IS NULL LIMIT 1")
+                .bind(`originals/${row.session_id}-s${row.id}.mp4`)
+                .first<{ id: string; url: string | null }>();
+        } catch {
+            // the answer below says what the row knows
+        }
+        return {
+            status: 200,
+            body: {
+                status: "success",
+                job: row.id,
+                ...(item?.url ? { url: item.url } : {}),
+                item_id: item?.id ?? null,
+                bytes: row.bytes,
+                width: row.out_width,
+                height: row.out_height,
+                seconds: row.seconds,
+            },
+        };
+    }
+
+    // The status of a slideshow job (18.5): the render row is the record, the helper is asked while it is pending.
+    private async slideshowStatus(sid: string, job: string, session: SessionRow, row: RenderRow): Promise<StudioReply> {
+        if (row.status === "success") return await this.slideshowSuccess(row);
+        if (row.status === "error") return studioErr(200, row.error_code ?? "error.webp.encode_failed");
+        const rec = await this.d.storage.get<JobRecord>(`job:${job}`);
+        if (!rec?.slideshow) {
+            const waiting = await this.line.find(sid, job);
+            if (waiting) {
+                const fresh = startingFresh(waiting.entry, this.d.now());
+                return this.slidePending(job, fresh ? "uploading" : "queued", fresh ? 0 : this.aheadOf(await this.lineView(), waiting.key));
+            }
+            // not queued: its save is still going, or it is ready and the job has not joined the line yet
+            if (session.status === "saving") return this.slidePending(job, "queued");
+            if (session.status === "ready" && this.d.now() - row.created_at < SLIDESHOW_ORPHAN_MS) {
+                const st = await this.ensureSlideshowQueued(sid, row);
+                if (st === "ended") {
+                    const now = await getRender(this.d.db, sid, job);
+                    return studioErr(200, now?.error_code ?? "error.webp.encode_failed");
+                }
+                return this.slidePending(job, "queued");
+            }
+            return await this.endSlideshow(sid, job, "error.webp.job_lost");
+        }
+
+        let res: Response;
+        try {
+            res = await this.callHelper(`/slideshow/${job}`);
+        } catch {
+            return this.slidePending(job, "composing");
+        }
+        if (res.status === 404) return await this.endSlideshow(sid, job, "error.webp.job_lost");
+        const body = await this.readJson(res);
+        if (!body || typeof body.status !== "string") return this.slidePending(job, "composing");
+        if (body.status === "error") {
+            const code = body.error?.code;
+            return await this.endSlideshow(sid, job, typeof code === "string" ? code : "error.webp.encode_failed");
+        }
+        if (body.status === "pending") {
+            const phase = body.phase === "encoding" ? "encoding" : "composing";
+            this.slideProgress.set(job, { phase, done: finite(body.done), total: finite(body.total) });
+            return this.slidePending(job, phase);
+        }
+        if (body.status !== "done") return this.slidePending(job, "composing");
+        const existing = this.slideInflight.get(job);
+        if (existing) return existing;
+        const p = this.collectSlideshow(sid, job, session, rec, body).finally(() => this.slideInflight.delete(job));
+        this.slideInflight.set(job, p);
+        return p;
+    }
+
+    // The render ends in an error (recorded once, as a result, so polling again is stable) and the helper is freed.
+    private async endSlideshow(sid: string, job: string, code: string): Promise<StudioReply> {
+        const upd = await this.d.db
+            .prepare("UPDATE studio_renders SET status = 'error', error_code = ?1 WHERE id = ?2 AND status = 'pending'")
+            .bind(code, job)
+            .run();
+        this.encodes.delete(job);
+        this.slideProgress.delete(job);
+        if (Number(upd.meta?.changes ?? 0) === 0) {
+            // settled meanwhile: answer what is recorded
+            const now = await getRender(this.d.db, sid, job);
+            if (now?.status === "success") return await this.slideshowSuccess(now);
+            if (now?.status === "error") return studioErr(200, now.error_code ?? code);
+        }
+        await this.d.storage.put(`result:${job}`, { status: "error", error: { code } });
+        await this.dropSlideshowJob(job);
+        return studioErr(200, code);
+    }
+
+    // The helper finished: its file goes to R2 as a `role 'slideshow'` row of the post, with the post's visibility
+    // and a poster (18.5). A transient failure leaves the job as it is: the next poll collects it.
+    private async collectSlideshow(sid: string, job: string, session: SessionRow, rec: JobRecord, done: Record<string, unknown>): Promise<StudioReply> {
+        const run = rec.slideshow!;
+        const transient = () => ({ status: 502, body: { status: "error", error: { code: "error.webp.storage" } } }) as StudioReply;
+        let file: Response;
+        try {
+            file = await this.callHelper(`/slideshow/${job}/file`);
+        } catch {
+            return transient();
+        }
+        const declared = Number(file.headers.get("content-length"));
+        if (!file.ok || !file.body || !(declared > 0) || (finite(done.bytes) !== null && declared !== done.bytes)) {
+            await file.body?.cancel().catch(() => {});
+            // gone (collected by a poll that raced this one) or unreadable: the stored record decides next time
+            const now = await getRender(this.d.db, sid, job);
+            if (now?.status === "success") return await this.slideshowSuccess(now);
+            return transient();
+        }
+        if (declared > MAX_SOURCE_BYTES) return await this.endSlideshow(sid, job, "error.studio.too_large");
+        const key = `originals/${sid}-s${job}.mp4`;
+        let stored: { size: number } | null;
+        const keepAwake = this.d.renew ? setInterval(this.d.renew, 20_000) : undefined;
+        try {
+            this.d.renew?.();
+            stored = await this.d.originals.put(key, this.d.fixedLength(file.body, declared), {
+                httpMetadata: { contentType: "video/mp4" },
+                customMetadata: { keyId: session.key_id ?? "", source: (session.link ?? "").slice(0, 1000), sessionId: sid, role: "slideshow", createdAt: String(this.d.now()) },
+            });
+        } catch (e) {
+            console.error("[studio] R2 put of a slideshow failed", job, String(e));
+            await this.d.originals.delete(key).catch(() => {});
+            return transient();
+        } finally {
+            if (keepAwake !== undefined) clearInterval(keepAwake);
+        }
+        const bytes = stored?.size ?? declared;
+        const width = finite(done.width);
+        const height = finite(done.height);
+        const seconds = finite(done.duration);
+        const spec = JSON.stringify({ items: run.inputs.map((i) => i.index), seconds: run.inputs.map((i) => i.seconds), fade: run.fade, frame: `${run.width}x${run.height}`, sound: run.sound });
+        const name = `${(session.title ?? sid).slice(0, 100)}-video.mp4`;
+        await insertMediaItem(this.d.db, {
+            kind: "private",
+            source: "studio",
+            bucket: "originals",
+            r2_key: key,
+            name,
+            content_type: "video/mp4",
+            bytes,
+            width,
+            height,
+            duration: seconds,
+            link: pageLink(session.link),
+            session_id: sid,
+            key_id: session.key_id,
+            created_at: this.d.now(),
+            role: "slideshow",
+            made_from: JSON.stringify(run.inputs.map((i) => i.itemId)),
+            made_spec: new TextEncoder().encode(spec).length <= 512 ? spec : null,
+            post_key: sid,
+        });
+
+        // the post's visibility: the new file is public when its lead item is (best effort, the owner's switch can fix it)
+        let url: string | null = null;
+        try {
+            const mine = await this.d.db
+                .prepare(`SELECT ${ITEM_COLUMNS} FROM media_items WHERE bucket = 'originals' AND r2_key = ?1 AND deleted_at IS NULL LIMIT 1`)
+                .bind(key)
+                .first<MediaRow>();
+            const lead = session.r2_key ? await getRow(this.d.db, (await this.itemIdOf(session.r2_key)) ?? "") : null;
+            const vis = this.visDeps();
+            if (mine && vis && lead && effectiveVisibility(lead) === "public") {
+                const made = await makePublic(vis, mine, session.key_id ?? SERVICE_KEY_ID);
+                if (made.ok) url = made.row.url;
+            } else if (mine) {
+                url = mine.url;
+            }
+        } catch (e) {
+            console.error("[studio] making the slideshow public failed", job, String(e));
+        }
+        await this.posters?.onReady(key);
+
+        const upd = await this.d.db
+            .prepare(
+                "UPDATE studio_renders SET status = 'success', error_code = NULL, url = ?1, bytes = ?2, out_width = ?3, out_height = ?4, seconds = ?5 WHERE id = ?6 AND status = 'pending'",
+            )
+            .bind(url, bytes, width, height, seconds, job)
+            .run();
+        this.encodes.delete(job);
+        this.slideProgress.delete(job);
+        const finished = (await getRender(this.d.db, sid, job)) ?? null;
+        const reply = finished ? await this.slideshowSuccess(finished) : transient();
+        if (Number(upd.meta?.changes ?? 0) > 0 && reply.status === 200) await this.d.storage.put(`result:${job}`, reply.body);
+        await this.dropSlideshowJob(job);
+        return reply;
+    }
+
+    // the library row id of a stored original (the session's lead)
+    private async itemIdOf(r2Key: string): Promise<string | null> {
+        const r = await this.d.db
+            .prepare("SELECT id FROM media_items WHERE bucket = 'originals' AND r2_key = ?1 AND deleted_at IS NULL LIMIT 1")
+            .bind(r2Key)
+            .first<{ id: string }>();
+        return r?.id ?? null;
+    }
+
+    // ---- POST /studio/<sid>/items/retry (section 18.2) ---------------------------------------------------
+
+    // Fetches only the indices that are not saved: a save of those items (a job of the line, 17.3 rules). The session
+    // reads `saving` from the moment it starts (not while it waits in the line) and `ready` again, with every item,
+    // when it is done.
+    async retryItems(keyId: string, sid: string, rawBody: string): Promise<StudioReply> {
+        const invalid = () => studioErr(400, "error.studio.invalid_params");
+        const owned = await this.ownedSession(keyId, sid);
+        if ("reply" in owned) return owned.reply;
+        const row = owned.row;
+        if (this.d.now() > row.expires_at) return studioErr(410, "error.studio.expired");
+        let parsed: unknown;
+        try {
+            if (rawBody.length > MAX_BODY_BYTES) return invalid();
+            parsed = JSON.parse(rawBody);
+        } catch {
+            return invalid();
+        }
+        if (!isPlainObject(parsed)) return invalid();
+        const asked = parseItemsField(parsed.items);
+        if (!asked.ok || !Array.isArray(asked.items)) return invalid();
+        const queueFlag = parseFlag(parsed.queue);
+        if (queueFlag === null) return invalid();
+        if (typeof row.item_count !== "number") return studioErr(409, "error.studio.not_gallery");
+        if (asked.items.some((i) => i >= row.item_count!)) return invalid();
+        if (row.status !== "ready") return studioErr(409, "error.studio.not_ready");
+        const have = parseItemRecords(row.items) ?? [];
+        const missing = asked.items.filter((i) => have.find((r) => r.i === i)?.status !== "ready");
+        // everything asked for is saved already
+        if (missing.length === 0) return { status: 200, body: { status: "success", id: sid, queued: false, queue_ahead: null } };
+
+        await this.posters?.idle(this.d.posterIdleMs);
+        await this.reapOrphans();
+        const now = this.d.now();
+        const extra = { items: missing, itemCount: row.item_count, retry: true };
+        type Out = { kind: "refused"; status: number; code: string } | { kind: "free" } | { kind: "queued"; key: string };
+        const out = await this.withLine(async (): Promise<Out> => {
+            const free = await this.isFree();
+            if (!free) {
+                if (!queueFlag) return { kind: "refused", status: 429, code: "error.studio.busy" };
+                if ((await this.line.size()) >= LINE_MAX) return { kind: "refused", status: 429, code: "error.studio.line_full" };
+            }
+            if (free) {
+                const upd = await this.d.db
+                    .prepare("UPDATE studio_sessions SET status = 'saving', error_code = NULL WHERE id = ?1 AND status = 'ready'")
+                    .bind(sid)
+                    .run();
+                // another retry took it first
+                if (Number(upd.meta?.changes ?? 0) === 0) return { kind: "refused", status: 409, code: "error.studio.not_ready" };
+                const rec: SaveRecord = { phase: "starting", startedAt: now, attempts: 0, lastAdvance: now, ...extra };
+                await this.d.storage.put(`save:${sid}`, rec);
+                return { kind: "free" };
+            }
+            // waiting: the session stays ready (the studio and the library keep working on it) until the retry
+            // starts; a second ask while one waits is that one
+            const waiting = await this.line.find(sid, null);
+            if (waiting) return { kind: "queued", key: waiting.key };
+            const q = await this.line.enqueue({ kind: "save", sid, job: null, keyId, at: now, origin: null, adopt: false, render: null, ...extra }, false);
+            if ("full" in q) return { kind: "refused", status: 429, code: "error.studio.line_full" };
+            return { kind: "queued", key: q.key };
+        });
+        if (out.kind === "refused") return out.status === 429 ? await this.refuse(out.code) : studioErr(out.status, out.code);
+        await this.scheduleSweep();
+        if (out.kind === "queued") {
+            return { status: 202, body: { status: "pending", id: sid, queued: true, queue_ahead: this.aheadOf(await this.lineView(), out.key) } };
+        }
+        await this.kick(sid);
+        // a warm helper has answered already: one more step tells a changed post at once (the helper's
+        // `error.studio.gallery_changed`), instead of leaving it to the next poll
+        try {
+            await raceCeiling(this.advance(sid, 0), this.d.kickMs ?? KICK_MS, "retry step");
+        } catch {
+            // still going: the poll finds out
+        }
+        try {
+            const after = await getSession(this.d.db, sid);
+            const failed = parseItemRecords(after?.items)?.filter((r) => missing.includes(r.i) && r.status === "error") ?? [];
+            if (failed.length > 0 && failed.every((r) => r.code === "error.studio.gallery_changed")) {
+                return studioErr(409, "error.studio.gallery_changed");
+            }
+        } catch {
+            // the answer below stands
+        }
+        return { status: 202, body: { status: "pending", id: sid, queued: false, queue_ahead: null } };
+    }
+
     async renderStatus(sid: string, job: string, waitSeconds: number): Promise<StudioReply> {
         const reply = await this.renderStatusInner(sid, job, waitSeconds);
         await this.emitRender(sid, job, reply);
@@ -2567,6 +3852,8 @@ export class StudioService {
             return studioErr(503, "error.api.generic");
         }
         if (!row) return studioErr(404, "error.studio.not_found");
+        // a slideshow (section 18.5) is collected from its own helper job
+        if (row.kind === "slideshow") return await this.slideshowStatus(sid, job, found.row, row);
         if (row.status === "success") return { status: 200, body: this.successBody(row) };
         if (row.status === "error") {
             return studioErr(200, row.error_code ?? "error.webp.encode_failed");
@@ -2715,7 +4002,7 @@ export class StudioService {
         for (const [key, rec] of jobs) {
             const id = key.slice("job:".length);
             try {
-                if (!rec || now - rec.createdAt > SWEEP_RENDER_MS) continue;
+                if (!rec || now - rec.createdAt > jobWindowMs(rec)) continue;
                 if (await this.d.storage.get(`result:${id}`)) continue;
                 const owner = rec.keyId;
                 const r = await raceCeiling(
@@ -2834,7 +4121,8 @@ export const isStudioRoute = (pathname: string) =>
     pathname === "/studio" ||
     pathname.startsWith("/studio/") ||
     pathname === "/library/adopt" ||
-    pathname === "/posters/kick";
+    pathname === "/posters/kick" ||
+    pathname === "/helper/caps";
 
 const toResponse = (r: StudioReply) =>
     r.status === 204
@@ -2903,6 +4191,13 @@ export async function handleStudioRoute(
         return toResponse(await service.adopt(keyId, await request.text()));
     }
 
+    // GET /helper/caps: the Worker's own call (GET /capabilities): what the helper said it can do last time it
+    // answered. Internal like the posters path; never wakes the container.
+    if (request.method === "GET" && p === "/helper/caps") {
+        if (!request.headers.get(KEY_ID_HEADER)) return new Response(null, { status: 403 });
+        return toResponse(await service.helperCaps());
+    }
+
     // POST /posters/kick?limit=N: the Worker's own call (a library read that saw missing
     // posters, POST /library/posters/backfill) or the cron's. Internal like the adopt path:
     // the public gate answers 404 for the path, the key id header is the Worker's word.
@@ -2943,6 +4238,16 @@ export async function handleStudioRoute(
         const job = parts[4];
         if (!STUDIO_JOB_REGEX.test(job)) return toResponse(studioErr(404, "error.studio.not_found"));
         return toResponse(await service.cancelRender(keyId, sid, job));
+    }
+    // POST /studio/<sid>/slideshow and POST /studio/<sid>/items/retry (section 18): keyed, the creating key only
+    if (request.method === "POST" && parts[1] === "studio" && ((parts.length === 4 && parts[3] === "slideshow") || (parts.length === 5 && parts[3] === "items" && parts[4] === "retry"))) {
+        const keyId = request.headers.get(KEY_ID_HEADER);
+        if (!keyId) return new Response(null, { status: 403 });
+        if (keyId === SERVICE_KEY_ID) return new Response(null, { status: 404 });
+        const sid = parts[2];
+        if (!STUDIO_SID_REGEX.test(sid)) return toResponse(studioErr(404, "error.studio.not_found"));
+        const body = await request.text();
+        return toResponse(parts[3] === "slideshow" ? await service.slideshow(keyId, sid, body) : await service.retryItems(keyId, sid, body));
     }
     if (parts.length >= 4 && parts[1] === "studio" && parts[3] === "render") {
         const sid = parts[2];

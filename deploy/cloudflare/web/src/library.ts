@@ -97,8 +97,10 @@ const hasPosterFrame = (t: string | null) => !!t && (t.startsWith("video/") || t
 
 // One card per post, as GET /library on the API groups them (api/src/app-routes.ts POST_KEY_SQL):
 // an upload and the renders of its adopted session share a key. Custom titles (migration 0007,
-// APP-API-CONTRACT.md section 15) are keyed by it.
+// APP-API-CONTRACT.md section 15) are keyed by it. Since migration 0009 (section 18.1) a row that names
+// its post (`post_key`: a gallery item, a slideshow, a crop, an export) says so first.
 const POST_KEY_SQL = `COALESCE(
+    m.post_key,
     (SELECT substr(s.link, 8) FROM studio_sessions s WHERE s.id = m.session_id AND s.link LIKE 'upload:%'),
     m.session_id, m.link, m.id)`;
 
@@ -624,6 +626,23 @@ async function itemStudio(ctx: Ctx, id: string): Promise<Response> {
 async function itemDelete(ctx: Ctx, id: string): Promise<Response> {
     const row = await getItem(ctx, id);
     if (!row) return err(404, "error.library.not_found");
+    // An item of a gallery (migration 0009, APP-API-CONTRACT.md section 18): its post lives on in its other items.
+    // The last one is refused (the post's own delete is the way to remove everything), and the studio session, which
+    // names the gallery's lead item, moves to the next item instead of closing. Without the column (0009 not applied)
+    // the lookup fails and the row is a plain file, as before.
+    const gal = await ctx.env.DB.prepare("SELECT role, session_id FROM media_items WHERE id = ?1")
+        .bind(id)
+        .first<{ role: string | null; session_id: string | null }>()
+        .catch(() => null);
+    const galleryItem = gal?.role === "item" && gal.session_id ? gal.session_id : null;
+    if (galleryItem) {
+        const others = await ctx.env.DB.prepare(
+            "SELECT COUNT(*) AS n FROM media_items WHERE session_id = ?1 AND role = 'item' AND deleted_at IS NULL AND id <> ?2",
+        )
+            .bind(galleryItem, id)
+            .first<{ n: number }>();
+        if ((others?.n ?? 0) === 0) return err(409, "error.library.last_item");
+    }
     // A public original (or a webp switched private and back, which lives in cobalt-originals too)
     // has a public mirror: switch it off through the API first (it deletes the mirror and purges the
     // edge). Failing closed: if that does not succeed, nothing is deleted, so a "private" delete can
@@ -642,7 +661,9 @@ async function itemDelete(ctx: Ctx, id: string): Promise<Response> {
     await ctx.env.DB.prepare("UPDATE media_items SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL")
         .bind(ctx.now, id)
         .run();
-    if (row.bucket === "originals") {
+    if (galleryItem) {
+        await moveGalleryLead(ctx, galleryItem);
+    } else if (row.bucket === "originals") {
         // The studios that read this original can no longer render from it.
         await ctx.env.DB.prepare("UPDATE studio_sessions SET expires_at = ?1 WHERE r2_key = ?2 AND expires_at > ?1")
             .bind(ctx.now, row.r2_key)
@@ -652,6 +673,31 @@ async function itemDelete(ctx: Ctx, id: string): Promise<Response> {
     // original of a public copy) still shows it. Never fails the delete.
     await releasePoster(ctx, row.poster);
     return json(200, { status: "success" });
+}
+
+// The session of a gallery names its lead item (the first video, else the first item) as its original: after one of
+// its items is deleted the session points at the lead that is left (the API's repointLead, src/studio.ts).
+async function moveGalleryLead(ctx: Ctx, sid: string): Promise<void> {
+    try {
+        const { results } = await ctx.env.DB.prepare(
+            "SELECT r2_key, content_type, bytes, duration, width, height, poster, visibility, url FROM media_items WHERE session_id = ?1 AND role = 'item' AND deleted_at IS NULL ORDER BY item_index, id",
+        )
+            .bind(sid)
+            .all<{ r2_key: string; content_type: string | null; bytes: number | null; duration: number | null; width: number | null; height: number | null; poster: string | null; visibility: string | null; url: string | null }>();
+        const lead = results.find((r) => (r.content_type ?? "").startsWith("video/")) ?? results[0];
+        if (!lead) return;
+        const publicUrl = lead.visibility === "public" && lead.url ? lead.url : null;
+        await ctx.env.DB.prepare(
+            `UPDATE studio_sessions SET r2_key = ?1, content_type = ?2, bytes = ?3, duration = ?4, width = ?5, height = ?6, poster = ?7,
+                    public_state = CASE WHEN ?8 IS NOT NULL THEN 'ready' WHEN public_state = 'pending' THEN public_state ELSE NULL END,
+                    public_url = ?8
+              WHERE id = ?9 AND (r2_key IS NULL OR r2_key <> ?1)`,
+        )
+            .bind(lead.r2_key, lead.content_type, lead.bytes, lead.duration, lead.width, lead.height, lead.poster, publicUrl, sid)
+            .run();
+    } catch (e) {
+        console.error("[library] moving the gallery's lead failed", sid, String(e));
+    }
 }
 
 async function releasePoster(ctx: Ctx, url: string | null): Promise<void> {

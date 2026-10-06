@@ -968,6 +968,9 @@ describe("GET /capabilities", () => {
                 titles: true,
                 visibility: true,
                 line: true,
+                // advertised only once the container's helper has said it has the slideshow routes (none has
+                // answered in this world yet)
+                gallery: false,
             },
             limits: {
                 max_webp_seconds: 10,
@@ -1051,7 +1054,9 @@ describe("GET /capabilities", () => {
         await caps();
         await caps(auth);
         await caps({ ...auth, [KEY_ID_HEADER]: "victim", [PORT_HEADER]: "9100", [SERVICE_HEADER]: "x" });
-        expect(w.seen).toHaveLength(0);
+        // only the Durable Object's stored answer about the helper (never the helper, never the client's headers)
+        expect(w.seen.map((r) => new URL(r.url).pathname)).toEqual(["/helper/caps", "/helper/caps", "/helper/caps"]);
+        expect(w.seen.every((r) => r.headers.get(KEY_ID_HEADER) === "worker:capabilities" && !r.headers.has(PORT_HEADER))).toBe(true);
     });
     it("a missing internal key is the Worker's generic 503 (misconfiguration), like every route", async () => {
         expect((await caps({}, { ...w.env, COBALT_API_KEY: "" })).status).toBe(503);

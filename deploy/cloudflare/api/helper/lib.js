@@ -4,7 +4,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, open, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -140,6 +140,71 @@ export function validateFetchInput(b) {
     return { id: b.id, url: b.url };
 }
 
+/** Most items one gallery fetch saves (APP-API-CONTRACT 18.2). */
+export const MAX_GALLERY_ITEMS = 20;
+/** All of one fetch job's items together (each is also capped at MAX_FETCH_BYTES). */
+export const MAX_JOB_BYTES = 500 * 1024 * 1024;
+
+/**
+ * The gallery fields of a POST /fetch body (APP-API-CONTRACT 18.2 / 18.7): `items` is "all",
+ * "first-video" or 1-20 unique ascending non-negative integers; `item_count` an integer 1-50.
+ * Both optional. A bad value is `{ok: false}` (the caller answers error.studio.invalid_params).
+ * @param {any} b the (already id/url-validated) body
+ * @returns {{ok: true, items?: "all" | "first-video" | number[], item_count?: number} | {ok: false}}
+ */
+export function parseFetchSelection(b) {
+    /** @type {{ok: true, items?: "all" | "first-video" | number[], item_count?: number}} */
+    const out = { ok: true };
+    if (b.items !== undefined) {
+        if (b.items === "all" || b.items === "first-video") out.items = b.items;
+        else if (
+            Array.isArray(b.items) &&
+            b.items.length >= 1 &&
+            b.items.length <= MAX_GALLERY_ITEMS &&
+            b.items.every((n, k) => Number.isInteger(n) && n >= 0 && n < 100 && (k === 0 || n > b.items[k - 1]))
+        ) {
+            out.items = [...b.items];
+        } else return { ok: false };
+    }
+    if (b.item_count !== undefined) {
+        if (!Number.isInteger(b.item_count) || b.item_count < 1 || b.item_count > 50) return { ok: false };
+        out.item_count = b.item_count;
+    }
+    return out;
+}
+
+/**
+ * Which picker entries a fetch saves. `entries` is `[{type, url}]` in cobalt's order; `type` is
+ * null for a plain (non-picker) answer, which counts as a one-item picker of unknown type.
+ *  - no `items`: a picker of exactly one saves that item whatever its type; 2+ keep the old rule
+ *    (first video, else first gif, else error.webp.no_video);
+ *  - "first-video": the old rule as is;
+ *  - "all": every entry, at most MAX_GALLERY_ITEMS;
+ *  - [indices]: those; one past the end means the post changed (error.studio.gallery_changed).
+ * @param {{type: string | null}[]} entries
+ * @param {undefined | "all" | "first-video" | number[]} items
+ * @returns {{ok: true, indices: number[]} | {ok: false, code: string}}
+ */
+export function selectPickerItems(entries, items) {
+    const firstVideo = () => {
+        if (entries.length === 1 && entries[0].type === null) return { ok: true, indices: [0] };
+        let i = entries.findIndex((e) => e?.type === "video");
+        if (i < 0) i = entries.findIndex((e) => e?.type === "gif");
+        return i < 0 ? { ok: false, code: "error.webp.no_video" } : { ok: true, indices: [i] };
+    };
+    if (items === undefined) {
+        if (entries.length === 1) return { ok: true, indices: [0] };
+        return /** @type {any} */ (firstVideo());
+    }
+    if (items === "first-video") return /** @type {any} */ (firstVideo());
+    if (items === "all") {
+        if (entries.length === 0) return { ok: false, code: "error.webp.no_video" };
+        return { ok: true, indices: entries.slice(0, MAX_GALLERY_ITEMS).map((_, i) => i) };
+    }
+    if (items.some((i) => i >= entries.length)) return { ok: false, code: "error.studio.gallery_changed" };
+    return { ok: true, indices: [...items] };
+}
+
 // --- what a saved video is ----------------------------------------------------
 
 /**
@@ -217,6 +282,39 @@ export function isGifHead(head) {
     if (head.length < 6) return false;
     const sig = String.fromCharCode(...head.subarray(0, 6));
     return sig === "GIF87a" || sig === "GIF89a";
+}
+
+const HEIF_BRANDS = new Set(["heic", "heix", "hevc", "mif1", "msf1"]);
+
+/**
+ * The type of a downloaded file from its first bytes (never from a name or a content type: cobalt
+ * serves a jpeg under whatever name the service gave it, and ffmpeg calls a jpeg a 0.04 s video).
+ * JPEG `FF D8 FF`, PNG, WebP `RIFF????WEBP`, HEIC/HEIF (`????ftyp` + heic heix hevc mif1 msf1) are
+ * stills; GIF is the animated image the studio already takes as `image/gif`. Anything else (a
+ * video, garbage, a head under 3 bytes) is null: the caller keeps the video path.
+ * @param {Uint8Array | Buffer} head at least the first 12 bytes where there are that many
+ * @returns {{type: "image" | "gif", contentType: string, ext: string} | null}
+ */
+export function sniffType(head) {
+    const n = head.length;
+    const ascii = (a, b) => String.fromCharCode(...head.subarray(a, b));
+    if (n >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) {
+        return { type: "image", contentType: "image/jpeg", ext: "jpg" };
+    }
+    if (
+        n >= 8 &&
+        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((v, i) => head[i] === v)
+    ) {
+        return { type: "image", contentType: "image/png", ext: "png" };
+    }
+    if (n >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") {
+        return { type: "image", contentType: "image/webp", ext: "webp" };
+    }
+    if (n >= 12 && ascii(4, 8) === "ftyp" && HEIF_BRANDS.has(ascii(8, 12))) {
+        return { type: "image", contentType: "image/heic", ext: "heic" };
+    }
+    if (isGifHead(head)) return { type: "gif", contentType: "image/gif", ext: "gif" };
+    return null;
 }
 
 /**
@@ -335,22 +433,26 @@ export function posterTime(duration) {
     return +Math.min(duration * POSTER_FRACTION, POSTER_MAX_AT_SECONDS).toFixed(3);
 }
 
+/** Longer side of the thumb the helper makes for a saved photo (APP-API-CONTRACT 18.7). */
+export const THUMB_MAX_SIDE = 480;
+
 /**
  * ffmpeg argv that writes ONE JPEG frame at `at` seconds: scaled so the longer side is at
  * most POSTER_MAX_SIDE (never upscaled; the rotation metadata is applied first, so a phone
  * clip comes out upright), square pixels, 4:2:0 full-range (what every JPEG decoder takes).
  * `-ss` before `-i` seeks the input (fast on a local file), the protocol whitelist keeps
- * ffmpeg on local files.
- * @param {{input: string, output: string, at: number}} j
+ * ffmpeg on local files. An image has only frame 0: pass no `at` (null or undefined) and there
+ * is no `-ss` (a 0.004 s seek past the one frame writes nothing). `side` defaults to POSTER_MAX_SIDE.
+ * @param {{input: string, output: string, at?: number | null, side?: number}} j
  */
 export function buildPosterArgs(j) {
-    const side = POSTER_MAX_SIDE;
+    const side = j.side ?? POSTER_MAX_SIDE;
     return [
         "-nostdin",
         "-hide_banner",
         "-loglevel", "error",
         "-protocol_whitelist", "file,pipe",
-        "-ss", dec(j.at),
+        ...(j.at === undefined || j.at === null ? [] : ["-ss", dec(j.at)]),
         "-i", j.input,
         "-frames:v", "1",
         "-an", "-sn", "-dn",
@@ -396,8 +498,10 @@ export function buildImg2webpArgs(j) {
  * Runs one child process to completion. Rejects with a JobError:
  * `error.webp.timeout` when `timeoutMs` elapses (the child is SIGKILLed),
  * `error.webp.encode_failed` for a spawn error or a non-zero exit.
+ * `onStdout` (optional) receives the child's stdout chunks (ffmpeg's `-progress pipe:1`).
  * @param {{spawnImpl?: typeof spawn, bin: string, args: string[], cwd?: string,
  *          timeoutMs: number, label: string,
+ *          onStdout?: (chunk: Buffer | string) => void,
  *          onChild?: (c: import("node:child_process").ChildProcess | undefined) => void}} o
  * @returns {Promise<void>}
  */
@@ -409,12 +513,13 @@ export function runProcess(o) {
         try {
             child = spawnImpl(o.bin, o.args, {
                 cwd: o.cwd,
-                stdio: ["ignore", "ignore", "pipe"],
+                stdio: ["ignore", o.onStdout ? "pipe" : "ignore", "pipe"],
             });
         } catch {
             return reject(new JobError("error.webp.encode_failed"));
         }
         o.onChild?.(child);
+        if (o.onStdout) child.stdout?.on("data", o.onStdout);
         let tail = "";
         let timedOut = false;
         child.stderr?.on("data", (d) => {
@@ -559,9 +664,14 @@ export function rewriteMediaUrl(raw, o = {}) {
 /**
  * POSTs the link to the local cobalt (with the internal key) and works out
  * which file to download. Throws JobError with the code to report.
+ * With `picker: true` (the studio's fetch) a picker answer is returned whole as
+ * `{url: null, filename: null, picker: [{i, type, url}]}` (`type` photo|video|gif, `url`
+ * rewritten, null when refused: that one item then fails alone) and the caller chooses; without
+ * it (WebP jobs) a picker still gives its first video, else gif, else error.webp.no_video.
  * @param {{url: string, internalKey: string, fetchImpl?: typeof fetch,
- *          origin?: string, apiOrigin?: string, signal?: AbortSignal}} o
- * @returns {Promise<{url: string, filename: string | null}>}
+ *          origin?: string, apiOrigin?: string, signal?: AbortSignal, picker?: boolean}} o
+ * @returns {Promise<{url: string | null, filename: string | null,
+ *          picker?: {i: number, type: "photo" | "video" | "gif", url: string | null}[]}>}
  */
 export async function resolveSource(o) {
     const fetchImpl = o.fetchImpl ?? fetch;
@@ -610,6 +720,17 @@ export async function resolveSource(o) {
         }
         case "picker": {
             const items = Array.isArray(body.picker) ? body.picker : [];
+            if (o.picker) {
+                return {
+                    url: null,
+                    filename: null,
+                    picker: items.map((it, i) => ({
+                        i,
+                        type: it?.type === "photo" || it?.type === "gif" ? it.type : "video",
+                        url: rw(it?.url),
+                    })),
+                };
+            }
             // a video item first; a "gif" (e.g. an X/Twitter GIF, which is an
             // mp4) is the next best thing for an animated WebP
             const item =
@@ -754,4 +875,372 @@ export function parseWebp(buf) {
         pos = data + size + (size & 1);
     }
     return { width, height, animated, frames, durationMs };
+}
+
+// --- slideshow (APP-API-CONTRACT 18.5 / 18.7, apple/CONTRACT-GALLERY.md section 6) --------------
+
+export const SLIDESHOW_FPS = 30;
+/** The crossfade between two slides; every slide but the last runs this much longer to make room. */
+export const FADE_SECONDS = 0.3;
+export const MAX_SLIDESHOW_SECONDS = 180;
+/** The videos and gifs of one slideshow together (the stills are not counted here): they cost per second of decode, scale and blur. */
+export const MAX_SLIDESHOW_MOTION_SECONDS = 60;
+export const MAX_SLIDESHOW_INPUTS = 20;
+/** `n` of `PUT /slideshow/:id/inputs/:n`: 0-19. */
+export const SLIDESHOW_N_RE = /^(?:[0-9]|1[0-9])$/;
+export const MAX_STILL_SECONDS = 15;
+
+/**
+ * Re-validates the body of `POST /slideshow/:id/start`: `{width, height, fade, sound, slides:
+ * [{n, seconds|null}]}`. width/height even, 16-1920; `slides` 1-20 entries with unique n 0-19;
+ * `seconds` 1-15 for a still, null for a video or gif (own length); the stills together at most
+ * 180 s (a video's length is added once it is probed). Returns the normalised body or null.
+ * @param {any} b
+ * @returns {{width: number, height: number, fade: boolean, sound: "none" | "own",
+ *            slides: {n: number, seconds: number | null}[]} | null}
+ */
+export function validateSlideshowStart(b) {
+    if (typeof b !== "object" || b === null) return null;
+    const { width, height } = b;
+    for (const d of [width, height]) {
+        if (!Number.isInteger(d) || d < 16 || d > 1920 || d % 2 !== 0) return null;
+    }
+    if (typeof b.fade !== "boolean") return null;
+    if (b.sound !== "none" && b.sound !== "own") return null;
+    if (!Array.isArray(b.slides) || b.slides.length < 1 || b.slides.length > MAX_SLIDESHOW_INPUTS) return null;
+    const seen = new Set();
+    let total = 0;
+    const slides = [];
+    for (const sl of b.slides) {
+        if (typeof sl !== "object" || sl === null) return null;
+        if (!Number.isInteger(sl.n) || sl.n < 0 || sl.n >= MAX_SLIDESHOW_INPUTS || seen.has(sl.n)) return null;
+        seen.add(sl.n);
+        if (sl.seconds === null) {
+            slides.push({ n: sl.n, seconds: null });
+            continue;
+        }
+        if (typeof sl.seconds !== "number" || !Number.isFinite(sl.seconds)) return null;
+        if (sl.seconds < 1 || sl.seconds > MAX_STILL_SECONDS) return null;
+        total += sl.seconds;
+        slides.push({ n: sl.n, seconds: sl.seconds });
+    }
+    if (total > MAX_SLIDESHOW_SECONDS + 1e-6) return null;
+    return { width, height, fade: b.fade, sound: b.sound, slides };
+}
+
+/** Whether `ffmpeg -i` stderr lists an audio stream. */
+export function parseHasAudio(stderr) {
+    return /Stream #\d+:\d+.*Audio:/.test(stderr);
+}
+
+/**
+ * Whether a source of `srcW`x`srcH` needs the blurred fill in a `width`x`height` frame: not when
+ * its aspect already matches (within 0.4 %), then it is simply scaled. Unknown size: yes.
+ * @param {number | null} srcW @param {number | null} srcH @param {number} width @param {number} height
+ */
+export function needsBlur(srcW, srcH, width, height) {
+    if (!srcW || !srcH) return true;
+    return Math.abs(srcW / srcH - width / height) / (width / height) >= 0.004;
+}
+
+/** The blurred fill is made on a copy this many times smaller than the frame, then scaled back up (measured: far less CPU and memory for a blur nobody can tell apart). */
+export const BLUR_DOWNSCALE = 8;
+
+/** The downscaled fill's size: the frame / BLUR_DOWNSCALE, even, at least 16 (so the box blur's chroma limit holds). */
+export function blurSize(width, height) {
+    const d = (n) => Math.max(16, Math.round(n / BLUR_DOWNSCALE / 2) * 2);
+    return { w: d(width), h: d(height) };
+}
+
+/** boxblur's radius on the downscaled copy (24 at 1080 px is 3 at 1/8), never over a quarter of its shorter side. */
+export function blurRadius(width, height) {
+    const { w, h } = blurSize(width, height);
+    return Math.max(1, Math.min(Math.round(24 / BLUR_DOWNSCALE), Math.floor(Math.min(w, h) / 4)));
+}
+
+/**
+ * One filter-graph fragment that fits `[inL]` into `width`x`height` and names the result `[outL]`:
+ * a straight scale when the aspect matches, else the item centred on a blurred, darkened copy of
+ * itself (CONTRACT-GALLERY 6.1). The blurred fill is cut and blurred on a copy 1/8 the frame's size and
+ * scaled back up, which costs a small fraction of blurring the full frame. `pre` keeps the labels of
+ * several fragments apart.
+ * @param {{inL: string, outL: string, pre: string, width: number, height: number, blur: boolean}} o
+ */
+export function fillGraph(o) {
+    const { inL, outL, pre, width: w, height: h } = o;
+    if (!o.blur) return `[${inL}]scale=${w}:${h}:flags=lanczos,setsar=1[${outL}]`;
+    const r = blurRadius(w, h);
+    const { w: sw, h: sh } = blurSize(w, h);
+    return (
+        `[${inL}]split=2[${pre}b][${pre}f];` +
+        `[${pre}b]scale=${sw}:${sh}:force_original_aspect_ratio=increase:flags=bilinear,crop=${sw}:${sh},boxblur=${r}:2,eq=brightness=-0.08,scale=${w}:${h}:flags=bilinear[${pre}bg];` +
+        `[${pre}f]scale=${w}:${h}:force_original_aspect_ratio=decrease[${pre}fg];` +
+        `[${pre}bg][${pre}fg]overlay=(W-w)/2:(H-h)/2,setsar=1[${outL}]`
+    );
+}
+
+/**
+ * ffmpeg argv that composes one still ONCE into a frame-sized JPEG (`-q:v 2`, 4:2:0 full range).
+ * @param {{input: string, output: string, width: number, height: number, blur: boolean}} j
+ */
+export function buildComposeArgs(j) {
+    return [
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-protocol_whitelist", "file,pipe",
+        "-i", j.input,
+        "-filter_complex", `${fillGraph({ inL: "0:v", outL: "fit", pre: "c", width: j.width, height: j.height, blur: j.blur })};[fit]format=yuvj420p[out]`,
+        "-map", "[out]",
+        "-frames:v", "1",
+        "-q:v", "2",
+        "-f", "image2",
+        "-update", "1",
+        "-y",
+        j.output,
+    ];
+}
+
+/**
+ * @typedef {{kind: "still", file: string, seconds: number}
+ *         | {kind: "motion", file: string, seconds: number, hasAudio: boolean, blur: boolean}} SlideshowSegment
+ *   a still is already composed at the frame size; a motion item (video or gif) is its own length
+ *   (`seconds` = the probed duration) and is fitted inside the graph.
+ */
+
+/**
+ * ffmpeg argv that sequences the segments, crossfades (`xfade` 0.3 s, offset = the sum of the
+ * previous slides) or cuts (`concat`), drops duplicate frames (`mpdecimate=…:max=15`, `-fps_mode vfr`)
+ * and encodes (libx264 veryfast stillimage crf 20, yuv420p, faststart). Every slide but the last
+ * runs 0.3 s longer when fading, so the output is the sum of the slides. Audio (`sound: "own"` and
+ * at least one motion item with a track): each item's own, `anullsrc` under the others, joined
+ * with `acrossfade` / `concat`; otherwise no audio at all.
+ * @param {{segments: SlideshowSegment[], width: number, height: number, fade: boolean,
+ *          sound: "none" | "own", output: string, fps?: number}} j
+ */
+export function buildSlideshowArgs(j) {
+    const fps = j.fps ?? SLIDESHOW_FPS;
+    const n = j.segments.length;
+    const fade = j.fade && n > 1;
+    const withAudio = j.sound === "own" && j.segments.some((s) => s.kind === "motion" && s.hasAudio);
+    // (an input option applies to the NEXT -i only, so the whitelist goes in front of every one)
+    const args = ["-nostdin", "-hide_banner", "-loglevel", "error", "-nostats"];
+    const parts = [];
+    /** the length each slide's stream really runs: fading makes every slide but the last 0.3 s longer */
+    const lens = j.segments.map((s, i) => s.seconds + (fade && i < n - 1 ? FADE_SECONDS : 0));
+    j.segments.forEach((s, i) => {
+        if (s.kind === "still") {
+            args.push("-protocol_whitelist", "file,pipe", "-loop", "1", "-framerate", String(fps), "-t", dec(lens[i]), "-i", s.file);
+            parts.push(`[${i}:v]fps=${fps},format=yuv420p,setsar=1,setpts=PTS-STARTPTS[v${i}]`);
+        } else {
+            args.push("-protocol_whitelist", "file,pipe", "-i", s.file);
+            parts.push(`[${i}:v]fps=${fps}[r${i}]`);
+            parts.push(fillGraph({ inL: `r${i}`, outL: `f${i}`, pre: `m${i}`, width: j.width, height: j.height, blur: s.blur }));
+            // padded generously with the last frame, then cut to exactly this slide's length
+            parts.push(
+                `[f${i}]format=yuv420p,tpad=stop_mode=clone:stop_duration=3,trim=duration=${dec(lens[i])},setpts=PTS-STARTPTS[v${i}]`,
+            );
+        }
+    });
+    let cur = "v0";
+    if (n > 1) {
+        if (fade) {
+            let at = 0;
+            for (let i = 1; i < n; i++) {
+                at += j.segments[i - 1].seconds;
+                parts.push(`[${cur}][v${i}]xfade=transition=fade:duration=${FADE_SECONDS}:offset=${dec(at)}[x${i}]`);
+                cur = `x${i}`;
+            }
+        } else {
+            parts.push(`${j.segments.map((_, i) => `[v${i}]`).join("")}concat=n=${n}:v=1:a=0[xc]`);
+            cur = "xc";
+        }
+    }
+    // mpdecimate (max=15) drops runs of identical frames, so a still's tail is dropped: the last
+    // kept frame can be up to 0.5 s before the end and the file comes out that much short of the plan
+    // (measured: 4.6 s for a planned 5.0 s, 8.7 for 9.2). The last two frames therefore carry a
+    // 16x8 px mark in the top-left corner (a black-blend block beside a white-blend one, so any
+    // pixels change), which makes mpdecimate keep the first of them; the file then ends within one
+    // frame of the plan. Not visible at 30 fps for 0.07 s.
+    const total = j.segments.reduce((t, s) => t + s.seconds, 0);
+    const markAt = dec(Math.max(0, total - 0.085));
+    parts.push(
+        `[${cur}]drawbox=x=0:y=0:w=8:h=8:color=black@0.5:t=fill:enable='gte(t,${markAt})',` +
+            `drawbox=x=8:y=0:w=8:h=8:color=white@0.5:t=fill:enable='gte(t,${markAt})',` +
+            `mpdecimate=hi=64:lo=32:frac=0.33:max=15[vout]`,
+    );
+
+    if (withAudio) {
+        j.segments.forEach((s, i) => {
+            const len = dec(lens[i]);
+            if (s.kind === "motion" && s.hasAudio) {
+                // the track is read from the same input as the picture (an `a` of this input)
+                parts.push(
+                    `[${i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=duration=${len},asetpts=PTS-STARTPTS[a${i}]`,
+                );
+            } else {
+                parts.push(`anullsrc=r=44100:cl=stereo,atrim=duration=${len},asetpts=PTS-STARTPTS[a${i}]`);
+            }
+        });
+        let a = "a0";
+        if (n > 1) {
+            if (fade) {
+                for (let i = 1; i < n; i++) {
+                    parts.push(`[${a}][a${i}]acrossfade=d=${FADE_SECONDS}[ax${i}]`);
+                    a = `ax${i}`;
+                }
+            } else {
+                parts.push(`${j.segments.map((_, i) => `[a${i}]`).join("")}concat=n=${n}:v=0:a=1[axc]`);
+                a = "axc";
+            }
+        }
+        parts.push(`[${a}]anull[aout]`);
+    }
+
+    args.push("-filter_complex", parts.join(";"), "-map", "[vout]");
+    if (withAudio) args.push("-map", "[aout]", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2");
+    else args.push("-an");
+    args.push(
+        "-fps_mode", "vfr",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-tune", "stillimage",
+        // no B-frames: with frames kept up to 0.5 s apart (mpdecimate) the B-frame reordering delay
+        // is counted in KEPT frames, so the mp4's duration (from the decode timestamps) came out
+        // up to 1.6 s short of the last picture
+        "-bf", "0",
+        "-crf", "20",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-threads", "2",
+        "-progress", "pipe:1",
+        "-y",
+        j.output,
+    );
+    return args;
+}
+
+/**
+ * Seconds encoded so far from a chunk of ffmpeg `-progress` output (the last `out_time_us=` /
+ * `out_time_ms=` line; both are microseconds), or null when the chunk has none (or "N/A").
+ * @param {string} text
+ * @returns {number | null}
+ */
+export function parseProgressSeconds(text) {
+    let last = null;
+    for (const m of text.matchAll(/out_time_(?:us|ms)=(-?\d+)/g)) last = Number(m[1]) / 1e6;
+    return last === null || !Number.isFinite(last) ? null : Math.max(0, last);
+}
+
+/**
+ * The whole slideshow render: probes the inputs, composes each still once at the frame size, then
+ * one ffmpeg run sequences, crossfades and encodes. The caller owns the files in `dir` (inputs as
+ * `input-<n>`); this writes `s-<k>.jpg` next to them and the result to `output`. One shared
+ * budget (`timeoutMs`). Throws JobError: error.webp.invalid_params (a still without seconds, a
+ * video with), error.webp.bad_source (an input that is no picture, or no length), error.webp.too_long
+ * (over 180 s with the videos counted), error.webp.timeout, error.webp.encode_failed,
+ * error.webp.too_large (over `maxOutputBytes`).
+ * @param {{ffmpegBin: string, dir: string, output: string,
+ *          files: Map<number, string>,
+ *          plan: {width: number, height: number, fade: boolean, sound: "none" | "own",
+ *                 slides: {n: number, seconds: number | null}[]},
+ *          probeAV: (file: string) => Promise<{duration: number | null, width: number | null, height: number | null, hasAudio: boolean}>,
+ *          timeoutMs: number, maxOutputBytes?: number, spawnImpl?: typeof spawn,
+ *          onChild?: (c: import("node:child_process").ChildProcess | undefined) => void,
+ *          onPhase?: (phase: "composing" | "encoding", p: {done: number, total: number}) => void}} o
+ * @returns {Promise<{bytes: number, duration: number | null, width: number | null, height: number | null}>}
+ */
+export async function renderSlideshow(o) {
+    const deadline = Date.now() + o.timeoutMs;
+    const left = () => deadline - Date.now();
+    const { width, height } = o.plan;
+
+    /** @type {{n: number, file: string, still: boolean, seconds: number | null, info: Awaited<ReturnType<typeof o.probeAV>>}[]} */
+    const slides = [];
+    for (const sl of o.plan.slides) {
+        const file = o.files.get(sl.n);
+        if (!file) throw new JobError("error.webp.invalid_params");
+        const head = await readFileHead(file, 12);
+        const sniffed = sniffType(head);
+        const still = sniffed?.type === "image";
+        if (still !== (sl.seconds !== null)) throw new JobError("error.webp.invalid_params");
+        const info = await o.probeAV(file);
+        if (info.width === null || info.height === null) throw new JobError("error.webp.bad_source");
+        if (!still && !(info.duration && info.duration > 0)) throw new JobError("error.webp.bad_source");
+        slides.push({ n: sl.n, file, still, seconds: sl.seconds, info });
+    }
+    const total = slides.reduce((t, s) => t + (s.still ? /** @type {number} */ (s.seconds) : /** @type {number} */ (s.info.duration)), 0);
+    if (total > MAX_SLIDESHOW_SECONDS + TOO_LONG_SLACK) throw new JobError("error.webp.too_long");
+    // the videos inside a slideshow are decoded, scaled and blurred frame by frame: a cap of their own
+    // (the stills are composed once and cost nothing per second)
+    const motion = slides.filter((s) => !s.still).reduce((t, s) => t + /** @type {number} */ (s.info.duration), 0);
+    if (motion > MAX_SLIDESHOW_MOTION_SECONDS + TOO_LONG_SLACK) throw new JobError("error.webp.too_long");
+
+    const stills = slides.filter((s) => s.still);
+    o.onPhase?.("composing", { done: 0, total: stills.length });
+    /** @type {SlideshowSegment[]} */
+    const segments = [];
+    let composed = 0;
+    for (const s of slides) {
+        if (!s.still) {
+            segments.push({
+                kind: "motion",
+                file: s.file,
+                seconds: /** @type {number} */ (s.info.duration),
+                hasAudio: s.info.hasAudio,
+                blur: needsBlur(s.info.width, s.info.height, width, height),
+            });
+            continue;
+        }
+        const out = path.join(o.dir, `s-${composed}.jpg`);
+        await runProcess({
+            spawnImpl: o.spawnImpl,
+            bin: o.ffmpegBin,
+            args: buildComposeArgs({ input: s.file, output: out, width, height, blur: needsBlur(s.info.width, s.info.height, width, height) }),
+            timeoutMs: left(),
+            label: "slideshow compose",
+            onChild: o.onChild,
+        });
+        if (!((await stat(out).catch(() => null))?.size > 0)) throw new JobError("error.webp.encode_failed");
+        segments.push({ kind: "still", file: out, seconds: /** @type {number} */ (s.seconds) });
+        o.onPhase?.("composing", { done: ++composed, total: stills.length });
+    }
+
+    o.onPhase?.("encoding", { done: 0, total });
+    let pending = "";
+    await runProcess({
+        spawnImpl: o.spawnImpl,
+        bin: o.ffmpegBin,
+        args: buildSlideshowArgs({ segments, width, height, fade: o.plan.fade, sound: o.plan.sound, output: o.output }),
+        timeoutMs: left(),
+        label: "slideshow encode",
+        onChild: o.onChild,
+        onStdout: (chunk) => {
+            // a chunk may end mid-line: only whole lines are read
+            pending += chunk;
+            const cut = pending.lastIndexOf("\n");
+            if (cut < 0) return;
+            const secs = parseProgressSeconds(pending.slice(0, cut));
+            pending = pending.slice(cut + 1);
+            if (secs !== null) o.onPhase?.("encoding", { done: Math.min(+secs.toFixed(1), total), total });
+        },
+    });
+    const size = (await stat(o.output).catch(() => null))?.size ?? 0;
+    if (!(size > 0)) throw new JobError("error.webp.encode_failed");
+    if (size > (o.maxOutputBytes ?? MAX_FETCH_BYTES)) throw new JobError("error.webp.too_large");
+    const info = await o.probeAV(o.output);
+    o.onPhase?.("encoding", { done: total, total });
+    return { bytes: size, duration: info.duration, width: info.width, height: info.height };
+}
+
+/** The first `n` bytes of a file (fewer when it is shorter). */
+export async function readFileHead(file, n) {
+    const fh = await open(file, "r");
+    try {
+        const buf = Buffer.alloc(n);
+        const { bytesRead } = await fh.read(buf, 0, n, 0);
+        return buf.subarray(0, bytesRead);
+    } finally {
+        await fh.close();
+    }
 }

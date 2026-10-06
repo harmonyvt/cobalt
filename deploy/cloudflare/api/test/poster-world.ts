@@ -26,7 +26,7 @@ export const svc = { [SERVICE_HEADER]: INTERNAL };
 export const json = (o: unknown) => JSON.stringify(o);
 export const asBody = (r: { body: unknown }) => r.body as any;
 
-export function world(opts: { media?: boolean } = {}) {
+export function world(opts: { media?: boolean; helperFn?: (path: string, init?: RequestInit) => Promise<Response> } = {}) {
     const withMedia = opts.media !== false;
     const db: FakeD1 = createBatchD1();
     const clock = new Clock();
@@ -55,7 +55,7 @@ export function world(opts: { media?: boolean } = {}) {
             now: clock.now,
             sleep: clock.sleep,
             ensureRunning: async () => {},
-            helper: helper.helper,
+            helper: opts.helperFn ?? helper.helper,
             fixedLength,
             scheduleSweep: () => {
                 sweepsArmed++;

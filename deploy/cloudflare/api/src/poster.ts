@@ -27,6 +27,8 @@ export type MediaStore = MediaBucket & PublishBucket;
 export const POSTER_PREFIX = "poster:";
 // A row whose poster could not be made is not tried again for this long (poster_at).
 export const POSTER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+// poster_at of a row that is never tried again
+export const POSTER_NEVER = Number.MAX_SAFE_INTEGER;
 // Helper attempts per job (counted when one starts, so a job that kills the Durable
 // Object cannot run for ever), and how many busy answers in a row count as one.
 export const POSTER_MAX_ATTEMPTS = 3;
@@ -41,9 +43,23 @@ export const POSTER_CALL_MS = 60_000;
 export const POSTER_IDLE_WAIT_MS = 20_000;
 export const MAX_POSTER_BYTES = 2 * 1024 * 1024;
 
-// Videos and gifs have a frame to show; everything else is its own picture (or none).
+// Videos and gifs have a frame to show, and (APP-API-CONTRACT.md section 18.2) a still image gets a small
+// poster of its own: the helper's /poster answers an image from its frame 0.
+// (HEIC is not in the list: the container's ffmpeg (7.0.2) has no HEIF still decoder, so a poster would fail every
+// day for ever. An uploaded HEIC is stored and shown without one.)
+export const POSTER_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 export const isPosterType = (contentType: string | null | undefined): boolean =>
-    !!contentType && (contentType.startsWith("video/") || contentType === "image/gif");
+    !!contentType &&
+    (contentType.startsWith("video/") || contentType === "image/gif" || POSTER_IMAGE_TYPES.includes(contentType));
+
+// The row-level rule: a webp rendition (a switched-private studio render or /webp job) is its own picture and
+// ffmpeg here cannot decode animated WebP, so only a still webp (an upload) qualifies.
+export const posterEligible = (r: { content_type: string | null; source?: string | null }): boolean =>
+    isPosterType(r.content_type) && !(r.content_type === "image/webp" && (r.source === "webp" || r.source === "studio"));
+
+// The same rule as SQL (the kick's query)
+const ELIGIBLE_SQL =
+    "(content_type LIKE 'video/%' OR content_type = 'image/gif' OR content_type IN ('image/jpeg', 'image/png') OR (content_type = 'image/webp' AND source NOT IN ('webp', 'studio')))";
 
 export type PosterJob = {
     // helper attempts started
@@ -78,6 +94,7 @@ type ItemRow = {
     id: string;
     bucket: string;
     r2_key: string;
+    source: string;
     content_type: string | null;
     poster: string | null;
     deleted_at: number | null;
@@ -116,11 +133,11 @@ export class PosterService {
         try {
             const row = await this.d.db
                 .prepare(
-                    "SELECT id, content_type, poster FROM media_items WHERE bucket = 'originals' AND r2_key = ?1 AND deleted_at IS NULL LIMIT 1",
+                    "SELECT id, content_type, source, poster FROM media_items WHERE bucket = 'originals' AND r2_key = ?1 AND deleted_at IS NULL LIMIT 1",
                 )
                 .bind(r2Key)
-                .first<{ id: string; content_type: string | null; poster: string | null }>();
-            if (!row || row.poster || !isPosterType(row.content_type)) return;
+                .first<{ id: string; content_type: string | null; source: string; poster: string | null }>();
+            if (!row || row.poster || !posterEligible(row)) return;
             if (await this.enqueue(row.id)) await this.scheduleSweep();
         } catch (e) {
             console.error("[poster] queueing after ready failed", String(e));
@@ -133,8 +150,7 @@ export class PosterService {
     async kick(limit: number = POSTER_BATCH): Promise<{ queued: number; eligible: number }> {
         const n = Math.max(1, Math.min(POSTER_MAX_BATCH, Math.floor(limit) || POSTER_BATCH));
         const since = this.d.now() - POSTER_COOLDOWN_MS;
-        const where =
-            "deleted_at IS NULL AND bucket = 'originals' AND poster IS NULL AND (poster_at IS NULL OR poster_at < ?1) AND (content_type LIKE 'video/%' OR content_type = 'image/gif')";
+        const where = `deleted_at IS NULL AND bucket = 'originals' AND poster IS NULL AND (poster_at IS NULL OR poster_at < ?1) AND ${ELIGIBLE_SQL}`;
         const { results } = await this.d.db
             .prepare(`SELECT id FROM media_items WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT ?2`)
             .bind(since, n)
@@ -209,12 +225,14 @@ export class PosterService {
     }
 
     // Gives the row up for a day (the lazy kick skips it until then) and ends the job.
-    private async giveUp(itemId: string, why: string): Promise<void> {
+    // `forever`: a still image the helper refused (an animated WebP, a file ffmpeg cannot read) will not get better
+    // tomorrow: poster_at is set past any cooldown so the lazy kick never offers it again.
+    private async giveUp(itemId: string, why: string, forever = false): Promise<void> {
         console.error("[poster] giving up on", itemId, why);
         try {
             await this.d.db
                 .prepare("UPDATE media_items SET poster_at = ?1 WHERE id = ?2 AND poster IS NULL")
-                .bind(this.d.now(), itemId)
+                .bind(forever ? POSTER_NEVER : this.d.now(), itemId)
                 .run();
         } catch (e) {
             console.error("[poster] could not record the failure", itemId, String(e));
@@ -233,11 +251,11 @@ export class PosterService {
         const attempts = rec.attempts + 1;
         try {
             const row = await this.d.db
-                .prepare("SELECT id, bucket, r2_key, content_type, poster, deleted_at FROM media_items WHERE id = ?1")
+                .prepare("SELECT id, bucket, r2_key, source, content_type, poster, deleted_at FROM media_items WHERE id = ?1")
                 .bind(itemId)
                 .first<ItemRow>();
             // deleted, done meanwhile, or not something with a frame: nothing to do
-            if (!row || row.deleted_at !== null || row.poster || row.bucket !== "originals" || !isPosterType(row.content_type)) {
+            if (!row || row.deleted_at !== null || row.poster || row.bucket !== "originals" || !posterEligible(row)) {
                 return await this.drop(itemId);
             }
             // counted now: a job that takes the Durable Object down still ends after MAX attempts
@@ -295,7 +313,10 @@ export class PosterService {
                     // not JSON
                 }
                 // the helper refused this file for good (not a video, no frame, too large)
-                if (res.status < 500) return await this.giveUp(itemId, code || `helper ${res.status}`);
+                if (res.status < 500) {
+                    const still = (row.content_type ?? "").startsWith("image/") && row.content_type !== "image/gif";
+                    return await this.giveUp(itemId, code || `helper ${res.status}`, still);
+                }
                 return await this.retryOrGiveUp(itemId, attempts, code || `helper ${res.status}`);
             }
 

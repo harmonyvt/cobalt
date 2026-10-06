@@ -15,6 +15,8 @@
 //   POST /library/visibility/migrate         the one-row-per-file data step (section 16)
 //   POST /library/items/<id>/studio[?queue=1] open a studio session for a private video
 //   DELETE /library/items/<id>/post          delete a whole post: every file and its sessions (section 12)
+//   DELETE /library/items/<id>                delete one item or made file of a post (section 18.4)
+//   PUT  /library/items/<id>/made             a crop or an export made on the device (section 18.6)
 
 // Read at bundle time from upstream's package.json (reading is fine, editing is
 // not); the fork's Worker bundles this one field.
@@ -23,7 +25,7 @@ import { version as apiVersion } from "../../../../api/package.json";
 import { LINE_MAX, LINE_WAIT_MS, parseQueryFlag } from "./line";
 import { lookupKey } from "./keys";
 import { SERVICE_KEY_ID, mintItemId, readCapped, releasePoster } from "./library";
-import { POSTER_COOLDOWN_MS, isPosterType } from "./poster";
+import { POSTER_COOLDOWN_MS, posterEligible } from "./poster";
 import type { PublishBucket } from "./publish";
 import {
     DEFAULT_MIGRATE_LIMIT,
@@ -33,6 +35,7 @@ import {
     getRow,
     isOriginalSource,
     itemShape,
+    makePublic,
     migrateVisibility,
     publishOriginal,
     purgeUrls,
@@ -56,6 +59,7 @@ import {
     cleanTitle,
     getSession,
     parseRange,
+    repointLead,
     studioErr,
     upsertTitle,
     type OriginalsBucket,
@@ -160,6 +164,9 @@ export async function capabilities(
     livePush = false,
     // the Hark webhook is configured (notification bridge, section 9)
     notifyBridge = false,
+    // the container's helper has said it has the slideshow routes (section 18.8): a Worker deployed ahead of the
+    // container rollout must not advertise what an older helper image cannot do
+    helperGallery = false,
 ): Promise<StudioReply> {
     const state = await resolveKeyState(d.db, auth, key, d.now());
     const version: unknown = apiVersion;
@@ -199,6 +206,11 @@ export async function capabilities(
                 // POST /library/items/<id>/studio, GET /studio/line, the cancel routes and
                 // PUT|DELETE /studio/line/notify (APP-API-CONTRACT.md section 17)
                 line: true,
+                // photos and galleries: `items` / `slideshow` on POST /studio, POST /studio/<sid>/items/retry and
+                // /slideshow, `v=3` on GET /library, DELETE /library/items/<id>, PUT .../made, `scope: "post"` on
+                // the visibility toggle (APP-API-CONTRACT.md section 18; needs `line`, and a helper that said it has
+                // the slideshow routes: the Durable Object learns that from the helper's own answers)
+                gallery: helperGallery === true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,
@@ -436,10 +448,19 @@ export async function studioUpload(
 
 // One card per post: the owner's COALESCE(session_id, link, id), refined so an
 // upload and the renders made from it (whose session's link is "upload:<item id>")
-// land in one card.
-const POST_KEY_SQL = `COALESCE(
+// land in one card. Since migration 0009 (section 18.1) a row that names its post (`post_key`: a
+// gallery item, a slideshow, a crop or an export) says so first; rows older than that have NULL.
+export const POST_KEY_SQL = `COALESCE(
+    m.post_key,
     (SELECT substr(s.link, 8) FROM studio_sessions s WHERE s.id = m.session_id AND s.link LIKE 'upload:%'),
     m.session_id, m.link, m.id)`;
+
+// The lead item of a gallery (section 18.1): its first video, else its first item. Rows only (no session).
+const LEAD_ITEM_SQL = `COALESCE(
+    (SELECT i.id FROM media_items i WHERE i.session_id = m.session_id AND i.role = 'item' AND i.deleted_at IS NULL AND i.content_type LIKE 'video/%' ORDER BY i.item_index, i.id LIMIT 1),
+    (SELECT i.id FROM media_items i WHERE i.session_id = m.session_id AND i.role = 'item' AND i.deleted_at IS NULL ORDER BY i.item_index, i.id LIMIT 1))`;
+// GET /library without v=3 (section 18.3): made rows and the items after the lead are left out
+const LEGACY_GALLERY_HIDE = ` AND COALESCE(m.role, '') NOT IN ('slideshow', 'crop', 'export') AND (COALESCE(m.role, '') <> 'item' OR m.id = ${LEAD_ITEM_SQL})`;
 
 const b64urlEncode = (s: string): string => {
     const bytes = new TextEncoder().encode(s);
@@ -466,21 +487,79 @@ export function decodeCursor(raw: string): { ms: number; key: string } | null {
     return m ? { ms: Number(m[1]), key: m[2]! } : null;
 }
 
-type FileRow = MediaRow & { post_key: string };
+// migration 0009's columns (section 18.1)
+type GalleryCols = { role: string | null; item_index: number | null; made_from: string | null; made_spec: string | null };
+type FileRow = MediaRow & GalleryCols & { post_key: string };
 type SessionRowLite = {
     id: string;
     status: string;
     service: string | null;
     expires_at: number;
     created_at: number;
+    items: string | null;
     post_key: string;
 };
+const GALLERY_COLUMNS = "role, item_index, made_from, made_spec";
+
+// A JSON column as a value, null when it is not valid JSON (never throws)
+const parseJson = (raw: string | null | undefined): unknown => {
+    if (raw === null || raw === undefined) return null;
+    try {
+        return JSON.parse(raw);
+    } catch {
+        return null;
+    }
+};
+const isStill = (type: string | null) => !!type && type.startsWith("image/") && type !== "image/gif";
+
+// v=3 file order (section 18.3): the items by item_index (a single original with them), then slideshows,
+// crops, exports, webps; each group but the items newest first
+const v3Rank = (f: FileRow) =>
+    f.role === "slideshow" ? 1 : f.role === "crop" ? 2 : f.role === "export" ? 3 : f.role === "item" || (f.bucket === "originals" && isOriginalSource(f.source)) ? 0 : 4;
+function sortV3(fs: FileRow[]): FileRow[] {
+    return [...fs].sort((a, b) => {
+        const ra = v3Rank(a);
+        const rb = v3Rank(b);
+        if (ra !== rb) return ra - rb;
+        if (ra === 0) {
+            const ia = a.item_index ?? Number.MAX_SAFE_INTEGER;
+            const ib = b.item_index ?? Number.MAX_SAFE_INTEGER;
+            if (ia !== ib) return ia - ib;
+            return a.created_at - b.created_at || (a.id < b.id ? -1 : 1);
+        }
+        return b.created_at - a.created_at || (a.id < b.id ? 1 : -1);
+    });
+}
+
+// The post's lead file: its lead item (first video, else the first item), else its one original.
+function leadOf(fs: FileRow[]): FileRow | undefined {
+    const items = fs.filter((f) => f.role === "item").sort((a, b) => (a.item_index ?? 0) - (b.item_index ?? 0));
+    return items.find((f) => (f.content_type ?? "").startsWith("video/")) ?? items[0] ?? fs.find((f) => f.bucket === "originals" && isOriginalSource(f.source));
+}
 
 const placeholders = (n: number, from = 1) => Array.from({ length: n }, (_, i) => `?${i + from}`).join(", ");
 const isVideoish = (r: MediaRow) => {
     const t = r.content_type ?? "";
     return t.startsWith("video/") || t === "image/gif" || t === "image/webp";
 };
+
+// v=3 (section 18.3), on every post: its kind, how many live items it has and which items the session
+// could not save (the indices its `items` record calls an error and no live item row has).
+function postGalleryFields(fs: FileRow[], ss: SessionRowLite[], lead: FileRow | undefined) {
+    const items = fs.filter((f) => f.role === "item");
+    const kind: "video" | "photo" | "gallery" | "webp" =
+        items.length >= 2 ? "gallery" : lead ? (isStill(lead.content_type) ? "photo" : "video") : "webp";
+    const live = new Set(items.map((f) => f.item_index));
+    const failed = new Set<number>();
+    for (const s of ss) {
+        const rec = parseJson(s.items);
+        if (!Array.isArray(rec)) continue;
+        for (const e of rec as { i?: unknown; status?: unknown }[]) {
+            if (e && e.status === "error" && typeof e.i === "number" && !live.has(e.i)) failed.add(e.i);
+        }
+    }
+    return { kind, item_count: items.length > 0 ? items.length : lead ? 1 : 0, items_failed: [...failed].sort((a, b) => a - b) };
+}
 
 // A call that must not hold the response up: it answers null after `ms`.
 async function bounded<T>(p: Promise<T>, ms: number): Promise<T | null> {
@@ -505,29 +584,40 @@ async function bounded<T>(p: Promise<T>, ms: number): Promise<T | null> {
 // file's own name, size and time survive).
 type Tomb = Pick<MediaRow, "id" | "name" | "content_type" | "bytes" | "width" | "height" | "duration" | "created_at" | "poster">;
 
-function listFiles(fs: FileRow[], v2: boolean, tombs: Map<string, Tomb>) {
-    const one = (f: FileRow) => {
-        const wn = webpName(f);
-        const isOrig = f.bucket === "originals" && isOriginalSource(f.source);
-        return {
-            id: f.id,
-            kind: f.kind,
-            source: f.source,
-            name: f.name,
-            url: !v2 && isOrig ? null : f.url,
-            content_type: f.content_type,
-            bytes: f.bytes,
-            width: f.width,
-            height: f.height,
-            duration: f.duration,
-            created_at: f.created_at,
-            media_name: wn ?? (f.bucket === "media" ? f.r2_key : null),
-            deletable: wn !== null,
-            poster_url: f.poster ?? null,
-            visibility: effectiveVisibility(f),
-            visibility_toggle: toggleable(f),
-        };
+export function fileShape(f: FileRow, v2: boolean, v3 = false) {
+    const wn = webpName(f);
+    const isOrig = f.bucket === "originals" && isOriginalSource(f.source);
+    return {
+        id: f.id,
+        kind: f.kind,
+        source: f.source,
+        name: f.name,
+        url: !v2 && isOrig ? null : f.url,
+        content_type: f.content_type,
+        bytes: f.bytes,
+        width: f.width,
+        height: f.height,
+        duration: f.duration,
+        created_at: f.created_at,
+        media_name: wn ?? (f.bucket === "media" ? f.r2_key : null),
+        deletable: wn !== null,
+        poster_url: f.poster ?? null,
+        visibility: effectiveVisibility(f),
+        visibility_toggle: toggleable(f),
+        // v3 (section 18.3): what the file is in its post
+        ...(v3
+            ? {
+                  role: f.role ?? null,
+                  item_index: f.item_index ?? null,
+                  made_from: Array.isArray(parseJson(f.made_from)) ? (parseJson(f.made_from) as unknown[]) : [],
+                  made_spec: ((v) => (v && typeof v === "object" && !Array.isArray(v) ? v : null))(parseJson(f.made_spec)),
+              }
+            : {}),
     };
+}
+
+function listFiles(fs: FileRow[], v2: boolean, tombs: Map<string, Tomb>, v3 = false) {
+    const one = (f: FileRow) => fileShape(f, v2, v3);
     const out: ReturnType<typeof one>[] = fs.map(one);
     if (v2) return out;
     const synth = (o: FileRow): ReturnType<typeof one> => {
@@ -593,8 +683,12 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
     // answer is the legacy shape: a public original is listed as its private file plus a synthesized
     // host file, exactly the pair those builds expect, and a private webp (which they have no word
     // for) is left out.
-    const v2 = q.get("v") === "2";
-    const hide = v2 ? "" : ` AND NOT (m.source IN ('webp', 'studio') AND ${visSql("m.")} = 'private')`;
+    // `v=3` (section 18.3, sent by builds with `features.gallery`) is v=2 plus the gallery fields and every file
+    // of a gallery post; without it a gallery is its lead item and its webps, nothing made.
+    const v3 = q.get("v") === "3";
+    const v2 = v3 || q.get("v") === "2";
+    const hide =
+        (v2 ? "" : ` AND NOT (m.source IN ('webp', 'studio') AND ${visSql("m.")} = 'private')`) + (v3 ? "" : LEGACY_GALLERY_HIDE);
 
     try {
         // 1. the page of posts: newest file first, ties broken by the post key
@@ -621,7 +715,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
             files = (
                 await db
                     .prepare(
-                        `SELECT * FROM (SELECT ${ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${POST_KEY_SQL} AS post_key
+                        `SELECT * FROM (SELECT ${ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${GALLERY_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${POST_KEY_SQL} AS post_key
                                         FROM media_items m WHERE m.deleted_at IS NULL${hide})
                          WHERE post_key IN (${marks}) ORDER BY created_at DESC, id DESC`,
                     )
@@ -631,7 +725,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
             sessions = (
                 await db
                     .prepare(
-                        `SELECT * FROM (SELECT s.id, s.status, s.service, s.expires_at, s.created_at,
+                        `SELECT * FROM (SELECT s.id, s.status, s.service, s.expires_at, s.created_at, s.items,
                                                 CASE WHEN s.link LIKE 'upload:%' THEN substr(s.link, 8) ELSE s.id END AS post_key
                                          FROM studio_sessions s)
                          WHERE post_key IN (${marks}) ORDER BY created_at DESC, id DESC`,
@@ -677,9 +771,10 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
 
         const api = noSlash(d.apiUrl);
         const posts = page.map((k) => {
-            const fs = filesByPost.get(k.post_key) ?? []; // newest first
+            const raw = filesByPost.get(k.post_key) ?? []; // newest first
+            const fs = v3 ? sortV3(raw) : raw;
             const ss = sessionsByPost.get(k.post_key) ?? []; // newest first
-            const original = fs.find((f) => f.bucket === "originals" && isOriginalSource(f.source));
+            const original = leadOf(fs);
             const meta = original ?? fs.find(isVideoish) ?? null;
             const link = original?.link ?? fs.find((f) => f.link)?.link ?? null;
             const open = ss.find((s) => s.expires_at > now && (s.status === "saving" || s.status === "ready")) ?? null;
@@ -708,7 +803,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                           source_url: `${api}/studio/${open.id}/source`,
                       }
                     : null,
-                files: listFiles(fs, v2, tombs),
+                files: listFiles(fs, v2, tombs, v3),
                 ...(v2
                     ? {
                           visibility: original
@@ -718,6 +813,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                                 : "private",
                       }
                     : {}),
+                ...(v3 ? postGalleryFields(fs, ss, original) : {}),
             };
         });
 
@@ -730,7 +826,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                 (f) =>
                     f.bucket === "originals" &&
                     !f.poster &&
-                    isPosterType(f.content_type) &&
+                    posterEligible(f) &&
                     (f.poster_at === null || f.poster_at < now - POSTER_COOLDOWN_MS),
             )
         ) {
@@ -884,18 +980,88 @@ export async function libraryVisibility(
         text = null;
     }
     let want: boolean | null = null;
+    // `scope` (section 18.4): absent / null / "row" = this file; "post" = every file of its post
+    let scope: "row" | "post" | null = "row";
     if (text !== null) {
         try {
             const body: unknown = JSON.parse(text);
             if (body && typeof body === "object" && !Array.isArray(body) && typeof (body as { public?: unknown }).public === "boolean") {
                 want = (body as { public: boolean }).public;
+                const sc = (body as { scope?: unknown }).scope;
+                if (sc === "post") scope = "post";
+                else if (sc !== undefined && sc !== null && sc !== "row") scope = null;
             }
         } catch {
             // not JSON: bad request below
         }
     }
-    if (want === null) return err(400, "error.library.bad_request");
+    if (want === null || scope === null) return err(400, "error.library.bad_request");
+    if (scope === "post") return setPostVisibility(d, id, want, keyId);
     return setVisibility(d, id, want, keyId);
+}
+
+// ---- 18.4 PATCH /library/items/<id>/visibility with "scope": "post" -------------------------------------
+
+// The file with the gallery columns and its post key (any live row; `id` may be a public_id).
+const FILE_COLUMNS = `${ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${GALLERY_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${POST_KEY_SQL} AS post_key`;
+async function getFile(db: D1Database, id: string): Promise<FileRow | null> {
+    return (
+        (await db
+            .prepare(
+                `SELECT ${FILE_COLUMNS} FROM media_items m WHERE (m.id = ?1 OR m.public_id = ?1) AND m.deleted_at IS NULL ORDER BY (m.id = ?1) DESC LIMIT 1`,
+            )
+            .bind(id)
+            .first<FileRow>()) ?? null
+    );
+}
+// Every live file of a post (optionally only those of one bucket), in item_index then creation order.
+async function postFiles(db: D1Database, postKey: string, bucket?: "originals"): Promise<FileRow[]> {
+    return (
+        await db
+            .prepare(
+                `SELECT * FROM (SELECT ${FILE_COLUMNS} FROM media_items m WHERE m.deleted_at IS NULL${bucket ? ` AND m.bucket = '${bucket}'` : ""})
+                 WHERE post_key = ?1 ORDER BY COALESCE(item_index, 1000000), created_at, id`,
+            )
+            .bind(postKey)
+            .all<FileRow>()
+    ).results;
+}
+
+// Applies on/off to every live private-bucket row of the post that is not a switched webp (those keep their own
+// switch, section 16), one row at a time as the single toggle does. A row that fails is listed in `remaining`
+// with 502 `error.library.partial`; the call is idempotent, so a retry finishes the rest.
+async function setPostVisibility(d: AppDeps, id: string, want: boolean, keyId: string): Promise<StudioReply> {
+    let anchor: FileRow | null;
+    let rows: FileRow[];
+    try {
+        anchor = await getFile(d.db, id);
+        if (!anchor) return err(404, "error.library.not_found");
+        rows = (await postFiles(d.db, anchor.post_key, "originals")).filter((r) => webpName(r) === null);
+    } catch {
+        return err(503, "error.api.generic");
+    }
+    const remaining: string[] = [];
+    let cleared: boolean | null = null;
+    for (const r of rows) {
+        const res = await setVisibility(d, r.id, want, keyId);
+        if (res.status !== 200) {
+            remaining.push(r.id);
+            continue;
+        }
+        const c = (res.body as { cache_cleared?: boolean | null }).cache_cleared;
+        if (c === false) cleared = false;
+        else if (c === true && cleared === null) cleared = true;
+    }
+    let items: ReturnType<typeof fileShape>[];
+    try {
+        items = (await postFiles(d.db, anchor.post_key, "originals")).filter((r) => webpName(r) === null).map((r) => fileShape(r, true, true));
+    } catch {
+        return err(503, "error.api.generic");
+    }
+    if (remaining.length > 0) {
+        return { status: 502, body: { status: "error", error: { code: "error.library.partial" }, items, remaining, cache_cleared: cleared } };
+    }
+    return { status: 200, body: { status: "success", items, cache_cleared: cleared } };
 }
 
 // ---- 16. POST /library/visibility/migrate --------------------------------------------------------
@@ -1234,4 +1400,271 @@ export async function libraryPostersBackfill(d: AppDeps, limit?: number): Promis
         console.error("[library] poster backfill failed", String(e));
         return err(503, "error.api.generic");
     }
+}
+
+// ---- 18.4 DELETE /library/items/<id> --------------------------------------------------------------------
+
+// Everything of one live row: its stored object (and the public mirror), the row, an unshared poster, the edge
+// copy. The object goes first and the row after it, so a row whose object could not be deleted stays live (the
+// caller answers 502 and a retry finishes it). Throws on a storage or D1 failure.
+async function removeFile(d: AppDeps, f: FileRow): Promise<{ bytes: number }> {
+    await (f.bucket === "media" ? d.media : d.originals).delete(f.r2_key);
+    if (f.public_key) await d.media.delete(f.public_key);
+    await d.db.prepare("UPDATE media_items SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL").bind(d.now(), f.id).run();
+    if (f.poster) await releasePoster(d.db, d.media, f.poster);
+    if (f.url) await purgeUrls(d, [f.url]);
+    return { bytes: typeof f.bytes === "number" ? f.bytes : 0 };
+}
+
+// One item or made file (a slideshow, a crop, an export) of a post. The last live item of a post is not
+// deletable here (section 12 deletes the post); a webp or any row without a role keeps its own route.
+export async function libraryItemDelete(d: AppDeps, id: string): Promise<StudioReply> {
+    let row: FileRow | null;
+    try {
+        row = await getFile(d.db, id);
+    } catch {
+        return err(503, "error.api.generic");
+    }
+    if (!row) return err(404, "error.library.not_found");
+    if (row.role !== "item" && row.role !== "slideshow" && row.role !== "crop" && row.role !== "export") {
+        return err(409, "error.library.not_deletable");
+    }
+    if (row.role === "item") {
+        let others: { n: number } | null;
+        try {
+            others = await d.db
+                .prepare(
+                    `SELECT COUNT(*) AS n FROM media_items m WHERE m.deleted_at IS NULL AND m.role = 'item' AND m.id <> ?1 AND ${POST_KEY_SQL} = ?2`,
+                )
+                .bind(row.id, row.post_key)
+                .first<{ n: number }>();
+        } catch {
+            return err(503, "error.api.generic");
+        }
+        if ((others?.n ?? 0) === 0) return err(409, "error.library.last_item");
+    }
+    let deleted: { bytes: number };
+    try {
+        deleted = await removeFile(d, row);
+    } catch (e) {
+        console.error("[library] item delete failed", row.id, String(e));
+        return err(502, "error.library.storage");
+    }
+    // the session's original is its lead item: a deleted lead hands that over to the next one
+    if (row.role === "item" && row.session_id) {
+        try {
+            await repointLead(d.db, row.session_id);
+        } catch (e) {
+            console.error("[library] item delete: moving the lead failed", row.session_id, String(e));
+        }
+    }
+    return { status: 200, body: { status: "success", deleted: { files: 1, bytes: deleted.bytes } } };
+}
+
+// ---- 18.6 PUT /library/items/<id>/made -------------------------------------------------------------------
+
+export const MAX_MADE_BYTES = 50 * 1024 * 1024;
+export const MAX_MADE_SPEC_BYTES = 512;
+const HEAD_BYTES = 128 * 1024;
+
+// The pixel size from a JPEG's start-of-frame marker (null when it is not one).
+export function jpegSize(b: Uint8Array): { width: number; height: number } | null {
+    if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return null;
+    let i = 2;
+    while (i + 9 < b.length) {
+        if (b[i] !== 0xff) {
+            i++;
+            continue;
+        }
+        const m = b[i + 1]!;
+        if (m === 0xff) {
+            i++;
+            continue;
+        }
+        if (m === 0xd8 || m === 0x01 || m === 0x00 || (m >= 0xd0 && m <= 0xd7)) {
+            i += 2;
+            continue;
+        }
+        if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+            return { height: (b[i + 5]! << 8) | b[i + 6]!, width: (b[i + 7]! << 8) | b[i + 8]! };
+        }
+        i += 2 + ((b[i + 2]! << 8) | b[i + 3]!);
+    }
+    return null;
+}
+
+// A crop or an export (the long image, the PDF) made on the device. Everything that can refuse does so before
+// the body is read (and cancels it); the body then goes straight to R2.
+export async function libraryMade(
+    d: AppDeps,
+    id: string,
+    request: Request,
+    keyId: string,
+    q: URLSearchParams,
+): Promise<StudioReply> {
+    const reject = (status: number, code: string) => {
+        void request.body?.cancel().catch(() => {});
+        return err(status, code);
+    };
+    const role = q.get("role");
+    if (role !== "crop" && role !== "export") return reject(400, "error.library.bad_request");
+    // spec: a URL-encoded JSON object, at most 512 bytes
+    const rawSpec = q.get("spec");
+    if (rawSpec === null || new TextEncoder().encode(rawSpec).length > MAX_MADE_SPEC_BYTES) return reject(400, "error.library.bad_request");
+    let spec: Record<string, unknown>;
+    try {
+        const parsed: unknown = JSON.parse(rawSpec);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return reject(400, "error.library.bad_request");
+        spec = parsed as Record<string, unknown>;
+    } catch {
+        return reject(400, "error.library.bad_request");
+    }
+    // the type the body must have: a crop and the long image are JPEGs, the PDF is a PDF
+    const type = (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+    let ext: "jpg" | "pdf";
+    if (role === "crop") {
+        if (type !== "image/jpeg") return reject(400, "error.library.bad_request");
+        ext = "jpg";
+    } else if (spec.kind === "long" && type === "image/jpeg") {
+        ext = "jpg";
+    } else if (spec.kind === "pdf" && type === "application/pdf") {
+        ext = "pdf";
+    } else {
+        return reject(400, "error.library.bad_request");
+    }
+    const declared = request.headers.get("content-length");
+    if (declared === null || !/^\d{1,15}$/.test(declared)) return reject(400, "error.library.bad_request");
+    const size = Number(declared);
+    if (size > MAX_MADE_BYTES) return reject(413, "error.studio.too_large");
+    if (size === 0 || !request.body) return reject(400, "error.library.bad_request");
+    const rawName = q.get("name");
+    const name = rawName !== null ? cleanName(rawName, ext) : `${role}.${ext}`;
+
+    let anchor: FileRow | null;
+    try {
+        anchor = await getFile(d.db, id);
+    } catch {
+        return reject(503, "error.api.generic");
+    }
+    if (!anchor) return reject(404, "error.library.not_found");
+    if (role === "crop") {
+        const photo = anchor.role === "item" || (anchor.role === null && isOriginalSource(anchor.source));
+        if (!photo || !isStill(anchor.content_type)) return reject(409, "error.library.not_photo");
+    }
+
+    const newId = mintItemId(d.randomBytes);
+    const key = `made/${newId}.${ext}`;
+    const now = d.now();
+    // straight from the request to R2: the body has a known length, nothing is buffered
+    let obj: { size: number } | null;
+    try {
+        obj = await d.originals.put(key, request.body, {
+            httpMetadata: { contentType: type },
+            customMetadata: { keyId, source: "made", role, createdAt: String(now) },
+        });
+    } catch (e) {
+        console.error("[made] R2 put failed", String(e));
+        await d.originals.delete(key).catch(() => {});
+        return err(503, "error.api.generic");
+    }
+    if (!obj || obj.size !== size) {
+        await d.originals.delete(key).catch(() => {});
+        return err(400, "error.library.bad_request");
+    }
+
+    // the head of what was stored: it must be what the headers said, and a JPEG tells its size
+    let width: number | null = null;
+    let height: number | null = null;
+    try {
+        const stored = await d.originals.get(key, { range: { offset: 0, length: HEAD_BYTES } });
+        if (stored) {
+            const head = new Uint8Array(await new Response(stored.body).arrayBuffer());
+            if (ext === "jpg") {
+                if (head[0] !== 0xff || head[1] !== 0xd8) {
+                    await d.originals.delete(key).catch(() => {});
+                    return err(400, "error.library.bad_request");
+                }
+                const dim = jpegSize(head);
+                width = dim?.width ?? null;
+                height = dim?.height ?? null;
+            } else if (new TextDecoder().decode(head.subarray(0, 5)) !== "%PDF-") {
+                await d.originals.delete(key).catch(() => {});
+                return err(400, "error.library.bad_request");
+            }
+        }
+    } catch (e) {
+        // the size is a nicety: the row is written without it
+        console.error("[made] reading the head failed", String(e));
+    }
+
+    // an export lists the photos of the post at this moment; a crop, the photo it was cut from
+    let madeFrom: string[] = [anchor.id];
+    let postRows: FileRow[] = [];
+    try {
+        postRows = await postFiles(d.db, anchor.post_key);
+        if (role === "export") {
+            madeFrom = postRows
+                .filter((f) => (f.role === "item" || (f.role === null && isOriginalSource(f.source))) && isStill(f.content_type))
+                .map((f) => f.id);
+        }
+    } catch (e) {
+        console.error("[made] reading the post failed", String(e));
+        await d.originals.delete(key).catch(() => {});
+        return err(503, "error.api.generic");
+    }
+    try {
+        await d.db
+            .prepare(
+                `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, visibility, role, made_from, made_spec, post_key)
+                 VALUES (?1, 'private', 'made', 'originals', ?2, NULL, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?11, 'private', ?12, ?13, ?14, ?15)`,
+            )
+            .bind(newId, key, name, type, size, width, height, anchor.link, anchor.session_id, keyId, now, role, JSON.stringify(madeFrom), JSON.stringify(spec), anchor.post_key)
+            .run();
+    } catch (e) {
+        console.error("[made] media_items insert failed", String(e));
+        await d.originals.delete(key).catch(() => {});
+        return err(503, "error.api.generic");
+    }
+
+    // the post's visibility is its lead item's: a new file of a public post is public too (best effort: a failure
+    // leaves it private, which the owner's switch can still fix)
+    try {
+        const lead = leadOf(postRows);
+        if (lead && effectiveVisibility(lead) === "public") {
+            const fresh = await getRow(d.db, newId);
+            if (fresh) await makePublic(d, fresh, keyId);
+        }
+    } catch (e) {
+        console.error("[made] making the new file public failed", newId, String(e));
+    }
+
+    // one export of a kind per post: the earlier one goes once the new one is stored
+    const replaced: string[] = [];
+    if (role === "export") {
+        try {
+            const old = postRows.filter((f) => f.role === "export" && f.id !== newId && (parseJson(f.made_spec) as { kind?: unknown } | null)?.kind === spec.kind);
+            for (const f of old) {
+                try {
+                    await removeFile(d, f);
+                    replaced.push(f.id);
+                } catch (e) {
+                    console.error("[made] replacing the earlier export failed", f.id, String(e));
+                }
+            }
+        } catch (e) {
+            console.error("[made] replacing the earlier export failed", String(e));
+        }
+    }
+
+    // a JPEG gets a poster (queued in the Durable Object; the answer never waits for it)
+    if (ext === "jpg" && d.kickPosters) await bounded(d.kickPosters().catch(() => null), 1500);
+
+    let item: ReturnType<typeof fileShape> | null = null;
+    try {
+        const fresh = await getFile(d.db, newId);
+        item = fresh ? fileShape(fresh, true, true) : null;
+    } catch {
+        // the row is stored: the answer below still carries its id
+    }
+    return { status: 201, body: { status: "success", item, replaced } };
 }
