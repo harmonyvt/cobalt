@@ -11,6 +11,8 @@ final class PreviewServer: Sendable {
         var clip: PreviewData.Clip
         var name: String?
         var bytes: Int64
+        /// The link the app sent (a save's `url`); nil for an upload and the library fixtures' sessions.
+        var link: URL?
     }
 
     struct Render: Sendable {
@@ -36,18 +38,31 @@ final class PreviewServer: Sendable {
         var notifyCalls: [String] = []         // "PUT <sid>" / "DELETE <sid>", in order
         var titles: [String: String] = [:]     // post id -> custom title the "server" holds ("" = cleared)
         var titleCalls: [String] = []          // "<item id> <title or ->" for every `setTitle`, in order
+        var line = PreviewLineState()
     }
 
     private let state = Mutex(State())
 
-    func newSession(isUpload: Bool, clip: PreviewData.Clip, name: String?, bytes: Int64, at now: Date) -> String {
+    func newSession(isUpload: Bool, clip: PreviewData.Clip, name: String?, bytes: Int64, at now: Date, link: URL? = nil) -> String {
         state.withLock { s in
             s.counter += 1
             let id = "PrEvIeWsession\(String(format: "%08d", s.counter))"
-            s.sessions[id] = Session(id: id, startedAt: now, isUpload: isUpload, clip: clip, name: name, bytes: bytes)
+            s.sessions[id] = Session(id: id, startedAt: now, isUpload: isUpload, clip: clip, name: name, bytes: bytes, link: link)
             return id
         }
     }
+
+    // MARK: The line (APP-API-CONTRACT 17), for `LinePreviewMode.server…`
+
+    /// Runs `body` on the line's state after moving it to `now`: every job whose turn has come has started, at the
+    /// moment the one before it ended (never later than it would have on a real server).
+    func withLine<T>(at now: Date, _ body: (inout PreviewLineState) -> T) -> T {
+        state.withLock { s in
+            s.line.pump(now: now)
+            return body(&s.line)
+        }
+    }
+
 
     func session(_ id: String) -> Session? { state.withLock { $0.sessions[id] } }
 
@@ -95,6 +110,30 @@ final class PreviewServer: Sendable {
     func markDeleted(_ name: String) { state.withLock { _ = $0.deleted.insert(name) } }
     func isDeleted(_ name: String?) -> Bool { name.map { n in state.withLock { $0.deleted.contains(n) } } ?? false }
 
+    func seedLine(mode: LinePreviewMode, at now: Date, timeScale: Double) {
+        state.withLock { $0.line.seed(mode: mode, at: now, timeScale: timeScale) }
+    }
+    func markCancelled(_ id: String) { state.withLock { _ = $0.line.cancelledIDs.insert(id) } }
+    func isCancelled(_ id: String) -> Bool { state.withLock { $0.line.cancelledIDs.contains(id) } }
+    /// Tests: `GET /studio/line` fails (the labels go, the positions stay).
+    var lineFails: Bool {
+        get { state.withLock { $0.line.failReads } }
+        set { state.withLock { $0.line.failReads = newValue } }
+    }
+    /// Tests: `DELETE …/line` and `DELETE …/render/<job>` cannot reach the "server" (offline).
+    var cancelFails: Bool {
+        get { state.withLock { $0.line.failCancel } }
+        set { state.withLock { $0.line.failCancel = newValue } }
+    }
+    /// The custom titles creates and uploads carried (session id -> title), as the real server stores them (17.3).
+    func setPendingTitle(_ title: String, session id: String) { state.withLock { $0.line.titles[id] = title } }
+    var pendingTitles: [String: String] { state.withLock { $0.line.titles } }
+
+    /// Calls the app made to the line's routes, in order ("PUT line/notify", "DELETE line/notify", "GET line",
+    /// "DELETE line <sid>", "DELETE line <sid>/<job>"), and the bodies the creates carried (`queue`, `title`).
+    var lineCalls: [String] { state.withLock { $0.line.calls } }
+    func recordLineCall(_ call: String) { state.withLock { $0.line.calls.append(call) } }
+
     /// Whole-post deletes: the files that went (by library file id) and how often a post was asked.
     func markFilesDeleted(_ ids: [String]) { state.withLock { $0.deletedFiles.formUnion(ids) } }
     func isFileDeleted(_ id: String) -> Bool { state.withLock { $0.deletedFiles.contains(id) } }
@@ -120,6 +159,9 @@ public struct PreviewClient: CobaltClient {
     /// `.off` (every other preview) is a server without `features.visibility`.
     let visibility: VisibilityPreviewMode
     let visibilityState = PreviewVisibilityState()
+    /// How this "server" holds the line (`AppModel.previewLine(_:)`): a server with `features.line`, one that is busy
+    /// with something the app does not know (device line), or neither (every other preview).
+    let lineMode: LinePreviewMode
 
     public var baseURL: URL { PreviewData.base }
 
@@ -127,11 +169,18 @@ public struct PreviewClient: CobaltClient {
         self.init(scenario: scenario, timeScale: timeScale, clock: SystemClock())
     }
 
-    init(scenario: PreviewScenario, timeScale: Double, clock: any PipelineClock, visibility: VisibilityPreviewMode = .off) {
+    init(
+        scenario: PreviewScenario, timeScale: Double, clock: any PipelineClock, visibility: VisibilityPreviewMode = .off,
+        line: LinePreviewMode = .off
+    ) {
         self.scenario = scenario
         self.timeScale = max(0.01, timeScale)
         self.clock = clock
         self.visibility = visibility
+        self.lineMode = line
+        let now = clock.now()
+        let scale = self.timeScale
+        server.seedLine(mode: line, at: now, timeScale: scale)
     }
 
     var clip: PreviewData.Clip { PreviewData.clip(for: scenario) }
@@ -139,9 +188,14 @@ public struct PreviewClient: CobaltClient {
 
     // MARK: - Capabilities, resolve
 
-    public func capabilities() async -> Capabilities { PreviewData.capabilities(for: scenario) }
+    public func capabilities() async -> Capabilities {
+        var caps = PreviewData.capabilities(for: scenario)
+        caps.line = lineMode.hasLine
+        return caps
+    }
 
     public func resolve(_ link: URL) async throws -> CobaltResult {
+        server.recordLineCall("POST /")
         switch scenario {
         case .revokedKey:
             throw CobaltError.api(code: "error.api.auth.key.invalid", httpStatus: 401)
@@ -166,9 +220,51 @@ public struct PreviewClient: CobaltClient {
     /// Records what the app asked for (`visibilityState.saveCalls`: "create public" / "create -"), so tests can
     /// see the default-public flag go out, or not.
     public func createStudio(link: URL, public makePublic: Bool?) async throws -> StudioCreated {
+        try await createStudio(link: link, public: makePublic, queue: false, title: nil)
+    }
+
+    /// `queue: true` on a server with the line answers at once, started or queued with its place (17.3); without it a
+    /// busy server answers `429 error.studio.busy` (also while anything waits). `title` is remembered as the post's
+    /// custom title, the way the real create stores it.
+    public func createStudio(link: URL, public makePublic: Bool?, queue: Bool, title: String?) async throws -> StudioCreated {
         visibilityState.recordSave("create", public: makePublic)
-        let id = server.newSession(isUpload: false, clip: clip, name: nil, bytes: clip.bytes, at: clock.now())
-        return StudioCreated(id: id, pageURL: nil)
+        let now = clock.now()
+        try throwIfBusy(queue: queue, render: false, at: now)
+        let id = server.newSession(isUpload: false, clip: clip, name: nil, bytes: clip.bytes, at: now, link: link)
+        server.recordLineCall("POST /studio queue=\(queue) title=\(title ?? "-")")
+        if let title { server.setPendingTitle(title, session: id) }
+        guard lineMode.hasLine else { return StudioCreated(id: id, pageURL: nil) }
+        let placed = server.withLine(at: now) {
+            $0.enqueue(
+                .init(kind: .save, sid: id, job: nil, focused: false, duration: saveDuration(link: link), mine: true,
+                      origin: nil, keyName: "iphone", link: link, failure: failure(for: link)),
+                at: now)
+        }
+        return StudioCreated(id: id, pageURL: nil, queued: queue ? placed.queued : false, queueAhead: queue ? placed.ahead : nil)
+    }
+
+    /// The seconds a save holds the helper on this "server" (fetch + save, or the cold fetch).
+    private func saveDuration(link: URL?) -> Double {
+        ((scenario == .coldStart ? PreviewData.coldFetchSeconds : PreviewData.fetchSeconds) + PreviewData.saveSeconds) * timeScale
+    }
+
+    /// A link the preview "server" cannot save (the boards' `Dd55fEyN1Yy`, a private post).
+    private func failure(for link: URL?) -> String? {
+        guard let link, link.absoluteString.contains(PreviewData.privateRef) else { return nil }
+        return "error.api.fetch.empty"
+    }
+
+    /// 429 the way the real server answers: while the helper is held (or anything waits) a caller that did not ask to
+    /// queue is refused; `line_full` when the "server" is full; the device-line mode's busy window.
+    private func throwIfBusy(queue: Bool, render: Bool, at now: Date) throws {
+        if case .deviceBusy = lineMode, server.withLine(at: now, { $0.foreignBusy(at: now) }) {
+            throw CobaltError.api(code: render ? "error.webp.busy" : "error.studio.busy", httpStatus: 429)
+        }
+        guard lineMode.hasLine else { return }
+        if lineMode == .serverFull, queue { throw CobaltError.api(code: "error.studio.line_full", httpStatus: 429) }
+        if !queue, server.withLine(at: now, { $0.isBusy }) {
+            throw CobaltError.api(code: render ? "error.webp.busy" : "error.studio.busy", httpStatus: 429)
+        }
     }
 
     // MARK: - Upload
@@ -184,7 +280,15 @@ public struct PreviewClient: CobaltClient {
         file: URL, name: String, contentType: String, public makePublic: Bool?,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> UploadResult {
+        try await upload(file: file, name: name, contentType: contentType, public: makePublic, queue: false, title: nil, progress: progress)
+    }
+
+    public func upload(
+        file: URL, name: String, contentType: String, public makePublic: Bool?, queue: Bool, title: String?,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> UploadResult {
         visibilityState.recordSave("upload", public: makePublic)
+        server.recordLineCall("PUT /studio/upload queue=\(queue) title=\(title ?? "-")")
         let onDisk = ((try? FileManager.default.attributesOfItem(atPath: file.path)[.size]) as? NSNumber)?.int64Value
         let size = PreviewData.uploadBytes(forFileSize: onDisk, scenario: scenario)
         let step = PreviewData.uploadBytesPerSecond / timeScale * 0.1
@@ -205,8 +309,23 @@ public struct PreviewClient: CobaltClient {
             item.width = 1170; item.height = 2532
             return UploadResult(sessionID: nil, item: item, studioErrorCode: nil)
         }
+        // A busy server (the line's mode, or a foreign save) that was not asked to queue adopts nothing: the upload
+        // is stored and the answer says why (`studio_error`), which the app follows with `openStudio(item:)`.
+        if !queue, lineMode.hasLine || lineMode != .off, (try? throwIfBusy(queue: false, render: false, at: now)) == nil {
+            return UploadResult(sessionID: nil, item: item, studioErrorCode: "error.studio.busy")
+        }
         let id = server.newSession(isUpload: true, clip: clip, name: name, bytes: size, at: now)
-        return UploadResult(sessionID: id, item: item, studioErrorCode: nil)
+        if let title { server.setPendingTitle(title, session: id) }
+        guard lineMode.hasLine else { return UploadResult(sessionID: id, item: item, studioErrorCode: nil) }
+        let placed = server.withLine(at: now) {
+            $0.enqueue(
+                .init(kind: .save, sid: id, job: nil, focused: false, duration: PreviewData.uploadReadSeconds * timeScale,
+                      mine: true, origin: nil, keyName: "iphone", link: nil, failure: nil),
+                at: now)
+        }
+        return UploadResult(
+            sessionID: id, item: item, studioErrorCode: nil, queued: queue ? placed.queued : false,
+            queueAhead: queue ? placed.ahead : nil)
     }
 
     // MARK: - Sessions
@@ -222,6 +341,7 @@ public struct PreviewClient: CobaltClient {
 
     public func session(_ id: String, wait: Int) async throws -> StudioSession {
         guard let s = knownSession(id) else { throw CobaltError.api(code: "error.studio.not_found", httpStatus: 404) }
+        if server.isCancelled(id) { return cancelledSession(s) }
         var snap = snapshot(of: s, at: clock.now())
         if wait > 0, snap.session.status == .saving {
             let pause = max(0.001, min(Double(wait), snap.nextChange))
@@ -231,17 +351,41 @@ public struct PreviewClient: CobaltClient {
         return snap.session
     }
 
+    /// A queued save the app cancelled: the session ends with `error.studio.cancelled` (17.7).
+    private func cancelledSession(_ s: PreviewServer.Session) -> StudioSession {
+        StudioSession(
+            id: s.id, status: .error, link: (s.link ?? s.clip.link).absoluteString, service: nil, title: nil, duration: nil,
+            width: nil, height: nil, bytes: nil, createdAt: s.startedAt, expiresAt: s.startedAt.addingTimeInterval(7 * 86_400),
+            errorCode: "error.studio.cancelled", renders: [], step: nil, stepBytes: nil, stepTotal: nil, waking: nil)
+    }
+
     public func sourceURL(session id: String) -> URL {
         PreviewData.base.appendingPathComponent("studio/\(id)/source")
     }
 
     private func snapshot(of s: PreviewServer.Session, at now: Date) -> (session: StudioSession, nextChange: Double) {
-        let t = max(0, now.timeIntervalSince(s.startedAt))
+        // On a server with the line a save starts when its turn comes: until then it is "queued" (17.4).
+        var startedAt = s.startedAt
+        var failing: String?
+        if lineMode.hasLine, let entry = server.withLine(at: now, { $0.entry(sid: s.id, job: nil) }) {
+            guard let started = entry.started else {
+                let ahead = server.withLine(at: now) { $0.ahead(of: entry) }
+                let queued = StudioSession(
+                    id: s.id, status: .saving, link: s.isUpload ? "upload:PrEvIeWupload0001" : (s.link ?? s.clip.link).absoluteString,
+                    service: s.isUpload ? "upload" : (LinkInfo(s.link ?? s.clip.link)?.service), title: nil, duration: nil,
+                    width: nil, height: nil, bytes: nil, createdAt: s.startedAt, expiresAt: s.startedAt.addingTimeInterval(7 * 86_400),
+                    errorCode: nil, renders: [], step: .queued, stepBytes: nil, stepTotal: nil, waking: false, queueAhead: ahead)
+                return (queued, 0.1)
+            }
+            startedAt = started
+            failing = entry.failure
+        }
+        let t = max(0, now.timeIntervalSince(startedAt))
         let cold = scenario == .coldStart
         let ts = timeScale
         var out = StudioSession(
-            id: s.id, status: .saving, link: s.isUpload ? "upload:PrEvIeWupload0001" : s.clip.link.absoluteString,
-            service: s.isUpload ? "upload" : (LinkInfo(s.clip.link)?.service),
+            id: s.id, status: .saving, link: s.isUpload ? "upload:PrEvIeWupload0001" : (s.link ?? s.clip.link).absoluteString,
+            service: s.isUpload ? "upload" : (LinkInfo(s.link ?? s.clip.link)?.service),
             title: nil, duration: nil, width: nil, height: nil, bytes: nil,
             createdAt: s.startedAt, expiresAt: s.startedAt.addingTimeInterval(7 * 86_400), errorCode: nil,
             renders: [], step: nil, stepBytes: nil, stepTotal: nil, waking: nil)
@@ -264,6 +408,11 @@ public struct PreviewClient: CobaltClient {
 
         let fetchEnd = (cold ? PreviewData.coldFetchSeconds : PreviewData.fetchSeconds) * ts
         let saveEnd = fetchEnd + PreviewData.saveSeconds * ts
+        if let failing, t >= fetchEnd {                            // a private post: the fetch fails when it is tried
+            out.status = .error
+            out.errorCode = failing
+            return (out, 0)
+        }
         if t < fetchEnd {
             let wakeAt = PreviewData.wakingAfterSeconds * ts
             if hasProgress {
@@ -293,14 +442,36 @@ public struct PreviewClient: CobaltClient {
     public func render(session id: String, _ request: RenderRequest) async throws -> String {
         guard let s = knownSession(id) else { throw CobaltError.api(code: "error.studio.not_found", httpStatus: 404) }
         if scenario == .renderBusy { throw CobaltError.api(code: "error.webp.busy", httpStatus: 429) }
+        let now = clock.now()
+        try throwIfBusy(queue: request.queue == true, render: true, at: now)
         if request.notify { server.setNotify(id, NotifyOptIn(on: [.rendered, .failed], label: s.name ?? s.clip.title)) }
-        return server.newRender(
-            sessionID: id, request: request, clip: s.clip, at: clock.now(),
+        server.recordLineCall("POST render queue=\(request.queue == true) priority=\(request.priority ?? "-")")
+        let job = server.newRender(
+            sessionID: id, request: request, clip: s.clip, at: now,
             uniqueLink: scenario == .renditions || scenario == .renditionsLegacy || scenario.failsRenames)
+        if lineMode.hasLine {
+            server.withLine(at: now) {
+                _ = $0.enqueue(
+                    .init(kind: .render, sid: id, job: job, focused: request.priority == "focused",
+                          duration: PreviewData.renderSeconds * timeScale, mine: true, origin: nil, keyName: "iphone",
+                          link: nil, failure: nil),
+                    at: now)
+            }
+        }
+        return job
     }
 
     public func renderStatus(session id: String, job: String, wait: Int) async throws -> RenderStatus {
-        guard let r = server.render(job) else { throw CobaltError.api(code: "error.webp.job_lost", httpStatus: 404) }
+        guard var r = server.render(job) else { throw CobaltError.api(code: "error.webp.job_lost", httpStatus: 404) }
+        if server.isCancelled(job) { return .failed(code: "error.webp.cancelled") }
+        if lineMode.hasLine, let entry = server.withLine(at: clock.now(), { $0.entry(sid: id, job: job) }) {
+            guard let started = entry.started else {
+                let ahead = server.withLine(at: clock.now()) { $0.ahead(of: entry) }
+                if wait > 0 { try await clock.sleep(seconds: 0.1) }
+                return .pending(phase: .queued, framesDone: nil, framesTotal: nil, queueAhead: ahead)
+            }
+            r.startedAt = started                                   // the render's turn came: its clock starts there
+        }
         var snap = renderSnapshot(r, at: clock.now())
         if wait > 0, case .pending = snap.status {
             try await clock.sleep(seconds: max(0.001, min(Double(wait), 0.1, snap.nextChange)))
@@ -360,8 +531,22 @@ public struct PreviewClient: CobaltClient {
     }
 
     public func openStudio(item id: String) async throws -> StudioCreated {
-        let sid = server.newSession(isUpload: true, clip: clip, name: nil, bytes: clip.bytes, at: clock.now())
-        return StudioCreated(id: sid, pageURL: nil)
+        try await openStudio(item: id, queue: false)
+    }
+
+    public func openStudio(item id: String, queue: Bool) async throws -> StudioCreated {
+        let now = clock.now()
+        try throwIfBusy(queue: queue, render: false, at: now)
+        server.recordLineCall("POST library/items/\(id)/studio queue=\(queue)")
+        let sid = server.newSession(isUpload: true, clip: clip, name: nil, bytes: clip.bytes, at: now)
+        guard lineMode.hasLine else { return StudioCreated(id: sid, pageURL: nil) }
+        let placed = server.withLine(at: now) {
+            $0.enqueue(
+                .init(kind: .save, sid: sid, job: nil, focused: false, duration: PreviewData.uploadReadSeconds * timeScale,
+                      mine: true, origin: nil, keyName: "iphone", link: nil, failure: nil),
+                at: now)
+        }
+        return StudioCreated(id: sid, pageURL: nil, queued: queue ? placed.queued : false, queueAhead: queue ? placed.ahead : nil)
     }
 
     public func library(cursor: String?, limit: Int) async throws -> LibraryPage {
@@ -466,6 +651,46 @@ public struct PreviewClient: CobaltClient {
     public func relayLiveState(run: UUID, _ state: LiveContentState) async throws {}
     public func endLiveRun(_ run: UUID) async throws {}
     public func liveSelftest() async throws -> LiveSelftest { LiveSelftest(configured: false) }
+
+    // The server's line (17.7, 17.4, 17.8)
+    public func cancelQueued(session id: String) async throws -> QueueCancel {
+        try await cancelQueued(sid: id, job: nil)
+    }
+
+    public func cancelQueued(session id: String, job: String) async throws -> QueueCancel {
+        try await cancelQueued(sid: id, job: job)
+    }
+
+    private func cancelQueued(sid: String, job: String?) async throws -> QueueCancel {
+        guard lineMode.hasLine else { throw PipelineFailure.unsupported }
+        let now = clock.now()
+        server.recordLineCall(job.map { "DELETE line \(sid)/\($0)" } ?? "DELETE line \(sid)")
+        if server.cancelFails { throw CobaltError.network(.notConnectedToInternet) }
+        let answer = server.withLine(at: now) { $0.cancel(sid: sid, job: job) }
+        switch answer {
+        case .none: throw CobaltError.api(code: "error.studio.not_found", httpStatus: 404)
+        case .some(true): server.markCancelled(job ?? sid); return .cancelled
+        case .some(false): return .started
+        }
+    }
+
+    public func line() async throws -> ServerLineSnapshot {
+        guard lineMode.hasLine else { throw PipelineFailure.unsupported }
+        server.recordLineCall("GET line")
+        if server.lineFails { throw CobaltError.network(.timedOut) }
+        return server.withLine(at: clock.now()) { $0.snapshot(now: clock.now()) }
+    }
+
+    public func setLineNotify() async throws -> Int {
+        guard lineMode.hasLine else { return 0 }
+        server.recordLineCall("PUT line/notify")
+        return server.withLine(at: clock.now()) { $0.watching }
+    }
+
+    public func cancelLineNotify() async throws {
+        guard lineMode.hasLine else { return }
+        server.recordLineCall("DELETE line/notify")
+    }
 
     // Notify bridge: previews remember the opt-in so tests can see what the app asked for.
     public func setNotify(session id: String, _ optIn: NotifyOptIn) async throws { server.setNotify(id, optIn) }

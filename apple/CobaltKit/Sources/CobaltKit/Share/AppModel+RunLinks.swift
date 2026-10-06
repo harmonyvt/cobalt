@@ -87,21 +87,36 @@ extension AppModel {
             open(URL(string: "cobalt-apple://job/\(job.id.uuidString)")!)
             return true
         }
-        guard let sid = link.session, isQuietForRunLink else { return true }
+        guard let sid = link.session else { return true }
         if let id = link.run, ctx.background.owns(job: id) { return true }
         let job = SharedJob(
             id: link.run ?? UUID(), origin: .shareExtension, link: nil, sessionID: sid, media: nil, trim: nil,
             stage: .saving, wantsTrim: link.trim, pickedUp: false, updatedAt: ctx.clock.now())
         Telemetry.log(.info, .share, "run link followed by session", data: ["trim": .bool(link.trim)])
+        guard isQuietForRunLink else {
+            // The owner is in the middle of something: the run joins the tray (3.3) when there is one, the home screen
+            // is left alone either way.
+            if queue.trayIsShown { queue.add([.shared(job)], via: .share) }
+            return true
+        }
         pipeline.resume(job)
         return true
     }
 
-    /// The home pipeline is on this run now.
+    /// A job of the queue (or the home pipeline) is on this run: nothing to start. A job the owner is not looking at is
+    /// focused when the screen is quiet (3.3).
     private func isFollowing(_ link: RunLink) -> Bool {
-        if case .idle = pipeline.state { return false }
-        if let id = link.run, id == pipeline.liveRunID { return true }
-        if let sid = link.session, sid == pipeline.sessionID { return true }
+        func matches(_ p: Pipeline) -> Bool {
+            if case .idle = p.state { return false }
+            if let id = link.run, id == p.liveRunID { return true }
+            if let sid = link.session, sid == p.sessionID { return true }
+            return false
+        }
+        if matches(pipeline) { return true }
+        if let job = queue.jobs.first(where: { matches($0.pipeline) }) {
+            if isQuietForRunLink, queue.focusedID == nil || queue.focused?.isLive == false { queue.focus(job.id, why: "handoff") }
+            return true
+        }
         return false
     }
 

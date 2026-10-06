@@ -15,6 +15,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
         public var maxUploadBytes: Int64       // 100_000_000
         public var maxSourceBytes: Int64       // 209_715_200
         public var sessionTTL: TimeInterval    // 604_800
+        /// `limits.line_max` (APP-API-CONTRACT 17.9): entries the server's line holds, all keys together.
+        public var lineMax: Int = 50
+        /// `limits.line_wait_ms`, in seconds: how long a queued job may wait before the server ends it.
+        public var lineWait: TimeInterval = 1_800
 
         public static let fork = Limits(
             maxWebpSeconds: 10, minWebpSeconds: 0.5, webpWidths: [320, 480], renderFPS: 15,
@@ -68,6 +72,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// 16, CONTRACT-VISIBILITY.md). One file per rendition, public or private. False when absent: the app then
     /// keeps its "public share" flow and asks for the old library shape.
     public var visibility: Bool = false
+    /// `features.line` (APP-API-CONTRACT 17.9): the server holds one line for every client. A save or render is sent
+    /// with `queue: true` and starts when its turn comes, polled or not. False when absent: the app then keeps its
+    /// own line on the device (`LineMode.device`) and sends no `queue`.
+    public var line: Bool = false
 
     public static let unknown = Capabilities(
         kind: .unreachable, cobaltVersion: nil, studio: false, upload: false, library: false,

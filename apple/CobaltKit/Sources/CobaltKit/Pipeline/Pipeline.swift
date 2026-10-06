@@ -60,7 +60,17 @@ public final class Pipeline: Identifiable {
     public internal(set) var hosting: ActionStatus = .idle    // "host original" / "host as-is"
     public internal(set) var hostedURL: URL?
     public internal(set) var sessionID: String? {
-        didSet { if sessionID != oldValue { ctx.live?.sessionChanged(self) } }
+        didSet {
+            guard sessionID != oldValue else { return }
+            ctx.live?.sessionChanged(self)
+            jobEvent?(self, .session)
+        }
+    }
+    /// Why this run is waiting (CONTRACT-PARALLEL.md 3.2): its place in the server's line or in the device's, or "the
+    /// server is busy with something not in this line". Nil when it is not waiting. The state stays `.fetching` (a
+    /// save) or `.rendering(.working)` (a webp) meanwhile; this says why.
+    public internal(set) var line: LinePosition? {
+        didSet { if line != oldValue { jobEvent?(self, .line) } }
     }
     public internal(set) var result: WebpResult?
     public internal(set) var stored: StoredVideo?             // the local original, once downloaded
@@ -152,6 +162,25 @@ public final class Pipeline: Identifiable {
     @ObservationIgnored var detachedRendering = false
     @ObservationIgnored var detachedSettled = false
 
+    // The job queue (Jobs/JobQueue.swift). A pipeline outside a queue (the share extension's, a hidden detached run)
+    // never sets any of these.
+    /// The queue's job id for this pipeline (stable across the runs it carries); the line's key.
+    @ObservationIgnored var jobKey: UUID?
+    /// What the caller of `JobQueue.add` asked: the title, the visibility.
+    @ObservationIgnored var jobOptions = JobOptions()
+    /// Created by `JobQueue.add`: takes turns in the device line when the server has none, and waits out a busy server
+    /// (10 minutes) instead of failing at 60 s. The pipeline the owner started by hand keeps today's flow.
+    @ObservationIgnored var takesPartInDeviceLine = false
+    /// A batch, a drop of several links, a Shortcut: sent straight to the server's line, no "checking the link" first.
+    @ObservationIgnored var skipsLinkCheck = false
+    /// The queue's ear: state, session, line and acceptance changes.
+    @ObservationIgnored var jobEvent: (@MainActor (Pipeline, PipelineJobEvent) -> Void)?
+    /// The server has this run (`201`/`202`), for `JobQueue.accepted`.
+    @ObservationIgnored var acceptance: JobAcceptance?
+
+    /// The key this run goes by in the line.
+    var lineKey: UUID { jobKey ?? liveRunID }
+
     init(context: PipelineContext) {
         self.id = UUID()
         self.ctx = context
@@ -226,6 +255,7 @@ public final class Pipeline: Identifiable {
         default: break
         }
         ctx.live?.stateChanged(self)
+        jobEvent?(self, .state)
     }
 
     /// The run on screen finished and the owner went on with it (back to the trim, a retry): the
@@ -318,7 +348,8 @@ public final class Pipeline: Identifiable {
         settleJobRecords()
         runID = UUID()
         renderStart = nil
-        jobRecordID = UUID()
+        // A run a queue job asked for (`nextLiveRunID`) has one id everywhere: its record, its Live Activity and the job.
+        jobRecordID = nextLiveRunID ?? UUID()
         liveRunID = nextLiveRunID ?? jobRecordID
         nextLiveRunID = nil
         origin = nil
@@ -338,6 +369,8 @@ public final class Pipeline: Identifiable {
         hosting = .idle
         hostedURL = nil
         sessionID = nil
+        line = nil
+        acceptance = nil
         result = nil
         stored = nil
         uploadedItemID = nil
@@ -399,8 +432,11 @@ public final class Pipeline: Identifiable {
             return
         }
         begin(input: .link(info))
+        let skipCheck = skipsLinkCheck
+        skipsLinkCheck = false                                    // one-shot: a later run on this pipeline checks the link
         setState(.fetching(since: runStart, waking: false))
-        launch { try await $0.runLink(info) }
+        if let title = jobOptions.title { applyTitle(title) }     // sent with the create as well (server line)
+        launch { try await $0.runLink(info, skipCheck: skipCheck) }
     }
 
     /// The file the owner picked in the Photos picker came from the library asset `localIdentifier`
@@ -436,6 +472,7 @@ public final class Pipeline: Identifiable {
         default: break
         }
         setState(.uploading(TransferProgress(bytes: 0, total: file.bytes)))
+        if let title = jobOptions.title { applyTitle(title) }
         launch { try await $0.runFile(file) }
     }
 

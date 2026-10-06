@@ -45,13 +45,21 @@ public final class AppModel {
     public let offlineDownloads: OfflineDownloads
     public internal(set) var capabilities: Capabilities
     public internal(set) var isCheckingServer: Bool = false
-    public internal(set) var pipeline: Pipeline           // the home pipeline
+    /// Every run of the app (CONTRACT-PARALLEL.md): the jobs, which one is focused, the tray's order, the lines.
+    public let queue: JobQueue
+    /// What the focus screens read: the focused job's pipeline, or an idle one when nothing is focused. A run started
+    /// on it by hand becomes the focused job at once.
+    public var pipeline: Pipeline { queue.focused?.pipeline ?? queue.idlePipeline }
     public var selectedTab: AppTab = .save
 
     /// A stored media a run link asks the home screen to open (CONTRACT-SHARE-QUICK.md R3): set by
     /// `openRunLink` when the run it names has settled and its original is in the store; the home screen
     /// opens that media's detail and sets this back to nil.
     public var requestedMediaID: String?
+
+    /// `cobalt-apple://jobs` (the Hark summary for a batch, APP-API-CONTRACT 17.8) asks the save tab to show the tray
+    /// (iPhone: the pill's cards; the Mac's tray is already on screen). The view that shows it sets this back to false.
+    public var requestedJobs = false
 
     /// Live Activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
     @ObservationIgnored var liveManager: LiveActivityManager?
@@ -69,7 +77,7 @@ public final class AppModel {
 
     init(
         context: PipelineContext, library: LibraryModel, photosSync: PhotosSync? = nil, folderSync: FolderSync? = nil,
-        offlineDownloads: OfflineDownloads? = nil,
+        offlineDownloads: OfflineDownloads? = nil, ledger: JobLedger? = nil,
         makeClient: @escaping @MainActor (Settings) -> any CobaltClient
     ) {
         let sync = photosSync ?? PhotosSync.preview(.init(access: .notAsked, enabled: false))
@@ -94,7 +102,12 @@ public final class AppModel {
         self.jobs = context.jobs
         self.library = library
         self.capabilities = context.capabilities
-        self.pipeline = Pipeline(context: context)
+        // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
+        self.queue = JobQueue(
+            context: context,
+            ledger: ledger ?? JobLedger(
+                fileURL: context.store.root.deletingLastPathComponent().appendingPathComponent("job-ledger.json"),
+                now: { [clock = context.clock] in clock.now() }))
         self.makeClient = makeClient
         context.keyRejected = { [weak self] in self?.markKeyInvalid() }
         context.capabilitiesChanged = { [weak self] caps in self?.apply(caps) }
@@ -143,7 +156,7 @@ public final class AppModel {
             clock: ctx.clock, client: { [unowned ctx] in ctx.client })
         let model = AppModel(
             context: ctx, library: LibraryModel(context: ctx), photosSync: sync, folderSync: folder,
-            offlineDownloads: offline, makeClient: factory)
+            offlineDownloads: offline, ledger: JobLedger.shared(), makeClient: factory)
         model.telemetry = TelemetryService.live(settings: settings, capabilities: { [unowned model] in model.capabilities })
         fetcher.isActive = { [unowned ctx] in ctx.background.activity.isActive }
         fetcher.serverHoldsRequests = { [unowned model] in model.capabilities.sourceWait }
@@ -235,7 +248,7 @@ public final class AppModel {
 
     /// New server: a new client, nothing known, nothing cached.
     func serverChanged() {
-        pipeline.reset()                         // first: its Live Activity ends against the server it belonged to
+        queue.serverChanged()                    // first: every job's Live Activity ends against the server it belonged to
         ctx.background.cancelAll()               // detached runs belonged to the old server too
         ctx.client = makeClient(settings)
         apply(.unknown)
@@ -253,9 +266,13 @@ public final class AppModel {
             if capabilities.library || capabilities.kind == .unreachable { selectedTab = .library }
             return
         }
+        if url.host(percentEncoded: false)?.lowercased() == "jobs" {
+            requestedJobs = true                        // the Hark summary (APP-API-CONTRACT 17.8): show the tray
+            return
+        }
         guard url.host(percentEncoded: false)?.lowercased() == "job",
               let id = UUID(uuidString: url.lastPathComponent),
-              !ctx.background.owns(job: id),            // a detached run of this process is still carrying it
+              !ctx.background.owns(job: id),            // a detached or queued run of this process is still carrying it
               let job = jobs.all().first(where: { $0.id == id })
         else { return }
         // Mid-run (saving, reading, rendering, a picker, a trim in progress) the home pipeline is
@@ -265,7 +282,12 @@ public final class AppModel {
         // here, because opening the job link is the owner asking for exactly that; so is a clip
         // sitting at the ready card when the job is a "trim in cobalt" one (that clip stays in the
         // library and the orbit).
-        guard isPipelineFree || (job.wantsTrim && pipelineIsReady) else { return }
+        guard isPipelineFree || (job.wantsTrim && pipelineIsReady) else {
+            // busy home: with a tray on screen the run joins it instead of being ignored (CONTRACT-PARALLEL.md 3.3);
+            // without one it stays in the store until the home screen is quiet
+            if queue.trayIsShown { queue.add([.shared(job)], via: .share) }
+            return
+        }
         take(job)
     }
 
@@ -281,7 +303,10 @@ public final class AppModel {
         await store.reload()
         store.startWatching()                      // the visible folder, while cobalt is in front (no-op without one)
         Telemetry.log(.info, .store, "store reloaded", data: ["media": .int(store.media.count), "videos": .int(store.videos.count)])
+        queue.appForegrounded()                    // the line's one summary opt-in is taken back: the owner is looking
         takePendingJobs()
+        await queue.restoreLedger()                // links the server never answered for, from last time (once per launch)
+        await queue.adoptRecentShares()            // share-sheet saves still running or queued on the server
         if capabilities.titles { await ctx.titles.flush(client: ctx.client) }      // titles that failed to send (decision 4)
         // Then what the share sheet handed to the background download, then the photos album
         // (CONTRACT-SYNC.md): in this order, so a clip that just landed goes into Photos at once.
@@ -304,14 +329,30 @@ public final class AppModel {
             take(job)
             return
         }
-        guard isPipelineFree else { return }
-        // The app itself was closed (or killed) mid-save or mid-render: the server carried on, so
-        // follow it again. Only from a quiet home screen, never over something the owner is doing.
-        if case .idle = pipeline.state,
-           let job = jobs.nextInFlightAppJob(now: ctx.clock.now(), excluding: ctx.background.jobIDs) {
-            selectedTab = .save
-            take(job)
+        // The app itself was closed (or killed) mid-save or mid-render: the server carried on, so follow every one of
+        // them again, newest first. The newest takes the focus when the screen is quiet (today's pickup); the rest go
+        // alongside. Jobs this process already runs are left alone.
+        let window = SharedJobStore.inFlightWindow + (capabilities.line ? capabilities.limits.lineWait : 0)
+        let owned = ctx.background.jobIDs
+        let now = ctx.clock.now()
+        let inFlight = jobs.all()
+            .filter { job in
+                guard job.origin == .app, !job.pickedUp, !owned.contains(job.id), now.timeIntervalSince(job.updatedAt) < window
+                else { return false }
+                switch job.stage {
+                case .saving, .rendering: return true
+                default: return false
+                }
+            }
+            .sorted { $0.updatedAt > $1.updatedAt }
+        guard !inFlight.isEmpty else { return }
+        let before = queue.focusedID
+        if queue.trayIsShown {
+            for job in inFlight { queue.add([.shared(job)], via: .relaunch) }
+        } else if isPipelineFree, case .idle = pipeline.state, let newest = inFlight.first {
+            queue.add([.shared(newest)], via: .relaunch)       // no tray yet: today's pickup, one run into the focus
         }
+        if queue.focusedID != before { selectedTab = .save }
     }
 
     /// Nothing on the home screen worth keeping: idle, or a failure (which says nothing the new job

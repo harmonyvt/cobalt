@@ -29,4 +29,22 @@ public struct LinkInfo: Sendable, Equatable {
         guard let url = URL(string: found), LinkInfo(url) != nil else { return nil }
         return url
     }
+
+    /// `firstLink`'s rule for every link in `text`, in order, repeats folded (the same URL once), at most `limit`
+    /// (CONTRACT-PARALLEL.md section 4.2). A link glued to the text before it by a newline is still found; one glued by
+    /// nothing at all is read up to the next whitespace, like the API reads it.
+    public static func allLinks(in text: String, limit: Int = 20) -> [URL] {
+        guard limit > 0 else { return [] }
+        var found: [URL] = []
+        var seen = Set<String>()
+        var rest = text[...]
+        while found.count < limit, let range = rest.range(of: "https?://[^\\s<>\"'`]+", options: [.regularExpression, .caseInsensitive]) {
+            var candidate = String(rest[range])
+            rest = rest[range.upperBound...]
+            while let last = candidate.last, "),.;:!?]}".contains(last) { candidate.removeLast() }
+            guard let url = URL(string: candidate), LinkInfo(url) != nil, seen.insert(url.absoluteString).inserted else { continue }
+            found.append(url)
+        }
+        return found
+    }
 }

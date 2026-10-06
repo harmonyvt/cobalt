@@ -63,21 +63,72 @@ extension Pipeline {
 
     /// What a new save asks for: `public: true` when the owner keeps "make new saves public" on and the server takes
     /// the field (`features.public_default`), else nothing at all (CONTRACT-VISIBILITY decision 3).
-    var publicFlag: Bool? { ctx.capabilities.publicDefault && ctx.settings.newSavesPublic ? true : nil }
+    var publicFlag: Bool? {
+        guard ctx.capabilities.publicDefault else { return nil }
+        return (jobOptions.makePublic ?? ctx.settings.newSavesPublic) ? true : nil
+    }
 
-    /// `POST /studio` (or the library's reopen) with the 3 s / 60 s busy retry.
+    // MARK: - The line (CONTRACT-PARALLEL.md 3.1, 3.2)
+
+    /// The server holds the line (`features.line`): the create and the render carry `queue: true`, never wait here.
+    var usesServerLine: Bool { ctx.line != nil && ctx.capabilities.line }
+    /// A job `JobQueue.add` made, on a server with no line: it takes turns on this device.
+    var usesDeviceLine: Bool { ctx.line != nil && !ctx.capabilities.line && takesPartInDeviceLine }
+
+    /// `queue_ahead` from an answer (nil: it started).
+    func observeLine(queueAhead: Int?) { ctx.line?.observe(lineKey, queueAhead: queueAhead) }
+
+    /// This run no longer holds or waits for the server's one slot.
+    func releaseLine() {
+        ctx.jobQueue?.releaseLines(lineKey)                       // both: the server may have changed its mind mid-run
+        if line != nil { line = nil }
+    }
+
+    /// The server has this run: `JobQueue.accepted` and the ledger hear it.
+    func noteAccepted(session: String, postKey: String, queued: Bool, ahead: Int?) {
+        guard acceptance == nil else { return }
+        let a = JobAcceptance.onServer(session: session, postKey: postKey, queued: queued, ahead: ahead)
+        acceptance = a
+        jobEvent?(self, .accepted(a))
+    }
+
+    /// `POST /studio` (or the library's reopen).
+    ///
+    /// With `features.line` the create carries `queue: true`: the server answers at once, started or queued with its
+    /// place, and never `429 busy` (a full line is `error.studio.line_full`). Without it, a job `JobQueue.add` made
+    /// first takes its turn in the device line and waits out a busy server for 10 minutes; any other run keeps the
+    /// 3 s / 60 s busy retry. The device line's slot stays held until the caller releases it (the save is done).
     func openStudioRetrying(_ client: any CobaltClient, link: URL?, item: String?) async throws -> StudioCreated {
-        let deadline = ctx.clock.now().addingTimeInterval(60)
-        let makePublic = publicFlag                              // read here: the closure below is not on the main actor
+        let makePublic = publicFlag                              // read here: the closures below are not on the main actor
+        let title = jobOptions.title
+        let key = lineKey
+        if let line = ctx.line, ctx.capabilities.line {
+            try await line.enter(key, kind: .save, priority: .batch)          // returns at once on a server line
+            let created = try await ctx.gates.create.withSlot {               // one create at a time: order = paste order
+                try await self.watched {
+                    if let item { return try await client.openStudio(item: item, queue: true) }
+                    guard let link else { throw PipelineFailure.noLink }
+                    return try await client.createStudio(link: link, public: makePublic, queue: true, title: title)
+                }
+            }
+            line.observe(key, queueAhead: created.queued ? max(1, created.queueAhead ?? 1) : nil)
+            return created
+        }
+        let managed = usesDeviceLine
+        if managed, let line = ctx.line { try await line.enter(key, kind: .save, priority: .batch) }
+        let deadline = ctx.clock.now().addingTimeInterval(managed ? 600 : 60)
         while true {
             do {
-                return try await watched {
+                let created = try await watched {
                     if let item { return try await client.openStudio(item: item) }
                     guard let link else { throw PipelineFailure.noLink }
                     return try await client.createStudio(link: link, public: makePublic)
                 }
+                if managed { ctx.line?.clearBusyElsewhere() }
+                return created
             } catch CobaltError.api(let code, _) where code == "error.studio.busy" {
                 if ctx.clock.now().addingTimeInterval(3) > deadline { throw PipelineFailure.serverBusy }
+                if managed { ctx.line?.noteBusyElsewhere(label: nil) }
                 try await ctx.clock.sleep(seconds: 3)
             }
         }
@@ -146,6 +197,8 @@ extension Pipeline {
     /// own copy; whatever frames arrived fill the gaps between them. Only when every rung fails is
     /// `framesFailed` set.
     func runFrames(_ input: FrameInput, duration: Double?) async throws {
+        try await ctx.gates.frames.acquire()                      // at most 2 runs read frames at once
+        defer { ctx.gates.frames.release() }
         var isRemote = false
         if case .remote = input { isRemote = true }
         let edge = ctx.frameEdge
@@ -361,11 +414,20 @@ extension Pipeline {
 
     // MARK: - Pasted link
 
-    func runLink(_ info: LinkInfo) async throws {
+    func runLink(_ info: LinkInfo, skipCheck: Bool = false) async throws {
         let caps = try await knownCapabilities()
         let client = ctx.client
         let link = info.url
-        let resolved = try await watched { try await client.resolve(link) }
+        // A batch, a drop of several links and a Shortcut go straight into the server's line: the check is a round
+        // trip the app must be alive for, and the server resolves the link itself (a multi-item post gives its first
+        // video). Only with a server line; without one the check comes first, as for any other link.
+        if skipCheck, caps.studio, usesServerLine {
+            try await forkSave(client, info)
+            return
+        }
+        let resolved = try await ctx.gates.check.withSlot {         // at most 3 link checks at once
+            try await self.watched { try await client.resolve(link) }
+        }
         try Task.checkCancellation()
         switch resolved {
         case .localProcessing:
@@ -384,10 +446,16 @@ extension Pipeline {
 
     /// Fork / legacy fork: `POST /studio`, poll until saved, read the frames from the source.
     func forkSave(_ client: any CobaltClient, _ info: LinkInfo) async throws {
-        let created = try await openStudioRetrying(client, link: info.url, item: nil)
+        let created: StudioCreated
+        do { created = try await openStudioRetrying(client, link: info.url, item: nil) }
+        catch { releaseLine(); throw error }
         sessionID = created.id
+        noteAccepted(session: created.id, postKey: created.id, queued: created.queued, ahead: created.queueAhead)
         recordJob(.saving)
-        let s = try await pollSaving(client, id: created.id)
+        let s: StudioSession
+        do { s = try await pollSaving(client, id: created.id) }
+        catch { releaseLine(); throw error }
+        releaseLine()                                             // the server is free for the next save
         let m = mediaInfo(s, fallbackName: info.ref)
         media = m
         keepOriginalInBackground(client, session: created.id, media: m)
@@ -408,7 +476,10 @@ extension Pipeline {
             case .error:
                 throw mapFailure(code: s.errorCode ?? "error.studio.unknown", during: .saving, limits: ctx.capabilities.limits)
             case .saving:
+                observeLine(queueAhead: s.step == .queued ? max(1, s.queueAhead ?? 1) : nil)
                 switch s.step {
+                case .queued:
+                    setState(.fetching(since: runStart, waking: false))      // waiting: `line` says where
                 case .fetching:
                     wakingSeen = wakingSeen || (s.waking ?? false)
                     setState(.fetching(since: runStart, waking: s.waking ?? wakingSeen))
@@ -433,7 +504,9 @@ extension Pipeline {
             case .ready: return s
             case .error:
                 throw mapFailure(code: s.errorCode ?? "error.studio.unknown", during: .saving, limits: ctx.capabilities.limits)
-            case .saving: continue
+            case .saving:
+                observeLine(queueAhead: s.step == .queued ? max(1, s.queueAhead ?? 1) : nil)
+                continue
             }
         }
     }
@@ -540,6 +613,7 @@ extension Pipeline {
         }
         var local = file
         local.url = copy
+        jobEvent?(self, .inboxCopy(copy, name: file.name, bytes: file.bytes, contentType: file.contentType))
         try await runUpload(local)
     }
 
@@ -554,9 +628,16 @@ extension Pipeline {
         setState(.uploading(TransferProgress(bytes: 0, total: file.bytes)))
         let relay = MainActorRelay<TransferProgress> { [weak self] p in self?.uploadProgress(p, token: token) }
         Telemetry.log(.info, .upload, "upload start", data: ["bytes": .bytes(file.bytes), "type": .string(file.contentType)])
-        let uploaded = try await client.upload(
-            file: file.url, name: file.name, contentType: file.contentType, public: publicFlag
-        ) { relay.push($0) }
+        let makePublic = publicFlag
+        let serverLine = usesServerLine
+        let title = serverLine ? jobOptions.title : nil          // an older server stores the title with `PATCH` afterwards
+        // At most 2 uploads at once; the third waits here, in `.uploading` with nothing sent.
+        let uploaded = try await ctx.gates.upload.withSlot {
+            try await client.upload(
+                file: file.url, name: file.name, contentType: file.contentType, public: makePublic,
+                queue: serverLine, title: title
+            ) { relay.push($0) }
+        }
         Telemetry.log(.info, .upload, "upload finished", data: ["bytes": .bytes(file.bytes), "session": .bool(uploaded.sessionID != nil), "studioError": .string(uploaded.studioErrorCode ?? "")])
         try Task.checkCancellation()
         guard token == runToken else { throw CancellationError() }
@@ -574,17 +655,32 @@ extension Pipeline {
                 name: file.name, duration: nil, width: uploaded.item.width ?? probed?.width,
                 height: uploaded.item.height ?? probed?.height, bytes: file.bytes, isImage: true)
             media = m
+            if let item = uploadedItemID { noteAccepted(session: item, postKey: item, queued: false, ahead: nil) }
             setState(.image(m))
             return
         }
         var sid = uploaded.sessionID
-        if sid == nil {
+        var created: StudioCreated?
+        if let adopted = sid {
+            // The adopt started (or queued) this session: from here the server has the upload.
+            if serverLine {
+                observeLine(queueAhead: uploaded.queued ? max(1, uploaded.queueAhead ?? 1) : nil)
+            } else if usesDeviceLine {
+                ctx.line?.noteOnServer(lineKey)                          // the adopt's probe holds the server's one slot
+            }
+            noteAccepted(session: adopted, postKey: uploadedItemID ?? adopted, queued: uploaded.queued, ahead: uploaded.queueAhead)
+        } else {
             guard let item = uploadedItemID else {
                 throw mapFailure(code: uploaded.studioErrorCode ?? "error.api.generic", during: .saving, limits: ctx.capabilities.limits)
             }
-            sid = try await openStudioRetrying(client, link: nil, item: item).id
+            do { created = try await openStudioRetrying(client, link: nil, item: item) }
+            catch { releaseLine(); throw error }
+            sid = created?.id
         }
-        guard let sid else { throw PipelineFailure.unsupported }
+        guard let sid else { releaseLine(); throw PipelineFailure.unsupported }
+        if let created {
+            noteAccepted(session: sid, postKey: uploadedItemID ?? sid, queued: created.queued, ahead: created.queueAhead)
+        }
         sessionID = sid
         media = MediaInfo(name: file.name, duration: nil, width: nil, height: nil, bytes: file.bytes, isImage: false)
         setState(.reading(developed: 0, of: Pipeline.frameCount))
@@ -593,8 +689,15 @@ extension Pipeline {
         // child (`async let`): cancelling this run cancels it, and leaving this scope ends it, so it
         // can never outlive the run and write into the next one.
         async let poll = self.waitReady(client, id: sid)
-        try await runFrames(.local(file.url), duration: nil)
-        let s = try await poll
+        let s: StudioSession
+        do {
+            try await runFrames(.local(file.url), duration: nil)
+            s = try await poll
+        } catch {
+            releaseLine()
+            throw error
+        }
+        releaseLine()                                                   // the server finished reading the upload
         try Task.checkCancellation()
         guard token == runToken else { throw CancellationError() }
         media = MediaInfo(
@@ -714,9 +817,11 @@ extension Pipeline {
         let token = runToken
         renderStart = since
         setState(.rendering(.working(since: since)))
+        defer { releaseLine() }                                   // the device line's slot (a server line holds nothing here)
         let jobID: String
         if let existingJob {
             jobID = existingJob
+            if usesDeviceLine { ctx.line?.noteOnServer(lineKey) }         // a resumed render already holds the server
         } else {
             // The POST is its own task so `detach()` can hand it over while it is on the wire (a
             // second POST would start a second render); a run that is cancelled cancels it.
@@ -727,10 +832,18 @@ extension Pipeline {
                 func round3(_ x: Double) -> Double { (x * 1000).rounded() / 1000 }
                 // Only a server that says `features.crop` is sent one (it would ignore it and render the whole frame).
                 let sentCrop = ctx.capabilities.crop ? crop.flatMap { $0.isFull ? nil : $0 } : nil
+                // A server line: wait there, ahead of every waiting save (the owner is looking at this planet).
+                // A device line: take the turn first; the focused webp goes ahead of saves that have not started.
+                let serverLine = usesServerLine
+                if serverLine || usesDeviceLine, let line = ctx.line {
+                    try await line.enter(lineKey, kind: .render, priority: .focused)
+                }
                 let request = RenderRequest(
                     start: round3(trim.start), length: round3(min(trim.length, maxClipSeconds)),
-                    width: ctx.settings.webpWidth, quality: ctx.settings.webpQuality, crop: sentCrop)
-                post = Task { try await client.render(session: sid, request) }
+                    width: ctx.settings.webpWidth, quality: ctx.settings.webpQuality, crop: sentCrop,
+                    queue: serverLine ? true : nil, priority: serverLine ? "focused" : nil)
+                let waitsOutBusy = usesDeviceLine
+                post = Task { @MainActor in try await self.sendRender(client, session: sid, request, waitsOutBusy: waitsOutBusy) }
                 renderRequest = post
                 lastRenderRequest = request
             }
@@ -750,8 +863,11 @@ extension Pipeline {
             try Task.checkCancellation()
             guard token == runToken else { throw CancellationError() }
             switch status {
-            case .pending(let phase, let done, let total):
+            case .pending(let phase, let done, let total, let ahead):
+                observeLine(queueAhead: phase == .queued ? max(1, ahead ?? 1) : nil)
                 switch phase {
+                case .queued:
+                    setState(.rendering(.working(since: since)))             // waiting: `line` says where
                 case .decode:
                     if let done, let total { setState(.rendering(.decoding(done: done, total: total))) }
                     else { setState(.rendering(.working(since: since))) }
@@ -767,6 +883,23 @@ extension Pipeline {
                 return
             case .failed(let code):
                 throw mapFailure(code: code, during: .rendering, limits: ctx.capabilities.limits)
+            }
+        }
+    }
+
+    /// `POST /render`. A job `JobQueue.add` made on a server with no line waits out `error.webp.busy` (every 3 s, up to 10
+    /// minutes, then `renderBusy`) instead of failing at once: the device line's other jobs are the usual cause.
+    func sendRender(_ client: any CobaltClient, session sid: String, _ request: RenderRequest, waitsOutBusy: Bool) async throws -> String {
+        let deadline = ctx.clock.now().addingTimeInterval(600)
+        while true {
+            do {
+                let job = try await client.render(session: sid, request)
+                if waitsOutBusy { ctx.line?.clearBusyElsewhere() }
+                return job
+            } catch CobaltError.api(let code, _) where waitsOutBusy && code == "error.webp.busy" {
+                if ctx.clock.now().addingTimeInterval(3) > deadline { throw CobaltError.api(code: code, httpStatus: 429) }
+                ctx.line?.noteBusyElsewhere(label: nil)
+                try await ctx.clock.sleep(seconds: 3)
             }
         }
     }
@@ -903,6 +1036,7 @@ extension Pipeline {
         opensOnTrim = job.wantsTrim             // "trim in cobalt": the focus card opens on the trim timeline
         liveRunID = job.id                      // the share sheet's activity (or this app's own, after a relaunch) carries on
         sessionID = job.sessionID
+        if let sid = job.sessionID { noteAccepted(session: sid, postKey: sid, queued: false, ahead: nil) }
         media = job.media
         if let t = job.trim { trim = t }
         if job.origin == .shareExtension {
@@ -937,9 +1071,14 @@ extension Pipeline {
         case .saving:
             if let sid = job.sessionID {
                 setState(.saving(bytes: nil, total: nil, since: runStart))
+                if usesDeviceLine { ctx.line?.noteOnServer(lineKey) }       // it already holds the server's one slot
+                noteAccepted(session: sid, postKey: sid, queued: false, ahead: nil)
                 launch { p in
                     let client = p.ctx.client
-                    let s = try await p.pollSaving(client, id: sid)
+                    let s: StudioSession
+                    do { s = try await p.pollSaving(client, id: sid) }
+                    catch { p.releaseLine(); throw error }
+                    p.releaseLine()
                     let m = p.mediaInfo(s, fallbackName: linkInfo?.ref ?? sid)
                     // The sheet that started this save closed before it finished: the original still
                     // belongs on this phone (CONTRACT-SYNC.md, the second gap).
@@ -1021,7 +1160,17 @@ extension Pipeline {
             if let open {
                 sid = open
             } else if let item = privateCopy {
-                sid = try await p.openStudioRetrying(p.ctx.client, link: nil, item: item.id).id
+                let created: StudioCreated
+                do { created = try await p.openStudioRetrying(p.ctx.client, link: nil, item: item.id) }
+                catch { p.releaseLine(); throw error }
+                sid = created.id
+                if created.queued {
+                    // the server's line has it: wait for its turn before reading anything
+                    p.sessionID = sid
+                    do { _ = try await p.waitReady(p.ctx.client, id: sid) }
+                    catch { p.releaseLine(); throw error }
+                }
+                p.releaseLine()
             } else {
                 throw PipelineFailure.expired
             }

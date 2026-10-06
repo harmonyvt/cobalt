@@ -29,8 +29,25 @@ final class PipelineContext {
     let background = BackgroundRuns()
 
     /// Mirrors the pipeline's run into a Live Activity (the app) or a relay (the share sheet);
-    /// nil in previews and tests unless a fake is injected (CONTRACT-LIVE.md 2.5).
-    var live: (any LiveSink)?
+    /// nil in previews and tests unless a fake is injected (CONTRACT-LIVE.md 2.5). Pipelines talk to it through
+    /// `liveRouter`, which keeps the pipelines of unfocused batch jobs from ending the focused run's activity
+    /// (Jobs/LiveRouter.swift).
+    var live: (any LiveSink)? {
+        get { liveRouter.sink == nil ? nil : liveRouter }
+        set { liveRouter.sink = newValue }
+    }
+    let liveRouter = LiveRouter()
+
+    /// The app's job queue (nil in the share extension): the device line and the server line live there.
+    weak var jobQueue: JobQueue?
+    /// The line a pipeline waits in: the server's mirror when the server has `features.line`, else the device's.
+    /// Nil in the share extension, which never queues.
+    var line: (any JobLine)? { jobQueue?.activeLine }
+    /// Concurrency caps shared by every pipeline of the app (3 link checks, 2 uploads, 2 frame reads).
+    let gates = JobGates()
+    /// What `GET /studio/recent` says (this key's share-sheet saves), for the relaunch pickup; the app wires its
+    /// client's call, previews and tests wire a fake. Nil: nothing to adopt.
+    var recentShares: (@MainActor () async -> [StudioSession])?
 
     /// The background download of originals (CONTRACT-SYNC.md decision 6): the app's, or the sheet's
     /// own. Nil in previews and tests unless one is injected.

@@ -27,6 +27,8 @@ func mapFailure(code: String, during phase: ErrorPhase, limits: Capabilities.Lim
         return .serverBusy
     case "error.webp.busy":
         return .renderBusy
+    case "error.studio.line_full":
+        return .lineFull
     case "error.webp.job_lost", "error.studio.save_lost":
         return phase == .rendering ? .renderLost : .server(code: code)
     case "error.studio.expired":

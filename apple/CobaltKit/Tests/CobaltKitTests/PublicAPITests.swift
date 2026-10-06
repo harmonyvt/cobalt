@@ -224,7 +224,7 @@ private func touchClient(_ client: any CobaltClient) async throws {
     _ = client.sourceURL(session: "a")
     _ = try await client.render(session: "a", RenderRequestProbe.make())
     switch try await client.renderStatus(session: "a", job: "b", wait: 1) {
-    case .pending(phase: _, framesDone: _, framesTotal: _), .success(_), .failed(code: _): break
+    case .pending(phase: _, framesDone: _, framesTotal: _, queueAhead: _), .success(_), .failed(code: _): break
     }
     let h: HostedFile = try await client.publish(session: "a")
     _ = (h.url, h.bytes, h.contentType, h.itemID)

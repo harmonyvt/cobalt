@@ -183,11 +183,13 @@ public struct HTTPCobaltClient: CobaltClient {
                 var titles: Bool?
                 var publicDefault: Bool?
                 var visibility: Bool?
+                var line: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
                 var renderFps: Int?; var maxUploadBytes: Int64?; var maxSourceBytes: Int64?
                 var sessionTtlMs: Double?
+                var lineMax: Int?; var lineWaitMs: Double?
             }
             var server: String?
             var cobalt: Cobalt?
@@ -209,6 +211,8 @@ public struct HTTPCobaltClient: CobaltClient {
             limits.maxUploadBytes = l.maxUploadBytes ?? limits.maxUploadBytes
             limits.maxSourceBytes = l.maxSourceBytes ?? limits.maxSourceBytes
             if let ttl = l.sessionTtlMs { limits.sessionTTL = ttl / 1000 }
+            limits.lineMax = l.lineMax ?? limits.lineMax
+            if let wait = l.lineWaitMs { limits.lineWait = wait / 1000 }
         }
         let f = w.features
         return Capabilities(
@@ -233,7 +237,8 @@ public struct HTTPCobaltClient: CobaltClient {
             createNotify: f?.createNotify ?? false,
             titles: f?.titles ?? false,
             publicDefault: f?.publicDefault ?? false,
-            visibility: f?.visibility ?? false)
+            visibility: f?.visibility ?? false,
+            line: f?.line ?? false)
     }
 
     // MARK: - Resolve and studio
@@ -268,11 +273,20 @@ public struct HTTPCobaltClient: CobaltClient {
 
     /// `public` rides next to `url` (APP-API-CONTRACT 13.2); nil leaves it out, which is "private" for the server.
     public func createStudio(link: URL, public makePublic: Bool?) async throws -> StudioCreated {
+        try await createStudio(link: link, public: makePublic, queue: false, title: nil)
+    }
+
+    /// `queue: true` (17.3) makes the server answer `201` with `queued` and `queue_ahead` instead of `429
+    /// error.studio.busy`; `title` is the post's custom title, stored with the create. Both are left out when nil/false.
+    public func createStudio(link: URL, public makePublic: Bool?, queue: Bool, title: String?) async throws -> StudioCreated {
         let req = try makeRequest("POST", "/studio", keyed: true)
         var fields: [String: Any] = ["url": link.absoluteString]
         if let makePublic { fields["public"] = makePublic }
+        if queue { fields["queue"] = true }
+        if let title { fields["title"] = title }
         let wire = try await sendJSON(IDWire.self, req, body: Self.jsonBody(fields))
-        return StudioCreated(id: wire.id, pageURL: wire.url.flatMap(URL.init(string:)))
+        return StudioCreated(
+            id: wire.id, pageURL: wire.url.flatMap(URL.init(string:)), queued: wire.queued ?? false, queueAhead: wire.queueAhead)
     }
 
     // MARK: - Instant share (APP-API-CONTRACT section 14)
@@ -319,8 +333,19 @@ public struct HTTPCobaltClient: CobaltClient {
         file: URL, name: String, contentType: String, public makePublic: Bool?,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> UploadResult {
+        try await upload(file: file, name: name, contentType: contentType, public: makePublic, queue: false, title: nil, progress: progress)
+    }
+
+    /// `?queue=1` (17.3): an adopt that finds the server busy joins its line (`queued`, `queue_ahead`) instead of
+    /// answering `studio_error`. `?title=` is the post's custom title.
+    public func upload(
+        file: URL, name: String, contentType: String, public makePublic: Bool?, queue: Bool, title: String?,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> UploadResult {
         var query = [("name", name)]
         if makePublic == true { query.append(("public", "1")) }
+        if queue { query.append(("queue", "1")) }
+        if let title { query.append(("title", title)) }
         var req = try makeRequest("PUT", "/studio/upload", query: query, keyed: true, timeout: 120)
         req.setValue(contentType, forHTTPHeaderField: "Content-Type")
         let delegate = ProgressDelegate(progress)
@@ -345,7 +370,9 @@ public struct HTTPCobaltClient: CobaltClient {
         let item = wire.item ?? LibraryFile(
             id: "", kind: .private, source: .upload, name: name, url: nil, contentType: contentType, bytes: size,
             width: nil, height: nil, duration: nil, createdAt: Date(), mediaName: nil, deletable: false)
-        return UploadResult(sessionID: wire.id, item: item, studioErrorCode: wire.studioError?.code)
+        return UploadResult(
+            sessionID: wire.id, item: item, studioErrorCode: wire.studioError?.code,
+            queued: wire.queued ?? false, queueAhead: wire.queueAhead)
     }
 
     public func session(_ id: String, wait: Int) async throws -> StudioSession {
@@ -368,6 +395,10 @@ public struct HTTPCobaltClient: CobaltClient {
         ]
         if request.notify { fields["notify"] = true }
         if let crop = request.crop, !crop.isFull { fields["crop"] = crop.wire }
+        if request.queue == true {
+            fields["queue"] = true
+            if let priority = request.priority { fields["priority"] = priority }      // only valid with `queue`
+        }
         return try await sendJSON(JobWire.self, req, body: Self.jsonBody(fields)).job
     }
 
@@ -377,7 +408,9 @@ public struct HTTPCobaltClient: CobaltClient {
         let wire = try await sendJSON(RenderWire.self, req)
         switch wire.status {
         case "pending":
-            return .pending(phase: wire.phase.flatMap(RenderPhase.init(rawValue:)), framesDone: wire.framesDone, framesTotal: wire.framesTotal)
+            return .pending(
+                phase: wire.phase.flatMap(RenderPhase.init(rawValue:)), framesDone: wire.framesDone,
+                framesTotal: wire.framesTotal, queueAhead: wire.queueAhead)
         case "success":
             guard let url = wire.url, let bytes = wire.bytes, let width = wire.width, let height = wire.height, let seconds = wire.seconds
             else { throw CobaltError.invalidResponse(httpStatus: 200) }
@@ -403,9 +436,15 @@ public struct HTTPCobaltClient: CobaltClient {
     }
 
     public func openStudio(item id: String) async throws -> StudioCreated {
-        let req = try makeRequest("POST", "/library/items/\(id)/studio", keyed: true)
+        try await openStudio(item: id, queue: false)
+    }
+
+    /// `?queue=1` (17.3): a busy server queues the reopened session instead of answering `429`.
+    public func openStudio(item id: String, queue: Bool) async throws -> StudioCreated {
+        let req = try makeRequest("POST", "/library/items/\(id)/studio", query: queue ? [("queue", "1")] : [], keyed: true)
         let wire = try await sendJSON(IDWire.self, req)
-        return StudioCreated(id: wire.id, pageURL: wire.url.flatMap(URL.init(string:)))
+        return StudioCreated(
+            id: wire.id, pageURL: wire.url.flatMap(URL.init(string:)), queued: wire.queued ?? false, queueAhead: wire.queueAhead)
     }
 
     public func library(cursor: String?, limit: Int) async throws -> LibraryPage {
@@ -478,6 +517,45 @@ public struct HTTPCobaltClient: CobaltClient {
 
     public func cancelNotify(session id: String) async throws {
         let req = try makeRequest("DELETE", "/studio/\(id)/notify", keyed: true, timeout: 15)
+        try await sendEmpty(req)
+    }
+
+    // MARK: - The server's line (APP-API-CONTRACT section 17; keyed)
+
+    public func cancelQueued(session id: String) async throws -> QueueCancel {
+        try await cancelQueued(try makeRequest("DELETE", "/studio/\(Self.encode(id))/line", keyed: true, timeout: 15))
+    }
+
+    public func cancelQueued(session id: String, job: String) async throws -> QueueCancel {
+        try await cancelQueued(try makeRequest("DELETE", "/studio/\(Self.encode(id))/render/\(Self.encode(job))", keyed: true, timeout: 15))
+    }
+
+    /// `200 {cancelled: true}` → `.cancelled`; `409 error.studio.started` → `.started` (its turn came first: the
+    /// server finishes what it started); anything else as the keyed calls throw it.
+    private func cancelQueued(_ req: URLRequest) async throws -> QueueCancel {
+        let (data, http) = try await send(req)
+        if (200..<300).contains(http.statusCode) { return .cancelled }
+        if http.statusCode == 409,
+           let env = try? JSONDecoder().decode(ErrorEnvelope.self, from: data), env.error?.code == "error.studio.started" {
+            return .started
+        }
+        throw apiError(data, status: http.statusCode)
+    }
+
+    public func line() async throws -> ServerLineSnapshot {
+        let req = try makeRequest("GET", "/studio/line", keyed: true, timeout: 15)
+        return try await sendJSON(ServerLineSnapshot.self, req)
+    }
+
+    public func setLineNotify() async throws -> Int {
+        let req = try makeRequest("PUT", "/studio/line/notify", keyed: true, timeout: 15)
+        struct Wire: Decodable { var watching: Int? }
+        let wire = try await sendJSON(Wire.self, req, body: Self.jsonBody([:]))
+        return wire.watching ?? 0
+    }
+
+    public func cancelLineNotify() async throws {
+        let req = try makeRequest("DELETE", "/studio/line/notify", keyed: true, timeout: 15)
         try await sendEmpty(req)
     }
 
@@ -596,7 +674,7 @@ private struct ResolveWire: Decodable {
     var error: ErrorEnvelope.Body?
 }
 
-private struct IDWire: Decodable { var id: String; var url: String? }
+private struct IDWire: Decodable { var id: String; var url: String?; var queued: Bool?; var queueAhead: Int? }
 private struct LiveRunWire: Decodable { var pushing: Bool?; var started: Bool?; var reason: String? }
 private struct LiveSelftestWire: Decodable {
     var configured: Bool?; var transport: String?; var host: String?; var jwt: String?
@@ -608,6 +686,8 @@ private struct UploadWire: Decodable {
     var id: String?
     var item: LibraryFile?
     var studioError: ErrorEnvelope.Body?
+    var queued: Bool?
+    var queueAhead: Int?
 }
 
 private struct RenderWire: Decodable {
@@ -621,6 +701,7 @@ private struct RenderWire: Decodable {
     var phase: String?
     var framesDone: Int?
     var framesTotal: Int?
+    var queueAhead: Int?
     var error: ErrorEnvelope.Body?
 }
 

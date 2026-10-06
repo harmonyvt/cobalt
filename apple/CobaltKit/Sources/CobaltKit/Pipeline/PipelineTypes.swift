@@ -68,12 +68,21 @@ public enum PipelineFailure: Sendable, Equatable, Error {
     /// Marks a `.server` code as one that came up while rendering (`ErrorMap.serverFailure`).
     public static let renderPhasePrefix = "render."
 
-    /// renderBusy, renderLost, and server errors during rendering (not during saving: there is
-    /// no trim to keep, and "make it again" would have nothing to make).
+    /// `error.studio.line_full` (APP-API-CONTRACT 17.6): the server's line holds its 50, so a save or a render was
+    /// refused (`features.line`). **An alias of `.server(code: "error.studio.line_full")`, not a new case**: every
+    /// exhaustive `switch` over `PipelineFailure` in the app, the share sheet and the widgets keeps compiling, and a
+    /// view that wants words matches `.lineFull` before `.server` ("cobalt's line is full (50). try again when a few
+    /// have finished.").
+    public static let lineFull = PipelineFailure.server(code: lineFullCode)
+    public static let lineFullCode = "error.studio.line_full"
+
+    /// renderBusy, renderLost, a full line (a render the server would not queue keeps its trim; a refused save has
+    /// no session, so nothing is offered), and server errors during rendering (not during saving: there is no trim
+    /// to keep, and "make it again" would have nothing to make).
     public var keepsTrim: Bool {
         switch self {
         case .renderBusy, .renderLost: return true
-        case .server(let code): return code.hasPrefix(PipelineFailure.renderPhasePrefix)
+        case .server(let code): return code.hasPrefix(PipelineFailure.renderPhasePrefix) || code == PipelineFailure.lineFullCode
         default: return false
         }
     }
@@ -131,4 +140,13 @@ public struct Frame: @unchecked Sendable, Equatable {
     public static func == (lhs: Frame, rhs: Frame) -> Bool {
         lhs.index == rhs.index && lhs.image === rhs.image
     }
+}
+
+/// What a pipeline tells the job queue that owns it.
+enum PipelineJobEvent: Sendable {
+    case state, session, line
+    /// The server answered the create (`201`/`202`), or the run failed before it did.
+    case accepted(JobAcceptance)
+    /// A file job's copy in the app's inbox: the one a relaunch can still read.
+    case inboxCopy(URL, name: String, bytes: Int64, contentType: String)
 }

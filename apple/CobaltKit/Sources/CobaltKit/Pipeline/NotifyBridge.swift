@@ -11,6 +11,7 @@ enum NotifySource: Sendable, Equatable {
     case shareSheet      // the sheet closed with work left; the extension is gone, only the server can say
     case detached        // the owner closed a run mid-work (`Pipeline.detach()`)
     case background      // the app left the screen with a run in flight
+    case line            // the app left with work on the server's line: one summary for all of it (`PUT /studio/line/notify`)
 }
 
 /// The opt-ins this process made, kept so that the LAST intent for a session wins.
@@ -45,6 +46,59 @@ final class NotifyBridge {
     private var uncertain: Set<String> = []
 
     private enum Answer: Equatable { case stored, rejected, unknown }
+
+    // MARK: The line's one summary (APP-API-CONTRACT 17.8)
+
+    /// The key of the line's own chain of calls: a session id is 22 characters, so it never collides.
+    private static let lineKey = "~line"
+    /// `.line` while the server may hold the summary opt-in (a PUT was sent, no DELETE has answered since).
+    private(set) var lineSource: NotifySource?
+
+    /// `PUT /studio/line/notify`: the server watches everything this key has in flight and sends ONE message when it is
+    /// all done. The Int is how many jobs it watches (0: nothing in flight, no bridge, no answer, or overtaken by a
+    /// cancel). The last intent wins, like a session's.
+    @discardableResult
+    func enqueueLineRegister(
+        client: any CobaltClient, clock: any PipelineClock, timeout: Double = NotifyBridge.closeTimeout
+    ) -> Task<Int, Never> {
+        let key = Self.lineKey
+        let mine = nextIntent(key)
+        lineSource = .line
+        return serialize(key) { [self] in
+            guard intent[key] == mine else { return 0 }
+            log.append("PUT line")
+            return await Self.raceCount(timeout: timeout, clock: clock) { (try? await client.setLineNotify()) ?? 0 }
+        }
+    }
+
+    /// `DELETE /studio/line/notify`: the owner is looking again.
+    @discardableResult
+    func enqueueLineCancel(client: any CobaltClient) -> Task<Void, Never> {
+        guard lineSource != nil else { return Task {} }
+        lineSource = nil
+        let key = Self.lineKey
+        let mine = nextIntent(key)
+        return serialize(key) { [self] in
+            guard intent[key] == mine else { return }
+            log.append("DELETE line")
+            try? await client.cancelLineNotify()
+        }
+    }
+
+    private static func raceCount(
+        timeout: Double, clock: any PipelineClock, _ body: @escaping @Sendable () async -> Int
+    ) async -> Int {
+        await withTaskGroup(of: Int?.self) { group in
+            group.addTask { await body() }
+            group.addTask {
+                try? await clock.sleep(seconds: timeout)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? 0
+        }
+    }
 
     /// Records the intent and queues the PUT. The Bool is false when the call failed (the caller falls
     /// back to a local notification), ran past `timeout`, or was overtaken by a `cancel`. Never throws:
@@ -181,6 +235,20 @@ final class NotifyBridge {
 }
 
 extension PipelineContext {
+    /// One summary for everything the app leaves on the server (`PUT /studio/line/notify`, 17.8). Nil when the server
+    /// has no line or no bridge.
+    @discardableResult
+    func queueLineNotify(timeout: Double = NotifyBridge.closeTimeout) -> Task<Int, Never>? {
+        guard capabilities.line, capabilities.notifyBridge else { return nil }
+        return notify.enqueueLineRegister(client: client, clock: clock, timeout: timeout)
+    }
+
+    /// The owner is looking again: the summary is taken back (nothing is sent when none was).
+    @discardableResult
+    func queueLineCancel() -> Task<Void, Never> {
+        notify.enqueueLineCancel(client: client)
+    }
+
     /// Registers `optIn` for `session` through the bridge. False when the server has no bridge.
     @discardableResult
     func registerNotify(
