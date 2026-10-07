@@ -6,6 +6,77 @@ import Foundation
 // index in memory.
 
 extension OfflineStore {
+    // MARK: the gate and the root
+
+    /// The root as it is right now, when it can be used: the visible root while `rootState == .ready`, else nil.
+    var usableRoot: URL? { rootState == .ready ? visibleRoot : nil }
+
+    /// Keeps the gate's view of the root in step with `visibleRoot` and `rootState`.
+    func publishRoot() { rootBox.set(usableRoot) }
+
+    /// Runs `body` alone behind `OfflineFolderGate`, with the root read when the gate is entered, not when the caller
+    /// decided to wait for it: a relocation (13.5) swaps the root inside the gate, and a scan or a move that waited
+    /// behind it must never run against the old one. `root` is nil when there is none or it is not `.ready`.
+    func inGate<T: Sendable>(_ body: @escaping @Sendable (_ root: URL?) async -> T) async -> T {
+        let box = rootBox
+        return await OfflineFolderGate.shared.exclusive { await body(box.current) }
+    }
+
+    /// Whether this store excludes server-backed files from backup: on iOS only. The Mac folder is the owner's, and Time
+    /// Machine is their backup of it (13.2.3).
+    var excludesBackup: Bool { rootMode == .documents }
+
+    /// `.macFolder`: asks the provider where the root is and who it is, and applies the answer: inside the gate for the box
+    /// the gate's work reads, then to the properties the screens read. A no-op in `.documents`. Called by `reload()`, the
+    /// scan and the promotion, so a disk swapped under the same path is never written to.
+    @discardableResult
+    func resolveRoot() async -> RootState {
+        guard rootMode == .macFolder else { return .ready }
+        guard let provider = rootProvider else {
+            // a store with no provider (a test's root): the directory is there or it is not; nothing is created
+            guard let configured = visibleRoot else { return rootState }
+            var isDirectory: ObjCBool = false
+            let there = FileManager.default.fileExists(atPath: configured.path, isDirectory: &isDirectory) && isDirectory.boolValue
+            let state: RootState = there ? .ready : .unreachable(path: configured.path)
+            if state != rootState { rootState = state }
+            publishRoot()
+            return state
+        }
+        let box = rootBox
+        let resolution = await OfflineFolderGate.shared.exclusive { () -> MacRootResolution in
+            let resolution = provider.resolve()
+            box.set(resolution.state == .ready ? resolution.url : nil)
+            return resolution
+        }
+        apply(resolution)
+        return rootState
+    }
+
+    /// The provider's answer: the root (it may have moved), its scope and its state.
+    private func apply(_ resolution: MacRootResolution) {
+        rootAccess?.stop()
+        rootAccess = resolution.access
+        if visibleRoot.map(FolderDestination.canonical) != FolderDestination.canonical(resolution.url) {
+            swapRoot(resolution.url)
+        }
+        if resolution.state != rootState {
+            rootState = resolution.state
+            Telemetry.log(.info, .store, "offline root state", data: ["state": .string(String(describing: resolution.state).prefix(24).description)])
+        }
+        publishRoot()
+    }
+
+    /// Swaps the root. Callers hold the gate (or have just left it with the box already swapped): nothing else reads or
+    /// writes the old one meanwhile.
+    func swapRoot(_ url: URL) {
+        let watching = watcher != nil
+        stopWatching()
+        visibleRoot = url
+        adopt(records)                                        // every record's file url resolves against the new root
+        if watching { startWatching() }
+        publishRoot()
+    }
+
     // MARK: moving in
 
     /// Moves kept records whose file waits in `files/` into the visible folder: tag, rename (or copy then
@@ -15,7 +86,9 @@ extension OfflineStore {
     /// how many files moved. No-op without a visible root.
     @discardableResult
     func promote(only ids: Set<String>?, respectHolds: Bool = false) async -> OfflineFolder.PromoteOutcome {
-        guard let visibleRoot else { return OfflineFolder.PromoteOutcome() }
+        guard visibleRoot != nil else { return OfflineFolder.PromoteOutcome() }
+        // an unreachable, wrong or unwritable root: the kept file waits in `files/` and `reload()` tries again (13.2.5)
+        if rootMode == .macFolder, await resolveRoot() != .ready { return OfflineFolder.PromoteOutcome() }
         var requests: [OfflineFolder.MoveRequest] = []
         let candidates = records
             .filter { $0.keep == true && $0.fileName != nil && $0.visiblePath == nil && (ids?.contains($0.id) ?? true) }
@@ -33,14 +106,18 @@ extension OfflineStore {
                 role: r.role, item: r.itemIndex, lib: r.libraryID)
             requests.append(OfflineFolder.MoveRequest(
                 id: r.id, source: root.appendingPathComponent("files/\(name)"), tag: tag, preferredName: preferred,
-                excludeFromBackup: r.hasServerCopy, folder: placement.folder, media: r.media))
+                excludeFromBackup: excludesBackup && r.hasServerCopy, folder: placement.folder, media: r.media))
         }
         guard !requests.isEmpty else { return OfflineFolder.PromoteOutcome() }
         let (hidden, ops, stamp, work) = (root, ops, now(), requests)
-        let outcome = await OfflineFolderGate.shared.exclusive {
-            await OfflineFolder.promote(work, hiddenRoot: hidden, visibleRoot: visibleRoot, ops: ops, now: stamp)
+        let outcome = await inGate { root in
+            guard let root else { return OfflineFolder.PromoteOutcome() }
+            return await OfflineFolder.promote(work, hiddenRoot: hidden, visibleRoot: root, ops: ops, now: stamp)
         }
         if let written = outcome.records { adopt(written) }
+        if rootMode == .macFolder {
+            if outcome.full { rootDiskFull = true } else if outcome.moved > 0 { rootDiskFull = false }
+        }
         if outcome.moved + outcome.failed > 0 {
             Telemetry.log(.info, .store, "offline promote", data: [
                 "moved": .int(outcome.moved), "failed": .int(outcome.failed), "bytes": .bytes(outcome.bytes)])
@@ -80,10 +157,16 @@ extension OfflineStore {
     /// a kept file, after a background wake, and from the watcher.
     @discardableResult
     public func scanVisibleRoot() async -> OfflineScanReport {
-        guard let visibleRoot else { return OfflineScanReport() }
-        let (hidden, ops, stamp) = (root, ops, now())
-        let result = await OfflineFolderGate.shared.exclusive {
-            await OfflineFolder.scan(hiddenRoot: hidden, visibleRoot: visibleRoot, now: stamp, ops: ops)
+        guard visibleRoot != nil else { return OfflineScanReport() }
+        if rootMode == .macFolder { await resolveRoot() }
+        let (hidden, ops, stamp, excludes) = (root, ops, now(), excludesBackup)
+        let scanned = await inGate { root -> OfflineFolder.ScanResult? in
+            guard let root else { return nil }
+            return await OfflineFolder.scan(hiddenRoot: hidden, visibleRoot: root, now: stamp, ops: ops, excludesBackup: excludes)
+        }
+        guard let result = scanned else {
+            // an unreachable root changes nothing at all (decision 6, last row; 13.6)
+            return OfflineScanReport(rootMissing: true)
         }
         if result.report.indexUnreadable {
             return result.report                          // already in telemetry (once), with a copy of the index beside it
@@ -141,7 +224,7 @@ extension OfflineStore {
     /// The media's title changed: every kept file whose name is still the one cobalt gave it (`givenName`) gets
     /// the new `FolderNaming` name, in its own folder; a file the owner renamed is never renamed again.
     func followTitle(media id: String) async {
-        guard let visibleRoot, let current = media(id: id) else { return }
+        guard visibleRoot != nil, let current = media(id: id) else { return }
         var plan: [OfflineFolder.Rename] = []
         for video in current.renditions {
             guard let record = records.first(where: { $0.id == video.id }), let path = record.visiblePath,
@@ -153,9 +236,123 @@ extension OfflineStore {
         }
         guard !plan.isEmpty else { return }
         let (hidden, ops, work) = (root, ops, plan)
-        let written = await OfflineFolderGate.shared.exclusive {
-            await OfflineFolder.rename(work, hiddenRoot: hidden, visibleRoot: visibleRoot, ops: ops)
+        let written = await inGate { root -> [Record]? in
+            guard let root else { return nil }
+            return await OfflineFolder.rename(work, hiddenRoot: hidden, visibleRoot: root, ops: ops)
         }
         if let written { adopt(written) }
+    }
+}
+
+// MARK: - The Mac folder (CONTRACT-OFFLINE.md section 13)
+
+extension OfflineStore {
+    /// 13.3: adopts the files `FolderSync` copied into the root, by tag, once per ledger section. A no-op outside
+    /// `.macFolder`, while the root is not `.ready`, and when the section is complete. Never writes `folder.json`.
+    func adoptFolderSyncFiles() async {
+        guard rootMode == .macFolder, rootState == .ready, let ledger = folderLedger, let syncDirectory,
+              let current = visibleRoot, FolderAdoption.needsRun(root: current, ledger: ledger, markerDirectory: syncDirectory)
+        else { return }
+        let busy = Set(records.filter { r in
+            isInUse(r.id) || (r.sessionID.map { sessionIsHeld?($0) == true } ?? false)
+        }.map(\.id))
+        let legacyOn = defaults.object(forKey: "folderSync") as? Bool ?? true
+        let (hidden, ops, stamp) = (root, ops, now())
+        isAdopting = true
+        defer { isAdopting = false }
+        let outcome = await inGate { root -> FolderAdoption.Outcome in
+            guard let root else { return FolderAdoption.Outcome() }
+            return await FolderAdoption.run(
+                root: root, hiddenRoot: hidden, ledger: ledger, markerDirectory: syncDirectory, busy: busy,
+                folderSyncWasOn: legacyOn, ops: ops, now: stamp)
+        }
+        if let written = outcome.records { adopt(written) }
+        guard outcome.ran else { return }
+        var data: [String: TelemetryValue] = [
+            "adopted": .int(outcome.adopted), "keptToMove": .int(outcome.keptToMove), "complete": .bool(outcome.complete)]
+        for (reason, n) in outcome.skipped { data[reason.rawValue] = .int(n) }
+        Telemetry.log(.info, .store, "folder adoption", data: data)
+    }
+
+    /// A record from before offline (`keep == nil`) is cache on the Mac, never "legacy, keep it" (13.2.1): the migration is
+    /// off here, so nothing else would ever settle it.
+    func normalizeLegacyKeeps() async {
+        guard rootMode == .macFolder, records.contains(where: { $0.keep == nil }) else { return }
+        guard let merged = try? Self.mutate(root: root, { records in
+            for i in records.indices where records[i].keep == nil { records[i].keep = false }
+        }) else { return }
+        adopt(merged)
+    }
+
+    /// How many kept files are in the visible root (what "move the 24 offline files" counts).
+    var visibleKeptCount: Int { records.filter { $0.visiblePath != nil }.count }
+
+    /// 13.5: the owner chose another folder. Inside the gate: every kept file that is provably its own moves into the new
+    /// root when `move` (and the old one is reachable), then the root swaps. `progress` is called as files go. The caller has
+    /// already recorded the new folder in the ledger and runs `reload()` after (adoption of the new folder's section, the
+    /// scan, the promotion of what waited).
+    func switchRoot(
+        to resolution: MacRootResolution, move: Bool, progress: (@Sendable (Int, Int) -> Void)? = nil
+    ) async -> (moved: Int, stayed: Int, interrupted: OfflineInterrupted?) {
+        let (hidden, ops, stamp) = (root, ops, now())
+        let destination = resolution.url
+        let canMove = move && resolution.state == .ready
+        let box = rootBox
+        let outcome = await OfflineFolderGate.shared.exclusive { () -> OfflineFolder.RelocateOutcome in
+            var outcome = OfflineFolder.RelocateOutcome()
+            if canMove, let old = box.current {
+                outcome = await OfflineFolder.relocate(
+                    hiddenRoot: hidden, from: old, to: destination, ops: ops, now: stamp, progress: progress)
+            }
+            // the swap happens inside the gate: whatever waited behind it reads the new root
+            if outcome.interrupted == nil { box.set(resolution.state == .ready ? destination : nil) }
+            return outcome
+        }
+        if outcome.interrupted == nil { finishSwitch(resolution) }
+        if let written = try? Self.readRecordsChecked(root: root) { adopt(written) }
+        Telemetry.log(.info, .store, "offline folder switched", data: [
+            "moved": .int(outcome.moved), "stayed": .int(outcome.stayed), "move": .bool(move)])
+        return (outcome.moved, outcome.stayed, outcome.interrupted)
+    }
+
+    private func finishSwitch(_ resolution: MacRootResolution) {
+        rootAccess?.stop()
+        rootAccess = resolution.access
+        swapRoot(resolution.url)
+        rootState = resolution.state
+        publishRoot()
+    }
+
+    /// 13.7: a made file (slideshow, gallery image) is being replaced by a remake. Its record goes; its visible file goes
+    /// only when its name is still the one cobalt gave it (`givenName`): a file the owner renamed, or one crash recovery
+    /// adopted (`givenName == nil`), is left where it is, untagged, and is theirs from then on. On the Mac a deleted file
+    /// goes to the Trash. Call it before the new file's `add`, so the new file takes the free name. False: nothing changed
+    /// (an unknown record, a tag that could not be read, an index that could not be written).
+    @discardableResult
+    public func replaceMade(_ id: String) async -> Bool {
+        guard let record = records.first(where: { $0.id == id }) else { return false }
+        if record.visiblePath != nil {
+            // the owner may have renamed it in Finder since the last scan: settle the paths first, then act on the index
+            await scanVisibleRoot()
+            let (hidden, ops, stamp) = (root, ops, now())
+            let outcome = await inGate { root -> OfflineFolder.ReplaceVisible in
+                guard let root else { return .refused }
+                return OfflineFolder.replaceVisible(hiddenRoot: hidden, visibleRoot: root, id: id, ops: ops, now: stamp)
+            }
+            if outcome == .refused { return false }
+        }
+        var removed: Record?
+        guard let merged = try? Self.mutate(root: root, { records in
+            guard let i = records.firstIndex(where: { $0.id == id }) else { return }
+            removed = records.remove(at: i)
+        }) else { return false }
+        guard let removed else { return false }
+        Self.delete(
+            Eviction(
+                files: removed.fileName.map { [$0] } ?? [], posters: removed.posterName.map { [$0] } ?? [],
+                previews: removed.previewNames ?? []),
+            root: root)
+        adopt(merged)
+        return true
     }
 }

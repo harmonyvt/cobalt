@@ -45,9 +45,11 @@ public final class AppModel {
     public let library: LibraryModel
     /// The photos album (CONTRACT-SYNC.md): `PhotosSync.preview(_:)` in previews.
     public let photosSync: PhotosSync
-    /// "save to a folder" (macOS; the Mac's counterpart of the photos album, Folder/FolderSync.swift):
-    /// unavailable on iOS and in previews, which get `FolderSync.preview(_:)`.
-    public let folderSync: FolderSync
+    /// The Mac's Finder folder, the store's visible root (CONTRACT-OFFLINE.md section 13, Folder/MacFolder.swift):
+    /// unavailable on iOS and in previews, which get `MacFolder.preview(_:)`.
+    public let macFolder: MacFolder
+    /// The Mac's pull of saves made anywhere (13.8): unavailable on iOS and in previews.
+    public let savePull: SavePull
     /// "keep offline" (CONTRACT-OFFLINE.md decision 9): the background downloads and their states.
     public let offlineDownloads: OfflineDownloads
     public internal(set) var capabilities: Capabilities
@@ -83,22 +85,21 @@ public final class AppModel {
     @ObservationIgnored let makeClient: @MainActor (Settings) -> any CobaltClient
 
     init(
-        context: PipelineContext, library: LibraryModel, photosSync: PhotosSync? = nil, folderSync: FolderSync? = nil,
-        offlineDownloads: OfflineDownloads? = nil, ledger: JobLedger? = nil,
+        context: PipelineContext, library: LibraryModel, photosSync: PhotosSync? = nil, macFolder: MacFolder? = nil,
+        savePull: SavePull? = nil, offlineDownloads: OfflineDownloads? = nil, ledger: JobLedger? = nil,
         makeClient: @escaping @MainActor (Settings) -> any CobaltClient
     ) {
         let sync = photosSync ?? PhotosSync.preview(.init(access: .notAsked, enabled: false))
         self.photosSync = sync
-        let folder = folderSync ?? FolderSync.preview(.init(available: false, enabled: false))
-        self.folderSync = folder
+        self.macFolder = macFolder ?? MacFolder.preview(.init(available: false))
+        self.savePull = savePull ?? SavePull.preview(.init(available: false))
         // Previews and tests fetch in the foreground (no background session); the app passes its own engine.
         let offline = offlineDownloads ?? OfflineDownloads(
             store: context.store,
             queue: OfflineQueue(directory: context.store.root.deletingLastPathComponent().appendingPathComponent("Sync", isDirectory: true)),
             transport: nil, clock: context.clock, client: { context.client }, isPreview: context.isPreview)
-        offline.markNotNew = { [sync, folder] keys in
+        offline.markNotNew = { [sync] keys in
             sync.markNotNew(keys)
-            await folder.markNotNew(keys)
         }
         offline.landed = { [sync] in await sync.refresh() }
         self.offlineDownloads = offline
@@ -158,18 +159,18 @@ public final class AppModel {
             identifier: BackgroundSessionID.app, transport: URLSessionBackgroundTransport(), pending: .shared(),
             store: store, clock: ctx.clock)
         ctx.originals = fetcher
-        // The Mac's folder: created after the photos sync so it chains onto the store's `onAdd` (macOS only;
-        // on iOS it is unavailable and never runs).
-        let folder = FolderSync(settings: settings, store: store, ledger: FolderLedger.shared())
+        // The Mac's folder is the store's visible root; this object reports it and chooses another (unavailable on iOS).
+        let folder = MacFolder(store: store, ledger: FolderLedger.shared())
         #if os(macOS)
         folder.observeActivation()
         #endif
+        let pull = SavePull(store: store)
         let offline = OfflineDownloads(
             store: store, queue: OfflineQueue(directory: AppGroup.directory("Sync")), transport: URLSessionOfflineTransport(),
             clock: ctx.clock, client: { [unowned ctx] in ctx.client })
         let model = AppModel(
-            context: ctx, library: LibraryModel(context: ctx), photosSync: sync, folderSync: folder,
-            offlineDownloads: offline, ledger: JobLedger.shared(), makeClient: factory)
+            context: ctx, library: LibraryModel(context: ctx), photosSync: sync, macFolder: folder,
+            savePull: pull, offlineDownloads: offline, ledger: JobLedger.shared(), makeClient: factory)
         model.telemetry = TelemetryService.live(settings: settings, capabilities: { [unowned model] in model.capabilities })
         fetcher.isActive = { [unowned ctx] in ctx.background.activity.isActive }
         fetcher.serverHoldsRequests = { [unowned model] in model.capabilities.sourceWait }
@@ -205,7 +206,8 @@ public final class AppModel {
         let model = AppModel(
             context: ctx, library: LibraryModel(context: ctx, seed: PreviewData.libraryPage(now: clock.now())),
             photosSync: PhotosSync.preview(.init(access: .album, enabled: false)),
-            folderSync: FolderSync.preview(.init(available: FolderSync.platformHasFolder, enabled: true, saved: 12, waiting: 0, existing: 0)),
+            macFolder: MacFolder.preview(.init(available: MacFolder.platformHasFolder)),
+            savePull: SavePull.preview(.init(available: MacFolder.platformHasFolder)),
             makeClient: { _ in client })
         if scenario == .offline { model.seedOfflinePreviewStates() }
         return model

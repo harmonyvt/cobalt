@@ -1,7 +1,7 @@
 import Foundation
 
-/// How a file copied into the owner's folder is named, and how a clash is settled (the Mac's "save to a
-/// folder", see `FolderSync`). Pure: no disk, no clock.
+/// How a kept file is named in the visible folder, and how a clash is settled (the iPhone's Files folder and, from wave M,
+/// the Mac's Finder folder: `OfflineStore` names every file it moves in with this). Pure: no disk, no clock.
 ///
 /// - an original: `<title>.<ext>`, the title being `MediaTitle`'s default for the media, so a link save
 ///   reads `instagram · DeHC9jcpfQW.mp4` and a file the owner uploaded keeps its own name;
@@ -13,10 +13,10 @@ import Foundation
 ///   `03 · webp 1.webp` (a webp of an item, numbered as today) and `03 · crop 9:16.jpg`. A made file is replaced when it
 ///   is made again (R8), never numbered; the ` (2)` only covers a clash with the owner's own file.
 ///
-/// The name is decided once, when the file is copied. Renaming the media in cobalt later does NOT rename
-/// the file in the Mac's `FolderSync` (the owner may have renamed or moved it in Finder already). The offline
-/// store's visible folder (CONTRACT-OFFLINE.md decision 8) follows a rename only while the file still has the
-/// name cobalt gave it (`Record.givenName`); a file the owner renamed is never renamed again.
+/// The name is decided when the file is moved in. Renaming the media in cobalt later renames the file only while it still
+/// has the name cobalt gave it (`Record.givenName`, CONTRACT-OFFLINE.md decision 8); a file the owner renamed or moved in
+/// Files or Finder is never renamed again. A file `FolderSync` wrote (1.14.x) keeps the name it has: adoption gives it
+/// that name as its `givenName` (13.3).
 enum FolderNaming {
     /// The longest stem (before the extension) in UTF-8 bytes; APFS takes 255 per name, and this leaves
     /// room for ` (99)` and the extension.

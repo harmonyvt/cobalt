@@ -336,8 +336,9 @@ struct OfflineUnpromotableStoreTests {
         #expect(rig.cacheFiles().count == OfflineStore.protectedNewest, "the limit holds: only the newest media stay")
     }
 
-    /// Wave 1 on the Mac: `FolderSync` already copies to the Movies folder, so the hidden copy is a cache.
-    @Test func theMacKeepsNothingInTheHiddenFolderUntilWaveM() async throws {
+    /// A store with no visible root and no app group (the extension on a phone; wave 1's Mac, which wave M replaced with
+    /// `.macFolder`, where `canKeep` is true) takes nothing as kept: the hidden copy is a cache.
+    @Test func aStoreWithNoRootToMoveToKeepsNothingInTheHiddenFolder() async throws {
         let rig = try OfflineRig(limit: 2_000)
         let mac = rig.store(visible: false, shared: false)
         let v = try await rig.save(mac, "clip", session: "S1", keep: true)

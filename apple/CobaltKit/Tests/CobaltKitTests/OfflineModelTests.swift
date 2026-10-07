@@ -336,20 +336,6 @@ struct OfflineOriginTests {
         _ = a
     }
 
-    @Test func theMacFolderDoesNotCopyKeepOfflineEither() async throws {
-        let env = try await FolderEnv(launchedLongAgo: true)
-        _ = try await env.store.add(
-            file: try makeTempFile("a.mp4"), kind: .original, media: info(), sessionID: "OLD1", link: nil, remoteURL: nil, move: true,
-            keep: true, origin: .keepOffline)
-        await env.sync.reconcile()
-        #expect(env.listing.isEmpty)
-        let ledgerEntry = env.ledger.entry(FolderLedger.defaultID, "s:OLD1")
-        #expect(ledgerEntry?.state == .skipped && ledgerEntry?.skip == .preexisting)
-        _ = try await env.add(session: "NEW1")
-        await env.sync.reconcile()
-        #expect(env.listing.count == 1, "a new save still is copied")
-    }
-
     @Test func theEngineMarksTheKeysBeforeTheFileLandsSoNothingRacesIt() async throws {
         let env = try PhotosEnv()
         env.turnOn()

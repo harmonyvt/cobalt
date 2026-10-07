@@ -7,8 +7,26 @@ import Synchronization
 // Everything here is plain `nonisolated` file work: the store calls it from `@concurrent` hops behind the
 // `OfflineFolderGate`, never from the main actor.
 
-/// Where an add came from (CONTRACT-OFFLINE.md section 5). `PhotosSync` and `FolderSync` act only on `.save`.
-public enum AddOrigin: Sendable, Equatable { case save, keepOffline, adopted, migrated }
+/// Where an add came from (CONTRACT-OFFLINE.md section 5). `PhotosSync` acts only on `.save`. `.pulled`: a save made on
+/// another device (or the web, the share sheet) that the Mac's pull downloaded (section 13.8).
+public enum AddOrigin: Sendable, Equatable { case save, keepOffline, adopted, migrated, pulled }
+
+/// Where the visible root comes from (CONTRACT-OFFLINE.md 13.1). Injected, never `#if`, so the Mac's rules run in
+/// CobaltKit's tests on a Mac host. `.documents`: the iOS app's `Documents` (and every extension and test that has none).
+/// `.macFolder`: the Mac's Finder folder, `~/Movies/cobalt` or the one the owner chose.
+public enum VisibleRootMode: Sendable, Equatable { case documents, macFolder }
+
+/// Whether the visible root can be used right now (13.1, 13.6). Only `.ready` allows a scan, an adoption, a move in or a
+/// pull; any other state changes nothing on disk.
+public enum RootState: Sendable, Equatable {
+    case ready
+    /// a chosen folder whose bookmark does not resolve or whose path is not a directory (an unplugged disk)
+    case unreachable(path: String)
+    /// the folder cannot be created or written
+    case notAllowed(path: String)
+    /// the folder resolves, but it is not the one cobalt was using (another disk at the same path)
+    case wrongFolder(path: String)
+}
 
 /// What is on the device, in the two tiers (decision 4). `offline`: kept files, wherever they wait (the
 /// visible folder, or `files/` until they can move). `cache`: files nobody asked to keep, plus the posters
@@ -125,6 +143,17 @@ struct OfflineTag: Codable, Equatable, Sendable {
     }
 }
 
+extension OfflineTag {
+    /// The tag of a record: what `promote` writes before a file enters the root, and what adoption writes on a file that is
+    /// already there.
+    init(record r: OfflineStore.Record) {
+        self.init(
+            id: r.id, media: r.media, kind: r.kind, session: r.sessionID, remote: r.remoteURL?.absoluteString,
+            link: r.link?.absoluteString, created: r.createdAt.timeIntervalSince1970, title: r.title,
+            role: r.role, item: r.itemIndex, lib: r.libraryID)
+    }
+}
+
 enum XAttr {
     static func set(_ name: String, _ data: Data, at url: URL) throws {
         let result = url.withUnsafeFileSystemRepresentation { path -> Int32 in
@@ -185,6 +214,12 @@ enum OfflineMoveStep: Sendable, Equatable {
     case renamed
     /// the index names the file
     case indexed
+    /// adoption (13.3): the folder file carries the record's tag, nothing else has changed yet
+    case adoptTagged
+    /// adoption: the marker names the cache copies about to go; the index is not written yet
+    case adoptMarked
+    /// adoption: the index names the folder files; the cache copies are still there
+    case adoptIndexed
 }
 
 /// What a test throws from `checkpoint` to stop a run where a crash would.
@@ -198,10 +233,17 @@ protocol OfflineFileOps: Sendable {
     func fullSync(_ url: URL) throws
     func size(of url: URL) -> Int64?
     func remove(_ url: URL) throws
+    /// Deletes a file of the visible root (13.2.2): the Trash in `.macFolder` (falling back to a plain delete only when
+    /// the volume has none), `removeItem` in `.documents`. Cache files, `.part` files and posters use `remove`.
+    func removeVisible(_ url: URL) throws
     func checkpoint(_ step: OfflineMoveStep) throws
 }
 
 struct SystemFileOps: OfflineFileOps {
+    var mode: VisibleRootMode = .documents
+
+    init(mode: VisibleRootMode = .documents) { self.mode = mode }
+
     func setTag(_ tag: OfflineTag, at url: URL) throws {
         try XAttr.set(OfflineTag.attribute, tag.encoded(), at: url)
     }
@@ -228,6 +270,15 @@ struct SystemFileOps: OfflineFileOps {
     func size(of url: URL) -> Int64? { OfflineFolder.fileSize(url) }
 
     func remove(_ url: URL) throws { try FileManager.default.removeItem(at: url) }
+
+    func removeVisible(_ url: URL) throws {
+        guard mode == .macFolder else { return try FileManager.default.removeItem(at: url) }
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        } catch let error as CocoaError where error.code == .featureUnsupported {
+            try FileManager.default.removeItem(at: url)               // a volume with no Trash
+        }
+    }
 
     func checkpoint(_ step: OfflineMoveStep) throws {}
 }
@@ -258,6 +309,16 @@ actor OfflineFolderGate {
         leave()
         return result
     }
+}
+
+// MARK: - The root as the gate reads it
+
+/// The usable visible root (nil: none, or not `.ready`), readable from any context: the gate's holders read it without a
+/// hop to the main actor.
+final class OfflineRootBox: Sendable {
+    private let value = Mutex<URL?>(nil)
+    var current: URL? { value.withLock { $0 } }
+    func set(_ url: URL?) { value.withLock { $0 = url } }
 }
 
 // MARK: - Watching the root
@@ -318,8 +379,8 @@ enum OfflineFolder {
     /// A `.part` older than this is the leftover of a copy that never finished.
     static let staleParts: TimeInterval = 60 * 60
 
-    /// `Documents` in the iOS app process (Files labels it "On My iPhone › cobalt"); nil in every extension
-    /// and on the Mac until wave M (decision 12, 15).
+    /// `Documents` in the iOS app process (Files labels it "On My iPhone › cobalt"); nil in every extension and on the
+    /// Mac, whose root is the Finder folder `OfflineStore.shared()` takes from the ledger (`.macFolder`, 13.1).
     static func defaultVisibleRoot() -> URL? {
         #if os(iOS)
         guard Bundle.main.bundleURL.pathExtension != "appex" else { return nil }
@@ -330,8 +391,8 @@ enum OfflineFolder {
     }
 
     /// In an extension: whether its store is the one the app reads (the app group), so the app can promote what the
-    /// extension keeps. False in the app itself (it has a visible root, or it is the Mac until wave M, where
-    /// `FolderSync` copies and the hidden copy is cache) and in an extension with no app group (the owner's phone).
+    /// extension keeps. False in the app itself (it has a visible root: Documents, or the Mac's Finder folder) and in an
+    /// extension with no app group (the owner's phone).
     static func storeIsSharedWithApp() -> Bool {
         #if os(iOS)
         return Bundle.main.bundleURL.pathExtension == "appex" && AppGroup.location.kind == .appGroup
@@ -417,7 +478,7 @@ enum OfflineFolder {
     static func deleteFile(_ url: URL, ops: any OfflineFileOps) -> Bool {
         guard FileManager.default.fileExists(atPath: url.path) else { return true }
         do {
-            try ops.remove(url)
+            try ops.removeVisible(url)
             removeEmptyGalleryFolder(url.deletingLastPathComponent())
             return true
         } catch {
@@ -494,10 +555,18 @@ enum OfflineFolder {
             } catch let interrupted as OfflineInterrupted {
                 throw interrupted
             } catch {
-                results.append((request.id, .failed(String(describing: error))))
+                results.append((request.id, .failed(Self.noSpace(error) ? "ENOSPC" : String(describing: error))))
             }
         }
         return results
+    }
+
+    /// The disk is full (the Mac folder says so in Settings).
+    static func noSpace(_ error: any Error) -> Bool {
+        if let posix = error as? POSIXError, posix.code == .ENOSPC { return true }
+        let ns = error as NSError
+        return ns.domain == NSCocoaErrorDomain && ns.code == NSFileWriteOutOfSpaceError
+            || ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOSPC)
     }
 
     /// The extended attribute on a gallery's folder: the media it holds. `rename(2)` keeps it, so the owner may rename
@@ -607,7 +676,7 @@ enum OfflineFolder {
     /// record points at is a copy the owner made, so it is the owner's own file (never adopted or rebuilt).
     static func reconcile(
         _ records: inout [OfflineStore.Record], entries: [VisibleEntry], hiddenRoot: URL, now: Date,
-        tombstones: Set<String> = []
+        tombstones: Set<String> = [], excludesBackup: Bool = true
     ) -> Reconciled {
         var out = Reconciled()
         var byID: [String: [VisibleEntry]] = [:]
@@ -650,7 +719,7 @@ enum OfflineFolder {
             records[i].visiblePath = chosen.path
             records[i].keep = true
             records[i].bytes = chosen.size
-            if record.hasServerCopy, !chosen.excludedFromBackup { out.exclude.append(chosen.path) }
+            if excludesBackup, record.hasServerCopy, !chosen.excludedFromBackup { out.exclude.append(chosen.path) }
         }
         // a tag with no record: the index was lost or rolled back
         for (id, matches) in byID.sorted(by: { $0.key < $1.key }) where !known.contains(id) {
@@ -681,7 +750,7 @@ enum OfflineFolder {
             records.append(rebuilt)
             out.rebuilt.append(id)
             out.report.rebuilt += 1
-            if rebuilt.hasServerCopy, !entry.excludedFromBackup { out.exclude.append(entry.path) }
+            if excludesBackup, rebuilt.hasServerCopy, !entry.excludedFromBackup { out.exclude.append(entry.path) }
         }
         return out
     }
@@ -696,7 +765,9 @@ enum OfflineFolder {
     /// One whole pass: enumerate the root, apply the table in one coordinated index write, delete the cache copies
     /// that are now redundant, take server-backed files out of the backup. Off the main actor.
     @concurrent
-    static func scan(hiddenRoot: URL, visibleRoot: URL, now: Date, ops: any OfflineFileOps) async -> ScanResult {
+    static func scan(
+        hiddenRoot: URL, visibleRoot: URL, now: Date, ops: any OfflineFileOps, excludesBackup: Bool = true
+    ) async -> ScanResult {
         // An index this build cannot decode is not "lost": reading nothing from it and writing a rebuilt one over it
         // would erase every record the tags cannot bring back (review fix S1).
         let before: [OfflineStore.Record]
@@ -710,14 +781,16 @@ enum OfflineFolder {
         }
         let tombstones = OfflineTombstones.ids(root: hiddenRoot)
         var probe = before
-        var reconciled = reconcile(&probe, entries: entries, hiddenRoot: hiddenRoot, now: now, tombstones: tombstones)
+        var reconciled = reconcile(
+            &probe, entries: entries, hiddenRoot: hiddenRoot, now: now, tombstones: tombstones, excludesBackup: excludesBackup)
         var records = before
         var wrote = false
         if probe != before {
             // something changed: apply it to the index as it is right now, in one coordinated write
             var again = Reconciled()
             if let written = try? OfflineStore.mutate(root: hiddenRoot, { current in
-                again = reconcile(&current, entries: entries, hiddenRoot: hiddenRoot, now: now, tombstones: tombstones)
+                again = reconcile(
+                    &current, entries: entries, hiddenRoot: hiddenRoot, now: now, tombstones: tombstones, excludesBackup: excludesBackup)
             }) {
                 records = written
                 reconciled = again
@@ -748,7 +821,7 @@ enum OfflineFolder {
     /// A deleted file's id goes on the tombstones, so a duplicate the owner made is not taken for the original.
     @concurrent
     static func removeVisibleChecked(
-        hiddenRoot: URL, visibleRoot: URL, id: String, ops: any OfflineFileOps, now: Date
+        hiddenRoot: URL, visibleRoot: URL, id: String, ops: any OfflineFileOps, now: Date, excludesBackup: Bool = true
     ) async -> RemoveResult {
         for attempt in 0..<2 {
             let index: [OfflineStore.Record]
@@ -769,7 +842,7 @@ enum OfflineFolder {
                 }
             }
             if attempt == 1 { return exists ? .refused : .absent }
-            let settled = await scan(hiddenRoot: hiddenRoot, visibleRoot: visibleRoot, now: now, ops: ops)
+            let settled = await scan(hiddenRoot: hiddenRoot, visibleRoot: visibleRoot, now: now, ops: ops, excludesBackup: excludesBackup)
             if settled.report.rootMissing || settled.report.indexUnreadable { return .refused }
         }
         return .refused
@@ -778,11 +851,12 @@ enum OfflineFolder {
     /// `removeVisibleChecked` for several records (a media's, "delete everything"): the ids that were refused.
     @concurrent
     static func purge(
-        ids: [String], hiddenRoot: URL, visibleRoot: URL, ops: any OfflineFileOps, now: Date
+        ids: [String], hiddenRoot: URL, visibleRoot: URL, ops: any OfflineFileOps, now: Date, excludesBackup: Bool = true
     ) async -> Set<String> {
         var refused: Set<String> = []
         for id in ids
-        where await removeVisibleChecked(hiddenRoot: hiddenRoot, visibleRoot: visibleRoot, id: id, ops: ops, now: now) == .refused {
+        where await removeVisibleChecked(
+            hiddenRoot: hiddenRoot, visibleRoot: visibleRoot, id: id, ops: ops, now: now, excludesBackup: excludesBackup) == .refused {
             refused.insert(id)
         }
         return refused
@@ -801,7 +875,7 @@ enum OfflineFolder {
     /// index (`keep = false`, no path, no file name), then the cache file.
     @concurrent
     static func removeCopy(
-        id: String, hiddenRoot: URL, visibleRoot: URL?, ops: any OfflineFileOps, now: Date
+        id: String, hiddenRoot: URL, visibleRoot: URL?, ops: any OfflineFileOps, now: Date, excludesBackup: Bool = true
     ) async -> RemoveCopyOutcome {
         var out = RemoveCopyOutcome()
         let index: [OfflineStore.Record]
@@ -812,7 +886,8 @@ enum OfflineFolder {
             guard let visibleRoot else { out.refused = true; return out }
             // The file goes first: a record without a path but with a tagged file still in the root would be
             // "restored" by the next scan.
-            switch await removeVisibleChecked(hiddenRoot: hiddenRoot, visibleRoot: visibleRoot, id: id, ops: ops, now: now) {
+            switch await removeVisibleChecked(
+                hiddenRoot: hiddenRoot, visibleRoot: visibleRoot, id: id, ops: ops, now: now, excludesBackup: excludesBackup) {
             case .refused:
                 out.refused = true
                 out.records = try? OfflineStore.readRecordsChecked(root: hiddenRoot)     // the scan may have moved paths
@@ -843,6 +918,8 @@ enum OfflineFolder {
         var failed = 0
         var bytes: Int64 = 0
         var interrupted: OfflineInterrupted?
+        /// a move failed because the disk is full
+        var full = false
     }
 
     /// Moves `requests` into the root, 20 to a coordinated index write (section 2.2): `fileName = nil`,
@@ -903,6 +980,7 @@ enum OfflineFolder {
                 case .moved(_, _, let bytes): outcome.moved += 1; outcome.bytes += bytes
                 case .failed(let reason):
                     outcome.failed += 1
+                    if reason == "ENOSPC" { outcome.full = true }
                     Telemetry.log(.warn, .store, "offline move failed", data: ["reason": .string(String(reason.prefix(120)))])
                 case .missing: break
                 }
@@ -1001,5 +1079,121 @@ enum OfflineFolder {
               let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let text = body["migratedAt"] as? String else { return nil }
         return ISO8601DateFormatter().date(from: text)
+    }
+}
+
+// MARK: - The Mac folder: moving to another one, and replacing a made file (CONTRACT-OFFLINE.md 13.5, 13.7)
+
+extension OfflineFolder {
+    struct RelocateOutcome: Sendable {
+        var moved = 0
+        var stayed = 0
+        var interrupted: OfflineInterrupted?
+    }
+
+    /// Moves every kept file that is provably its own (its tag is its record's id) from `old` into `new`, each with the
+    /// same move `promote` uses (tag, rename, or copy then full sync then size check then rename, and only then delete the
+    /// source), 20 to an index write that updates `visiblePath`. A gallery's folder is made again in `new` by its tag; a
+    /// file in a folder the owner made lands at the top of `new` (that folder was never cobalt's to re-make). Empty gallery
+    /// folders left behind go. A file that does not move stays where it is, and is counted. Inside the gate (the caller's).
+    @concurrent
+    static func relocate(
+        hiddenRoot: URL, from old: URL, to new: URL, ops: any OfflineFileOps, now: Date,
+        progress: (@Sendable (Int, Int) -> Void)?
+    ) async -> RelocateOutcome {
+        var outcome = RelocateOutcome()
+        guard let index = try? OfflineStore.readRecordsChecked(root: hiddenRoot) else { return outcome }
+        let kept = index.filter { $0.visiblePath != nil }.sorted { ($0.visiblePath ?? "") < ($1.visiblePath ?? "") }
+        var requests: [MoveRequest] = []
+        var oldPaths: [String: String] = [:]
+        for r in kept {
+            guard let path = r.visiblePath else { continue }
+            let url = old.appendingPathComponent(path)
+            guard case .tag(let tag) = OfflineTag.probe(at: url), tag.id == r.id else { outcome.stayed += 1; continue }
+            var folder: String?
+            let parts = path.split(separator: "/").map(String.init)
+            if parts.count > 1, !r.media.isEmpty,
+               let data = XAttr.get(folderAttribute, at: old.appendingPathComponent(parts[0], isDirectory: true)),
+               String(decoding: data, as: UTF8.self) == r.media {
+                folder = parts[0]
+            }
+            oldPaths[r.id] = path
+            requests.append(MoveRequest(
+                id: r.id, source: url, tag: OfflineTag(record: r), preferredName: parts.last ?? path, excludeFromBackup: false,
+                folder: folder, media: r.media))
+        }
+        let total = requests.count + outcome.stayed
+        var done = outcome.stayed
+        progress?(done, total)
+        var start = 0
+        while start < requests.count {
+            let batch = Array(requests[start..<min(start + 20, requests.count)])
+            start += 20
+            let results: [(id: String, outcome: MoveOutcome)]
+            do { results = try moveIn(batch, root: new, ops: ops, now: now) } catch let interrupted as OfflineInterrupted {
+                outcome.interrupted = interrupted
+                return outcome
+            } catch { outcome.stayed += batch.count; continue }
+            _ = try? OfflineStore.mutate(root: hiddenRoot) { records in
+                for result in results {
+                    guard case .moved(let path, let name, _) = result.outcome,
+                          let i = records.firstIndex(where: { $0.id == result.id }),
+                          records[i].visiblePath == oldPaths[result.id] else { continue }
+                    let oldLeaf = ((oldPaths[result.id] ?? "") as NSString).lastPathComponent
+                    records[i].visiblePath = path
+                    if records[i].givenName == oldLeaf { records[i].givenName = name }
+                }
+            }
+            for result in results {
+                if case .moved = result.outcome {
+                    outcome.moved += 1
+                    if let oldPath = oldPaths[result.id] {
+                        removeEmptyGalleryFolder(old.appendingPathComponent(oldPath).deletingLastPathComponent())
+                    }
+                } else {
+                    outcome.stayed += 1
+                }
+            }
+            done += batch.count
+            progress?(done, total)
+            do { try ops.checkpoint(.indexed) } catch let interrupted as OfflineInterrupted {
+                outcome.interrupted = interrupted
+                return outcome
+            } catch {}
+        }
+        return outcome
+    }
+
+    enum ReplaceVisible: Sendable, Equatable {
+        /// cobalt's file under the name cobalt gave it: deleted
+        case deleted
+        /// cobalt's file that the owner renamed (or that crash recovery adopted): left in place, untagged, theirs from now on
+        case released
+        /// nothing of cobalt's at the record's path (gone, or another file)
+        case nothing
+        /// the tag could not be read: nothing was touched
+        case refused
+    }
+
+    /// A made file is being replaced (13.7): its visible file is deleted only when its name is still the one cobalt gave
+    /// it. Inside the gate (the caller's); the path is read from the index here and the file's own tag must be the record's.
+    static func replaceVisible(hiddenRoot: URL, visibleRoot: URL, id: String, ops: any OfflineFileOps, now: Date) -> ReplaceVisible {
+        guard let index = try? OfflineStore.readRecordsChecked(root: hiddenRoot),
+              let record = index.first(where: { $0.id == id }), let path = record.visiblePath else { return .nothing }
+        let url = visibleRoot.appendingPathComponent(path)
+        guard FileManager.default.fileExists(atPath: url.path) else { return .nothing }
+        switch OfflineTag.probe(at: url) {
+        case .unreadable: return .refused
+        case .untagged: return .nothing
+        case .tag(let tag):
+            guard tag.id == id else { return .nothing }
+            if let given = record.givenName, (path as NSString).lastPathComponent == given {
+                guard deleteFile(url, ops: ops) else { return .refused }
+                OfflineTombstones.add([id], root: hiddenRoot, now: now)
+                return .deleted
+            }
+            XAttr.remove(OfflineTag.attribute, at: url)
+            return .released
+        }
     }
 }

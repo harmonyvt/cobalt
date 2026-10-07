@@ -45,6 +45,15 @@ struct OfflineTools: MediaTools {
 /// further change throws too: a crashed process does nothing more, and the rest of the run must not carry on.
 final class Dead: Sendable { let flag = Mutex(false) }
 
+/// What `removeVisible` was asked to delete (the Mac sends it to the Trash; a test never touches the real one).
+final class TrashBin: Sendable {
+    let urls = Mutex<[URL]>([])
+    /// The folder the "trash" is: a temp directory the test owns.
+    let folder: URL
+    init() { folder = (try? makeTempDirectory()) ?? FileManager.default.temporaryDirectory }
+    var items: [URL] { urls.withLock { $0 } }
+}
+
 struct TestFileOps: OfflineFileOps {
     /// Throws `OfflineInterrupted` at this step, as a crash would stop the run there.
     var crashAt: OfflineMoveStep?
@@ -52,6 +61,10 @@ struct TestFileOps: OfflineFileOps {
     var crossVolume = false
     /// Runs when the move reaches a step (before a crash at it): a test stages another writer between two steps.
     var onCheckpoint: (@Sendable (OfflineMoveStep) -> Void)?
+    /// Every rename out of this folder fails with EXDEV (relocation to another disk).
+    var crossVolumeFrom: URL?
+    /// `removeVisible` goes here (a fake Trash) instead of being deleted; `.documents` stores delete outright.
+    var trash: TrashBin?
     private let dead = Dead()
     private var system: SystemFileOps { SystemFileOps() }
 
@@ -70,12 +83,21 @@ struct TestFileOps: OfflineFileOps {
         if crossVolume, !from.lastPathComponent.hasSuffix(".part"), from.deletingLastPathComponent().lastPathComponent == "files" {
             throw POSIXError(.EXDEV)
         }
+        if let crossVolumeFrom, !from.lastPathComponent.hasSuffix(".part"), from.path.hasPrefix(crossVolumeFrom.path + "/") {
+            throw POSIXError(.EXDEV)
+        }
         try system.rename(from, to: to, exclusive: exclusive)
     }
     func copy(_ from: URL, to: URL) throws { try alive(); try system.copy(from, to: to) }
     func fullSync(_ url: URL) throws { try alive(); try system.fullSync(url) }
     func size(of url: URL) -> Int64? { system.size(of: url) }
     func remove(_ url: URL) throws { try alive(); try system.remove(url) }
+    func removeVisible(_ url: URL) throws {
+        try alive()
+        guard let trash else { return try system.remove(url) }
+        trash.urls.withLock { $0.append(url) }
+        try FileManager.default.moveItem(at: url, to: trash.folder.appendingPathComponent(UUID().uuidString + "-" + url.lastPathComponent))
+    }
     func checkpoint(_ step: OfflineMoveStep) throws {
         try alive()
         onCheckpoint?(step)

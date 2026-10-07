@@ -2,24 +2,22 @@ import CobaltKit
 import SwiftUI
 
 #if DEBUG
-// Previews for the folder section: every state it draws. The model's `FolderSync` is the preview twin, so
-// the toggle, the folder buttons and the backfill dialog move it around without touching the disk.
+// Previews for the folder section: every state it draws. The model's `MacFolder` is the preview twin, so the buttons and
+// the move question move it around without touching the disk.
 
 private enum FolderPreviewState: String, CaseIterable {
-    case off, enabled, customFolder, saving, waiting, existing, folderMissing, notAllowed, diskFull, gaveUp
+    case enabled, customFolder, adopting, moving, unreachable, notAllowed, wrongFolder, diskFull
 
-    var status: FolderSync.Status {
+    var status: MacFolder.Status {
         switch self {
-        case .off: return .init(enabled: false)
-        case .enabled: return .init(enabled: true, saved: 12)
-        case .customFolder: return .init(enabled: true, path: "/Volumes/Archive/videos/cobalt", isDefault: false, saved: 12)
-        case .saving: return .init(enabled: true, saved: 3, waiting: 9, progress: .init(done: 3, total: 12))
-        case .waiting: return .init(enabled: true, saved: 9, waiting: 3)
-        case .existing: return .init(enabled: true, saved: 2, existing: 14)
-        case .folderMissing: return .init(enabled: true, path: "/Volumes/Archive/cobalt", isDefault: false, saved: 12, waiting: 2, problem: .folderMissing)
-        case .notAllowed: return .init(enabled: true, saved: 0, waiting: 5, problem: .notAllowed)
-        case .diskFull: return .init(enabled: true, saved: 9, waiting: 4, problem: .diskFull)
-        case .gaveUp: return .init(enabled: true, saved: 9, gaveUp: 2)
+        case .enabled: return .init()
+        case .customFolder: return .init(path: "/Volumes/Archive/videos/cobalt", isDefault: false)
+        case .adopting: return .init(adopting: true)
+        case .moving: return .init(path: "/Volumes/Archive/videos/cobalt", isDefault: false, moving: .init(done: 12, total: 24))
+        case .unreachable: return .init(path: "/Volumes/Archive/cobalt", isDefault: false, problem: .unreachable)
+        case .notAllowed: return .init(problem: .notAllowed)
+        case .wrongFolder: return .init(path: "/Volumes/Archive/cobalt", isDefault: false, problem: .wrongFolder)
+        case .diskFull: return .init(problem: .diskFull)
         }
     }
 }
@@ -36,7 +34,7 @@ private struct FolderPreviewLabelStyle: LabelStyle {
 private struct FolderSectionMatrix: View {
     @State private var models: [(state: FolderPreviewState, model: AppModel)] = FolderPreviewState.allCases.map { state in
         let model = AppModel.preview(.happy)
-        model.folderSync.setPreviewStatus(state.status)
+        model.macFolder.setPreviewStatus(state.status)
         return (state, model)
     }
 

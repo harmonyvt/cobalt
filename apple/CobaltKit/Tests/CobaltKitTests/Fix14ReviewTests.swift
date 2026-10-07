@@ -307,92 +307,10 @@ struct ReplacedMakeTests {
     }
 }
 
-// MARK: - SF5 and the folder nit: the Mac's folder
-
-private struct StillClock: PipelineClock {
-    let at: Date
-    func now() -> Date { at }
-    func sleep(seconds: Double) async throws {}
-}
+// MARK: - the folder rule (a single photo is flat, a gallery is a folder)
 
 @Suite(.serialized) @MainActor
-struct FolderReplaceTests {
-    private func file(_ dir: URL, _ name: String, _ byte: UInt8, count: Int) throws -> URL {
-        let url = dir.appendingPathComponent(name)
-        try Data(repeating: byte, count: count).write(to: url)
-        return url
-    }
-
-    private func worker(_ root: URL) throws -> (FolderWorker, URL, FolderLedger) {
-        let destination = root.appendingPathComponent("Movies/cobalt", isDirectory: true)
-        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-        let ledger = FolderLedger(directory: root.appendingPathComponent("Sync", isDirectory: true))
-        let w = FolderWorker(ledger: ledger, destination: destination, id: "default", path: destination.path, clock: StillClock(at: Date(timeIntervalSince1970: 9_000)))
-        return (w, destination, ledger)
-    }
-
-    private func candidate(_ key: String, _ source: URL, slot: String?, mates: Set<String> = []) -> FolderWorker.Candidate {
-        FolderWorker.Candidate(
-            key: key, source: source, bytes: 100, name: "slideshow.webp", createdAt: Date(timeIntervalSince1970: 1), folder: nil,
-            media: "M1", slot: slot, slotMates: mates)
-    }
-
-    @Test func aRemakeReplacesTheFileWeWroteInsteadOfPilingUpANumberedOne() throws {
-        let root = try makeTempDirectory()
-        let (w, dest, _) = try worker(root)
-        let a = try file(root, "a.webp", 1, count: 100), b = try file(root, "b.webp", 2, count: 140)
-        let slot = "M1|slideshow webp"
-        #expect(w.copy(candidate("m:old", a, slot: slot)) == .copied)
-        #expect(try Data(contentsOf: dest.appendingPathComponent("slideshow.webp")).count == 100)
-        #expect(w.copy(candidate("m:new", b, slot: slot)) == .copied)
-        let names = try FileManager.default.contentsOfDirectory(atPath: dest.path).filter { !$0.hasPrefix(".") }
-        #expect(names == ["slideshow.webp"], "never `slideshow (2).webp`: \(names)")
-        #expect(try Data(contentsOf: dest.appendingPathComponent("slideshow.webp")).count == 140, "the new file")
-    }
-
-    @Test func onlyAFileWeWroteIsReplacedAndOnlyForTheSameSlot() throws {
-        let root = try makeTempDirectory()
-        let (w, dest, ledger) = try worker(root)
-        let a = try file(root, "a.webp", 1, count: 100), b = try file(root, "b.webp", 2, count: 140)
-        #expect(w.copy(candidate("m:old", a, slot: "M1|slideshow webp")) == .copied)
-        // the owner replaced the file under that name with a file of their own: it is theirs, never deleted
-        try Data(repeating: 9, count: 7).write(to: dest.appendingPathComponent("slideshow.webp"))
-        #expect(w.copy(candidate("m:new", b, slot: "M1|slideshow webp")) == .copied)
-        let names = try FileManager.default.contentsOfDirectory(atPath: dest.path).filter { !$0.hasPrefix(".") }.sorted()
-        #expect(names == ["slideshow (2).webp", "slideshow.webp"], "their file stays, ours is numbered beside it")
-        #expect(try Data(contentsOf: dest.appendingPathComponent("slideshow.webp")).count == 7)
-        #expect(ledger.entry("default", "m:old") == nil, "the replaced entry is forgotten")
-
-        // another slot (an mp4 slideshow) is a different file: nothing is replaced
-        let root2 = try makeTempDirectory()
-        let (w2, dest2, _) = try worker(root2)
-        #expect(w2.copy(candidate("m:1", a, slot: "M1|slideshow webp")) == .copied)
-        var other = candidate("m:2", b, slot: "M1|slideshow")
-        other.name = "slideshow.mp4"
-        #expect(w2.copy(other) == .copied)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: dest2.path).filter { !$0.hasPrefix(".") }.sorted() == ["slideshow.mp4", "slideshow.webp"])
-
-        // a record the store still holds is not replaced (an older server could leave two of a kind)
-        let root3 = try makeTempDirectory()
-        let (w3, dest3, _) = try worker(root3)
-        #expect(w3.copy(candidate("m:1", a, slot: "M1|slideshow webp")) == .copied)
-        #expect(w3.copy(candidate("m:2", b, slot: "M1|slideshow webp", mates: ["m:1"])) == .copied)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: dest3.path).filter { !$0.hasPrefix(".") }.sorted() == ["slideshow (2).webp", "slideshow.webp"])
-    }
-
-    @Test func theSlotComesFromTheMadeKindAndACropHasNone() {
-        func video(role: GalleryRole, spec: String?, media: String = "M1") -> StoredVideo {
-            StoredVideo(
-                id: UUID().uuidString, kind: .original, fileURL: nil, posterURL: nil, name: "n", duration: nil, width: nil, height: nil,
-                bytes: 1, sessionID: "S", link: nil, remoteURL: nil, createdAt: Date(), mediaID: media, role: role,
-                madeSpec: spec.map { Data($0.utf8) }, libraryID: "x")
-        }
-        #expect(FolderWorker.slot(of: video(role: .slideshow, spec: #"{"format":"webp"}"#)) == "M1|slideshow webp")
-        #expect(FolderWorker.slot(of: video(role: .export, spec: #"{"kind":"gallery","layout":"grid3"}"#)) == "M1|gallery image · 3 across")
-        #expect(FolderWorker.slot(of: video(role: .crop, spec: nil)) == nil)
-        #expect(FolderWorker.slot(of: video(role: .item, spec: nil)) == nil)
-    }
-
+struct FolderPlacementTests {
     @Test func aSinglePastedPhotoIsAFlatFileAndAGalleryAndItsMadeFilesAreAFolder() async throws {
         // the pipeline stores each item with the post's size, so the first item of a gallery is not mistaken for a lone photo
         let single = await Harness(.galleryOne).savedStore(igLink)
@@ -435,7 +353,7 @@ extension Harness {
     }
 }
 
-// MARK: - SF5 end to end on the Mac's FolderSync is in FolderSyncTests; the index nit is here
+// MARK: - the index nit
 
 @Suite(.serialized) @MainActor
 struct LenientRoleTests {

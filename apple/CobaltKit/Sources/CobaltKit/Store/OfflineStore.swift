@@ -190,13 +190,33 @@ public enum OfflineStoreError: Error, Sendable, Equatable {
 @MainActor @Observable
 public final class OfflineStore {
     @ObservationIgnored let root: URL
-    /// The visible folder for kept files: `Documents` in the iOS app process; nil in every extension and on the
-    /// Mac (wave 1), where kept files wait in `files/`. Tests inject a temp directory.
-    @ObservationIgnored public let visibleRoot: URL?
+    /// The visible folder for kept files: `Documents` in the iOS app process, the Finder folder in the Mac app process
+    /// (`.macFolder`: that URL whether or not it is reachable right now, 13.1); nil in every extension. It can change at
+    /// run time on the Mac (the owner chose another folder): swapped only inside `OfflineFolderGate` by `setVisibleRoot`.
+    /// Tests inject a temp directory.
+    public internal(set) var visibleRoot: URL?
+    /// Where `visibleRoot` comes from (13.1): every Mac-only rule is keyed on this, never on `#if`.
+    @ObservationIgnored public let rootMode: VisibleRootMode
+    /// Whether `visibleRoot` can be used right now (13.1, 13.6). Always `.ready` in `.documents`.
+    public internal(set) var rootState: RootState = .ready
+    /// A failed move into the root ran out of space (the Mac folder's "the disk is full" line); cleared by the next success.
+    public internal(set) var rootDiskFull = false
+    /// Adoption of what `FolderSync` wrote is running (13.3).
+    public internal(set) var isAdopting = false
+    /// The usable root (`visibleRoot` while `rootState == .ready`, else nil) as the gate's work reads it: a box any context
+    /// can read, so entering the gate never waits for the main actor (a hop there would make every gate holder queue behind
+    /// whatever else the main actor is doing). Written with the properties it mirrors, and by the gate's own swap.
+    @ObservationIgnored let rootBox = OfflineRootBox()
+    /// `.macFolder`: re-reads where the root is (the ledger's bookmark or path, the default folder) and who it is.
+    @ObservationIgnored let rootProvider: MacRootProvider?
+    /// `.macFolder`: the ledger FolderSync wrote, read (never written) by the adoption.
+    @ObservationIgnored let folderLedger: FolderLedger?
+    /// The root's security scope, held open for the life of the process and swapped with the root.
+    @ObservationIgnored var rootAccess: FolderAccess?
     @ObservationIgnored let ops: any OfflineFileOps
     /// Whether a kept file in this store can ever reach the visible folder: this process has one, or it is an
-    /// extension whose store the app also reads (the app group), where the app promotes. A store nobody
-    /// promotes from (the extension with no app group, the Mac until wave M) takes nothing as kept: kept files
+    /// extension whose store the app also reads (the app group), where the app promotes. The Mac app always has one (its
+    /// Finder folder, reachable or not, 13.1). A store nobody promotes from (the extension with no app group) takes nothing as kept: kept files
     /// are never evicted, so every one would stay forever (review fixes S2, S3). Its saves are cache.
     /// `shared()` decides it from the process (`OfflineFolder.storeIsSharedWithApp`); a store built directly (tests,
     /// previews) says so with `sharedWithApp` and defaults to a store that can keep.
@@ -245,16 +265,34 @@ public final class OfflineStore {
     init(
         root: URL, tools: any MediaTools, defaults: UserDefaults = AppGroup.defaults(),
         now: @escaping @Sendable () -> Date = { Date() }, visibleRoot: URL? = nil,
-        ops: any OfflineFileOps = SystemFileOps(), syncDirectory: URL? = nil, sharedWithApp: Bool = true
+        ops: (any OfflineFileOps)? = nil, syncDirectory: URL? = nil, sharedWithApp: Bool = true,
+        rootMode: VisibleRootMode = .documents, rootProvider: MacRootProvider? = nil, folderLedger: FolderLedger? = nil
     ) {
         self.root = root
-        self.visibleRoot = visibleRoot
-        self.canKeep = visibleRoot != nil || sharedWithApp
-        self.ops = ops
+        self.rootMode = rootMode
+        self.rootProvider = rootMode == .macFolder ? rootProvider : nil
+        self.folderLedger = folderLedger ?? (rootMode == .macFolder ? rootProvider?.ledger : nil)
+        // The Mac app's root is whatever the ledger says, reachable or not: never nil (13.1)
+        var resolvedRoot = visibleRoot
+        if rootMode == .macFolder, let provider = rootProvider {
+            let resolution = provider.resolve()
+            resolvedRoot = resolution.url
+            self.rootAccess = resolution.access
+            self.rootState = resolution.state
+        } else if rootMode == .macFolder, let visibleRoot {
+            var isDirectory: ObjCBool = false
+            if !(FileManager.default.fileExists(atPath: visibleRoot.path, isDirectory: &isDirectory) && isDirectory.boolValue) {
+                self.rootState = .unreachable(path: visibleRoot.path)
+            }
+        }
+        self.visibleRoot = resolvedRoot
+        self.canKeep = resolvedRoot != nil || sharedWithApp
+        self.ops = ops ?? SystemFileOps(mode: rootMode)
         self.syncDirectory = syncDirectory
         self.tools = tools
         self.defaults = defaults
         self.now = now
+        publishRoot()
         adopt(Self.reconciled(root: root))
         Self.purgeInbox(root: root, olderThan: Self.inboxLifetime)
     }
@@ -264,9 +302,19 @@ public final class OfflineStore {
     /// `<app group>/Videos`, else `Application Support/Videos`.
     public static func shared() -> OfflineStore {
         if let s = sharedInstance { return s }
-        let s = OfflineStore(
+        let s: OfflineStore
+        #if os(macOS)
+        // The Mac's visible root is the Finder folder the ledger names (13.1)
+        let ledger = FolderLedger.shared()
+        s = OfflineStore(
+            root: AppGroup.directory("Videos"), tools: SystemMediaTools(), visibleRoot: nil,
+            syncDirectory: AppGroup.directory("Sync"), sharedWithApp: false, rootMode: .macFolder,
+            rootProvider: MacRootProvider(ledger: ledger), folderLedger: ledger)
+        #else
+        s = OfflineStore(
             root: AppGroup.directory("Videos"), tools: SystemMediaTools(), visibleRoot: OfflineFolder.defaultVisibleRoot(),
             syncDirectory: AppGroup.directory("Sync"), sharedWithApp: OfflineFolder.storeIsSharedWithApp())
+        #endif
         s.sessionIsHeld = { session in
             if PendingOriginals.shared().isLive(session: session) { return true }
             return SharedJobStore.shared().all().contains { job in
@@ -899,9 +947,9 @@ public final class OfflineStore {
         guard !isInUse(id), records.contains(where: { $0.id == id }) else { return false }
         // Both tiers run inside the gate (a promotion's move and its index write are one step to this), and the
         // visible file goes by identity, not by the path remembered (review fixes B1, S5).
-        let (hidden, visible, ops, stamp) = (root, visibleRoot, ops, now())
-        let outcome = await OfflineFolderGate.shared.exclusive {
-            await OfflineFolder.removeCopy(id: id, hiddenRoot: hidden, visibleRoot: visible, ops: ops, now: stamp)
+        let (hidden, ops, stamp, excludes) = (root, ops, now(), excludesBackup)
+        let outcome = await inGate { visible in
+            await OfflineFolder.removeCopy(id: id, hiddenRoot: hidden, visibleRoot: visible, ops: ops, now: stamp, excludesBackup: excludes)
         }
         if let written = outcome.records { adopt(written) }
         return outcome.had && !outcome.refused
@@ -916,12 +964,14 @@ public final class OfflineStore {
     /// tagged file with no record would be rebuilt by the next scan. Returns the ids whose file could not be
     /// proved theirs, which the caller leaves in place.
     private func purgeVisible(of gone: [Record]) async -> Set<String> {
-        guard let visibleRoot else { return [] }
+        guard visibleRoot != nil else { return [] }
         let ids = gone.filter { $0.visiblePath != nil }.map(\.id)
         guard !ids.isEmpty else { return [] }
-        let (hidden, ops, stamp) = (root, ops, now())
-        return await OfflineFolderGate.shared.exclusive {
-            await OfflineFolder.purge(ids: ids, hiddenRoot: hidden, visibleRoot: visibleRoot, ops: ops, now: stamp)
+        let (hidden, ops, stamp, excludes) = (root, ops, now(), excludesBackup)
+        return await inGate { visible in
+            // a root that cannot be used (an unplugged disk) refuses: the files are there, and the records stay with them
+            guard let visible else { return Set(ids) }
+            return await OfflineFolder.purge(ids: ids, hiddenRoot: hidden, visibleRoot: visible, ops: ops, now: stamp, excludesBackup: excludes)
         }
     }
 
@@ -952,9 +1002,17 @@ public final class OfflineStore {
             root: root, referenced: Set(records.flatMap { $0.previewNames ?? [] }), olderThan: Self.inboxLifetime)
         if !canKeep { releaseUnpromotableKeeps() }
         if visibleRoot != nil {
+            if rootMode == .macFolder {
+                // The Mac: where is the root now, and is it the folder cobalt was using? Then what FolderSync wrote is
+                // adopted by tag, before the scan (13.3).
+                await resolveRoot()
+                await adoptFolderSyncFiles()
+                await normalizeLegacyKeeps()
+            }
             // The scan comes first: a file the last run moved but did not get to index (section 2.3) is adopted
             // by its tag here, and must not be moved a second time.
-            await scanVisibleRoot()
+            let report = await scanVisibleRoot()
+            if rootMode == .macFolder, !report.rootMissing, !report.indexUnreadable { rootProvider?.recordIdentity(ofRoot: visibleRoot) }
             await runMigrationIfNeeded()
             await promote(only: nil, respectHolds: true)
         }

@@ -174,8 +174,8 @@ struct GalleryFacts {
     /// "Files › On My iPhone › cobalt › instagram · Ddy0-gpGg5U" / "~/Movies/cobalt/instagram · Ddy0-gpGg5U".
     private static func place(title: String, single: Bool, model: AppModel) -> String? {
         #if os(macOS)
-        let status = model.folderSync.status
-        guard status.available, status.enabled else { return nil }
+        let status = model.macFolder.status
+        guard status.available else { return nil }
         return single ? status.path : "\(status.path)/\(title)"
         #else
         let device = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"

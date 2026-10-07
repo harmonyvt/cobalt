@@ -24,12 +24,47 @@ enum AppGroup {
     }
 
     static func defaults() -> UserDefaults {
+        #if DEBUG
+        if let sandbox = sandboxRoot {
+            // a sandboxed run never reads or writes the owner's own preferences (a toggle there would leak into the real app)
+            var hash: UInt64 = 0xcbf29ce484222325                                 // FNV-1a: a stable name for the folder
+            for byte in sandbox.path.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
+            return UserDefaults(suiteName: "cobalt.sandbox.\(String(hash, radix: 16))") ?? .standard
+        }
+        #endif
         #if os(macOS)
         return .standard
         #else
         return UserDefaults(suiteName: id) ?? .standard
         #endif
     }
+
+    /// DEBUG only: `-cobaltSandboxRoot <dir>` puts everything this process stores under `<dir>` (CONTRACT-OFFLINE.md 13.12):
+    /// the store and the ledgers at `<dir>/Application Support/{Videos,Sync,...}` (the layout of the real
+    /// `~/Library/Application Support`, so a `ditto` copy of the owner's folders drops straight in), the Mac's default
+    /// folder at `<dir>/Movies/cobalt` (`FolderDestination.defaultURL`), and the preferences in a suite of their own. A
+    /// build run to look at the Mac folder must never touch the real home. Compiled out of release builds.
+    static var sandboxRoot: URL? {
+        #if DEBUG
+        return sandbox
+        #else
+        return nil
+        #endif
+    }
+
+    #if DEBUG
+    private static let sandbox: URL? = sandboxRoot(arguments: ProcessInfo.processInfo.arguments)
+
+    /// `-cobaltSandboxRoot <dir>` in `arguments`: the folder, made when it is not there; nil without the flag or a value.
+    static func sandboxRoot(arguments args: [String]) -> URL? {
+        guard let i = args.firstIndex(of: "-cobaltSandboxRoot"), args.indices.contains(i + 1) else { return nil }
+        let path = args[i + 1]
+        guard !path.isEmpty, !path.hasPrefix("-") else { return nil }
+        let url = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+    #endif
 
     /// Which folder holds everything this process stores.
     enum RootKind: String, Sendable {
@@ -69,7 +104,13 @@ enum AppGroup {
     static var location: Location {
         resolved.withLock { slot in
             if let slot { return slot }
-            let made = resolve(container: containerURL(), applicationSupport: applicationSupportURL())
+            let made: Location
+            if let sandbox = sandboxRoot {
+                let base = sandbox.appendingPathComponent("Application Support", isDirectory: true)
+                made = Location(kind: .fallback, base: base, writable: writable(base), groupSkipped: "sandbox")
+            } else {
+                made = resolve(container: containerURL(), applicationSupport: applicationSupportURL())
+            }
             slot = made
             return made
         }
@@ -185,7 +226,14 @@ public final class Settings {
     /// App-group defaults and the shared keychain.
     public static func shared() -> Settings {
         if let s = sharedInstance { return s }
-        let s = Settings(defaults: AppGroup.defaults(), keychain: .shared)
+        #if DEBUG
+        // A sandboxed run (`-cobaltSandboxRoot`) never opens the owner's keychain (an unsigned build would raise its access
+        // prompt) nor reads their key: it starts with none, and a test key can be pasted in Settings.
+        let keychain: Keychain = AppGroup.sandboxRoot == nil ? .shared : .memory()
+        #else
+        let keychain: Keychain = .shared
+        #endif
+        let s = Settings(defaults: AppGroup.defaults(), keychain: keychain)
         sharedInstance = s
         return s
     }
@@ -311,11 +359,11 @@ public final class Settings {
         set { withMutation(keyPath: \.photosSyncWebps) { defaults.set(newValue, forKey: "photosSyncWebps") } }
     }
 
-    // MARK: save to a folder (the Mac; Folder/FolderSync.swift)
+    // MARK: save to a folder (the Mac; retired in wave M)
 
-    /// "save to a folder" (macOS): every video and webp that lands in the offline store is copied into the
-    /// owner's folder once. ON until the owner turns it off; an install that never touched it has no stored
-    /// value and reads on. Which folder, and what was copied, live in the folder ledger, not here.
+    /// The old "save to a folder" switch (macOS). `FolderSync` is gone (CONTRACT-OFFLINE.md 13.3): nothing reads this to
+    /// copy any more. Adoption reads the stored value once, to know whether a file FolderSync had not yet copied was on its
+    /// way (on unless the owner turned it off). Kept for that and for a downgrade.
     public var folderSync: Bool {
         get {
             access(keyPath: \.folderSync)
@@ -331,7 +379,8 @@ public final class Settings {
     public var sendTelemetry: Bool {
         get {
             access(keyPath: \.sendTelemetry)
-            return defaults.object(forKey: "sendTelemetry") as? Bool ?? true
+            // a DEBUG sandbox run (`-cobaltSandboxRoot`) sends nothing to the owner's server unless it is switched on there
+            return defaults.object(forKey: "sendTelemetry") as? Bool ?? (AppGroup.sandboxRoot == nil)
         }
         set { withMutation(keyPath: \.sendTelemetry) { defaults.set(newValue, forKey: "sendTelemetry") } }
     }

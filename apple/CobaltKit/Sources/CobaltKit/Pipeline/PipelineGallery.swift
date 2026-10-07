@@ -597,7 +597,7 @@ extension Pipeline {
             // the replaced file here and the new one in the library)
             let gone = Set(r.replaced)
             for old in store.videos where old.libraryID.map(gone.contains) == true && old.libraryID != r.itemID {
-                await store.remove(old.id)
+                await store.replaceMade(old.id)
             }
         }
         guard let itemID = r.itemID else { return r }
@@ -622,7 +622,7 @@ extension Pipeline {
             let spec = Self.madeSpec(for: m, result: r)
             // a make that replaces one: the old record and its Files copy leave first (R8), so the name is free
             for old in store.videos where old.madeKind == kind && old.libraryID != itemID && (old.sessionID == sid || old.mediaID == mediaID) {
-                await store.remove(old.id)
+                await store.replaceMade(old.id)
             }
             let info = MediaInfo(name: (name as NSString).deletingPathExtension, duration: r.seconds, width: r.width, height: r.height, bytes: r.bytes, isImage: isImage)
             let link: URL?

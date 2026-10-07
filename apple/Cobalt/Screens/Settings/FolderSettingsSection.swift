@@ -4,67 +4,60 @@ import SwiftUI
 import AppKit
 #endif
 
-/// "folder" (macOS): the Mac's counterpart of the photos album. Every video and webp cobalt keeps is
-/// copied once into a folder in Finder: `~/Movies/cobalt` unless the owner chose another. Driven by
-/// `model.folderSync.status`; this view only draws it and forwards the owner's choices. Nothing is drawn
-/// where `isAvailable` is false (iPhone, iPad).
+/// "folder" (macOS): the Finder folder that holds the offline files (CONTRACT-OFFLINE.md section 13): `~/Movies/cobalt`
+/// unless the owner chose another. Driven by `model.macFolder.status`; this view only draws it and forwards the owner's
+/// choices. Nothing is drawn where `isAvailable` is false (iPhone, iPad).
+///
+/// Wave M1 compile shim for the old "save to a folder" section (the copier is gone): the folder row, its three buttons,
+/// the problem line and the "move the offline files?" question, copy as 13.10 pins it. The Mac surfaces lane (M2) folds it
+/// into the "on this mac" section.
 struct FolderSettingsSection: View {
     let model: AppModel
 
-    /// The toggle reads on while turning it on is under way.
-    @State private var enabling = false
-    /// "also save the N videos already in cobalt?": N while the dialog is open.
-    @State private var backfillCount: Int?
+    /// "move the N offline files to <path>?": N while the dialog is open.
+    @State private var moveCount: Int?
     @State private var notice: String?
 
-    private var sync: FolderSync { model.folderSync }
-    private var status: FolderSync.Status { sync.status }
+    private var folder: MacFolder { model.macFolder }
+    private var status: MacFolder.Status { folder.status }
 
     var body: some View {
-        if sync.isAvailable {
+        if folder.isAvailable {
             Section {
-                folderToggle
-                if status.enabled {
-                    folderRow
-                    actionsRow
-                    statusRow
-                    if status.existing > 0 {
-                        Button(Copy.Folder.existingRow(status.existing), systemImage: Symbol.Folder.existing) {
-                            Task { await sync.includeExisting(true) }
-                        }
+                folderRow
+                    .confirmationDialog(
+                        moveCount.map { "move the \($0) offline files to \(status.path)?" } ?? "",
+                        isPresented: Binding(get: { moveCount != nil }, set: { if !$0 { answer(nil) } }),
+                        titleVisibility: .visible
+                    ) {
+                        Button("move") { answer(true) }
+                        // not `.cancel`: from iOS 26 / macOS 26 a dialog anchored to its row drops its cancel button, and this is a real answer
+                        Button("leave them") { answer(false) }
+                    } message: {
+                        Text("left behind, they stay in the old folder and aren't offline here any more.")
                     }
-                    if let notice {
-                        Text(notice).font(CobaltType.captionSmall).foregroundStyle(CobaltColor.errorText)
-                    }
+                actionsRow
+                if let line = problemLine {
+                    Text(line).font(CobaltType.captionSmall).foregroundStyle(CobaltColor.errorText)
+                }
+                if let notice {
+                    Text(notice).font(CobaltType.captionSmall).foregroundStyle(CobaltColor.errorText)
                 }
             } header: {
                 Text(Copy.Folder.group).font(CobaltType.caption).textCase(nil)
             } footer: {
-                Text(status.enabled ? Copy.Folder.footer : Copy.Folder.footerOff).font(CobaltType.captionSmall).lineSpacing(2)
+                Text("offline files stay in this folder until you remove them, here or in finder.").font(CobaltType.captionSmall).lineSpacing(2)
             }
         }
     }
 
-    // MARK: rows
-
-    private var folderToggle: some View {
-        Toggle(isOn: Binding(
-            get: { status.enabled || enabling },
-            set: { on in
-                if on { turnOn() } else { sync.disable() }
-            })) {
-            Label(Copy.Folder.toggle, systemImage: Symbol.Folder.toggle)
-        }
-        .confirmationDialog(
-            backfillCount.map { Copy.Folder.backfillTitle($0) } ?? "",
-            isPresented: Binding(
-                get: { backfillCount != nil },
-                set: { if !$0 { answerBackfill(false) } }),
-            titleVisibility: .visible
-        ) {
-            Button(backfillCount.map { Copy.Folder.backfillAdd($0) } ?? "") { answerBackfill(true) }
-            // not `.cancel`: from iOS 26 / macOS 26 a dialog anchored to its row drops its cancel button, and this is a real answer
-            Button(Copy.Folder.backfillSkip) { answerBackfill(false) }
+    private var problemLine: String? {
+        switch status.problem {
+        case .unreachable: return "this folder isn't connected. new saves wait on this mac until it's back."
+        case .notAllowed: return "cobalt can't write to this folder."
+        case .wrongFolder: return "this isn't the folder cobalt was using. choose it again."
+        case .diskFull: return "the disk is full."
+        case nil: return nil
         }
     }
 
@@ -72,7 +65,7 @@ struct FolderSettingsSection: View {
         LabeledContent {
             Text(status.path)
                 .font(Font.cobalt(12.5))
-                .foregroundStyle(status.problem == .folderMissing || status.problem == .notAllowed ? CobaltColor.errorText : Color.secondary)
+                .foregroundStyle(status.problem != nil ? CobaltColor.errorText : Color.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .textSelection(.enabled)
@@ -87,10 +80,11 @@ struct FolderSettingsSection: View {
             Spacer(minLength: 0)
             Button(Copy.Folder.choose, systemImage: Symbol.Folder.choose, action: chooseFolder)
             Button(Copy.Folder.showInFinder, systemImage: Symbol.Folder.showInFinder) {
-                Task { await sync.revealInFinder() }
+                Task { await folder.reveal() }
             }
+            .disabled(status.problem == .unreachable)
             if !status.isDefault {
-                Button(Copy.Folder.resetToDefault, systemImage: Symbol.Folder.reset, action: resetToDefault)
+                Button("use ~/Movies/cobalt", systemImage: Symbol.Folder.reset, action: resetToDefault)
             }
         }
         .buttonStyle(.bordered)
@@ -98,66 +92,32 @@ struct FolderSettingsSection: View {
         .labelStyle(.titleOnly)
     }
 
-    private var statusRow: some View {
-        let line = FolderStatusLine(status)
-        return VStack(alignment: .leading, spacing: 8) {
-            LabeledContent {
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(line.text)
-                        .foregroundStyle(line.textIsProblem ? CobaltColor.errorText : Color.secondary)
-                        .monospacedDigit()
-                    if let extra = line.extra {
-                        Text(extra).foregroundStyle(CobaltColor.errorText)
-                    }
-                }
-                .font(Font.cobalt(12.5))
-                .multilineTextAlignment(.trailing)
-            } label: {
-                Label(Copy.Folder.statusRow, systemImage: line.showsProblemIcon ? Symbol.Folder.problem : Symbol.Folder.status)
-            }
-            if let progress = status.progress, progress.total > 0 {
-                ProgressView(value: Double(min(progress.done, progress.total)), total: Double(progress.total))
-                    .progressViewStyle(.linear)
-                    .tint(CobaltColor.text)
-                    .accessibilityHidden(true)
-            }
-        }
-        .accessibilityElement(children: .combine)
-    }
-
     // MARK: actions
 
-    private func turnOn() {
-        guard !enabling else { return }
-        enabling = true
-        Task {
-            let existing = await sync.enable()
-            enabling = false
-            if existing > 0 { backfillCount = existing }
+    private func handle(_ outcome: MacFolder.ChooseOutcome) {
+        switch outcome {
+        case .chosen, .unchanged: break
+        case .askMove(let count): moveCount = count
+        case .refusedICloud: notice = "pick a folder on this mac or an external disk. icloud drive folders can't hold offline files."
+        case .failed: notice = Copy.Folder.chooseFailed
         }
     }
 
-    /// The once-only question. Idempotent: a button and the dialog's own dismissal can both land here.
-    private func answerBackfill(_ include: Bool) {
-        guard backfillCount != nil else { return }
-        backfillCount = nil
-        Task { await sync.includeExisting(include) }
+    /// Idempotent: a button and the dialog's own dismissal can both land here.
+    private func answer(_ move: Bool?) {
+        guard moveCount != nil else { return }
+        moveCount = nil
+        Task { await folder.answerMove(move) }
     }
 
     private func resetToDefault() {
         notice = nil
-        Task {
-            if case .chosen(let existing) = await sync.resetToDefault(), existing > 0 { backfillCount = existing }
-        }
+        Task { handle(await folder.resetToDefault()) }
     }
 
     private func picked(_ url: URL) async {
         notice = nil
-        switch await sync.chooseFolder(url) {
-        case .chosen(let existing): if existing > 0 { backfillCount = existing }
-        case .unchanged: break
-        case .failed: notice = Copy.Folder.chooseFailed
-        }
+        handle(await folder.chooseFolder(url))
     }
 
     /// The folder picker. AppKit calls the completion on a thread of its choosing: it is `@Sendable` and
@@ -170,7 +130,7 @@ struct FolderSettingsSection: View {
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
         panel.prompt = Copy.Folder.choosePrompt
-        panel.message = Copy.Folder.chooseMessage
+        panel.message = "offline files are kept in this folder."
         panel.directoryURL = URL(fileURLWithPath: (status.path as NSString).expandingTildeInPath, isDirectory: true)
         let chosen: @Sendable (NSApplication.ModalResponse) -> Void = { response in
             Task { @MainActor in
@@ -184,39 +144,5 @@ struct FolderSettingsSection: View {
             panel.begin(completionHandler: chosen)
         }
         #endif
-    }
-}
-
-/// What the status row says: a problem first (folder gone, no permission, disk full), else what is being
-/// saved, else the count with what waits.
-struct FolderStatusLine {
-    let text: String
-    /// A second line: what could not be saved, when the first line is about something else.
-    let extra: String?
-    let textIsProblem: Bool
-    var showsProblemIcon: Bool { textIsProblem || extra != nil }
-
-    init(_ s: FolderSync.Status) {
-        let gaveUp = s.gaveUp > 0 ? Copy.Folder.gaveUp(s.gaveUp) : nil
-        switch s.problem {
-        case .folderMissing: self.init(Copy.Folder.folderMissing, gaveUp, true)
-        case .notAllowed: self.init(Copy.Folder.notAllowed, gaveUp, true)
-        case .diskFull: self.init(Copy.Folder.diskFull(s.waiting), gaveUp, true)
-        case nil:
-            if let progress = s.progress {
-                self.init(Copy.Folder.saving(progress.done, of: progress.total), gaveUp, false)
-            } else if s.saved == 0, s.waiting == 0, let gaveUp {
-                self.init(gaveUp, nil, true)
-            } else {
-                let count = Copy.Folder.saved(s.saved) + (s.waiting > 0 ? " · " + Copy.Folder.waiting(s.waiting) : "")
-                self.init(count, gaveUp, false)
-            }
-        }
-    }
-
-    private init(_ text: String, _ extra: String?, _ textIsProblem: Bool) {
-        self.text = text
-        self.extra = extra
-        self.textIsProblem = textIsProblem
     }
 }

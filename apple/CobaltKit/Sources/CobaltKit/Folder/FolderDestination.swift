@@ -23,7 +23,13 @@ final class FolderAccess: @unchecked Sendable {
     deinit { stop() }
 }
 
-/// The folder the copies go to: the default one, or one the owner chose, kept as a security-scoped
+/// Which disk a folder is on and which folder it is (13.4): the volume's UUID and the folder's file id.
+struct FolderIdentity: Equatable, Sendable {
+    var volume: String?
+    var fileID: Int64?
+}
+
+/// The folder kept files live in (from wave M): the default one, or one the owner chose, kept as a security-scoped
 /// bookmark so it keeps working after the app is sandboxed (a plain path does not survive that).
 enum FolderDestination {
     enum Resolution: Sendable {
@@ -45,9 +51,26 @@ enum FolderDestination {
         return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
     }
 
-    /// `~/Movies/cobalt`.
+    /// `~/Movies/cobalt`; under a DEBUG sandbox (`-cobaltSandboxRoot`) `<dir>/Movies/cobalt`.
     static var defaultURL: URL {
-        realHome().appendingPathComponent("Movies", isDirectory: true).appendingPathComponent(folderName, isDirectory: true)
+        let home = AppGroup.sandboxRoot ?? realHome()
+        return home.appendingPathComponent("Movies", isDirectory: true).appendingPathComponent(folderName, isDirectory: true)
+    }
+
+    /// The disk and the id of the folder at `url` (symlinks followed); both nil when it cannot be read.
+    static func identity(of url: URL) -> FolderIdentity {
+        let values = try? url.resourceValues(forKeys: [.volumeUUIDStringKey, .fileIdentifierKey])
+        return FolderIdentity(volume: values?.volumeUUIDString, fileID: values?.fileIdentifier.map { Int64(truncatingIfNeeded: $0) })
+    }
+
+    /// Whether `url` is inside iCloud Drive (`~/Library/Mobile Documents`, or any item the system calls ubiquitous):
+    /// evicted placeholders and attribute sync would break identity (13.1), so such a folder is refused.
+    static func isInICloudDrive(_ url: URL) -> Bool {
+        let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+        let containers = realHome().appendingPathComponent("Library/Mobile Documents", isDirectory: true)
+            .resolvingSymlinksInPath().standardizedFileURL.path
+        if resolved.path == containers || resolved.path.hasPrefix(containers + "/") { return true }
+        return (try? resolved.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
     }
 
     /// The same folder under two spellings (a symlink, a trailing slash) compares equal.

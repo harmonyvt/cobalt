@@ -13,6 +13,9 @@ extension OfflineStore {
     /// in use waits for the next `reload()`. Records go newest first, 20 to an index write, off the main actor.
     public func runMigrationIfNeeded() async {
         guard visibleRoot != nil else { return }
+        // The Mac's visible root is the owner's own Finder folder (13.2.1): the legacy files FolderSync already copied
+        // there must not be moved in beside them as "(2)" duplicates. Adoption (`FolderAdoption`) does this job there.
+        guard rootMode == .documents else { return }
         let legacy = Set(records.filter { $0.fileName != nil && $0.keep == nil && !isInUse($0.id) }.map(\.id))
         guard !legacy.isEmpty else { return }
         let hidden = root
