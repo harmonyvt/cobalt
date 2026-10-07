@@ -16,7 +16,20 @@ struct RenditionHero: View {
     var item: MediaItem?
     var maxHeight: CGFloat = 360
 
-    private var remote: HeroRemote { HeroRemote(rendition, in: item) }
+    private var remote: HeroRemote {
+        let remote = HeroRemote(rendition, in: item)
+        #if DEBUG
+        // `-previewRemoteVideo <file name>` (with `-previewMediaDir <folder>` holding it): a video the server hosts no file of
+        // plays that file, so the hosted-video hero (bar, sound, full screen) can be driven without a server
+        if let name = UserDefaults.standard.string(forKey: "previewRemoteVideo"), !rendition.isWebp, rendition.local?.fileURL == nil,
+           remote.playableVideo == nil, remote.animatedWebp == nil, let url = URL(string: "https://media.capybaraharmony.com/\(name)") {
+            var forced = remote
+            forced.playableVideo = url
+            return forced
+        }
+        #endif
+        return remote
+    }
 
     var body: some View {
         Group {
@@ -168,6 +181,11 @@ private enum PlanetBadgeInset { static let value: CGFloat = 4 }
 struct RemoteHeroPicture: View {
     var poster: URL?
     let remote: HeroRemote
+    /// The media controls' transport and sound for a hosted video (nil: it just plays, muted and looping, as before).
+    var transport: HeroTransport?
+    var muted = true
+    /// Set once the hosted video has run: the controls are laid over it from then on, and the cloud badge gives way.
+    var ready: Binding<Bool>?
 
     var body: some View {
         ZStack {
@@ -180,7 +198,7 @@ struct RemoteHeroPicture: View {
             if let webp = remote.animatedWebp {
                 AnimatedImageView(source: HeroSource.animated(webp))
             } else if let video = remote.playableVideo {
-                RemoteVideo(url: HeroSource.resolve(video))
+                RemoteVideo(url: HeroSource.resolve(video), transport: transport, muted: muted, ready: ready)
             } else if remote.lockedWebp, poster == nil, remote.still == nil {
                 Image(systemName: Symbol.Media.isPrivate)
                     .font(.system(size: 28, weight: .regular))
@@ -189,14 +207,17 @@ struct RemoteHeroPicture: View {
             }
         }
         .overlay(alignment: .bottomLeading) {
-            Image(systemName: Symbol.offlineMissing)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(CobaltColor.badgeInk)
-                .frame(width: 24, height: 24)
-                .background(CobaltColor.badgeBack, in: Circle())
-                .padding(8)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            // the bar (and its quiet sound badge) own this corner once they are up
+            if ready?.wrappedValue != true {
+                Image(systemName: Symbol.offlineMissing)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(CobaltColor.badgeInk)
+                    .frame(width: 24, height: 24)
+                    .background(CobaltColor.badgeBack, in: Circle())
+                    .padding(8)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
         }
     }
 }
@@ -208,42 +229,94 @@ private struct RemoteHero: View {
     let maxHeight: CGFloat
     let label: String
     @State private var fullScreen: HeroFullScreen?
+    /// The media controls over a hosted video (play, scrubber, sound, full screen), like a stored video's.
+    @State private var transport = HeroTransport()
+    @State private var muted = true
+    /// The hosted video has run: its player is up, so the bar is.
+    @State private var ready = false
+    /// The clip was running when the full-screen player took over (it carries on when that closes).
+    @State private var wasPlaying = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The bar is for a hosted video, not for a webp or a poster.
+    private var hasBar: Bool { remote.animatedWebp == nil && remote.playableVideo != nil && ready }
 
     private var request: HeroFullScreen? {
         if let webp = remote.animatedWebp { return .webp(source: HeroSource.animated(webp), aspect: aspect, name: label) }
-        if let video = remote.playableVideo { return .video(url: HeroSource.resolve(video), name: label, start: .zero) }
+        if let video = remote.playableVideo {
+            let seconds = transport.time
+            let start = seconds.isFinite && seconds > 0 ? CMTime(seconds: seconds, preferredTimescale: 600) : .zero
+            return .video(url: HeroSource.resolve(video), name: label, start: start)
+        }
         return nil
     }
 
     private func open() {
         guard let request else { return }
+        if case .video = request {
+            // the hero's own sound and picture stand by while the full-screen player has the clip
+            muted = true
+            wasPlaying = transport.isPlaying
+            transport.player?.pause()
+        }
         var transaction = Transaction()
         transaction.disablesAnimations = reduceMotion
         withTransaction(transaction) { fullScreen = request }
     }
 
+    /// Back from the full-screen player: the same clip, muted, from where it got to.
+    private func closed(at time: CMTime?) {
+        guard let player = transport.player else { return }
+        player.isMuted = true
+        Task {
+            if let time, time.isValid { await player.seek(to: time) }
+            if wasPlaying { player.play() }
+        }
+    }
+
     private var expander: (() -> Void)? {
-        guard request != nil else { return nil }
+        guard remote.animatedWebp != nil || remote.playableVideo != nil else { return nil }
         return { open() }
     }
 
     var body: some View {
-        RemoteHeroPicture(poster: poster, remote: remote)
-            .heroFrame(aspect: aspect, maxHeight: maxHeight, label: label, expand: expander)
+        RemoteHeroPicture(poster: poster, remote: remote, transport: transport, muted: muted, ready: $ready)
+            .overlay {
+                // a hosted video that plays has the bar (full screen is in it); a webp keeps the lone corner button
+                if hasBar {
+                    HeroControls(transport: transport, muted: muted, onSound: { muted.toggle() }, onFullScreen: { open() })
+                }
+            }
+            .heroFrame(aspect: aspect, maxHeight: maxHeight, label: label, expand: hasBar ? nil : expander)
             .contentShape(Rectangle())
-            .onTapGesture(count: 2) { open() }
-            .heroFullScreen(item: $fullScreen) { _ in }
+            .onTapGesture(count: 2) { if !hasBar { open() } }
+            .heroFullScreen(item: $fullScreen) { closed(at: $0) }
+            #if DEBUG
+            .task {
+                // `-previewHeroFullScreen 1` (evidence): opens the full-screen player by itself, like the stored video's hero
+                guard UserDefaults.standard.bool(forKey: "previewHeroFullScreen"), remote.playableVideo != nil else { return }
+                try? await Task.sleep(for: .seconds(2.5))
+                open()
+            }
+            #endif
     }
 }
 
-/// A hosted mp4 played from its link, muted and looping, over the poster. Invisible until frames run.
+/// A hosted mp4 played from its link, muted and looping, over the poster. Invisible until frames run. With a `transport`
+/// the hero's media controls drive its player (play, scrub), and `muted` going false swaps in the clip's own item with its
+/// audio, as a stored video's first unmute does.
 private struct RemoteVideo: View {
     let url: URL
+    var transport: HeroTransport?
+    var muted = true
+    /// Set once frames have run: the hero lays its controls over the video from then on.
+    var ready: Binding<Bool>?
     @State private var player: AVPlayer?
     @State private var loop: NSObjectProtocol?
     @State private var statusWatch: NSKeyValueObservation?
     @State private var playing = false
+    /// The player's item carries the clip's audio (after the first unmute).
+    @State private var withSound = false
 
     var body: some View {
         Group {
@@ -261,21 +334,33 @@ private struct RemoteVideo: View {
             let next = AVPlayer(playerItem: item)
             next.isMuted = true
             next.actionAtItemEnd = .none
-            loop = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
-            ) { [weak next] _ in
-                next?.seek(to: .zero)
-                next?.play()
-            }
+            withSound = false
+            watchLoop(of: item, on: next)
             let flag = $playing
             statusWatch = next.observe(\.timeControlStatus, options: [.initial, .new]) { observed, _ in
                 let isPlaying = observed.timeControlStatus == .playing
                 Task { @MainActor in flag.wrappedValue = isPlaying }
             }
             player = next
+            transport?.attach(next)
             next.play()
         }
+        .onChange(of: playing) { _, now in
+            if now { ready?.wrappedValue = true }
+        }
+        .onChange(of: muted) { _, now in
+            guard let player else { return }
+            if now {
+                player.isMuted = true
+                AudioPolicy.release()
+            } else {
+                Task { await unmute(player) }
+            }
+        }
         .onDisappear {
+            if !muted { AudioPolicy.release() }
+            transport?.detach()
+            ready?.wrappedValue = false
             player?.pause()
             statusWatch?.invalidate()
             if let loop { NotificationCenter.default.removeObserver(loop) }
@@ -283,7 +368,35 @@ private struct RemoteVideo: View {
             loop = nil
             statusWatch = nil
             playing = false
+            withSound = false
         }
+    }
+
+    /// Restarts the clip at its end.
+    private func watchLoop(of item: AVPlayerItem, on player: AVPlayer) {
+        if let loop { NotificationCenter.default.removeObserver(loop) }
+        loop = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak player] _ in
+            player?.seek(to: .zero)
+            player?.play()
+        }
+    }
+
+    /// The picture-only item has no audio: the clip's own item takes over from the same moment.
+    private func unmute(_ player: AVPlayer) async {
+        if !withSound {
+            let resume = player.currentTime()
+            let running = player.timeControlStatus != .paused
+            let full = AVPlayerItem(url: url)
+            player.replaceCurrentItem(with: full)
+            watchLoop(of: full, on: player)
+            await full.seek(to: resume)
+            withSound = true
+            if running { player.play() }
+        }
+        player.isMuted = false
+        AudioPolicy.playback()
     }
 }
 
@@ -321,6 +434,10 @@ struct DetailPlayer: View {
     @State private var videoUp = false
     /// The media controls (play, scrubber, sound, full screen) over a video that plays here.
     @State private var transport = HeroTransport()
+    /// The hosted video (this device holds no file) has run: the same controls go over it, driving its player.
+    @State private var remoteReady = false
+    /// The hosted clip was running when the full-screen player took over.
+    @State private var remoteWasPlaying = false
     /// Muted until the owner taps the picture (the orbit's players are always muted).
     @State private var muted = true
     /// The orbit's own player for this planet, when it lent it.
@@ -343,7 +460,11 @@ struct DetailPlayer: View {
         }
         guard diskChecked || video.fileURL == nil else { return nil }
         if let webp = remote.animatedWebp { return .webp(source: HeroSource.animated(webp), aspect: shape, name: video.name) }
-        if let hosted = remote.playableVideo { return .video(url: HeroSource.resolve(hosted), name: video.name, start: .zero) }
+        if let hosted = remote.playableVideo {
+            let seconds = transport.time
+            let start = withTime && seconds.isFinite && seconds > 0 ? CMTime(seconds: seconds, preferredTimescale: 600) : .zero
+            return .video(url: HeroSource.resolve(hosted), name: video.name, start: start)
+        }
         return nil
     }
 
@@ -353,10 +474,17 @@ struct DetailPlayer: View {
     }
 
     /// The stored video is playing here, so the bar is up (not for a webp, a still, a poster or a remote picture).
-    private var hasBar: Bool { player != nil && video.kind == .original && onDisk && !isStill }
+    private var hasBar: Bool { (player != nil && video.kind == .original && onDisk && !isStill) || hostedBar }
+
+    /// The hosted video is playing in place of the file this device does not hold: it has the bar too.
+    private var hostedBar: Bool { !onDisk && remoteReady && remote.animatedWebp == nil && remote.playableVideo != nil }
 
     /// The bar's sound button: the first unmute swaps to the item with audio, muting gives the session back.
     private func toggleSound() {
+        if hostedBar {
+            muted.toggle()      // the hosted video's own view swaps in the sound (RemoteVideo)
+            return
+        }
         guard let player, video.kind == .original else { return }
         muted.toggle()
         if muted {
@@ -369,6 +497,12 @@ struct DetailPlayer: View {
 
     private func openFullScreen() {
         guard let request = fullScreenRequest(withTime: true) else { return }
+        if hostedBar {
+            // the hosted clip stands by, muted, while the full-screen player has it
+            muted = true
+            remoteWasPlaying = transport.isPlaying
+            transport.player?.pause()
+        }
         player?.pause()
         var transaction = Transaction()
         transaction.disablesAnimations = reduceMotion
@@ -377,12 +511,13 @@ struct DetailPlayer: View {
 
     /// Back from the full-screen player: the same tab, from where it got to, muted and playing again.
     private func closedFullScreen(at time: CMTime?) {
-        guard let player else { return }
+        guard let player = player ?? transport.player else { return }
+        let resumes = self.player != nil || remoteWasPlaying
         muted = true
         player.isMuted = true
         Task {
             if let time, time.isValid { await player.seek(to: time) }
-            player.play()
+            if resumes { player.play() }
         }
     }
 
@@ -480,8 +615,10 @@ struct DetailPlayer: View {
                         if let poster = video.posterURL {
                             StillImage(url: poster).opacity(videoUp ? 0 : 1).allowsHitTesting(false)
                         } else if let firstFrame {
-                            Image(decorative: firstFrame, scale: 1).resizable().scaledToFill()
-                                .opacity(videoUp ? 0 : 1).allowsHitTesting(false)
+                            // held to the hero's box: a bare `scaledToFill` reports its overflow as its size, which
+                            // stretched the hero (and the bar laid over its bottom) past the sheet's edge on the Mac
+                            Color.clear.overlay { Image(decorative: firstFrame, scale: 1).resizable().scaledToFill() }
+                                .clipped().opacity(videoUp ? 0 : 1).allowsHitTesting(false)
                         }
                     }
                     .animation(.easeOut(duration: 0.2), value: videoUp)
@@ -492,7 +629,7 @@ struct DetailPlayer: View {
                     if let poster = video.posterURL { StillImage(url: poster) }
                 }
             } else {
-                RemoteHeroPicture(poster: video.posterURL, remote: remote)
+                RemoteHeroPicture(poster: video.posterURL, remote: remote, transport: transport, muted: muted, ready: $remoteReady)
             }
         }
         .overlay {
@@ -569,8 +706,10 @@ struct DetailPlayer: View {
         #if DEBUG
         .task(id: video.fileURL) {
             // `-previewHeroFullScreen 1` (simulator evidence): opens the full-screen player or viewer by itself
-            guard UserDefaults.standard.bool(forKey: "previewHeroFullScreen"), video.fileURL != nil else { return }
+            guard UserDefaults.standard.bool(forKey: "previewHeroFullScreen"), video.fileURL != nil || remote.playableVideo != nil else { return }
             try? await Task.sleep(for: .seconds(2.5))
+            // a slow device has not found the file yet at 2.5 s: look again for a while
+            for _ in 0..<40 where fullScreenRequest(withTime: true) == nil { try? await Task.sleep(for: .milliseconds(500)) }
             openFullScreen()
         }
         #endif

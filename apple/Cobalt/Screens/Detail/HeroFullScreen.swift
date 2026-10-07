@@ -51,7 +51,11 @@ extension View {
     /// Presents `item` full screen (a sheet on the Mac); `onClose` hears the time a video reached, to carry on from
     /// it in the hero. Reduce Motion presents and dismisses without the slide.
     func heroFullScreen(item: Binding<HeroFullScreen?>, onClose: @escaping (CMTime?) -> Void) -> some View {
+        #if DEBUG
+        modifier(HeroFullScreenModifier(item: item, onClose: onClose)).task { DetailSnapshot.runIfRequested() }
+        #else
         modifier(HeroFullScreenModifier(item: item, onClose: onClose))
+        #endif
     }
 }
 
@@ -111,7 +115,7 @@ private struct FullScreenVideo: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.black.ignoresSafeArea()
-            VideoPlayer(player: player)
+            SystemPlayer(player: player)
                 .ignoresSafeArea()
             Button { finish() } label: {
                 Image(systemName: Symbol.close)
@@ -147,6 +151,47 @@ private struct FullScreenVideo: View {
         close(time.isValid ? time : nil)
     }
 }
+
+/// The system player over `player`. iOS uses AVKit's SwiftUI `VideoPlayer`. On the Mac `VideoPlayer` aborts the app while
+/// SwiftUI builds it (macOS 27: `swift::fatalError` in `getSuperclassMetadata` from `_AVKit_SwiftUI`'s generic metadata,
+/// SIGABRT, before a single frame), so there it is AppKit's `AVPlayerView`, the same system player (floating controls: play,
+/// scrub, volume, AirPlay, picture in picture), in a plain `NSViewRepresentable`: no coordinator, no closures, nothing the
+/// system calls back into.
+private struct SystemPlayer: View {
+    let player: AVPlayer
+
+    var body: some View {
+        #if os(macOS)
+        SystemPlayerView(player: player)
+        #else
+        VideoPlayer(player: player)
+        #endif
+    }
+}
+
+#if os(macOS)
+private struct SystemPlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.player = player
+        view.controlsStyle = .floating
+        view.showsFullScreenToggleButton = true
+        view.allowsPictureInPicturePlayback = true
+        view.videoGravity = .resizeAspect
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player { view.player = player }
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: Void) {
+        view.player = nil
+    }
+}
+#endif
 
 // MARK: - webp
 
