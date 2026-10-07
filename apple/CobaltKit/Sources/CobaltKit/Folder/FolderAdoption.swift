@@ -213,6 +213,7 @@ enum FolderAdoption {
                         index[i].givenName = (v.path as NSString).lastPathComponent
                         index[i].keep = true
                         index[i].fileName = nil
+                        index[i].placed = OfflineFolder.placed(at: v.url)
                         applied.insert(v.id)
                     }
                     for i in index.indices where flip.contains(index[i].id) && index[i].visiblePath == nil { index[i].keep = true }

@@ -201,6 +201,9 @@ public final class OfflineStore {
     public internal(set) var rootState: RootState = .ready
     /// A failed move into the root ran out of space (the Mac folder's "the disk is full" line); cleared by the next success.
     public internal(set) var rootDiskFull = false
+    /// The last delete of a visible file was refused because the volume has no Trash (the file stayed); the Mac folder says so.
+    /// Cleared by the next delete that worked and by choosing another folder.
+    public internal(set) var trashRefused = false
     /// Adoption of what `FolderSync` wrote is running (13.3).
     public internal(set) var isAdopting = false
     /// The usable root (`visibleRoot` while `rootState == .ready`, else nil) as the gate's work reads it: a box any context
@@ -936,7 +939,8 @@ public final class OfflineStore {
     public func isInUse(_ id: String) -> Bool { pins[id] != nil }
 
     /// "remove offline copy": drops the video file of one entry, kept or cached, in the visible folder or hidden
-    /// (`removeItem`, not the trash), and keeps its record, poster and flipbook (the library and the orbit still
+    /// (a kept file in the Mac folder goes to the Trash, and stays when the volume has none: `trashRefused`; on iOS and for a
+    /// cache file it is deleted), and keeps its record, poster and flipbook (the library and the orbit still
     /// show it; `attach` refills it with a fresh download). `keep` becomes false. It is the owner's own choice,
     /// so the newest-entries protection of the limit does not apply; an entry a running pipeline pins
     /// (`isInUse`) is never removed.
@@ -952,6 +956,7 @@ public final class OfflineStore {
             await OfflineFolder.removeCopy(id: id, hiddenRoot: hidden, visibleRoot: visible, ops: ops, now: stamp, excludesBackup: excludes)
         }
         if let written = outcome.records { adopt(written) }
+        if outcome.noTrash { trashRefused = true } else if outcome.had && !outcome.refused { trashRefused = false }
         return outcome.had && !outcome.refused
     }
 
@@ -968,11 +973,13 @@ public final class OfflineStore {
         let ids = gone.filter { $0.visiblePath != nil }.map(\.id)
         guard !ids.isEmpty else { return [] }
         let (hidden, ops, stamp, excludes) = (root, ops, now(), excludesBackup)
-        return await inGate { visible in
+        let outcome = await inGate { visible in
             // a root that cannot be used (an unplugged disk) refuses: the files are there, and the records stay with them
-            guard let visible else { return Set(ids) }
+            guard let visible else { return OfflineFolder.PurgeOutcome(refused: Set(ids)) }
             return await OfflineFolder.purge(ids: ids, hiddenRoot: hidden, visibleRoot: visible, ops: ops, now: stamp, excludesBackup: excludes)
         }
+        if outcome.noTrash { trashRefused = true } else if outcome.refused.isEmpty { trashRefused = false }
+        return outcome.refused
     }
 
     /// Previews: writes poster-less, file-less entries into the index so `reload()` keeps them.
@@ -1239,6 +1246,16 @@ public final class OfflineStore {
         var libraryID: String?
         /// How many items the post had when this item was kept (see `StoredVideo.postItems`).
         var postItems: Int?
+        /// The visible file as cobalt put it there (or adopted it): its size and modification time. `replaceMade` deletes a made
+        /// file only while it still is this: one the owner edited in place (same name, tag kept) is theirs (wave M review). Unlike
+        /// `bytes`, the scan never refreshes it. Nil for a file placed by an older build.
+        var placed: Placed?
+
+        struct Placed: Codable, Equatable, Sendable {
+            var bytes: Int64
+            /// seconds since 1970
+            var modified: Double
+        }
 
         /// The effective media id.
         var media: String { mediaID ?? id }

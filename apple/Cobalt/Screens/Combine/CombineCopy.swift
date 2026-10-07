@@ -101,9 +101,10 @@ extension Copy {
 
         // MARK: done
 
-        /// iPhone and iPad: the file's place in Files; the Mac: in the cobalt folder.
-        static func inFolder(title: String, file: String) -> String {
-            Platform.isMac ? "in Finder: ~/Movies/cobalt/\(title)/\(file)" : Gallery.inFiles("\(title)/\(file)")
+        /// iPhone and iPad: the file's place in Files; the Mac: in the folder the owner chose (`folder`, the display path of
+        /// `model.macFolder.status`; `~/Movies/cobalt` unless they picked another).
+        static func inFolder(title: String, file: String, folder: String) -> String {
+            Platform.isMac ? "in Finder: \(folder)/\(title)/\(file)" : Gallery.inFiles("\(title)/\(file)")
         }
         static let oneSwitch = "public or private with the post's one switch, like the photos."
         static func tabsSoFar(_ tabs: [String]) -> String { "tabs made from this post so far: \(tabs.joined(separator: " · "))" }

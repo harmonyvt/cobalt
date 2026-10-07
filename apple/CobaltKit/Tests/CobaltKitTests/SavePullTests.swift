@@ -39,9 +39,13 @@ final class PullRig {
     var own: [String] = []
     var token: String? = "KEY-1234"
     var serverID = apiBase.absoluteString
+    /// free bytes on the folder's disk (nil: unknown)
+    var free: Int64?
     var added: [(video: StoredVideo, origin: AddOrigin)] = []
 
-    init(maxPages: Int = SavePull.defaultMaxPages, unplugged: Bool = false) throws {
+    /// `massLimit` is unbounded by default: most of these tests walk long libraries and expect every save fetched; the brake's own
+    /// tests pass `SavePull.defaultMassLimit`.
+    init(maxPages: Int = SavePull.defaultMaxPages, unplugged: Bool = false, massLimit: Int = .max) throws {
         mac = try MacRig(folderName: "Movies/cobalt", createFolder: !unplugged)
         try mac.commit()
         if unplugged { mac.ledger.choose(path: mac.folder.path, bookmark: nil, isDefault: false) }
@@ -57,7 +61,8 @@ final class PullRig {
         engine = OfflineDownloads(store: store, queue: queue, transport: transport, clock: clock, client: { [client] in client })
         store.onAdd = { [weak self] video, origin in self?.added.append((video, origin)) }
         pull = SavePull(
-            store: store, ledger: ledger, downloads: engine, clock: clock, scheduler: ClockScheduler(clock: clock), maxPages: maxPages)
+            store: store, ledger: ledger, downloads: engine, clock: clock, scheduler: ClockScheduler(clock: clock), maxPages: maxPages,
+            massLimit: massLimit)
         pull.wire(environment())
     }
 
@@ -78,7 +83,8 @@ final class PullRig {
             uploadsInFlight: { [unowned self] in uploading },
             ownUploads: { [unowned self] in own },
             serverID: { [unowned self] in serverID },
-            apiToken: { [unowned self] in token })
+            apiToken: { [unowned self] in token },
+            freeBytes: { [unowned self] in free })
     }
 
     var session: FakeOfflineTransport.Session? { transport.session(OfflineDownloads.sessionIdentifier) }

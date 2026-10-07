@@ -25,6 +25,7 @@ extension Copy {
         static let moveMessage = "left behind, they stay in the old folder and aren't offline here any more."
         static func moving(done: Int, of total: Int) -> String { "moving… \(done) of \(total)" }
         static let refusedICloud = "pick a folder on this mac or an external disk. icloud drive folders can't hold offline files."
+        static let refusedStore = "that folder holds cobalt's own files. pick another one."
         static let chooseFailed = "cobalt couldn't use that folder."
 
         // the problem line (only when there is one)
@@ -32,6 +33,7 @@ extension Copy {
         static let notAllowed = "cobalt can't write to this folder."
         static let wrongFolder = "this isn't the folder cobalt was using. choose it again."
         static let diskFull = "the disk is full."
+        static let noTrash = "couldn't move that file to the trash. this disk has none, so cobalt left it where it is."
 
         // the detail's line while the disk is away
         static func notConnected(path: String) -> String { "on \(path), which isn't connected" }
@@ -45,6 +47,13 @@ extension Copy {
         static let pullFolderAway = "paused until the folder is back"
         static let pullAuth = "your key was refused. check it above."
         static let pullNoServer = "paused until a server and key are set above"
+        static let pullDiskLow = "paused while this disk has under 2 gb free"
+        /// "12 saves from other devices are waiting" (the pull holds back more than 20 new saves at once and asks first).
+        static func pullWaiting(_ n: Int) -> String {
+            n == 1 ? "1 save from another device is waiting" : "\(n) saves from other devices are waiting"
+        }
+        static let pullDownloadThem = "download them"
+        static let pullSkip = "skip"
 
         /// "just now", "2 min ago", "3 hr ago", "2 days ago": how long ago a check ran.
         static func ago(seconds: TimeInterval) -> String {

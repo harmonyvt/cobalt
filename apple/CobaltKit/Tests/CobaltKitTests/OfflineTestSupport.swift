@@ -65,6 +65,8 @@ struct TestFileOps: OfflineFileOps {
     var crossVolumeFrom: URL?
     /// `removeVisible` goes here (a fake Trash) instead of being deleted; `.documents` stores delete outright.
     var trash: TrashBin?
+    /// The volume has no Trash: `removeVisible` throws `OfflineTrashUnavailable` and deletes nothing.
+    var noTrash = false
     private let dead = Dead()
     private var system: SystemFileOps { SystemFileOps() }
 
@@ -94,6 +96,7 @@ struct TestFileOps: OfflineFileOps {
     func remove(_ url: URL) throws { try alive(); try system.remove(url) }
     func removeVisible(_ url: URL) throws {
         try alive()
+        if noTrash { throw OfflineTrashUnavailable() }
         guard let trash else { return try system.remove(url) }
         trash.urls.withLock { $0.append(url) }
         try FileManager.default.moveItem(at: url, to: trash.folder.appendingPathComponent(UUID().uuidString + "-" + url.lastPathComponent))

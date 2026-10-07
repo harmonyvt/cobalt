@@ -276,8 +276,17 @@ extension OfflineStore {
 
     /// A record from before offline (`keep == nil`) is cache on the Mac, never "legacy, keep it" (13.2.1): the migration is
     /// off here, so nothing else would ever settle it.
+    ///
+    /// Only once an adoption that matches the root has run (`FolderAdoption` settles the legacy records itself, in its own pass),
+    /// or when there is no ledger to adopt from. A ledger whose section names another folder than the root (an owner-chosen folder
+    /// the bookmark resolved elsewhere) adopted nothing: the legacy records stay exactly as they were, `keep` untouched, until the
+    /// adoption that matches runs (wave M review, evidence run).
     func normalizeLegacyKeeps() async {
         guard rootMode == .macFolder, records.contains(where: { $0.keep == nil }) else { return }
+        if let ledger = folderLedger, let syncDirectory, let current = visibleRoot {
+            guard let found = FolderAdoption.section(of: current, in: ledger.snapshot()),
+                  FolderAdoption.readMarker(in: syncDirectory).sections[found.id] != nil else { return }
+        }
         guard let merged = try? Self.mutate(root: root, { records in
             for i in records.indices where records[i].keep == nil { records[i].keep = false }
         }) else { return }
@@ -288,25 +297,40 @@ extension OfflineStore {
     var visibleKeptCount: Int { records.filter { $0.visiblePath != nil }.count }
 
     /// 13.5: the owner chose another folder. Inside the gate: every kept file that is provably its own moves into the new
-    /// root when `move` (and the old one is reachable), then the root swaps. `progress` is called as files go. The caller has
-    /// already recorded the new folder in the ledger and runs `reload()` after (adoption of the new folder's section, the
-    /// scan, the promotion of what waited).
+    /// root when `move` (and the old one is reachable), then the root swaps. `progress` is called as files go. The caller
+    /// runs `reload()` after (adoption of the new folder's section, the scan, the promotion of what waited).
+    ///
+    /// `old` is the folder the owner is leaving, read by the caller **before** it named the new folder in the ledger (nil when
+    /// the old one was not usable): anything that resolves the root between that write and this gate (a landing's promotion, the
+    /// watcher's scan) swaps the box to the new folder, and a move that read the box here would find nothing to move and still
+    /// swap the root, stranding every kept file in the old folder (wave M review S3).
     func switchRoot(
-        to resolution: MacRootResolution, move: Bool, progress: (@Sendable (Int, Int) -> Void)? = nil
+        to resolution: MacRootResolution, move: Bool, from old: URL?, progress: (@Sendable (Int, Int) -> Void)? = nil
+    ) async -> (moved: Int, stayed: Int, interrupted: OfflineInterrupted?) {
+        await switchRoot(move: move, from: old, progress: progress) { resolution }
+    }
+
+    /// `switchRoot(to:move:from:)` for a caller that names the new folder itself: `resolve` runs **inside the gate**, first
+    /// thing, so the ledger write that names the new folder and the move are one step to everything else (a scan or a promotion
+    /// can no longer read the new folder before the files have left the old one and take them for deleted). The ledger still names
+    /// the new folder before the first file moves: a crash mid-move reopens on the new folder, where what moved is found by tag.
+    func switchRoot(
+        move: Bool, from old: URL?, progress: (@Sendable (Int, Int) -> Void)? = nil,
+        resolve: @escaping @Sendable () -> MacRootResolution
     ) async -> (moved: Int, stayed: Int, interrupted: OfflineInterrupted?) {
         let (hidden, ops, stamp) = (root, ops, now())
-        let destination = resolution.url
-        let canMove = move && resolution.state == .ready
         let box = rootBox
-        let outcome = await OfflineFolderGate.shared.exclusive { () -> OfflineFolder.RelocateOutcome in
+        let (outcome, resolution) = await OfflineFolderGate.shared.exclusive { () -> (OfflineFolder.RelocateOutcome, MacRootResolution) in
+            let resolution = resolve()
+            let destination = resolution.url
             var outcome = OfflineFolder.RelocateOutcome()
-            if canMove, let old = box.current {
+            if move, resolution.state == .ready, let old, FolderDestination.canonical(old) != FolderDestination.canonical(destination) {
                 outcome = await OfflineFolder.relocate(
                     hiddenRoot: hidden, from: old, to: destination, ops: ops, now: stamp, progress: progress)
             }
             // the swap happens inside the gate: whatever waited behind it reads the new root
             if outcome.interrupted == nil { box.set(resolution.state == .ready ? destination : nil) }
-            return outcome
+            return (outcome, resolution)
         }
         if outcome.interrupted == nil { finishSwitch(resolution) }
         if let written = try? Self.readRecordsChecked(root: root) { adopt(written) }
@@ -316,6 +340,7 @@ extension OfflineStore {
     }
 
     private func finishSwitch(_ resolution: MacRootResolution) {
+        trashRefused = false
         rootAccess?.stop()
         rootAccess = resolution.access
         swapRoot(resolution.url)
@@ -331,6 +356,8 @@ extension OfflineStore {
     @discardableResult
     public func replaceMade(_ id: String) async -> Bool {
         guard let record = records.first(where: { $0.id == id }) else { return false }
+        // A crop is never replaced: the server keeps every crop (it replaces exports only), so no remake makes one stale.
+        guard record.role != .crop else { return false }
         if record.visiblePath != nil {
             // the owner may have renamed it in Finder since the last scan: settle the paths first, then act on the index
             await scanVisibleRoot()
@@ -339,7 +366,9 @@ extension OfflineStore {
                 guard let root else { return .refused }
                 return OfflineFolder.replaceVisible(hiddenRoot: hidden, visibleRoot: root, id: id, ops: ops, now: stamp)
             }
-            if outcome == .refused { return false }
+            if outcome == .noTrash { trashRefused = true }
+            else if outcome == .deleted { trashRefused = false }
+            if outcome == .refused || outcome == .noTrash { return false }
         }
         var removed: Record?
         guard let merged = try? Self.mutate(root: root, { records in

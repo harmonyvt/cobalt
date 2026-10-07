@@ -18,7 +18,10 @@ import Observation
 /// Platform-neutral CobaltKit; `isAvailable` is true where the store's root is the Mac's folder (`.macFolder`) only.
 @MainActor @Observable
 public final class SavePull {
-    public enum Paused: Sendable, Equatable { case keepOff, folderUnreachable, auth, noServer }
+    /// Why the pull is not checking. `waiting`: one check found more new saves than it fetches unasked
+    /// (`SavePull.defaultMassLimit`); `status.waiting` says how many, and `downloadWaiting()` / `skipWaiting()` answer. `diskLow`: the
+    /// folder's disk has less than `SavePull.minFreeBytes` free.
+    public enum Paused: Sendable, Equatable { case keepOff, folderUnreachable, auth, noServer, waiting, diskLow }
 
     public struct Status: Sendable, Equatable {
         public var available: Bool
@@ -26,12 +29,15 @@ public final class SavePull {
         public var paused: Paused?
         /// downloads under way that this pull started
         public var pulling: Int
+        /// new saves held back by the mass-pull brake, waiting for "download them" or "skip" (0: none)
+        public var waiting: Int
 
-        public init(available: Bool = false, lastChecked: Date? = nil, paused: Paused? = nil, pulling: Int = 0) {
+        public init(available: Bool = false, lastChecked: Date? = nil, paused: Paused? = nil, pulling: Int = 0, waiting: Int = 0) {
             self.available = available
             self.lastChecked = lastChecked
             self.paused = paused
             self.pulling = pulling
+            self.waiting = waiting
         }
     }
 
@@ -53,6 +59,8 @@ public final class SavePull {
         var serverID: @MainActor () -> String
         /// The key that is in use (a refusal is sticky until it changes).
         var apiToken: @MainActor () -> String?
+        /// Free bytes on the folder's disk (nil: unknown, so never "low").
+        var freeBytes: @MainActor () -> Int64? = { nil }
     }
 
     /// The cadence of the tick (13.8): every 5 minutes, tolerance 60 s.
@@ -66,6 +74,13 @@ public final class SavePull {
     static let defaultMaxPages = 10
     /// A walk starts this far below the watermark (inserts can arrive out of order; `done` dedupes).
     static let overlap: TimeInterval = 10 * 60
+    /// More new saves than this in one check are not fetched unasked (wave M review S5): the owner says "download them" or "skip".
+    static let defaultMassLimit = 20
+    /// The pull pauses while the folder's disk has less than this free (wave M review, nits).
+    static let minFreeBytes: Int64 = 2 * 1024 * 1024 * 1024
+    /// A new baseline is checked against the server's own dates only by a check this soon after it (S2): later, a save made on
+    /// another device in the meantime would be mistaken for one that already existed.
+    static let calibrationWindow: TimeInterval = 120
 
     // MARK: - State
 
@@ -75,13 +90,21 @@ public final class SavePull {
     @ObservationIgnored private let clock: any PipelineClock
     @ObservationIgnored private let scheduler: (any PullScheduling)?
     @ObservationIgnored private let maxPages: Int
+    @ObservationIgnored private let massLimit: Int
     @ObservationIgnored private var env: Environment?
     @ObservationIgnored private var tick: (any PullCancelling)?
     @ObservationIgnored private var isChecking = false
     @ObservationIgnored private var hasChecked = false
     @ObservationIgnored private var lastPaused: Paused?
     @ObservationIgnored private var pulledKeys: Set<String> = []
+    /// The first page the calibration read, which the walk then uses as its own first request.
+    @ObservationIgnored private var firstPage: LibraryPage?
     var previewStatus: Status?
+
+    /// The mass-pull brake as the ledger holds it (cached: `status` is read on every redraw).
+    private var brake: PullBrake?
+    /// The folder's disk is under `minFreeBytes` (measured at the start of every check).
+    private var diskLow = false
 
     /// When the last check finished against the server.
     public private(set) var lastChecked: Date?
@@ -92,23 +115,28 @@ public final class SavePull {
     public var status: Status {
         if let previewStatus { return previewStatus }
         guard let store, store.rootMode == .macFolder else { return Status(available: false) }
-        return Status(available: true, lastChecked: lastChecked, paused: pauseReason(), pulling: pullingCount)
+        return Status(
+            available: true, lastChecked: lastChecked, paused: pauseReason(), pulling: pullingCount, waiting: brake?.saves ?? 0)
     }
 
     public var isAvailable: Bool { status.available }
 
     init(
         store: OfflineStore, ledger: PullLedger? = nil, downloads: OfflineDownloads? = nil, clock: any PipelineClock = SystemClock(),
-        scheduler: (any PullScheduling)? = nil, environment: Environment? = nil, maxPages: Int = SavePull.defaultMaxPages
+        scheduler: (any PullScheduling)? = nil, environment: Environment? = nil, maxPages: Int = SavePull.defaultMaxPages,
+        massLimit: Int = SavePull.defaultMassLimit
     ) {
         self.maxPages = maxPages
+        self.massLimit = massLimit
         self.store = store
         self.ledger = ledger
         self.downloads = downloads
         self.clock = clock
         self.scheduler = scheduler
         self.env = environment
-        self.lastChecked = ledger?.read().lastCheck
+        let stored = ledger?.read()
+        self.lastChecked = stored?.lastCheck
+        self.brake = stored?.brake
         refreshPulledKeys()
         downloads?.endedGone = { [weak self] job in self?.endedGone(job) }
     }
@@ -120,6 +148,7 @@ public final class SavePull {
         self.clock = SystemClock()
         self.scheduler = nil
         self.maxPages = Self.defaultMaxPages
+        self.massLimit = Self.defaultMassLimit
         self.previewStatus = preview
     }
 
@@ -153,10 +182,12 @@ public final class SavePull {
         guard previewStatus == nil, store?.rootMode == .macFolder, let ledger, let env else { return }
         if on {
             ledger.rebaseline(now: clock.now(), server: env.serverID())
+            brake = nil
             refusedToken = nil
             Task { @MainActor in await self.check() }
         } else {
             ledger.disarm()
+            brake = nil
         }
     }
 
@@ -165,6 +196,7 @@ public final class SavePull {
         guard previewStatus == nil, store?.rootMode == .macFolder, let ledger, let env else { return }
         refusedToken = nil
         if env.keepOn() { ledger.rebaseline(now: clock.now(), server: env.serverID()) }
+        brake = nil
         lastPaused = .noServer                                       // the new server's answer runs the next check
     }
 
@@ -188,6 +220,19 @@ public final class SavePull {
         await check()
     }
 
+    /// "download them" (S5): the saves a check held back are fetched by the next check, which runs now.
+    public func downloadWaiting() async { await answerBrake(.download) }
+
+    /// "skip" (S5): the saves a check held back are never fetched (a save made after them still is).
+    public func skipWaiting() async { await answerBrake(.skip) }
+
+    private func answerBrake(_ choice: PullBrake.Choice) async {
+        guard previewStatus == nil, let ledger, brake != nil else { return }
+        ledger.chooseBrake(choice)
+        brake = ledger.read().brake
+        await check()
+    }
+
     // MARK: - Pausing
 
     private func pauseReason() -> Paused? {
@@ -200,6 +245,8 @@ public final class SavePull {
         if caps.key == .missing { return .noServer }
         if caps.kind == .unreachable && caps.key == .unknown { return .noServer }       // never reached the server
         if !caps.library { return .noServer }                                          // nothing to list
+        if let brake, brake.choice == nil { return .waiting }                          // held back: the owner decides
+        if diskLow { return .diskLow }
         return nil
     }
 
@@ -231,15 +278,18 @@ public final class SavePull {
         var file = ledger.read()
         if !env.keepOn() {
             if file.enabledAt != nil { ledger.disarm() }              // a switch off outside `keepChanged`: the next on rebaselines
+            brake = nil
             lastPaused = .keepOff
             return
         }
         if file.enabledAt == nil || file.server != env.serverID() {
             ledger.rebaseline(now: now, server: env.serverID())       // the first check, or another library
+            brake = nil
             file = ledger.read()
         }
         refreshPulledKeys()
         ledger.noteOwn(env.ownUploads(), now: now)
+        measureDisk(env: env)
         if let paused = pauseReason() {
             lastPaused = paused
             return
@@ -247,12 +297,41 @@ public final class SavePull {
         lastPaused = nil
 
         do {
-            try await walk(env: env, store: store, ledger: ledger, downloads: downloads, enabledAt: file.enabledAt ?? now)
+            guard let enabledAt = try await calibrated(file, now: now, env: env, ledger: ledger) else { return }
+            try await walk(env: env, store: store, ledger: ledger, downloads: downloads, enabledAt: enabledAt)
         } catch is CancellationError {
             return
         } catch {
             failed(error, env: env, ledger: ledger)
         }
+    }
+
+    /// S2: the baseline was taken from the Mac's clock. A check right after it asks the library for its first page and raises the
+    /// baseline to the newest file on it, so a Mac clock that runs behind the server's does not mistake the library's own last
+    /// hour for new saves. Only a check within `calibrationWindow` of the baseline does: later, a save made on another device in
+    /// the meantime would look like the library's own. The page is kept for the walk (one request, not two). Nil: the world moved
+    /// while it ran (nothing is written).
+    private func calibrated(_ file: PullFile, now: Date, env: Environment, ledger: PullLedger) async throws -> Date? {
+        let enabledAt = file.enabledAt ?? now
+        guard file.calibrate else { return enabledAt }
+        guard now.timeIntervalSince(enabledAt) <= Self.calibrationWindow else {
+            return ledger.calibrate(floor: nil) ?? enabledAt
+        }
+        let page = try await env.page(nil, Self.quietLimit)
+        guard ledger.read().enabledAt == file.enabledAt, pauseReason() == nil else { return nil }
+        var newest: Date?
+        for post in page.posts {
+            newest = max(newest ?? post.createdAt, post.createdAt)
+            for f in post.files { newest = max(newest ?? f.createdAt, f.createdAt) }
+        }
+        firstPage = page
+        return ledger.calibrate(floor: newest) ?? enabledAt
+    }
+
+    /// Reads the folder's free space (the volume of the root) once per check.
+    private func measureDisk(env: Environment) {
+        let low = env.freeBytes().map { $0 < Self.minFreeBytes } ?? false
+        if low != diskLow { diskLow = low }
     }
 
     private func failed(_ error: Error, env: Environment, ledger: PullLedger) {
@@ -287,6 +366,22 @@ public final class SavePull {
         var ledger: PullLedger
         var downloads: OfflineDownloads
         var enabledAt: Date
+        /// what the walk found worth fetching, handed to the engine only once the whole walk is known (the brake looks at all of it)
+        var found: Found
+    }
+
+    /// One rendition to fetch.
+    private struct Candidate {
+        var job: OfflineJob
+        var ids: [String]
+        var at: Date
+        var post: String
+    }
+
+    /// The candidates of one check, in walk order.
+    @MainActor private final class Found {
+        var candidates: [Candidate] = []
+        var ids: Set<String> = []
     }
 
     /// One run down the library from `cursor` to a stop line.
@@ -299,7 +394,6 @@ public final class SavePull {
         var resume: String?
         var newest: Date?
         var deferred: Date?
-        var queued = 0
         var skipped = 0
         var pages = 0
     }
@@ -308,10 +402,14 @@ public final class SavePull {
     /// than the stop line the next page (30) is fetched, `maxPages` in all. The stop line is the baseline or the watermark less
     /// an overlap, whichever is later. What a capped walk did not reach is a backlog segment the next check carries on from, so
     /// a long absence is caught up over several checks and the newest saves are never waiting behind it.
+    ///
+    /// What it finds is gathered, not fetched, until the whole walk is done: more than `massLimit` saves at once are held back
+    /// for the owner (S5), and nothing is written to the ledger but the brake (the watermark stays, so the walk that carries out
+    /// the owner's answer finds them again).
     private func walk(
         env: Environment, store: OfflineStore, ledger: PullLedger, downloads: OfflineDownloads, enabledAt: Date
     ) async throws {
-        let w = Walk(env: env, store: store, ledger: ledger, downloads: downloads, enabledAt: enabledAt)
+        let w = Walk(env: env, store: store, ledger: ledger, downloads: downloads, enabledAt: enabledAt, found: Found())
         let start = ledger.read()
         let stopLine = max(enabledAt, (start.watermark ?? .distantPast).addingTimeInterval(-Self.overlap))
         var budget = maxPages
@@ -320,12 +418,11 @@ public final class SavePull {
         var segments = start.backlog
         if !top.complete, let next = top.next { segments.insert(PullSegment(cursor: next, floor: stopLine), at: 0) }
         var remaining: [PullSegment] = []
-        var queued = top.queued, skipped = top.skipped, pages = top.pages
+        var skipped = top.skipped, pages = top.pages
         var deferred = top.deferred != nil
         for segment in segments {
             guard budget > 0 else { remaining.append(segment); continue }
             guard let r = try await scan(w, from: segment.cursor, limit: Self.pageLimit, stopLine: segment.floor, budget: &budget) else { return }
-            queued += r.queued
             skipped += r.skipped
             pages += r.pages
             if r.deferred != nil { deferred = true }
@@ -334,6 +431,18 @@ public final class SavePull {
         }
 
         let now = clock.now()
+        // the walk is over: what it found is fetched, skipped or held back
+        let outcome = settle(w.found.candidates, ledger: ledger, downloads: downloads, brake: start.brake)
+        if case .held(let held) = outcome {
+            ledger.setBrake(held)
+            brake = held
+            ledger.finishCheck(now: now, watermark: nil, backlog: start.backlog, problem: nil, markSeen: true)
+            lastChecked = now
+            Telemetry.log(.info, .sync, "pull held back", data: ["saves": .int(held.saves), "files": .int(held.files)])
+            return
+        }
+        if start.brake != nil { ledger.setBrake(nil); brake = nil }
+
         var watermark: Date?
         if var mark = top.newest {
             if let held = top.deferred { mark = min(mark, held.addingTimeInterval(-1)) }       // a held save is looked at again
@@ -342,8 +451,42 @@ public final class SavePull {
         ledger.finishCheck(now: now, watermark: watermark, backlog: remaining, problem: nil, markSeen: true)
         lastChecked = now
         Telemetry.log(.info, .sync, "pull checked", data: [
-            "pages": .int(pages), "queued": .int(queued), "skipped": .int(skipped), "complete": .bool(top.complete),
+            "pages": .int(pages), "queued": .int(outcome.queued), "skipped": .int(skipped + outcome.skipped), "complete": .bool(top.complete),
             "backlog": .int(remaining.count), "deferred": .bool(deferred)])
+    }
+
+    private enum Settled {
+        case done(queued: Int, skipped: Int)
+        case held(PullBrake)
+
+        var queued: Int { if case .done(let q, _) = self { return q } else { return 0 } }
+        var skipped: Int { if case .done(_, let s) = self { return s } else { return 0 } }
+    }
+
+    /// What a walk found: handed to the engine (the engine first, then the ledger, in one step: a crash between them can only
+    /// re-offer a rendition the queue already holds, never lose one), or, when there are more saves than `massLimit` and the
+    /// owner has not answered, held back. The owner's answer: "download them" fetches everything found; "skip" writes what was
+    /// held (up to the newest file it held) as skipped and treats anything newer as a check of its own.
+    private func settle(_ found: [Candidate], ledger: PullLedger, downloads: OfflineDownloads, brake answered: PullBrake?) -> Settled {
+        var fetch = found
+        var skipped = 0
+        if answered?.choice == .skip, let upTo = answered?.upTo {
+            for c in found where c.at <= upTo { ledger.record(c.ids, at: c.at, state: .skipped, why: "owner") }
+            skipped = found.filter { $0.at <= upTo }.count
+            fetch = found.filter { $0.at > upTo }
+        }
+        if answered?.choice != .download {
+            let saves = Set(fetch.map(\.post)).count
+            if saves > massLimit {
+                return .held(PullBrake(saves: saves, files: fetch.count, upTo: fetch.map(\.at).max() ?? clock.now(), choice: nil))
+            }
+        }
+        if !fetch.isEmpty {
+            downloads.enqueue(fetch.map(\.job))
+            for c in fetch { pulledKeys.insert(c.job.key) }
+            for c in fetch { ledger.record(c.ids, at: c.at, state: .queued) }
+        }
+        return .done(queued: fetch.count, skipped: skipped)
     }
 
     /// Nil when the world moved while a request ran (a new baseline, a switch off, the folder gone): nothing is written.
@@ -351,12 +494,20 @@ public final class SavePull {
         var s = Scan()
         var cursor = start
         var limit = firstLimit
+        var prefetched = start == nil ? firstPage : nil              // the calibration already asked for the first page
+        if start == nil { firstPage = nil }
         while true {
             guard budget > 0 else {
                 s.next = cursor
                 return s
             }
-            let page = try await w.env.page(cursor, limit)
+            let page: LibraryPage
+            if let pre = prefetched {
+                page = pre
+                prefetched = nil
+            } else {
+                page = try await w.env.page(cursor, limit)
+            }
             budget -= 1
             s.pages += 1
             guard w.ledger.read().enabledAt == w.enabledAt, pauseReason() == nil else { return nil }
@@ -367,8 +518,7 @@ public final class SavePull {
                     s.complete = true
                     return s
                 }
-                let r = evaluate(post, w)
-                s.queued += r.queued
+                let r = evaluate(post, w, stopLine: stopLine)
                 s.skipped += r.skipped
                 if let d = r.deferredAt {
                     s.deferred = min(s.deferred ?? d, d)
@@ -386,15 +536,18 @@ public final class SavePull {
     }
 
     private struct PostResult {
-        var queued = 0
         var skipped = 0
         var deferredAt: Date?
     }
 
-    /// One post of the page: the renditions that are candidates are handed to the engine and written `done`; the ones this
-    /// Mac already has (or made) are written `skipped`; the ones that wait for a session in flight change nothing.
-    private func evaluate(_ post: LibraryPost, _ w: Walk) -> PostResult {
-        let env = w.env, store = w.store, ledger = w.ledger, downloads = w.downloads, enabledAt = w.enabledAt
+    /// One post of the page: the renditions that are candidates are gathered for the walk's end; the ones this Mac already has
+    /// (or made) are written `skipped`; the ones that wait for a session in flight change nothing.
+    ///
+    /// A file is a candidate only when it is newer than the walk's stop line (S1). The post is reached because its newest file is
+    /// new, but the post's older files were seen by an earlier check (or are the library's own, from before the baseline): a file
+    /// the owner removed from this Mac must not come back because its post got a new file.
+    private func evaluate(_ post: LibraryPost, _ w: Walk, stopLine: Date) -> PostResult {
+        let env = w.env, store = w.store, ledger = w.ledger, enabledAt = w.enabledAt
         var result = PostResult()
         let known = ledger.read()
         let local = store.media.first { MediaItem.joins($0, post) }
@@ -402,13 +555,12 @@ public final class SavePull {
         let now = clock.now()
         let held = holds(post, env: env)
         let mediaBase = env.capabilities().mediaBaseURL
-        var jobs: [(job: OfflineJob, ids: [String], at: Date)] = []
         var settled: [(ids: [String], at: Date, why: String)] = []
         for r in item.renditions {
             guard let primary = r.file ?? r.hosted else { continue }             // only what the library lists
             let ids = r.serverFileIDs
-            guard primary.createdAt > enabledAt else { continue }                // from now on
-            if ids.contains(where: { known.done[$0] != nil }) { continue }       // decided, forever
+            guard primary.createdAt > enabledAt, primary.createdAt > stopLine else { continue }      // from now on, and not seen before
+            if ids.contains(where: { known.done[$0] != nil || w.found.ids.contains($0) }) { continue }       // decided, forever
             if r.local != nil {                                                  // 13.8: a record means seen here
                 settled.append((ids, primary.createdAt, "local"))
                 continue
@@ -424,15 +576,8 @@ public final class SavePull {
             }
             guard var job = OfflineSources.job(for: r, in: item, mediaBase: mediaBase, now: now) else { continue }
             job.origin = OfflineJob.pulledOrigin
-            jobs.append((job, ids, primary.createdAt))
-        }
-        // the engine first, then the ledger, in one step: a crash between them can only re-offer a rendition the queue
-        // already holds (`enqueue` is idempotent), never lose one
-        if !jobs.isEmpty {
-            downloads.enqueue(jobs.map(\.job))
-            for entry in jobs { pulledKeys.insert(entry.job.key) }
-            for entry in jobs { ledger.record(entry.ids, at: entry.at, state: .queued) }
-            result.queued = jobs.count
+            w.found.candidates.append(Candidate(job: job, ids: ids, at: primary.createdAt, post: post.id))
+            w.found.ids.formUnion(ids)
         }
         for entry in settled { ledger.record(entry.ids, at: entry.at, state: .skipped, why: entry.why) }
         result.skipped = settled.count
@@ -577,7 +722,15 @@ extension AppModel {
             apiToken: { [weak self] in
                 guard let settings = self?.settings else { return nil }
                 return Settings.apiKey(in: settings.keychain, forServer: settings.serverURL)
-            })
+            },
+            freeBytes: { [weak self] in self?.store.visibleRoot.flatMap { Self.freeBytes(at: $0) } })
+    }
+
+    /// Free bytes on the volume `url` is on (what the system would let an app use: purgeable space counts); nil when unknown.
+    nonisolated static func freeBytes(at url: URL) -> Int64? {
+        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey])
+        if let important = values?.volumeAvailableCapacityForImportantUsage, important > 0 { return important }
+        return values?.volumeAvailableCapacity.map { Int64($0) }
     }
 
     /// Notes the uploads this Mac makes as they are accepted, so the pull never brings one back (an image upload leaves no

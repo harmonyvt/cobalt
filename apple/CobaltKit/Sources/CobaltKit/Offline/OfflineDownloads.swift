@@ -450,9 +450,12 @@ public final class OfflineDownloads {
     /// R8 for a pulled made file (a slideshow, a gallery image, a crop): this device's records of the same kind, in the same
     /// session or media, that are another library row go first (`OfflineStore.replaceMade`: an untouched file to the Trash on
     /// the Mac, a renamed one left as the owner's). The new row's own record, if there is one, stays.
+    ///
+    /// Not for a crop: the server replaces exports only (`app-routes.ts`, the made route), so crops accumulate, one per photo
+    /// and several per post. A crop landing here is never "the newer one" of another crop.
     private func replaceOlderMade(_ n: OfflineJob.NewRecord) async {
         guard n.role != nil, n.role != .item,
-              let kind = MadeKind(role: n.role, spec: n.madeSpec.flatMap { MadeSpec(data: $0) }) else { return }
+              let kind = MadeKind(role: n.role, spec: n.madeSpec.flatMap { MadeSpec(data: $0) }), kind != .crop else { return }
         let stale = store.videos.filter { old in
             old.madeKind == kind && old.libraryID != n.libraryID
                 && ((n.sessionID != nil && old.sessionID == n.sessionID) || (n.mediaID != nil && old.mediaID == n.mediaID))

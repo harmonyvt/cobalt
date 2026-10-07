@@ -93,7 +93,8 @@ extension AppModel {
         offlineDownloads.cancel(keys: targets.flatMap { OfflineKey.aliases(of: $0) })
     }
 
-    /// "remove offline copy": the file goes (not the trash), the record, poster and flipbook stay, and a download of
+    /// "remove offline copy": the file goes (to the Trash on the Mac, and it stays when the volume has none; deleted on the
+    /// iPhone and for a cache file), the record, poster and flipbook stay, and a download of
     /// it that is still running stops. Kept or cached, in Files or hidden. True when a file was removed; false when
     /// there was none, or it is in use (a run is reading it).
     @discardableResult

@@ -45,6 +45,8 @@ struct SettingsScreen: View {
         .navigationTitle(Copy.settings)
         // back from system Settings (the owner may have changed photos access there) and first appearance
         .task { await model.photosSync.refresh() }
+        // a key pasted since the library last refused it: opening Settings lifts the pull's auth pause and asks once more (13.8)
+        .task { await model.savePull.resume() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.photosSync.refresh() } }
         }

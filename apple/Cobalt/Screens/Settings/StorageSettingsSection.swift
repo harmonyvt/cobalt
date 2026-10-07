@@ -136,6 +136,16 @@ struct StorageSettingsSection: View {
                         .monospacedDigit()
                 }
             }
+            // more than 20 new saves at once are held back and asked about (they are not downloaded unasked)
+            if status.waiting > 0 {
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    Button(Copy.Folder.pullDownloadThem) { Task { await model.savePull.downloadWaiting() } }
+                    Button(Copy.Folder.pullSkip) { Task { await model.savePull.skipWaiting() } }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
         }
     }
 
@@ -146,6 +156,8 @@ struct StorageSettingsSection: View {
         case .folderUnreachable: return Copy.Folder.pullFolderAway
         case .auth: return Copy.Folder.pullAuth
         case .noServer: return Copy.Folder.pullNoServer
+        case .waiting: return Copy.Folder.pullWaiting(status.waiting)
+        case .diskLow: return Copy.Folder.pullDiskLow
         case nil: break
         }
         if status.pulling > 0 { return Copy.Folder.pullDownloading(status.pulling) }

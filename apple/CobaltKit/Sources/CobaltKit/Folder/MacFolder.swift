@@ -13,7 +13,8 @@ import AppKit
 /// where the store's root is not the Mac folder (iPhone, iPad).
 @MainActor @Observable
 public final class MacFolder {
-    public enum Problem: Sendable, Equatable { case unreachable, notAllowed, wrongFolder, diskFull }
+    /// `noTrash`: the last delete was refused because the folder's disk has no Trash, so the file stayed.
+    public enum Problem: Sendable, Equatable { case unreachable, notAllowed, wrongFolder, diskFull, noTrash }
 
     public struct Moving: Sendable, Equatable {
         public var done: Int
@@ -55,6 +56,9 @@ public final class MacFolder {
         case unchanged
         /// a folder in iCloud Drive: refused (evicted placeholders and attribute sync would break identity)
         case refusedICloud
+        /// a folder that holds cobalt's own store (or is inside it): refused, or the scan would take the hidden copies for the
+        /// folder's files
+        case refusedStore
         /// the folder could not be opened or remembered
         case failed
     }
@@ -82,7 +86,7 @@ public final class MacFolder {
         guard let store, store.rootMode == .macFolder, let root = store.visibleRoot else { return Status(available: false) }
         let problem: Problem?
         switch store.rootState {
-        case .ready: problem = store.rootDiskFull ? .diskFull : nil
+        case .ready: problem = store.rootDiskFull ? .diskFull : (store.trashRefused ? .noTrash : nil)
         case .unreachable: problem = .unreachable
         case .notAllowed: problem = .notAllowed
         case .wrongFolder: problem = .wrongFolder
@@ -129,6 +133,13 @@ public final class MacFolder {
 
     // MARK: - Choosing another folder (13.5)
 
+    /// One folder holds the other, or is the other (symlinks resolved): a root that contains cobalt's hidden store makes the scan
+    /// read the store's own files as the folder's (wave M review S4), and one inside it is the store's.
+    nonisolated static func overlaps(_ a: URL, _ b: URL) -> Bool {
+        let x = FolderDestination.canonical(a) + "/", y = FolderDestination.canonical(b) + "/"
+        return x.hasPrefix(y) || y.hasPrefix(x)
+    }
+
     /// The owner picked a folder. Prepares it (bookmark, identity, the iCloud refusal) without switching. When kept files
     /// are in the current folder and it is reachable the answer is `.askMove(count:)`; nothing changes until `answerMove`.
     /// Otherwise the folder is switched to at once.
@@ -141,11 +152,13 @@ public final class MacFolder {
         guard let store, let ledger, store.rootMode == .macFolder else { return .failed }
         let defaultFolder = provider?.defaultFolder ?? FolderDestination.defaultURL
         let current = store.visibleRoot
-        enum Prep: Sendable { case unchanged, iCloud, failed, ready(path: String, bookmark: Data?, isDefault: Bool, volume: String?, fileID: Int64?) }
+        let stores = [store.root, store.syncDirectory].compactMap { $0 }
+        enum Prep: Sendable { case unchanged, iCloud, store, failed, ready(path: String, bookmark: Data?, isDefault: Bool, volume: String?, fileID: Int64?) }
         let prep: Prep = await Task.detached(priority: .userInitiated) {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             if FolderDestination.isInICloudDrive(url) { return .iCloud }                 // a path check first: nothing is read there
+            if stores.contains(where: { Self.overlaps(url, $0) }) { return .store }
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else { return .failed }
             let canonical = FolderDestination.canonical(url)
@@ -161,6 +174,7 @@ public final class MacFolder {
         switch prep {
         case .unchanged: return .unchanged
         case .iCloud: return .refusedICloud
+        case .store: return .refusedStore
         case .failed: return .failed
         case .ready(let path, let bookmark, let isDefault, let volume, let fileID):
             return await begin(Prepared(path: path, bookmark: bookmark, isDefault: isDefault, identity: FolderIdentity(volume: volume, fileID: fileID)), ledger: ledger, store: store)
@@ -205,17 +219,22 @@ public final class MacFolder {
 
     private func apply(_ prepared: Prepared, move: Bool) async -> (moved: Int, stayed: Int) {
         guard let store, let ledger else { return (0, 0) }
-        // The ledger names the new folder first: a crash mid-move then reopens on the new folder, where what moved is
-        // found by its tag, and what did not stays in the old one, the owner's, still tagged.
-        ledger.choose(
-            path: prepared.path, bookmark: prepared.bookmark, isDefault: prepared.isDefault,
-            volume: prepared.identity.volume, fileID: prepared.identity.fileID)
+        // The folder being left, read before the new one is named: from then on anything that resolves the root (a landing's
+        // promotion, the watcher) would swap it to the new folder (review S3).
+        let leaving = store.rootBox.current
         let provider = provider ?? MacRootProvider(ledger: ledger)
-        let resolution = provider.resolve()
         movingProgress = move ? Moving(done: 0, total: store.visibleKeptCount) : nil
-        let result = await store.switchRoot(to: resolution, move: move) { @Sendable [weak self] done, total in
+        // The ledger names the new folder first, inside the store's gate and before the first file moves: a crash mid-move then
+        // reopens on the new folder, where what moved is found by its tag, and what did not stays in the old one, the owner's,
+        // still tagged; and nothing can read the new folder before the files have left the old one.
+        let result = await store.switchRoot(move: move, from: leaving, progress: { @Sendable [weak self] done, total in
             Task { @MainActor in self?.movingProgress = Moving(done: done, total: total) }
-        }
+        }, resolve: { @Sendable in
+            ledger.choose(
+                path: prepared.path, bookmark: prepared.bookmark, isDefault: prepared.isDefault,
+                volume: prepared.identity.volume, fileID: prepared.identity.fileID)
+            return provider.resolve()
+        })
         movingProgress = nil
         await store.reload()                                  // adopts the new folder's section, scans it, moves in what waited
         return (result.moved, result.stayed)

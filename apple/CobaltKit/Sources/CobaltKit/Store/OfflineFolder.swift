@@ -222,6 +222,10 @@ enum OfflineMoveStep: Sendable, Equatable {
     case adoptIndexed
 }
 
+/// The volume has no Trash (a network share, some external disks): the file is left where it is. Never a plain delete: the owner
+/// asked for the Trash, and a file is not cobalt's to destroy when it cannot be recovered (wave M review, nits).
+struct OfflineTrashUnavailable: Error, Equatable {}
+
 /// What a test throws from `checkpoint` to stop a run where a crash would.
 struct OfflineInterrupted: Error, Equatable { var step: OfflineMoveStep }
 
@@ -233,8 +237,8 @@ protocol OfflineFileOps: Sendable {
     func fullSync(_ url: URL) throws
     func size(of url: URL) -> Int64?
     func remove(_ url: URL) throws
-    /// Deletes a file of the visible root (13.2.2): the Trash in `.macFolder` (falling back to a plain delete only when
-    /// the volume has none), `removeItem` in `.documents`. Cache files, `.part` files and posters use `remove`.
+    /// Deletes a file of the visible root (13.2.2): the Trash in `.macFolder` (throws `OfflineTrashUnavailable`, and deletes
+    /// nothing, when the volume has none), `removeItem` in `.documents`. Cache files, `.part` files and posters use `remove`.
     func removeVisible(_ url: URL) throws
     func checkpoint(_ step: OfflineMoveStep) throws
 }
@@ -276,7 +280,7 @@ struct SystemFileOps: OfflineFileOps {
         do {
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
         } catch let error as CocoaError where error.code == .featureUnsupported {
-            try FileManager.default.removeItem(at: url)               // a volume with no Trash
+            throw OfflineTrashUnavailable()                           // a volume with no Trash: the file stays, and the owner is told
         }
     }
 
@@ -373,6 +377,8 @@ struct VisibleEntry: Sendable, Equatable {
     var size: Int64
     var tag: OfflineTag?
     var excludedFromBackup: Bool
+    /// seconds since 1970
+    var modified: Double = 0
 }
 
 enum OfflineFolder {
@@ -409,24 +415,27 @@ enum OfflineFolder {
 
     /// Every regular file under `root` (recursive; hidden entries, `.Trash` and `.cobalt-*.part` skipped) with its
     /// size and tag. Nil when the root cannot be read: the caller changes nothing then.
-    static func enumerate(root: URL) -> [VisibleEntry]? {
+    static func enumerate(root: URL, excluding store: URL? = nil) -> [VisibleEntry]? {
         let fm = FileManager.default
         var isDirectory: ObjCBool = false
         guard fm.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue,
               (try? fm.contentsOfDirectory(atPath: root.path)) != nil
         else { return nil }
-        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .isExcludedFromBackupKey]
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .isExcludedFromBackupKey, .contentModificationDateKey]
         guard let walker = fm.enumerator(
             at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles, .skipsPackageDescendants],
             errorHandler: { _, _ in true })
         else { return nil }
         let prefix = root.resolvingSymlinksInPath().path + "/"
+        // cobalt's own store is never the folder's content, even when a root was chosen that holds it (wave M review S4)
+        let storePrefix = store.map { $0.resolvingSymlinksInPath().path + "/" }
         var out: [VisibleEntry] = []
         var unreadable = 0
         for case let url as URL in walker {
             guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true else { continue }
             let full = url.resolvingSymlinksInPath().path
             guard full.hasPrefix(prefix) else { continue }
+            if let storePrefix, full.hasPrefix(storePrefix) { continue }
             let relative = String(full.dropFirst(prefix.count))
             let tag: OfflineTag?
             switch OfflineTag.probe(at: url) {
@@ -436,7 +445,8 @@ enum OfflineFolder {
             }
             out.append(VisibleEntry(
                 path: relative, size: Int64(values.fileSize ?? 0), tag: tag,
-                excludedFromBackup: values.isExcludedFromBackup ?? false))
+                excludedFromBackup: values.isExcludedFromBackup ?? false,
+                modified: values.contentModificationDate?.timeIntervalSince1970 ?? 0))
         }
         // A tag that cannot be read (data protection, a permission) is not "no tag": the answer is unknown, so
         // nothing may be concluded from this pass (review fix S4).
@@ -472,18 +482,28 @@ enum OfflineFolder {
         try? target.setResourceValues(values)
     }
 
+    enum DeleteResult: Sendable, Equatable {
+        case deleted
+        /// the volume has no Trash: nothing was deleted, and the file keeps its tag (it is still the record's)
+        case noTrash
+        /// could not be deleted: the tag is off, so the file is the owner's from then on
+        case failed
+    }
+
     /// Deletes one file of the visible root (the caller has checked it is cobalt's). On failure the tag is taken
     /// off so the file is the owner's from then on (a tagged file with no record would be adopted again by the
-    /// next scan). False: still there.
-    static func deleteFile(_ url: URL, ops: any OfflineFileOps) -> Bool {
-        guard FileManager.default.fileExists(atPath: url.path) else { return true }
+    /// next scan), except when the volume has no Trash: then nothing happened and the file stays the record's.
+    static func deleteFile(_ url: URL, ops: any OfflineFileOps) -> DeleteResult {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .deleted }
         do {
             try ops.removeVisible(url)
             removeEmptyGalleryFolder(url.deletingLastPathComponent())
-            return true
+            return .deleted
+        } catch is OfflineTrashUnavailable {
+            return .noTrash
         } catch {
             XAttr.remove(OfflineTag.attribute, at: url)
-            return !FileManager.default.fileExists(atPath: url.path)
+            return FileManager.default.fileExists(atPath: url.path) ? .failed : .deleted
         }
     }
 
@@ -503,6 +523,22 @@ enum OfflineFolder {
         let first = a.withUnsafeFileSystemRepresentation { $0.map { lstat($0, &x) } ?? -1 }
         let second = b.withUnsafeFileSystemRepresentation { $0.map { lstat($0, &y) } ?? -1 }
         return first == 0 && second == 0 && x.st_dev == y.st_dev && x.st_ino == y.st_ino
+    }
+
+    /// What the file at `url` is now (size, modification time), as `Record.placed` remembers it.
+    static func placed(at url: URL) -> OfflineStore.Record.Placed? {
+        var st = stat()
+        let ok = url.withUnsafeFileSystemRepresentation { $0.map { lstat($0, &st) } ?? -1 }
+        guard ok == 0 else { return nil }
+        let modified = TimeInterval(st.st_mtimespec.tv_sec) + TimeInterval(st.st_mtimespec.tv_nsec) / 1e9
+        return OfflineStore.Record.Placed(bytes: Int64(st.st_size), modified: modified)
+    }
+
+    /// The file at `url` is what `placed` says cobalt put there. Modification times compare within 2 s (a FAT volume keeps
+    /// even seconds).
+    static func isUnchanged(_ placed: OfflineStore.Record.Placed, at url: URL) -> Bool {
+        guard let now = Self.placed(at: url) else { return false }
+        return now.bytes == placed.bytes && abs(now.modified - placed.modified) < 2
     }
 
     // MARK: moving in
@@ -676,7 +712,7 @@ enum OfflineFolder {
     /// record points at is a copy the owner made, so it is the owner's own file (never adopted or rebuilt).
     static func reconcile(
         _ records: inout [OfflineStore.Record], entries: [VisibleEntry], hiddenRoot: URL, now: Date,
-        tombstones: Set<String> = [], excludesBackup: Bool = true
+        tombstones: Set<String> = [], excludesBackup: Bool = true, visibleRoot: URL? = nil
     ) -> Reconciled {
         var out = Reconciled()
         var byID: [String: [VisibleEntry]] = [:]
@@ -708,14 +744,20 @@ enum OfflineFolder {
                 // A copy that crashed after its rename: the same file is in both places. The cache one goes only
                 // when the visible one is whole (same size); unsure, both stay and the record keeps the cache one.
                 // A cache file that is not there any more leaves the visible copy as the file.
-                if let cacheSize = fileSize(hiddenRoot.appendingPathComponent("files/\(cache)")) {
+                let cacheURL = hiddenRoot.appendingPathComponent("files/\(cache)")
+                if let cacheSize = fileSize(cacheURL) {
                     guard cacheSize == chosen.size else { continue }
+                    // the folder file may be the hidden copy itself (a root that holds the store, a link): deleting "the
+                    // redundant copy" would delete the only one (wave M review S4)
+                    if let visibleRoot, sameFile(cacheURL, visibleRoot.appendingPathComponent(chosen.path)) { continue }
                     out.dropCache.append(cache)
                 }
                 records[i].fileName = nil
             }
-            if record.visiblePath == nil { out.report.adopted += 1 }
-            else if record.visiblePath != chosen.path { out.report.followed += 1 }
+            if record.visiblePath == nil {
+                out.report.adopted += 1
+                records[i].placed = OfflineStore.Record.Placed(bytes: chosen.size, modified: chosen.modified)
+            } else if record.visiblePath != chosen.path { out.report.followed += 1 }
             records[i].visiblePath = chosen.path
             records[i].keep = true
             records[i].bytes = chosen.size
@@ -746,7 +788,8 @@ enum OfflineFolder {
                 posterBytes: hasPoster ? fileSize(hiddenRoot.appendingPathComponent("posters/\(posterName)")) : nil,
                 previewNames: nil, previewBytes: nil, publicURL: nil, mediaID: media, clip: nil, title: tag.title,
                 keep: true, visiblePath: entry.path, givenName: nil,
-                role: tag.role, itemIndex: tag.item, libraryID: tag.lib)
+                role: tag.role, itemIndex: tag.item, libraryID: tag.lib,
+                placed: OfflineStore.Record.Placed(bytes: entry.size, modified: entry.modified))
             records.append(rebuilt)
             out.rebuilt.append(id)
             out.report.rebuilt += 1
@@ -775,14 +818,15 @@ enum OfflineFolder {
             return ScanResult(records: [], report: OfflineScanReport(indexUnreadable: true), rebuilt: [], wrote: false)
         }
         purgeStaleParts(root: visibleRoot, now: now)
-        guard let entries = enumerate(root: visibleRoot) else {
+        guard let entries = enumerate(root: visibleRoot, excluding: hiddenRoot) else {
             // never "every file deleted": nothing changes
             return ScanResult(records: before, report: OfflineScanReport(rootMissing: true), rebuilt: [], wrote: false)
         }
         let tombstones = OfflineTombstones.ids(root: hiddenRoot)
         var probe = before
         var reconciled = reconcile(
-            &probe, entries: entries, hiddenRoot: hiddenRoot, now: now, tombstones: tombstones, excludesBackup: excludesBackup)
+            &probe, entries: entries, hiddenRoot: hiddenRoot, now: now, tombstones: tombstones, excludesBackup: excludesBackup,
+            visibleRoot: visibleRoot)
         var records = before
         var wrote = false
         if probe != before {
@@ -790,7 +834,8 @@ enum OfflineFolder {
             var again = Reconciled()
             if let written = try? OfflineStore.mutate(root: hiddenRoot, { current in
                 again = reconcile(
-                    &current, entries: entries, hiddenRoot: hiddenRoot, now: now, tombstones: tombstones, excludesBackup: excludesBackup)
+                    &current, entries: entries, hiddenRoot: hiddenRoot, now: now, tombstones: tombstones, excludesBackup: excludesBackup,
+                    visibleRoot: visibleRoot)
             }) {
                 records = written
                 reconciled = again
@@ -812,6 +857,8 @@ enum OfflineFolder {
         /// a file is there that is not provably the record's (the owner's own, another media's, a tag that cannot be
         /// read), or the root or index could not be read: nothing was deleted
         case refused
+        /// the volume has no Trash: nothing was deleted (counts as refused; the screens say why)
+        case noTrash
     }
 
     /// Deletes the visible file of record `id`, by identity and not by remembered name (review fix B1). Inside the
@@ -832,7 +879,11 @@ enum OfflineFolder {
             if exists {
                 switch OfflineTag.probe(at: url) {
                 case .tag(let tag) where tag.id == id:
-                    guard deleteFile(url, ops: ops) else { return .refused }
+                    switch deleteFile(url, ops: ops) {
+                    case .deleted: break
+                    case .noTrash: return .noTrash
+                    case .failed: return .refused
+                    }
                     OfflineTombstones.add([id], root: hiddenRoot, now: now)
                     return .removed
                 case .unreadable:
@@ -848,18 +899,29 @@ enum OfflineFolder {
         return .refused
     }
 
+    struct PurgeOutcome: Sendable, Equatable {
+        var refused: Set<String> = []
+        /// at least one was refused because the volume has no Trash
+        var noTrash = false
+    }
+
     /// `removeVisibleChecked` for several records (a media's, "delete everything"): the ids that were refused.
     @concurrent
     static func purge(
         ids: [String], hiddenRoot: URL, visibleRoot: URL, ops: any OfflineFileOps, now: Date, excludesBackup: Bool = true
-    ) async -> Set<String> {
-        var refused: Set<String> = []
-        for id in ids
-        where await removeVisibleChecked(
-            hiddenRoot: hiddenRoot, visibleRoot: visibleRoot, id: id, ops: ops, now: now, excludesBackup: excludesBackup) == .refused {
-            refused.insert(id)
+    ) async -> PurgeOutcome {
+        var out = PurgeOutcome()
+        for id in ids {
+            switch await removeVisibleChecked(
+                hiddenRoot: hiddenRoot, visibleRoot: visibleRoot, id: id, ops: ops, now: now, excludesBackup: excludesBackup) {
+            case .removed, .absent: break
+            case .refused: out.refused.insert(id)
+            case .noTrash:
+                out.refused.insert(id)
+                out.noTrash = true
+            }
         }
-        return refused
+        return out
     }
 
     struct RemoveCopyOutcome: Sendable {
@@ -868,6 +930,8 @@ enum OfflineFolder {
         var had = false
         /// the file could not be proved the record's, or the index or root could not be read: nothing changed
         var refused = false
+        /// refused because the volume has no Trash
+        var noTrash = false
     }
 
     /// "remove offline copy" (decision 10), inside the gate in both tiers, so it never lands between a
@@ -886,10 +950,12 @@ enum OfflineFolder {
             guard let visibleRoot else { out.refused = true; return out }
             // The file goes first: a record without a path but with a tagged file still in the root would be
             // "restored" by the next scan.
-            switch await removeVisibleChecked(
-                hiddenRoot: hiddenRoot, visibleRoot: visibleRoot, id: id, ops: ops, now: now, excludesBackup: excludesBackup) {
-            case .refused:
+            let removed = await removeVisibleChecked(
+                hiddenRoot: hiddenRoot, visibleRoot: visibleRoot, id: id, ops: ops, now: now, excludesBackup: excludesBackup)
+            switch removed {
+            case .refused, .noTrash:
                 out.refused = true
+                out.noTrash = removed == .noTrash
                 out.records = try? OfflineStore.readRecordsChecked(root: hiddenRoot)     // the scan may have moved paths
                 return out
             case .removed, .absent: break
@@ -969,6 +1035,7 @@ enum OfflineFolder {
                     records[i].givenName = name
                     records[i].keep = true
                     if bytes > 0 { records[i].bytes = bytes }
+                    records[i].placed = placed(at: visibleRoot.appendingPathComponent(path))
                 }
             }
             for stray in strays {                                              // only a file that is provably the record's
@@ -1142,6 +1209,10 @@ extension OfflineFolder {
                     let oldLeaf = ((oldPaths[result.id] ?? "") as NSString).lastPathComponent
                     records[i].visiblePath = path
                     if records[i].givenName == oldLeaf { records[i].givenName = name }
+                    // a file the owner had edited keeps the size it was placed with, so it still reads as edited
+                    if let was = records[i].placed, let now = placed(at: new.appendingPathComponent(path)), was.bytes == now.bytes {
+                        records[i].placed = now
+                    }
                 }
             }
             for result in results {
@@ -1167,12 +1238,15 @@ extension OfflineFolder {
     enum ReplaceVisible: Sendable, Equatable {
         /// cobalt's file under the name cobalt gave it: deleted
         case deleted
-        /// cobalt's file that the owner renamed (or that crash recovery adopted): left in place, untagged, theirs from now on
+        /// cobalt's file that the owner renamed or edited in place (or that crash recovery adopted): left in place, untagged,
+        /// theirs from now on
         case released
         /// nothing of cobalt's at the record's path (gone, or another file)
         case nothing
         /// the tag could not be read: nothing was touched
         case refused
+        /// the volume has no Trash: nothing was touched (the file stays, and the owner is told)
+        case noTrash
     }
 
     /// A made file is being replaced (13.7): its visible file is deleted only when its name is still the one cobalt gave
@@ -1187,8 +1261,15 @@ extension OfflineFolder {
         case .untagged: return .nothing
         case .tag(let tag):
             guard tag.id == id else { return .nothing }
-            if let given = record.givenName, (path as NSString).lastPathComponent == given {
-                guard deleteFile(url, ops: ops) else { return .refused }
+            // The owner may have edited it in place (same name, the tag stays): that file is theirs now. Compared with what cobalt
+            // placed (size and modification time); a file placed by an older build is compared by size with the record.
+            let untouched = record.placed.map { isUnchanged($0, at: url) } ?? (fileSize(url) == record.bytes)
+            if untouched, let given = record.givenName, (path as NSString).lastPathComponent == given {
+                switch deleteFile(url, ops: ops) {
+                case .deleted: break
+                case .noTrash: return .noTrash
+                case .failed: return .refused
+                }
                 OfflineTombstones.add([id], root: hiddenRoot, now: now)
                 return .deleted
             }

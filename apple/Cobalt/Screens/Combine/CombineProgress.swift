@@ -68,7 +68,7 @@ struct CombineProgress: View {
                 Image(systemName: Symbol.checkmark).foregroundStyle(CobaltColor.success)
             }
             if combine.keepsOnDevice {
-                note(Copy.Combine.inFolder(title: combine.title, file: names.file))
+                note(Copy.Combine.inFolder(title: combine.title, file: names.file, folder: combine.app.macFolder.status.path))
             }
             note(doneNumbers(m, result))
             note(Copy.Combine.oneSwitch)

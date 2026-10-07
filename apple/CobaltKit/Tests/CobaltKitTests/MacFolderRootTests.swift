@@ -292,7 +292,7 @@ struct MacFolderRelocationTests {
         let dying = rig.store(ops: TestFileOps(crashAt: .indexed))
         rig.ledger.choose(path: other.path, bookmark: nil, isDefault: false)
         let provider = MacRootProvider(ledger: rig.ledger, defaultFolder: rig.folder)
-        let result = await dying.switchRoot(to: provider.resolve(), move: true)
+        let result = await dying.switchRoot(to: provider.resolve(), move: true, from: dying.rootBox.current)
         #expect(result.interrupted != nil && result.moved == 20)
         #expect(rig.files(in: other).count == 20 && rig.files().count == 5, "20 moved, 5 not")
 

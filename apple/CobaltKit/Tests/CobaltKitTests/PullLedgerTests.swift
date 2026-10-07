@@ -68,13 +68,25 @@ struct PullLedgerTests {
         #expect(ledger.read().done["never-seen"] == nil)
     }
 
-    @Test func entriesOlderThanTheWatermarkByADayArePrunedAndRecentOnesStay() throws {
+    /// Wave M review S1: the entry is the only memory of a file the owner removed from this Mac, so it does not age out.
+    @Test func entriesDoNotAgeOutWhateverTheWatermark() throws {
         let (ledger, _) = try ledger()
         ledger.record(["old"], at: t0.addingTimeInterval(-2 * 86_400), state: .queued)
         ledger.record(["edge"], at: t0.addingTimeInterval(-86_400 + 5), state: .queued)
         ledger.record(["new"], at: t0, state: .queued)
         ledger.finishCheck(now: t0, watermark: t0, backlog: [], problem: nil, markSeen: true)
-        #expect(Set(ledger.read().done.keys) == ["edge", "new"])
+        ledger.finishCheck(now: t0.addingTimeInterval(30 * 86_400), watermark: t0.addingTimeInterval(30 * 86_400), backlog: [], problem: nil, markSeen: true)
+        #expect(Set(ledger.read().done.keys) == ["old", "edge", "new"])
+    }
+
+    @Test func aLedgerPastItsCapDropsTheOldestEntriesFirst() throws {
+        let (ledger, _) = try ledger()
+        let n = PullLedger.maxDone + 3
+        for i in 0..<n { ledger.record(["F\(i)"], at: t0.addingTimeInterval(Double(i)), state: .queued) }
+        ledger.finishCheck(now: t0, watermark: t0, backlog: [], problem: nil, markSeen: true)
+        let done = ledger.read().done
+        #expect(done.count == PullLedger.maxDone)
+        #expect(done["F0"] == nil && done["F2"] == nil && done["F3"] != nil && done["F\(n - 1)"] != nil)
     }
 
     @Test func nothingIsPrunedBeforeAWatermarkExists() throws {

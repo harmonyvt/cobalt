@@ -62,6 +62,7 @@ struct MacFolderRows: View {
         case .notAllowed: return Copy.Folder.notAllowed
         case .wrongFolder: return Copy.Folder.wrongFolder
         case .diskFull: return Copy.Folder.diskFull
+        case .noTrash: return Copy.Folder.noTrash
         case nil: return nil
         }
     }
@@ -112,6 +113,7 @@ struct MacFolderRows: View {
             movePath = path
             moveCount = count
         case .refusedICloud: notice = Copy.Folder.refusedICloud
+        case .refusedStore: notice = Copy.Folder.refusedStore
         case .failed: notice = Copy.Folder.chooseFailed
         }
     }
