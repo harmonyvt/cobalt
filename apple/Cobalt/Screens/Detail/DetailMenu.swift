@@ -116,7 +116,7 @@ struct DetailMenu: View {
                 Button(Copy.Media.openInLibrary, systemImage: Symbol.Media.openInLibrary, action: openInLibrary)
             }
             if item.detailShape != .classic { galleryItems(deleting: deleting) }
-            ShowInFinderButton(model: model, videos: rendition.local.map { [$0] } ?? [])
+            ShowInFinderButton(model: model, item: item)
             ShowInFilesButton(model: model, item: item)
             if showsKeepEverything {
                 Button(Copy.Offline.keepEverything, systemImage: Symbol.keepOffline) { model.keepOffline(item) }

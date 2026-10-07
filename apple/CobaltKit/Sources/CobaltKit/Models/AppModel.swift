@@ -125,6 +125,8 @@ public final class AppModel {
             Task { await self.library.refresh() }
         }
         context.libraryDropped = { [weak self] ids in self?.library.drop(files: Set(ids)) }
+        // The Mac's pull reads this model (settings, capabilities, the library, the runs); previews have none to wire.
+        self.savePull.wire(pullEnvironment())
     }
 
     /// The real app: app-group stores, the keychain, the configured server.
@@ -164,14 +166,19 @@ public final class AppModel {
         #if os(macOS)
         folder.observeActivation()
         #endif
-        let pull = SavePull(store: store)
         let offline = OfflineDownloads(
             store: store, queue: OfflineQueue(directory: AppGroup.directory("Sync")), transport: URLSessionOfflineTransport(),
             clock: ctx.clock, client: { [unowned ctx] in ctx.client })
+        // The pull of saves made anywhere (13.8): the Mac only (`isAvailable`); its baseline lives in `Sync/pull.json`.
+        let pull = SavePull(
+            store: store, ledger: PullLedger(directory: AppGroup.directory("Sync")), downloads: offline, clock: ctx.clock,
+            scheduler: TimerScheduler())
         let model = AppModel(
             context: ctx, library: LibraryModel(context: ctx), photosSync: sync, macFolder: folder,
             savePull: pull, offlineDownloads: offline, ledger: JobLedger.shared(), makeClient: factory)
         model.telemetry = TelemetryService.live(settings: settings, capabilities: { [unowned model] in model.capabilities })
+        pull.start()                             // the 5 minute tick (a no-op without the Mac folder)
+        model.watchOwnUploads()
         fetcher.isActive = { [unowned ctx] in ctx.background.activity.isActive }
         fetcher.serverHoldsRequests = { [unowned model] in model.capabilities.sourceWait }
         // a gallery found by the foreground (a build with no app group) is followed as a job, not downloaded as one file
@@ -243,6 +250,7 @@ public final class AppModel {
         ctx.capabilities = caps
         if selectedTab == .library, !caps.library, caps.kind != .unreachable { selectedTab = .save }
         liveManager?.capabilitiesChanged()
+        savePull.capabilitiesChanged()                // a check that waited for the server runs now
     }
 
     func markKeyInvalid() {
@@ -266,6 +274,7 @@ public final class AppModel {
     /// New server: a new client, nothing known, nothing cached.
     func serverChanged() {
         queue.serverChanged()                    // first: every job's Live Activity ends against the server it belonged to
+        savePull.serverChanged()                 // another library: a new baseline for the pull
         ctx.background.cancelAll()               // detached runs belonged to the old server too
         ctx.client = makeClient(settings)
         apply(.unknown)
@@ -333,6 +342,9 @@ public final class AppModel {
         await offlineDownloads.reconcile()
         await photosSync.refresh()
         await photosSync.reconcile()
+        // The Mac's pull of saves made anywhere (13.8): at launch and on every activation, once the engine has landed what
+        // arrived. Not awaited: a slow library never holds the foregrounding.
+        Task { @MainActor [savePull] in await savePull.check() }
     }
 
     private func takePendingJobs() {

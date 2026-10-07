@@ -15,11 +15,40 @@ enum OfflineWords {
         }
     }
 
+    /// Where a kept file is, as the Mac says it (CONTRACT-OFFLINE 13.10): in the folder it is in, waiting to move into it,
+    /// or in a folder whose disk is away. Nil off the Mac, and for what is not kept.
+    enum KeptPlace: Equatable {
+        case inFolder(String)
+        case waiting
+        case notConnected(path: String)
+    }
+
+    /// The Mac's `KeptPlace` for a rendition's record; nil where the files app answers instead (iPhone, iPad).
+    @MainActor
+    static func keptPlace(of rendition: Rendition, model: AppModel) -> KeptPlace? {
+        #if os(macOS)
+        let folder = model.macFolder
+        guard folder.isAvailable, let local = rendition.local, local.isOffline else { return nil }
+        let status = folder.status
+        if status.problem == .unreachable { return .notConnected(path: status.path) }
+        if local.place == .cache { return .waiting }          // kept, still in the hidden files/ until it can move
+        return .inFolder(folder.displayFolder(of: local) ?? status.path)
+        #else
+        return nil
+        #endif
+    }
+
     /// The line under the detail's toggle: where the file is and its size, progress, waiting, the failure, or
     /// that it is not here.
-    static func status(_ state: RenditionOffline) -> String {
+    static func status(_ state: RenditionOffline, place: KeptPlace? = nil) -> String {
         switch state {
-        case .offline(let bytes): return Copy.Offline.kept(bytes: bytes)
+        case .offline(let bytes):
+            switch place {
+            case .inFolder(let folder): return Copy.Offline.keptIn(folder, bytes: bytes)
+            case .waiting: return Copy.Offline.waitingForFolder(bytes: bytes)
+            case .notConnected(let path): return Copy.Folder.notConnected(path: path)
+            case nil: return Copy.Offline.kept(bytes: bytes)
+            }
         case .cached(let bytes): return Copy.Offline.cached(bytes: bytes)
         case .downloading(let progress): return Copy.Offline.downloading(bytes: progress.bytes, total: progress.total)
         case .waiting: return Copy.Offline.waiting
@@ -185,7 +214,7 @@ private struct OfflineToggleSection: View {
             if case .failed = state { return true }
             return false
         }()
-        Text(OfflineWords.status(state))
+        Text(OfflineWords.status(state, place: OfflineWords.keptPlace(of: rendition, model: model)))
             .font(Font.cobalt(12.5))
             .foregroundStyle(failed ? CobaltColor.errorText : Color.secondary)
             .monospacedDigit()
@@ -229,10 +258,17 @@ private struct DetailRowLabelStyle: LabelStyle {
 }
 
 #if DEBUG
-/// The section for every state of the offline fixture, one under the other.
+/// The section for every state of the offline fixture, one under the other. `folder` is the Mac folder's state while it
+/// draws (the disk away, say); `StorageDebug` shows it in the app's own window.
 @MainActor
-private struct OfflineSectionsPreview: View {
-    @State private var model = AppModel.preview(.offline)
+struct OfflineSectionsPreview: View {
+    @State private var model: AppModel
+
+    init(folder: MacFolder.Status? = nil) {
+        let model = AppModel.preview(.offline)
+        if let folder { model.macFolder.setPreviewStatus(folder) }
+        _model = State(initialValue: model)
+    }
 
     var body: some View {
         let items = (model.store.media.map { model.mediaItem(for: $0) } + model.library.posts.map { model.mediaItem(for: $0) })

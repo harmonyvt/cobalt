@@ -106,6 +106,10 @@ struct OfflineJob: Codable, Equatable, Sendable {
         var madeFrom: [Int]?
         var madeSpec: Data?
         var libraryID: String?
+        /// The post's live items when this is one of a gallery's, so the first item to land is filed in the gallery's folder
+        /// and not mistaken for a lone photo (`FolderNaming.isInGalleryFolder`). Nil on every other rendition and in a
+        /// ledger written by a build that did not know it.
+        var postItems: Int?
     }
 
     enum Target: Codable, Equatable, Sendable {
@@ -123,6 +127,14 @@ struct OfflineJob: Codable, Equatable, Sendable {
     var expectedBytes: Int64?
     /// The inbox name, with a real extension: the store derives the stored file's extension from it.
     var fileName: String
+    /// Who asked: nil is the owner's "keep offline"; `OfflineJob.pulledOrigin` is the Mac's pull of saves made anywhere
+    /// (CONTRACT-OFFLINE.md 13.8). Optional and Codable, so a queue written before it decodes as the owner's.
+    var origin: String?
+
+    static let pulledOrigin = "pulled"
+
+    /// The pull asked for this one.
+    var isPulled: Bool { origin == Self.pulledOrigin }
 
     /// The photos ledger / folder ledger key the finished file will have, so the origin skip can be applied
     /// before the file lands (see `OfflineDownloads.land`).
@@ -203,6 +215,7 @@ enum OfflineSources {
                 record.madeFrom = r.isMade ? item.itemIndices(of: file.madeFrom) : nil
                 record.madeSpec = file.madeSpec?.data
                 record.libraryID = file.id
+                if r.isItem, item.itemCount >= 2 { record.postItems = item.itemCount }
             }
             target = .new(record)
         }

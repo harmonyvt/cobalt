@@ -59,6 +59,7 @@ struct LibraryMenuItems: View {
         }
         OfflineMenuItems(item: item, controller: controller, askRemove: askRemove)
         ShowInFilesButton(model: controller.model, item: item)
+        ShowInFinderButton(model: controller.model, item: item)
         if controller.canSwitchVisibility(item) {
             if row.isPublic {
                 Button(Copy.Library2.makePrivate, systemImage: Symbol.Library.makePrivate) { controller.makingPrivate = item }
@@ -67,7 +68,6 @@ struct LibraryMenuItems: View {
             }
         }
         Button(Copy.Library2.rename, systemImage: Symbol.Library.rename) { controller.renaming = item }
-        ShowInFinderButton(model: controller.model, videos: item.local?.renditions ?? [])
         if controller.canDelete(item) {
             Divider()
             Button(Copy.Library2.deleteEverything, systemImage: Symbol.Library.deleteEverything, role: .destructive) {
@@ -137,8 +137,8 @@ struct OfflineMenuItems: View {
 }
 
 /// "show in files" (iPhone and iPad): the media's folder in the files app. Drawn only while a kept file is in the
-/// visible root and the model has a link that opens it; empty elsewhere (the Mac has `ShowInFinderButton`), so a
-/// menu can list it unconditionally.
+/// visible root and the model has a link that opens it; empty elsewhere (the Mac has `ShowInFinderButton`, listed right
+/// after it), so a menu can list it unconditionally.
 struct ShowInFilesButton: View {
     let model: AppModel
     let item: MediaItem

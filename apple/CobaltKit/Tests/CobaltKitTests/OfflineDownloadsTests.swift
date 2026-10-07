@@ -964,3 +964,110 @@ struct OfflineURLSessionTests {
         #expect(seen[1].path == "/final" && seen[1].headers["authorization"] == nil, "another host never sees the key")
     }
 }
+
+// MARK: - Who asked (CONTRACT-OFFLINE.md 13.8): the pull's jobs on the same engine
+
+@MainActor
+@Suite(.serialized)
+struct PulledOriginTests {
+    private final class Seen: Sendable {
+        let list = Mutex<[AddOrigin]>([])
+        var all: [AddOrigin] { list.withLock { $0 } }
+    }
+
+    private func origins(_ t: DownloadRig) -> Seen {
+        let seen = Seen()
+        t.store.onAdd = { _, origin in seen.list.withLock { $0.append(origin) } }
+        return seen
+    }
+
+    @Test func aJobHasNoOriginUnlessThePullAsked() {
+        let job = OfflineJob(
+            key: "f:A", aliases: ["f:A"], target: .existing(id: "x"), sources: [.libraryItem(id: "A")], expectedBytes: nil, fileName: "a.mp4")
+        #expect(job.origin == nil && !job.isPulled)
+        var pulled = job
+        pulled.origin = OfflineJob.pulledOrigin
+        #expect(pulled.isPulled && OfflineJob.pulledOrigin == "pulled")
+    }
+
+    @Test func aQueueWrittenBeforeOriginsExistedStillDecodesAsTheOwnersKeepOffline() throws {
+        let json = #"""
+        {"key":"f:A","aliases":["f:A"],"target":{"existing":{"id":"x"}},"sources":[{"libraryItem":{"id":"A"}}],"fileName":"a.mp4"}
+        """#
+        let job = try JSONDecoder().decode(OfflineJob.self, from: Data(json.utf8))
+        #expect(job.origin == nil && !job.isPulled)
+        let record = try JSONDecoder().decode(
+            OfflineJob.NewRecord.self,
+            from: Data(#"{"kind":"original","media":{"name":"n","isImage":false},"createdAt":1,"sessionID":"s"}"#.utf8))
+        #expect(record.postItems == nil)
+        // and the new fields round-trip
+        var again = job
+        again.origin = "pulled"
+        let back = try JSONDecoder().decode(OfflineJob.self, from: JSONEncoder().encode(again))
+        #expect(back == again && back.isPulled)
+    }
+
+    @Test func aKeepOfflineDownloadLandsWithOriginKeepOfflineAndAPulledOneWithPulled() async throws {
+        let t = try DownloadRig()
+        let seen = origins(t)
+        t.engine.enqueue([t.newJob(key: "f:K1", sources: [.libraryItem(id: "K1")], session: "KEEP")])
+        var pulled = t.newJob(key: "f:P1", sources: [.libraryItem(id: "P1")], session: "PULL")
+        pulled.origin = OfflineJob.pulledOrigin
+        t.engine.enqueue([pulled])
+        let s = try #require(t.session)
+        for task in s.tasks { s.respond(task: task.id, status: 200, body: body()) }
+        #expect(await eventually(15) { t.queue.all().isEmpty && t.store.videos.count == 2 })
+        #expect(seen.all.sorted { "\($0)" < "\($1)" } == [.keepOffline, .pulled])
+        #expect(t.store.videos.allSatisfy { $0.keep })
+    }
+
+    @Test func aPulledJobOnAnExistingRecordAttachesWithOriginPulled() async throws {
+        let t = try DownloadRig()
+        let seen = origins(t)
+        let v = try await t.evicted()
+        var job = t.existingJob(v)
+        job.origin = OfflineJob.pulledOrigin
+        t.engine.enqueue([job])
+        let task = try #require(t.session?.tasks.first)
+        t.session?.respond(task: task.id, status: 200, body: body())
+        #expect(await eventually(15) { t.store.videos.first { $0.id == v.id }?.isOffline == true && t.queue.all().isEmpty })
+        #expect(seen.all.last == .pulled)
+    }
+
+    @Test func theFirstItemOfAGalleryThatCarriesThePostsSizeIsFiledInTheGalleryFolder() async throws {
+        let t = try DownloadRig()
+        func item(_ id: String, postItems: Int?) -> OfflineJob {
+            var job = t.job(key: "f:\(id)", target: .new(OfflineJob.NewRecord(
+                kind: .original, media: MediaInfo(name: "01", duration: nil, width: 10, height: 10, bytes: nil, isImage: true),
+                sessionID: "GAL-\(id)", link: URL(string: "https://www.instagram.com/p/DeKlsGCGZmx/"), remoteURL: nil, publicURL: nil,
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000), title: nil, mediaID: nil, role: .item, itemIndex: 0,
+                madeFrom: nil, madeSpec: nil, libraryID: id, postItems: postItems)),
+                sources: [.libraryItem(id: id)])
+            job.fileName = "01.jpg"
+            return job
+        }
+        t.engine.enqueue([item("G3", postItems: 3), item("G1", postItems: nil)])
+        let s = try #require(t.session)
+        for task in s.tasks { s.respond(task: task.id, status: 200, body: body()) }
+        #expect(await eventually(15) { t.queue.all().isEmpty && t.store.videos.count == 2 })
+        let files = t.rig.visibleFiles()
+        #expect(files.count == 2)
+        #expect(files.filter { $0.contains("/") }.count == 1, "a gallery of 3 is a folder; the lone item (no size known) stays flat: \(files)")
+    }
+
+    @Test func onlyAFailureOfGoneCallsTheEndedHook() async throws {
+        let t = try DownloadRig()
+        let gone = Mutex<[String]>([])
+        t.engine.endedGone = { job in gone.withLock { $0.append(job.key) } }
+        let a = try await t.evicted(session: "SA", name: "a"), b = try await t.evicted(session: "SB", name: "b")
+        t.engine.enqueue([
+            t.existingJob(a, key: "f:A", sources: [.libraryItem(id: "A")]),
+            t.existingJob(b, key: "f:B", sources: [.libraryItem(id: "B")]),
+        ])
+        let s = try #require(t.session)
+        s.respond(task: 1, status: 404, body: Data())          // gone
+        s.respond(task: 2, status: 401, body: Data())          // auth
+        #expect(await eventually(15) { t.engine.states["f:A"] == .failed(.gone) && t.engine.states["f:B"] == .failed(.auth) })
+        #expect(gone.withLock { $0 } == ["f:A"])
+    }
+}

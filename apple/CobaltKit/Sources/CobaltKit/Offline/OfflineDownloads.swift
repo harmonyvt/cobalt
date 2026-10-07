@@ -7,8 +7,9 @@ import Observation
 // screen and being killed; `OfflineQueue` (`Sync/offline-queue.json`) is the ledger a fresh process reads to
 // re-attach to it. Progress reaches `states` at about 4 Hz. A transfer the system interrupts keeps its resume data
 // (`Sync/offline-resume/`) and restarts from it. A finished file moves into the inbox inside the delegate callback
-// and is landed (`attach` to its record, or `add` a new one) on the main actor, always `keep: true` and origin
-// `.keepOffline`: the photos album and the Mac folder never copy it (it is not a new save).
+// and is landed (`attach` to its record, or `add` a new one) on the main actor, always `keep: true`, with origin
+// `.keepOffline` (the owner's "keep offline") or `.pulled` (the Mac's pull of saves made anywhere, `OfflineJob.origin`,
+// CONTRACT-OFFLINE.md 13.8): the photos album never copies either (it is not a new save made here).
 //
 // Delegate callbacks come on the session's own queue. They go through `OfflineEventSink`, a plain `Sendable` class,
 // and hop to the main actor with an explicit `Task { @MainActor … }`: nothing the system calls is inferred
@@ -73,6 +74,9 @@ public final class OfflineDownloads {
     @ObservationIgnored var markNotNew: (@MainActor ([String]) async -> Void)?
     /// Something landed (the photos sync runs).
     @ObservationIgnored var landed: (@MainActor () async -> Void)?
+    /// A download ended `gone` (every place that might have the file said so): the pull writes its ledger entry `skipped`
+    /// (CONTRACT-OFFLINE.md 13.8). Only called for that failure.
+    @ObservationIgnored var endedGone: (@MainActor (OfflineJob) -> Void)?
 
     @ObservationIgnored private var sink: OfflineEventSink?
     @ObservationIgnored private var session: (any OfflineSession)?
@@ -383,6 +387,7 @@ public final class OfflineDownloads {
         foreground[key] = nil
         track(updated, .failed(failure))
         Telemetry.log(.warn, .sync, "offline failed", data: ["reason": .string("\(failure)")])
+        if failure == .gone { endedGone?(updated.job) }
     }
 
     // MARK: - Landing
@@ -401,16 +406,20 @@ public final class OfflineDownloads {
         }
         // before the file lands: nothing racing the album's pass sees a "new save"
         await markNotNew?(entry.job.notNewKeys(store: store))
+        let origin: AddOrigin = entry.job.isPulled ? .pulled : .keepOffline
         do {
             switch entry.job.target {
             case .existing(let id):
-                _ = try await store.attach(file: file, to: id, move: true, keep: true, origin: .keepOffline)
+                _ = try await store.attach(file: file, to: id, move: true, keep: true, origin: origin)
             case .new(let n):
+                // a made file the pull brings replaces this device's older one of the same kind first (R8, 13.7), so the
+                // new file takes the free name
+                if entry.job.isPulled { await replaceOlderMade(n) }
                 let video = try await store.add(
                     file: file, kind: n.kind, media: n.media, sessionID: n.sessionID, link: n.link, remoteURL: n.remoteURL,
                     move: true, publicURL: n.publicURL, mediaID: n.mediaID, clip: nil, keep: true, createdAt: n.createdAt,
-                    origin: .keepOffline, role: n.role, itemIndex: n.itemIndex, madeFrom: n.madeFrom, madeSpec: n.madeSpec,
-                    libraryID: n.libraryID)
+                    origin: origin, role: n.role, itemIndex: n.itemIndex, madeFrom: n.madeFrom, madeSpec: n.madeSpec,
+                    libraryID: n.libraryID, postItems: n.postItems)
                 if let title = n.title { await store.setTitle(title, media: video.mediaID) }
             }
         } catch OfflineStoreError.notFound {
@@ -436,6 +445,19 @@ public final class OfflineDownloads {
         forget(key)
         Telemetry.log(.info, .sync, "offline landed", data: ["kind": .string(Self.kind(of: entry.job))])
         await landed?()
+    }
+
+    /// R8 for a pulled made file (a slideshow, a gallery image, a crop): this device's records of the same kind, in the same
+    /// session or media, that are another library row go first (`OfflineStore.replaceMade`: an untouched file to the Trash on
+    /// the Mac, a renamed one left as the owner's). The new row's own record, if there is one, stays.
+    private func replaceOlderMade(_ n: OfflineJob.NewRecord) async {
+        guard n.role != nil, n.role != .item,
+              let kind = MadeKind(role: n.role, spec: n.madeSpec.flatMap { MadeSpec(data: $0) }) else { return }
+        let stale = store.videos.filter { old in
+            old.madeKind == kind && old.libraryID != n.libraryID
+                && ((n.sessionID != nil && old.sessionID == n.sessionID) || (n.mediaID != nil && old.mediaID == n.mediaID))
+        }
+        for old in stale { await store.replaceMade(old.id) }
     }
 
     // MARK: - Foreground and wakes

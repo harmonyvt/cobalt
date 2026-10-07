@@ -181,3 +181,48 @@ P's work in `AppModel.swift` / `AppModel+Offline.swift` starts from these.
 * A run against the owner's real folder and store: none was made (hard rule). The adoption counts for it (8 of 8) are predicted by
   `OwnerFolderTests` (the fixture uses the real names, keys and kinds with scaled-down sizes: 8 of 8 adopted when nothing is renamed, 7 of 8 with the renamed file); V repeats it on a `ditto` copy under
   `-cobaltSandboxRoot`.
+
+---
+
+# Wave M2 / P (the pull) as built
+
+Written 2026-10-07 by lane M2-PULL. Additive to the API above: nothing pinned by M1 changed. `CONTRACT-OFFLINE.md` 13.8 and 13.9 as built; **DEVIATION** marks every difference.
+
+## 1. What a Mac screen can rely on
+
+```swift
+SavePull.status                       // Status { available, lastChecked, paused, pulling } as pinned; now live
+SavePull.check() async                // one check (the screens rarely need it)
+SavePull.resume() async               // NEW, public: lifts an auth pause (a refused key) and checks once. Call it when Settings opens.
+SavePull.start() / stop()             // NEW, public: the 5 minute tick; `AppModel.live()` starts it, nothing else needs to
+AppModel.setKeepNewSaves(_ on: Bool)  // writes `keepVideosOnDevice`; when the value CHANGES: on takes a new baseline and checks, off forgets the baseline
+```
+
+* `status.paused` is derived live, in this order: `.keepOff` (the setting), `.folderUnreachable` (`store.rootState != .ready`), `.auth` (`capabilities.key == .invalid`, or the library answered 401/403 with the key now in use: sticky until the key changes or `resume()`), `.noServer` (`key == .missing`, capabilities never read, or a server with no library). Network and 5xx answers are not a pause: `lastChecked` simply does not move.
+* `status.pulling` counts the engine's `waiting` and `downloading` entries whose job has origin `pulled` (an owner's "keep offline" download is not counted). It reads `OfflineDownloads.states`, so a view redraws as each one lands.
+* `status.lastChecked` is the last check that reached the server (restored from the ledger at launch).
+* Previews are unchanged (`SavePull.preview(_:)`; `check`, `resume`, `start`, `keepChanged` do nothing on one).
+
+## 2. Files
+
+* `Offline/PullLedger.swift` (new): `Sync/pull.json`, `CoordinatedFile`. **DEVIATION (additive to the 13.8 shape):** `server` (the library the baseline belongs to), `own` (library ids of uploads this Mac made, aged out after 8 days), `backlog` (`[{cursor, floor}]`: what a walk capped at 10 pages did not reach). `done` entries are keyed by the bare library file id (the queue's keys are `f:<id>`).
+* `Offline/SavePull.swift`: the pull. Also holds the `AppModel` extension (`setKeepNewSaves`, `holdsSession`, `ownUploadIDs`, `uploadIsInFlight`, `pullEnvironment()`, `watchOwnUploads()`), moved here from the M1 stub. `TimerScheduler` (a `Timer` on the main run loop, tolerance 60 s, `@Sendable` block that hops to the main actor) is the app's tick; `ClockScheduler` runs it on a `PipelineClock` (tests).
+* `Offline/OfflineSources.swift`: `OfflineJob.origin: String?` (nil = the owner's "keep offline"; `OfflineJob.pulledOrigin == "pulled"`), `OfflineJob.NewRecord.postItems: Int?` (a gallery item carries the post's size so the first one to land is filed in the gallery folder; set for `keep offline` too). Both optional and `Codable`: a queue written by 1.14.x decodes as the owner's.
+* `Offline/OfflineDownloads.swift`: landing passes `origin: .pulled` for a pulled job; a pulled `.new` made file calls `replaceMade` on this device's older records of the same `madeKind` (same session or media, another library row) before `add` (13.7); `endedGone` hook (only for `failed(.gone)`).
+* `Models/AppModel.swift`: wiring only (`savePull.wire(pullEnvironment())` in `init`, the tick and `watchOwnUploads()` in `live()`, `capabilitiesChanged()` in `apply`, `serverChanged()`, a check at the end of `pickUpSharedJobs`).
+
+## 3. Rules as built
+
+* **Baseline.** `enabledAt` = the device's `now` at the first check on this build with the setting on, again at every off to on (`setKeepNewSaves`), and for another server (`serverChanged()`, or a launch that finds a different server URL than the ledger names). It is taken even while the check is paused for the folder, the key or the server. Off forgets it. A library file older than it is never a candidate. A 72-post library costs one request of 5 and no job.
+* **Candidate** (per rendition of `MediaItem.merge(local: <the media that joins the post>, post:)`): lists a library file (`file ?? hosted`), `createdAt > enabledAt`, none of its file ids in `done`, no local record at all, not an upload this Mac made (`own`), its post not held (13.9 layer 1), and `OfflineSources.job` is not nil. Queued then written `done=queued` (engine first, ledger second: a crash between can only re-offer what the queue already holds). **DEVIATION (safer, additive):** a rendition that has a local record, or is an upload this Mac made, is written `done=skipped` (`why: "local"` / `"own"`) so a later change (a session that expires and stops joining) cannot flip the decision.
+* **Held** (deferred, not decided; the watermark never passes it): `AppModel.holdsSession(post.id)` or of `post.session.id`. **DEVIATION (wider than the M1 stub):** also a run that finished but still has its original coming into the store (`pipeline.keepRequest`), and the detached runs of `ctx.background`; both are real windows (the library lists the post before the record lands).
+* **Uploads made on this Mac.** Read from the server (`api/src/app-routes.ts`, `studioUpload`): the library row of an upload has id = the upload's item id, which is the **post key** (`POST_KEY_SQL`); the adopted video session has `link = upload:<item id>` and joins that post as its `session`, only while open (status `saving`/`ready` and not expired, 7 days). The local original is stored under the **session id**, so `MediaItem.joins` works while the session is open (a video upload is never pulled back in that time). An **image upload** has no session and leaves **no local record** (`runUpload` stops at `.image`), so nothing joins. The pull therefore also keeps `own`: the library ids in `queue.jobs[].pipeline.uploadedItemID`, read at every check and as the queue changes, remembered in `pull.json`, and an upload whose file is still on the wire (`.uploading`, no id yet) defers upload rows. **Gap (measured by `theOneGapAVideoUpload…`):** a video upload whose session expired before any run of this process noted its id (a Mac closed for over a week after uploading, with a baseline older than the upload) comes back once as a second file.
+* **Walk.** `limit=5` first; while every post is newer than `stopLine = max(enabledAt, watermark − 10 min)` the next page is 30; at most 10 pages per check. **DEVIATION (added to 13.8):** a walk that hits the cap keeps the rest as a `backlog` segment (`cursor`, `floor`) the next check continues after its quiet top walk, and the watermark still advances; otherwise a long absence would be re-walked from the top at every tick and never reach the older saves. A held post inside a segment makes it resume at that page. The watermark = the newest `createdAt` of the top walk, never past a held post; `done` older than `watermark − 1 day` is pruned.
+* **Failures.** 401/403 (or `error.api.auth.*`): `.auth` sticky. Anything else: `problem` in the ledger (`network`, `server <status>`), the next tick tries again.
+* **Keep turned off while pulled downloads are queued:** they finish and land (kept); the next on is a new baseline. Not cancelled (13.8 is silent).
+* **Not changed:** `Store/OfflineFolder.swift` (`AddOrigin.pulled` was M1's), `OfflineQueue.swift`, the pinned M1 API, the server.
+
+## 4. Not verified here
+
+* No run of the app (no sandboxed launch, no real server): the checks above are CobaltKit tests on temp directories, a scripted library, the engine's fake session and a loopback server (`GET /library?v=3&limit=5`).
+* G-MB (a background download surviving a Mac quit), the real `Timer` under App Nap, `Settings` screen wiring (U's: `setKeepNewSaves`, `resume()`, `status`).

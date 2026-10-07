@@ -1,50 +1,71 @@
 import Foundation
 
-/// Copy and symbols for the Mac's "save to a folder" (a copy of every video and webp cobalt keeps, in a
-/// folder in Finder). All lowercase, like the rest. Its own file so the folder lane never edits `Copy.swift`;
-/// compiled into the app, the share extension and the widgets (`Cobalt/Design` is shared by all three).
+/// Copy for the Mac's folder (CONTRACT-OFFLINE.md 13.10): the Finder folder that holds the kept files, the choose dialog,
+/// the problem lines and the "saves from other devices" row. Lowercase, exact. Its own file so the folder lane never edits
+/// `Copy.swift`; compiled into the app, the share extension and the widgets (`Cobalt/Design` is shared by all three), so plain
+/// values only. The copier's strings (the `save to a folder` toggle, the backfill offer, its counters) went with it.
 extension Copy {
     enum Folder {
-        static let group = "folder"
-        static let toggle = "save to a folder"
+        // the folder row and its buttons
         static let row = "folder"
         static let choose = "choose…"
         static let showInFinder = "show in finder"
-        static let resetToDefault = "reset to default"
-        static let chooseMessage = "cobalt copies the videos and webps it keeps into this folder."
+        static let useDefault = "use ~/Movies/cobalt"
+
+        // the open panel
         static let choosePrompt = "choose"
-        static func saved(_ n: Int) -> String { n == 1 ? "1 saved" : "\(n) saved" }
-        static func waiting(_ n: Int) -> String { "\(n) waiting" }
-        static func saving(_ done: Int, of total: Int) -> String { "saving \(done) of \(total)" }
-        static let statusRow = "saved"
-        static func gaveUp(_ n: Int) -> String { n == 1 ? "1 couldn't be saved" : "\(n) couldn't be saved" }
-        static let folderMissing = "the folder isn't there · choose another or put it back"
-        static let notAllowed = "cobalt can't write to this folder · choose another"
-        static func diskFull(_ waiting: Int) -> String { "the disk is full · \(waiting) waiting" }
-        static let chooseFailed = "cobalt couldn't use that folder."
-        // the offer for what cobalt already holds
-        static func backfillTitle(_ n: Int) -> String {
-            n == 1 ? "also save the video already in cobalt to this folder?" : "also save the \(n) videos already in cobalt to this folder?"
+        static let chooseMessage = "offline files are kept in this folder."
+
+        // the choose dialog: "move the 24 offline files to <path>?"
+        static func moveTitle(count: Int, path: String) -> String {
+            count == 1 ? "move the 1 offline file to \(path)?" : "move the \(count) offline files to \(path)?"
         }
-        static func backfillAdd(_ n: Int) -> String { "save \(n)" }
-        static let backfillSkip = "only new ones"
-        static func existingRow(_ n: Int) -> String { n == 1 ? "save the 1 already in cobalt" : "save the \(n) already in cobalt" }
-        // the more menu and the library's context menu
-        static let menuShowInFinder = "show in finder"
-        static let footer = "videos and webps cobalt keeps on this mac are copied here, once each, with a name you can read. delete or rename one in finder and cobalt leaves it alone, and renaming something in cobalt doesn't rename its file."
-        static let footerOff = "turn this on to copy the videos and webps cobalt keeps into a folder in finder."
+        static let move = "move"
+        static let leaveThem = "leave them"
+        static let moveMessage = "left behind, they stay in the old folder and aren't offline here any more."
+        static func moving(done: Int, of total: Int) -> String { "moving… \(done) of \(total)" }
+        static let refusedICloud = "pick a folder on this mac or an external disk. icloud drive folders can't hold offline files."
+        static let chooseFailed = "cobalt couldn't use that folder."
+
+        // the problem line (only when there is one)
+        static let unreachable = "this folder isn't connected. new saves wait on this mac until it's back."
+        static let notAllowed = "cobalt can't write to this folder."
+        static let wrongFolder = "this isn't the folder cobalt was using. choose it again."
+        static let diskFull = "the disk is full."
+
+        // the detail's line while the disk is away
+        static func notConnected(path: String) -> String { "on \(path), which isn't connected" }
+
+        // "saves from other devices": what the pull is doing
+        static let pullRow = "saves from other devices"
+        static let pullNotChecked = "not checked yet"
+        static func pullChecked(_ ago: String) -> String { "checked \(ago)" }
+        static func pullDownloading(_ n: Int) -> String { "downloading \(n)" }
+        static let pullKeepOff = "paused while keep new saves offline is off"
+        static let pullFolderAway = "paused until the folder is back"
+        static let pullAuth = "your key was refused. check it above."
+        static let pullNoServer = "paused until a server and key are set above"
+
+        /// "just now", "2 min ago", "3 hr ago", "2 days ago": how long ago a check ran.
+        static func ago(seconds: TimeInterval) -> String {
+            let s = max(0, Int(seconds))
+            if s < 60 { return "just now" }
+            if s < 3600 { return "\(s / 60) min ago" }
+            if s < 86_400 { return "\(s / 3600) hr ago" }
+            let days = s / 86_400
+            return days == 1 ? "1 day ago" : "\(days) days ago"
+        }
+
+        static let footer = "offline files stay in this folder until you remove them, here or in finder. while cobalt is open, saves from your iphone, the share sheet, shortcuts and the web download here too. the cache makes room by itself."
     }
 }
 
 extension Symbol {
     enum Folder {
-        static let toggle = "folder.badge.plus"
         static let row = "folder"
         static let choose = "folder.badge.gearshape"
-        static let showInFinder = "magnifyingglass"
+        static let showInFinder = "folder"
         static let reset = "arrow.uturn.backward"
-        static let status = "externaldrive.badge.checkmark"
-        static let problem = "externaldrive.badge.exclamationmark"
-        static let existing = "tray.and.arrow.down"
+        static let pull = "arrow.triangle.2.circlepath"
     }
 }

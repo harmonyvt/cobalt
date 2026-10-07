@@ -13,6 +13,7 @@ extension Copy.Offline {
     static let stop = "stop downloading"
     static let stopAll = "stop all"
     static let showInFiles = "show in files"                           // iOS: the media's folder in the files app
+    static let showInFinder = "show in finder"                         // the Mac: the media's files (or gallery folder) in finder
     static let openInFiles = "open in files"                           // iOS: the settings row
 
     // the library: the show filter's word and the table's column
@@ -26,20 +27,30 @@ extension Copy.Offline {
 
     // the confirm of "remove offline copy" (decision 10): the server keeps a copy, or this is the only one
     static let removeCopyTitle = "remove the offline copy?"
-    static let removeCopyMessage = "the server keeps its copy. you can keep it offline again any time."
+    static var removeCopyMessage: String {
+        #if os(macOS)
+        "it goes to the trash. the server keeps its copy."                // wave M: a remove on the Mac is the Trash (13.10)
+        #else
+        "the server keeps its copy. you can keep it offline again any time."
+        #endif
+    }
     static let onlyCopyTitle = "remove the only copy?"
     static let onlyCopyMessage = "this isn't on your server. once it's removed it can't be downloaded again."
 
     // the status line under the detail's toggle
-    /// Kept: where it is and how big. The iPhone and iPad keep it in the files app; the Mac (wave 1) in its own
-    /// store (wave M: the folder's display path).
-    static func kept(bytes: Int64) -> String {
+    /// Kept: where it is and how big. The iPhone and iPad keep it in the files app; the Mac says the folder it is in
+    /// (`in ~/Movies/cobalt · 54 MB`, `folder` is the display path; 13.10).
+    static func kept(bytes: Int64, folder: String? = nil) -> String {
         #if os(macOS)
-        "on this \(Copy.device) · \(Copy.Storage.size(bytes))"
+        folder.map { keptIn($0, bytes: bytes) } ?? "on this \(Copy.device) · \(Copy.Storage.size(bytes))"
         #else
         "in the files app · \(Copy.Storage.size(bytes))"
         #endif
     }
+    /// The Mac: `in ~/Movies/cobalt/instagram · DeKlsGCGZmx · 54 MB`.
+    static func keptIn(_ folder: String, bytes: Int64) -> String { "in \(folder) · \(Copy.Storage.size(bytes))" }
+    /// The Mac: a kept file that has not moved into the folder yet (it is not connected, or the move waits).
+    static func waitingForFolder(bytes: Int64) -> String { "waiting for the folder · \(Copy.Storage.size(bytes))" }
     static func cached(bytes: Int64) -> String {
         "in the cache · \(Copy.Storage.size(bytes)) · leaves when space runs low"
     }
@@ -72,7 +83,7 @@ extension Copy.Offline {
         percent.map { "downloading, \($0) percent" } ?? "downloading"
     }
 
-    // settings, "on this iphone"
+    // settings, "on this iphone" / "on this mac"
     static let keepNewSaves = "keep new saves offline"                 // replaces `Copy.keepVideos`
     static let rowOffline = "offline"
     static let rowDownloading = "downloading"
@@ -85,10 +96,16 @@ extension Copy.Offline {
     static func queueLine(left: Int, bytes: Int64, total: Int64?) -> String {
         "\(left) left · " + String(downloading(bytes: bytes, total: total).dropFirst("downloading… ".count))
     }
-    /// The section's footer (the Mac says nothing of the files app until wave M).
+    /// "24 files · 3.1 GB" (the Mac counts files: a gallery is many); with a limit "3 files · 210 MB of 5 GB".
+    static func filesUsage(count: Int, bytes: Int64, limit: Int64?) -> String {
+        let head = "\(count) \(count == 1 ? "file" : "files") · \(Copy.Storage.size(bytes))"
+        guard let limit else { return head }
+        return "\(head) of \(Copy.Storage.size(limit))"
+    }
+    /// The section's footer.
     static var footer: String {
         #if os(macOS)
-        "offline videos stay on this \(Copy.device) until you remove them here. the cache makes room by itself."
+        Copy.Folder.footer
         #else
         "offline videos stay on this \(Copy.device) until you remove them, here or in files › on my \(Copy.device) › cobalt. the cache makes room by itself."
         #endif

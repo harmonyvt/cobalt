@@ -17,6 +17,8 @@ extension Symbol {
     static let stopDownloading = "stop.circle"
     /// "show in files" and "open in files".
     static let showInFiles = "folder"
+    /// "show in finder" (the Mac's twin of `showInFiles`).
+    static let showInFinder = "folder"
     /// The cache row.
     static let cache = "internaldrive"
     /// A download that waits for the network.

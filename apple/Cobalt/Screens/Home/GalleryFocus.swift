@@ -147,7 +147,8 @@ struct GalleryFacts {
     let run: GalleryRun
     let title: String
     let line: LinePosition?
-    /// Where it was kept, when it was kept on this device ("Files › On My iPhone › cobalt › <title>").
+    /// Where it was kept, when it was kept on this device ("Files › On My iPhone › cobalt › <title>"; on the Mac the folder
+    /// the files are in, `~/Movies/cobalt/instagram · Ddy0-gpGg5U`).
     let place: String?
     /// The media is in this device's store, so its detail can open.
     let canOpen: Bool
@@ -167,22 +168,24 @@ struct GalleryFacts {
         let stored = pipeline.mediaID.flatMap { model.store.media(id: $0) }
         self.canOpen = stored != nil
         self.canMake = model.capabilities.gallery && model.capabilities.galleryMake
+        #if os(macOS)
+        // the folder the kept files are in (the owner's choice, a gallery's own folder); nothing when none is kept
+        // there (keep new saves offline is off: the files wait in the cache)
+        self.place = stored?.items.first(where: \.isOffline).flatMap { model.macFolder.displayFolder(of: $0) }
+        #else
         let kept = stored.map { !$0.items.isEmpty } ?? false
         self.place = kept ? Self.place(title: title, single: max(run.total, items.count) <= 1, model: model) : nil
+        #endif
     }
 
-    /// "Files › On My iPhone › cobalt › instagram · Ddy0-gpGg5U" / "~/Movies/cobalt/instagram · Ddy0-gpGg5U".
+    #if os(iOS)
+    /// "Files › On My iPhone › cobalt › instagram · Ddy0-gpGg5U".
     private static func place(title: String, single: Bool, model: AppModel) -> String? {
-        #if os(macOS)
-        let status = model.macFolder.status
-        guard status.available else { return nil }
-        return single ? status.path : "\(status.path)/\(title)"
-        #else
         let device = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
         let base = "Files › On My \(device) › cobalt"
         return single ? base : "\(base) › \(title)"
-        #endif
     }
+    #endif
 
     var total: Int { max(run.total, items.count, 1) }
     var isSingle: Bool { total <= 1 }
@@ -308,7 +311,7 @@ struct GalleryFacts {
             let f = progress.fraction
             out.append(.making(Copy.Gallery.making(m.focusWhat, Int((f * 100).rounded())), fraction: f))
         case .done(let m, _):
-            let file = place == nil ? nil : Copy.Gallery.inFiles("\(title)/\(m.focusFile)")
+            let file = place.map { GalleryFocusCopy.inFolder($0, title: title, file: m.focusFile) }
             out.append(.madeDone(Copy.Gallery.addedAsTab(m.focusTab), file))
         case .failed(let m, _):
             out.append(.makeFailed(Copy.Gallery.makeFailed(m.focusWhat)))
@@ -335,6 +338,10 @@ enum GalleryFocusCopy {
     static let makeAgainHint = "try again"
     static func fetchingAgain(_ name: String) -> String { "fetching \(name) again" }
     static let resolvesAnew = "cobalt resolves the post anew"
+    /// Where a made file went: the Mac names the folder it is in, the iPhone and iPad the files app.
+    static func inFolder(_ place: String, title: String, file: String) -> String {
+        Platform.isMac ? "in Finder: \(place)/\(file)" : Copy.Gallery.inFiles("\(title)/\(file)")
+    }
     static func openA11y(_ title: String) -> String { "open \(title)" }
     static func heroA11y(_ countText: String) -> String { countText }
 }

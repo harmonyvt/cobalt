@@ -129,7 +129,7 @@ struct LibraryTable: View {
                 TableColumn(Copy.Offline.column, value: \.offline) { row in
                     OfflineCell(item: row.item, model: controller.model)
                 }
-                .width(min: 64, ideal: 78, max: 100)
+                .width(min: 78, ideal: 88, max: 110)
             }
             TableColumn(Copy.Library2.colDate, value: \.date) { row in
                 secondary(Format.when(row.date, now: Date()))
