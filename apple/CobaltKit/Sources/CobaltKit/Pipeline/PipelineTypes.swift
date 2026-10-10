@@ -46,7 +46,10 @@ public enum RenderProgress: Sendable, Equatable {
 public enum PipelineFailure: Sendable, Equatable, Error {
     case noLink                    // pasteboard had no http(s) link
     case tooLarge(limit: Int64)    // file over the upload limit (checked before uploading)
-    case fetchFailed(code: String) // cobalt couldn't fetch (error.api.fetch.*, content.*, link.*)
+    case fetchFailed(code: String) // cobalt couldn't fetch (error.api.fetch.*, content.*): the post may be private or gone
+    /// cobalt does not read this link at all (`error.api.link.invalid` / `link.unsupported`): not a post from a site it
+    /// knows, and not a media file. Nothing is private or removed; the link itself is what is wrong.
+    case linkUnreadable(code: String)
     case unsupported               // local-processing, or a type the server refuses
     case serverBusy                // error.studio.busy after the pipeline's own retries (60 s)
     case renderBusy                // error.webp.busy (keeps the trim)

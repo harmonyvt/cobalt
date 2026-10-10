@@ -63,7 +63,7 @@ enum TrayCopy {
     /// A failure that "try again" cannot cure: the input or the key is what is wrong.
     static func isRetryable(_ failure: PipelineFailure) -> Bool {
         switch failure {
-        case .noLink, .tooLarge, .unsupported, .keyMissing, .keyInvalid: return false
+        case .noLink, .tooLarge, .unsupported, .linkUnreadable, .keyMissing, .keyInvalid: return false
         default: return true
         }
     }

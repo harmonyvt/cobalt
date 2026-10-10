@@ -66,6 +66,9 @@ struct ScriptedClient: CobaltClient {
         return try await base.resolve(link)
     }
     func createStudio(link: URL) async throws -> StudioCreated { try await base.createStudio(link: link) }
+    func createStudio(url: URL, options: StudioCreateOptions) async throws -> StudioCreated {
+        try await base.createStudio(url: url, options: options)
+    }
     func upload(
         file: URL, name: String, contentType: String, progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> UploadResult {

@@ -84,6 +84,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// chained make exist (needs `gallery`). False when absent: the three makes are hidden and the share sheet draws only
     /// `save all`.
     public var galleryMake: Bool = false
+    /// `features.direct_links`: `POST /studio` takes a link straight at a media file (image, video or gif, from any
+    /// public host) and the server fetches and saves it as one item. False when absent: the app then downloads such a
+    /// link on the device and sends it through the file upload instead.
+    public var directLinks: Bool = false
 
     public static let unknown = Capabilities(
         kind: .unreachable, cobaltVersion: nil, studio: false, upload: false, library: false,

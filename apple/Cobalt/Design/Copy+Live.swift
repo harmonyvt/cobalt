@@ -43,6 +43,7 @@ extension Copy {
             case "noLink": return Copy.failure(.noLink)
             case "tooLarge": return "that file is over the size limit."                       // new (the limit is not in the state)
             case "fetchFailed": return Copy.failure(.fetchFailed(code: code))
+            case "linkUnreadable": return Copy.failure(.linkUnreadable(code: code))
             case "unsupported": return Copy.failure(.unsupported)
             case "serverBusy": return Copy.failure(.serverBusy)
             case "renderBusy": return Copy.failure(.renderBusy)

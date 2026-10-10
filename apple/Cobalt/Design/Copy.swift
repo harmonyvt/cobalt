@@ -183,11 +183,18 @@ enum Copy {
         return "\(bytes / 1_000_000) MB"
     }
 
+    /// A link cobalt cannot read at all (`error.api.link.invalid` / `link.unsupported`): not a private or removed post.
+    /// `failure` says both lines in one string, which every surface shows as it is (the tray card, the share sheet, a
+    /// Shortcut, the widget).
+    static let linkUnreadable = "cobalt can't read this link."
+    static let linkUnreadableHint = "it isn't a post from a site cobalt knows, or a media file."
+
     static func failure(_ failure: PipelineFailure) -> String {
         switch failure {
         case .noLink: return "no link found in that text."
         case .tooLarge(let limit): return "that file is over the \(megabytes(limit)) limit."
         case .fetchFailed: return "cobalt couldn't fetch this link. the post may be private or removed."
+        case .linkUnreadable: return "\(linkUnreadable) \(linkUnreadableHint)"
         case .unsupported: return "cobalt for apple can't save this kind of post yet."          // new
         case .serverBusy: return "cobalt is busy with another video. try again in a minute."     // new
         case .renderBusy: return "another webp is being made right now."

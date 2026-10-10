@@ -71,7 +71,7 @@ private func touchPipeline(_ p: Pipeline) {
         _ = f.keepsTrim
         switch f {
         case .noLink, .tooLarge(limit: _), .fetchFailed(code: _), .unsupported, .serverBusy, .renderBusy,
-             .renderLost, .expired, .keyMissing, .keyInvalid, .unreachable, .server(code: _): break
+             .renderLost, .expired, .keyMissing, .keyInvalid, .unreachable, .server(code: _), .linkUnreadable(code: _): break
         }
     }
     if let f = p.frames.compactMap({ $0 }).first { _ = (f.index, f.image) }

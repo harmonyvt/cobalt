@@ -32,7 +32,7 @@ extension PipelineFailure {
         switch self {
         case .noLink: return "noLink"
         case .tooLarge: return "tooLarge"
-        case .fetchFailed(let code): return code
+        case .fetchFailed(let code), .linkUnreadable(let code): return code
         case .unsupported: return "unsupported"
         case .serverBusy: return "serverBusy"
         case .renderBusy: return "renderBusy"

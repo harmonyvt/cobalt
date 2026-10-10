@@ -186,6 +186,7 @@ public struct HTTPCobaltClient: CobaltClient {
                 var line: Bool?
                 var gallery: Bool?
                 var galleryMake: Bool?
+                var directLinks: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -242,7 +243,8 @@ public struct HTTPCobaltClient: CobaltClient {
             visibility: f?.visibility ?? false,
             line: f?.line ?? false,
             gallery: f?.gallery ?? false,
-            galleryMake: (f?.gallery ?? false) && (f?.galleryMake ?? false))
+            galleryMake: (f?.gallery ?? false) && (f?.galleryMake ?? false),
+            directLinks: f?.directLinks ?? false)
     }
 
     // MARK: - Resolve and studio

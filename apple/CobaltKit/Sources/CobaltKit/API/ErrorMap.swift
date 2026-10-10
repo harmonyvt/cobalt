@@ -11,8 +11,17 @@ func serverFailure(_ code: String, during phase: ErrorPhase) -> PipelineFailure 
     return .server(code: PipelineFailure.renderPhasePrefix + code)
 }
 
+/// The two codes of `POST /` for a link cobalt cannot read at all.
+func isUnreadableLinkCode(_ code: String) -> Bool {
+    code == "error.api.link.invalid" || code == "error.api.link.unsupported"
+}
+
 /// Section 4.5 error code map: `error.*` → `PipelineFailure`.
 func mapFailure(code: String, during phase: ErrorPhase, limits: Capabilities.Limits = .fork) -> PipelineFailure {
+    // `link.invalid` (not a URL cobalt can use) and `link.unsupported` (a site it does not know) say nothing about the
+    // post: they are their own failure. `fetch.*` and `content.*` are the sites' answers (empty, private, removed, age or
+    // region locked, too long), the family the "private or removed" wording belongs to.
+    if isUnreadableLinkCode(code) { return .linkUnreadable(code: code) }
     if code.hasPrefix("error.api.fetch.") || code.hasPrefix("error.api.content.") || code.hasPrefix("error.api.link.") {
         return .fetchFailed(code: code)
     }

@@ -428,6 +428,21 @@ extension Pipeline {
         let caps = try await knownCapabilities()
         let client = ctx.client
         let link = info.url
+        // A link straight at an image, a video or a gif is no post: cobalt's own check (`POST /`) would answer
+        // `link.invalid`. A server that takes direct links saves it as one item at once, with no check first; an older
+        // fork gets the file from this device through the upload. Plain cobalt has neither and goes on to the check.
+        if info.isMediaFile {
+            if caps.directLinks, caps.studio {
+                Telemetry.log(.info, .net, "direct link", data: ["via": "server", "type": .string(Self.fileExtension(of: info))])
+                try await forkSave(client, info, savesGalleries: caps.gallery && info.isPhotoFile)
+                return
+            }
+            if caps.studio, caps.upload {
+                Telemetry.log(.info, .net, "direct link", data: ["via": "device", "type": .string(Self.fileExtension(of: info))])
+                try await runDeviceFetchedFile(info, caps: caps)
+                return
+            }
+        }
         // A batch, a drop of several links and a Shortcut go straight into the server's line: the check is a round
         // trip the app must be alive for, and the server resolves the link itself (a multi-item post gives its first
         // video). Only with a server line; without one the check comes first, as for any other link.
@@ -435,8 +450,17 @@ extension Pipeline {
             try await forkSave(client, info, savesGalleries: caps.gallery)
             return
         }
-        let resolved = try await ctx.gates.check.withSlot {         // at most 3 link checks at once
-            try await self.watched { try await client.resolve(link) }
+        let resolved: CobaltResult
+        do {
+            resolved = try await ctx.gates.check.withSlot {         // at most 3 link checks at once
+                try await self.watched { try await client.resolve(link) }
+            }
+        } catch where caps.directLinks && caps.studio && Self.isUnreadableLink(error) {
+            // cobalt does not know this link. The server decides by the bytes it finds, once: a media file behind a
+            // link with no file name (a CDN's `/image?id=…`) saves; anything else is still "can't read this link".
+            Telemetry.log(.info, .net, "direct link", data: ["via": "server-fallback"])
+            try await saveUnreadableLinkOnServer(client, info, caps: caps, original: error)
+            return
         }
         try Task.checkCancellation()
         switch resolved {
@@ -462,6 +486,83 @@ extension Pipeline {
         }
     }
 
+    /// The link's file extension, lowercased (telemetry).
+    static func fileExtension(of info: LinkInfo) -> String { LinkInfo.fileExtension(info.url) }
+
+    /// What `POST /` answered for a link cobalt cannot read at all (`error.api.link.invalid` / `link.unsupported`).
+    static func isUnreadableLink(_ error: Error) -> Bool {
+        switch error {
+        case CobaltError.api(let code, _): return isUnreadableLinkCode(code)
+        case PipelineFailure.linkUnreadable: return true
+        default: return false
+        }
+    }
+
+    /// The one try the server gets at a link cobalt could not read. Its own answer stands when it is about something
+    /// else (busy, a full line, no key, no connection, a file over the limit); "not a post, not a file" in any of its
+    /// wordings is the original `link.invalid` again, so the owner reads one message whichever side said no.
+    func saveUnreadableLinkOnServer(
+        _ client: any CobaltClient, _ info: LinkInfo, caps: Capabilities, original: Error
+    ) async throws {
+        do {
+            try await forkSave(client, info, savesGalleries: caps.gallery)
+        } catch {
+            guard let failure = pipelineFailure(from: error, during: .saving, limits: caps.limits) else { throw error }
+            switch failure {
+            case .fetchFailed, .linkUnreadable, .unsupported:
+                throw pipelineFailure(from: original, during: .saving, limits: caps.limits)
+                    ?? PipelineFailure.linkUnreadable(code: "error.api.link.invalid")
+            default:
+                throw error
+            }
+        }
+    }
+
+    // MARK: - A link at a file, on an older server
+
+    /// A server without `features.direct_links` cannot fetch the link, so the device does: the file is downloaded (never
+    /// with the key: `RemoteFile.open`), kept to the upload limit, and then goes through the file upload like a file the
+    /// owner picked. Its title reads `discord · LiaPoor`, the link's, as the same save does on a newer server.
+    func runDeviceFetchedFile(_ info: LinkInfo, caps: Capabilities) async throws {
+        let limit = caps.limits.maxUploadBytes
+        let ext = LinkInfo.fileExtension(info.url)
+        let name = (info.fileName.flatMap(SafeFileName.clean)) ?? "\(info.service)_\(info.ref).\(ext)"
+        // The upload takes mp4, mov, gif and the stills; webm (which only a server with direct links can fetch and keep)
+        // is refused before a byte is downloaded.
+        guard ext != "webm", MIME.uploadTypes.contains(MIME.type(forFileName: name)) else { throw PipelineFailure.unsupported }
+        let client = ctx.client
+        let since = runStart
+        let token = runToken
+        setState(.saving(bytes: 0, total: nil, since: since))
+        let relay = MainActorRelay<TransferProgress> { [weak self] p in self?.savingProgress(p, since: since, token: token) }
+        let guardrail = DownloadGuard(limit: limit)
+        let dest = ctx.store.inboxURL(for: name)
+        let url = info.url
+        let task = Task<URL, any Error> {
+            try await client.download(.open(url), to: dest) { p in
+                relay.push(p)
+                guardrail.observe(p)
+            }
+        }
+        guardrail.attach(task)
+        let local: URL
+        do {
+            local = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        } catch {
+            try? FileManager.default.removeItem(at: dest)
+            if guardrail.tripped { throw PipelineFailure.tooLarge(limit: limit) }
+            // The host said no (an expired signed link, a removed file): the link is the problem, not this device.
+            switch error {
+            case CobaltError.api, CobaltError.invalidResponse: throw PipelineFailure.fetchFailed(code: "error.app.link_download_failed")
+            default: throw error
+            }
+        }
+        try Task.checkCancellation()
+        guard token == runToken else { try? FileManager.default.removeItem(at: local); throw CancellationError() }
+        let file = try ctx.intake.inspect(local)
+        try await runFile(file)
+    }
+
     /// Fork / legacy fork: `POST /studio`, poll until saved, read the frames from the source.
     ///
     /// `savesGalleries` (a server with `features.gallery`): the create asks for every item, so a post that turns out to be
@@ -482,10 +583,23 @@ extension Pipeline {
             try await finishUnfocusedGallery(client, session: s, link: info.url)
             return
         }
+        if savesGalleries, Self.isStill(s) {
+            // A link at a photo (`features.direct_links`) is one file with no `items`: a gallery of one, like a post with
+            // a single photo, never a clip to trim.
+            galleryRun = GalleryRun(total: 1)
+            setState(.gallery(items: [GalleryItem(id: 0, type: .photo, width: s.width, height: s.height)]))
+            try await finishGallerySave(client, session: s, link: info.url)
+            return
+        }
         let m = mediaInfo(s, fallbackName: info.ref)
         media = m
         keepOriginalInBackground(client, session: created.id, media: m)
         try await develop(m, from: .remote(client.sourceURL(session: created.id)))
+    }
+
+    /// A saved session that is a picture: it has a size and no length.
+    static func isStill(_ s: StudioSession) -> Bool {
+        s.duration == nil && (s.width ?? 0) > 0 && (s.height ?? 0) > 0
     }
 
     func pollSaving(_ client: any CobaltClient, id: String) async throws -> StudioSession {

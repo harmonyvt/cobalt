@@ -92,6 +92,7 @@ extension PipelineFailure {
         case .noLink: return "noLink"
         case .tooLarge: return "tooLarge"
         case .fetchFailed: return "fetchFailed"
+        case .linkUnreadable: return "linkUnreadable"
         case .unsupported: return "unsupported"
         case .serverBusy: return "serverBusy"
         case .renderBusy: return "renderBusy"
@@ -108,7 +109,7 @@ extension PipelineFailure {
     /// the only code that maps to this case). Cases several codes map to carry none.
     var liveCode: String? {
         switch self {
-        case .fetchFailed(let code): return code
+        case .fetchFailed(let code), .linkUnreadable(let code): return code
         case .server(let code):
             return code.hasPrefix(PipelineFailure.renderPhasePrefix)
                 ? String(code.dropFirst(PipelineFailure.renderPhasePrefix.count)) : code

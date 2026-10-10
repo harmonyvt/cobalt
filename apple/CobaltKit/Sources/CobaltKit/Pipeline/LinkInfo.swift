@@ -17,9 +17,44 @@ public struct LinkInfo: Sendable, Equatable {
         self.url = url
         let labels = host.lowercased().split(separator: ".").map(String.init)
         let label = labels.count >= 2 ? labels[labels.count - 2] : (labels.first ?? host)
-        service = label == "twitter" ? "x" : label
+        service = Self.shortNames[label] ?? label
         let parts = url.pathComponents.filter { $0 != "/" && !$0.isEmpty }
-        ref = Self.handle(service: service, parts: parts) ?? parts.last ?? host
+        if Self.isMediaFile(url), let last = parts.last {
+            // A link at a file is named by the file: `discord · LiaPoor` for `cdn.discordapp.com/attachments/…/LiaPoor.png?ex=…`.
+            let stem = (last as NSString).deletingPathExtension
+            ref = stem.isEmpty ? last : stem
+        } else {
+            ref = Self.handle(service: service, parts: parts) ?? parts.last ?? host
+        }
+    }
+
+    /// Hosts whose second-level label is not what the owner calls the site: the CDNs are named for the site they serve.
+    static let shortNames: [String: String] = ["twitter": "x", "twimg": "x", "discordapp": "discord"]
+
+    /// The extensions of the media files a link can point straight at (a query does not count).
+    static let mediaFileExtensions: Set<String> = ["jpg", "jpeg", "png", "webp", "heic", "gif", "mp4", "mov", "webm", "m4v"]
+    /// The still pictures among them (the rest are video and gif).
+    static let photoFileExtensions: Set<String> = ["jpg", "jpeg", "png", "webp", "heic"]
+
+    /// The path's extension, lowercased (`LiaPoor.PNG` → `png`); empty when the path has none.
+    static func fileExtension(_ url: URL) -> String { (url.path as NSString).pathExtension.lowercased() }
+
+    static func isMediaFile(_ url: URL) -> Bool { mediaFileExtensions.contains(fileExtension(url)) }
+
+    /// The link points straight at a media file: an image, a video or a gif, by the extension of its path on any host
+    /// (a query is allowed, and does not count: `…/LiaPoor.png?ex=…&hm=…`). A page that merely ends in `.html` is not.
+    /// cobalt cannot resolve these (`POST /` answers `error.api.link.invalid`); a server with `features.direct_links`
+    /// fetches them itself, and an older one gets the file from this device.
+    public var isMediaFile: Bool { Self.isMediaFile(url) }
+
+    /// `isMediaFile`, and a still picture (jpg, jpeg, png, webp, heic): saved as a post of one photo; a video or a gif is
+    /// saved as one clip.
+    public var isPhotoFile: Bool { Self.photoFileExtensions.contains(Self.fileExtension(url)) }
+
+    /// The file's name as the link gives it (`LiaPoor.png`, percent-decoded), for a link at a media file; nil for any other.
+    public var fileName: String? {
+        guard isMediaFile else { return nil }
+        return url.pathComponents.last(where: { $0 != "/" && !$0.isEmpty })
     }
 
     /// The author the link names, as `@handle`: X and Twitter name theirs first (`/<handle>/status/<id>`; `/i/status/<id>`
