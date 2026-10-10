@@ -360,9 +360,13 @@ export class FakeHelper {
     // "older helper image" is `advertise = false`
     advertise = true;
     makes = true;
+    // `direct=1`: a link to a media file that cobalt has no service for is saved as that file (APP-API-CONTRACT.md 19)
+    directs = true;
     helper = async (path: string, init?: RequestInit): Promise<Response> => {
         const res = await this.answer(path, init);
-        if (this.advertise) res.headers.set("x-cobalt-helper", this.makes ? "gallery=1,make=1" : "gallery=1");
+        if (this.advertise) {
+            res.headers.set("x-cobalt-helper", [this.makes ? "gallery=1,make=1" : "gallery=1", this.directs ? "direct=1" : ""].filter(Boolean).join(","));
+        }
         return res;
     };
 

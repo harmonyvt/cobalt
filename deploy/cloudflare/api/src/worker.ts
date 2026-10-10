@@ -451,15 +451,15 @@ async function handleInner(
 
 // What the container's helper has said it can do (the Durable Object keeps what it last answered; it never wakes the
 // container for this): the slideshow routes (`gallery`), and the webp slideshow, the gallery image and `item` renders
-// (`make`). Any failure is "not yet": the capability is simply not offered.
-async function helperHas(container: ContainerStub): Promise<[boolean, boolean]> {
+// (`make`), and a pasted link straight to a media file (`direct`, section 19). Any failure is "not yet": the capability is simply not offered.
+async function helperHas(container: ContainerStub): Promise<[boolean, boolean, boolean]> {
     try {
         const res = await container.fetch(new Request("https://do.internal/helper/caps", { headers: { [KEY_ID_HEADER]: "worker:capabilities" } }));
-        if (res.status !== 200) return [false, false];
-        const body = (await res.json()) as { gallery?: unknown; make?: unknown };
-        return [body?.gallery === true, body?.make === true];
+        if (res.status !== 200) return [false, false, false];
+        const body = (await res.json()) as { gallery?: unknown; make?: unknown; direct?: unknown };
+        return [body?.gallery === true, body?.make === true, body?.direct === true];
     } catch {
-        return [false, false];
+        return [false, false, false];
     }
 }
 
@@ -595,7 +595,8 @@ export async function describeBody(request: Request): Promise<BodyInfo> {
             urlLen: typeof u === "string" ? u.length : null,
             urlPrefix:
                 typeof u === "string"
-                    ? u.slice(0, 80)
+                    ? // never the query or userinfo: a signed link's token and a `user:pass@` are credentials (APP-API-CONTRACT.md 19)
+                      u.split(/[?#]/)[0].replace(/^(https?:\/\/)[^/]*@/i, "$1").slice(0, 80)
                     : u !== undefined
                       ? JSON.stringify(u).slice(0, 80)
                       : null,

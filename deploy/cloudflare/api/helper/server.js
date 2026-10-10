@@ -123,6 +123,12 @@ import {
     parseHasAudio,
     parseVideoInfo,
     buildPosterArgs,
+    checkPublicUrl,
+    directHeadOk,
+    filenameFromUrl,
+    imageDimensions,
+    logUrl,
+    makeSafeFetch,
     parseWebp,
     planClip,
     posterTime,
@@ -133,6 +139,7 @@ import {
     selectPickerItems,
     serviceFromUrl,
     sniffType,
+    sniffVideo,
     studioCode,
     titleFromFilename,
     validateEncodeFields,
@@ -144,8 +151,14 @@ import {
 
 /** Sent on every answer (see `createServer`): the Durable Object's `features.gallery` follows it. */
 export const HELPER_CAPS_HEADER = "x-cobalt-helper";
-// `gallery=1`: the slideshow routes; `make=1`: the slideshow webp, the gallery image routes, `item` renders' (APP-API-CONTRACT 18.8, 18.10-18.13)
-export const HELPER_CAPS = "gallery=1,make=1";
+// `gallery=1`: the slideshow routes; `make=1`: the slideshow webp, the gallery image routes, `item` renders' (APP-API-CONTRACT 18.8, 18.10-18.13);
+// `direct=1`: a pasted link to a media file that cobalt does not know is saved as that file (APP-API-CONTRACT 19)
+export const HELPER_CAPS = "gallery=1,make=1,direct=1";
+
+/** What cobalt says about a link it has no service for: the studio then tries the link as a file (section 19). */
+/** How much of a saved file's start is read to type it and read its pixel size (a JPEG's frame header can follow a big EXIF/ICC). */
+const HEAD_READ_BYTES = 1 << 20;
+const DIRECT_LINK_CODES = new Set(["error.api.link.invalid", "error.api.link.unsupported"]);
 
 /** A slideshow or gallery image nobody has asked about for this long is dropped (the helper is freed). */
 export const SLIDESHOW_IDLE_MS = 5 * 60_000;
@@ -187,6 +200,7 @@ export const APNS_DEFAULT_TIMEOUT_MS = 2000;
  *   waitForCobalt?: () => Promise<void>,
  *   resolveSource?: typeof resolveSource,
  *   downloadToFile?: typeof downloadToFile,
+ *   fetchPolicy?: Parameters<typeof makeSafeFetch>[0], maxSavePixels?: number,
  *   encodeAnimatedWebp?: typeof encodeAnimatedWebp,
  *   apnsOrigin?: (host: string) => string,
  *   apnsTimeoutMs?: number,
@@ -218,7 +232,26 @@ export function createHelper(opts = {}) {
     const apiOrigin = opts.apiOrigin;
 
     const doResolve = opts.resolveSource ?? resolveSource;
-    const doDownload = opts.downloadToFile ?? downloadToFile;
+    // Everything that is not cobalt's own /tunnel (a redirect or picker item, a direct link) is fetched from a host
+    // this code does not control: through the public-only fetch (hop-by-hop redirect checks, resolved-address
+    // check, ports 80/443). `fetchPolicy` is for tests only (a local origin).
+    const safeFetch = makeSafeFetch(opts.fetchPolicy);
+    // A still or gif bigger than this is refused from its header bytes, before any decoder sees it (a 797 KB PNG of
+    // 16000x16000 cost ~950 MB to thumbnail, in a 1 GiB container). The gallery's own working ceiling.
+    // 64 MP: a 48 MP phone photo (8064x6048) must save; a thumb costs ~3.7 bytes a pixel, so ~240 MB at the cap
+    const MAX_SAVE_PIXELS = opts.maxSavePixels ?? 64e6;
+    const cobaltOrigin = new URL(COBALT).origin;
+    const isOurTunnel = (u) => {
+        try {
+            const x = new URL(u);
+            return x.origin === cobaltOrigin && x.pathname === "/tunnel";
+        } catch {
+            return false;
+        }
+    };
+    const doDownload =
+        opts.downloadToFile ??
+        ((o) => downloadToFile(isOurTunnel(o.url) ? o : { ...o, fetchImpl: o.fetchImpl ?? safeFetch }));
     const doEncode = opts.encodeAnimatedWebp ?? encodeAnimatedWebp;
     // where the APNs hosts are reached (tests point this at a local h2c server)
     const apnsOrigin = opts.apnsOrigin ?? ((host) => `https://${host}`);
@@ -505,9 +538,12 @@ export function createHelper(opts = {}) {
      * Downloads one file to `input`, types it by its bytes and probes it. A still image (jpeg png
      * webp heic) keeps its real type, `duration: null`, and gets a thumb at `thumbOut`; a GIF is
      * `image/gif`; everything else is a video, as it has always been (it must have a video stream).
+     * With `direct` (a pasted link to a file, section 19) no service vouches for the file, so its bytes must: a
+     * still or a GIF by `sniffType`, a video only when `sniffVideo` knows its container (mp4/mov/m4v/webm/mkv) AND
+     * it has a video stream; anything else is `error.webp.bad_source`. A video's extension then comes from the bytes.
      * @param {Job} job
      * @param {{url: string, input: string, thumbOut: string, filename: string | null, maxBytes: number,
-     *          index: number, itemsDone: number}} o
+     *          index: number, itemsDone: number, direct?: boolean}} o
      */
     async function fetchOne(job, o) {
         /** @type {string | null} */
@@ -528,6 +564,8 @@ export function createHelper(opts = {}) {
             dest: o.input,
             maxBytes: o.maxBytes,
             signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+            // a direct link's first bytes must be an image or a known video container, or the download stops there
+            acceptHead: o.direct ? directHeadOk : undefined,
             onResponse: (res) => {
                 contentType = res.headers.get("content-type");
             },
@@ -535,7 +573,17 @@ export function createHelper(opts = {}) {
         });
 
         progress("probing", bytes, null);
-        const sniffed = sniffType(await readHead(o.input, 12));
+        const head = await readHead(o.input, HEAD_READ_BYTES);
+        const sniffed = sniffType(head);
+        if (sniffed) {
+            // every still and gif (a direct link, a picker or gallery photo): the size from the header bytes, before ffmpeg
+            const dims = imageDimensions(head);
+            if (dims && dims.width * dims.height > MAX_SAVE_PIXELS) throw new JobError("error.webp.too_large");
+            // a direct link has no service to vouch for it: a header that does not say its size is not an image
+            if (!dims && o.direct) throw new JobError("error.webp.bad_source");
+        }
+        const container = o.direct && !sniffed ? sniffVideo(head) : null;
+        if (o.direct && !sniffed && !container) throw new JobError("error.webp.bad_source");
         const info = await probe(o.input);
         if (sniffed?.type === "image") {
             // a still: its type comes from its bytes, never from what cobalt or the CDN called it.
@@ -559,7 +607,7 @@ export function createHelper(opts = {}) {
         // a real GIF is labelled as one (the studio already takes `image/gif` from uploads),
         // not as an mp4 that no video player can open
         const gif = sniffed?.type === "gif";
-        const ext = gif ? "gif" : videoExt({ contentType, filename: o.filename });
+        const ext = gif ? "gif" : container ? container.ext : videoExt({ contentType, filename: o.filename });
         return {
             bytes,
             contentType: gif ? "image/gif" : VIDEO_TYPES[ext],
@@ -575,18 +623,33 @@ export function createHelper(opts = {}) {
     async function runFetch(job, p) {
         job.fetchProgress = { stage: "downloading", bytes: 0, total: null, item: null, itemsDone: 0, itemsTotal: null };
         const nn = (i) => String(i).padStart(2, "0");
+        // set when cobalt had no service for the link and the link itself is being tried as a file (section 19):
+        // whatever then goes wrong ends with cobalt's own error, as it always did
+        /** @type {JobError | null} */
+        let directOriginal = null;
         try {
             await mkdir(job.dir, { recursive: true });
             await waitForCobalt();
 
-            const src = await doResolve({
-                url: p.url,
-                internalKey: INTERNAL_KEY,
-                origin: COBALT,
-                apiOrigin,
-                signal: AbortSignal.timeout(60_000),
-                picker: true,
-            });
+            /** @type {Awaited<ReturnType<typeof resolveSource>> & {direct?: boolean}} */
+            let src;
+            try {
+                src = await doResolve({
+                    url: p.url,
+                    internalKey: INTERNAL_KEY,
+                    origin: COBALT,
+                    apiOrigin,
+                    signal: AbortSignal.timeout(60_000),
+                    picker: true,
+                });
+            } catch (e) {
+                const u = e instanceof JobError && DIRECT_LINK_CODES.has(e.code) ? checkPublicUrl(p.url, opts.fetchPolicy) : null;
+                if (!u) throw e;
+                // a pasted link to a media file: the file is the one item. Host and path only in the log.
+                directOriginal = /** @type {JobError} */ (e);
+                console.log("[webp-helper] direct link", logUrl(p.url));
+                src = { url: u.toString(), filename: filenameFromUrl(u), direct: true };
+            }
 
             // A plain answer (tunnel / redirect) is a picker of one of unknown type. The count the
             // client saw must be the count here, or the indices would name the wrong items.
@@ -622,6 +685,7 @@ export function createHelper(opts = {}) {
                     maxBytes: MAX_FETCH,
                     index,
                     itemsDone: 0,
+                    direct: src.direct,
                 });
                 job.files.set(index, { file: input, thumb: r.thumb ? thumbOut : null, contentType: r.contentType });
                 job.lead = index;
@@ -635,6 +699,8 @@ export function createHelper(opts = {}) {
                     title,
                     service,
                     picker_count: pickerCount,
+                    // the link was a file, not a post: the Durable Object keeps it without its query (section 19.2)
+                    ...(src.direct ? { direct: true } : {}),
                 };
                 job.status = "done";
                 return;
@@ -694,8 +760,15 @@ export function createHelper(opts = {}) {
             };
             job.status = "done";
         } catch (e) {
+            if (directOriginal) {
+                // a file bigger than the cap says so; every other reason (refused host, html, json, a file that is
+                // no image or video, a download that failed) is the answer cobalt gave for the link
+                const tooLarge = e instanceof JobError && e.code === "error.webp.too_large";
+                console.log("[webp-helper] direct link failed:", e instanceof JobError ? e.code : "error", logUrl(p.url));
+                e = tooLarge ? e : directOriginal;
+            }
             const code = e instanceof JobError ? studioCode(e.code) : "error.webp.download_failed";
-            if (!(e instanceof JobError)) console.error("[webp-helper] fetch failed:", e);
+            if (!directOriginal && !(e instanceof JobError)) console.error("[webp-helper] fetch failed:", e);
             await rm(job.dir, { recursive: true, force: true }).catch(() => {});
             job.error = { code };
             job.status = "error";

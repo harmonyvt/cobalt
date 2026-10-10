@@ -96,9 +96,9 @@ const jpegSize = (buf: Buffer) => {
 };
 
 describe("what this helper says it can do", () => {
-    it("gallery=1,make=1 on a 200, a 404 and a 403", async () => {
+    it("gallery=1,make=1,direct=1 on a 200, a 404 and a 403", async () => {
         for (const [p, key] of [["/gallery/" + rid(), KEY], ["/nope", KEY], ["/gallery/" + rid(), "wrong"]] as const) {
-            expect((await call(p, {}, key)).headers.get("x-cobalt-helper"), p).toBe("gallery=1,make=1");
+            expect((await call(p, {}, key)).headers.get("x-cobalt-helper"), p).toBe("gallery=1,make=1,direct=1");
         }
     });
     it("403 without the key on every gallery route", async () => {

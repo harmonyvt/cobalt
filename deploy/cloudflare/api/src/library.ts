@@ -133,6 +133,24 @@ export function mediaNameFromUrl(url: string | null | undefined): string | null 
     }
 }
 
+// A link to a FILE (a pasted CDN attachment, section 19) carries its credential in the query (`?ex=&is=&hm=` is a signed
+// token), and may carry userinfo: kept nowhere past the save that needed it. Scheme, host, port and path only. A link that
+// is not http(s) (an `upload:<id>` marker) comes back as it is. Never used for a post's canonical URL (its query can matter).
+export function stripLinkSecrets(link: string | null | undefined): string {
+    if (!link) return "";
+    try {
+        const u = new URL(link);
+        if (u.protocol !== "http:" && u.protocol !== "https:") return link;
+        u.username = "";
+        u.password = "";
+        u.search = "";
+        u.hash = "";
+        return u.toString();
+    } catch {
+        return link.split(/[?#]/)[0] ?? "";
+    }
+}
+
 // A session's `link` for display: uploads carry "upload:<item id>" instead of a page.
 export const pageLink = (link: string | null | undefined): string | null =>
     link && /^https?:\/\//i.test(link) ? link : null;

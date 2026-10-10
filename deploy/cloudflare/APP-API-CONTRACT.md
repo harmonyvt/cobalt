@@ -2131,3 +2131,99 @@ carousel with `error.webp.no_video` (`helper/lib.js:188-202`, `server.js:582`). 
 **Capability (18.10-18.13):** `features.gallery_make: true` when the running helper answers `x-cobalt-helper: gallery=1,make=1`
 (checked as `gallery=1` is, `studio.ts:812-836`); without it the app hides the three makes and the share sheet draws only `save all`.
 New code: `error.studio.too_few_photos`. Reused: `error.studio.not_video`, `error.studio.not_gallery`, `error.webp.*` as above.
+
+---
+
+## 19. Direct media links: a pasted link to a file just saves (addendum, built 2026-10-10; owner: pasting a Discord CDN attachment answered `error.api.link.invalid`)
+
+A link to a media file on a host cobalt has no service for (`https://cdn.discordapp.com/attachments/<id>/<id>/LiaPoor.png?ex=…&is=…&hm=…`) is
+saved as that file. **No new route, no new request field, no migration, no client change**: `POST /studio` with such a URL (and
+`items`, `public`, `notify`, `origin`, `queue` as ever) now works where it used to end `error.api.link.invalid`. `GET /capabilities` gains
+`features.direct_links: true` (missing = `false`), true only while the running helper says `direct=1` in its `x-cobalt-helper` header
+(now `gallery=1,make=1,direct=1`; the Durable Object keeps it next to `gallery` and `make`, `helper:caps`). An app uses the flag to skip
+its own "not a supported link" pre-check; `POST /` (upstream cobalt) is unchanged and still answers 400 for such a link.
+
+### 19.1 The rule (helper `POST /fetch`, `helper/server.js` `runFetch`)
+
+1. The helper asks cobalt as always. Only when cobalt answers **`error.api.link.invalid` or `error.api.link.unsupported`** (no other
+   code, no other route: `POST /jobs` keeps its behaviour) is the submitted URL tried as the file itself.
+2. The URL must pass the public-URL rule (19.2). Otherwise: cobalt's own error, as before.
+3. It is downloaded with the studio's usual caps (200 MB per item, the 240 s fetch budget) and typed **by its bytes**: a still (jpeg png
+   webp heic) or a GIF by `sniffType`; a video only when its container is one the studio stores (`sniffVideo`: mp4 / mov / m4v by a video
+   `ftyp` brand, webm / mkv by EBML) **and** ffmpeg finds a video stream. **The first 64 bytes decide early**: a body that cannot be an
+   accepted file is cut at its first chunk (`downloadToFile` `acceptHead`), so a 200 MB html page or mp3 is never fetched. A HEIC needs
+   more than its magic: a plausible `ftyp` box (16-128 bytes, a HEIF brand) **and** an `ispe` box inside `meta > iprp > ipco`.
+   **Pixel size from the header, before any decoder** (`imageDimensions`: PNG IHDR, JPEG SOF, GIF logical screen, WebP VP8/VP8L/VP8X,
+   HEIC `ispe`): a still or GIF over **64 MP** (the helper's save cap, `maxSavePixels`) is `error.studio.too_large`, a direct link whose header does not
+   say its size is refused. This applies to **every** still the fetch saves (picker and gallery photos too, per item), because a 797 KB
+   16000x16000 PNG cost ~950 MB to thumbnail in the 1 GiB container. Note this refuses a 48 MP phone photo (8064x6048); raise
+   `maxSavePixels` if that matters (~3.7 bytes per pixel to thumbnail). The content-type header and the file name decide nothing; the
+   extension of a saved video comes from the bytes. html, json, audio (mp3, m4a), an audio-only mp4, an unknown container, an empty
+   body, a 4xx/5xx: **cobalt's original error** (`error.api.link.invalid` / `.unsupported`).
+4. The exception: a body over the cap is **`error.studio.too_large`** (the user should learn the file is real and too big).
+5. The result is one file, exactly the answer of a single-photo / single-video save (no `items`, `picker_count: null`): the same session and
+   `media_items` rows, thumb → poster for a still, posters for a video, `public` hosting, `notify`, the line. `title` = the URL's file name
+   without extension (`LiaPoor.png` → `LiaPoor`; none → null; control, zero-width and bidi override/isolate characters removed). `service` is what the session already records for every link
+   (`serviceFromUrl`: `discordapp`); the helper's answer says the same, and adds `direct: true`. **The signed query is kept nowhere past the
+   save** (it is a credential): the helper gets the full link while the save runs; when the save becomes ready the Durable Object stores the
+   link **without query, fragment or userinfo** in `studio_sessions.link` (same statement as `ready`), in `media_items.link`, and in
+   both R2 objects' `customMetadata.source` (the private original and the public copy hosted from it; a mirror made later is
+   made from the bare row). A save that **fails** with `error.api.link.invalid` / `.unsupported` (cobalt never knew the link: it is not a
+   post) has its session link cut the same way. Links of supported services (posts, whose query can matter) and every other failure keep
+   the link as before.
+6. `items: "all"` / `"first-video"` on such a link is the one file; an `items` list naming an index other than 0, or an `item_count`
+   other than 1, ends with cobalt's original error.
+
+### 19.2 The public-URL rule (`helper/lib.js`: `checkPublicUrl`, `isPublicIp`, `makeSafeFetch`)
+
+- **Scheme/credentials/port**: `http` or `https` only; **no `user:pass@`**; **port 80 or 443 only** (whichever scheme; the number decides). A
+  link to `host:8080`, `:6379`, `:9000` is refused: nothing a person pastes to save a photo lives there, and every other port is an
+  internal service.
+- **Name/address**: an IP literal must be a public global-unicast address; a name must contain a dot and not be a private-looking
+  spelling (`localhost`, `*.localhost`, `*.local`, `*.internal`, a trailing dot ignored). Refused ranges: `0/8`, `10/8`, `100.64/10`,
+  `127/8`, `169.254/16` (the metadata address), `172.16/12`, `192.168/16`, `192.0.0/24`, `192.0.2/24`, `198.18/15`, `198.51.100/24`,
+  `203.0.113/24`, `224/4` and up; IPv6 is a **whitelist** (only `2000::/3`; never `::`, `::1`, `fc00::/7`, `fe80::/10`, `ff00::/8`,
+  Teredo, documentation), and a v4 address written inside a v6 one (`::ffff:a.b.c.d` in either spelling, `::a.b.c.d`, NAT64
+  `64:ff9b::/96`, 6to4 `2002::/16`) is judged by the v4 address inside. URL parsing already turns decimal / hex / octal IPv4 into dotted form.
+- **Resolution is the connection's own**: the name is resolved by the `lookup` of the socket that connects, and **every** address it
+  returns must be public (one private address among public ones refuses the host). The address checked is the address connected to, so
+  a rebinding name gets no second lookup to flip; nothing is resolved by a separate pre-check.
+- **Redirects** are followed by hand, **at most 3**: each `Location` goes through the same URL rule and a fresh guarded connection; a
+  4th redirect, a loop, an unparseable `Location`, a `file:` / `ftp:` target, a private target, and an `https` → `http` downgrade are refusals
+  (`error.webp.bad_source` inside the helper; cobalt's original error to the client). The next hop is never requested after a refusal.
+- **Nothing of the client's travels**: the remote host gets `user-agent`, `accept`, `accept-encoding: identity` (the byte caps count what is on
+  the wire), `connection: close`, and nothing else: no `cookie`, `authorization`, `referer`, no internal key, no API key. (The Worker
+  already strips the client's headers; the helper never had them.)
+- **Caps**: the body is counted **while streaming** (content-length is only an early out) and the socket is destroyed at the cap. The
+  30 s idle timer covers an established socket (waiting for the response, or between chunks); DNS and connecting are bounded only by the
+  job's 240 s signal. A socket that closes without any response (including a `101 Switching Protocols`, which is refused) or answers a
+  status `Response` cannot represent (600-999) is a failed download, settled at once.
+- **Tunnel exemption**: only cobalt's own `GET /tunnel` on its loopback origin (the exact path) is fetched plainly; any other path on
+  that origin goes through the same public-only fetch (and is refused).
+- **Logs**: a link's query is a credential (a signed token). The helper logs `host/path` only (`logUrl`: no userinfo, no query), never the
+  URL; the Worker's request log (`request_log.url_prefix`) is now cut at the first `?` or `#` and loses any `user:pass@` before its
+  80-character slice (this also covers every other link).
+
+### 19.3 Picker and redirect items are hardened the same way
+
+Before this change a picker / redirect item URL from cobalt was fetched with a plain `fetch` that followed redirects anywhere and trusted
+the name. They share `downloadToFile`, so the helper now gives every download that is **not cobalt's own `/tunnel`** (the container's
+loopback, by design) the same `makeSafeFetch`: ports 80/443, resolved-address check, at most 3 hops each re-checked, no credentials. A
+refused item is `error.webp.bad_source` (per item in a gallery, as any failed item). WebP jobs (`POST /jobs`) get it too.
+
+### 19.4 Files and tests
+
+`helper/lib.js` (`isPublicIp`, `checkPublicUrl`, `makeSafeFetch`, `sniffVideo`, `filenameFromUrl`, `logUrl`; `downloadToFile` re-throws a
+refusal), `helper/server.js` (`HELPER_CAPS`, `runFetch`, `fetchOne` `direct`, the default `doDownload`, `fetchPolicy` for tests),
+`src/studio.ts` (`helperDirect`, `helper:caps`, `finalize` and `markError` strip the link), `src/library.ts` (`stripLinkSecrets`),
+`src/worker.ts` (`helperHas`, log prefix), `src/app-routes.ts` (`direct_links`).
+`test/direct-links.test.ts` (the rule: address and URL tables, `makeSafeFetch` against a real local origin with a fake resolver for
+redirects, private and rebinding destinations, credentials, ports, mid-stream cap, timeouts, headers; `POST /fetch` through the real
+helper for image / gif / video / html / json / audio / oversize / chain > 3 / private redirect / log hygiene / picker hardening; one real
+ffmpeg describe) and `test/direct-links-api.test.ts` (through the Worker and the Durable Object with the fake helper: single-item
+rows, poster, public, library listing, notify, request-log prefix, capability).
+
+### 19.5 Deploy (owner; not run by the lane)
+
+Container image (the helper) and Worker. No migration. Either order is safe: a Worker ahead of the image advertises `direct_links: false`
+until the new helper answers once; an image ahead of the Worker just works for old clients.

@@ -3,7 +3,11 @@
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
+import { lookup as dnsLookup } from "node:dns";
 import { createWriteStream } from "node:fs";
+import http from "node:http";
+import https from "node:https";
+import net from "node:net";
 import { mkdir, open, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -33,6 +37,8 @@ export const ID_RE = /^[A-Za-z0-9]{16,32}$/;
 // downloadToFile reports progress at most once per this many bytes or ms.
 export const PROGRESS_BYTES = 256 * 1024;
 export const PROGRESS_MS = 250;
+/** The first bytes `downloadToFile`'s `acceptHead` judges: enough for every signature `sniffType` / `sniffVideo` read. */
+export const HEAD_BYTES = 64;
 
 // An error that carries the public error code the DO passes on to the client.
 export class JobError extends Error {
@@ -330,6 +336,158 @@ export function sniffType(head) {
         return { type: "image", contentType: "image/heic", ext: "heic" };
     }
     if (isGifHead(head)) return { type: "gif", contentType: "image/gif", ext: "gif" };
+    return null;
+}
+
+// ftyp brands of an ISO-BMFF file that carries video (the ones that name a still image or audio-only file are
+// deliberately absent: heic/avif stills, M4A/M4B audio)
+const MP4_BRANDS = new Set([
+    "isom", "iso2", "iso3", "iso4", "iso5", "iso6", "mp41", "mp42", "mp71", "avc1", "dash", "MSNV", "mmp4",
+    "3gp4", "3gp5", "3gp6", "3gp7", "3ge6", "3ge7", "3gg6", "3g2a", "3g2b", "3g2c", "XAVC", "f4v ", "cmfc",
+]);
+
+/**
+ * The container of a video file from its first bytes, only the five the studio stores (VIDEO_TYPES): an
+ * ISO-BMFF `ftyp` with a video brand (mp4, mov `qt  `, m4v), or EBML (webm / matroska, told apart by the
+ * DocType). Null for everything else (audio, a still, html, json, garbage, an unknown container). Used by
+ * the direct-link path, which has no service to vouch for the file, so the bytes must.
+ * @param {Uint8Array | Buffer} head up to the first 64 bytes
+ * @returns {{ext: keyof typeof VIDEO_TYPES, contentType: string} | null}
+ */
+export function sniffVideo(head) {
+    const n = head.length;
+    const ascii = (a, b) => String.fromCharCode(...head.subarray(a, Math.min(b, n)));
+    if (n >= 12 && ascii(4, 8) === "ftyp") {
+        const brand = ascii(8, 12);
+        let ext = null;
+        if (brand === "qt  ") ext = "mov";
+        else if (brand === "M4V " || brand === "M4VH" || brand === "M4VP") ext = "m4v";
+        else if (MP4_BRANDS.has(brand)) ext = "mp4";
+        return ext ? { ext: /** @type {any} */ (ext), contentType: VIDEO_TYPES[ext] } : null;
+    }
+    if (n >= 4 && head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) {
+        const ext = /webm/.test(ascii(4, 64)) ? "webm" : "mkv";
+        return { ext, contentType: VIDEO_TYPES[ext] };
+    }
+    return null;
+}
+
+/** An ISO-BMFF `ftyp` box a real HEIC/HEIF file has: a plausible size (16-128 bytes, the brand list included) and a HEIF brand. */
+export function plausibleHeicHead(head) {
+    if (head.length < 16) return false;
+    const size = Buffer.from(head.buffer, head.byteOffset, head.length).readUInt32BE(0);
+    return size >= 16 && size <= 128 && String.fromCharCode(...head.subarray(4, 8)) === "ftyp" && HEIF_BRANDS.has(String.fromCharCode(...head.subarray(8, 12)));
+}
+
+/**
+ * Whether the first bytes of a direct link's body can be an accepted file at all: a still / gif by `sniffType` (a HEIC
+ * must also have a plausible `ftyp` box, not just 12 magic bytes) or a video container by `sniffVideo`. The download
+ * stops at the first bytes that cannot be (a 200 MB html page is never fetched).
+ * @param {Buffer} head
+ */
+export function directHeadOk(head) {
+    const s = sniffType(head);
+    if (s) return s.ext !== "heic" || plausibleHeicHead(head);
+    return sniffVideo(head) !== null;
+}
+
+/**
+ * Pixel size of a still or GIF read from its header bytes, with no decoder (a decoder is what a "pixel bomb" abuses: a
+ * 797 KB PNG of 16000x16000 costs ~950 MB to thumbnail). JPEG: the first SOF marker; PNG: IHDR; GIF: the logical
+ * screen; WebP: VP8 / VP8L / VP8X; HEIC/HEIF: the largest `ispe` box in `meta > iprp > ipco`. Null when the bytes
+ * do not say (truncated, malformed, or a HEIC whose `meta` is past what was given).
+ * @param {Uint8Array | Buffer} bytes the start of the file (a few hundred KB cover a JPEG with a large EXIF/ICC)
+ * @returns {{width: number, height: number} | null}
+ */
+export function imageDimensions(bytes) {
+    const b = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length);
+    const kind = sniffType(b);
+    if (!kind) return null;
+    const dims = (w, h) => (w > 0 && h > 0 ? { width: w, height: h } : null);
+    try {
+        if (kind.ext === "png") {
+            if (b.length < 24 || b.toString("latin1", 12, 16) !== "IHDR") return null;
+            return dims(b.readUInt32BE(16), b.readUInt32BE(20));
+        }
+        if (kind.type === "gif") {
+            return b.length < 10 ? null : dims(b.readUInt16LE(6), b.readUInt16LE(8));
+        }
+        if (kind.ext === "jpg") {
+            let pos = 2;
+            while (pos + 4 <= b.length) {
+                if (b[pos] !== 0xff) return null;
+                const marker = b[pos + 1];
+                if (marker === 0xff) {
+                    pos++; // fill byte
+                    continue;
+                }
+                if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+                    pos += 2; // standalone markers carry no length
+                    continue;
+                }
+                if (marker === 0xda || marker === 0xd9) return null; // scan data / end: no frame header was found
+                const len = b.readUInt16BE(pos + 2);
+                if (len < 2) return null;
+                if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+                    if (pos + 9 > b.length) return null;
+                    return dims(b.readUInt16BE(pos + 7), b.readUInt16BE(pos + 5));
+                }
+                pos += 2 + len;
+            }
+            return null;
+        }
+        if (kind.ext === "webp") {
+            const chunk = b.toString("latin1", 12, 16);
+            if (chunk === "VP8 " && b.length >= 30 && b[23] === 0x9d && b[24] === 0x01 && b[25] === 0x2a) {
+                return dims(b.readUInt16LE(26) & 0x3fff, b.readUInt16LE(28) & 0x3fff);
+            }
+            if (chunk === "VP8L" && b.length >= 25 && b[20] === 0x2f) {
+                const v = b.readUInt32LE(21);
+                return dims((v & 0x3fff) + 1, ((v >>> 14) & 0x3fff) + 1);
+            }
+            if (chunk === "VP8X" && b.length >= 30) return dims(b.readUIntLE(24, 3) + 1, b.readUIntLE(27, 3) + 1);
+            return null;
+        }
+        if (kind.ext === "heic") {
+            if (!plausibleHeicHead(b)) return null;
+            let best = null;
+            /** @param {number} from @param {number} to @param {(type: string, start: number, end: number) => void} visit */
+            const boxes = (from, to, visit) => {
+                let p = from;
+                while (p + 8 <= to) {
+                    let size = b.readUInt32BE(p);
+                    const type = b.toString("latin1", p + 4, p + 8);
+                    let header = 8;
+                    if (size === 1) {
+                        if (p + 16 > to) return;
+                        size = Number(b.readBigUInt64BE(p + 8));
+                        header = 16;
+                    } else if (size === 0) size = to - p;
+                    if (size < header) return;
+                    visit(type, p + header, Math.min(p + size, to));
+                    p += size;
+                }
+            };
+            boxes(0, b.length, (type, start, end) => {
+                if (type !== "meta") return;
+                boxes(start + 4, end, (t1, s1, e1) => {
+                    if (t1 !== "iprp") return;
+                    boxes(s1, e1, (t2, s2, e2) => {
+                        if (t2 !== "ipco") return;
+                        boxes(s2, e2, (t3, s3, e3) => {
+                            if (t3 !== "ispe" || e3 - s3 < 12) return;
+                            const w = b.readUInt32BE(s3 + 4);
+                            const h = b.readUInt32BE(s3 + 8);
+                            if (!best || w * h > best.width * best.height) best = { width: w, height: h };
+                        });
+                    });
+                });
+            });
+            return best;
+        }
+    } catch {
+        return null;
+    }
     return null;
 }
 
@@ -677,6 +835,307 @@ export function rewriteMediaUrl(raw, o = {}) {
     return u.toString();
 }
 
+// --- public URLs: the one rule for anything fetched from a link the owner pasted -----------------------
+//
+// A direct media link (APP-API-CONTRACT.md section 19) and every non-tunnel picker/redirect item are fetched
+// from a host this code does not control, from inside the container. So the destination is checked, in
+// the order that matters: the URL (scheme, credentials, port, a private-looking name or address), then the
+// ADDRESS THE CONNECTION USES (the name is resolved by the connection's own `lookup`, so the address checked is the
+// address connected to: a name that resolves to a private address, or flips between lookups, never gets
+// a socket), then every redirect hop again, at most MAX_REDIRECTS of them.
+
+/** Only the web's own ports: a link to `host:6379` or `:9000` is never a media file. */
+export const PUBLIC_PORTS = [80, 443];
+export const MAX_REDIRECTS = 3;
+/** A socket idle for this long (connecting, waiting for headers, or between body chunks) is dropped. */
+export const FETCH_IDLE_MS = 30_000;
+
+/** @param {string} ip dotted quad @returns {number[] | null} */
+function v4Parts(ip) {
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+    if (!m) return null;
+    const p = m.slice(1).map(Number);
+    return p.every((n) => n <= 255) ? p : null;
+}
+
+/** @param {number[]} p */
+function publicV4([a, b, c]) {
+    if (a === 0 || a === 10 || a === 127) return false; // "this" network, private, loopback
+    if (a === 100 && b >= 64 && b <= 127) return false; // carrier-grade NAT
+    if (a === 169 && b === 254) return false; // link-local, incl. the 169.254.169.254 metadata address
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 192 && b === 0 && c === 0) return false; // IETF protocol assignments
+    if (a === 192 && b === 0 && c === 2) return false; // documentation
+    if (a === 192 && b === 88 && c === 99) return false; // 6to4 relay anycast
+    if (a === 192 && b === 168) return false;
+    if (a === 198 && (b === 18 || b === 19)) return false; // benchmarking
+    if (a === 198 && b === 51 && c === 100) return false; // documentation
+    if (a === 203 && b === 0 && c === 113) return false; // documentation
+    if (a >= 224) return false; // multicast, reserved, broadcast
+    return true;
+}
+
+/**
+ * The eight 16-bit groups of an IPv6 address (the dotted-quad tail form included), or null.
+ * @param {string} ip
+ * @returns {number[] | null}
+ */
+function v6Groups(ip) {
+    let s = ip;
+    const tail = /(\d{1,3}(?:\.\d{1,3}){3})$/.exec(s);
+    if (tail) {
+        const q = v4Parts(tail[1]);
+        if (!q) return null;
+        s = s.slice(0, s.length - tail[1].length) + ((q[0] << 8) | q[1]).toString(16) + ":" + ((q[2] << 8) | q[3]).toString(16);
+    }
+    const halves = s.split("::");
+    if (halves.length > 2) return null;
+    const head = halves[0] ? halves[0].split(":") : [];
+    const rest = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+    const missing = 8 - head.length - rest.length;
+    if (halves.length === 1 ? missing !== 0 : missing < 1) return null;
+    const all = [...head, ...(halves.length === 2 ? Array(missing).fill("0") : []), ...rest];
+    if (all.length !== 8) return null;
+    const g = all.map((h) => (/^[0-9a-f]{1,4}$/.test(h) ? parseInt(h, 16) : NaN));
+    return g.some(Number.isNaN) ? null : g;
+}
+
+/** @param {number} hi @param {number} lo */
+const quad = (hi, lo) => [hi >> 8, hi & 255, lo >> 8, lo & 255];
+
+/**
+ * Whether an IP literal (v4 or v6) is a public, globally routable unicast address. A WHITELIST for IPv6
+ * (only 2000::/3 and the embedded-IPv4 forms, never ::, ::1, fc00::/7, fe80::/10, ff00::/8, ...), and every
+ * way of writing a v4 address inside a v6 one (IPv4-mapped `::ffff:a.b.c.d` in either spelling, the
+ * deprecated IPv4-compatible `::a.b.c.d`, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`) is judged by the v4 address inside.
+ * Anything that is not an IP literal is false.
+ * @param {string} ip
+ */
+export function isPublicIp(ip) {
+    let s = String(ip).trim().toLowerCase();
+    if (s.startsWith("[") && s.endsWith("]")) s = s.slice(1, -1);
+    s = s.replace(/%.*$/, ""); // a zone id
+    const kind = net.isIP(s);
+    if (kind === 4) {
+        const p = v4Parts(s);
+        return p !== null && publicV4(p);
+    }
+    if (kind !== 6) return false;
+    const g = v6Groups(s);
+    if (!g) return false;
+    const [g0, g1, g2, g3, g4, g5, g6, g7] = g;
+    // ::ffff:0:0/96 (IPv4-mapped) and ::/96 (IPv4-compatible; :: and ::1 fall out as v4 0.x.x.x)
+    if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && (g5 === 0xffff || g5 === 0)) {
+        return publicV4(quad(g6, g7));
+    }
+    // 64:ff9b::/96 (NAT64, what a DNS64 resolver makes of a v4-only host)
+    if (g0 === 0x64 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) return publicV4(quad(g6, g7));
+    // 2002::/16 (6to4) carries a v4 address in groups 1-2
+    if (g0 === 0x2002) return publicV4(quad(g1, g2));
+    if ((g0 & 0xe000) !== 0x2000) return false; // not global unicast: ULA, link-local, multicast, loopback, ...
+    if (g0 === 0x2001 && g1 === 0) return false; // Teredo
+    if (g0 === 0x2001 && g1 === 0xdb8) return false; // documentation
+    if (g0 === 0x2001 && (g1 & 0xfff0) === 0x10) return false; // ORCHID
+    if (g0 === 0x3fff && g1 <= 0x0fff) return false; // documentation
+    return true;
+}
+
+/**
+ * The URL as a `URL` when it is one this code may fetch, else null: http(s) only, no credentials, port 80 or
+ * 443 only (`o.ports`, null = any: tests), a host that is a public IP literal, or a name with a dot that is not
+ * one of the private-looking spellings (localhost, *.local, *.internal, ...). Names are only half the check:
+ * `makeSafeFetch` also checks what they resolve to.
+ * @param {unknown} raw
+ * @param {{ports?: number[] | null, isPublicIp?: (ip: string) => boolean}} [o]
+ * @returns {URL | null}
+ */
+export function checkPublicUrl(raw, o = {}) {
+    if (typeof raw !== "string" || raw.length === 0 || raw.length > 2048) return null;
+    let u;
+    try {
+        u = new URL(raw);
+    } catch {
+        return null;
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    if (u.username || u.password) return null;
+    const ports = o.ports === undefined ? PUBLIC_PORTS : o.ports;
+    const port = u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80;
+    if (ports && !ports.includes(port)) return null;
+    const host = u.hostname.replace(/\.$/, "");
+    if (!host) return null;
+    const bare = host.startsWith("[") ? host.slice(1, -1) : host;
+    if (net.isIP(bare)) return (o.isPublicIp ?? isPublicIp)(bare) ? u : null;
+    if (!host.includes(".") || PRIVATE_HOST.test(host)) return null;
+    return u;
+}
+
+/** Host and path only: a signed link's query is a credential and never reaches a log. */
+export function logUrl(raw) {
+    try {
+        const u = new URL(raw);
+        return `${u.host}${u.pathname}`.slice(0, 160);
+    } catch {
+        return "(unparseable url)";
+    }
+}
+
+/** The last path segment of a URL, decoded and cleaned, or null (`/attachments/1/2/LiaPoor.png` is `LiaPoor.png`). */
+export function filenameFromUrl(u) {
+    const last = u.pathname.split("/").filter(Boolean).pop();
+    if (!last) return null;
+    let name = last;
+    try {
+        name = decodeURIComponent(last);
+    } catch {
+        // keep it as it is
+    }
+    // eslint-disable-next-line no-control-regex
+    // controls (C0 and C1), path separators, zero-width and bidi override/isolate characters (they flip how a title reads)
+    name = name
+        .replace(/[\u0000-\u001f\u007f-\u009f/\\\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "")
+        .trim()
+        .slice(0, 200);
+    return name || null;
+}
+
+/**
+ * A `lookup` for `http.request` that refuses to connect when ANY address the name resolves to is not public.
+ * It is the connection's own resolution, so the address checked is the address used (no second lookup to
+ * rebind), and it runs again on every redirect hop's new connection.
+ * @param {(host: string, o: object, cb: Function) => void} lookupImpl
+ * @param {(ip: string) => boolean} isPublic
+ * @param {{refused: boolean}} flag
+ */
+function guardedLookup(lookupImpl, isPublic, flag) {
+    return (hostname, options, cb) => {
+        if (typeof options === "function") {
+            cb = options;
+            options = {};
+        }
+        lookupImpl(hostname, { ...options, all: true }, (err, addrs) => {
+            if (err) return cb(err);
+            const list = Array.isArray(addrs) ? addrs : [{ address: addrs, family: net.isIP(addrs) }];
+            if (list.length === 0 || list.some((a) => !isPublic(a.address))) {
+                flag.refused = true;
+                return cb(new JobError("error.webp.bad_source"));
+            }
+            if (options.all) return cb(null, list);
+            return cb(null, list[0].address, list[0].family);
+        });
+    };
+}
+
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * A `fetch` that only talks to public hosts (see the section comment). Same shape as `fetch(url, {signal})`, so
+ * it drops into `downloadToFile({fetchImpl})`. Redirects are followed by hand: each hop's URL goes through
+ * `checkPublicUrl` and its connection through the guarded lookup, at most `maxRedirects` hops, never
+ * https -> http. Sends no credentials of any kind (no cookie, no authorization, no referer: the request
+ * carries a user agent and `accept` and nothing from the client), asks for an unencoded body (the byte caps count
+ * what is on the wire), and drops a socket idle for `idleMs`. A refusal is `JobError("error.webp.bad_source")`.
+ * `policy` exists for tests (a local origin, a fake resolver); the helper never passes one.
+ * @param {{ports?: number[] | null, maxRedirects?: number, idleMs?: number,
+ *          isPublicIp?: (ip: string) => boolean,
+ *          lookup?: (host: string, o: object, cb: Function) => void}} [policy]
+ * @returns {typeof fetch}
+ */
+export function makeSafeFetch(policy = {}) {
+    const ports = policy.ports === undefined ? PUBLIC_PORTS : policy.ports;
+    const maxRedirects = policy.maxRedirects ?? MAX_REDIRECTS;
+    const idleMs = policy.idleMs ?? FETCH_IDLE_MS;
+    const isPublic = policy.isPublicIp ?? isPublicIp;
+    const lookupImpl = policy.lookup ?? ((h, o, cb) => dnsLookup(h, o, cb));
+    const refuse = () => new JobError("error.webp.bad_source");
+
+    /** @param {URL} u @param {AbortSignal | undefined} signal */
+    const once = (u, signal) =>
+        new Promise((resolve, reject) => {
+            const flag = { refused: false };
+            /** @type {http.IncomingMessage | null} */
+            let incoming = null;
+            // one way to end the exchange, before or after the answer began: the socket is destroyed and whoever
+            // reads the body sees the same error (a bare destroy would surface as "aborted", losing the cause)
+            const end = (/** @type {Error} */ e) => {
+                incoming?.destroy(e);
+                req.destroy(e);
+            };
+            const onAbort = () =>
+                end(Object.assign(new Error("aborted"), { name: signal?.reason?.name === "TimeoutError" ? "TimeoutError" : "AbortError" }));
+            const host = u.hostname.startsWith("[") ? u.hostname.slice(1, -1) : u.hostname;
+            const req = (u.protocol === "https:" ? https : http).request(
+                {
+                    hostname: host,
+                    port: u.port || (u.protocol === "https:" ? 443 : 80),
+                    path: `${u.pathname}${u.search}`,
+                    method: "GET",
+                    agent: false,
+                    lookup: guardedLookup(lookupImpl, isPublic, flag),
+                    headers: {
+                        "user-agent": "Mozilla/5.0 (compatible; cobalt-studio)",
+                        accept: "*/*",
+                        "accept-encoding": "identity",
+                        connection: "close",
+                    },
+                },
+                (res) => {
+                    incoming = res;
+                    resolve(res);
+                },
+            );
+            req.on("timeout", () => end(Object.assign(new Error("idle"), { name: "TimeoutError" })));
+            req.setTimeout(idleMs);
+            req.on("error", (e) => reject(flag.refused ? refuse() : e));
+            // a `101 Switching Protocols` (or anything that closes the socket before a response) never emits "response"
+            // or "error", only "close": without these two the promise would never settle and the job would hang
+            req.on("upgrade", (_res, socket) => {
+                socket.destroy();
+                reject(Object.assign(new Error("upgrade refused"), { code: "ECONNRESET" }));
+            });
+            req.on("close", () => {
+                signal?.removeEventListener("abort", onAbort);
+                reject(Object.assign(new Error("closed without a response"), { code: "ECONNRESET" })); // a no-op once settled
+            });
+            if (signal?.aborted) onAbort();
+            else signal?.addEventListener("abort", onAbort, { once: true });
+            req.end();
+        });
+
+    return /** @type {typeof fetch} */ (
+        async function safeFetch(input, init) {
+            let current = checkPublicUrl(typeof input === "string" ? input : String(input), { ports, isPublicIp: isPublic });
+            if (!current) throw refuse();
+            for (let followed = 0; ; followed++) {
+                const res = /** @type {http.IncomingMessage} */ (await once(current, init?.signal ?? undefined));
+                const status = res.statusCode ?? 0;
+                if (REDIRECTS.has(status) && res.headers.location) {
+                    res.destroy();
+                    if (followed >= maxRedirects) throw refuse();
+                    let next = null;
+                    try {
+                        next = checkPublicUrl(new URL(res.headers.location, current).toString(), { ports, isPublicIp: isPublic });
+                    } catch {
+                        // an unparseable Location is a refusal
+                    }
+                    if (!next || (current.protocol === "https:" && next.protocol === "http:")) throw refuse();
+                    current = next;
+                    continue;
+                }
+                const headers = new Headers();
+                for (const [k, v] of Object.entries(res.headers)) {
+                    if (k !== "set-cookie" && v !== undefined) headers.set(k, Array.isArray(v) ? v.join(", ") : v);
+                }
+                // a status `Response` cannot represent (100-199 never arrive here, 600-999 can) is a bad gateway
+                const valid = status >= 200 && status <= 599;
+                const bodyless = !valid || status === 204 || status === 205 || status === 304;
+                if (bodyless) res.destroy();
+                return new Response(bodyless ? null : /** @type {any} */ (Readable.toWeb(res)), { status: valid ? status : 502, headers });
+            }
+        }
+    );
+}
+
 /**
  * POSTs the link to the local cobalt (with the internal key) and works out
  * which file to download. Throws JobError with the code to report.
@@ -781,7 +1240,9 @@ export async function resolveSource(o) {
  * @param {{url: string, dest: string, maxBytes?: number,
  *          fetchImpl?: typeof fetch, signal?: AbortSignal,
  *          onResponse?: (res: Response) => void,
- *          onProgress?: (bytes: number, total: number | null) => void}} o
+ *          onProgress?: (bytes: number, total: number | null) => void,
+ *          acceptHead?: (head: Buffer) => boolean}} o `acceptHead` sees the first HEAD_BYTES of the body (or all of a
+ *          shorter one) as soon as they arrive; false ends the download there with `error.webp.bad_source`
  * @returns {Promise<number>} bytes written
  */
 export async function downloadToFile(o) {
@@ -794,6 +1255,7 @@ export async function downloadToFile(o) {
         // whole file lands on disk before ffmpeg reads it.
         res = await fetchImpl(o.url, { signal: o.signal });
     } catch (e) {
+        if (e instanceof JobError) throw e; // a refusal by the fetch (makeSafeFetch)
         if (isAbort(e)) throw new JobError("error.webp.timeout");
         throw new JobError("error.webp.download_failed");
     }
@@ -823,12 +1285,26 @@ export async function downloadToFile(o) {
             }
         }
     };
+    let head = Buffer.alloc(0);
+    let headChecked = !o.acceptHead;
     const counter = new Transform({
         transform(chunk, _enc, cb) {
             n += chunk.length;
             if (n > maxBytes) return cb(new JobError("error.webp.too_large"));
+            if (!headChecked) {
+                head = Buffer.concat([head, chunk.subarray(0, HEAD_BYTES - head.length)]);
+                if (head.length >= HEAD_BYTES) {
+                    headChecked = true;
+                    if (!o.acceptHead?.(head)) return cb(new JobError("error.webp.bad_source"));
+                }
+            }
             report(false);
             cb(null, chunk);
+        },
+        flush(cb) {
+            // a body shorter than HEAD_BYTES is judged whole
+            if (!headChecked && !o.acceptHead?.(head)) return cb(new JobError("error.webp.bad_source"));
+            cb();
         },
     });
 

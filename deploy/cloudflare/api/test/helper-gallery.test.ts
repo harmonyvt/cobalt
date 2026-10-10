@@ -1430,11 +1430,11 @@ describe("the helper says what it can do on every answer (the API's features.gal
     it("x-cobalt-helper: gallery=1 on a 200, a 404 and a 403", async () => {
         const ok = await call(`/slideshow/${rid()}`);
         expect(ok.status).toBe(404);
-        expect(ok.headers.get("x-cobalt-helper")).toBe("gallery=1,make=1");
+        expect(ok.headers.get("x-cobalt-helper")).toBe("gallery=1,make=1,direct=1");
         const denied = await call(`/slideshow/${rid()}`, {}, "wrong-key");
         expect(denied.status).toBe(403);
         const poster = await call("/nothing-here");
-        expect(poster.headers.get("x-cobalt-helper")).toBe("gallery=1,make=1");
+        expect(poster.headers.get("x-cobalt-helper")).toBe("gallery=1,make=1,direct=1");
     });
 });
 

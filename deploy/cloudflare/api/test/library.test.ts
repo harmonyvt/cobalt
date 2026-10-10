@@ -972,6 +972,7 @@ describe("GET /capabilities", () => {
                 // answered in this world yet)
                 gallery: false,
                 gallery_make: false,
+                direct_links: false,
             },
             limits: {
                 max_webp_seconds: 10,

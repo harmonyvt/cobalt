@@ -23,7 +23,7 @@ import { Crop, HELPER_UPLOAD_MS, JobRecord, KV, MEDIA_NAME_LENGTH, Quality, Webp
 import { KEY_ID_HEADER } from "./headers";
 import { cropToPixels, parseCrop } from "../helper/crop.js";
 import { STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "./gate";
-import { SERVICE_KEY_ID, insertMediaItem, mediaNameFromUrl, pageLink, releasePoster } from "./library";
+import { SERVICE_KEY_ID, insertMediaItem, mediaNameFromUrl, pageLink, releasePoster, stripLinkSecrets } from "./library";
 import { LIVE_PUSH_MS, type LiveHooks, type LiveRenderEvent } from "./live";
 import {
     LINE_BUSY_WAIT_MS,
@@ -824,7 +824,13 @@ type FetchDone = {
     // the post's item count when the link was a picker (null = it was not); with `items` the answer lists each one
     picker_count?: number | null;
     items?: FetchItem[];
+    // the link was a file, not a post (section 19): its signed query is kept nowhere past the save
+    direct?: boolean;
 };
+
+// What cobalt says about a link it has no service for. A save that ends with one of these was never a post, so the
+// session's link (a pasted file's signed URL, perhaps) is cut to its path once the save has failed (section 19.2).
+const LINK_NOT_A_POST_CODES = new Set(["error.api.link.invalid", "error.api.link.unsupported"]);
 
 // the still image types a save keeps as they are (section 18.2) and the extension each is stored under
 const IMAGE_EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic" };
@@ -895,15 +901,19 @@ export class StudioService {
     private helperGallery: boolean | undefined;
     // `make=1` (18.10-18.13): the slideshow webp and the gallery image routes
     private helperMake: boolean | undefined;
+    // `direct=1` (19): a pasted link to a media file that cobalt has no service for is saved as that file
+    private helperDirect: boolean | undefined;
     private noteHelper(res: Response): Response {
         try {
             const caps = res.headers.get(HELPER_CAPS_HEADER) ?? "";
             const g = caps.includes("gallery=1");
             const m = caps.includes("make=1");
-            if (g !== this.helperGallery || m !== this.helperMake) {
+            const dl = caps.includes("direct=1");
+            if (g !== this.helperGallery || m !== this.helperMake || dl !== this.helperDirect) {
                 this.helperGallery = g;
                 this.helperMake = m;
-                void Promise.resolve(this.d.storage.put("helper:caps", { gallery: g, make: m, at: this.d.now() })).catch(() => {});
+                this.helperDirect = dl;
+                void Promise.resolve(this.d.storage.put("helper:caps", { gallery: g, make: m, direct: dl, at: this.d.now() })).catch(() => {});
             }
         } catch {
             // a response whose headers cannot be read says nothing
@@ -913,17 +923,20 @@ export class StudioService {
     async helperCaps(): Promise<StudioReply> {
         let gallery = this.helperGallery;
         let make = this.helperMake;
+        let direct = this.helperDirect;
         if (gallery === undefined) {
             try {
-                const stored = await this.d.storage.get<{ gallery?: boolean; make?: boolean }>("helper:caps");
+                const stored = await this.d.storage.get<{ gallery?: boolean; make?: boolean; direct?: boolean }>("helper:caps");
                 gallery = stored?.gallery === true;
                 make = stored?.make === true;
+                direct = stored?.direct === true;
             } catch {
                 gallery = false;
                 make = false;
+                direct = false;
             }
         }
-        return { status: 200, body: { status: "success", gallery, make: make === true } };
+        return { status: 200, body: { status: "success", gallery, make: make === true, direct: direct === true } };
     }
     // helper job id -> when this DO started it; used only for the busy answer.
     private encodes = new Map<string, number>();
@@ -2217,6 +2230,20 @@ export class StudioService {
                 .bind(code, sid)
                 .run();
             const changed = Number(res.meta?.changes ?? 0) > 0;
+            // cobalt had no service for the link: it is not a post, so whatever signed query it carries is dropped now
+            if (changed && LINK_NOT_A_POST_CODES.has(code)) {
+                await this.d.db
+                    .prepare("SELECT link FROM studio_sessions WHERE id = ?1")
+                    .bind(sid)
+                    .first<{ link: string | null }>()
+                    .then(async (r) => {
+                        const cut = stripLinkSecrets(r?.link);
+                        if (r?.link && cut !== r.link) {
+                            await this.d.db.prepare("UPDATE studio_sessions SET link = ?1 WHERE id = ?2").bind(cut, sid).run();
+                        }
+                    })
+                    .catch(() => {});
+            }
             // a make asked for with the save (18.2, 18.12) cannot be made from a save that failed
             if (changed) {
                 await this.d.db
@@ -2536,11 +2563,15 @@ export class StudioService {
     private async finalize(sid: string, row: SessionRow, done: FetchDone, rec?: SaveRecord): Promise<number> {
         // a save of a post's items has its own path (section 18.2)
         if (Array.isArray(done.items)) return await this.finalizeItems(sid, row, done, rec);
-        const link = row.link ?? "";
+        // what is stored of the link (the helper's own copy of the full URL was needed only to fetch)
+        const link = done.direct === true ? stripLinkSecrets(row.link) : (row.link ?? "");
         const keyId = row.key_id ?? "";
         const bytes = finite(done.bytes);
         if (bytes === null || bytes <= 0) return await this.fail(sid, "error.studio.unavailable");
         if (bytes > MAX_SOURCE_BYTES) return await this.fail(sid, "error.studio.too_large");
+        // A direct link (section 19) is stored without its query/userinfo everywhere: the library row, both R2 objects'
+        // `source` metadata (and so the public mirror's) and, with this very save becoming ready, the session itself.
+        const direct = done.direct === true;
         // A still image the helper recognised by its bytes stays what it is (section 18.2: a single photo was
         // coerced to a 0.04 s "video/mp4" before); anything else that is not a video or a gif is coerced as ever.
         const stillExt = typeof done.contentType === "string" ? IMAGE_EXT[done.contentType] : undefined;
@@ -2612,7 +2643,7 @@ export class StudioService {
         const thumb = stillExt !== undefined && stillExt !== "heic" && contentType === done.contentType ? await this.storeThumb(sid, null) : null;
         const res = await this.d.db
             .prepare(
-                "UPDATE studio_sessions SET status = 'ready', error_code = NULL, r2_key = ?1, content_type = ?2, bytes = ?3, duration = ?4, width = ?5, height = ?6, title = ?7 WHERE id = ?8 AND status = 'saving' AND expires_at > ?9",
+                `UPDATE studio_sessions SET status = 'ready', error_code = NULL, r2_key = ?1, content_type = ?2, bytes = ?3, duration = ?4, width = ?5, height = ?6, title = ?7${direct ? ", link = ?10" : ""} WHERE id = ?8 AND status = 'saving' AND expires_at > ?9`,
             )
             .bind(
                 key,
@@ -2624,6 +2655,7 @@ export class StudioService {
                 title,
                 sid,
                 this.d.now(),
+                ...(direct ? [link] : []),
             )
             .run();
         let becameReady = false;

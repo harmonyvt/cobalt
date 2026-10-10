@@ -169,6 +169,8 @@ export async function capabilities(
     helperGallery = false,
     // ... and the make routes too: the webp slideshow, the gallery image, `item` on renders (section 18.10-18.13)
     helperMake = false,
+    // ... and `direct=1`: a link to a media file that cobalt has no service for is saved as that file (section 19)
+    helperDirect = false,
 ): Promise<StudioReply> {
     const state = await resolveKeyState(d.db, auth, key, d.now());
     const version: unknown = apiVersion;
@@ -217,6 +219,9 @@ export async function capabilities(
                 // `gallery_image` on POST /studio, `item` on POST /studio/<sid>/render (section 18.10-18.13): only while
                 // the helper that runs said `make=1`
                 gallery_make: helperGallery === true && helperMake === true,
+                // a pasted link straight to an image or video file (a Discord CDN attachment, ...) just saves
+                // (APP-API-CONTRACT.md section 19): only while the helper that runs said `direct=1`
+                direct_links: helperDirect === true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,
