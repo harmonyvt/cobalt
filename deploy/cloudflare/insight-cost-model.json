@@ -1,0 +1,1102 @@
+{
+  "schema": 1,
+  "title": "cobalt insight: cost model inputs",
+  "read_on": "2026-10-10",
+  "currency": "USD",
+  "about": "Every price, limit and assumption the insight cost model uses (apple/PROPOSAL-INSIGHT.md). Each entry has value, unit, source_url, read_on and confidence. confidence 'verified' = read from the source_url on read_on; 'estimated' = a guess, an inference, or a number the page read did not state. A page can compute every figure in the proposal from `production`, `prices`, `limits`, `assumptions` and `options` with the formulas in `formulas`; `computed` is that arithmetic run once (scratch script, 2026-10-10) so a page can check itself. How pages were read: platform.claude.com pricing and batch rows from the raw page text; developers.cloudflare.com pages through a fetch tool that summarises with a small model (three prices cross-checked by neuron arithmetic), so open a source_url before money depends on one figure.",
+
+  "production": {
+    "read_on": "2026-10-10",
+    "source": "D1 cobalt-keys (media_items, studio_sessions), read by the owner's session on 2026-10-10 and passed to this lane; not re-queried here",
+    "confidence": "verified",
+    "posts_ready": 172,
+    "videos": 162,
+    "video_seconds": 6823,
+    "video_avg_seconds": 43.7,
+    "video_max_seconds": 431,
+    "buckets": [
+      { "id": "lt15", "label": "under 15 s", "videos": 62, "seconds": 530 },
+      { "id": "15to30", "label": "15 to 30 s", "videos": 39, "seconds": 836 },
+      { "id": "30to60", "label": "30 to 60 s", "videos": 27, "seconds": 1175 },
+      { "id": "1to3m", "label": "1 to 3 min", "videos": 22, "seconds": 2116 },
+      { "id": "3mplus", "label": "3 min and over", "videos": 12, "seconds": 2166 }
+    ],
+    "still_images": 25,
+    "galleries": 4,
+    "gallery_photo_items": 15,
+    "webps": 46,
+    "sources": { "instagram": 130, "x": 34, "upload": 6 },
+    "originals_bytes": 1200000000,
+    "saves_per_day": { "last_10_days_avg": 17, "min": 2, "max": 42 },
+    "note": "162 videos + 25 stills + 4 galleries is 191 things to describe against 172 posts: the counts are files, and a few posts hold more than one. The model prices 191 describes, an upper bound on 172 posts."
+  },
+
+  "prices": {
+    "haiku55_model_id": { "value": "claude-haiku-5-5", "unit": "model id (dateless, a pinned snapshot)", "source_url": "https://platform.claude.com/docs/en/about-claude/models/overview", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_input": { "value": 0.10, "unit": "USD per million input tokens, prompts up to 100,000 tokens", "source_url": "https://platform.claude.com/docs/en/about-claude/pricing", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_output": { "value": 0.50, "unit": "USD per million output tokens, prompts up to 100,000 tokens (thinking tokens bill as output)", "source_url": "https://platform.claude.com/docs/en/about-claude/pricing", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_cache_write_5m": { "value": 0.125, "unit": "USD per million tokens written to the 5 minute cache", "source_url": "https://platform.claude.com/docs/en/about-claude/pricing", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_cache_write_1h": { "value": 0.20, "unit": "USD per million tokens written to the 1 hour cache", "source_url": "https://platform.claude.com/docs/en/about-claude/pricing", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_cache_read": { "value": 0.01, "unit": "USD per million cached tokens read", "source_url": "https://platform.claude.com/docs/en/about-claude/pricing", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_long_input": { "value": 0.50, "unit": "USD per million input tokens when the prompt is over 100,000 tokens (5x)", "source_url": "https://platform.claude.com/docs/en/about-claude/pricing", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_long_output": { "value": 2.50, "unit": "USD per million output tokens when the prompt is over 100,000 tokens (5x)", "source_url": "https://platform.claude.com/docs/en/about-claude/pricing", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_batch_input": { "value": 0.05, "unit": "USD per million input tokens, Message Batches API", "source_url": "https://platform.claude.com/docs/en/about-claude/pricing", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_batch_output": { "value": 0.25, "unit": "USD per million output tokens, Message Batches API", "source_url": "https://platform.claude.com/docs/en/about-claude/pricing", "read_on": "2026-10-10", "confidence": "verified" },
+    "anthropic_batch_discount": { "value": 0.5, "unit": "fraction off every token price; stacks with the cache multipliers", "source_url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing", "read_on": "2026-10-10", "confidence": "verified" },
+    "anthropic_us_only_multiplier": { "value": 1.1, "unit": "x on every token price with inference_geo: \"us\" (not used; global is the default)", "source_url": "https://platform.claude.com/docs/en/about-claude/pricing", "read_on": "2026-10-10", "confidence": "verified" },
+
+    "workers_ai_neuron": { "value": 0.011, "unit": "USD per 1,000 neurons", "source_url": "https://developers.cloudflare.com/workers-ai/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "workers_ai_free_neurons_per_day": { "value": 10000, "unit": "neurons per day, free, on Workers Free and Workers Paid", "source_url": "https://developers.cloudflare.com/workers-ai/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "whisper_turbo_per_minute": { "value": 0.000513, "unit": "USD per audio minute, @cf/openai/whisper-large-v3-turbo (46.63 neurons)", "source_url": "https://developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo/", "read_on": "2026-10-10", "confidence": "verified" },
+    "whisper_turbo_neurons_per_minute": { "value": 46.63, "unit": "neurons per audio minute", "source_url": "https://developers.cloudflare.com/workers-ai/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "whisper_base_per_minute": { "value": 0.0005, "unit": "USD per audio minute, @cf/openai/whisper (41.14 neurons; not chosen)", "source_url": "https://developers.cloudflare.com/workers-ai/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "nova3_per_minute": { "value": 0.0052, "unit": "USD per audio minute, deepgram nova-3 on Workers AI (not chosen: 10x whisper)", "source_url": "https://developers.cloudflare.com/workers-ai/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "gemma4_input": { "value": 0.10, "unit": "USD per million input tokens, @cf/google/gemma-4-26b-a4b-it (9,091 neurons)", "source_url": "https://developers.cloudflare.com/workers-ai/models/gemma-4-26b-a4b-it/", "read_on": "2026-10-10", "confidence": "verified" },
+    "gemma4_output": { "value": 0.30, "unit": "USD per million output tokens, @cf/google/gemma-4-26b-a4b-it (27,273 neurons)", "source_url": "https://developers.cloudflare.com/workers-ai/models/gemma-4-26b-a4b-it/", "read_on": "2026-10-10", "confidence": "verified" },
+    "llama4_scout_input": { "value": 0.27, "unit": "USD per million input tokens, @cf/meta/llama-4-scout-17b-16e-instruct (alternative)", "source_url": "https://developers.cloudflare.com/workers-ai/models/llama-4-scout-17b-16e-instruct/", "read_on": "2026-10-10", "confidence": "verified" },
+    "llama4_scout_output": { "value": 0.85, "unit": "USD per million output tokens, @cf/meta/llama-4-scout-17b-16e-instruct (alternative)", "source_url": "https://developers.cloudflare.com/workers-ai/models/llama-4-scout-17b-16e-instruct/", "read_on": "2026-10-10", "confidence": "verified" },
+    "llama32_vision_input": { "value": 0.049, "unit": "USD per million input tokens, llama-3.2-11b-vision-instruct (alternative)", "source_url": "https://developers.cloudflare.com/workers-ai/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "llama32_vision_output": { "value": 0.676, "unit": "USD per million output tokens, llama-3.2-11b-vision-instruct (alternative)", "source_url": "https://developers.cloudflare.com/workers-ai/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "mistral_small31_input": { "value": 0.351, "unit": "USD per million input tokens, mistral-small-3.1-24b-instruct (alternative)", "source_url": "https://developers.cloudflare.com/workers-ai/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "mistral_small31_output": { "value": 0.555, "unit": "USD per million output tokens, mistral-small-3.1-24b-instruct (alternative)", "source_url": "https://developers.cloudflare.com/workers-ai/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "bge_m3": { "value": 0.012, "unit": "USD per million input tokens, @cf/baai/bge-m3 (1,075 neurons; the model page says $0.0118)", "source_url": "https://developers.cloudflare.com/workers-ai/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "qwen3_embedding": { "value": 0.012, "unit": "USD per million input tokens, @cf/qwen/qwen3-embedding-0.6b (alternative)", "source_url": "https://developers.cloudflare.com/workers-ai/models/qwen3-embedding-0.6b/", "read_on": "2026-10-10", "confidence": "verified" },
+    "embeddinggemma_300m": { "value": null, "unit": "no price listed on its model page or the pricing page; marked Beta (not chosen)", "source_url": "https://developers.cloudflare.com/workers-ai/models/embeddinggemma-300m/", "read_on": "2026-10-10", "confidence": "verified" },
+
+    "ai_gateway_core": { "value": 0, "unit": "USD; analytics, caching and rate limiting are free", "source_url": "https://developers.cloudflare.com/ai-gateway/reference/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "ai_gateway_unified_billing_fee": { "value": 0.05, "unit": "fraction added to credits bought (USD 100 of credit costs USD 105); provider tokens pass through with no markup. Not used: the plan is the owner's own Anthropic key", "source_url": "https://developers.cloudflare.com/ai-gateway/features/unified-billing/", "read_on": "2026-10-10", "confidence": "verified" },
+
+    "vectorize_queried_dims_included": { "value": 50000000, "unit": "queried vector dimensions per month included on Workers Paid", "source_url": "https://developers.cloudflare.com/vectorize/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "vectorize_stored_dims_included": { "value": 10000000, "unit": "stored vector dimensions included on Workers Paid", "source_url": "https://developers.cloudflare.com/vectorize/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "vectorize_queried_dims": { "value": 0.01, "unit": "USD per million queried dimensions past the included amount; queried dimensions in a month = (stored vectors + queries) x dimensions", "source_url": "https://developers.cloudflare.com/vectorize/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "vectorize_stored_dims": { "value": 0.05, "unit": "USD per 100 million stored dimensions past the included amount", "source_url": "https://developers.cloudflare.com/vectorize/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+
+    "container_memory": { "value": 0.0000025, "unit": "USD per GiB-second, provisioned; 25 GiB-hours a month included", "source_url": "https://developers.cloudflare.com/containers/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "container_cpu": { "value": 0.00002, "unit": "USD per vCPU-second, active use; 375 vCPU-minutes a month included", "source_url": "https://developers.cloudflare.com/containers/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "container_disk": { "value": 0.00000007, "unit": "USD per GB-second, provisioned; 200 GB-hours a month included", "source_url": "https://developers.cloudflare.com/containers/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "container_basic_vcpu": { "value": 0.25, "unit": "vCPU, instance type basic (the helper's: deploy/cloudflare/api/cloudflare.config.ts:20)", "source_url": "https://developers.cloudflare.com/containers/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "container_basic_memory_gib": { "value": 1, "unit": "GiB, instance type basic", "source_url": "https://developers.cloudflare.com/containers/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "container_basic_disk_gb": { "value": 4, "unit": "GB, instance type basic", "source_url": "https://developers.cloudflare.com/containers/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "container_included_memory_gib_hours": { "value": 25, "unit": "GiB-hours a month", "source_url": "https://developers.cloudflare.com/containers/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "container_included_vcpu_minutes": { "value": 375, "unit": "vCPU-minutes a month", "source_url": "https://developers.cloudflare.com/containers/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+
+    "media_transformations_op": { "value": 0.0005, "unit": "USD per operation (USD 0.50 per 1,000) past 5,000 free a month, shared with Image Transformations; a still frame is 1 operation, audio or video output is 1 operation per second of output. The Workers binding is in open beta and not billed during it; afterwards billed per operation (no monthly dedupe). The alternative way to cut frames, not the plan", "source_url": "https://developers.cloudflare.com/stream/transform-videos/", "read_on": "2026-10-10", "confidence": "verified" },
+    "media_transformations_free_ops": { "value": 5000, "unit": "operations a month free", "source_url": "https://developers.cloudflare.com/stream/transform-videos/", "read_on": "2026-10-10", "confidence": "verified" },
+    "workflows_requests_included": { "value": 10000000, "unit": "requests a month included, then USD 0.30 per million", "source_url": "https://developers.cloudflare.com/workflows/reference/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "workflows_cpu_ms_included": { "value": 30000000, "unit": "CPU ms a month included, then USD 0.02 per million; waiting on a fetch or a sleep bills no CPU", "source_url": "https://developers.cloudflare.com/workflows/reference/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "workflows_steps_included": { "value": 500000, "unit": "steps a month included, then USD 0.80 per 100,000 (retries not counted)", "source_url": "https://developers.cloudflare.com/workflows/reference/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "workflows_storage_included_gb": { "value": 1, "unit": "GB-month included, then USD 0.20 per GB-month", "source_url": "https://developers.cloudflare.com/workflows/reference/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "queues_ops_included": { "value": 1000000, "unit": "operations a month included, then USD 0.40 per million; a delivered message is 3 operations (not used by the plan)", "source_url": "https://developers.cloudflare.com/queues/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "durable_objects_requests_included": { "value": 1000000, "unit": "requests a month included, then USD 0.15 per million (an alarm is a request)", "source_url": "https://developers.cloudflare.com/durable-objects/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "durable_objects_duration_included": { "value": 400000, "unit": "GB-seconds a month included, then USD 12.50 per million (128 MB per object while awake)", "source_url": "https://developers.cloudflare.com/durable-objects/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "r2_storage": { "value": 0.015, "unit": "USD per GB-month, Standard; 10 GB-month free", "source_url": "https://developers.cloudflare.com/r2/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "r2_class_a": { "value": 4.50, "unit": "USD per million writes/lists; 1 million a month free", "source_url": "https://developers.cloudflare.com/r2/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "r2_class_b": { "value": 0.36, "unit": "USD per million reads; 10 million a month free", "source_url": "https://developers.cloudflare.com/r2/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "d1_rows_written": { "value": 1.00, "unit": "USD per million rows written past 50 million a month included", "source_url": "https://developers.cloudflare.com/d1/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "d1_rows_read": { "value": 0.001, "unit": "USD per million rows read past 25 billion a month included", "source_url": "https://developers.cloudflare.com/d1/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "workers_paid_base": { "value": 5, "unit": "USD a month, already paid by this deployment (Containers and Durable Objects need it); 10 million requests and 30 million CPU ms included", "source_url": "https://developers.cloudflare.com/workers/platform/pricing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "ai_search_billing_starts": { "value": "2026-11-01", "unit": "date AI Search billing begins; 5 million ingestion tokens, 1,000 semantic queries and 10 GB-month included a month (not used by the plan)", "source_url": "https://developers.cloudflare.com/ai-search/platform/limits-pricing/", "read_on": "2026-10-10", "confidence": "verified" }
+  },
+
+  "limits": {
+    "claude_video_input": { "value": false, "unit": "Claude takes text and images, not video or audio: a video is sent as frames plus a transcript", "source_url": "https://platform.claude.com/docs/en/about-claude/models/overview", "read_on": "2026-10-10", "confidence": "verified" },
+    "claude_image_formats": { "value": ["image/jpeg", "image/png", "image/gif", "image/webp"], "unit": "accepted image types; an animation is read as its first frame only", "source_url": "https://platform.claude.com/docs/en/build-with-claude/vision", "read_on": "2026-10-10", "confidence": "verified" },
+    "claude_image_patch_px": { "value": 28, "unit": "pixels; an image costs ceil(width/28) x ceil(height/28) visual tokens", "source_url": "https://platform.claude.com/docs/en/build-with-claude/vision", "read_on": "2026-10-10", "confidence": "verified" },
+    "claude_image_max_long_edge_px": { "value": 2576, "unit": "pixels; larger images are downscaled first. The page says 'Claude 4.7 and later models'; that Haiku 5.5 is in that tier is read from that wording, not from a Haiku 5.5 row", "source_url": "https://platform.claude.com/docs/en/build-with-claude/vision", "read_on": "2026-10-10", "confidence": "verified" },
+    "claude_image_max_visual_tokens": { "value": 4784, "unit": "visual tokens per image at most, high-resolution tier", "source_url": "https://platform.claude.com/docs/en/build-with-claude/vision", "read_on": "2026-10-10", "confidence": "verified" },
+    "claude_images_per_request": { "value": 600, "unit": "images per API request for models whose context is not 200k (Haiku 5.5 is 1M)", "source_url": "https://platform.claude.com/docs/en/build-with-claude/vision", "read_on": "2026-10-10", "confidence": "verified" },
+    "claude_many_image_threshold": { "value": 20, "unit": "images; above this every image in the request must be at most 2000 px on each side or the request is refused", "source_url": "https://platform.claude.com/docs/en/build-with-claude/vision", "read_on": "2026-10-10", "confidence": "verified" },
+    "claude_image_max_bytes_base64": { "value": 10000000, "unit": "bytes per image, base64-encoded, on the Claude API", "source_url": "https://platform.claude.com/docs/en/build-with-claude/vision", "read_on": "2026-10-10", "confidence": "verified" },
+    "claude_request_max_bytes": { "value": 32000000, "unit": "bytes per standard request", "source_url": "https://platform.claude.com/docs/en/build-with-claude/vision", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_long_context_threshold": { "value": 100000, "unit": "prompt tokens (cache reads and writes count); over it the whole request pays 5x", "source_url": "https://platform.claude.com/docs/en/about-claude/pricing", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_context_window": { "value": 1000000, "unit": "tokens", "source_url": "https://platform.claude.com/docs/en/about-claude/models/overview", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_max_output": { "value": 128000, "unit": "tokens", "source_url": "https://platform.claude.com/docs/en/about-claude/models/overview", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_default_effort": { "value": "medium", "unit": "output_config.effort default; thinking is adaptive and on by default", "source_url": "https://platform.claude.com/docs/en/about-claude/models/overview", "read_on": "2026-10-10", "confidence": "verified" },
+    "haiku55_thinking_can_be_disabled": { "value": true, "unit": "thinking: {type: \"disabled\"} is accepted at effort high or below. Source is the claude-api skill bundled with Claude Code (cached 2026-10-06), not a page fetched on read_on", "source_url": "https://platform.claude.com/docs/en/about-claude/models/migration-guide", "read_on": "2026-10-10", "confidence": "estimated" },
+    "claude_tokenizer_inflation": { "value": 1.3, "unit": "x; Claude 4.7 and later count the same text as about 30% more tokens than older models", "source_url": "https://platform.claude.com/docs/en/about-claude/pricing", "read_on": "2026-10-10", "confidence": "verified" },
+    "claude_cache_min_tokens": { "value": 512, "unit": "tokens; a shorter cached prefix silently does not cache (Haiku 5.5)", "source_url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching", "read_on": "2026-10-10", "confidence": "verified" },
+    "claude_structured_outputs_haiku55": { "value": true, "unit": "output_config.format json_schema is supported on claude-haiku-5-5; no maxItems, minLength or numeric bounds; at most 24 optional fields and 16 union-typed fields", "source_url": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs", "read_on": "2026-10-10", "confidence": "verified" },
+    "anthropic_batch_max_requests": { "value": 100000, "unit": "requests per batch (or 256 MB, whichever first)", "source_url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing", "read_on": "2026-10-10", "confidence": "verified" },
+    "anthropic_batch_max_hours": { "value": 24, "unit": "hours before an unfinished batch expires; most finish in under 1 hour", "source_url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing", "read_on": "2026-10-10", "confidence": "verified" },
+    "anthropic_batch_retention_days": { "value": 29, "unit": "days requests and results are stored; the Batch API is not eligible for zero data retention", "source_url": "https://platform.claude.com/docs/en/manage-claude/api-and-data-retention", "read_on": "2026-10-10", "confidence": "verified" },
+    "anthropic_batch_cache_hit_range": { "value": [0.3, 0.98], "unit": "fraction; cache hits inside a batch are best effort", "source_url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing", "read_on": "2026-10-10", "confidence": "verified" },
+    "anthropic_default_retention_days": { "value": 30, "unit": "days; API inputs and outputs are deleted within 30 days unless flagged (up to 2 years) or under a zero-data-retention agreement", "source_url": "https://privacy.claude.com/en/articles/7996866-how-long-do-you-store-my-organization-s-data", "read_on": "2026-10-10", "confidence": "verified" },
+    "anthropic_zdr_self_serve": { "value": false, "unit": "zero data retention is arranged per organization through Anthropic sales; there is no switch a self-serve account can flip", "source_url": "https://platform.claude.com/docs/en/manage-claude/api-and-data-retention", "read_on": "2026-10-10", "confidence": "verified" },
+    "anthropic_rate_limit_start_tier_rpm": { "value": 1000, "unit": "requests a minute for Haiku 5.5 on the Start tier (2,000,000 input tokens and 400,000 output tokens a minute): never the bottleneck here", "source_url": "https://platform.claude.com/docs/en/api/rate-limits", "read_on": "2026-10-10", "confidence": "verified" },
+
+    "workers_ai_hosts_claude": { "value": false, "unit": "no Anthropic model is hosted on Workers AI; the Workers AI model list has none", "source_url": "https://developers.cloudflare.com/workers-ai/models/", "read_on": "2026-10-10", "confidence": "verified" },
+    "cloudflare_catalog_has_haiku55": { "value": false, "unit": "Cloudflare's AI model catalog lists 12 third-party Anthropic models (anthropic/claude-haiku-4.5 among them) and not Haiku 5.5, so unified billing and Cloudflare-side zero data retention cannot be assumed for it yet", "source_url": "https://developers.cloudflare.com/ai/models/", "read_on": "2026-10-10", "confidence": "verified" },
+    "ai_gateway_anthropic_endpoint": { "value": "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/anthropic", "unit": "base URL for the Anthropic SDK; only /v1/messages is documented, so the Batch and Files endpoints through the gateway are unconfirmed", "source_url": "https://developers.cloudflare.com/ai-gateway/usage/providers/anthropic/", "read_on": "2026-10-10", "confidence": "verified" },
+    "ai_gateway_log_payload_header": { "value": "cf-aig-collect-log-payload: false", "unit": "request header: keep the log's metadata (tokens, cost, status) and store no prompt or response", "source_url": "https://developers.cloudflare.com/ai-gateway/observability/logging/", "read_on": "2026-10-10", "confidence": "verified" },
+    "ai_gateway_zdr_scope": { "value": "unified billing only", "unit": "Cloudflare's zero-data-retention routing applies to unified-billing requests with Cloudflare-managed credentials, not to a request carrying the owner's own key", "source_url": "https://developers.cloudflare.com/ai-gateway/features/unified-billing/", "read_on": "2026-10-10", "confidence": "verified" },
+    "workers_ai_image_embedding_model": { "value": false, "unit": "no CLIP, SigLIP or other image-embedding model on Workers AI (only resnet-50 classification)", "source_url": "https://developers.cloudflare.com/workers-ai/models/", "read_on": "2026-10-10", "confidence": "verified" },
+    "gemma4_context": { "value": 256000, "unit": "tokens; vision listed as supported, how images are passed and counted is not on the page", "source_url": "https://developers.cloudflare.com/workers-ai/models/gemma-4-26b-a4b-it/", "read_on": "2026-10-10", "confidence": "verified" },
+    "bge_m3_context": { "value": 60000, "unit": "tokens per input on Workers AI", "source_url": "https://developers.cloudflare.com/workers-ai/models/bge-m3/", "read_on": "2026-10-10", "confidence": "verified" },
+    "bge_m3_dimensions": { "value": 1024, "unit": "dimensions per vector; from the model's own card, the Cloudflare page read did not state it. Confirm with one call before creating the index (an index's dimensions cannot be changed)", "source_url": "https://developers.cloudflare.com/workers-ai/models/bge-m3/", "read_on": "2026-10-10", "confidence": "estimated" },
+    "vectorize_max_dimensions": { "value": 1536, "unit": "dimensions per vector", "source_url": "https://developers.cloudflare.com/vectorize/platform/limits/", "read_on": "2026-10-10", "confidence": "verified" },
+    "vectorize_id_max_bytes": { "value": 64, "unit": "bytes per vector id (a post key can be a long link, so ids are minted, never the key)", "source_url": "https://developers.cloudflare.com/vectorize/platform/limits/", "read_on": "2026-10-10", "confidence": "verified" },
+    "vectorize_metadata_max_bytes": { "value": 10240, "unit": "bytes of metadata per vector", "source_url": "https://developers.cloudflare.com/vectorize/platform/limits/", "read_on": "2026-10-10", "confidence": "verified" },
+    "vectorize_metadata_indexes": { "value": 10, "unit": "filterable metadata properties per index; a string is indexed by its first 64 bytes; created before vectors are inserted", "source_url": "https://developers.cloudflare.com/vectorize/platform/limits/", "read_on": "2026-10-10", "confidence": "verified" },
+    "vectorize_topk_with_metadata": { "value": 50, "unit": "results per query with values or metadata (100 without)", "source_url": "https://developers.cloudflare.com/vectorize/platform/limits/", "read_on": "2026-10-10", "confidence": "verified" },
+    "vectorize_filter_max_bytes": { "value": 2048, "unit": "bytes of filter JSON; operators $eq $ne $in $nin $lt $lte $gt $gte", "source_url": "https://developers.cloudflare.com/vectorize/reference/metadata-filtering/", "read_on": "2026-10-10", "confidence": "verified" },
+    "media_transformations_input_max_bytes": { "value": 100000000, "unit": "bytes of source video (and 10 minutes); a saved original here may be up to 200 MB (MAX_SOURCE_BYTES, deploy/cloudflare/api/src/studio.ts:83). Audio output is at most 60 s per call", "source_url": "https://developers.cloudflare.com/stream/transform-videos/", "read_on": "2026-10-10", "confidence": "verified" },
+    "media_binding_private_r2": { "value": true, "unit": "env.MEDIA.input(<R2 object body>).output({mode: \"frame\", time, format: \"jpg\"}) works on a private bucket's stream; public open beta", "source_url": "https://developers.cloudflare.com/stream/transform-videos/bindings/", "read_on": "2026-10-10", "confidence": "verified" },
+    "workflows_step_return_max_bytes": { "value": 1048576, "unit": "bytes a step may return (frames therefore live in R2, steps pass keys)", "source_url": "https://developers.cloudflare.com/workflows/reference/limits/", "read_on": "2026-10-10", "confidence": "verified" },
+    "workflows_max_steps": { "value": 10000, "unit": "steps per instance on Workers Paid (default)", "source_url": "https://developers.cloudflare.com/workflows/reference/limits/", "read_on": "2026-10-10", "confidence": "verified" },
+    "workflows_state_retention_days": { "value": 30, "unit": "days a finished instance's state is kept on Workers Paid", "source_url": "https://developers.cloudflare.com/workflows/reference/limits/", "read_on": "2026-10-10", "confidence": "verified" },
+    "agents_sdk_base": { "value": "DurableObject > Server (partyserver) > Agent", "unit": "the Agents SDK's Agent class is a Durable Object with SQL state, schedule(), queue(), fibers and WebSockets; npm package `agents`", "source_url": "https://developers.cloudflare.com/agents/runtime/lifecycle/agent-class/", "read_on": "2026-10-10", "confidence": "verified" },
+    "cf_config_bindings": { "value": ["ai", "vectorize", "workflow", "secretsStoreSecret"], "unit": "binding helpers present in the repo's installed deploy tool (cf 1.0.0-beta.5, @cloudflare/config 0.20.0): deploy/cloudflare/api/node_modules/@cloudflare/config/dist/public-DA8eKvPJ.d.mts lines 108, 260, 288, 1585. Present in the types; not deployed", "source_url": "https://developers.cloudflare.com/workflows/", "read_on": "2026-10-10", "confidence": "verified" },
+    "helper_sweep_gap_seconds": { "value": 5, "unit": "seconds between sweep passes (SWEEP_DELAY_S, deploy/cloudflare/api/src/sweep.ts:20); one helper job starts per pass", "source_url": null, "read_on": "2026-10-10", "confidence": "verified" },
+    "helper_sleep_after_seconds": { "value": 45, "unit": "seconds the container stays up after its last call (deploy/cloudflare/api/src/index.ts:37)", "source_url": null, "read_on": "2026-10-10", "confidence": "verified" }
+  },
+
+  "assumptions": {
+    "frame_long_edge_px": { "value": 768, "unit": "pixels, longer side of a sampled video frame (never upscaled)", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "frame_aspect": { "value": [9, 16], "unit": "width:height assumed for the token estimate (130 of 170 sources are instagram; the real mix of shapes was not measured). 9:16 at 768 is 432x768 = 16 x 28 = 448 tokens; a square frame is 784", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "frame_label_tokens": { "value": 8, "unit": "tokens of text before each frame ('frame 3 at 0:12')", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "photo_long_edge_px": { "value": 1024, "unit": "pixels, longer side of a still photo sent for describing; 3:4 assumed (768x1024 = 28 x 37 = 1,036 tokens)", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "photo_aspect": { "value": [3, 4], "unit": "width:height assumed for stills", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "prompt_overhead_tokens": { "value": 1200, "unit": "tokens per request for the instructions, the facet lists and the JSON schema the API injects. Not measured: count it with messages.countTokens once the prompt exists", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "post_context_tokens": { "value": 80, "unit": "tokens per request for the link, service, file name, duration and size", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "speech_share": { "value": 0.5, "unit": "fraction of video seconds that carry words Whisper returns (many clips are music only). Not measured", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "transcript_tokens_per_second": { "value": 4.3, "unit": "tokens per second of speech (about 150 words a minute, 1.3 tokens a word, x1.3 for the newer tokenizer)", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "output_tokens_base": { "value": 450, "unit": "output tokens for one description document (title, description, tags, facets, on-screen text, entities, search phrases)", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "output_tokens_per_scene": { "value": 40, "unit": "output tokens per scene caption (haiku + scenes only)", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "scenes_per_frame": { "value": 0.5, "unit": "scenes the model reports per frame it is shown (haiku + scenes only)", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "thinking_tokens": { "value": 0, "unit": "output tokens of thinking per request; 0 = thinking disabled. With adaptive thinking at low effort budget a few hundred", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "workers_ai_image_tokens": { "value": 280, "unit": "input tokens one image costs on the Workers AI vision model. The model page does not say; this is a guess", "source_url": "https://developers.cloudflare.com/workers-ai/models/gemma-4-26b-a4b-it/", "read_on": "2026-10-10", "confidence": "estimated" },
+    "embed_tokens_card": { "value": 400, "unit": "tokens embedded for a post's card text", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "embed_tokens_scene": { "value": 40, "unit": "tokens embedded per scene caption", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "said_tokens_cap": { "value": 2000, "unit": "tokens of transcript embedded at most as the post's 'said' vector", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "helper_seconds_base": { "value": 4, "unit": "seconds the helper is held per describe before any frame: carrying the original in from R2, the probe, cleanup. Not measured", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "helper_seconds_per_frame": { "value": 1.5, "unit": "seconds of ffmpeg per sampled frame on the basic instance. From the README's 'a second or two of ffmpeg' for one poster; not measured for a run of seeks", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "helper_seconds_per_media_second": { "value": 0.02, "unit": "seconds of ffmpeg per second of video to cut the audio track to 16 kHz mono. Not measured", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "describer_idle_seconds": { "value": 20, "unit": "seconds the describer's own container instance stays billed around one everyday describe besides the ffmpeg itself (cold start plus a 15 s sleep-after). Counted once per post in the monthly figures, not in the backfill, where jobs run back to back. Not measured", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "container_cpu_busy_share": { "value": 1, "unit": "fraction of the basic instance's quarter vCPU counted as active while the helper is held (an upper bound)", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "frame_jpeg_bytes": { "value": 45000, "unit": "bytes per kept frame at 768 px, JPEG q4 (posters at 720 px measure 14 to 17 KB on test clips; real footage is busier)", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "cache_hit_rate_backfill": { "value": 0.9, "unit": "fraction of backfill requests that read the cached instructions (requests run back to back inside the 5 minute window)", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "cache_hit_rate_steady": { "value": 0, "unit": "fraction of everyday requests that read the cache (17 saves a day are rarely within 5 minutes of each other)", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "searches_per_month": { "value": 600, "unit": "searches by meaning a month (20 a day); each embeds about 12 tokens and makes one Vectorize query", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" },
+    "days_per_month": { "value": 30.44, "unit": "days", "source_url": null, "read_on": "2026-10-10", "confidence": "estimated" }
+  },
+
+  "options": {
+    "cloudflare_only": {
+      "name": "cloudflare only",
+      "order": 1,
+      "describer": "workers_ai",
+      "describer_model": "@cf/google/gemma-4-26b-a4b-it",
+      "input_price": "gemma4_input",
+      "output_price": "gemma4_output",
+      "frames": { "every_seconds": 6, "min": 3, "max": 12 },
+      "image_tokens": "workers_ai_image_tokens",
+      "scenes": false,
+      "vectors": ["card", "said"],
+      "leaves_cloudflare": false
+    },
+    "haiku_watches": {
+      "name": "haiku watches",
+      "order": 2,
+      "describer": "anthropic",
+      "describer_model": "claude-haiku-5-5",
+      "input_price": "haiku55_input",
+      "output_price": "haiku55_output",
+      "frames": { "every_seconds": 4, "min": 4, "max": 24 },
+      "image_tokens": "claude_formula",
+      "scenes": false,
+      "vectors": ["card", "said"],
+      "leaves_cloudflare": true,
+      "recommended": true
+    },
+    "haiku_scenes": {
+      "name": "haiku + scenes",
+      "order": 3,
+      "describer": "anthropic",
+      "describer_model": "claude-haiku-5-5",
+      "input_price": "haiku55_input",
+      "output_price": "haiku55_output",
+      "frames": { "every_seconds": 2, "min": 4, "max": 48 },
+      "image_tokens": "claude_formula",
+      "scenes": true,
+      "vectors": ["card", "said", "scene"],
+      "leaves_cloudflare": true
+    }
+  },
+
+  "formulas": {
+    "frames": "frames(d) = min(max, max(min, ceil(d / every_seconds))) for a video of d seconds; a photo is 1 frame; a gallery is its photos.",
+    "frames_bucket": "For a bucket of n videos totalling S seconds (per-video lengths are not in this file): n x min(max, max(min, S/n/every_seconds + 0.5)). The + 0.5 stands in for the ceiling. Exact where every video hits min or max (the under-15 s and 3-min-plus buckets); an upper bound for the 1 to 3 min bucket.",
+    "claude_image_tokens": "ceil(w / 28) x ceil(h / 28), with (w, h) the frame scaled so its longer side is frame_long_edge_px.",
+    "input_tokens": "prompt_overhead_tokens + post_context_tokens + frames x (image_tokens + frame_label_tokens) + speech_share x transcript_tokens_per_second x d",
+    "output_tokens": "output_tokens_base + thinking_tokens + (scenes ? frames x scenes_per_frame x output_tokens_per_scene : 0)",
+    "describe_usd": "input_tokens x input_price / 1e6 + output_tokens x output_price / 1e6",
+    "describe_usd_cached": "as describe_usd, with prompt_overhead_tokens priced at hit x cache_read + (1 - hit) x cache_write_5m instead of the input price",
+    "describe_usd_batch": "describe_usd x (1 - anthropic_batch_discount); anthropic only",
+    "whisper_usd": "d / 60 x whisper_turbo_per_minute (videos with an audio track; list price, before the 10,000 free neurons a day)",
+    "embed_usd": "(embed_tokens_card + min(said_tokens_cap, transcript tokens) + (scenes ? frames x scenes_per_frame x embed_tokens_scene : 0)) x bge_m3 / 1e6",
+    "helper_seconds": "helper_seconds_base + frames x helper_seconds_per_frame + d x helper_seconds_per_media_second",
+    "container_usd": "helper_seconds x (container_basic_vcpu x container_cpu_busy_share x container_cpu + container_basic_memory_gib x container_memory + container_basic_disk_gb x container_disk); list price, before the included monthly amounts",
+    "backfill_wall_clock_seconds": "sum of helper_seconds over every describe + helper_sweep_gap_seconds x number of describes (one job starts per sweep pass, and only while the line is empty)",
+    "out_of_pocket": "What is expected on a bill: the Anthropic tokens (describe_usd, haiku pipelines) plus Workers AI neurons past 10,000 a day; container seconds, Vectorize, Workflows, R2 and D1 sit inside what Workers Paid already includes at this size (not checked against the account's current usage).",
+    "vectorize_usd": "max(0, (stored_vectors + queries) x dims - vectorize_queried_dims_included) x 0.01 / 1e6 + max(0, stored_vectors x dims - vectorize_stored_dims_included) x 0.05 / 1e8",
+    "monthly_usd": "saves_per_day x days_per_month x (backfill total / posts_ready + describer_idle_seconds x container rate per second): a new save is priced as the average post of today's library (172 posts)"
+  },
+
+  "computed": {
+    "by": "scratch script run 2026-10-10 over this file; see apple/PROPOSAL-INSIGHT.md section 9 for the arithmetic shown bucket by bucket",
+    "confidence": "estimated",
+    "results": {
+      "frame_tokens": 448,
+      "photo_tokens": 1036,
+      "container_usd_per_second": 0.00000778,
+      "options": {
+        "cloudflare_only": {
+          "per_video": {
+            "8s": {
+              "frames": 3,
+              "input_tokens": 2161,
+              "output_tokens": 450,
+              "describe_usd": 0.000351,
+              "whisper_usd": 0.000068,
+              "embed_usd": 0.000005,
+              "container_usd": 0.000067,
+              "helper_seconds": 8.7,
+              "total_usd": 0.000492
+            },
+            "15s": {
+              "frames": 3,
+              "input_tokens": 2176,
+              "output_tokens": 450,
+              "describe_usd": 0.000353,
+              "whisper_usd": 0.000128,
+              "embed_usd": 0.000005,
+              "container_usd": 0.000068,
+              "helper_seconds": 8.8,
+              "total_usd": 0.000555
+            },
+            "30s": {
+              "frames": 5,
+              "input_tokens": 2785,
+              "output_tokens": 450,
+              "describe_usd": 0.000413,
+              "whisper_usd": 0.000257,
+              "embed_usd": 0.000006,
+              "container_usd": 0.000094,
+              "helper_seconds": 12.1,
+              "total_usd": 0.00077
+            },
+            "43.7s": {
+              "frames": 8,
+              "input_tokens": 3678,
+              "output_tokens": 450,
+              "describe_usd": 0.000503,
+              "whisper_usd": 0.000374,
+              "embed_usd": 0.000006,
+              "container_usd": 0.000131,
+              "helper_seconds": 16.9,
+              "total_usd": 0.001014
+            },
+            "60s": {
+              "frames": 10,
+              "input_tokens": 4289,
+              "output_tokens": 450,
+              "describe_usd": 0.000564,
+              "whisper_usd": 0.000513,
+              "embed_usd": 0.000006,
+              "container_usd": 0.000157,
+              "helper_seconds": 20.2,
+              "total_usd": 0.00124
+            },
+            "120s": {
+              "frames": 12,
+              "input_tokens": 4994,
+              "output_tokens": 450,
+              "describe_usd": 0.000634,
+              "whisper_usd": 0.001026,
+              "embed_usd": 0.000008,
+              "container_usd": 0.00019,
+              "helper_seconds": 24.4,
+              "total_usd": 0.001858
+            },
+            "431s": {
+              "frames": 12,
+              "input_tokens": 5663,
+              "output_tokens": 450,
+              "describe_usd": 0.000701,
+              "whisper_usd": 0.003685,
+              "embed_usd": 0.000016,
+              "container_usd": 0.000238,
+              "helper_seconds": 30.6,
+              "total_usd": 0.00464
+            }
+          },
+          "buckets": [
+            {
+              "id": "lt15",
+              "videos": 62,
+              "seconds": 530,
+              "frames": 186,
+              "input_tokens": 134068,
+              "output_tokens": 27900,
+              "describe_usd": 0.0218,
+              "whisper_usd": 0.0045,
+              "embed_usd": 0.000311,
+              "helper_seconds": 538,
+              "container_usd": 0.0042,
+              "total_usd": 0.0308
+            },
+            {
+              "id": "15to30",
+              "videos": 39,
+              "seconds": 836,
+              "frames": 158.8,
+              "input_tokens": 97461,
+              "output_tokens": 17550,
+              "describe_usd": 0.015,
+              "whisper_usd": 0.0071,
+              "embed_usd": 0.000209,
+              "helper_seconds": 411,
+              "container_usd": 0.0032,
+              "total_usd": 0.0256
+            },
+            {
+              "id": "30to60",
+              "videos": 27,
+              "seconds": 1175,
+              "frames": 209.3,
+              "input_tokens": 97374,
+              "output_tokens": 12150,
+              "describe_usd": 0.0134,
+              "whisper_usd": 0.01,
+              "embed_usd": 0.00016,
+              "helper_seconds": 446,
+              "container_usd": 0.0035,
+              "total_usd": 0.0271
+            },
+            {
+              "id": "1to3m",
+              "videos": 22,
+              "seconds": 2116,
+              "frames": 264,
+              "input_tokens": 108741,
+              "output_tokens": 9900,
+              "describe_usd": 0.0138,
+              "whisper_usd": 0.0181,
+              "embed_usd": 0.00016,
+              "helper_seconds": 526,
+              "container_usd": 0.0041,
+              "total_usd": 0.0362
+            },
+            {
+              "id": "3mplus",
+              "videos": 12,
+              "seconds": 2166,
+              "frames": 144,
+              "input_tokens": 61489,
+              "output_tokens": 5400,
+              "describe_usd": 0.0078,
+              "whisper_usd": 0.0185,
+              "embed_usd": 0.000113,
+              "helper_seconds": 307,
+              "container_usd": 0.0024,
+              "total_usd": 0.0288
+            }
+          ],
+          "backfill": {
+            "standard": {
+              "describe_usd": 0.0806,
+              "whisper_usd": 0.0583,
+              "embed_usd": 0.0011,
+              "container_usd": 0.0187,
+              "total_usd": 0.1587,
+              "videos_only_total_usd": 0.1484
+            },
+            "frames": 1002,
+            "input_tokens": 547773,
+            "output_tokens": 85950,
+            "neurons": 12724,
+            "vectors": 272,
+            "helper_seconds": 2404,
+            "wall_clock_seconds": 3359,
+            "wall_clock_minutes": 56,
+            "kept_frames_bytes": 45097500,
+            "out_of_pocket_usd_one_day": 0.03,
+            "dedicated_instance_minutes": 40,
+            "cached": {
+              "describe_usd": 0.0806,
+              "whisper_usd": 0.0583,
+              "embed_usd": 0.0011,
+              "container_usd": 0.0187,
+              "total_usd": 0.1587,
+              "videos_only_total_usd": 0.1484
+            },
+            "batch": {
+              "describe_usd": 0.0806,
+              "whisper_usd": 0.0583,
+              "embed_usd": 0.0011,
+              "container_usd": 0.0187,
+              "total_usd": 0.1587,
+              "videos_only_total_usd": 0.1484
+            },
+            "batch_cached": {
+              "describe_usd": 0.0806,
+              "whisper_usd": 0.0583,
+              "embed_usd": 0.0011,
+              "container_usd": 0.0187,
+              "total_usd": 0.1587,
+              "videos_only_total_usd": 0.1484
+            }
+          },
+          "stills": {
+            "n": 25,
+            "input_tokens": 39200,
+            "output_tokens": 11250,
+            "describe_usd": 0.0073,
+            "helper_seconds": 138,
+            "total_usd": 0.0085
+          },
+          "galleries": {
+            "n": 4,
+            "photos": 15,
+            "input_tokens": 9440,
+            "output_tokens": 1800,
+            "describe_usd": 0.0015,
+            "helper_seconds": 39,
+            "total_usd": 0.0018
+          },
+          "per_post_usd": 0.000923,
+          "per_post_helper_seconds": 14,
+          "per_post_neurons": 74,
+          "monthly": {
+            "5_per_day": {
+              "posts": 152,
+              "usd": 0.1641,
+              "describe_usd": 0.0713,
+              "whisper_usd": 0.0516,
+              "embed_usd": 0.001,
+              "container_usd": 0.0402,
+              "helper_minutes": 35,
+              "neurons_per_day": 370,
+              "new_vectors": 241,
+              "out_of_pocket_usd": 0
+            },
+            "17_per_day": {
+              "posts": 517,
+              "usd": 0.558,
+              "describe_usd": 0.2424,
+              "whisper_usd": 0.1755,
+              "embed_usd": 0.0033,
+              "container_usd": 0.1368,
+              "helper_minutes": 121,
+              "neurons_per_day": 1258,
+              "new_vectors": 818,
+              "out_of_pocket_usd": 0
+            },
+            "50_per_day": {
+              "posts": 1522,
+              "usd": 1.6411,
+              "describe_usd": 0.7129,
+              "whisper_usd": 0.5162,
+              "embed_usd": 0.0097,
+              "container_usd": 0.4023,
+              "helper_minutes": 355,
+              "neurons_per_day": 3699,
+              "new_vectors": 2407,
+              "out_of_pocket_usd": 0
+            }
+          },
+          "vectorize": {
+            "stored_vectors": 272,
+            "stored_dims": 278528,
+            "queried_dims_month": 892928,
+            "usd": 0,
+            "posts_until_stored_dims_exceed_included": 6175
+          }
+        },
+        "haiku_watches": {
+          "per_video": {
+            "8s": {
+              "frames": 4,
+              "input_tokens": 3121,
+              "output_tokens": 450,
+              "describe_usd": 0.000537,
+              "whisper_usd": 0.000068,
+              "embed_usd": 0.000005,
+              "container_usd": 0.000079,
+              "helper_seconds": 10.2,
+              "total_usd": 0.00069
+            },
+            "15s": {
+              "frames": 4,
+              "input_tokens": 3136,
+              "output_tokens": 450,
+              "describe_usd": 0.000539,
+              "whisper_usd": 0.000128,
+              "embed_usd": 0.000005,
+              "container_usd": 0.00008,
+              "helper_seconds": 10.3,
+              "total_usd": 0.000752
+            },
+            "30s": {
+              "frames": 8,
+              "input_tokens": 4993,
+              "output_tokens": 450,
+              "describe_usd": 0.000724,
+              "whisper_usd": 0.000257,
+              "embed_usd": 0.000006,
+              "container_usd": 0.000129,
+              "helper_seconds": 16.6,
+              "total_usd": 0.001115
+            },
+            "43.7s": {
+              "frames": 11,
+              "input_tokens": 6390,
+              "output_tokens": 450,
+              "describe_usd": 0.000864,
+              "whisper_usd": 0.000374,
+              "embed_usd": 0.000006,
+              "container_usd": 0.000166,
+              "helper_seconds": 21.4,
+              "total_usd": 0.00141
+            },
+            "60s": {
+              "frames": 15,
+              "input_tokens": 8249,
+              "output_tokens": 450,
+              "describe_usd": 0.00105,
+              "whisper_usd": 0.000513,
+              "embed_usd": 0.000006,
+              "container_usd": 0.000216,
+              "helper_seconds": 27.7,
+              "total_usd": 0.001785
+            },
+            "120s": {
+              "frames": 24,
+              "input_tokens": 12482,
+              "output_tokens": 450,
+              "describe_usd": 0.001473,
+              "whisper_usd": 0.001026,
+              "embed_usd": 0.000008,
+              "container_usd": 0.00033,
+              "helper_seconds": 42.4,
+              "total_usd": 0.002837
+            },
+            "431s": {
+              "frames": 24,
+              "input_tokens": 13151,
+              "output_tokens": 450,
+              "describe_usd": 0.00154,
+              "whisper_usd": 0.003685,
+              "embed_usd": 0.000016,
+              "container_usd": 0.000378,
+              "helper_seconds": 48.6,
+              "total_usd": 0.005619
+            }
+          },
+          "buckets": [
+            {
+              "id": "lt15",
+              "videos": 62,
+              "seconds": 530,
+              "frames": 248,
+              "input_tokens": 193588,
+              "output_tokens": 27900,
+              "describe_usd": 0.0333,
+              "whisper_usd": 0.0045,
+              "embed_usd": 0.000311,
+              "helper_seconds": 631,
+              "container_usd": 0.0049,
+              "total_usd": 0.0431
+            },
+            {
+              "id": "15to30",
+              "videos": 39,
+              "seconds": 836,
+              "frames": 228.5,
+              "input_tokens": 155913,
+              "output_tokens": 17550,
+              "describe_usd": 0.0244,
+              "whisper_usd": 0.0071,
+              "embed_usd": 0.000209,
+              "helper_seconds": 515,
+              "container_usd": 0.004,
+              "total_usd": 0.0357
+            },
+            {
+              "id": "30to60",
+              "videos": 27,
+              "seconds": 1175,
+              "frames": 307.3,
+              "input_tokens": 177192,
+              "output_tokens": 12150,
+              "describe_usd": 0.0238,
+              "whisper_usd": 0.01,
+              "embed_usd": 0.00016,
+              "helper_seconds": 592,
+              "container_usd": 0.0046,
+              "total_usd": 0.0386
+            },
+            {
+              "id": "1to3m",
+              "videos": 22,
+              "seconds": 2116,
+              "frames": 528,
+              "input_tokens": 273477,
+              "output_tokens": 9900,
+              "describe_usd": 0.0323,
+              "whisper_usd": 0.0181,
+              "embed_usd": 0.00016,
+              "helper_seconds": 922,
+              "container_usd": 0.0072,
+              "total_usd": 0.0577
+            },
+            {
+              "id": "3mplus",
+              "videos": 12,
+              "seconds": 2166,
+              "frames": 288,
+              "input_tokens": 151345,
+              "output_tokens": 5400,
+              "describe_usd": 0.0178,
+              "whisper_usd": 0.0185,
+              "embed_usd": 0.000113,
+              "helper_seconds": 523,
+              "container_usd": 0.0041,
+              "total_usd": 0.0405
+            }
+          ],
+          "backfill": {
+            "standard": {
+              "describe_usd": 0.146,
+              "whisper_usd": 0.0583,
+              "embed_usd": 0.0011,
+              "container_usd": 0.0261,
+              "total_usd": 0.2316,
+              "videos_only_total_usd": 0.2157
+            },
+            "frames": 1640,
+            "input_tokens": 1030395,
+            "output_tokens": 85950,
+            "neurons": 5401,
+            "vectors": 272,
+            "helper_seconds": 3360,
+            "wall_clock_seconds": 4315,
+            "wall_clock_minutes": 72,
+            "kept_frames_bytes": 73788750,
+            "out_of_pocket_usd_one_day": 0.146,
+            "dedicated_instance_minutes": 56,
+            "cached": {
+              "describe_usd": 0.128,
+              "whisper_usd": 0.0583,
+              "embed_usd": 0.0011,
+              "container_usd": 0.0261,
+              "total_usd": 0.2136,
+              "videos_only_total_usd": 0.2004
+            },
+            "batch": {
+              "describe_usd": 0.073,
+              "whisper_usd": 0.0583,
+              "embed_usd": 0.0011,
+              "container_usd": 0.0261,
+              "total_usd": 0.1586,
+              "videos_only_total_usd": 0.1499
+            },
+            "batch_cached": {
+              "describe_usd": 0.064,
+              "whisper_usd": 0.0583,
+              "embed_usd": 0.0011,
+              "container_usd": 0.0261,
+              "total_usd": 0.1496,
+              "videos_only_total_usd": 0.1422
+            }
+          },
+          "stills": {
+            "n": 25,
+            "input_tokens": 58100,
+            "output_tokens": 11250,
+            "describe_usd": 0.0114,
+            "helper_seconds": 138,
+            "total_usd": 0.0126
+          },
+          "galleries": {
+            "n": 4,
+            "photos": 15,
+            "input_tokens": 20780,
+            "output_tokens": 1800,
+            "describe_usd": 0.003,
+            "helper_seconds": 39,
+            "total_usd": 0.0033
+          },
+          "per_post_usd": 0.001346,
+          "per_post_helper_seconds": 19.5,
+          "per_post_neurons": 31.4,
+          "monthly": {
+            "5_per_day": {
+              "posts": 152,
+              "usd": 0.2286,
+              "describe_usd": 0.1292,
+              "whisper_usd": 0.0516,
+              "embed_usd": 0.001,
+              "container_usd": 0.0468,
+              "helper_minutes": 50,
+              "neurons_per_day": 157,
+              "new_vectors": 241,
+              "out_of_pocket_usd": 0.1292
+            },
+            "17_per_day": {
+              "posts": 517,
+              "usd": 0.7773,
+              "describe_usd": 0.4393,
+              "whisper_usd": 0.1755,
+              "embed_usd": 0.0033,
+              "container_usd": 0.1592,
+              "helper_minutes": 168,
+              "neurons_per_day": 534,
+              "new_vectors": 818,
+              "out_of_pocket_usd": 0.4393
+            },
+            "50_per_day": {
+              "posts": 1522,
+              "usd": 2.2861,
+              "describe_usd": 1.2921,
+              "whisper_usd": 0.5162,
+              "embed_usd": 0.0097,
+              "container_usd": 0.4681,
+              "helper_minutes": 496,
+              "neurons_per_day": 1570,
+              "new_vectors": 2407,
+              "out_of_pocket_usd": 1.2921
+            }
+          },
+          "vectorize": {
+            "stored_vectors": 272,
+            "stored_dims": 278528,
+            "queried_dims_month": 892928,
+            "usd": 0,
+            "posts_until_stored_dims_exceed_included": 6175
+          }
+        },
+        "haiku_scenes": {
+          "per_video": {
+            "8s": {
+              "frames": 4,
+              "input_tokens": 3121,
+              "output_tokens": 530,
+              "describe_usd": 0.000577,
+              "whisper_usd": 0.000068,
+              "embed_usd": 0.000006,
+              "container_usd": 0.000079,
+              "helper_seconds": 10.2,
+              "total_usd": 0.000731
+            },
+            "15s": {
+              "frames": 8,
+              "input_tokens": 4960,
+              "output_tokens": 610,
+              "describe_usd": 0.000801,
+              "whisper_usd": 0.000128,
+              "embed_usd": 0.000007,
+              "container_usd": 0.000127,
+              "helper_seconds": 16.3,
+              "total_usd": 0.001063
+            },
+            "30s": {
+              "frames": 15,
+              "input_tokens": 8185,
+              "output_tokens": 750,
+              "describe_usd": 0.001193,
+              "whisper_usd": 0.000257,
+              "embed_usd": 0.000009,
+              "container_usd": 0.000211,
+              "helper_seconds": 27.1,
+              "total_usd": 0.00167
+            },
+            "43.7s": {
+              "frames": 22,
+              "input_tokens": 11406,
+              "output_tokens": 890,
+              "describe_usd": 0.001586,
+              "whisper_usd": 0.000374,
+              "embed_usd": 0.000011,
+              "container_usd": 0.000295,
+              "helper_seconds": 37.9,
+              "total_usd": 0.002265
+            },
+            "60s": {
+              "frames": 30,
+              "input_tokens": 15089,
+              "output_tokens": 1050,
+              "describe_usd": 0.002034,
+              "whisper_usd": 0.000513,
+              "embed_usd": 0.000014,
+              "container_usd": 0.000391,
+              "helper_seconds": 50.2,
+              "total_usd": 0.002951
+            },
+            "120s": {
+              "frames": 48,
+              "input_tokens": 23426,
+              "output_tokens": 1410,
+              "describe_usd": 0.003048,
+              "whisper_usd": 0.001026,
+              "embed_usd": 0.000019,
+              "container_usd": 0.00061,
+              "helper_seconds": 78.4,
+              "total_usd": 0.004703
+            },
+            "431s": {
+              "frames": 48,
+              "input_tokens": 24095,
+              "output_tokens": 1410,
+              "describe_usd": 0.003114,
+              "whisper_usd": 0.003685,
+              "embed_usd": 0.000027,
+              "container_usd": 0.000658,
+              "helper_seconds": 84.6,
+              "total_usd": 0.007485
+            }
+          },
+          "buckets": [
+            {
+              "id": "lt15",
+              "videos": 62,
+              "seconds": 530,
+              "frames": 296,
+              "input_tokens": 215476,
+              "output_tokens": 33820,
+              "describe_usd": 0.0385,
+              "whisper_usd": 0.0045,
+              "embed_usd": 0.000382,
+              "helper_seconds": 703,
+              "container_usd": 0.0055,
+              "total_usd": 0.0488
+            },
+            {
+              "id": "15to30",
+              "videos": 39,
+              "seconds": 836,
+              "frames": 437.5,
+              "input_tokens": 251217,
+              "output_tokens": 26300,
+              "describe_usd": 0.0383,
+              "whisper_usd": 0.0071,
+              "embed_usd": 0.000314,
+              "helper_seconds": 829,
+              "container_usd": 0.0064,
+              "total_usd": 0.0522
+            },
+            {
+              "id": "30to60",
+              "videos": 27,
+              "seconds": 1175,
+              "frames": 601,
+              "input_tokens": 311142,
+              "output_tokens": 24170,
+              "describe_usd": 0.0432,
+              "whisper_usd": 0.01,
+              "embed_usd": 0.000304,
+              "helper_seconds": 1033,
+              "container_usd": 0.008,
+              "total_usd": 0.0616
+            },
+            {
+              "id": "1to3m",
+              "videos": 22,
+              "seconds": 2116,
+              "frames": 1056,
+              "input_tokens": 514245,
+              "output_tokens": 31020,
+              "describe_usd": 0.0669,
+              "whisper_usd": 0.0181,
+              "embed_usd": 0.000414,
+              "helper_seconds": 1714,
+              "container_usd": 0.0133,
+              "total_usd": 0.0988
+            },
+            {
+              "id": "3mplus",
+              "videos": 12,
+              "seconds": 2166,
+              "frames": 576,
+              "input_tokens": 282673,
+              "output_tokens": 16920,
+              "describe_usd": 0.0367,
+              "whisper_usd": 0.0185,
+              "embed_usd": 0.000252,
+              "helper_seconds": 955,
+              "container_usd": 0.0074,
+              "total_usd": 0.0629
+            }
+          ],
+          "backfill": {
+            "standard": {
+              "describe_usd": 0.238,
+              "whisper_usd": 0.0583,
+              "embed_usd": 0.0018,
+              "container_usd": 0.0421,
+              "total_usd": 0.3402,
+              "videos_only_total_usd": 0.3243
+            },
+            "frames": 3007,
+            "input_tokens": 1653633,
+            "output_tokens": 145280,
+            "neurons": 5464,
+            "vectors": 1755,
+            "helper_seconds": 5410,
+            "wall_clock_seconds": 6365,
+            "wall_clock_minutes": 106,
+            "kept_frames_bytes": 135292500,
+            "out_of_pocket_usd_one_day": 0.238,
+            "dedicated_instance_minutes": 90,
+            "cached": {
+              "describe_usd": 0.22,
+              "whisper_usd": 0.0583,
+              "embed_usd": 0.0018,
+              "container_usd": 0.0421,
+              "total_usd": 0.3222,
+              "videos_only_total_usd": 0.3091
+            },
+            "batch": {
+              "describe_usd": 0.119,
+              "whisper_usd": 0.0583,
+              "embed_usd": 0.0018,
+              "container_usd": 0.0421,
+              "total_usd": 0.2212,
+              "videos_only_total_usd": 0.2125
+            },
+            "batch_cached": {
+              "describe_usd": 0.11,
+              "whisper_usd": 0.0583,
+              "embed_usd": 0.0018,
+              "container_usd": 0.0421,
+              "total_usd": 0.2122,
+              "videos_only_total_usd": 0.2049
+            }
+          },
+          "stills": {
+            "n": 25,
+            "input_tokens": 58100,
+            "output_tokens": 11250,
+            "describe_usd": 0.0114,
+            "helper_seconds": 138,
+            "total_usd": 0.0126
+          },
+          "galleries": {
+            "n": 4,
+            "photos": 15,
+            "input_tokens": 20780,
+            "output_tokens": 1800,
+            "describe_usd": 0.003,
+            "helper_seconds": 39,
+            "total_usd": 0.0033
+          },
+          "per_post_usd": 0.001978,
+          "per_post_helper_seconds": 31.5,
+          "per_post_neurons": 31.8,
+          "monthly": {
+            "5_per_day": {
+              "posts": 152,
+              "usd": 0.3248,
+              "describe_usd": 0.2106,
+              "whisper_usd": 0.0516,
+              "embed_usd": 0.0016,
+              "container_usd": 0.0609,
+              "helper_minutes": 80,
+              "neurons_per_day": 159,
+              "new_vectors": 1553,
+              "out_of_pocket_usd": 0.2106
+            },
+            "17_per_day": {
+              "posts": 517,
+              "usd": 1.1042,
+              "describe_usd": 0.7161,
+              "whisper_usd": 0.1755,
+              "embed_usd": 0.0054,
+              "container_usd": 0.2072,
+              "helper_minutes": 271,
+              "neurons_per_day": 540,
+              "new_vectors": 5281,
+              "out_of_pocket_usd": 0.7161
+            },
+            "50_per_day": {
+              "posts": 1522,
+              "usd": 3.2475,
+              "describe_usd": 2.1061,
+              "whisper_usd": 0.5162,
+              "embed_usd": 0.016,
+              "container_usd": 0.6093,
+              "helper_minutes": 798,
+              "neurons_per_day": 1588,
+              "new_vectors": 15532,
+              "out_of_pocket_usd": 2.1061
+            }
+          },
+          "vectorize": {
+            "stored_vectors": 1755,
+            "stored_dims": 1797376,
+            "queried_dims_month": 2411776,
+            "usd": 0,
+            "posts_until_stored_dims_exceed_included": 957
+          }
+        }
+      },
+      "sensitivity_haiku_watches": {
+        "base_backfill_usd": 0.2316,
+        "cases": {
+          "frames at 512 px": {
+            "frame_tokens": 209,
+            "backfill_usd": 0.1934,
+            "x_base": 0.83
+          },
+          "square frames at 768 px": {
+            "frame_tokens": 784,
+            "backfill_usd": 0.2854,
+            "x_base": 1.23
+          },
+          "frames at 1024 px": {
+            "frame_tokens": 777,
+            "backfill_usd": 0.2842,
+            "x_base": 1.23
+          },
+          "frames at 1568 px": {
+            "frame_tokens": 1792,
+            "backfill_usd": 0.4466,
+            "x_base": 1.93
+          },
+          "twice the frames (every 2 s, cap 48)": {
+            "backfill_usd": 0.3099,
+            "x_base": 1.34
+          },
+          "half the frames (every 8 s, cap 12)": {
+            "backfill_usd": 0.1957,
+            "x_base": 0.84
+          },
+          "output 3x (1,350 tokens)": {
+            "backfill_usd": 0.3175,
+            "x_base": 1.37
+          },
+          "thinking left on (+400 output tokens)": {
+            "backfill_usd": 0.2698,
+            "x_base": 1.16
+          },
+          "every second has speech": {
+            "backfill_usd": 0.2332,
+            "x_base": 1.01
+          },
+          "prompt overhead 2x (2,400 tokens)": {
+            "backfill_usd": 0.2545,
+            "x_base": 1.1
+          },
+          "ffmpeg 3 s a frame": {
+            "backfill_usd": 0.2507,
+            "x_base": 1.08
+          }
+        }
+      },
+      "guards": {
+        "max_prompt_tokens_haiku_scenes_431s": 24095,
+        "long_context_threshold": 100000
+      }
+    }
+  }
+}

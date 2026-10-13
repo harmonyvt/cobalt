@@ -1,0 +1,1791 @@
+{
+  "schema": "cobalt-insight-gemini-pricing/1",
+  "title": "Gemini native-video pricing vs Claude Haiku 5.5 frames, via Google, OpenRouter and Cloudflare",
+  "read_on": "2026-10-10",
+  "currency": "USD",
+  "about": "Prices were read from the vendors' own pages on 2026-10-10 by fetching the page source (not from memory). 'verified' = read from source_url on read_on; 'estimated' = an assumption or an inference. `computed` is arithmetic over these entries (scratch script, same date). Companion to insight-cost-model.json.",
+  "assumptions": {
+    "avg_video_seconds": {
+      "value": 43.7,
+      "unit": "seconds, the owner's stated average and production.video_avg_seconds in insight-cost-model.json. Note 6,823 s / 162 videos = 42.1 s, so the stated average and the stated totals disagree slightly; per-video rows use 43.7, backfill rows use the totals",
+      "source_url": null,
+      "read_on": "2026-10-10",
+      "confidence": "estimated"
+    },
+    "backfill_video_seconds": {
+      "value": 6823.0,
+      "unit": "seconds across the whole library",
+      "source_url": null,
+      "read_on": "2026-10-10",
+      "confidence": "verified"
+    },
+    "backfill_videos": {
+      "value": 162,
+      "unit": "videos",
+      "source_url": null,
+      "read_on": "2026-10-10",
+      "confidence": "verified"
+    },
+    "instruction_prompt_tokens": {
+      "value": 400,
+      "unit": "text tokens per request (instructions), priced at the model's text/video input rate",
+      "source_url": null,
+      "read_on": "2026-10-10",
+      "confidence": "estimated"
+    },
+    "output_tokens": {
+      "value": 300,
+      "unit": "output tokens per video (description + tags). Excludes thinking: see sensitivity_extra_output_tokens. Haiku's existing model uses 450",
+      "source_url": null,
+      "read_on": "2026-10-10",
+      "confidence": "estimated"
+    },
+    "saves_per_day": {
+      "value": 17,
+      "unit": "new saves per day",
+      "source_url": null,
+      "read_on": "2026-10-10",
+      "confidence": "estimated"
+    },
+    "days_per_month": {
+      "value": 30.44,
+      "unit": "days, same as insight-cost-model.json",
+      "source_url": null,
+      "read_on": "2026-10-10",
+      "confidence": "estimated"
+    },
+    "audio_track": {
+      "value": "every video is assumed to carry an audio track that is tokenized and billed",
+      "unit": "assumption; a silent file would save the audio tokens (25 or 32 per second)",
+      "source_url": null,
+      "read_on": "2026-10-10",
+      "confidence": "estimated"
+    },
+    "audio_billed_at": {
+      "value": "the model's audio input rate",
+      "unit": "assumption: for models with a separate audio price (3.1 Flash-Lite, 2.5 Flash-Lite, 2.5 Flash) the audio track's tokens are priced at the audio rate. Google's pricing page does not say how a video's own audio track is billed",
+      "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "read_on": "2026-10-10",
+      "confidence": "estimated"
+    },
+    "fps": {
+      "value": 1,
+      "unit": "frames per second sampled in static (default) processing",
+      "source_url": "https://ai.google.dev/gemini-api/docs/video-understanding",
+      "read_on": "2026-10-10",
+      "confidence": "verified"
+    }
+  },
+  "google": {
+    "models": {
+      "gemini-3.5-flash-lite": {
+        "status": {
+          "value": "Stable",
+          "unit": "models page; deprecations page says 'For any new projects, use our latest models: 3.5 Flash-Lite or 3.8 Flash'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/deprecations",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "input_video_usd_per_mtok": {
+          "value": 0.3,
+          "unit": "USD per 1M tokens, text / image / video / audio (one price). Quote: '$0.30 (text / image / video / audio)'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "input_audio_usd_per_mtok": {
+          "value": 0.3,
+          "unit": "USD per 1M tokens, same row",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "output_usd_per_mtok": {
+          "value": 2.5,
+          "unit": "USD per 1M tokens, 'Output price (including thinking tokens)' $2.50",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "cache_read_usd_per_mtok": {
+          "value": 0.03,
+          "unit": "USD per 1M; storage $1.00 per 1M tokens per hour",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "batch": {
+          "value": {
+            "input": 0.15,
+            "output": 1.25,
+            "cache": 0.02
+          },
+          "unit": "USD per 1M tokens, Batch table (50% off)",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "free_tier": {
+          "value": "input and output 'Free of charge'; content used to improve products ('Used to improve our products: Yes')",
+          "unit": "Standard table, Free Tier column",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "video_input": {
+          "value": true,
+          "unit": "model page: 'supports text, image, video, audio, and PDF inputs'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "default_thinking": {
+          "value": "on (minimal); levels minimal, low, medium, high",
+          "unit": "thinking doc table",
+          "source_url": "https://ai.google.dev/gemini-api/docs/thinking",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        }
+      },
+      "gemini-3.1-flash-lite": {
+        "status": {
+          "value": "Stable",
+          "unit": "models page",
+          "source_url": "https://ai.google.dev/gemini-api/docs/models",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "input_video_usd_per_mtok": {
+          "value": 0.25,
+          "unit": "USD per 1M tokens. Quote: '$0.25 (text / image / video)'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "input_audio_usd_per_mtok": {
+          "value": 0.5,
+          "unit": "USD per 1M tokens. Quote: '$0.50 (audio)'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "output_usd_per_mtok": {
+          "value": 1.5,
+          "unit": "USD per 1M tokens incl. thinking",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "cache_read_usd_per_mtok": {
+          "value": {
+            "text_image_video": 0.025,
+            "audio": 0.05
+          },
+          "unit": "USD per 1M; storage $1.00 per 1M tokens per hour",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "batch": {
+          "value": {
+            "input_text_image_video": 0.125,
+            "input_audio": 0.25,
+            "output": 0.75
+          },
+          "unit": "USD per 1M tokens, Batch table",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "free_tier": {
+          "value": "input and output 'Free of charge' (content used to improve products)",
+          "unit": "Standard table, Free Tier column",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "video_input": {
+          "value": true,
+          "unit": "model page: 'supports text, image, video, audio, and PDF inputs'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        }
+      },
+      "gemini-3.8-flash": {
+        "status": {
+          "value": "Stable ('New')",
+          "unit": "models page",
+          "source_url": "https://ai.google.dev/gemini-api/docs/models",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "input_usd_per_mtok": {
+          "value": {
+            "through_2026-12-31": 0.75,
+            "from_2027-01-01": 1.5
+          },
+          "unit": "USD per 1M tokens, one price (no per-modality split shown). Quote: '$0.75 through December 31, 2026. $1.50 starting January 1, 2027.'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "output_usd_per_mtok": {
+          "value": {
+            "through_2026-12-31": 3.75,
+            "from_2027-01-01": 7.5
+          },
+          "unit": "USD per 1M tokens incl. thinking",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "cache_read_usd_per_mtok": {
+          "value": {
+            "through_2026-12-31": 0.075,
+            "from_2027-01-01": 0.15
+          },
+          "unit": "USD per 1M; storage $0.50 then $1.00 per 1M tokens per hour",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "batch": {
+          "value": {
+            "input": {
+              "through_2026-12-31": 0.375,
+              "from_2027-01-01": 0.75
+            },
+            "output": {
+              "through_2026-12-31": 1.875,
+              "from_2027-01-01": 3.75
+            }
+          },
+          "unit": "USD per 1M tokens; Flex tier has the same numbers as Batch",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "priority": {
+          "value": {
+            "input": "1.35 then 2.70",
+            "output": "6.75 then 13.50"
+          },
+          "unit": "USD per 1M tokens, Priority table",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "free_tier": {
+          "value": "input and output 'Free of charge' (content used to improve products); Batch free tier 'Not available'",
+          "unit": "Standard table",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "video_input": {
+          "value": true,
+          "unit": "model page inputs row: 'Text, Image, Video, Audio, and PDF'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "default_thinking": {
+          "value": "on (medium); levels low, medium, high (no minimal, cannot be turned off)",
+          "unit": "thinking doc table",
+          "source_url": "https://ai.google.dev/gemini-api/docs/thinking",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        }
+      },
+      "gemini-3.6-flash": {
+        "note": "previous-generation Flash; same price rows as 3.8 Flash on Google ($0.75/$3.75 through 2026-12-31, then $1.50/$7.50). Not computed.",
+        "input_usd_per_mtok": {
+          "value": {
+            "through_2026-12-31": 0.75,
+            "from_2027-01-01": 1.5
+          },
+          "unit": "USD per 1M tokens",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "output_usd_per_mtok": {
+          "value": {
+            "through_2026-12-31": 3.75,
+            "from_2027-01-01": 7.5
+          },
+          "unit": "USD per 1M tokens",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "video_input": {
+          "value": true,
+          "unit": "model page inputs row: 'Text, Image, Video, Audio, and PDF'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        }
+      },
+      "gemini-3.1-pro-preview": {
+        "status": {
+          "value": "Preview (no shutdown date announced)",
+          "unit": "models + deprecations pages",
+          "source_url": "https://ai.google.dev/gemini-api/docs/models",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "input_usd_per_mtok": {
+          "value": 2.0,
+          "unit": "USD per 1M tokens, prompts <=200k tokens (one price, no audio split shown)",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "output_usd_per_mtok": {
+          "value": 12.0,
+          "unit": "USD per 1M tokens incl. thinking, prompts <=200k",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "cache_read_usd_per_mtok": {
+          "value": 0.2,
+          "unit": "USD per 1M, <=200k; storage $4.50 per 1M tokens per hour",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "batch": {
+          "value": {
+            "input": 1.0,
+            "output": 6.0
+          },
+          "unit": "USD per 1M tokens, prompts <=200k",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "free_tier": {
+          "value": "Not available",
+          "unit": "Standard table, Free Tier column",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "video_input": {
+          "value": true,
+          "unit": "model page inputs row: 'Text, Image, Video, Audio, and PDF'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "default_thinking": {
+          "value": "on (high); levels low, medium, high (cannot be turned off)",
+          "unit": "thinking doc table",
+          "source_url": "https://ai.google.dev/gemini-api/docs/thinking",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        }
+      },
+      "gemini-2.5-flash-lite": {
+        "status": {
+          "value": "Legacy: 'we are limiting access to the 2.5 models to users who have actively used them in the past' (not deprecated)",
+          "unit": "deprecations + models pages",
+          "source_url": "https://ai.google.dev/gemini-api/docs/deprecations",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "input_video_usd_per_mtok": {
+          "value": 0.1,
+          "unit": "USD per 1M, '$0.10 (text / image / video)'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "input_audio_usd_per_mtok": {
+          "value": 0.3,
+          "unit": "USD per 1M, '$0.30 (audio)'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "output_usd_per_mtok": {
+          "value": 0.4,
+          "unit": "USD per 1M",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "batch": {
+          "value": {
+            "input_text_image_video": 0.05,
+            "input_audio": 0.15,
+            "output": 0.2
+          },
+          "unit": "USD per 1M; batch free tier 'Not available'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "default_thinking": {
+          "value": "Off",
+          "unit": "thinking doc table",
+          "source_url": "https://ai.google.dev/gemini-api/docs/thinking",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        }
+      },
+      "gemini-2.5-flash": {
+        "status": {
+          "value": "Legacy, access limited as above",
+          "unit": "deprecations page",
+          "source_url": "https://ai.google.dev/gemini-api/docs/deprecations",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "input_video_usd_per_mtok": {
+          "value": 0.3,
+          "unit": "USD per 1M, '$0.30 (text / image / video)'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "input_audio_usd_per_mtok": {
+          "value": 1.0,
+          "unit": "USD per 1M, '$1.00 (audio)'",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "output_usd_per_mtok": {
+          "value": 2.5,
+          "unit": "USD per 1M",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        },
+        "batch": {
+          "value": {
+            "input_text_image_video": 0.15,
+            "input_audio": 0.5,
+            "output": 1.25
+          },
+          "unit": "USD per 1M",
+          "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "read_on": "2026-10-10",
+          "confidence": "verified"
+        }
+      }
+    },
+    "other_tiers": {
+      "value": "Batch = 50% off (Paid tier); Flex tier = Batch prices on 3.8 Flash; Priority tier ~1.8x on 3.8 Flash. Context caching needs the paid tier.",
+      "unit": "pricing page tier headings",
+      "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "read_on": "2026-10-10",
+      "confidence": "verified"
+    },
+    "video_token_accounting": {
+      "sampling": {
+        "value": "1 frame per second (static processing, default for all models); audio processed at 1 Kbps single channel; timestamps added every second",
+        "unit": "video-understanding page",
+        "source_url": "https://ai.google.dev/gemini-api/docs/video-understanding",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "gemini3_default_low_medium_per_frame": {
+        "value": 70,
+        "unit": "tokens per video frame at media_resolution unspecified (default), low and medium (identical for video). Quote: 'Video (General): low (or medium): 70 (per frame)... low and medium settings are treated identically (70 tokens)'",
+        "source_url": "https://ai.google.dev/gemini-api/docs/media-resolution",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "gemini3_high_per_frame": {
+        "value": 280,
+        "unit": "tokens per video frame at media_resolution high",
+        "source_url": "https://ai.google.dev/gemini-api/docs/media-resolution",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "gemini3_audio_per_second": {
+        "value": 25,
+        "unit": "tokens per second of audio. Quote: 'Audio is tokenized at a fixed rate of 25 tokens per second across all supported resolution settings'",
+        "source_url": "https://ai.google.dev/gemini-api/docs/media-resolution",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "docs_conflict_video_understanding_page": {
+        "value": {
+          "low_per_frame": 66,
+          "other_per_frame": 258,
+          "audio_per_second": 32,
+          "total_default_low": "approximately 100 tokens per second",
+          "total_high": "approximately 300 tokens per second"
+        },
+        "unit": "Quote: 'If media_resolution is set to low, frames are tokenized at 66 tokens per frame. Otherwise, ... 258 tokens per frame. Audio: 32 tokens per second.'",
+        "source_url": "https://ai.google.dev/gemini-api/docs/video-understanding",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "docs_conflict_tokens_page": {
+        "value": "Video: 263 tokens per second (applies to static processing); Audio: 32 tokens per second",
+        "unit": "tokens page; the same page's code comment says 'A 60-second video is approximately 100 * 60 = 6,000 tokens'",
+        "source_url": "https://ai.google.dev/gemini-api/docs/tokens",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "resolution_for_gemini3_default_equals_low": {
+        "value": true,
+        "unit": "On Gemini 3 models default, low and medium are all 70 tokens per frame, so choosing 'low' saves nothing versus default. On Gemini 2.5 models default is 258 per frame and low is 66, so low cuts video tokens ~3x",
+        "source_url": "https://ai.google.dev/gemini-api/docs/media-resolution",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "used_in_computed": {
+        "value": {
+          "gemini3": "default=low=70+25=95 tok/s; high=280+25=305 tok/s",
+          "gemini2.5": "default=258+32=290 tok/s; low=66+32=98 tok/s"
+        },
+        "unit": "inference from the two pages; the pages disagree by a few percent, only count_tokens on a real clip settles it",
+        "source_url": null,
+        "read_on": "2026-10-10",
+        "confidence": "estimated"
+      },
+      "agentic_mode": {
+        "value": "Gemini 3.8 Flash, 3.6 Flash and 3.5 Flash-Lite also have an 'agentic' processing mode that loads frames on demand ('up to 88% fewer tokens' on long-form); navigation tokens bill as thought tokens. Not modelled: clips are short.",
+        "unit": "video-understanding page",
+        "source_url": "https://ai.google.dev/gemini-api/docs/video-understanding",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      }
+    },
+    "limits": {
+      "inline_vs_files_api": {
+        "value": "Inline data < 100MB; use the Files API when total request > 20 MB; Files stored 48 hours; Files API max 20GB paid / 2GB free",
+        "unit": "video-understanding + files pages",
+        "source_url": "https://ai.google.dev/gemini-api/docs/video-understanding",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "max_length": {
+        "value": "1M-context models: up to 3 hours at low media resolution, 1 hour at high",
+        "unit": "video-understanding page",
+        "source_url": "https://ai.google.dev/gemini-api/docs/video-understanding",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      }
+    },
+    "data_terms": {
+      "paid_tier": {
+        "value": "Paid Services (a Cloud project with an active billing account): 'Google doesn't use your prompts (including ... files such as images, videos, or documents) or responses to improve our products'. Prompts and responses are logged 'for a limited period of time, solely for detecting and preventing violations of the Prohibited Use Policy'",
+        "unit": "Gemini API Additional Terms",
+        "source_url": "https://ai.google.dev/gemini-api/terms",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "free_tier": {
+        "value": "Unpaid Services: Google 'uses the content you submit ... to provide, improve, and develop Google products' and 'human reviewers may read, annotate, and process your API input and output'. In the EEA, Switzerland and UK the Paid-Services terms apply to unpaid use too",
+        "unit": "Gemini API Additional Terms",
+        "source_url": "https://ai.google.dev/gemini-api/terms",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "developer_logs": {
+        "value": "Paid-project API logs (opt-in sharing) retained a default maximum of 55 days; selectable 7, 14, 28 or 55 days",
+        "unit": "logs-policy page",
+        "source_url": "https://ai.google.dev/gemini-api/docs/logs-policy",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      }
+    }
+  },
+  "openrouter": {
+    "fees": {
+      "credit_purchase_fee_card": {
+        "value": 0.055,
+        "unit": "fraction of the credit purchase, $0.80 minimum (card). Quote from the FAQ page source: '5.5% ($0.80 minimum)'; crypto 5%. pricing page: 'Platform fees: Standard 5.5%, Business 8%'",
+        "source_url": "https://openrouter.ai/docs/faq",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "inference_markup": {
+        "value": 0,
+        "unit": "OpenRouter: 'We pass through the pricing of the underlying model providers without any markup'",
+        "source_url": "https://openrouter.ai/docs/faq",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "byok_fee": {
+        "value": "0 up to $25,000 per month of list-price inference, then 5%",
+        "unit": "pricing page: 'BYOK Limits: $25,000 of list price inference / month with no fees, 5% fee after'",
+        "source_url": "https://openrouter.ai/pricing",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "min_fee_note": {
+        "value": "A $5 top-up costs $5.80 (the $0.80 minimum is 16%); the 5.5% only applies to larger top-ups (>= about $14.55). At cents per month the minimum dominates, so top up in one larger amount",
+        "unit": "inference from the 5.5% / $0.80 minimum rule",
+        "source_url": "https://openrouter.ai/docs/faq",
+        "read_on": "2026-10-10",
+        "confidence": "estimated"
+      }
+    },
+    "models": {
+      "google/gemini-3.5-flash-lite": {
+        "value": {
+          "input": 0.3,
+          "output": 2.5,
+          "image": 0.3,
+          "audio": 0.3,
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "file",
+            "audio"
+          ],
+          "batch_variant": {
+            "input": 0.15,
+            "output": 1.25
+          }
+        },
+        "unit": "USD per 1M; from /api/v1/models JSON. Model page FAQ: 'costs $0.30/M input tokens and $2.50/M output tokens ... accepts text, images, video, files such as PDFs, and audio as input'",
+        "source_url": "https://openrouter.ai/api/v1/models",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "google/gemini-3.1-flash-lite": {
+        "value": {
+          "input": 0.25,
+          "output": 1.5,
+          "image": 0.25,
+          "audio": 0.5,
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "file",
+            "audio"
+          ]
+        },
+        "unit": "USD per 1M",
+        "source_url": "https://openrouter.ai/api/v1/models",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "google/gemini-3.8-flash": {
+        "value": {
+          "input": 0.75,
+          "output": 3.75,
+          "image": 0.75,
+          "audio": 0.75,
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "file",
+            "audio"
+          ],
+          "batch_variant": {
+            "input": 0.375,
+            "output": 1.875
+          }
+        },
+        "unit": "USD per 1M; OpenRouter lists the current introductory price (it would be expected to follow Google to 1.50/7.50 on 2027-01-01, not confirmed)",
+        "source_url": "https://openrouter.ai/api/v1/models",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "google/gemini-3.6-flash": {
+        "value": {
+          "input": 0.75,
+          "output": 3.75,
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "file",
+            "audio"
+          ]
+        },
+        "unit": "USD per 1M",
+        "source_url": "https://openrouter.ai/api/v1/models",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "google/gemini-3.1-pro-preview": {
+        "value": {
+          "input": 2.0,
+          "output": 12.0,
+          "audio": 2.0,
+          "over_200k_prompt": {
+            "input": 4.0,
+            "output": 18.0
+          },
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "file",
+            "audio"
+          ]
+        },
+        "unit": "USD per 1M",
+        "source_url": "https://openrouter.ai/api/v1/models",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "google/gemini-2.5-flash-lite": {
+        "value": {
+          "input": 0.1,
+          "output": 0.4,
+          "audio": 0.3,
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "file",
+            "audio"
+          ]
+        },
+        "unit": "USD per 1M",
+        "source_url": "https://openrouter.ai/api/v1/models",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "google/gemini-2.5-flash": {
+        "value": {
+          "input": 0.3,
+          "output": 2.5,
+          "audio": 1.0,
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "file",
+            "audio"
+          ]
+        },
+        "unit": "USD per 1M",
+        "source_url": "https://openrouter.ai/api/v1/models",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "anthropic/claude-haiku-5.5": {
+        "value": {
+          "input": 0.1,
+          "output": 0.5,
+          "cache_read": 0.01,
+          "cache_write_5m": 0.125,
+          "over_100k_prompt": {
+            "input": 0.5,
+            "output": 2.5
+          },
+          "input_modalities": [
+            "text",
+            "image",
+            "file"
+          ],
+          "batch_variant": {
+            "input": 0.05,
+            "output": 0.25
+          }
+        },
+        "unit": "USD per 1M; listed, identical to Anthropic's list price. Model page: 'accepts text, images, and files such as PDFs as input'. No video modality",
+        "source_url": "https://openrouter.ai/api/v1/models",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      }
+    },
+    "pricing_fields": {
+      "value": "OpenRouter's price schema has prompt, completion, image, audio and internal_reasoning rates but no 'video' rate; video tokens evidently bill at the prompt rate and a video's audio track may or may not bill at the audio rate",
+      "unit": "/api/v1/models pricing keys",
+      "source_url": "https://openrouter.ai/api/v1/models",
+      "read_on": "2026-10-10",
+      "confidence": "estimated"
+    },
+    "video_input": {
+      "supported": {
+        "value": true,
+        "unit": "Chat Completions /api/v1/chat/completions with a `video_url` content part; the models above list 'video' in input_modalities. The Messages API (/api/v1/messages) does not support video. No video in the chatroom UI",
+        "source_url": "https://openrouter.ai/docs/guides/overview/multimodal/videos",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "how_to_pass": {
+        "value": "URL or base64 data URL (video/mp4, video/mpeg, video/mov, video/webm). 'Google Gemini (AI Studio): Only supports YouTube links ... Google Gemini (Vertex AI): Does not support video URLs. Use base64-encoded data URLs instead'. So a saved Instagram/X clip has to be sent as base64 in the request body",
+        "source_url": "https://openrouter.ai/docs/guides/overview/multimodal/videos",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "files_api": {
+        "value": "not reachable through OpenRouter's chat completions, so Google's 48-hour Files API route is unavailable; size is bounded by the request body",
+        "source_url": "https://openrouter.ai/docs/guides/overview/multimodal/videos",
+        "read_on": "2026-10-10",
+        "confidence": "estimated"
+      },
+      "processing_field": {
+        "value": "optional `processing: agentic|static` on the video part (Gemini only)",
+        "source_url": "https://openrouter.ai/docs/guides/overview/multimodal/videos",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      }
+    },
+    "data": {
+      "prompt_logging": {
+        "value": "OpenRouter stores prompts/completions only if you switch on 'Input & Output Logging' (Beta). Opt-in, retained a minimum of 3 months once on. Request metadata (tokens, cost, model) is shown in Activity by default (not separately verified)",
+        "source_url": "https://openrouter.ai/docs/guides/features/input-output-logging",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "training": {
+        "value": "Per-provider policies; account setting to avoid providers that may train on prompts; ZDR option removes Google AI Studio endpoints (Vertex remains)",
+        "source_url": "https://openrouter.ai/docs/guides/privacy/provider-logging",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      }
+    }
+  },
+  "cloudflare": {
+    "ai_gateway": {
+      "price": {
+        "value": "Free. Quote: 'AI Gateway's core features available today are offered for free ... dashboard analytics, caching, and rate limiting'. Page last updated Sep 24, 2026",
+        "source_url": "https://developers.cloudflare.com/ai-gateway/reference/pricing/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "logs": {
+        "value": "Gateways created on/after 2026-09-24 follow Workers Logs: Free 200,000 events/day, 3 days; Paid 20M/month included then $0.60 per million, 7 days; 256 KB max log size (larger truncated). Older gateways: Legacy Logs, 100,000 logs on Free, 10M per gateway on Paid, 10 MB per log",
+        "source_url": "https://developers.cloudflare.com/ai-gateway/reference/pricing/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "native_google_passthrough": {
+        "value": "Provider-native endpoints exist for Google AI Studio (`.../google-ai-studio/v1/models/{model}:generateContent`) and Google Vertex AI; keys can be in the request (x-goog-api-key), stored (BYOK) or Unified Billing. It forwards the native Gemini request, so inlineData / Files API video parts should pass through, but no Cloudflare page documents a video example and no call was made",
+        "source_url": "https://developers.cloudflare.com/ai-gateway/usage/providers/google-ai-studio/",
+        "read_on": "2026-10-10",
+        "confidence": "estimated"
+      },
+      "limits": {
+        "value": "Cacheable request size 25 MB; Unified Billing request rate 200 requests/60 s per gateway (not applied to BYOK); Logpush 1 MB per log",
+        "source_url": "https://developers.cloudflare.com/ai-gateway/reference/limits/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "byok_fee": {
+        "value": 0,
+        "unit": "No AI Gateway fee for using your own provider key is stated on the pricing page; inference is billed by Google directly at Google list",
+        "source_url": "https://developers.cloudflare.com/ai-gateway/reference/pricing/",
+        "read_on": "2026-10-10",
+        "confidence": "estimated"
+      }
+    },
+    "unified_billing": {
+      "fee": {
+        "value": 0.05,
+        "unit": "fraction on credits purchased. Quote: 'A 5% fee is applied to all credits purchased through Unified Billing. For example, a $100 credit purchase will result in a $105 charge. Inference pricing from providers is passed through with no markup'",
+        "source_url": "https://developers.cloudflare.com/ai-gateway/reference/pricing/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "providers": {
+        "value": [
+          "OpenAI",
+          "Anthropic",
+          "Google AI Studio",
+          "Google Vertex AI",
+          "xAI",
+          "Groq"
+        ],
+        "unit": "providers listed for the HTTP API; also env.AI.run() with the catalog model id",
+        "source_url": "https://developers.cloudflare.com/ai-gateway/features/unified-billing/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "zdr": {
+        "value": "Zero Data Retention routing is available for Unified Billing requests only (not BYOK) on models whose catalog entry supports it; it does not control AI Gateway's own logging",
+        "source_url": "https://developers.cloudflare.com/ai-gateway/features/unified-billing/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "credit_rules": {
+        "value": "Credits are prepaid, auto top-up possible; balance can go negative and is then charged to the card monthly",
+        "source_url": "https://developers.cloudflare.com/ai-gateway/features/unified-billing/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "video_via_catalog_endpoint": {
+        "value": "unverified: the catalog pages for Google models show only the Generate Content / Chat Completions schema and a text example; none documents a video part",
+        "source_url": "https://developers.cloudflare.com/ai/models/",
+        "read_on": "2026-10-10",
+        "confidence": "estimated"
+      }
+    },
+    "catalog_prices": {
+      "google/gemini-3.5-flash-lite": {
+        "value": {
+          "input": 0.3,
+          "output": 2.5,
+          "cached_input": 0.03
+        },
+        "unit": "USD per 1M; catalog row 'Input $0.30, Output $2.50, Cached input $0.03, Cache creation $0.03'",
+        "source_url": "https://developers.cloudflare.com/ai/models/google/gemini-3.5-flash-lite/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "google/gemini-3.1-flash-lite": {
+        "value": {
+          "input": 0.25,
+          "output": 1.5,
+          "cached_input": 0.03
+        },
+        "unit": "USD per 1M (<=200k and >200k identical); no audio row",
+        "source_url": "https://developers.cloudflare.com/ai/models/google/gemini-3.1-flash-lite/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "google/gemini-3.8-flash": {
+        "value": {
+          "input": 0.75,
+          "output": 3.75,
+          "cached_input": 0.075,
+          "odd_row": "'Default (per second) $0.75' appears in the pricing list, unexplained"
+        },
+        "unit": "USD per 1M",
+        "source_url": "https://developers.cloudflare.com/ai/models/google/gemini-3.8-flash/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "google/gemini-3.6-flash": {
+        "value": {
+          "input": 1.5,
+          "output": 7.5
+        },
+        "unit": "USD per 1M. Higher than Google's current $0.75/$3.75 for the same model: Cloudflare appears to list the post-2026-12-31 price already (or the page lags)",
+        "source_url": "https://developers.cloudflare.com/ai/models/google/gemini-3.6-flash/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "google/gemini-3.1-pro": {
+        "value": {
+          "input_le_200k": 2.0,
+          "output_le_200k": 12.0,
+          "input_gt_200k": 4.0,
+          "output_gt_200k": 18.0
+        },
+        "unit": "USD per 1M",
+        "source_url": "https://developers.cloudflare.com/ai/models/google/gemini-3.1-pro/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "anthropic/claude-haiku-4.5": {
+        "value": {
+          "input": 1.0,
+          "output": 5.0
+        },
+        "unit": "USD per 1M. Claude Haiku 5.5 is NOT in the Cloudflare catalog (only Haiku 4.5; Sonnet 5.5, Opus 5.5, Fable 5.1 are)",
+        "source_url": "https://developers.cloudflare.com/ai/models/anthropic/claude-haiku-4.5/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "alibaba/qwen3.7-plus": {
+        "value": {
+          "input": 0.32,
+          "output": 1.28,
+          "cached_input": 0.064
+        },
+        "unit": "USD per 1M; third-party, description 'image and video understanding'; not computed (its video token accounting was not read)",
+        "source_url": "https://developers.cloudflare.com/ai/models/alibaba/qwen3.7-plus/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      }
+    },
+    "workers_ai": {
+      "gemini_hosted": {
+        "value": false,
+        "unit": "No Gemini model is hosted on Workers AI (@cf). Gemini appears only as third-party catalog entries billed via Unified Billing or called via AI Gateway",
+        "source_url": "https://developers.cloudflare.com/ai/models/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      },
+      "gemma_4_26b_a4b_it": {
+        "value": {
+          "usd_per_mtok_input": 0.1,
+          "usd_per_mtok_output": 0.3,
+          "video_url_in_schema": true
+        },
+        "unit": "Workers AI open model (Gemma, not Gemini). The page's request schema enumerates a `video_url` content type next to image_url, input_audio and file; whether the hosted model really ingests video was not tested. insight-cost-model.json already prices it",
+        "source_url": "https://developers.cloudflare.com/ai/models/@cf/google/gemma-4-26b-a4b-it/",
+        "read_on": "2026-10-10",
+        "confidence": "estimated"
+      },
+      "neuron_price": {
+        "value": 0.011,
+        "unit": "USD per 1,000 neurons; 10,000 neurons/day free",
+        "source_url": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+        "read_on": "2026-10-10",
+        "confidence": "verified"
+      }
+    }
+  },
+  "haiku_5_5_frames_baseline": {
+    "source": "deploy/cloudflare/insight-cost-model.json computed.results.options.haiku_watches (read 2026-10-10)",
+    "avg_video_43_7s": {
+      "frames": 11,
+      "input_tokens": 6390,
+      "output_tokens": 450,
+      "describe_usd": 0.000864,
+      "all_in_usd": 0.00141,
+      "all_in_includes": "describe + Whisper (0.000374) + embed (6e-6) + container (0.000166)"
+    },
+    "backfill_162_videos": {
+      "input_tokens": 1030395,
+      "output_tokens": 85950,
+      "describe_usd": 0.146,
+      "all_in_usd": 0.2157,
+      "all_in_note": "0.2157 is videos_only_total_usd (0.2316 incl. 10 stills/galleries priced in the same model)"
+    },
+    "price_inputs": "Haiku 5.5 $0.10 in / $0.50 out per MTok (<=100k prompt), verified on platform.claude.com/docs/en/about-claude/pricing on 2026-10-10 by the requester; OpenRouter lists the same"
+  },
+  "computed": {
+    "method": "per video: cost = (d*v_tok*p_video + d*a_tok*p_audio + 400*p_video)/1e6 + 300*p_out/1e6 with d seconds, 1 fps; backfill: same with d=6823 s and 162 requests; monthly = per-video(43.7 s) x 17 x 30.44. OpenRouter card = list x 1.055 (ignores the $0.80 minimum per top-up). Cloudflare Unified Billing = list x 1.05. Cloudflare AI Gateway BYOK and OpenRouter BYOK = list. All model-call cost only (no container, upload, embed or storage).",
+    "confidence": "estimated",
+    "gemini_rows": [
+      {
+        "model": "gemini-3.5-flash-lite",
+        "tier": "Flash-Lite",
+        "media_resolution": "default",
+        "tokens_per_second": {
+          "visual": 70,
+          "audio": 25
+        },
+        "avg_video": {
+          "input_tokens": 4552,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 712985,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.002115,
+          "google_batch": 0.001058,
+          "openrouter_credits_5_5pct": 0.002232,
+          "openrouter_byok": 0.002115,
+          "cloudflare_gateway_byok": 0.002115,
+          "cloudflare_unified_billing_5pct": 0.002221
+        },
+        "backfill_usd": {
+          "google_list": 0.3354,
+          "google_batch": 0.1677,
+          "openrouter_credits_5_5pct": 0.35384,
+          "openrouter_byok": 0.3354,
+          "cloudflare_gateway_byok": 0.3354,
+          "cloudflare_unified_billing_5pct": 0.35217
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 1.0947,
+          "openrouter_credits_5_5pct": 1.1549,
+          "cloudflare_gateway_byok": 1.0947,
+          "cloudflare_unified_billing_5pct": 1.1494
+        }
+      },
+      {
+        "model": "gemini-3.5-flash-lite",
+        "tier": "Flash-Lite",
+        "media_resolution": "low",
+        "tokens_per_second": {
+          "visual": 70,
+          "audio": 25
+        },
+        "avg_video": {
+          "input_tokens": 4552,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 712985,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.002115,
+          "google_batch": 0.001058,
+          "openrouter_credits_5_5pct": 0.002232,
+          "openrouter_byok": 0.002115,
+          "cloudflare_gateway_byok": 0.002115,
+          "cloudflare_unified_billing_5pct": 0.002221
+        },
+        "backfill_usd": {
+          "google_list": 0.3354,
+          "google_batch": 0.1677,
+          "openrouter_credits_5_5pct": 0.35384,
+          "openrouter_byok": 0.3354,
+          "cloudflare_gateway_byok": 0.3354,
+          "cloudflare_unified_billing_5pct": 0.35217
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 1.0947,
+          "openrouter_credits_5_5pct": 1.1549,
+          "cloudflare_gateway_byok": 1.0947,
+          "cloudflare_unified_billing_5pct": 1.1494
+        }
+      },
+      {
+        "model": "gemini-3.5-flash-lite",
+        "tier": "Flash-Lite",
+        "media_resolution": "high",
+        "tokens_per_second": {
+          "visual": 280,
+          "audio": 25
+        },
+        "avg_video": {
+          "input_tokens": 13728,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 2145815,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.004869,
+          "google_batch": 0.002434,
+          "openrouter_credits_5_5pct": 0.005136,
+          "openrouter_byok": 0.004869,
+          "cloudflare_gateway_byok": 0.004869,
+          "cloudflare_unified_billing_5pct": 0.005112
+        },
+        "backfill_usd": {
+          "google_list": 0.76524,
+          "google_batch": 0.38262,
+          "openrouter_credits_5_5pct": 0.80733,
+          "openrouter_byok": 0.76524,
+          "cloudflare_gateway_byok": 0.76524,
+          "cloudflare_unified_billing_5pct": 0.80351
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 2.5194,
+          "openrouter_credits_5_5pct": 2.6579,
+          "cloudflare_gateway_byok": 2.5194,
+          "cloudflare_unified_billing_5pct": 2.6453
+        }
+      },
+      {
+        "model": "gemini-3.1-flash-lite",
+        "tier": "Flash-Lite (older)",
+        "media_resolution": "default",
+        "tokens_per_second": {
+          "visual": 70,
+          "audio": 25
+        },
+        "avg_video": {
+          "input_tokens": 4552,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 712985,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.001861,
+          "google_batch": 0.00093,
+          "openrouter_credits_5_5pct": 0.001963,
+          "openrouter_byok": 0.001861,
+          "cloudflare_gateway_byok": 0.001861,
+          "cloudflare_unified_billing_5pct": 0.001954
+        },
+        "backfill_usd": {
+          "google_list": 0.29379,
+          "google_batch": 0.14689,
+          "openrouter_credits_5_5pct": 0.30995,
+          "openrouter_byok": 0.29379,
+          "cloudflare_gateway_byok": 0.29379,
+          "cloudflare_unified_billing_5pct": 0.30848
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 0.963,
+          "openrouter_credits_5_5pct": 1.016,
+          "cloudflare_gateway_byok": 0.963,
+          "cloudflare_unified_billing_5pct": 1.0112
+        }
+      },
+      {
+        "model": "gemini-3.1-flash-lite",
+        "tier": "Flash-Lite (older)",
+        "media_resolution": "low",
+        "tokens_per_second": {
+          "visual": 70,
+          "audio": 25
+        },
+        "avg_video": {
+          "input_tokens": 4552,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 712985,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.001861,
+          "google_batch": 0.00093,
+          "openrouter_credits_5_5pct": 0.001963,
+          "openrouter_byok": 0.001861,
+          "cloudflare_gateway_byok": 0.001861,
+          "cloudflare_unified_billing_5pct": 0.001954
+        },
+        "backfill_usd": {
+          "google_list": 0.29379,
+          "google_batch": 0.14689,
+          "openrouter_credits_5_5pct": 0.30995,
+          "openrouter_byok": 0.29379,
+          "cloudflare_gateway_byok": 0.29379,
+          "cloudflare_unified_billing_5pct": 0.30848
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 0.963,
+          "openrouter_credits_5_5pct": 1.016,
+          "cloudflare_gateway_byok": 0.963,
+          "cloudflare_unified_billing_5pct": 1.0112
+        }
+      },
+      {
+        "model": "gemini-3.1-flash-lite",
+        "tier": "Flash-Lite (older)",
+        "media_resolution": "high",
+        "tokens_per_second": {
+          "visual": 280,
+          "audio": 25
+        },
+        "avg_video": {
+          "input_tokens": 13728,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 2145815,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.004155,
+          "google_batch": 0.002078,
+          "openrouter_credits_5_5pct": 0.004384,
+          "openrouter_byok": 0.004155,
+          "cloudflare_gateway_byok": 0.004155,
+          "cloudflare_unified_billing_5pct": 0.004363
+        },
+        "backfill_usd": {
+          "google_list": 0.652,
+          "google_batch": 0.326,
+          "openrouter_credits_5_5pct": 0.68786,
+          "openrouter_byok": 0.652,
+          "cloudflare_gateway_byok": 0.652,
+          "cloudflare_unified_billing_5pct": 0.6846
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 2.1503,
+          "openrouter_credits_5_5pct": 2.2685,
+          "cloudflare_gateway_byok": 2.1503,
+          "cloudflare_unified_billing_5pct": 2.2578
+        }
+      },
+      {
+        "model": "gemini-3.8-flash",
+        "tier": "Flash",
+        "media_resolution": "default",
+        "tokens_per_second": {
+          "visual": 70,
+          "audio": 25
+        },
+        "avg_video": {
+          "input_tokens": 4552,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 712985,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.004539,
+          "google_batch": 0.002269,
+          "openrouter_credits_5_5pct": 0.004788,
+          "openrouter_byok": 0.004539,
+          "cloudflare_gateway_byok": 0.004539,
+          "cloudflare_unified_billing_5pct": 0.004766
+        },
+        "backfill_usd": {
+          "google_list": 0.71699,
+          "google_batch": 0.35849,
+          "openrouter_credits_5_5pct": 0.75642,
+          "openrouter_byok": 0.71699,
+          "cloudflare_gateway_byok": 0.71699,
+          "cloudflare_unified_billing_5pct": 0.75284
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 2.3486,
+          "openrouter_credits_5_5pct": 2.4778,
+          "cloudflare_gateway_byok": 2.3486,
+          "cloudflare_unified_billing_5pct": 2.4661
+        }
+      },
+      {
+        "model": "gemini-3.8-flash",
+        "tier": "Flash",
+        "media_resolution": "low",
+        "tokens_per_second": {
+          "visual": 70,
+          "audio": 25
+        },
+        "avg_video": {
+          "input_tokens": 4552,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 712985,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.004539,
+          "google_batch": 0.002269,
+          "openrouter_credits_5_5pct": 0.004788,
+          "openrouter_byok": 0.004539,
+          "cloudflare_gateway_byok": 0.004539,
+          "cloudflare_unified_billing_5pct": 0.004766
+        },
+        "backfill_usd": {
+          "google_list": 0.71699,
+          "google_batch": 0.35849,
+          "openrouter_credits_5_5pct": 0.75642,
+          "openrouter_byok": 0.71699,
+          "cloudflare_gateway_byok": 0.71699,
+          "cloudflare_unified_billing_5pct": 0.75284
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 2.3486,
+          "openrouter_credits_5_5pct": 2.4778,
+          "cloudflare_gateway_byok": 2.3486,
+          "cloudflare_unified_billing_5pct": 2.4661
+        }
+      },
+      {
+        "model": "gemini-3.8-flash",
+        "tier": "Flash",
+        "media_resolution": "high",
+        "tokens_per_second": {
+          "visual": 280,
+          "audio": 25
+        },
+        "avg_video": {
+          "input_tokens": 13728,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 2145815,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.011421,
+          "google_batch": 0.005711,
+          "openrouter_credits_5_5pct": 0.01205,
+          "openrouter_byok": 0.011421,
+          "cloudflare_gateway_byok": 0.011421,
+          "cloudflare_unified_billing_5pct": 0.011992
+        },
+        "backfill_usd": {
+          "google_list": 1.79161,
+          "google_batch": 0.89581,
+          "openrouter_credits_5_5pct": 1.89015,
+          "openrouter_byok": 1.79161,
+          "cloudflare_gateway_byok": 1.79161,
+          "cloudflare_unified_billing_5pct": 1.88119
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 5.9103,
+          "openrouter_credits_5_5pct": 6.2354,
+          "cloudflare_gateway_byok": 5.9103,
+          "cloudflare_unified_billing_5pct": 6.2058
+        }
+      },
+      {
+        "model": "gemini-3.1-pro-preview",
+        "tier": "Pro",
+        "media_resolution": "default",
+        "tokens_per_second": {
+          "visual": 70,
+          "audio": 25
+        },
+        "avg_video": {
+          "input_tokens": 4552,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 712985,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.012703,
+          "google_batch": 0.006351,
+          "openrouter_credits_5_5pct": 0.013402,
+          "openrouter_byok": 0.012703,
+          "cloudflare_gateway_byok": 0.012703,
+          "cloudflare_unified_billing_5pct": 0.013338
+        },
+        "backfill_usd": {
+          "google_list": 2.00917,
+          "google_batch": 1.00459,
+          "openrouter_credits_5_5pct": 2.11967,
+          "openrouter_byok": 2.00917,
+          "cloudflare_gateway_byok": 2.00917,
+          "cloudflare_unified_billing_5pct": 2.10963
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 6.5735,
+          "openrouter_credits_5_5pct": 6.9351,
+          "cloudflare_gateway_byok": 6.5735,
+          "cloudflare_unified_billing_5pct": 6.9022
+        }
+      },
+      {
+        "model": "gemini-3.1-pro-preview",
+        "tier": "Pro",
+        "media_resolution": "low",
+        "tokens_per_second": {
+          "visual": 70,
+          "audio": 25
+        },
+        "avg_video": {
+          "input_tokens": 4552,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 712985,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.012703,
+          "google_batch": 0.006351,
+          "openrouter_credits_5_5pct": 0.013402,
+          "openrouter_byok": 0.012703,
+          "cloudflare_gateway_byok": 0.012703,
+          "cloudflare_unified_billing_5pct": 0.013338
+        },
+        "backfill_usd": {
+          "google_list": 2.00917,
+          "google_batch": 1.00459,
+          "openrouter_credits_5_5pct": 2.11967,
+          "openrouter_byok": 2.00917,
+          "cloudflare_gateway_byok": 2.00917,
+          "cloudflare_unified_billing_5pct": 2.10963
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 6.5735,
+          "openrouter_credits_5_5pct": 6.9351,
+          "cloudflare_gateway_byok": 6.5735,
+          "cloudflare_unified_billing_5pct": 6.9022
+        }
+      },
+      {
+        "model": "gemini-3.1-pro-preview",
+        "tier": "Pro",
+        "media_resolution": "high",
+        "tokens_per_second": {
+          "visual": 280,
+          "audio": 25
+        },
+        "avg_video": {
+          "input_tokens": 13728,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 2145815,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.031057,
+          "google_batch": 0.015528,
+          "openrouter_credits_5_5pct": 0.032765,
+          "openrouter_byok": 0.031057,
+          "cloudflare_gateway_byok": 0.031057,
+          "cloudflare_unified_billing_5pct": 0.03261
+        },
+        "backfill_usd": {
+          "google_list": 4.87483,
+          "google_batch": 2.43741,
+          "openrouter_credits_5_5pct": 5.14295,
+          "openrouter_byok": 4.87483,
+          "cloudflare_gateway_byok": 4.87483,
+          "cloudflare_unified_billing_5pct": 5.11857
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 16.0714,
+          "openrouter_credits_5_5pct": 16.9553,
+          "cloudflare_gateway_byok": 16.0714,
+          "cloudflare_unified_billing_5pct": 16.8749
+        }
+      },
+      {
+        "model": "gemini-2.5-flash-lite",
+        "tier": "Flash-Lite (legacy, restricted)",
+        "media_resolution": "default",
+        "tokens_per_second": {
+          "visual": 258,
+          "audio": 32
+        },
+        "avg_video": {
+          "input_tokens": 13073,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 2043470,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.001707,
+          "google_batch": 0.000853,
+          "openrouter_credits_5_5pct": 0.001801,
+          "openrouter_byok": 0.001707,
+          "cloudflare_gateway_byok": 0.001707,
+          "cloudflare_unified_billing_5pct": null
+        },
+        "backfill_usd": {
+          "google_list": 0.26745,
+          "google_batch": 0.13373,
+          "openrouter_credits_5_5pct": 0.28216,
+          "openrouter_byok": 0.26745,
+          "cloudflare_gateway_byok": 0.26745,
+          "cloudflare_unified_billing_5pct": null
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 0.8833,
+          "openrouter_credits_5_5pct": 0.9319,
+          "cloudflare_gateway_byok": 0.8833,
+          "cloudflare_unified_billing_5pct": null
+        }
+      },
+      {
+        "model": "gemini-2.5-flash-lite",
+        "tier": "Flash-Lite (legacy, restricted)",
+        "media_resolution": "low",
+        "tokens_per_second": {
+          "visual": 66,
+          "audio": 32
+        },
+        "avg_video": {
+          "input_tokens": 4683,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 733454,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.000868,
+          "google_batch": 0.000434,
+          "openrouter_credits_5_5pct": 0.000916,
+          "openrouter_byok": 0.000868,
+          "cloudflare_gateway_byok": 0.000868,
+          "cloudflare_unified_billing_5pct": null
+        },
+        "backfill_usd": {
+          "google_list": 0.13645,
+          "google_batch": 0.06823,
+          "openrouter_credits_5_5pct": 0.14396,
+          "openrouter_byok": 0.13645,
+          "cloudflare_gateway_byok": 0.13645,
+          "cloudflare_unified_billing_5pct": null
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 0.4491,
+          "openrouter_credits_5_5pct": 0.4738,
+          "cloudflare_gateway_byok": 0.4491,
+          "cloudflare_unified_billing_5pct": null
+        }
+      },
+      {
+        "model": "gemini-2.5-flash",
+        "tier": "Flash (legacy, restricted)",
+        "media_resolution": "default",
+        "tokens_per_second": {
+          "visual": 258,
+          "audio": 32
+        },
+        "avg_video": {
+          "input_tokens": 13073,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 2043470,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.005651,
+          "google_batch": 0.002825,
+          "openrouter_credits_5_5pct": 0.005962,
+          "openrouter_byok": 0.005651,
+          "cloudflare_gateway_byok": 0.005651,
+          "cloudflare_unified_billing_5pct": null
+        },
+        "backfill_usd": {
+          "google_list": 0.88738,
+          "google_batch": 0.44369,
+          "openrouter_credits_5_5pct": 0.93618,
+          "openrouter_byok": 0.88738,
+          "cloudflare_gateway_byok": 0.88738,
+          "cloudflare_unified_billing_5pct": null
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 2.9242,
+          "openrouter_credits_5_5pct": 3.085,
+          "cloudflare_gateway_byok": 2.9242,
+          "cloudflare_unified_billing_5pct": null
+        }
+      },
+      {
+        "model": "gemini-2.5-flash",
+        "tier": "Flash (legacy, restricted)",
+        "media_resolution": "low",
+        "tokens_per_second": {
+          "visual": 66,
+          "audio": 32
+        },
+        "avg_video": {
+          "input_tokens": 4683,
+          "output_tokens": 300
+        },
+        "backfill": {
+          "input_tokens": 733454,
+          "output_tokens": 48600
+        },
+        "per_video_usd": {
+          "google_list": 0.003134,
+          "google_batch": 0.001567,
+          "openrouter_credits_5_5pct": 0.003306,
+          "openrouter_byok": 0.003134,
+          "cloudflare_gateway_byok": 0.003134,
+          "cloudflare_unified_billing_5pct": null
+        },
+        "backfill_usd": {
+          "google_list": 0.49437,
+          "google_batch": 0.24719,
+          "openrouter_credits_5_5pct": 0.52156,
+          "openrouter_byok": 0.49437,
+          "cloudflare_gateway_byok": 0.49437,
+          "cloudflare_unified_billing_5pct": null
+        },
+        "monthly_usd_at_17_saves_per_day": {
+          "saves_per_month": 517.5,
+          "google_list": 1.6216,
+          "openrouter_credits_5_5pct": 1.7108,
+          "cloudflare_gateway_byok": 1.6216,
+          "cloudflare_unified_billing_5pct": null
+        }
+      }
+    ],
+    "gemini_3_8_flash_from_2027_01_01": {
+      "confidence": "estimated",
+      "note": "Google list x2 on input and output; OpenRouter/Cloudflare presumably follow, add fees",
+      "by_resolution": {
+        "default": {
+          "per_video_google_list": 0.009077,
+          "backfill_google_list": 1.43398,
+          "monthly_google_list": 4.6973
+        },
+        "high": {
+          "per_video_google_list": 0.022843,
+          "backfill_google_list": 3.58322,
+          "monthly_google_list": 11.8207
+        }
+      }
+    },
+    "haiku_5_5_frames": {
+      "confidence": "estimated",
+      "per_video_usd": {
+        "anthropic_list_describe_only": 0.000864,
+        "anthropic_list_all_in": 0.00141,
+        "openrouter_credits_5_5pct_describe_only": 0.000912,
+        "cloudflare_gateway_byok_describe_only": 0.000864,
+        "cloudflare_unified_billing": null
+      },
+      "backfill_usd": {
+        "anthropic_list_describe_only": 0.146,
+        "anthropic_list_all_in": 0.2157,
+        "openrouter_credits_5_5pct_describe_only": 0.154,
+        "cloudflare_gateway_byok_describe_only": 0.146,
+        "cloudflare_unified_billing": null
+      },
+      "monthly_usd_at_17_saves_per_day": {
+        "anthropic_list_describe_only": 0.4471,
+        "anthropic_list_all_in": 0.7296
+      }
+    },
+    "ratio_vs_haiku_describe_only_google_list_default_res": {
+      "gemini-3.5-flash-lite": 2.45,
+      "gemini-3.1-flash-lite": 2.15,
+      "gemini-3.8-flash": 5.25,
+      "gemini-3.1-pro-preview": 14.7,
+      "gemini-2.5-flash-lite": 1.98,
+      "gemini-2.5-flash": 6.54
+    },
+    "sensitivity_extra_output_tokens_per_video_google_list_default_res": {
+      "unit": "USD per 43.7 s video; keys are total output tokens (300 = base). 3.8 Flash and 3.1 Pro cannot disable thinking, so the base column is optimistic for them",
+      "confidence": "estimated",
+      "values": {
+        "gemini-3.5-flash-lite": {
+          "0": 0.002115,
+          "300": 0.002865,
+          "1000": 0.004615,
+          "3000": 0.009615
+        },
+        "gemini-3.1-flash-lite": {
+          "0": 0.001861,
+          "300": 0.002311,
+          "1000": 0.003361,
+          "3000": 0.006361
+        },
+        "gemini-3.8-flash": {
+          "0": 0.004539,
+          "300": 0.005664,
+          "1000": 0.008289,
+          "3000": 0.015789
+        },
+        "gemini-3.1-pro-preview": {
+          "0": 0.012703,
+          "300": 0.016303,
+          "1000": 0.024703,
+          "3000": 0.048703
+        }
+      }
+    }
+  },
+  "caveats": [
+    "Thinking tokens bill as output. 3.8 Flash (lowest level 'low') and 3.1 Pro (lowest 'low') cannot turn thinking off, so their real output is above the assumed 300 tokens; see the sensitivity table.",
+    "The two Google docs pages disagree on video tokens (66/258 + 32 audio vs 70/280 + 25 audio vs 263 per second); results move a few percent. Run count_tokens on one real clip before trusting a number.",
+    "On Gemini 3 models 'low' media resolution is identical to default (70 tokens/frame), so it does not save money; only 'high' changes the bill (about 3.2x). The 2.5 family is where low helps, but 2.5 access is limited to prior users.",
+    "Gemini 3.8 Flash and 3.6 Flash prices double on 2027-01-01 per Google's page; 3.5 Flash-Lite and 3.1 Pro have no such notice.",
+    "OpenRouter: video must be sent as a base64 data URL (Vertex) or YouTube link (AI Studio); no Google Files API.",
+    "OpenRouter's 5.5% credit fee has a $0.80 minimum per top-up; the monthly bill here is cents to a few dollars.",
+    "Cloudflare: Claude Haiku 5.5 is not in the Unified Billing catalog; Gemini video through Cloudflare was not exercised (no call made)."
+  ],
+  "not_verified": [
+    "No API call was made to any of the three services; video acceptance through OpenRouter and Cloudflare is from documentation only.",
+    "Real token counts of a saved clip (count_tokens) were not run.",
+    "How Google bills the audio track of a video (audio rate vs video rate) is not stated on the pricing page; computed with the audio rate where one exists.",
+    "Whether Cloudflare Unified Billing bills Gemini audio at Google's audio rate (3.1 Flash-Lite, 2.5 family): the catalog shows a single input price.",
+    "Free-tier rate limits (requests per minute/day) for Gemini models: not captured (AI Studio shows them per project).",
+    "OpenRouter's default retention of request metadata, and its per-provider data policy rows for Google AI Studio vs Vertex endpoints: not read in detail.",
+    "Whether the Cloudflare 'Default (per second) $0.75' row on the 3.8 Flash page is a per-second video price; unexplained.",
+    "Output quality of Gemini native video versus Haiku frames + Whisper was not evaluated; this file is price only."
+  ]
+}
