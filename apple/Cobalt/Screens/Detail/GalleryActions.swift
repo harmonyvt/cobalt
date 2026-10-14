@@ -11,6 +11,8 @@ struct GalleryActions: View {
 
     @Environment(\.shell) private var shell
     @Environment(\.hapticsEnabled) private var haptics
+    /// File URLs for the system sheet. Empty means nothing is presented.
+    @State private var filesToShare: [URL] = []
 
     private var controller: DetailController { c.controller }
     private var item: MediaItem { c.item }
@@ -22,9 +24,11 @@ struct GalleryActions: View {
 
     // MARK: the plan
 
-    private var shareURL: URL? {
-        if let url = r.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url }
-        return r.publicURL
+    /// A share button is shown when this device already has the file, or the library row can be downloaded.
+    /// A public link on its own is not enough: the sheet only receives a file URL (`localFileURLs`).
+    private var canShare: Bool {
+        if let url = r.local?.fileURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) { return true }
+        return r.file != nil
     }
     private var canSave: Bool { RenditionPhotos.canSave(r) }
     private var placement: PhotosPlacement { controller.placement(of: r, in: item) }
@@ -56,13 +60,13 @@ struct GalleryActions: View {
         var primary: Primary?
         if r.publicURL != nil {
             primary = .copyLink
-        } else if shareURL != nil {
+        } else if canShare {
             primary = .share
         } else if canSave {
             primary = .savePhotos
         }
         var secondary: [Choice] = []
-        if shareURL != nil, primary != .share { secondary.append(.share) }
+        if canShare, primary != .share { secondary.append(.share) }
         if canSave, primary != .savePhotos { secondary.append(.savePhotos) }
         if canCopyText { secondary.append(.copyText) }
         if r.isItem, controller.canMakeWebp(ofItem: r, in: item) { secondary.append(.makeWebp) }
@@ -75,7 +79,7 @@ struct GalleryActions: View {
         let locked = controller.isDeleting
         VStack(spacing: 12) {
             if controller.selecting, c.page != nil {
-                GallerySelectionBar(c: c)
+                GallerySelectionBar(c: c, share: share)
             } else {
                 let plan = plan
                 GlassEffectContainer(spacing: 0) {
@@ -94,6 +98,22 @@ struct GalleryActions: View {
         .haptic(.error, trigger: controller.notice, enabled: haptics) { $0 != nil }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
+        .background { GalleryFileShare(fileURLs: $filesToShare) }
+    }
+
+    /// Copies files onto this device if they are not here, then presents the system sheet. A second tap while that
+    /// is running does nothing. An empty list is a notice, not a sheet.
+    private func share(_ renditions: [Rendition]) {
+        Task { await presentShare(renditions) }
+    }
+
+    private func presentShare(_ renditions: [Rendition]) async {
+        guard !controller.preparingShare else { return }
+        controller.preparingShare = true
+        let urls = await controller.localFileURLs(for: renditions)
+        controller.preparingShare = false
+        guard !urls.isEmpty else { return }
+        filesToShare = urls
     }
 
     // MARK: a page that was never saved
@@ -119,12 +139,9 @@ struct GalleryActions: View {
                 title: done ? Copy.Media.copied : linkTitle, symbol: Symbol.Media.copyLink, doneSymbol: Symbol.Media.copied, done: done
             ) { if let url = r.publicURL { controller.copy(url, for: r.id) } }
         case .share:
-            if let url = shareURL {
-                ShareLink(item: url) {
-                    Label(Copy.Media.share, systemImage: Symbol.Media.share)
-                }
-                .buttonStyle(.cobaltPrimary())
-            }
+            DetailPrimary(
+                title: Copy.Media.share, symbol: Symbol.Media.share, working: controller.preparingShare
+            ) { share([r]) }
         case .savePhotos:
             savePrimary
         case .tryAgain(let index):
@@ -191,12 +208,9 @@ struct GalleryActions: View {
     private func secondary(_ choice: Choice, _ layout: DetailChoiceLayout) -> some View {
         switch choice {
         case .share:
-            if let url = shareURL {
-                ShareLink(item: url) {
-                    DetailChoiceLabel(title: Copy.Media.share, symbol: Symbol.Media.share, layout: layout)
-                }
-                .detailChoiceStyle()
-            }
+            DetailChoiceButton(
+                title: Copy.Media.share, symbol: Symbol.Media.share, working: controller.preparingShare, layout: layout
+            ) { share([r]) }
         case .savePhotos:
             let state = controller.photos[r.id] ?? .idle
             switch placement {
@@ -227,19 +241,14 @@ struct GalleryActions: View {
 // MARK: - select photos
 
 /// `select photos` is on (the `more` menu): `3 selected` and `done`, then share, to photos, delete for the ticked ones. A tap
-/// on a tile of the strip ticks it (the strip draws the ticks).
+/// on a tile of the strip (or the big photo) ticks it.
 struct GallerySelectionBar: View {
     let c: DetailContext
+    /// Shares the ticked files. A chosen photo may still need a download, so this is not gated on a URL.
+    let share: ([Rendition]) -> Void
 
     private var controller: DetailController { c.controller }
     private var chosen: [Rendition] { controller.pickedRenditions(in: c.item) }
-
-    private var urls: [URL] {
-        chosen.compactMap { r in
-            if let url = r.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url }
-            return r.publicURL
-        }
-    }
 
     var body: some View {
         let chosen = chosen
@@ -266,15 +275,10 @@ struct GallerySelectionBar: View {
 
     @ViewBuilder
     private func buttons(_ chosen: [Rendition], _ layout: DetailChoiceLayout) -> some View {
-        if urls.isEmpty {
-            DetailChoiceButton(title: Copy.Media.share, symbol: Symbol.Media.share, layout: layout) {}
-                .disabled(true)
-        } else {
-            ShareLink(items: urls) {
-                DetailChoiceLabel(title: Copy.Media.share, symbol: Symbol.Media.share, layout: layout)
-            }
-            .detailChoiceStyle()
-        }
+        DetailChoiceButton(
+            title: Copy.Media.share, symbol: Symbol.Media.share, working: controller.preparingShare, layout: layout
+        ) { share(chosen) }
+        .disabled(chosen.isEmpty)
         DetailChoiceButton(
             title: DetailWords.toPhotos, symbol: GalleryActions.saveSymbol, working: controller.batchPhotos == .working,
             layout: layout

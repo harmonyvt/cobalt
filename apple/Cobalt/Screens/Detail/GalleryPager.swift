@@ -50,6 +50,9 @@ struct GalleryPager: View {
     @ViewBuilder
     private func pageView(_ page: GalleryPage, count: Int) -> some View {
         let position = (pages.firstIndex { $0.index == page.index } ?? 0) + 1
+        let selecting = c.controller.selecting
+        let ticked = c.controller.picked.contains(page.index)
+        let selectedCount = c.controller.pickedRenditions(in: c.item).count
         Group {
             if let r = page.rendition {
                 RenditionHero(rendition: r, item: c.item, maxHeight: maxHeight)
@@ -67,6 +70,38 @@ struct GalleryPager: View {
                     .accessibilityHidden(true)
             }
         }
+        .overlay(alignment: .bottom) {
+            if selecting {
+                Text(DetailWords.selected(selectedCount))
+                    .font(Font.cobalt(13, .medium, relativeTo: .footnote))
+                    .foregroundStyle(CobaltColor.badgeInk)
+                    .contentTransition(.numericText())
+                    .animation(reduceMotion ? nil : Motion.copy, value: selectedCount)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(CobaltColor.badgeBack, in: Capsule())
+                    .padding(8)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if selecting, !page.isMissing {
+                Image(systemName: ticked ? Symbol.Gallery.ticked : Symbol.Gallery.unticked)
+                    .font(.system(size: 22, weight: .semibold))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(ticked ? CobaltColor.onText : Color.white, ticked ? CobaltColor.text : Color.black.opacity(0.3))
+                    .padding(8)
+                    .accessibilityHidden(true)
+            }
+        }
+        .overlay {
+            // over the hero, so its full-screen tap does not also fire. simultaneous so it does not take the swipe.
+            if selecting, !page.isMissing {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(TapGesture().onEnded { c.controller.toggle(page.index) })
+                    .accessibilityHidden(true)
+            }
+        }
         .simultaneousGesture(
             DragGesture(minimumDistance: 28).onEnded { value in
                 // a mostly horizontal swipe turns the page; a vertical drag is the form scrolling
@@ -76,6 +111,8 @@ struct GalleryPager: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Gallery.itemName(
             page.rendition?.itemType.map { $0 == .photo ? "photo" : $0.rawValue } ?? "photo", page.index + 1, of: c.item.galleryTotal))
+        .accessibilityValue(selecting ? DetailWords.selected(selectedCount) : "")
+        .accessibilityAddTraits(selecting && ticked ? .isSelected : [])
     }
 
     /// The left and right keys (the Mac, an iPad keyboard).
