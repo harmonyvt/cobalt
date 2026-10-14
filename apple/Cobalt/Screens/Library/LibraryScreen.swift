@@ -66,6 +66,8 @@ private struct LibraryContent: View {
 
     @Environment(\.shell) private var shell
     @Namespace private var zoomSpace
+    /// File URLs for the system share sheet. Assigned only once they are ready; the sheet clears this when it finishes.
+    @State private var filesToShare: [URL] = []
     #if DEBUG
     @Environment(\.libraryDebugRows) private var debugRows
     #endif
@@ -138,7 +140,10 @@ private struct LibraryContent: View {
             // search drawer and the glass bar re-sampled the tiles under them, which read as a flicker at the top.
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .navigationSubtitle(Copy.libraryCounts(posts: library.postCount, files: library.fileCount))
+            .navigationSubtitle(
+                controller.selecting
+                    ? Copy.Library2.selected(controller.picked.count)
+                    : Copy.libraryCounts(posts: library.postCount, files: library.fileCount))
             .searchable(text: $library.query, placement: searchPlacement, prompt: Copy.Library2.searchPrompt)
             .toolbar { toolbar }
             .safeAreaInset(edge: .top, spacing: 0) {
@@ -174,6 +179,7 @@ private struct LibraryContent: View {
             #endif
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { controller.decideInspector(width: $0) }
             .onChange(of: tier, initial: true) { controller.compact = tier == .compact }
+            .background { GalleryFileShare(fileURLs: $filesToShare) }
             .onAppear { controller.showStatus = { shell.showStatus($0) } }
             .task(id: library.needsWholeLibrary) {
                 if library.needsWholeLibrary { await library.loadAll() }
@@ -222,21 +228,44 @@ private struct LibraryContent: View {
         ToolbarItem(placement: .navigation) { LibraryViewSwitcher(library: library) }
         #endif
         ToolbarItemGroup(placement: .primaryAction) {
-            LibrarySortMenu(library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery)
-            #if os(macOS)
-            Button(Copy.Library2.refresh, systemImage: Symbol.Library.refresh) { Task { await controller.refresh() } }
-                .keyboardShortcut("r", modifiers: .command)
-                .help(Copy.Library2.refresh)
-            #endif
-            PasteFileButtons(showsFile: model.capabilities.showsFileButton)
-            if tier != .compact {
-                Button(Copy.Library2.toggleDetail, systemImage: Symbol.Library.inspector) {
-                    controller.inspectorOpen.toggle()
+            // Select mode keeps the view switcher and replaces the rest of this capsule.
+            if controller.selecting {
+                if !controller.picked.isEmpty {
+                    Button(Copy.Library2.share, systemImage: Symbol.Library.share) { Task { await sharePicked() } }
+                        .disabled(controller.preparingShare)
+                        .help(Copy.Library2.share)
                 }
-                .keyboardShortcut("i", modifiers: [.command, .option])
-                .help(Copy.Library2.toggleDetail)
+            } else {
+                LibrarySortMenu(library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery)
+                #if os(macOS)
+                Button(Copy.Library2.refresh, systemImage: Symbol.Library.refresh) { Task { await controller.refresh() } }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .help(Copy.Library2.refresh)
+                #endif
+                PasteFileButtons(showsFile: model.capabilities.showsFileButton)
+                if tier != .compact {
+                    Button(Copy.Library2.toggleDetail, systemImage: Symbol.Library.inspector) {
+                        controller.inspectorOpen.toggle()
+                    }
+                    .keyboardShortcut("i", modifiers: [.command, .option])
+                    .help(Copy.Library2.toggleDetail)
+                }
             }
+            Button(
+                controller.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select,
+                systemImage: controller.selecting ? Symbol.Gallery.ticked : Symbol.Gallery.selectPhotos
+            ) {
+                if controller.selecting { controller.endSelecting() } else { controller.beginSelecting() }
+            }
+            .help(controller.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select)
         }
+    }
+
+    /// Copies each ticked face that is on screen, then presents the sheet. A second tap while that runs does nothing.
+    private func sharePicked() async {
+        let urls = await controller.sharePicked(rows)
+        guard !urls.isEmpty else { return }
+        filesToShare = urls
     }
 
     #if os(macOS)

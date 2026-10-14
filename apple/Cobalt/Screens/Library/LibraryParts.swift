@@ -355,6 +355,24 @@ struct LibraryRowBadges: View {
     }
 }
 
+/// The select-mode tick, shared by a mosaic tile, a compact row and the table's title cell.
+/// On a photo it matches the gallery strip (a white circle). On a plain row the circle uses the text ink,
+/// or a white one would disappear.
+struct LibraryPickMark: View {
+    let ticked: Bool
+    var onPhoto = false
+
+    var body: some View {
+        Image(systemName: ticked ? Symbol.Gallery.ticked : Symbol.Gallery.unticked)
+            .font(.system(size: 17, weight: .semibold))
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(
+                ticked ? CobaltColor.onText : (onPhoto ? Color.white : CobaltColor.text),
+                ticked ? CobaltColor.text : (onPhoto ? Color.black.opacity(0.3) : CobaltColor.text.opacity(0.3)))
+            .accessibilityHidden(true)
+    }
+}
+
 // MARK: - offline (CONTRACT-OFFLINE decision 11)
 
 /// What the library draws for one media's offline state. `none` and `cached` draw nothing, so the default stays

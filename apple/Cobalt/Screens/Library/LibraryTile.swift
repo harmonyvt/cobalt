@@ -12,7 +12,8 @@ private struct TilePress: ButtonStyle {
 /// `MasonryPlan` gave it, with badges (the face's type top right, a `globe` (public) or `lock.fill` (private) dot top left,
 /// the length bottom left on a video face tall enough to hold it) and a one-line title on a soft dark scrim.
 /// A webp face moves while the budget lets it. A tile whose picture failed keeps its frame, badges and caption
-/// with a glyph, and still opens. Tap opens; the context menu is the row's.
+/// with a glyph, and still opens. Tap opens, unless the library is selecting: then it ticks this post and the
+/// context menu is not offered.
 ///
 /// `Equatable` on what it draws, so a new page of tiles (or a refresh that changed nothing) re-evaluates none of
 /// the tiles already there.
@@ -26,6 +27,9 @@ struct LibraryTile: View, Equatable {
     let showsCaption: Bool
     let lit: Bool
     let selected: Bool
+    /// Select mode. Passed in (not read off the controller while drawing) so `.equatable()` redraws the tick.
+    let selecting: Bool
+    let ticked: Bool
     let reload: Int
 
     // Not part of what the tile draws:
@@ -40,7 +44,8 @@ struct LibraryTile: View, Equatable {
 
     nonisolated static func == (a: LibraryTile, b: LibraryTile) -> Bool {
         a.row == b.row && a.index == b.index && a.size == b.size && a.centerY == b.centerY && a.maxPixel == b.maxPixel
-            && a.showsCaption == b.showsCaption && a.lit == b.lit && a.selected == b.selected && a.reload == b.reload
+            && a.showsCaption == b.showsCaption && a.lit == b.lit && a.selected == b.selected
+            && a.selecting == b.selecting && a.ticked == b.ticked && a.reload == b.reload
             && a.nearEnd == b.nearEnd
     }
 
@@ -65,15 +70,14 @@ struct LibraryTile: View, Equatable {
     }
 
     var body: some View {
-        Button { controller.open(row) } label: { tile }
+        Button {
+            if selecting { controller.togglePick(row.id) } else { controller.open(row) }
+        } label: { tile }
             .buttonStyle(TilePress())
+            .opacity(selecting && !ticked ? 0.7 : 1)
             .frame(width: size.width, height: size.height)
             .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .contextMenu {
-                LibraryMenuItems(row: row, controller: controller) { removing = $0 }
-            } preview: {
-                LibraryPreviewCard(row: row)
-            }
+            .modifier(LibraryRowMenu(row: row, controller: controller, enabled: !selecting, removing: $removing))
             .offlineRemoveConfirm($removing, model: controller.model)
             .zoomSource(id: row.id, in: zoom)
             .onScrollVisibilityChange(threshold: 0.8) { visible in
@@ -84,7 +88,7 @@ struct LibraryTile: View, Equatable {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
             .accessibilityValue(accessibilityValue)
-            .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAddTraits(selected || ticked ? [.isButton, .isSelected] : .isButton)
             // date order for VoiceOver, not column order
             .accessibilitySortPriority(Double(-index))
     }
@@ -130,10 +134,16 @@ struct LibraryTile: View, Equatable {
             }
             .padding(5)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            // top right: the face's type
-            typeBadge
-                .padding(5)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            // top right: the select tick, or the face's type (the badge would sit on the tick)
+            if selecting {
+                LibraryPickMark(ticked: ticked, onPhoto: true)
+                    .padding(5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            } else {
+                typeBadge
+                    .padding(5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
             // bottom: the length, then the caption
             VStack(alignment: .leading, spacing: 1) {
                 if !face.playsAsWebp, row.kind != .gallery, row.length > 0, size.height >= 80 {

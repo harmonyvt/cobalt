@@ -157,6 +157,27 @@ struct ShowInFilesButton: View {
     }
 }
 
+/// The tile or compact row's context menu. Left off while selecting, so a long press does not open it.
+struct LibraryRowMenu: ViewModifier {
+    let row: LibraryRow
+    let controller: LibraryController
+    let enabled: Bool
+    @Binding var removing: MediaItem?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.contextMenu {
+                LibraryMenuItems(row: row, controller: controller) { removing = $0 }
+            } preview: {
+                LibraryPreviewCard(row: row)
+            }
+        } else {
+            content
+        }
+    }
+}
+
 /// What the context menu shows above its items: the face at its aspect with the title and its meta under it.
 struct LibraryPreviewCard: View {
     let row: LibraryRow

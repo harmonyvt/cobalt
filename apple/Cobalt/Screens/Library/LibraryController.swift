@@ -19,8 +19,9 @@ struct LibraryReveal: Equatable {
 }
 
 /// The library screen's state and what its menus do: what is opened (a push on the phone, the inspector on the
-/// iPad and Mac), what is lit, the rename and delete in progress, and each action of the context menu. One per
-/// screen; the views read the parts they draw, so a lit tile never re-evaluates the table.
+/// iPad and Mac), what is lit, select mode for the posts on screen, the rename and delete in progress, and each
+/// action of the context menu. One per screen; the views read the parts they draw, so a lit tile never re-evaluates
+/// the table.
 @MainActor @Observable
 final class LibraryController {
     let model: AppModel
@@ -36,6 +37,12 @@ final class LibraryController {
     /// The post "open in library" lit, for 1.6 s.
     var lit: String?
     var reveal: LibraryReveal?
+    /// The trailing checkbox: taps tick posts instead of opening them.
+    var selecting = false
+    /// Ticked posts (`LibraryRow.id`). Kept across a re-enter; `endSelecting` clears it.
+    var picked: Set<String> = []
+    /// A share of the ticked posts is copying files. A second tap while this is set does nothing.
+    var preparingShare = false
     /// Bumped by a refresh: a tile whose picture failed tries again.
     var reload = 0
     var renaming: MediaItem?
@@ -104,6 +111,53 @@ final class LibraryController {
             try? await Task.sleep(for: .seconds(1.6))
             if lit == id { lit = nil }
         }
+    }
+
+    // MARK: select mode
+
+    /// Starts select mode. Does not clear `picked`: ending is what empties it, so a fresh enter starts empty
+    /// and a second call while already selecting keeps the ticks.
+    func beginSelecting() {
+        selecting = true
+    }
+
+    func endSelecting() {
+        selecting = false
+        picked = []
+    }
+
+    func togglePick(_ id: String) {
+        if picked.contains(id) { picked.remove(id) } else { picked.insert(id) }
+    }
+
+    /// Local files for the ticked posts, in `rows` order. One file per picked row: that row's face only
+    /// (not every item of a gallery, not `post.link`, never `publicURL`). One download at a time.
+    /// The URL `localCopy` returns is kept — deleting it can destroy the only copy.
+    /// Empty means nothing could be shared (`Copy.actionFailed` is already shown). `[]` while a share is
+    /// already being prepared: the caller does nothing.
+    func sharePicked(_ rows: [LibraryRow]) async -> [URL] {
+        guard !preparingShare else { return [] }
+        preparingShare = true
+        defer { preparingShare = false }
+        let chosen = picked
+        var urls: [URL] = []
+        for row in rows where chosen.contains(row.id) {
+            let face = row.item.face
+            if let url = face.local?.fileURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) {
+                urls.append(url)
+                continue
+            }
+            guard let file = face.file else { continue }
+            do {
+                let copied = try await model.library.localCopy(file)
+                guard copied.isFileURL else { continue }
+                urls.append(copied)
+            } catch {
+                continue
+            }
+        }
+        if urls.isEmpty { showStatus(Copy.actionFailed) }
+        return urls
     }
 
     // MARK: the menu's questions
