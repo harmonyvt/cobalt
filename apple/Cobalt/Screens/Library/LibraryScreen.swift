@@ -45,6 +45,7 @@ struct LibraryScreen: View {
             if LibraryDebug.state != nil { return }
             #endif
             if model.library.posts.isEmpty { await model.library.refresh() }
+            KeyboardShelf.publish(model.store.videos)
         }
     }
 }
@@ -180,6 +181,11 @@ private struct LibraryContent: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { controller.decideInspector(width: $0) }
             .onChange(of: tier, initial: true) { controller.compact = tier == .compact }
             .background { GalleryFileShare(fileURLs: $filesToShare) }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if controller.preparingShare, !controller.sharePrep.isEmpty {
+                    LibrarySharePrepCard(rows: controller.sharePrep)
+                }
+            }
             .onAppear { controller.showStatus = { shell.showStatus($0) } }
             .task(id: library.needsWholeLibrary) {
                 if library.needsWholeLibrary { await library.loadAll() }
@@ -469,5 +475,25 @@ struct LibraryProblem: View {
                 }
             }
         }
+    }
+}
+
+/// Names each file while a share is copying it, then goes away when the sheet is ready.
+private struct LibrarySharePrepCard: View {
+    let rows: [SharePrepRow]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(rows) { row in
+                Text("\(row.title) · \(row.state)")
+                    .font(Font.cobalt(12))
+                    .foregroundStyle(CobaltColor.text)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Metrics.gutter)
+        .padding(.vertical, 10)
+        .background(CobaltColor.elevated)
     }
 }

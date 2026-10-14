@@ -1,28 +1,48 @@
 import CobaltKit
 import Foundation
 import Observation
+import Synchronization
 
 enum KeyboardWords {
-    static let keyboard = "keyboard"
-    static let gallery = "gallery"
     static let idle = "tap copies · hold for the link"
+    static let choose = "tap to choose · hold a choice for its link"
     static let copied = "copied. paste it in."
     static let noKey = "cobalt can't find your key from here"
     static let noAccess = "allow full access to copy from your library."
     static let noPublicLinks = "no public links: the post is private."
-    static let tooBig = "too big to copy."
+    static let downloading = "downloading…"
+    static var savedHere: String { "saved on this \(Copy.device)" }
+    static func tooBig(_ bytes: Int64) -> String { "too big to copy (\(Format.bytes(bytes)))" }
+    static func downloading(_ done: Int64, _ total: Int64) -> String { "downloading · \(Copy.bytesOf(done, total))" }
 }
 
-/// Which rendition a library tile shows, downloads, and links. The face is the one the library shows.
+/// One file a tap can copy: the video, a webp, or the only photo.
+struct KeyboardChoice: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let rendition: Rendition
+}
+
+struct KeyboardTransfer: Equatable {
+    var title: String
+    var detail: String
+}
+
+/// Which rendition a library tile shows, downloads, and links.
 enum KeyboardFace {
+    static let byteCap: Int64 = 200_000_000
+
     static func of(_ post: LibraryPost) -> Rendition? {
         MediaItem.merge(local: nil, post: post)?.face
     }
 
-    /// `face.publicURL` when it is http or https. Never `post.link` (that is the source page).
-    static func publicLink(of post: LibraryPost) -> URL? {
-        guard let face = of(post) else { return nil }
-        return httpURL(face.publicURL)
+    static func item(of post: LibraryPost) -> MediaItem? {
+        MediaItem.merge(local: nil, post: post)
+    }
+
+    /// `publicURL` when it is http or https. Never `post.link`.
+    static func publicLink(of rendition: Rendition) -> URL? {
+        httpURL(rendition.publicURL)
     }
 
     /// Poster first, then the post's poster, then the public URL of a still. Never a video file.
@@ -33,7 +53,6 @@ enum KeyboardFace {
         return httpURL(face.publicURL)
     }
 
-    /// An image content type, or a webp rendition. Anything else is shown as a video.
     static func isPicture(_ face: Rendition) -> Bool {
         if isWebpRendition(face) { return true }
         return contentType(of: face)?.hasPrefix("image/") == true
@@ -44,6 +63,18 @@ enum KeyboardFace {
         if let title = nonempty(post.title) { return title }
         if let face, !isPicture(face) { return "video" }
         return "photo"
+    }
+
+    static func fileTitle(label: String, rendition: Rendition) -> String {
+        "\(label) · \(displayName(of: rendition))"
+    }
+
+    static func displayName(of rendition: Rendition) -> String {
+        if let name = nonempty(rendition.file?.name ?? rendition.hosted?.name) { return name }
+        if let remote = remoteFile(for: rendition), let ext = fileExtension(face: rendition, remote: remote) {
+            return "file.\(ext)"
+        }
+        return "file"
     }
 
     /// Public https URL (never sent the key), else the private file, else the hosted file.
@@ -78,10 +109,19 @@ enum KeyboardFace {
         case .libraryItem(let id): raw = id
         case .open, .studioSource: raw = face.file?.id ?? face.hosted?.id ?? face.id
         }
+        return safeID(raw)
+    }
+
+    static func safeID(_ raw: String) -> String {
         let safe = String(raw.map { ch in
             (ch.isASCII && (ch.isLetter || ch.isNumber)) || ch == "-" || ch == "_" ? ch : "-"
         })
         return safe.isEmpty ? "cobalt" : safe
+    }
+
+    static func canCopy(_ face: Rendition) -> Bool {
+        guard let remote = remoteFile(for: face) else { return false }
+        return fileExtension(face: face, remote: remote) != nil
     }
 
     private static func isWebpRendition(_ face: Rendition) -> Bool {
@@ -126,15 +166,17 @@ final class KeyboardGalleryModel {
 
     private(set) var posts: [LibraryPost] = []
     private(set) var phase: Phase = .loading
-    /// False until Allow Full Access is on. No network and no general pasteboard without it.
     private(set) var fullAccess = false
-    /// Set while a tile's file is downloading. Only that tile shows a working state.
+    var kind: LibraryKindFilter = .all
+    /// The tile whose video / webp choices are open.
+    var chooserPostID: String?
+    /// Set while a file is being copied. Only that tile shows a working state.
     var busyID: String?
-    /// Replaces the idle caption until a later copy succeeds or a link insert clears it.
     var notice: Notice?
+    var transfer: KeyboardTransfer?
 
-    @ObservationIgnored var onCopy: @MainActor (LibraryPost) -> Void = { _ in }
-    @ObservationIgnored var onHold: @MainActor (LibraryPost) -> Void = { _ in }
+    @ObservationIgnored var onCopy: @MainActor (LibraryPost, KeyboardChoice?) -> Void = { _, _ in }
+    @ObservationIgnored var onHold: @MainActor (LibraryPost, KeyboardChoice?) -> Void = { _, _ in }
 
     @ObservationIgnored private var client: HTTPCobaltClient?
     @ObservationIgnored private var nextCursor: String?
@@ -142,11 +184,98 @@ final class KeyboardGalleryModel {
 
     private static let pageLimit = 30
 
+    var visiblePosts: [LibraryPost] {
+        posts.filter { post in
+            guard let item = KeyboardFace.item(of: post) else { return false }
+            switch kind {
+            case .all: return true
+            case .videos: return item.kind == .video
+            case .photos: return item.kind == .photo
+            case .galleries: return item.kind == .gallery
+            case .webps: return item.kind == .webp
+            }
+        }
+    }
+
+    func choices(for post: LibraryPost) -> [KeyboardChoice] {
+        guard let item = KeyboardFace.item(of: post) else { return [] }
+        var out: [KeyboardChoice] = []
+        if let original = item.renditions.first(where: { if case .video = $0.kind { return true }; return false }),
+           KeyboardFace.canCopy(original) {
+            let label = KeyboardFace.isPicture(original) ? "photo" : "video"
+            out.append(KeyboardChoice(id: original.id, label: label, rendition: original))
+        }
+        let webps = item.renditions.filter { ($0.isWebp || $0.isAnimatedMade) && KeyboardFace.canCopy($0) }
+        for (index, rendition) in webps.enumerated() {
+            let number = rendition.webpNumber ?? (index + 1)
+            let label = webps.count == 1 ? "webp" : "webp \(number)"
+            out.append(KeyboardChoice(id: rendition.id, label: label, rendition: rendition))
+        }
+        if out.isEmpty, let face = KeyboardFace.of(post), KeyboardFace.canCopy(face) {
+            let label = KeyboardFace.isPicture(face) ? "photo" : "video"
+            out.append(KeyboardChoice(id: face.id, label: label, rendition: face))
+        }
+        return out
+    }
+
+    /// What a tap on this tile means under the current filter.
+    func relevant(_ post: LibraryPost) -> [KeyboardChoice] {
+        let all = choices(for: post)
+        let picked: [KeyboardChoice]
+        switch kind {
+        case .videos:
+            picked = all.filter { $0.label == "video" }
+        case .webps:
+            picked = all.filter { $0.label.hasPrefix("webp") }
+        case .photos, .galleries:
+            if let face = KeyboardFace.of(post), let match = all.first(where: { $0.id == face.id }) {
+                picked = [match]
+            } else {
+                picked = Array(all.prefix(1))
+            }
+        case .all:
+            picked = all
+        }
+        return picked.isEmpty ? all : picked
+    }
+
+    func setKind(_ next: LibraryKindFilter) {
+        guard kind != next else { return }
+        kind = next
+        chooserPostID = nil
+        fillFilter()
+    }
+
+    func tap(_ post: LibraryPost) {
+        let choices = relevant(post)
+        if choices.count <= 1 {
+            chooserPostID = nil
+            onCopy(post, choices.first)
+            return
+        }
+        chooserPostID = chooserPostID == post.id ? nil : post.id
+    }
+
+    func hold(_ post: LibraryPost) {
+        guard busyID == nil else { return }
+        let choices = relevant(post)
+        if choices.count <= 1 {
+            onHold(post, choices.first)
+            return
+        }
+        chooserPostID = post.id
+    }
+
+    var asksToChoose: Bool {
+        if chooserPostID != nil { return true }
+        guard kind == .all else { return false }
+        return visiblePosts.contains { choices(for: $0).count > 1 }
+    }
+
     func setFullAccess(_ allowed: Bool) {
         fullAccess = allowed
     }
 
-    /// When the keyboard appears. Does nothing once a page is on screen, or without full access.
     func reloadIfEmpty() {
         guard fullAccess, posts.isEmpty else { return }
         begin(reset: true)
@@ -163,22 +292,73 @@ final class KeyboardGalleryModel {
         begin(reset: false)
     }
 
-    /// Nil when the face has nothing to copy, or no real media extension. Throws when the download fails.
+    /// A file already on this phone: the shelf the app published, else the shared cache. Nil downloads.
+    func prepareLocal(_ rendition: Rendition) -> URL? {
+        guard let root = Self.videosRoot() else { return nil }
+        let ids = Set([rendition.file?.id, rendition.hosted?.id].compactMap { $0 })
+        let link = rendition.publicURL?.absoluteString
+        if let match = Self.shelfMatch(root: root, ids: ids, link: link) { return match }
+        return Self.indexMatch(root: root, ids: ids, link: link, remote: rendition.publicURL)
+    }
+
+    /// Nil when the rendition has nothing to copy. Throws when the download fails.
     /// The file is under `tmp/cobalt-keyboard/` and the caller removes it.
-    func prepareFile(for post: LibraryPost) async throws -> URL? {
-        guard let face = KeyboardFace.of(post) else { return nil }
-        guard let remote = KeyboardFace.remoteFile(for: face) else { return nil }
-        guard let ext = KeyboardFace.fileExtension(face: face, remote: remote) else { return nil }
+    func prepareDownload(_ rendition: Rendition, title: String) async throws -> URL? {
+        guard let remote = KeyboardFace.remoteFile(for: rendition) else { return nil }
+        guard let ext = KeyboardFace.fileExtension(face: rendition, remote: remote) else { return nil }
         guard let client else { return nil }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cobalt-keyboard", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let dest = folder.appendingPathComponent("\(KeyboardFace.storageID(face: face, remote: remote)).\(ext)")
+        let dest = folder.appendingPathComponent("\(KeyboardFace.storageID(face: rendition, remote: remote)).\(ext)")
+        transfer = KeyboardTransfer(title: title, detail: KeyboardWords.downloading)
+        let relay = LineRelay { [weak self] detail in
+            guard let self else { return }
+            self.transfer = KeyboardTransfer(title: title, detail: detail)
+        }
         do {
-            return try await client.download(remote, to: dest) { _ in }
+            return try await client.download(remote, to: dest) { progress in
+                relay.push(downloadDetail(progress))
+            }
         } catch {
             try? FileManager.default.removeItem(at: dest)
             throw error
         }
+    }
+
+    private static func videosRoot() -> URL? {
+        guard let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.capybaraharmony.cobalt") else { return nil }
+        return container.appendingPathComponent("Videos", isDirectory: true)
+    }
+
+    private static func shelfMatch(root: URL, ids: Set<String>, link: String?) -> URL? {
+        let manifest = root.appendingPathComponent("for-keyboard/manifest.json")
+        guard let data = try? Data(contentsOf: manifest),
+              let entries = try? JSONDecoder().decode([ShelfEntry].self, from: data) else { return nil }
+        let hit = entries.first { entry in
+            if let id = entry.libraryID, ids.contains(id) { return true }
+            if let link, entry.publicURL == link { return true }
+            return false
+        }
+        guard let hit else { return nil }
+        let url = root.appendingPathComponent("for-keyboard/\(hit.file)")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    private static func indexMatch(root: URL, ids: Set<String>, link: String?, remote: URL?) -> URL? {
+        let index = root.appendingPathComponent("index.json")
+        guard let data = try? Data(contentsOf: index) else { return nil }
+        let rows = (try? JSONDecoder().decode([IndexEntry].self, from: data)) ?? []
+        let hit = rows.first { entry in
+            guard let name = entry.fileName, !name.isEmpty else { return false }
+            if let id = entry.libraryID, ids.contains(id) { return true }
+            if let link, entry.publicURL?.absoluteString == link { return true }
+            if let remote, entry.remoteURL == remote { return true }
+            return false
+        }
+        guard let name = hit?.fileName else { return nil }
+        let url = root.appendingPathComponent("files/\(name)")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     private func begin(reset: Bool) {
@@ -189,8 +369,17 @@ final class KeyboardGalleryModel {
         Task { await self.run(reset: reset) }
     }
 
+    /// Keep paging while a filter has almost nothing on screen yet.
+    private func fillFilter() {
+        guard kind != .all, visiblePosts.count < 12, nextCursor != nil else { return }
+        begin(reset: false)
+    }
+
     private func run(reset: Bool) async {
-        defer { loading = false }
+        defer {
+            loading = false
+            fillFilter()
+        }
         guard fullAccess else { return }
         if reset && posts.isEmpty { phase = .loading }
         let settings = Settings.shared()
@@ -214,7 +403,6 @@ final class KeyboardGalleryModel {
         }
         let cursor = reset ? nil : nextCursor
         do {
-            // Same rule as PipelineContext.libraryPage. Not called: this target does not build a pipeline.
             let caps = await client.capabilities()
             let page: LibraryPage
             if caps.gallery {
@@ -244,5 +432,57 @@ final class KeyboardGalleryModel {
             nextCursor = page.next
         }
         phase = posts.isEmpty ? .empty : .ready
+    }
+}
+
+private struct ShelfEntry: Decodable {
+    var libraryID: String?
+    var publicURL: String?
+    var file: String
+    var bytes: Int64
+}
+
+private struct IndexEntry: Decodable {
+    var libraryID: String?
+    var publicURL: URL?
+    var remoteURL: URL?
+    var fileName: String?
+}
+
+private func downloadDetail(_ progress: TransferProgress) -> String {
+    if let total = progress.total, total > 0 {
+        return KeyboardWords.downloading(progress.bytes, total)
+    }
+    return KeyboardWords.downloading
+}
+
+/// Hands a download's latest line to the main actor. One hop at a time.
+private final class LineRelay: Sendable {
+    private struct State { var latest: String?; var scheduled = false }
+    private let state = Mutex(State())
+    private let apply: @MainActor @Sendable (String) -> Void
+
+    init(_ apply: @escaping @MainActor @Sendable (String) -> Void) { self.apply = apply }
+
+    func push(_ value: String) {
+        let start = state.withLock { s -> Bool in
+            s.latest = value
+            if s.scheduled { return false }
+            s.scheduled = true
+            return true
+        }
+        guard start else { return }
+        Task { @MainActor in
+            while true {
+                let next = self.state.withLock { s -> String? in
+                    let value = s.latest
+                    s.latest = nil
+                    if value == nil { s.scheduled = false }
+                    return value
+                }
+                guard let next else { return }
+                self.apply(next)
+            }
+        }
     }
 }

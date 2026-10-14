@@ -4,16 +4,12 @@ import UIKit
 import UniformTypeIdentifiers
 
 /// Principal class of the custom keyboard (`com.apple.keyboard-service`).
-/// A tab at the top switches a typing keyboard and the library gallery.
+/// The gallery fills it. A globe switches back to the Apple keyboard.
 final class KeyboardViewController: UIInputViewController {
     private let model = KeyboardGalleryModel()
-    private let keysView = KeyboardKeysView()
-    private let tabBar = UIStackView()
-    private let keyboardTab = UIButton(type: .system)
-    private let galleryTab = UIButton(type: .system)
+    private let globe = UIButton(type: .system)
     private var galleryHost: UIHostingController<KeyboardGalleryView>!
     private var heightConstraint: NSLayoutConstraint!
-    private var showingGallery = false
 
     override func loadView() {
         let chrome = KeyboardChromeView(frame: .zero, inputViewStyle: .keyboard)
@@ -24,11 +20,10 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         CobaltFont.register()
-        model.onCopy = { [weak self] post in self?.copyFile(post) }
-        model.onHold = { [weak self] post in self?.insertLink(post) }
+        model.onCopy = { [weak self] post, choice in self?.copyRendition(post, choice) }
+        model.onHold = { [weak self] post, choice in self?.insertLink(post, choice) }
         model.setFullAccess(hasFullAccess)
         installSubviews()
-        showGallery(false)
         updateHeight()
         applyKeyboardAppearance()
         model.reloadIfEmpty()
@@ -39,11 +34,11 @@ final class KeyboardViewController: UIInputViewController {
         updateHeight()
         applyKeyboardAppearance()
         model.setFullAccess(hasFullAccess)
-        if showingGallery { model.reloadIfEmpty() }
+        model.reloadIfEmpty()
     }
 
     override func viewWillLayoutSubviews() {
-        keysView.showsGlobe = needsInputModeSwitchKey
+        globe.isHidden = !needsInputModeSwitchKey
         updateHeight()
         super.viewWillLayoutSubviews()
     }
@@ -63,7 +58,6 @@ final class KeyboardViewController: UIInputViewController {
         applyKeyboardAppearance()
     }
 
-    /// iPhone portrait is the tall keyboard. Landscape is short. iPad stays tall.
     private func updateHeight() {
         let pad = traitCollection.userInterfaceIdiom == .pad
         let landscape = traitCollection.verticalSizeClass == .compact
@@ -77,24 +71,6 @@ final class KeyboardViewController: UIInputViewController {
         heightConstraint.priority = UILayoutPriority(999)
         heightConstraint.isActive = true
 
-        tabBar.axis = .horizontal
-        tabBar.spacing = 6
-        tabBar.distribution = .fillEqually
-        tabBar.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(tabBar)
-
-        configureTab(keyboardTab, title: KeyboardWords.keyboard, gallery: false)
-        configureTab(galleryTab, title: KeyboardWords.gallery, gallery: true)
-        tabBar.addArrangedSubview(keyboardTab)
-        tabBar.addArrangedSubview(galleryTab)
-
-        keysView.translatesAutoresizingMaskIntoConstraints = false
-        keysView.insert = { [weak self] text in self?.textDocumentProxy.insertText(text) }
-        keysView.deleteCharacter = { [weak self] in self?.textDocumentProxy.deleteBackward() }
-        // A SwiftUI button cannot receive the UIEvent this selector needs.
-        keysView.globeButton.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
-        view.addSubview(keysView)
-
         let host = UIHostingController(rootView: KeyboardGalleryView(model: model))
         host.view.backgroundColor = .clear
         host.view.translatesAutoresizingMaskIntoConstraints = false
@@ -103,44 +79,24 @@ final class KeyboardViewController: UIInputViewController {
         host.didMove(toParent: self)
         galleryHost = host
 
-        let bodyTop = tabBar.bottomAnchor
-        let bodyBottom = view.safeAreaLayoutGuide.bottomAnchor
+        globe.translatesAutoresizingMaskIntoConstraints = false
+        globe.accessibilityLabel = "switch keyboard"
+        let symbol = UIImage(systemName: "globe", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .medium))
+        globe.setImage(symbol, for: .normal)
+        globe.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
+        view.addSubview(globe)
+
         NSLayoutConstraint.activate([
-            tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
-            tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
-            tabBar.topAnchor.constraint(equalTo: view.topAnchor, constant: 4),
-            tabBar.heightAnchor.constraint(equalToConstant: 44),
-
-            keysView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            keysView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            keysView.topAnchor.constraint(equalTo: bodyTop, constant: 6),
-            keysView.bottomAnchor.constraint(equalTo: bodyBottom),
-
             host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            host.view.topAnchor.constraint(equalTo: bodyTop, constant: 6),
-            host.view.bottomAnchor.constraint(equalTo: bodyBottom),
+            host.view.topAnchor.constraint(equalTo: view.topAnchor, constant: 4),
+            host.view.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+
+            globe.topAnchor.constraint(equalTo: view.topAnchor, constant: 2),
+            globe.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -4),
+            globe.widthAnchor.constraint(equalToConstant: 44),
+            globe.heightAnchor.constraint(equalToConstant: 36),
         ])
-    }
-
-    private func configureTab(_ button: UIButton, title: String, gallery: Bool) {
-        button.setTitle(title, for: .normal)
-        button.titleLabel?.font = UIFont(name: "IBMPlexMono-Medm", size: 15)
-            ?? .systemFont(ofSize: 15, weight: .medium)
-        button.layer.cornerRadius = 8
-        button.layer.cornerCurve = .continuous
-        button.addAction(UIAction { [weak self] _ in self?.showGallery(gallery) }, for: .touchUpInside)
-    }
-
-    private func showGallery(_ gallery: Bool) {
-        showingGallery = gallery
-        keysView.isHidden = gallery
-        galleryHost.view.isHidden = !gallery
-        styleTabs()
-        if gallery {
-            model.setFullAccess(hasFullAccess)
-            model.reloadIfEmpty()
-        }
     }
 
     private func applyKeyboardAppearance() {
@@ -157,91 +113,160 @@ final class KeyboardViewController: UIInputViewController {
             dark = traitCollection.userInterfaceStyle == .dark
         }
         view.backgroundColor = KeyboardChrome.background(dark: dark)
-        keysView.apply(dark: dark)
-        styleTabs()
+        globe.tintColor = KeyboardChrome.label(dark: dark)
     }
 
-    private func styleTabs() {
-        let dark = view.overrideUserInterfaceStyle == .dark
-            || (view.overrideUserInterfaceStyle == .unspecified && traitCollection.userInterfaceStyle == .dark)
-        let label = KeyboardChrome.label(dark: dark)
-        let quiet = label.withAlphaComponent(0.55)
-        let selectedFill = dark ? UIColor(white: 1, alpha: 0.18) : UIColor(white: 1, alpha: 0.72)
-        for (button, selected) in [(keyboardTab, !showingGallery), (galleryTab, showingGallery)] {
-            button.backgroundColor = selected ? selectedFill : .clear
-            button.setTitleColor(selected ? label : quiet, for: .normal)
-        }
-    }
-
-    /// One download at a time. A second tap, or a hold, while one is in flight does nothing.
-    private func copyFile(_ post: LibraryPost) {
+    private func copyRendition(_ post: LibraryPost, _ choice: KeyboardChoice?) {
         guard model.fullAccess, model.busyID == nil else { return }
+        let rendition = choice?.rendition ?? KeyboardFace.of(post)
+        guard let rendition else { return }
         model.busyID = post.id
+        model.chooserPostID = nil
+        let label = choice?.label ?? (KeyboardFace.isPicture(rendition) ? "photo" : "video")
         Task { @MainActor in
-            await self.deliverCopy(post)
+            await self.deliver(rendition, label: label)
         }
     }
 
-    /// Downloads the face, then puts its bytes on the general pasteboard. The temp file is removed
-    /// when this returns, which is after the pasteboard write (or after it throws).
-    private func deliverCopy(_ post: LibraryPost) async {
+    /// Puts the rendition's bytes on the general pasteboard. A file already on the phone is reused.
+    private func deliver(_ rendition: Rendition, label: String) async {
         var temp: URL?
         defer {
             model.busyID = nil
+            model.transfer = nil
             if let temp { try? FileManager.default.removeItem(at: temp) }
         }
+        let title = KeyboardFace.fileTitle(label: label, rendition: rendition)
         do {
             guard model.fullAccess else { return }
-            // The server already knows the size. Skip the download when it cannot be copied.
-            if let bytes = KeyboardFace.of(post)?.bytes, bytes > 8_000_000 {
-                model.notice = .failed(KeyboardWords.tooBig)
+            if let bytes = rendition.bytes, bytes > KeyboardFace.byteCap {
+                model.notice = .failed(KeyboardWords.tooBig(bytes))
                 return
             }
-            guard let url = try await model.prepareFile(for: post) else {
-                model.notice = .failed(Copy.actionFailed)
-                return
+            let source: URL
+            if let local = model.prepareLocal(rendition) {
+                model.transfer = KeyboardTransfer(title: title, detail: KeyboardWords.savedHere)
+                source = local
+            } else {
+                guard let downloaded = try await model.prepareDownload(rendition, title: title) else {
+                    model.notice = .failed(Copy.actionFailed)
+                    return
+                }
+                temp = downloaded
+                source = downloaded
             }
-            temp = url
-            let bytes = try Self.byteCount(of: url)
-            // Over this stays on disk. Reading it, or decoding a UIImage, gets the keyboard killed.
-            if bytes > 8_000_000 {
-                model.notice = .failed(KeyboardWords.tooBig)
+            let bytes = try Self.byteCount(of: source)
+            if bytes > KeyboardFace.byteCap {
+                model.notice = .failed(KeyboardWords.tooBig(bytes))
                 return
             }
             guard model.fullAccess else { return }
-            let data = try Data(contentsOf: url)
-            guard model.fullAccess else { return }
-            writePasteboard(data, ext: url.pathExtension)
+            try writePasteboard(source, label: label)
             model.notice = .copied
         } catch {
             model.notice = .failed(Copy.actionFailed)
         }
     }
 
-    /// One representation. `UIPasteboard.general.image` is not set: that flattens a gif to one frame.
-    private func writePasteboard(_ data: Data, ext: String) {
-        let type = UTType(filenameExtension: ext) ?? .data
-        var item: [String: Any] = [type.identifier: data]
-        if type.conforms(to: .image) {
-            item[UTType.image.identifier] = data
+    /// Movie types are registered explicitly. Discord asks for `public.movie` and will not
+    /// walk from `public.mpeg-4`. WhatsApp reads the mpeg-4 data, so that stays too.
+    private func writePasteboard(_ source: URL, label: String) throws {
+        let ext = source.pathExtension.lowercased()
+        let pasteURL = try snapshot(of: source, ext: ext.isEmpty ? "bin" : ext)
+        let type = UTType(filenameExtension: pasteURL.pathExtension) ?? .data
+        let identifiers = pasteTypes(ext: pasteURL.pathExtension.lowercased(), type: type)
+        let provider = NSItemProvider()
+        provider.suggestedName = "\(label).\(pasteURL.pathExtension)"
+        for identifier in identifiers {
+            provider.registerFileRepresentation(forTypeIdentifier: identifier, fileOptions: [], visibility: .all) { completion in
+                completion(pasteURL, false, nil)
+                return nil
+            }
         }
-        UIPasteboard.general.setItems([item])
+        if let count = try? Self.byteCount(of: pasteURL), count <= 20_000_000, let data = try? Data(contentsOf: pasteURL) {
+            for identifier in identifiers {
+                provider.registerDataRepresentation(forTypeIdentifier: identifier, visibility: .all) { completion in
+                    completion(data, nil)
+                    return nil
+                }
+            }
+        }
+        UIPasteboard.general.setItemProviders([provider], localOnly: false, expirationDate: Date().addingTimeInterval(180))
     }
 
-    private static func byteCount(of url: URL) throws -> Int {
+    private func pasteTypes(ext: String, type: UTType) -> [String] {
+        var ids: [String] = []
+        func add(_ id: String) {
+            if !ids.contains(id) { ids.append(id) }
+        }
+        let movie = type.conforms(to: .movie) || ext == "mp4" || ext == "m4v" || ext == "mov"
+        let image = type.conforms(to: .image) || ["webp", "gif", "png", "jpg", "jpeg", "heic", "heif"].contains(ext)
+        if movie {
+            add(UTType.movie.identifier)
+            if ext == "mov" { add(UTType.quickTimeMovie.identifier) }
+            else { add(UTType.mpeg4Movie.identifier) }
+            add(type.identifier)
+        } else if image {
+            add(type.identifier)
+            add(UTType.image.identifier)
+            if ext == "gif" { add(UTType.gif.identifier) }
+        } else {
+            add(type.identifier)
+        }
+        return ids
+    }
+
+    /// The last paste stays until the next one. Discord loads the file after this method returns.
+    private func snapshot(of source: URL, ext: String) throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cobalt-keyboard", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        if let items = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) {
+            for item in items where item.lastPathComponent.hasPrefix("last-paste") {
+                try? FileManager.default.removeItem(at: item)
+            }
+        }
+        let dest = folder.appendingPathComponent("last-paste.\(ext)")
+        if FileManager.default.fileExists(atPath: dest.path) {
+            try FileManager.default.removeItem(at: dest)
+        }
+        try FileManager.default.copyItem(at: source, to: dest)
+        return dest
+    }
+
+    private static func byteCount(of url: URL) throws -> Int64 {
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
         guard let size else { throw CocoaError(.fileReadUnknown) }
-        return size
+        return Int64(size)
     }
 
-    /// Inserts the face's public URL. No public URL inserts nothing (never the source page).
-    private func insertLink(_ post: LibraryPost) {
+    private func insertLink(_ post: LibraryPost, _ choice: KeyboardChoice?) {
         guard model.busyID == nil else { return }
-        guard let url = KeyboardFace.publicLink(of: post) else {
+        let rendition = choice?.rendition ?? KeyboardFace.of(post)
+        guard let rendition, let url = KeyboardFace.publicLink(of: rendition) else {
             model.notice = .failed(KeyboardWords.noPublicLinks)
             return
         }
         textDocumentProxy.insertText(url.absoluteString)
         model.notice = nil
     }
+}
+
+/// The keyboard's root view. Self-sizing so iOS does not collapse the extension to a one-line bar.
+final class KeyboardChromeView: UIInputView, UIInputViewAudioFeedback {
+    var enableInputClicksWhenVisible: Bool { true }
+    var preferredHeight: CGFloat = 291 {
+        didSet { invalidateIntrinsicContentSize() }
+    }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: preferredHeight)
+    }
+}
+
+enum KeyboardChrome {
+    static func background(dark: Bool) -> UIColor {
+        dark ? UIColor(white: 0.17, alpha: 1) : UIColor(white: 0.82, alpha: 1)
+    }
+
+    static func label(dark: Bool) -> UIColor { dark ? .white : .black }
 }
