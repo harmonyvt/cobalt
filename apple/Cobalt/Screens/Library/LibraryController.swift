@@ -18,6 +18,13 @@ struct LibraryReveal: Equatable {
     let token = UUID()
 }
 
+/// One row of the card shown while ticked posts are being copied for the share sheet.
+struct SharePrepRow: Identifiable, Equatable {
+    let id: String
+    var title: String
+    var state: String
+}
+
 /// The library screen's state and what its menus do: what is opened (a push on the phone, the inspector on the
 /// iPad and Mac), what is lit, select mode for the posts on screen, the rename and delete in progress, and each
 /// action of the context menu. One per screen; the views read the parts they draw, so a lit tile never re-evaluates
@@ -43,6 +50,8 @@ final class LibraryController {
     var picked: Set<String> = []
     /// A share of the ticked posts is copying files. A second tap while this is set does nothing.
     var preparingShare = false
+    /// What the share card lists while `preparingShare` is set. Cleared when the copy finishes.
+    var sharePrep: [SharePrepRow] = []
     /// Bumped by a refresh: a tile whose picture failed tries again.
     var reload = 0
     var renaming: MediaItem?
@@ -137,27 +146,59 @@ final class LibraryController {
     /// already being prepared: the caller does nothing.
     func sharePicked(_ rows: [LibraryRow]) async -> [URL] {
         guard !preparingShare else { return [] }
+        KeyboardShelf.publish(model.store.videos)
         preparingShare = true
-        defer { preparingShare = false }
         let chosen = picked
+        sharePrep = rows.filter { chosen.contains($0.id) }.map { row in
+            SharePrepRow(id: row.id, title: row.title, state: Self.shareState(of: row.item.face))
+        }
+        defer {
+            preparingShare = false
+            sharePrep = []
+        }
         var urls: [URL] = []
         for row in rows where chosen.contains(row.id) {
             let face = row.item.face
             if let url = face.local?.fileURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) {
+                setShareState(row.id, Self.savedHere)
                 urls.append(url)
                 continue
             }
-            guard let file = face.file else { continue }
+            setShareState(row.id, Self.downloading)
+            guard let file = face.file else {
+                setShareState(row.id, "skipped")
+                continue
+            }
             do {
                 let copied = try await model.library.localCopy(file)
-                guard copied.isFileURL else { continue }
+                guard copied.isFileURL else {
+                    setShareState(row.id, "skipped")
+                    continue
+                }
+                setShareState(row.id, "ready")
                 urls.append(copied)
             } catch {
+                setShareState(row.id, "skipped")
                 continue
             }
         }
         if urls.isEmpty { showStatus(Copy.actionFailed) }
         return urls
+    }
+
+    private func setShareState(_ id: String, _ state: String) {
+        guard let index = sharePrep.firstIndex(where: { $0.id == id }) else { return }
+        sharePrep[index].state = state
+    }
+
+    private static var savedHere: String { "saved on this \(Copy.device)" }
+    private static let downloading = "downloading…"
+
+    private static func shareState(of face: Rendition) -> String {
+        if let url = face.local?.fileURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) {
+            return savedHere
+        }
+        return downloading
     }
 
     // MARK: the menu's questions
