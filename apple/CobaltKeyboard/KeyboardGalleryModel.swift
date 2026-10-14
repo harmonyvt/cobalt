@@ -3,6 +3,8 @@ import Foundation
 import Observation
 
 enum KeyboardWords {
+    static let keyboard = "keyboard"
+    static let gallery = "gallery"
     static let idle = "tap copies · hold for the link"
     static let copied = "copied. paste it in."
     static let noKey = "cobalt can't find your key from here"
