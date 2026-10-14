@@ -1,7 +1,7 @@
 name: Cobalt
 
-# One multiplatform SwiftUI app (iPhone, iPad, Mac) plus an iOS share extension and an iOS widget
-# extension (the Live Activity).
+# One multiplatform SwiftUI app (iPhone, iPad, Mac) plus an iOS share extension, an iOS keyboard
+# extension, and an iOS widget extension (the Live Activity).
 # Generated project is gitignored: `cd apple && xcodegen generate`.
 # Info.plists in Config/ are generated from this file and committed; the entitlements are hand-written.
 
@@ -40,6 +40,9 @@ targets:
         embed: true
         platformFilter: iOS
       - target: CobaltWidgets
+        embed: true
+        platformFilter: iOS
+      - target: CobaltKeyboard
         embed: true
         platformFilter: iOS
     info:
@@ -166,3 +169,41 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
+
+  # The library, as a custom keyboard. Tap copies a face onto the pasteboard; hold inserts its public link.
+  CobaltKeyboard:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: CobaltKeyboard
+      - path: Cobalt/Design
+      - path: Cobalt/Shared
+      # The gallery draws with the same typeface; CobaltFont registers it from the bundle at launch.
+      - path: Cobalt/Resources/Fonts
+        buildPhase: resources
+    dependencies:
+      - package: CobaltKit
+    info:
+      path: Config/CobaltKeyboard-Info.plist
+      properties:
+        CFBundleDisplayName: cobalt
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # Apple's Custom Keyboard Extension template, except Allow Full Access is on.
+        NSExtension:
+          NSExtensionAttributes:
+            PrimaryLanguage: en-US
+            IsASCIICapable: false
+            PrefersRightToLeft: false
+            RequestsOpenAccess: true
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).KeyboardViewController
+    settings:
+      base:
+        PRODUCT_NAME: CobaltKeyboard
+        PRODUCT_BUNDLE_IDENTIFIER: com.capybaraharmony.cobalt.keyboard
+        TARGETED_DEVICE_FAMILY: "1,2"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        CODE_SIGN_ENTITLEMENTS: Config/CobaltKeyboard.entitlements
