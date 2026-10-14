@@ -212,6 +212,7 @@ describe("a poster can not be deleted by hand, and nothing on a lifetime path or
             [
                 "app-routes.ts:originals.delete(", // upload rollbacks, post delete (session originals)
                 "app-routes.ts:media.delete(", // post delete (the file's mirror), poster release
+                "emotes.ts:media.delete(", // a saved emote whose library row was not written
                 "library.ts:media.delete(", // releasePoster
                 "poster.ts:media.delete(", // an orphan guard / a failed put of a poster
                 "studio.ts:originals.delete(", // a save marked lost meanwhile
