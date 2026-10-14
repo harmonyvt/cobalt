@@ -22,6 +22,8 @@ final class KeyboardViewController: UIInputViewController {
         CobaltFont.register()
         model.onCopy = { [weak self] post, choice in self?.copyRendition(post, choice) }
         model.onHold = { [weak self] post, choice in self?.insertLink(post, choice) }
+        model.onCopyEmote = { [weak self] hit in self?.copyEmote(hit) }
+        model.onHoldEmote = { [weak self] hit in self?.holdEmote(hit) }
         model.setFullAccess(hasFullAccess)
         installSubviews()
         updateHeight()
@@ -237,6 +239,52 @@ final class KeyboardViewController: UIInputViewController {
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
         guard let size else { throw CocoaError(.fileReadUnknown) }
         return Int64(size)
+    }
+
+    /// Copies the largest webp. A saved emote uses our public file when we have it; otherwise the 7TV cdn file.
+    private func copyEmote(_ hit: EmoteHit) {
+        guard model.fullAccess, model.busyID == nil else { return }
+        let url = (hit.libraryURL?.scheme == "https" ? hit.libraryURL : nil) ?? hit.fileURL
+        guard url.scheme == "https", let host = url.host?.lowercased(),
+              host == "cdn.7tv.app" || host == "media.capybaraharmony.com" else { return }
+        model.busyID = hit.id
+        model.transfer = KeyboardTransfer(title: hit.name, detail: KeyboardWords.downloading)
+        Task { @MainActor in
+            defer {
+                self.model.busyID = nil
+                self.model.transfer = nil
+            }
+            do {
+                let (source, _) = try await URLSession.shared.download(from: url)
+                let dest = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("cobalt-emote-\(hit.id).webp")
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    try FileManager.default.removeItem(at: dest)
+                }
+                try FileManager.default.moveItem(at: source, to: dest)
+                defer { try? FileManager.default.removeItem(at: dest) }
+                let bytes = try Self.byteCount(of: dest)
+                if bytes > KeyboardFace.byteCap {
+                    self.model.notice = .failed(KeyboardWords.tooBig(bytes))
+                    return
+                }
+                try self.writePasteboard(dest, label: hit.name)
+                self.model.notice = .copied
+            } catch {
+                self.model.notice = .failed(Copy.actionFailed)
+            }
+        }
+    }
+
+    /// The public link of our copy. An emote that is not saved inserts nothing.
+    private func holdEmote(_ hit: EmoteHit) {
+        guard model.busyID == nil else { return }
+        guard let url = hit.libraryURL, url.scheme == "https" || url.scheme == "http" else {
+            model.notice = .failed(KeyboardWords.saveFirst)
+            return
+        }
+        textDocumentProxy.insertText(url.absoluteString)
+        model.notice = nil
     }
 
     private func insertLink(_ post: LibraryPost, _ choice: KeyboardChoice?) {

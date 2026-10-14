@@ -115,7 +115,7 @@ extension Copy {
 
         // MARK: library (unchanged from 2026-10-06)
 
-        static let kindAll = "all", kindVideos = "videos", kindPhotos = "photos", kindGalleries = "galleries", kindWebps = "webps"
+        static let kindAll = "all", kindVideos = "videos", kindPhotos = "photos", kindGalleries = "galleries", kindWebps = "webps", kindEmotes = "emotes"
         static func galleryKind(_ n: Int) -> String { "gallery · \(n)" }
         static func nothingHere(_ what: String, kept: Bool) -> String { "no \(what)\(kept ? " kept on this \(Copy.device)" : "") yet." }
 

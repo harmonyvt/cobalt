@@ -13,6 +13,7 @@ enum Symbol {
     // actions
     static let paste = "doc.on.clipboard"
     static let file = "paperclip"
+    static let seventv = "magnifyingglass"
     static let makeWebp = "sparkles"
     static let trim = "timeline.selection"
     static let savePhotos = "photo.badge.arrow.down"

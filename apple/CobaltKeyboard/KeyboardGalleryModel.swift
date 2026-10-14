@@ -6,6 +6,8 @@ import Synchronization
 enum KeyboardWords {
     static let idle = "tap copies · hold for the link"
     static let choose = "tap to choose · hold a choice for its link"
+    static let chooseFile = "tap a choice to copy the file · hold for the link"
+    static let chooseLink = "tap a choice to insert the link · hold to copy the file"
     static let copied = "copied. paste it in."
     static let noKey = "cobalt can't find your key from here"
     static let noAccess = "allow full access to copy from your library."
@@ -13,6 +15,10 @@ enum KeyboardWords {
     static let downloading = "downloading…"
     static var savedHere: String { "saved on this \(Copy.device)" }
     static func tooBig(_ bytes: Int64) -> String { "too big to copy (\(Format.bytes(bytes)))" }
+    static let emoteEmpty = "no emotes yet. search to add one."
+    static let emoteMiss = "nothing on 7tv for that"
+    static let emoteDown = "7tv didn't answer."
+    static let saveFirst = "save it first"
     static func downloading(_ done: Int64, _ total: Int64) -> String { "downloading · \(Copy.bytesOf(done, total))" }
 }
 
@@ -170,6 +176,16 @@ final class KeyboardGalleryModel {
     var kind: LibraryKindFilter = .all
     /// The tile whose video / webp choices are open.
     var chooserPostID: String?
+    /// On that row, a tap inserts the hosted link. Otherwise it copies the file.
+    var sendsHostedLink = false
+    /// The magnifying glass is open: letters go into `emoteQuery`, not into the host.
+    var searching = false
+    var emoteQuery = ""
+    var emoteHits: [EmoteHit] = []
+    var emoteNote: String?
+    var savingEmoteID: String?
+    private var rememberedKind: LibraryKindFilter = .all
+    private var searchToken = 0
     /// Set while a file is being copied. Only that tile shows a working state.
     var busyID: String?
     var notice: Notice?
@@ -177,6 +193,8 @@ final class KeyboardGalleryModel {
 
     @ObservationIgnored var onCopy: @MainActor (LibraryPost, KeyboardChoice?) -> Void = { _, _ in }
     @ObservationIgnored var onHold: @MainActor (LibraryPost, KeyboardChoice?) -> Void = { _, _ in }
+    @ObservationIgnored var onCopyEmote: @MainActor (EmoteHit) -> Void = { _ in }
+    @ObservationIgnored var onHoldEmote: @MainActor (EmoteHit) -> Void = { _ in }
 
     @ObservationIgnored private var client: HTTPCobaltClient?
     @ObservationIgnored private var nextCursor: String?
@@ -187,12 +205,14 @@ final class KeyboardGalleryModel {
     var visiblePosts: [LibraryPost] {
         posts.filter { post in
             guard let item = KeyboardFace.item(of: post) else { return false }
+            let emote = post.isEmote
             switch kind {
-            case .all: return true
-            case .videos: return item.kind == .video
-            case .photos: return item.kind == .photo
-            case .galleries: return item.kind == .gallery
-            case .webps: return item.kind == .webp
+            case .all: return !emote
+            case .videos: return !emote && item.kind == .video
+            case .photos: return !emote && item.kind == .photo
+            case .galleries: return !emote && item.kind == .gallery
+            case .webps: return !emote && item.kind == .webp
+            case .emotes: return emote
             }
         }
     }
@@ -227,6 +247,8 @@ final class KeyboardGalleryModel {
             picked = all.filter { $0.label == "video" }
         case .webps:
             picked = all.filter { $0.label.hasPrefix("webp") }
+        case .emotes:
+            picked = all.filter { $0.label.hasPrefix("webp") || $0.label == "photo" }
         case .photos, .galleries:
             if let face = KeyboardFace.of(post), let match = all.first(where: { $0.id == face.id }) {
                 picked = [match]
@@ -237,6 +259,76 @@ final class KeyboardGalleryModel {
             picked = all
         }
         return picked.isEmpty ? all : picked
+    }
+
+    func beginSearch() {
+        guard !searching else { return }
+        rememberedKind = kind
+        searching = true
+        emoteQuery = ""
+        emoteHits = []
+        emoteNote = nil
+        chooserPostID = nil
+    }
+
+    func stopSearch() {
+        guard searching else { return }
+        searching = false
+        emoteQuery = ""
+        emoteHits = []
+        emoteNote = nil
+        kind = rememberedKind
+    }
+
+    func type(_ text: String) {
+        guard emoteQuery.count < 64 else { return }
+        emoteQuery += text
+    }
+
+    func backspace() {
+        guard !emoteQuery.isEmpty else { return }
+        emoteQuery.removeLast()
+    }
+
+    func loadEmotes() async {
+        let q = emoteQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        searchToken += 1
+        let mine = searchToken
+        emoteNote = nil
+        guard searching, !q.isEmpty else {
+            emoteHits = []
+            return
+        }
+        guard let client else {
+            emoteNote = KeyboardWords.noKey
+            return
+        }
+        do {
+            let found = try await client.searchEmotes(query: q)
+            guard mine == searchToken, emoteQuery.trimmingCharacters(in: .whitespacesAndNewlines) == q else { return }
+            emoteHits = found
+            emoteNote = found.isEmpty ? KeyboardWords.emoteMiss : nil
+        } catch {
+            guard mine == searchToken else { return }
+            emoteHits = []
+            emoteNote = KeyboardWords.emoteDown
+        }
+    }
+
+    func saveEmote(_ hit: EmoteHit) async {
+        guard let client, savingEmoteID == nil else { return }
+        savingEmoteID = hit.id
+        defer { savingEmoteID = nil }
+        do {
+            let saved = try await client.saveEmote(id: hit.id)
+            guard let index = emoteHits.firstIndex(where: { $0.id == hit.id }) else { return }
+            var next = hit
+            next.libraryID = saved.id
+            next.libraryURL = saved.url
+            emoteHits[index] = next
+        } catch {
+            notice = .failed(KeyboardWords.emoteDown)
+        }
     }
 
     func setKind(_ next: LibraryKindFilter) {

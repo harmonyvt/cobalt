@@ -22,8 +22,14 @@ struct LibraryKindChips: View {
             out[.all, default: 0] += 1
             out[Self.filter(for: kind), default: 0] += 1
         }
-        for post in library.posts { add(model.mediaItem(for: post).kind) }
-        for row in extra { add(row.kind) }
+        for post in library.posts {
+            if post.isEmote { out[.emotes, default: 0] += 1 }
+            else { add(model.mediaItem(for: post).kind) }
+        }
+        for row in extra {
+            if row.emote { out[.emotes, default: 0] += 1 }
+            else { add(row.kind) }
+        }
         return out
     }
 

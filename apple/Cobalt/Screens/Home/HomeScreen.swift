@@ -2,7 +2,7 @@ import CobaltKit
 import Combine
 import SwiftUI
 
-/// The save tab: the orbit, the two glass circles, and what the tapped circle opens into. While a video
+/// The save tab: the orbit, the glass circles, and what a tapped circle opens into. While a video
 /// is being fetched, saved and read, that is the work capsule (the circle morphs into it, matching
 /// `glassEffectID`) and the star above it; when the video is read, the star morphs into the newest slot
 /// of the orbit and the planet lifts into focus (FocusView.swift). The orbit stays solid underneath.
@@ -44,6 +44,8 @@ struct HomeScreen: View {
     /// The width the home column itself gets (the inspector and the sidebar already taken out).
     @State private var contentWidth: CGFloat = 0
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+    /// The 7tv circle has opened into its card. Closed when a save starts.
+    @State private var emoteOpen = false
 
     // the orbit's eased state, and the focus state
     @State private var orbit = OrbitDynamics()
@@ -621,8 +623,12 @@ struct HomeScreen: View {
                 VStack(spacing: 12) {
                     if let kind = cardKind {
                         WorkCard(kind: kind, glassID: glassID, glass: glass, failureToken: failureToken) { cardContent }
+                    } else if isIdle, emoteOpen {
+                        WorkCard(kind: .emote, glassID: "seventv", glass: glass, failureToken: failureToken) {
+                            EmoteSearchCard(model: model) { emoteOpen = false }
+                        }
                     }
-                    if isIdle { circles }
+                    if isIdle, !emoteOpen { circles }
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { stackTop = $0 }
@@ -638,6 +644,10 @@ struct HomeScreen: View {
                 .simultaneousGesture(DragGesture(minimumDistance: 0).updating($holding) { _, state, _ in state = true })
         }
         .motion(Motion.morph, value: stage, reduced: .fade)
+        .motion(Motion.morph, value: emoteOpen, reduced: .fade)
+        .onChange(of: stage) { _, next in
+            if next != .idle { emoteOpen = false }
+        }
     }
 
     // MARK: pieces
@@ -661,6 +671,9 @@ struct HomeScreen: View {
             CircleLabel(id: "paste", glass: glass, title: Copy.paste, systemImage: Symbol.paste, a11y: Copy.pasteA11y) { shell.paste() }
             if model.capabilities.showsFileButton {
                 CircleLabel(id: "file", glass: glass, title: Copy.file, systemImage: Symbol.file, a11y: Copy.fileA11y, menu: true) {}
+            }
+            CircleLabel(id: "seventv", glass: glass, title: Copy.seventv, systemImage: Symbol.seventv, a11y: Copy.seventvA11y) {
+                emoteOpen = true
             }
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { circlesFrame = $0 }

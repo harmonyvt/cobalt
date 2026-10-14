@@ -21,7 +21,8 @@ public struct LibraryFile: Sendable, Codable, Equatable, Identifiable {
     public enum Kind: String, Sendable, Codable { case `public`, `private` }
     /// `made`: a crop (or an export) made on the device and uploaded with `PUT /library/items/<id>/made` (18.6). Before this
     /// word a `made` row failed to decode, and the library page dropped it.
-    public enum Source: String, Sendable, Codable { case webp, studio, host, upload, saved, made }
+    /// `emote`: a 7TV webp kept by `POST /emotes`. The post's `link` is the token `7tv:<id>`, not a URL.
+    public enum Source: String, Sendable, Codable { case webp, studio, host, upload, saved, made, emote }
     public enum Role: Sendable, Equatable { case webp, hostedLink, privateCopy }
 
     public var id: String
@@ -224,6 +225,9 @@ public struct LibraryPost: Sendable, Codable, Equatable, Identifiable {
     /// `LinkInfo(link).ref`
     public var ref: String? { link.flatMap { LinkInfo($0)?.ref } }
 
+    /// A 7TV emote saved by this fork. The file's source says so; the post kind stays `webp`.
+    public var isEmote: Bool { files.contains { $0.source == .emote } }
+
     /// Unique roles present, order webp, mp4Link, privateCopy.
     public var pills: [LibraryPill] {
         let roles = Set(files.map(\.role))
@@ -247,7 +251,8 @@ extension LibraryPost {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         service = try c.decodeIfPresent(String.self, forKey: .service)
-        link = try c.decodeIfPresent(URL.self, forKey: .link)
+        // `7tv:<id>` is not a URL. A bad link must not drop the post; the files still decode.
+        link = try? c.decodeIfPresent(URL.self, forKey: .link) ?? nil
         title = try c.decodeIfPresent(String.self, forKey: .title)
         duration = try c.decodeIfPresent(Double.self, forKey: .duration)
         width = try c.decodeIfPresent(Int.self, forKey: .width)

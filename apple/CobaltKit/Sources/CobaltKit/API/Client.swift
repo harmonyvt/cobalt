@@ -109,6 +109,10 @@ public protocol CobaltClient: Sendable {
     /// `GET /library` with `v=3` when `v3` (only when the server has `features.gallery`): `v=2` plus gallery items,
     /// made files and each post's `kind`.
     func library(cursor: String?, limit: Int, v3: Bool) async throws -> LibraryPage
+    /// `GET /emotes?q=` (APP-API-CONTRACT section 20). Stores nothing.
+    func searchEmotes(query: String) async throws -> [EmoteHit]
+    /// `POST /emotes` `{id}`. The first save is new; the same id again is the same file.
+    func saveEmote(id: String) async throws -> SavedEmote
 }
 
 extension CobaltClient {
@@ -173,6 +177,8 @@ extension CobaltClient {
     }
     /// A client that predates the route says the server cannot do it.
     public func deletePost(anchor itemID: String) async throws -> PostDeleteResult { throw PipelineFailure.unsupported }
+    public func searchEmotes(query: String) async throws -> [EmoteHit] { throw PipelineFailure.unsupported }
+    public func saveEmote(id: String) async throws -> SavedEmote { throw PipelineFailure.unsupported }
     /// Likewise: a client that predates titles says the server cannot do it.
     public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult { throw PipelineFailure.unsupported }
 }

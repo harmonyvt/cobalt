@@ -43,6 +43,12 @@ enum Copy {
     static let file = "file"
     static let pasteA11y = "paste a link"
     static let fileA11y = "add a file"
+    static let seventv = "7tv"
+    static let seventvA11y = "search 7tv"
+    static let emoteSearchEmpty = "search for an emote"
+    static let emoteSearchMiss = "nothing on 7tv for that"
+    static let emoteSearchDown = "7tv didn't answer."
+    static let emoteSaveFirst = "save it first"
     /// The file circle's menu: where the file comes from.
     static let sourcePhotos = "photos"
     static let sourceFiles = "files"

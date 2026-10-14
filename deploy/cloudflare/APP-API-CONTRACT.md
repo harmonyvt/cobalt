@@ -2227,3 +2227,23 @@ rows, poster, public, library listing, notify, request-log prefix, capability).
 
 Container image (the helper) and Worker. No migration. Either order is safe: a Worker ahead of the image advertises `direct_links: false`
 until the new helper answers once; an image ahead of the Worker just works for old clients.
+
+## 20. 7TV emotes
+
+Keyed. The Worker only: it calls 7TV and writes D1 + the public media bucket. The container is not woken. The phone and the keyboard do not call 7TV.
+
+7TV's search is `POST https://7tv.io/v4/gql` (`emotes { search }` and `emotes { emote }`), sorted `TOP_ALL_TIME` descending. A live emote (catJAM, checked 2026-10-14) has webp at scales 1, 2, 3 and 4, plus a still `*_static.webp` and gif/avif copies. The file we keep is the webp with the greatest `scale` whose `frameCount` is greater than 1 when the emote is animated. Static fallbacks are not saved. A file over 15 MB steps down to the next scale. The grid preview is scale 2 when that webp exists, else 1, then 3, then 4. Zero-width and private emotes are left out. The download URL's host must be `cdn.7tv.app`.
+
+`GET /emotes?q=` — `q` is 1..64 trimmed characters, else 400 `error.emote.query`. 200:
+
+```
+{ "items": [ { "id", "name", "animated", "preview_url", "file_url", "library_id", "library_url" } ] }
+```
+
+`preview_url` is the grid picture. `file_url` is the largest webp, the one a copy or a save keeps. `library_id` is our row id when this emote is already saved, else null, and `library_url` is that file's public URL or null. At most 24. 7TV not answering is 502 `error.emote.unavailable`. Nothing is written.
+
+`POST /emotes` body `{ "id" }` — id is 20..32 letters or digits, else 400 `error.emote.query`. Unknown, deleted, zero-width, private, or no usable webp: 404 `error.emote.not_found`. The bytes are a public object `<10 base62>.webp` on `media.capybaraharmony.com`, same names as a made webp. The `media_items` row is `source: "emote"`, `kind: "public"`, `bucket: "media"`, `content_type: "image/webp"`, `name` the emote's name, `link` the token `7tv:<id>` (not a 7tv.app URL). No new column. Saving the same id again is 200 and the same row, and does not download again. The first save is 201 and the library file shape plus `emote_id`.
+
+`GET /library?v=3` is unchanged. This row is not an original (`saved` / `upload`), so the post's kind stays `webp`. Clients tell an emote by `source == "emote"`. Removing it is the existing `DELETE /library/items/<id>/post` (a role-less file is not deletable on `DELETE /library/items/<id>`).
+
+No migration. Deploy the API Worker only. The app decodes each library file on its own, so an old build drops a file whose `source` is `emote` and can show an empty post. Ship the app that accepts the word before relying on a saved emote.
