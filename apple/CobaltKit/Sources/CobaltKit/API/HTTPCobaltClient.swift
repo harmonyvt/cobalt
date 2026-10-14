@@ -505,6 +505,16 @@ public struct HTTPCobaltClient: CobaltClient {
         return VisibilityChange(file: wire.item, cacheCleared: wire.cacheCleared)
     }
 
+    public func searchEmotes(query: String) async throws -> [EmoteHit] {
+        let req = try makeRequest("GET", "/emotes", query: [("q", query)], keyed: true)
+        return try await sendJSON(EmoteListWire.self, req).items
+    }
+
+    public func saveEmote(id: String) async throws -> SavedEmote {
+        let req = try makeRequest("POST", "/emotes", keyed: true)
+        return try await sendJSON(SavedEmote.self, req, body: Self.jsonBody(["id": id]))
+    }
+
     public func deleteMedia(name: String) async throws {
         let req = try makeRequest("DELETE", "/media/\(Self.encode(name))", keyed: true)
         let (data, http) = try await send(req)
@@ -896,6 +906,10 @@ private struct LibraryWire: Decodable {
     var counts: Counts?
     var usage: Usage?
     var next: String?
+}
+
+private struct EmoteListWire: Decodable {
+    var items: [EmoteHit]
 }
 
 // MARK: - Delegates

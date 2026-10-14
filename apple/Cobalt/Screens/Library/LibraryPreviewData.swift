@@ -289,7 +289,11 @@ enum LibraryDebug {
     ) -> [LibraryRow] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var extra = q.isEmpty ? extra : extra.filter { $0.title.localizedStandardContains(q) }
-        if kind != .all { extra = extra.filter { LibraryKindChips.filter(for: $0.kind) == kind } }
+        extra = extra.filter { row in
+            if row.emote { return kind == .emotes }
+            if kind == .all || kind == .emotes { return kind == .all }
+            return LibraryKindChips.filter(for: row.kind) == kind
+        }
         // the kind order groups the model's rows and the synthetic ones together; any other sort leaves the model's rows first
         guard real.isEmpty || sort.key == .kind else { return real + extra }
         return (real + extra).sorted { a, b in

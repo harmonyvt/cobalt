@@ -66,6 +66,8 @@ export type LookupThen =
     | "studio_upload"
     | "library_adopt"
     | "library_list"
+    | "emotes_search"
+    | "emotes_save"
     | "library_file"
     | "library_publish"
     | "library_visibility"
@@ -204,6 +206,13 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         return req.service
             ? { action: "service", then: "library_adopt" }
             : reject(401, "error.api.auth.key.invalid");
+    }
+
+    // 7TV search and save (APP-API-CONTRACT.md section 20). Worker only: no container.
+    if (req.pathname === "/emotes") {
+        if (req.method === "GET") return lookupThen(req, "emotes_search");
+        if (req.method === "POST") return lookupThen(req, "emotes_save");
+        return reject(404);
     }
 
     // The app's library (keyed): GET /library, then per item /library/items/<id>/<sub>.

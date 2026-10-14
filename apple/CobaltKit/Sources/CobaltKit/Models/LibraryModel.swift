@@ -253,6 +253,24 @@ public final class LibraryModel {
         }
     }
 
+    /// `GET /emotes?q=`. Nothing is stored.
+    public func searchEmotes(query: String) async throws -> [EmoteHit] {
+        try await ctx.client.searchEmotes(query: query)
+    }
+
+    /// `POST /emotes`, then the library is read again so the new file is in `posts`.
+    public func saveEmote(id: String) async throws -> SavedEmote {
+        let saved = try await ctx.client.saveEmote(id: id)
+        await refresh()
+        return saved
+    }
+
+    /// Deletes our copy only (`DELETE /library/items/<id>/post`). 7TV is not called.
+    public func removeEmote(fileID: String) async throws {
+        _ = try await ctx.client.deletePost(anchor: fileID)
+        drop(files: [fileID])
+    }
+
     /// Only when `file.deletable`; removes it from `posts`.
     public func delete(_ file: LibraryFile) async throws {
         guard file.deletable, let name = file.mediaName else { throw PipelineFailure.unsupported }

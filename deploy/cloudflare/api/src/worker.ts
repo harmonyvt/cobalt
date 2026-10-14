@@ -20,6 +20,7 @@ import {
 } from "./app-routes";
 import { livePushConfigured } from "./apns";
 import { harkConfigured } from "./notify";
+import { saveEmote, searchEmotes } from "./emotes";
 import { decide, isStudioPath } from "./gate";
 import { KEY_ID_HEADER, SERVICE_HEADER, stripInternalHeaders } from "./headers";
 import { lookupKey } from "./keys";
@@ -285,6 +286,14 @@ async function handleInner(
         }
         if (decision.then === "library_list") {
             const r = await libraryList(appDeps(env, container, edge), url.searchParams);
+            return json(r.status, r.body, allowOrigin);
+        }
+        if (decision.then === "emotes_search" || decision.then === "emotes_save") {
+            const deps = appDeps(env, container, edge);
+            const r =
+                decision.then === "emotes_search"
+                    ? await searchEmotes(deps, url.searchParams)
+                    : await saveEmote(deps, request, keyId);
             return json(r.status, r.body, allowOrigin);
         }
         if (decision.then === "library_file") {

@@ -14,7 +14,7 @@ export const ITEM_ID_LENGTH = 16;
 export const SERVICE_KEY_ID = "service:library";
 
 // 'made' = a crop or an export made on the device (section 18.6)
-export type MediaSource = "webp" | "studio" | "host" | "upload" | "saved" | "made";
+export type MediaSource = "webp" | "studio" | "host" | "upload" | "saved" | "made" | "emote";
 
 // migration 0009 (section 18.1)
 export type MediaRole = "item" | "slideshow" | "crop" | "export";

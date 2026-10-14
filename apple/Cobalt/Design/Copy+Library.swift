@@ -71,6 +71,7 @@ extension Copy {
             case .photos: return Copy.Gallery.kindPhotos
             case .galleries: return Copy.Gallery.kindGalleries
             case .webps: return Copy.Gallery.kindWebps
+            case .emotes: return Copy.Gallery.kindEmotes
             }
         }
         /// A chip's text: `galleries 3`; the bare word while the whole library is not loaded yet (a count of a page would lie).

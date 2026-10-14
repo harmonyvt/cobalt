@@ -547,6 +547,7 @@ migration, no new binding, no web change. The Worker-side code is `api/src/app-r
 | `GET /capabilities` | none (a key, if sent, is reported) | Worker (D1 for the key at most) |
 | `PUT /studio/upload?name=[&queue=1][&title=]` | key | Worker (R2 + D1), then the DO's internal `POST /studio/upload/adopt` for a video |
 | `GET /library?limit=&cursor=` | key | Worker (D1) |
+| `GET /emotes?q=`, `POST /emotes` | key | Worker (D1 + R2). Search asks 7TV and stores nothing; save keeps the largest animated webp (`source: emote`) |
 | `GET\|HEAD /library/items/<id>/file` | key | Worker (D1 + R2) |
 | `POST /library/items/<id>/publish` | key | Worker (D1 + R2) |
 | `POST /library/items/<id>/studio[?queue=1]` | key | Worker (D1), then the DO's internal adopt (or reopens a ready session) |

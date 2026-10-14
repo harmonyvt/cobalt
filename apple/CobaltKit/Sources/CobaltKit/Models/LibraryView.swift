@@ -35,15 +35,18 @@ public enum LibraryShow: String, Sendable, CaseIterable { case everything, publi
 /// The kind chips (apple/CONTRACT-GALLERY.md 1.21): `all · videos · photos · galleries · webps`. A media is one kind
 /// (`MediaItem.kind`); `webps` is a media that holds nothing but webps. Remembered like the other view state.
 public enum LibraryKindFilter: String, Sendable, CaseIterable {
-    case all, videos, photos, galleries, webps
+    case all, videos, photos, galleries, webps, emotes
 
-    func passes(_ kind: MediaKind) -> Bool {
+    /// An emote is only on the emotes chip. `all` and `webps` leave it out.
+    func passes(kind: MediaKind, emote: Bool) -> Bool {
+        if emote { return self == .emotes }
         switch self {
         case .all: return true
         case .videos: return kind == .video
         case .photos: return kind == .photo
         case .galleries: return kind == .gallery
         case .webps: return kind == .webp
+        case .emotes: return false
         }
     }
 }
@@ -93,6 +96,8 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
     public let kind: MediaKind
     /// The items of a gallery (`MediaItem.itemCount`: the count badge); 0 for every other media.
     public let itemCount: Int
+    /// A 7TV emote. It is not counted with webps.
+    public let emote: Bool
 
     public init(item: MediaItem) {
         self.item = item
@@ -105,6 +110,7 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
         offline = item.offline
         kind = item.kind
         itemCount = item.kind == .gallery ? item.itemCount : 0
+        emote = item.post?.isEmote ?? false
 
         let source = item.video ?? item.face
         let duration = source.duration ?? item.face.duration ?? item.post?.duration
@@ -215,7 +221,7 @@ extension AppModel {
     public var libraryRows: [LibraryRow] {
         var rows = library.posts.map { LibraryRow(item: mediaItem(for: $0)) }
         if library.show != .everything { rows = rows.filter { $0.passes(library.show) } }
-        if library.kindFilter != .all { rows = rows.filter { library.kindFilter.passes($0.kind) } }
+        rows = rows.filter { library.kindFilter.passes(kind: $0.kind, emote: $0.emote) }
         let query = library.trimmedQuery
         if !query.isEmpty {
             let folded = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)

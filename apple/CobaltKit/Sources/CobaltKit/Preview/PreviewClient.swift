@@ -576,6 +576,27 @@ public struct PreviewClient: CobaltClient {
         return StudioCreated(id: sid, pageURL: nil, queued: queue ? placed.queued : false, queueAhead: queue ? placed.ahead : nil)
     }
 
+    public func searchEmotes(query: String) async throws -> [EmoteHit] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return [] }
+        guard q.contains("cat") else { return [] }
+        return [Self.catJAM]
+    }
+
+    public func saveEmote(id: String) async throws -> SavedEmote {
+        guard id == Self.catJAM.id else { throw CobaltError.api(code: "error.emote.not_found", httpStatus: 404) }
+        return SavedEmote(id: "PrEvIeWemote0001", name: "catJAM", url: Self.catJAM.fileURL, emoteID: id)
+    }
+
+    private static let catJAM = EmoteHit(
+        id: "01F6MQ33FG000FFJ97ZB8MWV52",
+        name: "catJAM",
+        animated: true,
+        previewURL: URL(string: "https://cdn.7tv.app/emote/01F6MQ33FG000FFJ97ZB8MWV52/2x.webp")!,
+        fileURL: URL(string: "https://cdn.7tv.app/emote/01F6MQ33FG000FFJ97ZB8MWV52/4x.webp")!,
+        libraryID: nil,
+        libraryURL: nil)
+
     public func library(cursor: String?, limit: Int) async throws -> LibraryPage {
         shown(PreviewData.libraryPage(now: clock.now()))
     }
