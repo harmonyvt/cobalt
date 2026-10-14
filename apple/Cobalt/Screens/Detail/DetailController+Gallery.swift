@@ -86,6 +86,38 @@ extension DetailController {
         item.items.filter { r in r.itemIndex.map { picked.contains($0) } ?? false }
     }
 
+    // MARK: - share the files
+
+    /// Local file URLs for the system share sheet, in `renditions` order. One `localCopy` at a time.
+    /// A public link is not a file: `publicURL` is never returned. The URL `localCopy` returns is kept —
+    /// deleting it can destroy the only copy (the original, or a temp in the inbox).
+    func localFileURLs(for renditions: [Rendition]) async -> [URL] {
+        notice = nil
+        var urls: [URL] = []
+        var firstError: Error?
+        for rendition in renditions {
+            if let url = rendition.local?.fileURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) {
+                urls.append(url)
+                continue
+            }
+            guard let file = rendition.file else { continue }
+            do {
+                let copied = try await model.library.localCopy(file)
+                // Never `rendition.publicURL`: an https link is not a file the share sheet can send.
+                guard copied.isFileURL else { continue }
+                urls.append(copied)
+            } catch {
+                if firstError == nil { firstError = error }
+            }
+        }
+        if urls.isEmpty {
+            notice = firstError.map(Self.words) ?? DetailWords.notOnThisDevice
+        } else if let firstError {
+            notice = Self.words(firstError)
+        }
+        return urls
+    }
+
     // MARK: - words
 
     /// A neutral line under the actions for a moment.

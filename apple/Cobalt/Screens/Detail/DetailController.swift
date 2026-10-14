@@ -52,6 +52,8 @@ final class DetailController {
     /// `select photos` is on: the strip shows ticks, the actions become share / to photos / delete.
     var selecting = false
     var picked: Set<Int> = []
+    /// True while share is copying files onto this device, before the sheet is shown.
+    var preparingShare = false
     /// A neutral line under the actions for a moment (`copied 12 links.`, `saved to Photos.`).
     var flash: String?
     /// A switch of the whole post is on its way.

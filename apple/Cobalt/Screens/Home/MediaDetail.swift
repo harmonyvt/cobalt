@@ -112,6 +112,9 @@ struct MediaDetail: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .navigationTitle(title(item))
+        // omitted when not selecting: an empty subtitle reserves a blank line under the title
+        .selectionSubtitle(
+            !gone && controller.selecting ? DetailWords.selected(controller.pickedRenditions(in: item).count) : nil)
         // the title is a menu (iOS inline title, the Mac window title): `rename`
         .toolbarTitleMenu {
             if !gone { renameButton }
@@ -258,6 +261,18 @@ struct MediaDetail: View {
             .frame(width: 0, height: 0)
             .opacity(0)
             .accessibilityHidden(true)
+        }
+    }
+}
+
+extension View {
+    /// The selection count under the title. Nil applies nothing: an empty subtitle reserves a blank line.
+    @ViewBuilder
+    fileprivate func selectionSubtitle(_ text: String?) -> some View {
+        if let text {
+            navigationSubtitle(text)
+        } else {
+            self
         }
     }
 }
