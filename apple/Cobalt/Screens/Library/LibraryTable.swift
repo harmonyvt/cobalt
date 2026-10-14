@@ -80,12 +80,24 @@ struct LibraryTable: View {
         Table(rows, selection: $controller.selection, sortOrder: sortOrder) {
             TableColumn(Copy.Library2.colTitle, value: \.title) { row in
                 HStack(spacing: 8) {
+                    if controller.selecting {
+                        // A click that only moves the inspector selection does not run `primaryAction`, so the tick
+                        // itself toggles. It is not its own VoiceOver control; the cell carries `.isSelected`.
+                        Button { controller.togglePick(row.id) } label: {
+                            LibraryPickMark(ticked: controller.picked.contains(row.id))
+                                .frame(width: 28, height: 28)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityHidden(true)
+                    }
                     LibraryThumb(row: row, side: 24, reload: controller.reload)
                     LibraryTitleText(row: row, size: 11.5, weight: .medium)
                 }
                 .onAppear { if lastIDs.contains(row.id) { controller.loadMoreIfNeeded() } }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
+                .accessibilityAddTraits(controller.selecting && controller.picked.contains(row.id) ? .isSelected : [])
             }
             .width(min: 150, ideal: 280)
             if controller.model.capabilities.gallery {
@@ -137,11 +149,16 @@ struct LibraryTable: View {
             .width(min: 90, ideal: 110, max: 150)
         }
         .contextMenu(forSelectionType: String.self) { ids in
-            if let id = ids.first, let row = rows.first(where: { $0.id == id }) {
+            if !controller.selecting, let id = ids.first, let row = rows.first(where: { $0.id == id }) {
                 LibraryMenuItems(row: row, controller: controller) { removing = $0 }
             }
         } primaryAction: { ids in
-            if let id = ids.first, let row = rows.first(where: { $0.id == id }) { controller.open(row) }
+            guard let id = ids.first else { return }
+            if controller.selecting {
+                controller.togglePick(id)
+            } else if let row = rows.first(where: { $0.id == id }) {
+                controller.open(row)
+            }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -169,47 +186,54 @@ struct LibraryListRow: View {
     let row: LibraryRow
     let model: AppModel
     let reload: Int
+    var selecting = false
+    var ticked = false
     @Environment(\.dynamicTypeSize) private var typeSize
 
     private var stacked: Bool { typeSize.isAccessibilitySize }
 
     var body: some View {
         let meta = LibraryRowCopy.meta(row, now: Date(), withKind: model.capabilities.gallery)
-        Group {
-            if stacked {
-                VStack(alignment: .leading, spacing: 8) {
-                    LibraryThumb(row: row, side: 64, reload: reload, maxPixel: 256)
-                    VStack(alignment: .leading, spacing: 3) {
-                        LibraryTitleText(row: row, size: 13).lineLimit(nil)
-                        Text(meta).font(CobaltType.captionSmall).foregroundStyle(.secondary)
-                        LibraryRowBadges(row: row, model: model)
-                    }
-                }
-            } else {
-                HStack(spacing: 10) {
-                    LibraryThumb(row: row, side: 44, reload: reload)
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            LibraryTitleText(row: row)
-                            Spacer(minLength: 4)
+        HStack(spacing: 10) {
+            Group {
+                if stacked {
+                    VStack(alignment: .leading, spacing: 8) {
+                        LibraryThumb(row: row, side: 64, reload: reload, maxPixel: 256)
+                        VStack(alignment: .leading, spacing: 3) {
+                            LibraryTitleText(row: row, size: 13).lineLimit(nil)
+                            Text(meta).font(CobaltType.captionSmall).foregroundStyle(.secondary)
                             LibraryRowBadges(row: row, model: model)
                         }
-                        Text(meta)
-                            .font(Font.cobalt(10.5, .regular, relativeTo: .caption2))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
+                    }
+                } else {
+                    HStack(spacing: 10) {
+                        LibraryThumb(row: row, side: 44, reload: reload)
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                LibraryTitleText(row: row)
+                                Spacer(minLength: 4)
+                                LibraryRowBadges(row: row, model: model)
+                            }
+                            Text(meta)
+                                .font(Font.cobalt(10.5, .regular, relativeTo: .caption2))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if selecting { LibraryPickMark(ticked: ticked) }
         }
+        .opacity(selecting && !ticked ? 0.7 : 1)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(minHeight: stacked ? nil : 44)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
         .accessibilityValue(OfflineMark(item: row.item, model: model).spoken.map { "\(meta), \($0)" } ?? meta)
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(ticked ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -227,17 +251,20 @@ struct LibraryList: View {
             List {
                 Section {
                     ForEach(rows) { row in
-                        Button { controller.open(row) } label: { LibraryListRow(row: row, model: controller.model, reload: controller.reload) }
-                            .buttonStyle(.plain)
-                            .zoomSource(id: row.id, in: zoom)
-                            .contextMenu {
-                                LibraryMenuItems(row: row, controller: controller) { removing = $0 }
-                            } preview: {
-                                LibraryPreviewCard(row: row)
-                            }
-                            .listRowBackground(controller.lit == row.id ? CobaltColor.focus.opacity(0.14) : nil)
-                            .id(row.id)
-                            .onAppear { if lastIDs.contains(row.id) { controller.loadMoreIfNeeded() } }
+                        let selecting = controller.selecting
+                        Button {
+                            if selecting { controller.togglePick(row.id) } else { controller.open(row) }
+                        } label: {
+                            LibraryListRow(
+                                row: row, model: controller.model, reload: controller.reload,
+                                selecting: selecting, ticked: controller.picked.contains(row.id))
+                        }
+                        .buttonStyle(.plain)
+                        .zoomSource(id: row.id, in: zoom)
+                        .modifier(LibraryRowMenu(row: row, controller: controller, enabled: !selecting, removing: $removing))
+                        .listRowBackground(controller.lit == row.id ? CobaltColor.focus.opacity(0.14) : nil)
+                        .id(row.id)
+                        .onAppear { if lastIDs.contains(row.id) { controller.loadMoreIfNeeded() } }
                     }
                 } footer: {
                     LibraryFooterView(state: footer) { Task { await controller.library.loadMore() } }

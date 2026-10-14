@@ -29,6 +29,10 @@ extension Copy {
         static let refresh = "refresh library"                                 // Mac menu, ⌘R
         static let asMosaic = "as mosaic", asTable = "as table"                // Mac view menu
         static let toggleDetail = "show or hide the detail"                    // inspector button a11y
+        static let select = "select"                                           // select-mode checkbox, off
+        static let doneSelecting = "done"                                      // the same checkbox, on
+        /// The navigation subtitle while selecting: nothing ticked yet, or how many are.
+        static func selected(_ n: Int) -> String { n == 0 ? "tick posts" : "\(n) selected" }
 
         // table columns and cells
         static let colTitle = "title", colService = "service", colLength = "length"

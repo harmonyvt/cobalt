@@ -159,7 +159,8 @@ struct LibraryMosaic: View {
             LibraryTile(
                 row: row, index: slot.index, size: size, centerY: Self.topInset + slot.y + slot.height / 2,
                 maxPixel: maxPixel, showsCaption: true, lit: controller.lit == row.id,
-                selected: !controller.compact && controller.selection == row.id, reload: controller.reload,
+                selected: !controller.compact && controller.selection == row.id,
+                selecting: controller.selecting, ticked: controller.picked.contains(row.id), reload: controller.reload,
                 controller: controller, budget: budget, zoom: zoom, nearEnd: slot.index >= rows.count - 6)
             .equatable()
         }

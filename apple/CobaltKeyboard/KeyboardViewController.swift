@@ -4,104 +4,173 @@ import UIKit
 import UniformTypeIdentifiers
 
 /// Principal class of the custom keyboard (`com.apple.keyboard-service`).
-/// The gallery fills the keyboard. ABC returns to the Apple keyboard.
+/// A tab at the top switches a typing keyboard and the library gallery.
 final class KeyboardViewController: UIInputViewController {
     private let model = KeyboardGalleryModel()
-    private let switchBar = UIView()
-    private let nextKeyboardButton = UIButton(type: .system)
-    private var galleryAboveBar: NSLayoutConstraint!
-    private var galleryAtBottom: NSLayoutConstraint!
+    private let keysView = KeyboardKeysView()
+    private let tabBar = UIStackView()
+    private let keyboardTab = UIButton(type: .system)
+    private let galleryTab = UIButton(type: .system)
+    private var galleryHost: UIHostingController<KeyboardGalleryView>!
+    private var heightConstraint: NSLayoutConstraint!
+    private var showingGallery = false
+
+    override func loadView() {
+        let chrome = KeyboardChromeView(frame: .zero, inputViewStyle: .keyboard)
+        chrome.allowsSelfSizing = true
+        view = chrome
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         CobaltFont.register()
-        view.backgroundColor = .clear
         model.onCopy = { [weak self] post in self?.copyFile(post) }
         model.onHold = { [weak self] post in self?.insertLink(post) }
         model.setFullAccess(hasFullAccess)
         installSubviews()
+        showGallery(false)
+        updateHeight()
         applyKeyboardAppearance()
         model.reloadIfEmpty()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        updateHeight()
         applyKeyboardAppearance()
         model.setFullAccess(hasFullAccess)
-        model.reloadIfEmpty()
+        if showingGallery { model.reloadIfEmpty() }
     }
 
     override func viewWillLayoutSubviews() {
-        let showSwitch = needsInputModeSwitchKey
-        if nextKeyboardButton.isHidden == showSwitch {
-            nextKeyboardButton.isHidden = !showSwitch
-            switchBar.isHidden = !showSwitch
-            // Drop the unused pin before adding the other, so the two bottoms never both apply.
-            if showSwitch {
-                galleryAtBottom.isActive = false
-                galleryAboveBar.isActive = true
-            } else {
-                galleryAboveBar.isActive = false
-                galleryAtBottom.isActive = true
-            }
-        }
+        keysView.showsGlobe = needsInputModeSwitchKey
+        updateHeight()
         super.viewWillLayoutSubviews()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        updateHeight()
+        applyKeyboardAppearance()
+    }
+
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: { _ in self.updateHeight() })
     }
 
     override func textDidChange(_ textInput: UITextInput?) {
         applyKeyboardAppearance()
     }
 
-    /// Pins the gallery to the edges above a 44pt bar. The bar goes away when the switch key does.
+    /// iPhone portrait is the tall keyboard. Landscape is short. iPad stays tall.
+    private func updateHeight() {
+        let pad = traitCollection.userInterfaceIdiom == .pad
+        let landscape = traitCollection.verticalSizeClass == .compact
+        let height: CGFloat = pad ? 320 : (landscape ? 204 : 291)
+        heightConstraint?.constant = height
+        (view as? KeyboardChromeView)?.preferredHeight = height
+    }
+
     private func installSubviews() {
+        heightConstraint = view.heightAnchor.constraint(equalToConstant: 291)
+        heightConstraint.priority = UILayoutPriority(999)
+        heightConstraint.isActive = true
+
+        tabBar.axis = .horizontal
+        tabBar.spacing = 6
+        tabBar.distribution = .fillEqually
+        tabBar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(tabBar)
+
+        configureTab(keyboardTab, title: KeyboardWords.keyboard, gallery: false)
+        configureTab(galleryTab, title: KeyboardWords.gallery, gallery: true)
+        tabBar.addArrangedSubview(keyboardTab)
+        tabBar.addArrangedSubview(galleryTab)
+
+        keysView.translatesAutoresizingMaskIntoConstraints = false
+        keysView.insert = { [weak self] text in self?.textDocumentProxy.insertText(text) }
+        keysView.deleteCharacter = { [weak self] in self?.textDocumentProxy.deleteBackward() }
+        // A SwiftUI button cannot receive the UIEvent this selector needs.
+        keysView.globeButton.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
+        view.addSubview(keysView)
+
         let host = UIHostingController(rootView: KeyboardGalleryView(model: model))
         host.view.backgroundColor = .clear
-        addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false
+        addChild(host)
         view.addSubview(host.view)
+        host.didMove(toParent: self)
+        galleryHost = host
 
-        switchBar.translatesAutoresizingMaskIntoConstraints = false
-        switchBar.backgroundColor = .clear
-        view.addSubview(switchBar)
-
-        nextKeyboardButton.setTitle("ABC", for: .normal)
-        nextKeyboardButton.titleLabel?.font = UIFont(name: "IBMPlexMono-Medm", size: 16)
-            ?? .monospacedSystemFont(ofSize: 16, weight: .medium)
-        nextKeyboardButton.translatesAutoresizingMaskIntoConstraints = false
-        // A SwiftUI Button cannot receive the UIEvent this selector needs.
-        nextKeyboardButton.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
-        switchBar.addSubview(nextKeyboardButton)
-
-        galleryAboveBar = host.view.bottomAnchor.constraint(equalTo: switchBar.topAnchor)
-        galleryAtBottom = host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-
+        let bodyTop = tabBar.bottomAnchor
+        let bodyBottom = view.safeAreaLayoutGuide.bottomAnchor
         NSLayoutConstraint.activate([
+            tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            tabBar.topAnchor.constraint(equalTo: view.topAnchor, constant: 4),
+            tabBar.heightAnchor.constraint(equalToConstant: 44),
+
+            keysView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            keysView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            keysView.topAnchor.constraint(equalTo: bodyTop, constant: 6),
+            keysView.bottomAnchor.constraint(equalTo: bodyBottom),
+
             host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            host.view.topAnchor.constraint(equalTo: view.topAnchor),
-            galleryAboveBar,
-            switchBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            switchBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            switchBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            switchBar.heightAnchor.constraint(equalToConstant: 44),
-            nextKeyboardButton.leadingAnchor.constraint(equalTo: switchBar.leadingAnchor, constant: 8),
-            nextKeyboardButton.topAnchor.constraint(equalTo: switchBar.topAnchor),
-            nextKeyboardButton.bottomAnchor.constraint(equalTo: switchBar.bottomAnchor),
-            nextKeyboardButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            host.view.topAnchor.constraint(equalTo: bodyTop, constant: 6),
+            host.view.bottomAnchor.constraint(equalTo: bodyBottom),
         ])
-        host.didMove(toParent: self)
+    }
+
+    private func configureTab(_ button: UIButton, title: String, gallery: Bool) {
+        button.setTitle(title, for: .normal)
+        button.titleLabel?.font = UIFont(name: "IBMPlexMono-Medm", size: 15)
+            ?? .systemFont(ofSize: 15, weight: .medium)
+        button.layer.cornerRadius = 8
+        button.layer.cornerCurve = .continuous
+        button.addAction(UIAction { [weak self] _ in self?.showGallery(gallery) }, for: .touchUpInside)
+    }
+
+    private func showGallery(_ gallery: Bool) {
+        showingGallery = gallery
+        keysView.isHidden = gallery
+        galleryHost.view.isHidden = !gallery
+        styleTabs()
+        if gallery {
+            model.setFullAccess(hasFullAccess)
+            model.reloadIfEmpty()
+        }
     }
 
     private func applyKeyboardAppearance() {
+        let dark: Bool
         switch textDocumentProxy.keyboardAppearance {
         case .dark:
             view.overrideUserInterfaceStyle = .dark
+            dark = true
         case .light:
             view.overrideUserInterfaceStyle = .light
+            dark = false
         default:
             view.overrideUserInterfaceStyle = .unspecified
+            dark = traitCollection.userInterfaceStyle == .dark
         }
-        nextKeyboardButton.setTitleColor(.label, for: .normal)
+        view.backgroundColor = KeyboardChrome.background(dark: dark)
+        keysView.apply(dark: dark)
+        styleTabs()
+    }
+
+    private func styleTabs() {
+        let dark = view.overrideUserInterfaceStyle == .dark
+            || (view.overrideUserInterfaceStyle == .unspecified && traitCollection.userInterfaceStyle == .dark)
+        let label = KeyboardChrome.label(dark: dark)
+        let quiet = label.withAlphaComponent(0.55)
+        let selectedFill = dark ? UIColor(white: 1, alpha: 0.18) : UIColor(white: 1, alpha: 0.72)
+        for (button, selected) in [(keyboardTab, !showingGallery), (galleryTab, showingGallery)] {
+            button.backgroundColor = selected ? selectedFill : .clear
+            button.setTitleColor(selected ? label : quiet, for: .normal)
+        }
     }
 
     /// One download at a time. A second tap, or a hold, while one is in flight does nothing.
