@@ -186,17 +186,22 @@ struct RemoteHeroPicture: View {
     var muted = true
     /// Set once the hosted video has run: the controls are laid over it from then on, and the cloud badge gives way.
     var ready: Binding<Bool>?
+    /// The animated webp has drawn a frame. The still underneath leaves then: an emote's frames are
+    /// transparent, and a first frame left under them shows as a second, frozen copy.
+    @State private var webpUp = false
 
     var body: some View {
         ZStack {
             Rectangle().fill(FrameGradient.fill(1))
-            if let poster {
-                StillImage(url: poster)
-            } else if let still = remote.still {
-                RemoteStill(poster: still, maxPixel: 960)
+            if !webpUp {
+                if let poster {
+                    StillImage(url: poster)
+                } else if let still = remote.still {
+                    RemoteStill(poster: still, maxPixel: 960)
+                }
             }
             if let webp = remote.animatedWebp {
-                AnimatedImageView(source: HeroSource.animated(webp))
+                AnimatedImageView(source: HeroSource.animated(webp), started: $webpUp)
             } else if let video = remote.playableVideo {
                 RemoteVideo(url: HeroSource.resolve(video), transport: transport, muted: muted, ready: ready)
             } else if remote.lockedWebp, poster == nil, remote.still == nil {

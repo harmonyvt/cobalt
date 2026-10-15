@@ -190,12 +190,16 @@ private final class AnimatedImageModel {
     var failed = false
     @ObservationIgnored private var stopFlag: StopFlag?
 
+    /// Set once a frame has been drawn. A still underneath can then leave: an emote's frames are
+    /// transparent, so a poster left under them reads as a second, frozen copy.
+    var hasFrame = false
+
     func play(file url: URL) {
         stop()
         let flag = StopFlag()
         stopFlag = flag
         let ok = AnimationDriver.play(url: url, stop: flag) { [weak self] frame in
-            Task { @MainActor in self?.image = frame }
+            Task { @MainActor in self?.show(frame) }
         }
         failed = !ok
     }
@@ -205,9 +209,14 @@ private final class AnimatedImageModel {
         let flag = StopFlag()
         stopFlag = flag
         let ok = AnimationDriver.play(data: data, stop: flag) { [weak self] frame in
-            Task { @MainActor in self?.image = frame }
+            Task { @MainActor in self?.show(frame) }
         }
         failed = !ok
+    }
+
+    private func show(_ frame: ImageBox) {
+        image = frame
+        if !hasFrame { hasFrame = true }
     }
 
     func stop() {
@@ -224,6 +233,8 @@ struct AnimatedImageView: View {
         case remote(URL)
     }
     let source: Source
+    /// Set once the first frame is up, so a poster underneath can leave.
+    var started: Binding<Bool>? = nil
     @State private var model = AnimatedImageModel()
 
     var body: some View {
@@ -234,6 +245,9 @@ struct AnimatedImageView: View {
                 }
             }
             .clipped()
+            .onChange(of: model.hasFrame) { _, up in
+                if up, started?.wrappedValue != true { started?.wrappedValue = true }
+            }
             .task(id: source) {
                 switch source {
                 case .file(let url):
