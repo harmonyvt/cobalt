@@ -12,19 +12,26 @@ struct EmotePicture: View {
 
     var body: some View {
         ZStack {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFit()
-                } else {
-                    Color.clear
+            // The still leaves once a frame is playing. An emote's frames are transparent, so a
+            // first frame left underneath shows as a second, frozen copy.
+            if !animated || !playing {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        image.resizable().scaledToFit()
+                    } else {
+                        Color.clear
+                    }
                 }
             }
             if animated, let url {
-                EmoteMotion(url: url)
+                EmoteMotion(url: url, started: $playing)
             }
         }
         .frame(width: side, height: side)
+        .onChange(of: url) { _, _ in playing = false }
     }
+
+    @State private var playing = false
 }
 
 @MainActor @Observable
@@ -32,12 +39,18 @@ private final class EmoteMotionModel {
     var image: EmoteFrame?
     @ObservationIgnored private var stopFlag: EmoteStop?
 
+    var hasFrame = false
+
     func play(data: Data) {
         stop()
         let flag = EmoteStop()
         stopFlag = flag
         _ = EmoteDriver.play(data: data, stop: flag) { [weak self] frame in
-            Task { @MainActor in self?.image = frame }
+            Task { @MainActor in
+                guard let self else { return }
+                self.image = frame
+                if !self.hasFrame { self.hasFrame = true }
+            }
         }
     }
 
@@ -49,6 +62,7 @@ private final class EmoteMotionModel {
 
 private struct EmoteMotion: View {
     let url: URL
+    var started: Binding<Bool>
     @State private var model = EmoteMotionModel()
 
     var body: some View {
@@ -57,6 +71,9 @@ private struct EmoteMotion: View {
                 if let image = model.image {
                     Image(decorative: image.image, scale: 1).resizable().scaledToFit()
                 }
+            }
+            .onChange(of: model.hasFrame) { _, up in
+                if up, started.wrappedValue != true { started.wrappedValue = true }
             }
             .task(id: url) {
                 guard let (data, _) = try? await URLSession.shared.data(from: url), !Task.isCancelled else { return }
