@@ -302,14 +302,7 @@ private struct EmoteKeyTile: View {
     var body: some View {
         VStack(spacing: 2) {
             ZStack(alignment: .topTrailing) {
-                AsyncImage(url: hit.previewURL) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFit()
-                    } else {
-                        Color.clear
-                    }
-                }
-                .frame(width: 56, height: 56)
+                EmotePicture(url: hit.previewURL, animated: hit.animated, side: 56)
                 .contentShape(Rectangle())
                 .gesture(
                     LongPressGesture(minimumDuration: 0.45).onEnded { _ in hold() }
