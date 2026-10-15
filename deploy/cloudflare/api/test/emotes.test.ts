@@ -197,6 +197,7 @@ describe("POST /emotes", () => {
         expect(body.name).toBe("catJAM");
         expect(media.puts).toHaveLength(1);
         expect(media.puts[0].key).toMatch(/^[A-Za-z0-9]{10}\.webp$/);
+        expect(media.puts[0].value).toBeInstanceOf(ArrayBuffer);
 
         const row = db.raw.prepare("SELECT source, content_type, link, bucket FROM media_items WHERE id = ?").get(body.id) as {
             source: string;

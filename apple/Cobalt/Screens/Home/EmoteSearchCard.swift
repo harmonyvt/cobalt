@@ -133,6 +133,7 @@ struct EmoteSearchCard: View {
             guard mine == token else { return }
             hits = found
             missed = found.isEmpty
+            failed = false
         } catch {
             guard mine == token else { return }
             hits = []
@@ -152,6 +153,7 @@ struct EmoteSearchCard: View {
                     next.libraryURL = nil
                     hits[index] = next
                 }
+                failed = false
             } catch {
                 failed = true
             }
@@ -167,6 +169,7 @@ struct EmoteSearchCard: View {
                 next.libraryURL = saved.url
                 hits[index] = next
             }
+            failed = false
         } catch {
             failed = true
         }
@@ -177,6 +180,7 @@ struct EmoteSearchCard: View {
         defer { busy.remove(file.id) }
         do {
             try await model.library.removeEmote(fileID: file.id)
+            failed = false
         } catch {
             failed = true
         }

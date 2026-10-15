@@ -13,7 +13,8 @@ import { getSession, studioErr, type OriginalsBucket, type StudioReply } from ".
 export interface PublishBucket {
     put(
         key: string,
-        value: ReadableStream,
+        // R2 accepts a buffer or a byte stream. A plain ReadableStream is rejected.
+        value: ReadableStream | ArrayBuffer,
         options: {
             httpMetadata: { contentType: string; cacheControl: string };
             customMetadata: Record<string, string>;
