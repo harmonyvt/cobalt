@@ -238,14 +238,9 @@ export async function saveEmote(
 
     const name = mintName(d.randomBytes);
     const url = (d.mediaBaseUrl.endsWith("/") ? d.mediaBaseUrl : `${d.mediaBaseUrl}/`) + name;
-    const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-            controller.enqueue(new Uint8Array(bytes));
-            controller.close();
-        },
-    });
     try {
-        await d.media.put(name, stream, {
+        // The bytes themselves. A default ReadableStream is not a byte stream, and R2 refuses it.
+        await d.media.put(name, bytes, {
             httpMetadata: { contentType: "image/webp", cacheControl: "public, max-age=31536000, immutable" },
             customMetadata: { source: "emote", emoteId: id },
         });
