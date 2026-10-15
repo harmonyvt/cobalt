@@ -50,6 +50,7 @@ struct EmoteSearchCard: View {
                                 id: hit.id,
                                 name: hit.name,
                                 url: hit.previewURL,
+                                animated: hit.animated,
                                 mark: hit.libraryID != nil,
                                 action: { Task { await tap(hit) } })
                         }
@@ -59,6 +60,8 @@ struct EmoteSearchCard: View {
                                 id: file.id,
                                 name: file.name,
                                 url: file.url,
+                                // A saved webp carries no flag. A still shows its one frame; an animated one plays.
+                                animated: true,
                                 mark: false,
                                 action: { Task { await remove(file) } })
                         }
@@ -82,18 +85,11 @@ struct EmoteSearchCard: View {
         }
     }
 
-    private func tile(id: String, name: String, url: URL?, mark: Bool, action: @escaping () -> Void) -> some View {
+    private func tile(id: String, name: String, url: URL?, animated: Bool, mark: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 6) {
                 ZStack {
-                    AsyncImage(url: url) { phase in
-                        if let image = phase.image {
-                            image.resizable().scaledToFit()
-                        } else {
-                            Color.clear
-                        }
-                    }
-                    .frame(width: 64, height: 64)
+                    EmotePicture(url: url, animated: animated)
                     if busy.contains(id) {
                         ProgressView().controlSize(.small)
                     } else if mark {
