@@ -451,3 +451,37 @@ public final class Settings {
         hasAPIKey = Settings.apiKey(in: keychain, forServer: serverURL) != nil
     }
 }
+
+// MARK: - Last known server
+
+extension Settings {
+    private struct KnownCapabilities: Codable {
+        var server: String
+        var capabilities: Capabilities
+    }
+
+    nonisolated static let knownCapabilitiesKey = "server.lastCapabilities"
+
+    /// What the current server last answered, so a launch draws the tabs and controls it had instead of growing
+    /// them when `/capabilities` answers. Nil for another server, or when nothing was stored.
+    var knownCapabilities: Capabilities? {
+        guard let data = defaults.data(forKey: Settings.knownCapabilitiesKey),
+              let known = try? JSONDecoder().decode(KnownCapabilities.self, from: data),
+              known.server == serverURL.absoluteString
+        else { return nil }
+        return known.capabilities
+    }
+
+    /// Remembers a cobalt's answer for the current server; anything else (not cobalt, unreachable) keeps or clears it.
+    func remember(_ caps: Capabilities) {
+        switch caps.kind {
+        case .fork, .legacyFork, .plainCobalt:
+            let known = KnownCapabilities(server: serverURL.absoluteString, capabilities: caps)
+            if let data = try? JSONEncoder().encode(known) { defaults.set(data, forKey: Settings.knownCapabilitiesKey) }
+        case .notCobalt:
+            defaults.removeObject(forKey: Settings.knownCapabilitiesKey)
+        case .unreachable:
+            break
+        }
+    }
+}

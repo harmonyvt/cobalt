@@ -10,8 +10,8 @@ import SwiftUI
 /// phone (with the zoom from the tile), in a trailing inspector on the iPad and Mac. The context menu, rename and
 /// `delete everything` are the same in every view.
 ///
-/// Compact (iPhone, or any narrow window): the shell provides the navigation stack. Regular and wide: this screen
-/// brings its own on iOS; the Mac's window toolbar is already there.
+/// iOS: this screen always brings its own navigation stack. Mac: a narrow window gets one; otherwise the window's
+/// toolbar is already there.
 struct LibraryScreen: View {
     let model: AppModel
     let tier: Tier
@@ -27,11 +27,8 @@ struct LibraryScreen: View {
     var body: some View {
         Group {
             #if os(iOS)
-            if tier == .compact {
-                LibraryContent(model: model, tier: tier, controller: controller)
-            } else {
-                NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
-            }
+            // Always its own stack (the shell adds none), so the tier never changes this screen's identity.
+            NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
             #else
             if tier == .compact {
                 NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
