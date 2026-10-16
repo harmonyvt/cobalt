@@ -1,7 +1,7 @@
 import Foundation
 
 /// One 7TV emote from `GET /emotes` (APP-API-CONTRACT section 20).
-public struct EmoteHit: Sendable, Equatable, Decodable, Identifiable {
+public struct EmoteHit: Sendable, Equatable, Codable, Identifiable {
     public var id: String
     public var name: String
     public var animated: Bool

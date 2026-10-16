@@ -18,7 +18,6 @@ enum KeyboardWords {
     static let emoteEmpty = "no emotes yet. search to add one."
     static let emoteMiss = "nothing on 7tv for that"
     static let emoteDown = "7tv didn't answer."
-    static let saveFirst = "save it first"
     static func downloading(_ done: Int64, _ total: Int64) -> String { "downloading · \(Copy.bytesOf(done, total))" }
 }
 
@@ -332,6 +331,28 @@ final class KeyboardGalleryModel {
         } catch {
             notice = .failed(KeyboardWords.emoteDown)
         }
+    }
+
+    /// A save made outside the search row (typing mode, a hold) shows its tick there too.
+    func markSaved(_ hit: EmoteHit) {
+        guard let index = emoteHits.firstIndex(where: { $0.id == hit.id }) else { return }
+        emoteHits[index] = hit
+    }
+
+    /// The keyed client, built on first use, so the emote bar works before the library has loaded.
+    func keyedClient() -> Result<HTTPCobaltClient, KeyboardClientMissing> {
+        guard fullAccess else { return .failure(.noAccess) }
+        let settings = Settings.shared()
+        guard settings.apiKey() != nil else { return .failure(.noKey) }
+        let server = settings.serverURL
+        if client == nil || client?.baseURL != server {
+            let keychain = Keychain.shared
+            client = HTTPCobaltClient(
+                baseURL: server,
+                apiKey: { Settings.apiKey(in: keychain, forServer: server) })
+        }
+        guard let client else { return .failure(.noKey) }
+        return .success(client)
     }
 
     func setKind(_ next: LibraryKindFilter) {
