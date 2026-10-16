@@ -578,7 +578,9 @@ struct HomeScreen: View {
         let solo = soloCaption
         return OrbitView(
             media: orbitMedia, scene: scene, running: orbitRuns, dim: orbitDim, freshID: freshID,
-            popID: popID, pool: pool, playersEnabled: motionAllowed,
+            // behind a lifted focus the orbit is a dim backdrop: its players and webps stop like its flipbooks, so the
+            // focus video is not one decoder among four (the posters stay)
+            popID: popID, pool: pool, playersEnabled: motionAllowed && !(focusActive && focusLifted),
             flipbooksEnabled: !(focusActive && focusLifted),
             star: star, signal: shownSignal, poster: pipeline.posterFrame,
             lowPower: lowPower, zoom: zoom,
