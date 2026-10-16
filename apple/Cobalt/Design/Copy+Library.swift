@@ -42,7 +42,8 @@ extension Copy {
         static func sharePrepTitle(_ n: Int) -> String { n == 1 ? "getting 1 file ready" : "getting \(n) files ready" }
         /// What is going out, by kind: `2 videos · 1 photo · 1 gallery cover`.
         static func sharePrepKinds(videos: Int, photos: Int, webps: Int, covers: Int) -> String {
-            func n(_ count: Int, _ one: String, _ many: String) -> String? { count == 0 ? nil : "\(count) \(count == 1 ? one : many)" }
+            func n(_ count: Int, _ one: String, _ many: String) -> String? { count == 0 ? nil : "\(count)\u{00A0}\((count == 1 ? one : many).replacingOccurrences(of: " ", with: "\u{00A0}"))" }
+            // no-break spaces inside each part, so a wrap falls between kinds, never inside "1 gallery cover"
             return [n(videos, "video", "videos"), n(photos, "photo", "photos"), n(webps, "webp", "webps"),
                     n(covers, "gallery cover", "gallery covers")].compactMap { $0 }.joined(separator: " · ")
         }
