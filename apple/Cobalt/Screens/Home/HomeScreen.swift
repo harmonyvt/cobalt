@@ -176,7 +176,8 @@ struct HomeScreen: View {
     /// How far the orbit dims behind the capsule or the focused planet (it dims rather than shrinks).
     private var orbitDim: Double {
         switch stage {
-        case .idle: return 1
+        // the 7tv card's glass blurred full-light planets into grey smudges behind the search: dim them like the capsule
+        case .idle: return emoteOpen ? 0.35 : 1
         case .capsule, .failure, .picker: return 0.55
         // the orbit brightens as the planet goes home, so it is at full light when the planet is handed back
         case .focus: return focusClosing ? 1 : (focusLifted ? 0.4 : 0.55)

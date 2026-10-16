@@ -246,9 +246,15 @@ private struct LibraryContent: View {
             // Select mode keeps the view switcher and replaces the rest of this capsule.
             if controller.selecting {
                 // every post the chip, the search and the show filter leave on screen, in one tap
-                Button(allPicked ? Copy.Library2.selectNone : Copy.Library2.selectAll) {
+                // an icon, so the bar keeps room for the title and the count
+                Button(
+                    allPicked ? Copy.Library2.selectNone : Copy.Library2.selectAll,
+                    systemImage: allPicked ? Symbol.Library.selectNone : Symbol.Library.selectAll
+                ) {
                     controller.toggleAll(rows)
                 }
+                .labelStyle(.iconOnly)
+                .help(allPicked ? Copy.Library2.selectNone : Copy.Library2.selectAll)
                 .disabled(rows.isEmpty)
                 if pickedCount > 0 {
                     Button(Copy.Library2.share, systemImage: Symbol.Library.share) { Task { await sharePicked() } }
