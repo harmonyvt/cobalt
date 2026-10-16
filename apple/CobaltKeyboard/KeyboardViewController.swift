@@ -4,11 +4,12 @@ import UIKit
 import UniformTypeIdentifiers
 
 /// Principal class of the custom keyboard (`com.apple.keyboard-service`).
-/// The gallery fills it. A globe switches back to the Apple keyboard.
+/// The gallery fills it, or typing mode with the ":" emote bar. A globe switches back to the Apple keyboard.
 final class KeyboardViewController: UIInputViewController {
     private let model = KeyboardGalleryModel()
+    private let typing = KeyboardTypingModel()
     private let globe = UIButton(type: .system)
-    private var galleryHost: UIHostingController<KeyboardGalleryView>!
+    private var galleryHost: UIHostingController<KeyboardRootView>!
     private var heightConstraint: NSLayoutConstraint!
 
     override func loadView() {
@@ -24,6 +25,11 @@ final class KeyboardViewController: UIInputViewController {
         model.onHold = { [weak self] post, choice in self?.insertLink(post, choice) }
         model.onCopyEmote = { [weak self] hit in self?.copyEmote(hit) }
         model.onHoldEmote = { [weak self] hit in self?.holdEmote(hit) }
+        typing.insert = { [weak self] text in self?.typeText(text) }
+        typing.deleteBackward = { [weak self] in self?.typeBackspace() }
+        typing.pick = { [weak self] hit in self?.pickSuggestion(hit) }
+        typing.hold = { [weak self] hit in self?.holdSuggestion(hit) }
+        typing.client = { [weak self] in self?.model.keyedClient() ?? .failure(.noKey) }
         model.setFullAccess(hasFullAccess)
         installSubviews()
         updateHeight()
@@ -37,6 +43,7 @@ final class KeyboardViewController: UIInputViewController {
         applyKeyboardAppearance()
         model.setFullAccess(hasFullAccess)
         model.reloadIfEmpty()
+        refreshTyping()
     }
 
     override func viewWillLayoutSubviews() {
@@ -58,6 +65,11 @@ final class KeyboardViewController: UIInputViewController {
 
     override func textDidChange(_ textInput: UITextInput?) {
         applyKeyboardAppearance()
+        refreshTyping()
+    }
+
+    override func selectionDidChange(_ textInput: UITextInput?) {
+        refreshTyping()
     }
 
     private func updateHeight() {
@@ -73,7 +85,7 @@ final class KeyboardViewController: UIInputViewController {
         heightConstraint.priority = UILayoutPriority(999)
         heightConstraint.isActive = true
 
-        let host = UIHostingController(rootView: KeyboardGalleryView(model: model))
+        let host = UIHostingController(rootView: KeyboardRootView(gallery: model, typing: typing))
         host.view.backgroundColor = .clear
         host.view.translatesAutoresizingMaskIntoConstraints = false
         addChild(host)
@@ -272,21 +284,111 @@ final class KeyboardViewController: UIInputViewController {
                 }
                 try self.writePasteboard(dest, label: hit.name)
                 self.model.notice = .copied
+                // a used emote is kept: in the library and first in the typing bar
+                Task { @MainActor in _ = await self.linkSaving(hit, quiet: true) }
             } catch {
                 self.model.notice = .failed(Copy.actionFailed)
             }
         }
     }
 
-    /// The public link of our copy. An emote that is not saved inserts nothing.
+    /// The public link of our copy. An emote that is not saved yet is saved first.
     private func holdEmote(_ hit: EmoteHit) {
-        guard model.busyID == nil else { return }
-        guard let url = hit.libraryURL, url.scheme == "https" || url.scheme == "http" else {
-            model.notice = .failed(KeyboardWords.saveFirst)
-            return
+        guard model.busyID == nil, model.savingEmoteID == nil else { return }
+        Task { @MainActor in
+            guard let url = await self.linkSaving(hit) else { return }
+            self.textDocumentProxy.insertText(url.absoluteString)
+            self.model.notice = nil
         }
-        textDocumentProxy.insertText(url.absoluteString)
+    }
+
+    /// Our public link for the emote, saving it to the library when it is not there yet. Every use lands in the
+    /// recents. Nil after a failure, which shows a notice unless `quiet`.
+    private func linkSaving(_ hit: EmoteHit, quiet: Bool = false) async -> URL? {
+        if let url = Self.webLink(hit.libraryURL) {
+            typing.remember(hit)
+            return url
+        }
+        typing.remember(hit)
+        guard model.savingEmoteID == nil else { return nil }
+        let client: HTTPCobaltClient
+        switch model.keyedClient() {
+        case .success(let ready): client = ready
+        case .failure(let missing):
+            if !quiet { model.notice = .failed(missing == .noAccess ? KeyboardWords.noAccess : KeyboardWords.noKey) }
+            return nil
+        }
+        model.savingEmoteID = hit.id
+        defer { model.savingEmoteID = nil }
+        do {
+            let saved = try await client.saveEmote(id: hit.id)
+            var next = hit
+            next.libraryID = saved.id
+            next.libraryURL = saved.url
+            model.markSaved(next)
+            typing.remember(next)
+            guard let url = Self.webLink(saved.url) else {
+                if !quiet { model.notice = .failed(KeyboardWords.emoteDown) }
+                return nil
+            }
+            return url
+        } catch {
+            if !quiet { model.notice = .failed(KeyboardWords.emoteDown) }
+            return nil
+        }
+    }
+
+    private static func webLink(_ url: URL?) -> URL? {
+        guard let url, url.scheme == "https" || url.scheme == "http" else { return nil }
+        return url
+    }
+
+    // MARK: typing mode
+
+    private func typeText(_ text: String) {
+        UIDevice.current.playInputClick()
         model.notice = nil
+        textDocumentProxy.insertText(text)
+        refreshTyping()
+    }
+
+    private func typeBackspace() {
+        UIDevice.current.playInputClick()
+        model.notice = nil
+        textDocumentProxy.deleteBackward()
+        refreshTyping()
+    }
+
+    private func refreshTyping() {
+        let proxy = textDocumentProxy
+        let caps = proxy.autocapitalizationType ?? .sentences
+        typing.contextChanged(before: proxy.documentContextBeforeInput, autoCapitalize: caps != UITextAutocapitalizationType.none)
+    }
+
+    /// Tap in the bar: ":word" becomes the emote's link (saved first when needed).
+    private func pickSuggestion(_ hit: EmoteHit) {
+        guard let query = typing.query, model.savingEmoteID == nil else { return }
+        Task { @MainActor in
+            guard let url = await self.linkSaving(hit) else { return }
+            self.replaceTrigger(query, with: url.absoluteString + " ")
+        }
+    }
+
+    /// Hold in the bar: ":word" goes and the file is copied, to paste as an attachment.
+    private func holdSuggestion(_ hit: EmoteHit) {
+        guard let query = typing.query, model.busyID == nil else { return }
+        replaceTrigger(query, with: nil)
+        copyEmote(hit)
+    }
+
+    /// Removes ":query" only while it is still what sits before the cursor (the save may have taken a moment).
+    private func replaceTrigger(_ query: String, with text: String?) {
+        let proxy = textDocumentProxy
+        if EmoteTrigger.query(before: proxy.documentContextBeforeInput) == query {
+            for _ in 0...query.count { proxy.deleteBackward() }
+        }
+        if let text { proxy.insertText(text) }
+        refreshTyping()
     }
 
     private func insertLink(_ post: LibraryPost, _ choice: KeyboardChoice?) {
