@@ -26,7 +26,7 @@ struct EmoteSuggestionTests {
         list = EmoteRecents.adding(b, to: list)
         list = EmoteRecents.adding(a, to: list)
         #expect(list.map(\.id) == ["a", "b"])
-        let many = (0..<40).reduce([EmoteHit]()) { EmoteRecents.adding(hit("\($0)", "e\($0)"), to: $1) }
+        let many = (0..<40).reduce([EmoteHit]()) { EmoteRecents.adding(hit("\($1)", "e\($1)"), to: $0) }
         #expect(many.count == EmoteRecents.limit)
         #expect(many.first?.id == "39")
     }
