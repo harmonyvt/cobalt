@@ -11,6 +11,8 @@ struct LibraryKindChips: View {
     let model: AppModel
     /// Synthetic rows a preview adds (DEBUG); empty in the app.
     var extra: [LibraryRow] = []
+    /// A chip's long press: tick every post of that kind (`false`), or tick them and share (`true`). Nil offers neither.
+    var pickAll: ((LibraryKindFilter, Bool) -> Void)?
 
     private var library: LibraryModel { model.library }
 
@@ -78,6 +80,12 @@ struct LibraryKindChips: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            if let pickAll, count != 0 {
+                Button(Copy.Library2.selectAllKind(kind), systemImage: Symbol.Gallery.selectPhotos) { pickAll(kind, false) }
+                Button(Copy.Library2.shareAllKind(kind), systemImage: Symbol.Library.share) { pickAll(kind, true) }
+            }
+        }
         .accessibilityLabel(Copy.Library2.name(kind))
         .accessibilityValue(count.map { "\($0)" } ?? "")
         .accessibilityAddTraits(selected ? .isSelected : [])

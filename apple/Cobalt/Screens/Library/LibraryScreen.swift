@@ -62,6 +62,7 @@ private struct LibraryContent: View {
     @Bindable var controller: LibraryController
 
     @Environment(\.shell) private var shell
+    @Environment(\.hapticsEnabled) private var haptics
     @Namespace private var zoomSpace
     /// File URLs for the system share sheet. Assigned only once they are ready; the sheet clears this when it finishes.
     @State private var filesToShare: [URL] = []
@@ -147,7 +148,11 @@ private struct LibraryContent: View {
             .toolbar { toolbar(pickedCount: pickedCount) }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    if model.capabilities.gallery { LibraryKindChips(model: model, extra: debugExtra) }
+                    if model.capabilities.gallery {
+                        LibraryKindChips(model: model, extra: debugExtra) { kind, share in
+                            pickKind(kind, thenShare: share)
+                        }
+                    }
                     loadingAllLine
                 }
             }
@@ -182,8 +187,14 @@ private struct LibraryContent: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if controller.preparingShare, !controller.sharePrep.isEmpty {
                     LibrarySharePrepCard(rows: controller.sharePrep)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            .motion(Motion.card, value: controller.preparingShare)
+            // a tick, select mode on and off, and the share sheet ready: felt as well as seen (Settings › haptics)
+            .haptic(.selection, trigger: controller.picked, enabled: haptics)
+            .haptic(.impact(weight: .light), trigger: controller.selecting, enabled: haptics)
+            .haptic(.success, trigger: filesToShare.isEmpty, enabled: haptics) { !$0 }
             .onAppear { controller.showStatus = { shell.showStatus($0) } }
             .task(id: library.needsWholeLibrary) {
                 if library.needsWholeLibrary { await library.loadAll() }
@@ -234,6 +245,11 @@ private struct LibraryContent: View {
         ToolbarItemGroup(placement: .primaryAction) {
             // Select mode keeps the view switcher and replaces the rest of this capsule.
             if controller.selecting {
+                // every post the chip, the search and the show filter leave on screen, in one tap
+                Button(allPicked ? Copy.Library2.selectNone : Copy.Library2.selectAll) {
+                    controller.toggleAll(rows)
+                }
+                .disabled(rows.isEmpty)
                 if pickedCount > 0 {
                     Button(Copy.Library2.share, systemImage: Symbol.Library.share) { Task { await sharePicked() } }
                         .disabled(controller.preparingShare)
@@ -267,11 +283,26 @@ private struct LibraryContent: View {
         }
     }
 
-    /// Copies each ticked face that is on screen, then presents the sheet. A second tap while that runs does nothing.
+    /// Every post on screen is ticked (the select-all button then clears them).
+    private var allPicked: Bool {
+        let rows = self.rows
+        return !rows.isEmpty && rows.allSatisfy { controller.picked.contains($0.id) }
+    }
+
+    /// Copies each ticked face that is on screen, then presents the sheet and leaves select mode (as saving a
+    /// gallery's photos does). A second tap while that runs does nothing.
     private func sharePicked() async {
         let urls = await controller.sharePicked(rows)
         guard !urls.isEmpty else { return }
         filesToShare = urls
+        withAnimation(Motion.rows) { controller.endSelecting() }
+    }
+
+    /// A kind chip's long press: the chip's posts ticked in one go, and shared at once for `share all`.
+    private func pickKind(_ kind: LibraryKindFilter, thenShare share: Bool) {
+        model.library.kindFilter = kind
+        withAnimation(Motion.rows) { controller.pickOnly(rows) }
+        if share { Task { await sharePicked() } }
     }
 
     #if os(macOS)
@@ -479,21 +510,100 @@ struct LibraryProblem: View {
 }
 
 /// Names each file while a share is copying it, then goes away when the sheet is ready.
+/// The card that rises while ticked posts are copied for the share sheet: how many are ready, a bar, and each post with
+/// its picture and where it stands (already here, waiting, downloading, ready, couldn't get it). The share sheet opens
+/// once every row is done.
 private struct LibrarySharePrepCard: View {
     let rows: [SharePrepRow]
 
+    /// Rows listed before `and n more`.
+    private static let listed = 4
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(rows) { row in
-                Text("\(row.title) · \(row.state)")
-                    .font(Font.cobalt(12))
+        let done = rows.filter(\.state.done).count
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(Copy.Library2.sharePrepTitle(rows.count))
+                    .font(Font.cobalt(14, .semibold, relativeTo: .subheadline))
                     .foregroundStyle(CobaltColor.text)
-                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text(Copy.Library2.sharePrepCount(done: done, of: rows.count))
+                    .font(Font.cobalt(12, relativeTo: .caption))
+                    .monospacedDigit()
+                    .foregroundStyle(CobaltColor.caption)
+                    .contentTransition(.numericText(value: Double(done)))
+            }
+            ProgressView(value: Double(done), total: Double(max(rows.count, 1)))
+                .tint(CobaltColor.text)
+            VStack(spacing: 8) {
+                ForEach(rows.prefix(Self.listed)) { row in SharePrepLine(row: row) }
+            }
+            if rows.count > Self.listed {
+                Text(Copy.Library2.sharePrepMore(rows.count - Self.listed))
+                    .font(Font.cobalt(12, relativeTo: .caption))
+                    .foregroundStyle(CobaltColor.caption)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(CobaltColor.hairline, lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
         .padding(.horizontal, Metrics.gutter)
-        .padding(.vertical, 10)
-        .background(CobaltColor.elevated)
+        .padding(.bottom, 10)
+        .animation(Motion.rows, value: done)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// One post on the share card: its picture, its title, and a mark for where it stands.
+private struct SharePrepLine: View {
+    let row: SharePrepRow
+
+    var body: some View {
+        HStack(spacing: 10) {
+            FacePicture(item: row.item, maxPixel: 120, showsGlyph: false)
+                .frame(width: 34, height: 34)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.title)
+                    .font(Font.cobalt(13, relativeTo: .body))
+                    .foregroundStyle(CobaltColor.text)
+                    .lineLimit(1)
+                Text(caption)
+                    .font(Font.cobalt(11.5, relativeTo: .caption))
+                    .foregroundStyle(row.state == .skipped ? CobaltColor.errorText : CobaltColor.caption)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            mark
+                .frame(width: 20, height: 20)
+        }
+    }
+
+    private var caption: String {
+        switch row.state {
+        case .onDevice: return Copy.Library2.shareOnDevice
+        case .waiting: return Copy.Library2.shareWaiting
+        case .downloading: return Copy.Library2.shareDownloading
+        case .ready: return Copy.Library2.shareReady
+        case .skipped: return Copy.Library2.shareSkipped
+        }
+    }
+
+    @ViewBuilder
+    private var mark: some View {
+        switch row.state {
+        case .downloading:
+            ProgressView().controlSize(.small)
+        case .waiting:
+            Image(systemName: "circle.dotted").foregroundStyle(CobaltColor.caption)
+        case .onDevice, .ready:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(CobaltColor.text)
+                .transition(.scale.combined(with: .opacity))
+        case .skipped:
+            Image(systemName: "exclamationmark.circle").foregroundStyle(CobaltColor.errorText)
+        }
     }
 }
