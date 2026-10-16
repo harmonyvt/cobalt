@@ -20,9 +20,19 @@ struct LibraryReveal: Equatable {
 
 /// One row of the card shown while ticked posts are being copied for the share sheet.
 struct SharePrepRow: Identifiable, Equatable {
+    enum State: Equatable {
+        /// Already a file on this device: nothing to download.
+        case onDevice
+        case waiting, downloading, ready, skipped
+
+        var done: Bool { self == .onDevice || self == .ready || self == .skipped }
+    }
+
     let id: String
     var title: String
-    var state: String
+    /// For the card's thumbnail.
+    var item: MediaItem
+    var state: State
 }
 
 /// The library screen's state and what its menus do: what is opened (a push on the phone, the inspector on the
@@ -139,6 +149,19 @@ final class LibraryController {
         if picked.contains(id) { picked.remove(id) } else { picked.insert(id) }
     }
 
+    /// Ticks every post on screen (the kind chip, the search and the show filter decide which), or clears them all
+    /// when every one is already ticked.
+    func toggleAll(_ rows: [LibraryRow]) {
+        let ids = Set(rows.map(\.id))
+        if ids.isSubset(of: picked) { picked.subtract(ids) } else { picked.formUnion(ids) }
+    }
+
+    /// Select mode with exactly these posts ticked: a kind chip's `select all` / `share all`.
+    func pickOnly(_ rows: [LibraryRow]) {
+        selecting = true
+        picked = Set(rows.map(\.id))
+    }
+
     /// Local files for the ticked posts, in `rows` order. One file per picked row: that row's face only
     /// (not every item of a gallery, not `post.link`, never `publicURL`). One download at a time.
     /// The URL `localCopy` returns is kept — deleting it can destroy the only copy.
@@ -146,11 +169,10 @@ final class LibraryController {
     /// already being prepared: the caller does nothing.
     func sharePicked(_ rows: [LibraryRow]) async -> [URL] {
         guard !preparingShare else { return [] }
-        KeyboardShelf.publish(model.store.videos)
         preparingShare = true
         let chosen = picked
         sharePrep = rows.filter { chosen.contains($0.id) }.map { row in
-            SharePrepRow(id: row.id, title: row.title, state: Self.shareState(of: row.item.face))
+            SharePrepRow(id: row.id, title: row.title, item: row.item, state: Self.shareState(of: row.item.face))
         }
         defer {
             preparingShare = false
@@ -160,25 +182,25 @@ final class LibraryController {
         for row in rows where chosen.contains(row.id) {
             let face = row.item.face
             if let url = face.local?.fileURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) {
-                setShareState(row.id, Self.savedHere)
+                setShareState(row.id, .onDevice)
                 urls.append(url)
                 continue
             }
-            setShareState(row.id, Self.downloading)
+            setShareState(row.id, .downloading)
             guard let file = face.file else {
-                setShareState(row.id, "skipped")
+                setShareState(row.id, .skipped)
                 continue
             }
             do {
                 let copied = try await model.library.localCopy(file)
                 guard copied.isFileURL else {
-                    setShareState(row.id, "skipped")
+                    setShareState(row.id, .skipped)
                     continue
                 }
-                setShareState(row.id, "ready")
+                setShareState(row.id, .ready)
                 urls.append(copied)
             } catch {
-                setShareState(row.id, "skipped")
+                setShareState(row.id, .skipped)
                 continue
             }
         }
@@ -186,19 +208,16 @@ final class LibraryController {
         return urls
     }
 
-    private func setShareState(_ id: String, _ state: String) {
+    private func setShareState(_ id: String, _ state: SharePrepRow.State) {
         guard let index = sharePrep.firstIndex(where: { $0.id == id }) else { return }
         sharePrep[index].state = state
     }
 
-    private static var savedHere: String { "saved on this \(Copy.device)" }
-    private static let downloading = "downloading…"
-
-    private static func shareState(of face: Rendition) -> String {
+    private static func shareState(of face: Rendition) -> SharePrepRow.State {
         if let url = face.local?.fileURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) {
-            return savedHere
+            return .onDevice
         }
-        return downloading
+        return .waiting
     }
 
     // MARK: the menu's questions

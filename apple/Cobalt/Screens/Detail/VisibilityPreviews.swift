@@ -45,12 +45,7 @@ private struct VisibilityLibraryHost: View {
     }
 
     var body: some View {
-        let screen = LibraryScreen(model: model, tier: tier)
-        if tier == .compact {
-            NavigationStack { screen }
-        } else {
-            screen
-        }
+        LibraryScreen(model: model, tier: tier)
     }
 }
 

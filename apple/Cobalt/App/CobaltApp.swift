@@ -116,9 +116,6 @@ struct CobaltApp: App {
         #if DEBUG
         DebugHooks.log("CobaltApp scene .task")
         #endif
-        #if os(iOS)
-        KeyboardShelf.publish(model.store.videos)
-        #endif
         LinkInbox.shared.install { [model] url in handleAppLink(url, model: model) }
         #if DEBUG
         LaunchConfig.runDebugLiveIfRequested()

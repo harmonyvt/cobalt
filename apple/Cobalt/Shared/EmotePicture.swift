@@ -10,11 +10,16 @@ struct EmotePicture: View {
     var animated: Bool
     var side: CGFloat = 64
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Reduce Motion keeps every emote on its still.
+    private var moves: Bool { animated && !reduceMotion }
+
     var body: some View {
         ZStack {
             // The still leaves once a frame is playing. An emote's frames are transparent, so a
             // first frame left underneath shows as a second, frozen copy.
-            if !animated || !playing {
+            if !moves || !playing {
                 AsyncImage(url: url) { phase in
                     if let image = phase.image {
                         image.resizable().scaledToFit()
@@ -23,8 +28,9 @@ struct EmotePicture: View {
                     }
                 }
             }
-            if animated, let url {
-                EmoteMotion(url: url, started: $playing)
+            if moves, let url {
+                // a new emote is a new player: the old one's last frame never sits under the new animation
+                EmoteMotion(url: url, started: $playing).id(url)
             }
         }
         .frame(width: side, height: side)

@@ -569,13 +569,13 @@ extension View {
 // one that failed, one waiting.
 #Preview("library · offline, mosaic", traits: .fixedLayout(width: 390, height: 844)) {
     PreviewHost(.offline, tab: .library) { model in
-        NavigationStack { LibraryScreen(model: model, tier: .compact) }
+        LibraryScreen(model: model, tier: .compact)
     }
 }
 #Preview("library · offline, list", traits: .fixedLayout(width: 390, height: 844)) {
     PreviewHost(.offline, tab: .library) { model in
         let _ = { model.library.viewMode = .table }()
-        NavigationStack { LibraryScreen(model: model, tier: .compact) }
+        LibraryScreen(model: model, tier: .compact)
     }
 }
 #Preview("library · offline, table", traits: .fixedLayout(width: 1100, height: 700)) {

@@ -309,7 +309,9 @@ final class KeyboardGalleryModel {
             emoteHits = found
             emoteNote = found.isEmpty ? KeyboardWords.emoteMiss : nil
         } catch {
-            guard mine == searchToken else { return }
+            // A keystroke during the search cancels it: that is a newer search coming, not 7tv being down.
+            guard mine == searchToken, !Task.isCancelled,
+                  emoteQuery.trimmingCharacters(in: .whitespacesAndNewlines) == q else { return }
             emoteHits = []
             emoteNote = KeyboardWords.emoteDown
         }
@@ -326,6 +328,7 @@ final class KeyboardGalleryModel {
             next.libraryID = saved.id
             next.libraryURL = saved.url
             emoteHits[index] = next
+            begin(reset: true)                     // the saved emote shows under the emotes chip without a pull
         } catch {
             notice = .failed(KeyboardWords.emoteDown)
         }

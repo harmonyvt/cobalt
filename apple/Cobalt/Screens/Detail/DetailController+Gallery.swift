@@ -81,6 +81,12 @@ extension DetailController {
         if picked.contains(index) { picked.remove(index) } else { picked.insert(index) }
     }
 
+    /// Ticks every photo of the post, or clears them all when every one is already ticked.
+    func toggleAll(in item: MediaItem) {
+        let all = Set(item.items.compactMap(\.itemIndex))
+        picked = all.isSubset(of: picked) ? [] : all
+    }
+
     /// The ticked photos that exist, in the post's order.
     func pickedRenditions(in item: MediaItem) -> [Rendition] {
         item.items.filter { r in r.itemIndex.map { picked.contains($0) } ?? false }

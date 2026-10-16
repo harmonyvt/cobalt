@@ -249,16 +249,22 @@ struct GallerySelectionBar: View {
 
     private var controller: DetailController { c.controller }
     private var chosen: [Rendition] { controller.pickedRenditions(in: c.item) }
+    @Environment(\.hapticsEnabled) private var haptics
 
     var body: some View {
         let chosen = chosen
         let none = chosen.isEmpty
+        let all = !c.item.items.isEmpty && chosen.count == c.item.items.filter { $0.itemIndex != nil }.count
         VStack(spacing: 10) {
             HStack {
                 Text(DetailWords.selected(chosen.count))
                     .font(Font.cobalt(13, .medium, relativeTo: .footnote))
                     .contentTransition(.numericText())
                 Spacer()
+                Button(all ? DetailWords.selectNone : DetailWords.selectAll) {
+                    withAnimation(Motion.rows) { controller.toggleAll(in: c.item) }
+                }
+                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
                 Button(DetailWords.doneSelecting) { withAnimation(Motion.rows) { controller.endSelecting() } }
                     .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
             }
@@ -271,6 +277,7 @@ struct GallerySelectionBar: View {
             .disabled(none || controller.isDeleting)
         }
         .accessibilityElement(children: .contain)
+        .haptic(.selection, trigger: chosen.count, enabled: haptics)
     }
 
     @ViewBuilder
@@ -278,13 +285,13 @@ struct GallerySelectionBar: View {
         DetailChoiceButton(
             title: Copy.Media.share, symbol: Symbol.Media.share, working: controller.preparingShare, layout: layout
         ) { share(chosen) }
-        .disabled(chosen.isEmpty)
         DetailChoiceButton(
             title: DetailWords.toPhotos, symbol: GalleryActions.saveSymbol, working: controller.batchPhotos == .working,
             layout: layout
         ) { Task { await controller.saveToPhotos(chosen, of: c.item) } }
         DetailChoiceButton(title: DetailWords.deleteN(chosen.count), symbol: Symbol.Media.deleteWebp, layout: layout) {
-            controller.confirm = chosen.count == 1 ? .deletePhoto(chosen[0].itemIndex ?? 0) : .deletePhotos(chosen.compactMap(\.itemIndex).sorted())
+            let indices = chosen.compactMap(\.itemIndex).sorted()
+            controller.confirm = indices.count == 1 ? .deletePhoto(indices[0]) : .deletePhotos(indices)
         }
     }
 }

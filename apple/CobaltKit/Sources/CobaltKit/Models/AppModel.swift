@@ -80,6 +80,7 @@ public final class AppModel {
     /// Mac, in previews and in tests unless one is injected.
     @ObservationIgnored var continuedProcessing: ContinuedProcessing?
     @ObservationIgnored var lifecycleObservers: [any NSObjectProtocol] = []
+    @ObservationIgnored private var foregrounding: Task<Void, Never>?
 
     @ObservationIgnored let ctx: PipelineContext
     @ObservationIgnored let makeClient: @MainActor (Settings) -> any CobaltClient
@@ -143,7 +144,7 @@ public final class AppModel {
             "media": .int(store.media.count), "videos": .int(store.videos.count), "root": .string(AppGroup.location.kind.rawValue),
         ])
         let ctx = PipelineContext(
-            client: factory(settings), capabilities: .unknown, settings: settings, store: store,
+            client: factory(settings), capabilities: settings.knownCapabilities ?? .unknown, settings: settings, store: store,
             jobs: .shared(), tools: SystemMediaTools(), clock: SystemClock(), photos: SystemPhotosSaver(),
             clipboard: SystemClipboard(), intake: SystemFileIntake(), isPreview: false)
         ctx.recordsJobs = true
@@ -248,6 +249,7 @@ public final class AppModel {
     func apply(_ caps: Capabilities) {
         capabilities = caps
         ctx.capabilities = caps
+        if !ctx.isPreview { settings.remember(caps) }
         if selectedTab == .library, !caps.library, caps.kind != .unreachable { selectedTab = .save }
         liveManager?.capabilitiesChanged()
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
@@ -321,6 +323,19 @@ public final class AppModel {
     private func take(_ job: SharedJob) {
         pipeline.resume(job)
         if !ctx.isPreview { Notifications.clear(jobID: job.id) }
+    }
+
+    /// Launch and every activation: the server check, then whatever the share extension left. Calls that overlap
+    /// (the launch task and the first `.active`) share one run instead of checking and reloading twice at once.
+    public func foreground() async {
+        if let running = foregrounding { return await running.value }
+        let run = Task { @MainActor in
+            await refreshServer()
+            await pickUpSharedJobs()
+        }
+        foregrounding = run
+        await run.value
+        foregrounding = nil
     }
 
     /// On scenePhase `.active`: take over whatever the share extension left.

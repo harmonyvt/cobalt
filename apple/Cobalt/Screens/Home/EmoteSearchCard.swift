@@ -14,6 +14,12 @@ struct EmoteSearchCard: View {
     @State private var failed = false
     @State private var busy = Set<String>()
     @State private var token = 0
+    /// A saved emote the owner tapped: the confirm before its copy is removed.
+    @State private var removing: LibraryFile?
+    /// Bumped on each finished save, remove and failure: drives the haptics.
+    @State private var savedTick = 0
+    @State private var removedTick = 0
+    @Environment(\.hapticsEnabled) private var haptics
 
     private var saved: [LibraryFile] {
         model.library.posts
@@ -63,7 +69,12 @@ struct EmoteSearchCard: View {
                                 // A saved webp carries no flag. A still shows its one frame; an animated one plays.
                                 animated: true,
                                 mark: false,
-                                action: { Task { await remove(file) } })
+                                action: { removing = file })
+                            .contextMenu {
+                                Button(Copy.emoteRemove, systemImage: "trash", role: .destructive) {
+                                    Task { await remove(file) }
+                                }
+                            }
                         }
                     }
                 }
@@ -72,6 +83,22 @@ struct EmoteSearchCard: View {
         }
         .task { await model.library.refresh() }
         .task(id: query) { await search() }
+        .confirmationDialog(
+            removing.map { Copy.emoteRemoveTitle($0.name) } ?? "", isPresented: removingPresented, titleVisibility: .visible,
+            presenting: removing
+        ) { file in
+            Button(Copy.emoteRemove, role: .destructive) { Task { await remove(file) } }
+            Button(Copy.emoteKeep, role: .cancel) {}
+        } message: { _ in
+            Text(Copy.emoteRemoveMessage)
+        }
+        .haptic(.success, trigger: savedTick, enabled: haptics)
+        .haptic(.impact(weight: .light), trigger: removedTick, enabled: haptics)
+        .haptic(.error, trigger: failed, enabled: haptics) { $0 }
+    }
+
+    private var removingPresented: Binding<Bool> {
+        Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
     }
 
     @ViewBuilder
@@ -88,16 +115,30 @@ struct EmoteSearchCard: View {
     private func tile(id: String, name: String, url: URL?, animated: Bool, mark: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 6) {
-                ZStack {
+                ZStack(alignment: .topTrailing) {
                     EmotePicture(url: url, animated: animated)
+                        .padding(4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(mark ? CobaltColor.elevated : Color.clear))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(CobaltColor.text, lineWidth: mark ? 1.5 : 0)
+                        }
+                        .scaleEffect(busy.contains(id) ? 0.92 : 1)
+                        .opacity(busy.contains(id) ? 0.6 : 1)
                     if busy.contains(id) {
                         ProgressView().controlSize(.small)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if mark {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .semibold))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        // the same tick as library and gallery select mode
+                        LibraryPickMark(ticked: true)
+                            .offset(x: 6, y: -6)
+                            .transition(.scale.combined(with: .opacity))
                     }
                 }
+                .animation(Motion.chip, value: mark)
+                .animation(Motion.press, value: busy.contains(id))
                 Text(name)
                     .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
                     .foregroundStyle(CobaltColor.caption)
@@ -107,6 +148,7 @@ struct EmoteSearchCard: View {
         .buttonStyle(.plain)
         .disabled(busy.contains(id))
         .accessibilityLabel(mark ? "\(name), saved" : name)
+        .accessibilityHint(mark ? Copy.emoteSavedHint : Copy.emoteSaveHint)
     }
 
     private func search() async {
@@ -149,6 +191,7 @@ struct EmoteSearchCard: View {
                     next.libraryURL = nil
                     hits[index] = next
                 }
+                removedTick += 1
                 failed = false
             } catch {
                 failed = true
@@ -165,6 +208,7 @@ struct EmoteSearchCard: View {
                 next.libraryURL = saved.url
                 hits[index] = next
             }
+            savedTick += 1
             failed = false
         } catch {
             failed = true
@@ -176,6 +220,7 @@ struct EmoteSearchCard: View {
         defer { busy.remove(file.id) }
         do {
             try await model.library.removeEmote(fileID: file.id)
+            removedTick += 1
             failed = false
         } catch {
             failed = true
