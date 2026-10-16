@@ -107,7 +107,8 @@ struct KeyboardGalleryView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+                    // lazy: only the emotes on screen are built, decoded and animated (the extension's memory is small)
+                    LazyHStack(spacing: 8) {
                         ForEach(model.emoteHits) { hit in
                             EmoteKeyTile(hit: hit, saving: model.savingEmoteID == hit.id) {
                                 model.onCopyEmote(hit)

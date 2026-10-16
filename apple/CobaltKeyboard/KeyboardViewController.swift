@@ -64,7 +64,7 @@ final class KeyboardViewController: UIInputViewController {
         let pad = traitCollection.userInterfaceIdiom == .pad
         let landscape = traitCollection.verticalSizeClass == .compact
         let height: CGFloat = pad ? 320 : (landscape ? 204 : 291)
-        heightConstraint?.constant = height
+        if heightConstraint?.constant != height { heightConstraint?.constant = height }
         (view as? KeyboardChromeView)?.preferredHeight = height
     }
 
@@ -185,7 +185,9 @@ final class KeyboardViewController: UIInputViewController {
                 return nil
             }
         }
-        if let count = try? Self.byteCount(of: pasteURL), count <= 20_000_000, let data = try? Data(contentsOf: pasteURL) {
+        if let count = try? Self.byteCount(of: pasteURL), count <= 20_000_000,
+           // mapped, not read: the pasteboard keeps these bytes for minutes, and dirty memory counts against the keyboard
+           let data = try? Data(contentsOf: pasteURL, options: .alwaysMapped) {
             for identifier in identifiers {
                 provider.registerDataRepresentation(forTypeIdentifier: identifier, visibility: .all) { completion in
                     completion(data, nil)
@@ -303,7 +305,8 @@ final class KeyboardViewController: UIInputViewController {
 final class KeyboardChromeView: UIInputView, UIInputViewAudioFeedback {
     var enableInputClicksWhenVisible: Bool { true }
     var preferredHeight: CGFloat = 291 {
-        didSet { invalidateIntrinsicContentSize() }
+        // every layout pass sets it: invalidating an unchanged size only scheduled another pass
+        didSet { if preferredHeight != oldValue { invalidateIntrinsicContentSize() } }
     }
 
     override var intrinsicContentSize: CGSize {
