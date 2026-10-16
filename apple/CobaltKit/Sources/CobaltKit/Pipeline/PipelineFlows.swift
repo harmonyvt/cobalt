@@ -538,22 +538,29 @@ extension Pipeline {
         let guardrail = DownloadGuard(limit: limit)
         let dest = ctx.store.inboxURL(for: name)
         let url = info.url
-        let task = Task<URL, any Error> {
-            try await client.download(.open(url), to: dest) { p in
-                relay.push(p)
-                guardrail.observe(p)
-            }
-        }
-        guardrail.attach(task)
         let local: URL
         do {
-            local = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            // At most 3 at once, like the link checks: a pasted batch of file links would otherwise download them all
+            // into the inbox before the upload gate is reached.
+            local = try await ctx.gates.check.withSlot {
+                let task = Task<URL, any Error> {
+                    try await client.download(.open(url), to: dest) { p in
+                        relay.push(p)
+                        guardrail.observe(p)
+                    }
+                }
+                guardrail.attach(task)
+                return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            }
         } catch {
-            try? FileManager.default.removeItem(at: dest)
+            try? FileManager.default.removeItem(at: dest.deletingLastPathComponent())
             if guardrail.tripped { throw PipelineFailure.tooLarge(limit: limit) }
-            // The host said no (an expired signed link, a removed file): the link is the problem, not this device.
+            // The host said no (an expired signed link, a removed file), or could not be reached: the link is the
+            // problem, not this device's server, so it never reads as "can't reach the server".
             switch error {
             case CobaltError.api, CobaltError.invalidResponse: throw PipelineFailure.fetchFailed(code: "error.app.link_download_failed")
+            case CobaltError.network(let code) where code != .cancelled:
+                throw PipelineFailure.fetchFailed(code: "error.app.link_download_failed")
             default: throw error
             }
         }
