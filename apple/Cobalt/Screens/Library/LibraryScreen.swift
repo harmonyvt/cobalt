@@ -256,11 +256,11 @@ private struct LibraryContent: View {
                 .labelStyle(.iconOnly)
                 .help(allPicked ? Copy.Library2.selectNone : Copy.Library2.selectAll)
                 .disabled(rows.isEmpty)
-                if pickedCount > 0 {
-                    Button(Copy.Library2.share, systemImage: Symbol.Library.share) { Task { await sharePicked() } }
-                        .disabled(controller.preparingShare)
-                        .help(Copy.Library2.share)
-                }
+                // always there (disabled until something is ticked): appearing on the first tick moved the icons under
+                // the finger, and a second tap meant for select-none landed on share
+                Button(Copy.Library2.share, systemImage: Symbol.Library.share) { Task { await sharePicked() } }
+                    .disabled(controller.preparingShare || pickedCount == 0)
+                    .help(Copy.Library2.share)
             } else {
                 LibrarySortMenu(library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery)
                 #if os(macOS)
