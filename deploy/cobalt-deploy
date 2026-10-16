@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# One entry point for this fork's deploys (fork-only; see deploy/RUNBOOK.md).
+#
+# Usage: deploy/cobalt-deploy <target> [options]
+#
+#   ios [release.sh options] [--commit <ref>]
+#                      build the iOS app and publish it to the Feather source (deploy/apple/release.sh).
+#                      Every build is kept: the ipa is cobalt-<version>-<build>.ipa in R2, ~/cobalt-ipas/ and
+#                      ~/Downloads/. --commit <ref> ships exactly that commit from a temporary worktree instead of
+#                      the working tree. Common options: --dry-run, --notes "text", --taildrop <device>,
+#                      --keep <n> (prune to the newest n), --replace. `deploy/apple/release.sh --help` lists all.
+#   ios list           list the builds in the published Feather source, newest first, and which ones are archived
+#                      locally in ~/cobalt-ipas/
+#   ios url            print the Feather source URL (it contains the secret token; treat it like a password)
+#   mac                build, sign and install the Mac app (deploy/apple/mac-install.sh)
+#   api [--dry-run]    deploy the API Worker + container (prepare-git-info.sh, then cf deploy)
+#   web [--dry-run]    build the web app and deploy the web Worker (build-web.sh, then cf deploy)
+#
+# Env: COBALT_SECRETS (default ~/.config/cobalt/secrets.json), COBALT_FEATHER_CONFIG
+# (default ~/.config/cobalt/feather.json), COBALT_IPA_ARCHIVE (default ~/cobalt-ipas).
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+SECRETS="${COBALT_SECRETS:-$HOME/.config/cobalt/secrets.json}"
+FEATHER_CONFIG="${COBALT_FEATHER_CONFIG:-$HOME/.config/cobalt/feather.json}"
+IPA_ARCHIVE="${COBALT_IPA_ARCHIVE:-$HOME/cobalt-ipas}"
+
+die() { echo "cobalt-deploy: $*" >&2; exit 1; }
+usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+feather_source_url() {
+    [ -f "$FEATHER_CONFIG" ] || die "missing $FEATHER_CONFIG (see deploy/apple/README.md)"
+    local token base
+    token="$(jq -r '.token // empty' "$FEATHER_CONFIG")"
+    base="$(jq -r '.baseUrl // "https://media.capybaraharmony.com"' "$FEATHER_CONFIG")"
+    [ -n "$token" ] || die "$FEATHER_CONFIG has no token"
+    printf '%s/apps/%s/source.json\n' "${base%/}" "$token"
+}
+
+ios_list() {
+    command -v jq >/dev/null || die "missing tool: jq"
+    local url body
+    url="$(feather_source_url)"
+    body="$(curl -fsS --max-time 20 -H 'Cache-Control: no-cache' "$url?cb=$(date +%s)")" \
+        || die "could not fetch the published source.json"
+    jq -r '.apps[0].versions[]
+           | [.version, .buildVersion, (.date // "" | .[:16] | sub("T"; " ")),
+              ((.size // 0) / 1048576 * 10 | floor / 10 | tostring) + " MB",
+              (.downloadURL | split("/") | last)] | @tsv' <<<"$body" \
+    | {
+        printf '%-10s %-6s %-17s %-9s %s\n' VERSION BUILD "DATE (UTC)" SIZE LOCAL
+        first=1
+        while IFS=$'\t' read -r version build date size file; do
+            if [ -f "$IPA_ARCHIVE/$file" ]; then here="${IPA_ARCHIVE/#"$HOME"/\~}/$file"; else here="-"; fi
+            printf '%-10s %-6s %-17s %-9s %s%s\n' "$version" "$build" "$date" "$size" "$here" \
+                "$([ "$first" -eq 1 ] && echo "   (current in Feather)")"
+            first=0
+        done
+    }
+}
+
+ios_release() {
+    local commit="" args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --commit)
+                [ $# -ge 2 ] || die "--commit needs a ref"
+                commit="$2"
+                shift
+                ;;
+            *) args+=("$1") ;;
+        esac
+        shift
+    done
+    if [ -z "$commit" ]; then
+        exec "$HERE/apple/release.sh" ${args[@]+"${args[@]}"}
+    fi
+
+    local sha wt status=0
+    sha="$(git -C "$ROOT" rev-parse --verify "$commit^{commit}")" || die "unknown commit: $commit"
+    wt="$(mktemp -d "${TMPDIR:-/tmp}/cobalt-rel.XXXXXX")"
+    rmdir "$wt"
+    git -C "$ROOT" worktree add --detach "$wt" "$sha" >/dev/null
+    # Ship that commit's app with this checkout's release tooling, so an older commit still gets today's rules
+    # (every build kept, versioned names).
+    mkdir -p "$wt/deploy/apple"
+    cp -f "$HERE/apple/release.sh" "$wt/deploy/apple/release.sh"
+    echo "==> releasing ${sha:0:12} from a temporary worktree"
+    "$wt/deploy/apple/release.sh" ${args[@]+"${args[@]}"} || status=$?
+    git -C "$ROOT" worktree remove --force "$wt" || echo "cobalt-deploy: could not remove worktree $wt" >&2
+    return "$status"
+}
+
+cf_deploy() { # dir [--dry-run]
+    local dir="$1" dry=()
+    shift
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) dry=(--dry-run) ;;
+            *) die "unknown option: $1" ;;
+        esac
+        shift
+    done
+    command -v cf >/dev/null || die "missing tool: cf (the global Cloudflare CLI)"
+    [ -f "$SECRETS" ] || die "missing $SECRETS (see CLAUDE.md, Secrets)"
+    (cd "$dir" && cf deploy --secrets-file "$SECRETS" ${dry[@]+"${dry[@]}"})
+}
+
+[ $# -ge 1 ] || { usage; exit 2; }
+target="$1"
+shift
+case "$target" in
+    ios)
+        case "${1:-}" in
+            list) ios_list ;;
+            url) feather_source_url ;;
+            *) ios_release "$@" ;;
+        esac
+        ;;
+    mac) exec "$HERE/apple/mac-install.sh" "$@" ;;
+    api)
+        "$HERE/cloudflare/api/prepare-git-info.sh"
+        cf_deploy "$HERE/cloudflare/api" "$@"
+        ;;
+    web)
+        "$HERE/cloudflare/build-web.sh"
+        cf_deploy "$HERE/cloudflare/web" "$@"
+        ;;
+    -h|--help|help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac

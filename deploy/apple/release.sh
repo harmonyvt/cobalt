@@ -2,6 +2,7 @@
 # Build the cobalt iOS app unsigned, pack an .ipa, and publish it as a Feather / AltStore source.
 #
 # Usage: deploy/apple/release.sh [--dry-run] [--show-url] [--taildrop <device>] [--notes "text"] [--skip-build]
+#                                 [--keep <n>] [--replace]
 #
 #   --dry-run          build, pack, copy dSYMs and the ipa, print the source.json that would be published;
 #                      upload and delete nothing, send nothing (Taildrop included)
@@ -9,9 +10,16 @@
 #   --taildrop <dev>   also `tailscale file cp` the ipa to that device (ignored by --dry-run)
 #   --notes "text"     "what's new" text for this version (default: "cobalt <version> (<build>)")
 #   --skip-build       reuse the Release app already in apple/.build/ipa (packs, publishes; does not rebuild)
+#   --keep <n>         keep only the newest n builds in the source and delete older ipas from R2
+#                      (default: config "keep", else 0 = keep every build, delete nothing)
+#   --replace          allow re-publishing a version + build that is already in the source (overwrites that ipa)
+#
+# Every ipa is named cobalt-<version>-<build>.ipa everywhere (R2, ~/cobalt-ipas/, ~/Downloads/, Taildrop), so a new
+# build never overwrites an earlier one.
 #
 # Needs: xcodegen, xcodebuild, jq, curl, zip, global `cf` (authenticated), and ~/.config/cobalt/feather.json
-# ({"token": "<32 hex>", "bucket": "cobalt-media", "baseUrl": "https://media.capybaraharmony.com"}, chmod 600).
+# ({"token": "<32 hex>", "bucket": "cobalt-media", "baseUrl": "https://media.capybaraharmony.com", "keep": 0},
+# chmod 600; "keep" is optional).
 # Fork-only; see deploy/apple/README.md. Never prints the token unless --show-url.
 
 set -euo pipefail
@@ -20,7 +28,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APPLE="$ROOT/apple"
 CONFIG_FILE="${COBALT_FEATHER_CONFIG:-$HOME/.config/cobalt/feather.json}"
 DSYM_ROOT="${COBALT_DSYM_DIR:-$HOME/cobalt-dsyms}"
-KEEP_VERSIONS=5
+IPA_ARCHIVE="${COBALT_IPA_ARCHIVE:-$HOME/cobalt-ipas}"
+KEEP_VERSIONS=""
+REPLACE=0
 
 DRY_RUN=0
 SHOW_URL=0
@@ -33,6 +43,12 @@ while [ $# -gt 0 ]; do
         --dry-run) DRY_RUN=1 ;;
         --show-url) SHOW_URL=1 ;;
         --skip-build) SKIP_BUILD=1 ;;
+        --replace) REPLACE=1 ;;
+        --keep)
+            [ $# -ge 2 ] || { echo "release.sh: --keep needs a number" >&2; exit 2; }
+            KEEP_VERSIONS="$2"
+            shift
+            ;;
         --taildrop)
             [ $# -ge 2 ] || { echo "release.sh: --taildrop needs a device name" >&2; exit 2; }
             TAILDROP="$2"
@@ -44,7 +60,7 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         -h|--help)
-            sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -66,6 +82,10 @@ TOKEN="$(jq -r '.token // empty' "$CONFIG_FILE")"
 BUCKET="$(jq -r '.bucket // "cobalt-media"' "$CONFIG_FILE")"
 BASE_URL="$(jq -r '.baseUrl // "https://media.capybaraharmony.com"' "$CONFIG_FILE")"
 BASE_URL="${BASE_URL%/}"
+[ -n "$KEEP_VERSIONS" ] || KEEP_VERSIONS="$(jq -r '.keep // 0' "$CONFIG_FILE")"
+case "$KEEP_VERSIONS" in
+    ""|*[!0-9]*) die "--keep (or \"keep\" in $CONFIG_FILE) must be a whole number; 0 keeps every build" ;;
+esac
 case "$TOKEN" in
     *[!0-9a-f]*|"") die "$CONFIG_FILE: token must be 32 lowercase hex characters" ;;
 esac
@@ -172,11 +192,13 @@ say "copied $DSYM_COUNT dSYM bundles to $DSYM_DIR"
 say "app binary UUID:"
 dwarfdump --uuid "$APP/cobalt" | sed 's/^/  /'
 
-# --- the copy the owner can AirDrop / open in Files -----------------------------------------------
+# --- local copies: the archive (one file per build, never pruned) and the one to AirDrop / open --------
 
-step "copy to ~/Downloads/cobalt.ipa"
-mkdir -p "$HOME/Downloads"
-cp -f "$IPA" "$HOME/Downloads/cobalt.ipa"
+step "copy to $IPA_ARCHIVE/ and ~/Downloads/"
+mkdir -p "$IPA_ARCHIVE" "$HOME/Downloads"
+cp -f "$IPA" "$IPA_ARCHIVE/$IPA_NAME"
+cp -f "$IPA" "$HOME/Downloads/$IPA_NAME"
+say "local copies: $IPA_ARCHIVE/$IPA_NAME, ~/Downloads/$IPA_NAME"
 
 # --- source.json -----------------------------------------------------------------------------------
 
@@ -224,10 +246,25 @@ NEW_VERSION="$(jq -n -c \
     '{version: $version, buildVersion: $build, date: $date, localizedDescription: $notes,
       downloadURL: $url, size: $size, minOSVersion: $minos}')"
 
+# The same version + build already published would be overwritten in place (same ipa name). Refuse unless asked:
+# that is how an earlier build silently disappears.
+if jq -e --arg v "$VERSION" --arg b "$BUILD" 'any(.[]; .version == $v and .buildVersion == $b)' \
+    <<<"$PREV_VERSIONS" >/dev/null; then
+    if [ "$REPLACE" -eq 1 ]; then
+        say "warning: $VERSION ($BUILD) is already published; --replace overwrites $IPA_NAME"
+    elif [ "$DRY_RUN" -eq 1 ]; then
+        say "warning: $VERSION ($BUILD) is already published; a real run refuses without --replace (bump CURRENT_PROJECT_VERSION)"
+    else
+        die "$VERSION ($BUILD) is already published; bump CURRENT_PROJECT_VERSION in apple/project.yml, or pass --replace to overwrite it"
+    fi
+fi
+
 # Newest first (Feather reads versions[0]); this build replaces an earlier upload of the same build.
+# keep 0 keeps every version.
 VERSIONS="$(jq -c -n --argjson new "$NEW_VERSION" --argjson prev "$PREV_VERSIONS" \
     --arg v "$VERSION" --arg b "$BUILD" --argjson keep "$KEEP_VERSIONS" \
-    '([$new] + [$prev[] | select((.version != $v) or (.buildVersion != $b))])[:$keep]')"
+    '[$new] + [$prev[] | select((.version != $v) or (.buildVersion != $b))]
+     | if $keep > 0 then .[:$keep] else . end')"
 
 SOURCE_JSON="$OUT_DIR/source.json"
 # Top-level version/versionDate/size/downloadURL on the app mirror Feather's own app-repo.json and cover
@@ -270,7 +307,8 @@ jq -e '(.apps | length > 0) and (.apps[0].iconURL | type == "string")
        and (.apps[0].versions[0].version == .apps[0].version)' "$SOURCE_JSON" >/dev/null \
     || die "generated source.json failed its own sanity check"
 
-# Versions that fall out of the window; their ipas are deleted (together with any orphan ipa under the prefix).
+# With --keep n, versions that fall out of the window have their ipas deleted (together with any orphan ipa under the
+# prefix). With keep 0 (the default) nothing is ever deleted.
 KEEP_KEYS="$(jq -r --arg base "$PUBLIC_BASE/" '.apps[0].versions[].downloadURL | ltrimstr($base)' "$SOURCE_JSON")"
 
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -305,7 +343,9 @@ cf_list() { # prints keys under the prefix, one per line
 
 step "R2 ($BUCKET, prefix apps/<token>/)"
 STALE=""
-if [ "$DRY_RUN" -eq 1 ] && [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "404" ]; then
+if [ "$KEEP_VERSIONS" -eq 0 ]; then
+    say "keeping every build (no --keep): nothing will be deleted"
+elif [ "$DRY_RUN" -eq 1 ] && [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "404" ]; then
     say "skipping the R2 listing in the dry run (the published source could not be read either)"
 else
     EXISTING="$(cf_list || true)"
@@ -383,7 +423,7 @@ fi
 if [ -n "$TAILDROP" ] && [ "$DRY_RUN" -eq 0 ]; then
     step "Taildrop to $TAILDROP"
     need tailscale
-    tailscale file cp "$HOME/Downloads/cobalt.ipa" "$TAILDROP:"
+    tailscale file cp "$HOME/Downloads/$IPA_NAME" "$TAILDROP:"
 fi
 
 step "source URL"

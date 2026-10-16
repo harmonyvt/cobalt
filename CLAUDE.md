@@ -60,7 +60,8 @@ the files and a real run before anything is called done.
   `api/.gitinfo/` (gitignored); the API Dockerfile copies it to `/app/.git`, and
   `deploy/cloudflare/build-web.sh` builds web in a temp copy using it. Run
   `prepare-git-info.sh` before every API deploy.
-- Deploy commands (from the repo root):
+- Deploy commands (from the repo root): `deploy/cobalt-deploy api|web|ios|mac [--dry-run]` wraps all of these
+  (`deploy/cobalt-deploy --help`). By hand:
   - API: `deploy/cloudflare/api/prepare-git-info.sh`, then
     `cd deploy/cloudflare/api && cf deploy --secrets-file ~/.config/cobalt/secrets.json`
   - Web: `deploy/cloudflare/build-web.sh`, then
