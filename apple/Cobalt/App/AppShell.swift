@@ -89,6 +89,9 @@ struct AppShell: View {
             .environment(\.shell, actions)
             .environment(\.photoImport, photoImport)
             .overlay { if dropTargeted { dropHighlight } }
+            #if os(iOS)
+            .background { KeyboardShelfPublisher(store: model.store) }
+            #endif
             .overlay(alignment: .bottom) {
                 if let status {
                     StatusToast(text: status)

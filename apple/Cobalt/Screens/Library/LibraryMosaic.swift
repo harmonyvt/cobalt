@@ -110,8 +110,8 @@ struct LibraryMosaic: View {
                         HStack(alignment: .top, spacing: Self.gap) {
                             ForEach(0..<plan.columns, id: \.self) { column in
                                 LazyVStack(spacing: Self.gap) {
-                                    ForEach(byColumn[column] ?? [], id: \.index) { slot in
-                                        tileView(slot, plan: plan)
+                                    ForEach(tiles(byColumn[column] ?? [])) { tile in
+                                        tileView(tile.slot, plan: plan)
                                     }
                                 }
                                 .frame(width: plan.columnWidth)
@@ -148,6 +148,16 @@ struct LibraryMosaic: View {
         .accessibilityLabel(Copy.postsA11y)
     }
 
+    /// A column's slots keyed by their post, not their position: a new save at the top or another sort shifts every
+    /// index, and a tile keyed by index handed its picture, its failed state and its delete confirm to another post.
+    private func tiles(_ slots: [MasonryPlan.Slot]) -> [MosaicTile] {
+        slots.compactMap { slot in
+            if skeleton { return MosaicTile(id: "ghost-\(slot.index)", slot: slot) }
+            guard rows.indices.contains(slot.index) else { return nil }
+            return MosaicTile(id: rows[slot.index].id, slot: slot)
+        }
+    }
+
     @ViewBuilder
     private func tileView(_ slot: MasonryPlan.Slot, plan: MasonryPlan) -> some View {
         let size = CGSize(width: plan.columnWidth, height: slot.height)
@@ -182,4 +192,9 @@ struct LibraryMosaic: View {
         let stepped = (pixels / 64).rounded(.up) * 64
         return Int(min(768, max(128, stepped)))
     }
+}
+
+private struct MosaicTile: Identifiable {
+    let id: String
+    let slot: MasonryPlan.Slot
 }

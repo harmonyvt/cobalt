@@ -146,7 +146,6 @@ final class LibraryController {
     /// already being prepared: the caller does nothing.
     func sharePicked(_ rows: [LibraryRow]) async -> [URL] {
         guard !preparingShare else { return [] }
-        KeyboardShelf.publish(model.store.videos)
         preparingShare = true
         let chosen = picked
         sharePrep = rows.filter { chosen.contains($0.id) }.map { row in

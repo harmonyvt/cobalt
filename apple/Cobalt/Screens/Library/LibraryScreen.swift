@@ -42,7 +42,6 @@ struct LibraryScreen: View {
             if LibraryDebug.state != nil { return }
             #endif
             if model.library.posts.isEmpty { await model.library.refresh() }
-            KeyboardShelf.publish(model.store.videos)
         }
     }
 }
@@ -131,6 +130,8 @@ private struct LibraryContent: View {
         @Bindable var library = model.library
         let rows = self.rows
         let phase = phase(rows)
+        // Ticks a search, a filter or a delete took off screen are neither counted nor shared.
+        let pickedCount = controller.selecting ? rows.reduce(0) { $0 + (controller.picked.contains($1.id) ? 1 : 0) } : 0
         content(rows: rows, phase: phase)
             .navigationTitle(Copy.library)
             #if os(iOS)
@@ -140,10 +141,10 @@ private struct LibraryContent: View {
             #endif
             .navigationSubtitle(
                 controller.selecting
-                    ? Copy.Library2.selected(controller.picked.count)
+                    ? Copy.Library2.selected(pickedCount)
                     : Copy.libraryCounts(posts: library.postCount, files: library.fileCount))
             .searchable(text: $library.query, placement: searchPlacement, prompt: Copy.Library2.searchPrompt)
-            .toolbar { toolbar }
+            .toolbar { toolbar(pickedCount: pickedCount) }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     if model.capabilities.gallery { LibraryKindChips(model: model, extra: debugExtra) }
@@ -218,7 +219,7 @@ private struct LibraryContent: View {
     // MARK: toolbar
 
     @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
+    private func toolbar(pickedCount: Int) -> some ToolbarContent {
         #if os(iOS)
         // Two plain buttons in one group, drawn as one glass capsule like the trailing group. A segmented `Picker` in a
         // toolbar item got a second glass capsule behind it on iOS 26 (the bar's and the control's own).
@@ -233,7 +234,7 @@ private struct LibraryContent: View {
         ToolbarItemGroup(placement: .primaryAction) {
             // Select mode keeps the view switcher and replaces the rest of this capsule.
             if controller.selecting {
-                if !controller.picked.isEmpty {
+                if pickedCount > 0 {
                     Button(Copy.Library2.share, systemImage: Symbol.Library.share) { Task { await sharePicked() } }
                         .disabled(controller.preparingShare)
                         .help(Copy.Library2.share)
@@ -258,7 +259,9 @@ private struct LibraryContent: View {
                 controller.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select,
                 systemImage: controller.selecting ? Symbol.Gallery.ticked : Symbol.Gallery.selectPhotos
             ) {
-                if controller.selecting { controller.endSelecting() } else { controller.beginSelecting() }
+                withAnimation(Motion.rows) {
+                    if controller.selecting { controller.endSelecting() } else { controller.beginSelecting() }
+                }
             }
             .help(controller.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select)
         }

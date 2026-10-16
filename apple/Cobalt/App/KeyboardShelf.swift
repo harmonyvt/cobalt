@@ -1,5 +1,6 @@
 import CobaltKit
 import Foundation
+import SwiftUI
 
 /// Hardlinks of files already on this phone, so the keyboard can copy them without downloading.
 /// The keyboard cannot see On My iPhone. A hardlink in the app group is the same bytes.
@@ -29,6 +30,8 @@ enum KeyboardShelf {
             let name = ext.isEmpty ? KeyboardFaceSafe.id(raw) : "\(KeyboardFaceSafe.id(raw)).\(ext)"
             if !names.insert(name).inserted { continue }
             let dest = dir.appendingPathComponent(name)
+            // A file replaced under the same id is a new inode: the old link would keep handing out the old bytes.
+            if fm.fileExists(atPath: dest.path), fileNumber(dest) != fileNumber(src) { try? fm.removeItem(at: dest) }
             if !fm.fileExists(atPath: dest.path) {
                 do { try fm.linkItem(at: src, to: dest) } catch { continue }
             }
@@ -45,6 +48,10 @@ enum KeyboardShelf {
         for item in items where item.lastPathComponent != "manifest.json" && !names.contains(item.lastPathComponent) {
             try? fm.removeItem(at: item)
         }
+    }
+
+    private static func fileNumber(_ url: URL) -> UInt64? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.systemFileNumber] as? NSNumber)?.uint64Value
     }
 
     private static func videosRoot() -> URL? {
@@ -66,3 +73,24 @@ private enum KeyboardFaceSafe {
         return safe.isEmpty ? "cobalt" : safe
     }
 }
+
+#if os(iOS)
+/// Keeps the keyboard's shelf in step with the store: republished a moment after the stored videos change, off the
+/// main actor (hard links, a manifest and a directory listing). Draws nothing; it only observes `store.videos`, so
+/// nothing else re-renders for it.
+struct KeyboardShelfPublisher: View {
+    let store: OfflineStore
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .task(id: store.videos) {
+                let videos = store.videos
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                await Task.detached(priority: .utility) { KeyboardShelf.publish(videos) }.value
+            }
+    }
+}
+#endif
