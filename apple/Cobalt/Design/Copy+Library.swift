@@ -40,6 +40,15 @@ extension Copy {
 
         // the card while ticked posts are copied for the share sheet
         static func sharePrepTitle(_ n: Int) -> String { n == 1 ? "getting 1 file ready" : "getting \(n) files ready" }
+        /// What is going out, by kind: `2 videos · 1 photo · 1 gallery cover`.
+        static func sharePrepKinds(videos: Int, photos: Int, webps: Int, covers: Int) -> String {
+            func n(_ count: Int, _ one: String, _ many: String) -> String? { count == 0 ? nil : "\(count)\u{00A0}\((count == 1 ? one : many).replacingOccurrences(of: " ", with: "\u{00A0}"))" }
+            // no-break spaces inside each part, so a wrap falls between kinds, never inside "1 gallery cover"
+            return [n(videos, "video", "videos"), n(photos, "photo", "photos"), n(webps, "webp", "webps"),
+                    n(covers, "gallery cover", "gallery covers")].compactMap { $0 }.joined(separator: " · ")
+        }
+        static let shareKindVideo = "video", shareKindPhoto = "photo", shareKindWebp = "webp", shareKindCover = "gallery cover"
+        static let shareCancel = "cancel"
         static func sharePrepCount(done: Int, of n: Int) -> String { "\(done) of \(n)" }
         static func sharePrepMore(_ n: Int) -> String { "and \(n) more" }
         static var shareOnDevice: String { "on this \(Copy.device)" }
