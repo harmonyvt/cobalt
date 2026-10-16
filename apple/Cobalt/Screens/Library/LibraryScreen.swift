@@ -184,10 +184,15 @@ private struct LibraryContent: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { controller.decideInspector(width: $0) }
             .onChange(of: tier, initial: true) { controller.compact = tier == .compact }
             .background { GalleryFileShare(fileURLs: $filesToShare) }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+            // centred over a light scrim: at the bottom it sat under the floating tab bar
+            .overlay {
                 if controller.preparingShare, !controller.sharePrep.isEmpty {
-                    LibrarySharePrepCard(rows: controller.sharePrep)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    ZStack {
+                        Color.black.opacity(0.28).ignoresSafeArea()
+                            .transition(.opacity)
+                        LibrarySharePrepCard(rows: controller.sharePrep) { controller.shareCancelled = true }
+                            .transition(.scale(scale: 0.94).combined(with: .opacity))
+                    }
                 }
             }
             .motion(Motion.card, value: controller.preparingShare)
@@ -516,67 +521,136 @@ struct LibraryProblem: View {
 }
 
 /// Names each file while a share is copying it, then goes away when the sheet is ready.
-/// The card that rises while ticked posts are copied for the share sheet: how many are ready, a bar, and each post with
-/// its picture and where it stands (already here, waiting, downloading, ready, couldn't get it). The share sheet opens
-/// once every row is done.
+/// The card while ticked posts are copied for the share sheet: what is going out (`2 videos · 1 photo`), a fan of
+/// their pictures, a bar, and each post with its kind, where it stands and a mark. The share sheet opens once every row
+/// is done; `cancel` stops before the next post and opens nothing.
 private struct LibrarySharePrepCard: View {
     let rows: [SharePrepRow]
+    let cancel: () -> Void
 
     /// Rows listed before `and n more`.
     private static let listed = 4
 
     var body: some View {
         let done = rows.filter(\.state.done).count
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(spacing: 14) {
+            SharePrepFan(rows: Array(rows.prefix(3)))
+            VStack(spacing: 3) {
                 Text(Copy.Library2.sharePrepTitle(rows.count))
-                    .font(Font.cobalt(14, .semibold, relativeTo: .subheadline))
+                    .font(Font.cobalt(16, .semibold, relativeTo: .headline))
                     .foregroundStyle(CobaltColor.text)
-                Spacer(minLength: 0)
+                Text(kinds)
+                    .font(Font.cobalt(12.5, relativeTo: .subheadline))
+                    .foregroundStyle(CobaltColor.caption)
+                    .multilineTextAlignment(.center)
+            }
+            HStack(spacing: 10) {
+                ProgressView(value: Double(done), total: Double(max(rows.count, 1)))
+                    .tint(CobaltColor.text)
                 Text(Copy.Library2.sharePrepCount(done: done, of: rows.count))
                     .font(Font.cobalt(12, relativeTo: .caption))
                     .monospacedDigit()
                     .foregroundStyle(CobaltColor.caption)
                     .contentTransition(.numericText(value: Double(done)))
             }
-            ProgressView(value: Double(done), total: Double(max(rows.count, 1)))
-                .tint(CobaltColor.text)
-            VStack(spacing: 8) {
+            VStack(spacing: 10) {
                 ForEach(rows.prefix(Self.listed)) { row in SharePrepLine(row: row) }
+                if rows.count > Self.listed {
+                    Text(Copy.Library2.sharePrepMore(rows.count - Self.listed))
+                        .font(Font.cobalt(12, relativeTo: .caption))
+                        .foregroundStyle(CobaltColor.caption)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
-            if rows.count > Self.listed {
-                Text(Copy.Library2.sharePrepMore(rows.count - Self.listed))
-                    .font(Font.cobalt(12, relativeTo: .caption))
-                    .foregroundStyle(CobaltColor.caption)
-            }
+            Button(Copy.Library2.shareCancel, role: .cancel, action: cancel)
+                .buttonStyle(.cobaltSecondary(fullWidth: true, compact: true))
         }
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(18)
+        .frame(maxWidth: 360)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(CobaltColor.hairline, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(CobaltColor.hairline, lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
-        .padding(.horizontal, Metrics.gutter)
-        .padding(.bottom, 10)
+        .shadow(color: .black.opacity(0.18), radius: 30, y: 12)
+        .padding(24)
         .animation(Motion.rows, value: done)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isModal)
+    }
+
+    private var kinds: String {
+        func count(_ kind: SharePrepRow.Kind) -> Int { rows.filter { $0.kind == kind }.count }
+        return Copy.Library2.sharePrepKinds(
+            videos: count(.video), photos: count(.photo), webps: count(.webp), covers: count(.galleryCover))
     }
 }
 
-/// One post on the share card: its picture, its title, and a mark for where it stands.
+/// Up to three of the posts' pictures, fanned like a hand of cards, each with its kind in the corner.
+private struct SharePrepFan: View {
+    let rows: [SharePrepRow]
+
+    var body: some View {
+        ZStack {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                let spread = Double(index) - Double(rows.count - 1) / 2
+                SharePrepThumb(row: row, side: 64)
+                    .rotationEffect(.degrees(spread * 9))
+                    .offset(x: spread * 30, y: abs(spread) * 5)
+                    .zIndex(-abs(spread))
+            }
+        }
+        .frame(height: 78)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A post's picture with a small kind glyph (film, photo, sparkles, stack) in its corner.
+private struct SharePrepThumb: View {
+    let row: SharePrepRow
+    let side: CGFloat
+
+    var body: some View {
+        FacePicture(item: row.item, maxPixel: Int(side * 3), showsGlyph: false)
+            .frame(width: side, height: side)
+            .clipShape(RoundedRectangle(cornerRadius: side * 0.22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: side * 0.22, style: .continuous)
+                    .strokeBorder(.white.opacity(0.6), lineWidth: side > 40 ? 1.5 : 0.75)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                Image(systemName: SharePrepThumb.symbol(row.kind))
+                    .font(.system(size: side > 40 ? 10 : 7.5, weight: .bold))
+                    .foregroundStyle(CobaltColor.badgeInk)
+                    .frame(width: side > 40 ? 20 : 14, height: side > 40 ? 20 : 14)
+                    .background(CobaltColor.badgeBack, in: Circle())
+                    .padding(side > 40 ? 4 : 2)
+            }
+            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+    }
+
+    static func symbol(_ kind: SharePrepRow.Kind) -> String {
+        switch kind {
+        case .video: return Symbol.Library.typeVideo
+        case .photo: return Symbol.Library.typePhoto
+        case .webp: return Symbol.Library.typeWebp
+        case .galleryCover: return Symbol.Gallery.gallery
+        }
+    }
+}
+
+/// One post on the share card: its picture, its title, `video · 0:12 · downloading…`, and a mark for where it stands.
 private struct SharePrepLine: View {
     let row: SharePrepRow
 
     var body: some View {
         HStack(spacing: 10) {
-            FacePicture(item: row.item, maxPixel: 120, showsGlyph: false)
-                .frame(width: 34, height: 34)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            SharePrepThumb(row: row, side: 36)
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.title)
                     .font(Font.cobalt(13, relativeTo: .body))
                     .foregroundStyle(CobaltColor.text)
                     .lineLimit(1)
+                    .truncationMode(.middle)
                 Text(caption)
                     .font(Font.cobalt(11.5, relativeTo: .caption))
                     .foregroundStyle(row.state == .skipped ? CobaltColor.errorText : CobaltColor.caption)
@@ -586,9 +660,17 @@ private struct SharePrepLine: View {
             mark
                 .frame(width: 20, height: 20)
         }
+        .accessibilityElement(children: .combine)
     }
 
     private var caption: String {
+        var parts = [Copy.Library2.shareKind(row.kind)]
+        if let length = row.length { parts.append(Format.seconds(length)) }
+        parts.append(state)
+        return parts.joined(separator: " · ")
+    }
+
+    private var state: String {
         switch row.state {
         case .onDevice: return Copy.Library2.shareOnDevice
         case .waiting: return Copy.Library2.shareWaiting
