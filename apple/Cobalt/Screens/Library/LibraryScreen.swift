@@ -664,10 +664,19 @@ private struct SharePrepLine: View {
     }
 
     private var caption: String {
-        var parts = [Copy.Library2.shareKind(row.kind)]
+        var parts = [word(row.kind)]
         if let length = row.length { parts.append(Format.seconds(length)) }
         parts.append(state)
         return parts.joined(separator: " · ")
+    }
+
+    private func word(_ kind: SharePrepRow.Kind) -> String {
+        switch kind {
+        case .video: return Copy.Library2.shareKindVideo
+        case .photo: return Copy.Library2.shareKindPhoto
+        case .webp: return Copy.Library2.shareKindWebp
+        case .galleryCover: return Copy.Library2.shareKindCover
+        }
     }
 
     private var state: String {

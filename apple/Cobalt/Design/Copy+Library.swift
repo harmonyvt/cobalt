@@ -46,14 +46,7 @@ extension Copy {
             return [n(videos, "video", "videos"), n(photos, "photo", "photos"), n(webps, "webp", "webps"),
                     n(covers, "gallery cover", "gallery covers")].compactMap { $0 }.joined(separator: " · ")
         }
-        static func shareKind(_ kind: SharePrepRow.Kind) -> String {
-            switch kind {
-            case .video: return "video"
-            case .photo: return "photo"
-            case .webp: return "webp"
-            case .galleryCover: return "gallery cover"
-            }
-        }
+        static let shareKindVideo = "video", shareKindPhoto = "photo", shareKindWebp = "webp", shareKindCover = "gallery cover"
         static let shareCancel = "cancel"
         static func sharePrepCount(done: Int, of n: Int) -> String { "\(done) of \(n)" }
         static func sharePrepMore(_ n: Int) -> String { "and \(n) more" }
