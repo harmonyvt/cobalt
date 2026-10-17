@@ -2248,7 +2248,7 @@ Keyed. The Worker only: it calls 7TV and writes D1 + the public media bucket. Th
 
 No migration. Deploy the API Worker only. The app decodes each library file on its own, so an old build drops a file whose `source` is `emote` and can show an empty post. Ship the app that accepts the word before relying on a saved emote.
 
-## 21. Library search (addendum, built 2026-10-17; owner: "have a cloudflare worker embed our media for searching", hosted on a free private Hugging Face Space)
+## 21. Library search (addendum, built 2026-10-17; owner: "have a cloudflare worker embed our media for searching", hosted on a private Hugging Face Space, `capybaraharmony/cobalt-embed`)
 
 One vector per library post, made by Google's EmbeddingGemma 2 (text and image encoders) on a private Hugging Face Space (`deploy/huggingface/embed`, its README has the Space contract), stored in D1 `media_embeddings` (migration `0010_search.sql`) and searched by the API Worker (`src/embed.ts`). A post is embedded from `title: <custom title, else the lead file's name> | text: <its file names · the link's host and path>` plus its poster when the poster is on `media.capybaraharmony.com`, so a query finds a post by the words in it or by what its poster shows. Vectors are 256 numbers (Matryoshka truncation, L2-normalized).
 

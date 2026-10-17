@@ -922,7 +922,7 @@ Two additive features (owner, 2026-10-05: "by default videos are public and they
 
 ## Library search (`APP-API-CONTRACT.md` section 21)
 
-Search runs EmbeddingGemma 2 on a free, private Hugging Face Space; the API Worker indexes posts every 15
+Search runs EmbeddingGemma 2 on a private Hugging Face Space (`capybaraharmony/cobalt-embed`, CPU basic, needs HF PRO); the API Worker indexes posts every 15
 minutes and answers `GET /library/search`. Owner steps, once:
 
 1. Create the Space from `deploy/huggingface/embed` (its README: private Docker Space `cobalt-embed`, secret `EMBED_KEY`).
@@ -932,7 +932,7 @@ minutes and answers `GET /library/search`. Owner steps, once:
 4. Check: `POST /library/search/index` with an Api-Key answers `indexed` > 0 (the first call may say
    `unavailable: true` while the Space boots; the cron carries on), then `GET /library/search?q=...`.
 
-Accepted trade-offs: a free Space sleeps when idle, so the first search after a quiet spell answers
+Accepted trade-offs: the Space sleeps when idle, so the first search after a quiet spell answers
 `error.search.waking`; search scores every vector in the Worker (fine for thousands of posts, not millions);
 only the poster frame is looked at, not the whole video or its audio.
 

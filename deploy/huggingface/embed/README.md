@@ -20,7 +20,8 @@ a 256-number vector in the same space.
 ## Create the Space (once, by the owner)
 
 1. On huggingface.co: **New Space**, name `cobalt-embed`, SDK **Docker** (blank), hardware
-   **CPU basic (free)**, visibility **Private**.
+   **CPU basic**, visibility **Private**. Docker Spaces need a Hugging Face PRO account (a free account
+   gets 402 Payment Required). The live one is `capybaraharmony/cobalt-embed`, created 2026-10-17.
 2. Upload the four files in this folder (`README.md`, `Dockerfile`, `requirements.txt`, `app.py`), or push
    them with git. The first build downloads the model and takes several minutes.
 3. Space settings > **Variables and secrets**: add the secret `EMBED_KEY` (any long random string).
@@ -51,4 +52,4 @@ anything else, or a failed fetch, embeds the text alone and reports `false` in `
 
 `GET /` → `{ "status": "ok", "model", "ready" }` (`ready` turns true once the model is loaded).
 
-A free Space sleeps after a stretch without traffic; the first call after that waits while it boots.
+A CPU basic Space sleeps after a stretch without traffic; the first call after that waits while it boots.
