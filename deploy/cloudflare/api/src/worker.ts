@@ -30,6 +30,7 @@ import { publishStudio, type PublishBucket } from "./publish";
 import { queueSnapshot } from "./queue";
 import { serviceAuthorized } from "./service-auth";
 import { sharePage } from "./share";
+import { createShareSet, listShareSets, revokeShareSet } from "./share-sets";
 import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { ingestTelemetry } from "./telemetry";
 import {
@@ -356,6 +357,21 @@ async function handleInner(
                     return res.ok ? await res.json() : null;
                 },
             });
+            const res = json(r.status, r.body, allowOrigin);
+            res.headers.set("cache-control", "no-store");
+            return res;
+        }
+        // Gallery share links (section 24): D1 only.
+        if (decision.then === "share_sets_create" || decision.then === "share_sets_list" || decision.then === "share_sets_revoke") {
+            const shareBaseUrl = shareHost(env) ? env.SHARE_BASE_URL : undefined;
+            if (!shareBaseUrl) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
+            const sd = { db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, shareBaseUrl, now: edge.now };
+            const r =
+                decision.then === "share_sets_create"
+                    ? await createShareSet(sd, request, keyId)
+                    : decision.then === "share_sets_list"
+                      ? await listShareSets(sd)
+                      : await revokeShareSet(sd, decision.params!.id);
             const res = json(r.status, r.body, allowOrigin);
             res.headers.set("cache-control", "no-store");
             return res;

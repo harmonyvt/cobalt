@@ -20,6 +20,7 @@
 
 // Read at bundle time from upstream's package.json (reading is fine, editing is
 // not); the fork's Worker bundles this one field.
+import { SHARE_SET_MAX } from "./share-sets";
 import { version as apiVersion } from "../../../../api/package.json";
 
 import { LINE_MAX, LINE_WAIT_MS, parseQueryFlag } from "./line";
@@ -232,6 +233,9 @@ export async function capabilities(
                 // GET /queue: the line, the search index and the posters in one snapshot (APP-API-CONTRACT.md
                 // section 23)
                 queue: true,
+                // POST|GET /share/sets and DELETE /share/sets/<id>, gallery links on the share host
+                // (APP-API-CONTRACT.md section 24): exactly while the share host is configured
+                share_sets: !!d.shareBaseUrl,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,
@@ -244,6 +248,7 @@ export async function capabilities(
                 session_ttl_ms: SESSION_TTL_MS,
                 line_max: LINE_MAX,
                 line_wait_ms: LINE_WAIT_MS,
+                share_set_max: SHARE_SET_MAX,
             },
             media_base_url: withSlash(d.mediaBaseUrl),
             // the rich link page of a public file https://media.../<name>.<ext> is <share_base_url><name>

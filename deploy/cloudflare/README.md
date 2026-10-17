@@ -929,6 +929,14 @@ are public right now have a page. `SHARE_BASE_URL` in `api/cloudflare.config.ts`
 Worker's `domains`; `GET /capabilities` advertises it as `share_base_url` and the app copies those links instead of the
 file URLs. Check a page with `curl -s https://share.capybaraharmony.com/<name> | grep og:` or paste it in Discord.
 
+## Gallery share links (`APP-API-CONTRACT.md` section 24)
+
+`https://share.capybaraharmony.com/g/<19 digits>` shows 2..4 public files as one embed (`src/share-sets.ts`). The app
+makes them (`POST /share/sets`), lists them (`GET /share/sets`, the links tab) and revokes them
+(`DELETE /share/sets/<id>`). Discord's crawler gets a Mastodon `activity+json` link and reads
+`/api/v1/statuses/<id>`, which lists every file as an attachment (videos play in the grid); that path is undocumented
+Discord behaviour, and Discord falls back to the Open Graph tags when it fails. Apply migration 0012 before deploying.
+
 ## Library search (`APP-API-CONTRACT.md` section 21)
 
 Search runs EmbeddingGemma 2 on a private Hugging Face Space (`capybaraharmony/cobalt-embed`, CPU basic, needs HF PRO); the API Worker drains the index queue every 15
