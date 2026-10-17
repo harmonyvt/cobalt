@@ -92,6 +92,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// search index's backlog, the posters) for the queue tab. False when absent: the tab then shows only what this
     /// device knows (its jobs, downloads and the photos album) and never asks the server.
     public var queue: Bool = false
+    /// `features.search` (APP-API-CONTRACT 21): `GET /library/search` ranks the library by meaning and
+    /// `GET /library/search/post` says how one post sits in the index. False when absent: the library's search field
+    /// filters the loaded posts by name only, and the detail has no "search index" section.
+    public var search: Bool = false
     /// `share_base_url` (APP-API-CONTRACT 22): the server's rich link pages. A public file
     /// `<mediaBaseURL><name>.<ext>` has a page at `<shareBaseURL><name>` that unfurls as a playable video or a
     /// full-size image in Discord, iMessage, X and the rest. Nil when absent: links are the files themselves.

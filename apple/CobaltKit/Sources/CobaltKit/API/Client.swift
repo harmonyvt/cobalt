@@ -116,6 +116,12 @@ public protocol CobaltClient: Sendable {
     func searchEmotes(query: String) async throws -> [EmoteHit]
     /// `POST /emotes` `{id}`. The first save is new; the same id again is the same file.
     func saveEmote(id: String) async throws -> SavedEmote
+    /// `GET /library/search?q=&limit=&v=` (APP-API-CONTRACT 21; keyed; only when `features.search`): the posts best
+    /// first, each with its `score`. `version` is the `GET /library` shape the posts come in (2 or 3; nil sends none).
+    /// Defaulted below (`.unsupported`) so older fakes compile.
+    func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult
+    /// `GET /library/search/post?key=` (keyed; only when `features.search`): how one post sits in the search index.
+    func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus
 }
 
 extension CobaltClient {
@@ -183,11 +189,19 @@ extension CobaltClient {
     public func deletePost(anchor itemID: String) async throws -> PostDeleteResult { throw PipelineFailure.unsupported }
     public func searchEmotes(query: String) async throws -> [EmoteHit] { throw PipelineFailure.unsupported }
     public func saveEmote(id: String) async throws -> SavedEmote { throw PipelineFailure.unsupported }
+    public func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult {
+        throw PipelineFailure.unsupported
+    }
+    public func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus { throw PipelineFailure.unsupported }
     /// Likewise: a client that predates titles says the server cannot do it.
     public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult { throw PipelineFailure.unsupported }
 }
 
 extension CobaltClient {
+    /// `librarySearch` with the posts in the `GET /library?v=3` shape.
+    public func librarySearch(query: String, limit: Int) async throws -> LibrarySearchResult {
+        try await librarySearch(query: query, limit: limit, version: 3)
+    }
     /// `makeSlideshow` without a Hark opt-in.
     public func makeSlideshow(session: String, plan: SlideshowPlan, items: [GalleryItem], focused: Bool) async throws -> RenderAccepted {
         try await makeSlideshow(session: session, plan: plan, items: items, focused: focused, notify: false)

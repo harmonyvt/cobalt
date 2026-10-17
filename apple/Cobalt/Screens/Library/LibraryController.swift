@@ -148,9 +148,9 @@ final class LibraryController {
         }
     }
 
-    /// The media the inspector shows: the loaded post whatever the filter says.
+    /// The media the inspector shows: the loaded post whatever the filter says (else the post a search returned).
     var selectedItem: MediaItem? {
-        guard let id = selection, let post = library.posts.first(where: { $0.id == id }) else { return nil }
+        guard let id = selection, let post = library.post(id: id) else { return nil }
         return model.mediaItem(for: post)
     }
 

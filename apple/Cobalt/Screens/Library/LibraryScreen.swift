@@ -105,6 +105,8 @@ private struct LibraryContent: View {
         if library.failure != nil, library.posts.isEmpty { return .failed }
         if library.isLoading || library.loadingAll != nil { return .loading }
         let query = library.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // the server is still looking (or waking up): not "nothing matches" yet
+        if !query.isEmpty, library.searchState == .searching || library.searchState == .waking { return .loading }
         if !query.isEmpty { return .noMatch(query) }
         if model.capabilities.gallery, library.kindFilter != .all {
             return .emptyKind(library.kindFilter, kept: library.show == .offline)
@@ -144,7 +146,9 @@ private struct LibraryContent: View {
                 controller.selecting
                     ? Copy.Library2.selected(pickedCount)
                     : Copy.libraryCounts(posts: library.postCount, files: library.fileCount))
-            .searchable(text: $library.query, placement: searchPlacement, prompt: Copy.Library2.searchPrompt)
+            .searchable(
+                text: $library.query, placement: searchPlacement,
+                prompt: model.capabilities.search ? Copy.Search.prompt : Copy.Library2.searchPrompt)
             .toolbar { toolbar(pickedCount: pickedCount) }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
@@ -154,7 +158,9 @@ private struct LibraryContent: View {
                         }
                     }
                     loadingAllLine
+                    LibrarySearchLine(state: library.searchState)
                 }
+                .motion(Motion.rows, value: library.searchState)
             }
             .modifier(LibraryInspector(model: model, controller: controller, enabled: tier != .compact))
             .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: tier == .compact))
@@ -363,6 +369,33 @@ private struct LibraryContent: View {
         }
         // the iPad and Mac's table has only the selection to show; every other view scrolls to it and lights it
         if tier == .compact || library.viewMode == .mosaic { controller.reveal = LibraryReveal(id: id) }
+    }
+}
+
+/// The line under the search field while the server searches (APP-API-CONTRACT 21): `searching…`, `12 results · still
+/// indexing 3 posts`, `search is waking up…`, or why only name matches show. Nothing while there is no server search.
+struct LibrarySearchLine: View {
+    let state: LibrarySearchState
+
+    var body: some View {
+        if let text = Copy.Search.line(state) {
+            HStack(spacing: 6) {
+                if state == .searching || state == .waking {
+                    ProgressView().controlSize(.mini)
+                }
+                Text(text)
+                    .contentTransition(.opacity)
+            }
+            .font(CobaltType.captionSmall)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(.bar)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.updatesFrequently)
+            .transition(.opacity)
+        }
     }
 }
 

@@ -190,6 +190,7 @@ public struct HTTPCobaltClient: CobaltClient {
                 var galleryMake: Bool?
                 var directLinks: Bool?
                 var queue: Bool?
+                var search: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -250,6 +251,7 @@ public struct HTTPCobaltClient: CobaltClient {
             galleryMake: (f?.gallery ?? false) && (f?.galleryMake ?? false),
             directLinks: f?.directLinks ?? false,
             queue: f?.queue ?? false)
+        caps.search = f?.search ?? false
         caps.shareBaseURL = w.shareBaseUrl.flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
         return caps
     }
@@ -520,6 +522,34 @@ public struct HTTPCobaltClient: CobaltClient {
     public func saveEmote(id: String) async throws -> SavedEmote {
         let req = try makeRequest("POST", "/emotes", keyed: true)
         return try await sendJSON(SavedEmote.self, req, body: Self.jsonBody(["id": id]))
+    }
+
+    // MARK: - Library search (APP-API-CONTRACT 21; `features.search`)
+
+    /// `GET /library/search?q=&limit=&v=` (keyed): the posts best first, each decoded as `GET /library` decodes it,
+    /// plus its `score`. Errors as the keyed calls throw them: `503 error.search.waking` / `error.search.off`,
+    /// `502 error.search.failed` and `400 error.library.bad_request` are `CobaltError.api(code:httpStatus:)`.
+    public func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult {
+        var params = [("q", String(query.prefix(200))), ("limit", String(max(1, min(50, limit))))]
+        if let version, version == 2 || version == 3 { params.append(("v", String(version))) }
+        let req = try makeRequest("GET", "/library/search", query: params, keyed: true, timeout: 30)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw apiError(data, status: http.statusCode) }
+        do {
+            return try LibrarySearchWire.decode(data, asked: query)
+        } catch {
+            if let env = try? JSONDecoder().decode(ErrorEnvelope.self, from: data), let code = env.error?.code {
+                throw CobaltError.api(code: code, httpStatus: http.statusCode)
+            }
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+    }
+
+    /// `GET /library/search/post?key=<post key>` (keyed): how one post sits in the index. `404 error.library.not_found`
+    /// is `CobaltError.api`.
+    public func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus {
+        let req = try makeRequest("GET", "/library/search/post", query: [("key", postKey)], keyed: true, timeout: 20)
+        return try await sendJSON(LibrarySearchStatus.self, req)
     }
 
     public func deleteMedia(name: String) async throws {

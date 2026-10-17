@@ -75,7 +75,8 @@ struct MediaDetail: View {
     /// The media from the store and the library as they are now; nil once nothing of it is left.
     private var resolved: MediaItem? {
         guard live else { return lastShown }
-        let post = postID.flatMap { id in model.library.posts.first { $0.id == id } }
+        // the loaded post, else the one a library search returned (past the loaded pages)
+        let post = postID.flatMap { id in model.library.post(id: id) }
         let local = localID.flatMap { model.store.media(id: $0) }
         if let post {
             return model.mediaItem(for: post, preferring: local)

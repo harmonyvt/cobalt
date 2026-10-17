@@ -36,8 +36,22 @@ public final class LibraryModel {
     public var kindFilter: LibraryKindFilter {
         didSet { if kindFilter != oldValue { defaults.set(kindFilter.rawValue, forKey: LibraryDefaults.kind) } }
     }
-    /// The search text; not persisted.
-    public var query: String = ""
+    /// The search text; not persisted. With `features.search` a change also starts the server search
+    /// (`LibraryModel+Search.swift`).
+    public var query: String = "" {
+        didSet { if query != oldValue { queryDidChange() } }
+    }
+    /// The server's answer for the current query, posts best first (APP-API-CONTRACT 21); nil while there is none (no
+    /// query, under two letters, no `features.search`, still waiting, or the search failed): the local name filter then
+    /// answers alone.
+    public internal(set) var searchResults: [LibraryPost]?
+    /// Each result's `score`, by post id.
+    public internal(set) var searchScores: [String: Double] = [:]
+    /// Where the server search is, for the line under the search field.
+    public internal(set) var searchState: LibrarySearchState = .idle
+    /// Posts a search returned, by id, kept after the query is cleared, so a detail opened from a result that is not
+    /// in `posts` (past the loaded pages) keeps its post. Emptied by `reset()`.
+    public internal(set) var searchKnown: [String: LibraryPost] = [:]
     /// While `loadAll` runs: pages in so far and the server's total (the quiet line above the results).
     public private(set) var loadingAll: (loaded: Int, total: Int)?
 
@@ -49,6 +63,10 @@ public final class LibraryModel {
     @ObservationIgnored let defaults: UserDefaults
     @ObservationIgnored var cursor: String?
     @ObservationIgnored var redownloadTasks: [String: Task<StoredVideo, Error>] = [:]
+    /// The debounce, request and waking retry of the current query; cancelled by the next keystroke.
+    @ObservationIgnored var searchTask: Task<Void, Never>?
+    /// The server answered `error.search.off`: no more server searches until `reset()` (a server or key change).
+    @ObservationIgnored var searchOffByServer = false
 
     static let pageSize = 20
     static let wholePageSize = 50
@@ -69,6 +87,8 @@ public final class LibraryModel {
     func reset() {
         posts = []; postCount = 0; fileCount = 0; failure = nil; hasMore = false; cursor = nil
         expandedPostID = nil; loadingAll = nil; localTitles = [:]
+        searchTask?.cancel(); searchTask = nil; searchOffByServer = false
+        searchResults = nil; searchScores = [:]; searchState = .idle; searchKnown = [:]
     }
 
     func apply(_ page: LibraryPage, replacing: Bool) {
@@ -279,6 +299,7 @@ public final class LibraryModel {
         } catch {
             throw pipelineFailure(from: error, during: .saving, limits: ctx.capabilities.limits) ?? error
         }
+        forgetSearched(files: [file.id])
         guard let index = posts.firstIndex(where: { $0.files.contains { $0.id == file.id } }) else { return }
         posts[index].files.removeAll { $0.id == file.id }
         fileCount = max(0, fileCount - 1)
@@ -293,6 +314,7 @@ public final class LibraryModel {
     /// and a post left with no file goes with them.
     func drop(files ids: Set<String>) {
         guard !ids.isEmpty else { return }
+        forgetSearched(files: ids)
         for index in posts.indices.reversed() {
             let before = posts[index].files.count
             posts[index].files.removeAll { ids.contains($0.id) }
@@ -309,6 +331,7 @@ public final class LibraryModel {
 
     /// A whole post is gone on the server.
     func drop(post id: String) {
+        forgetSearched(posts: [id])
         guard let index = posts.firstIndex(where: { $0.id == id }) else { return }
         fileCount = max(0, fileCount - posts[index].files.count)
         postCount = max(0, postCount - 1)

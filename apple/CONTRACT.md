@@ -1018,3 +1018,74 @@ poll at once, then every **5 s** while `snapshot.isActive`, else every **30 s**;
 then 120 s** until one succeeds (the last snapshot stays on screen with "can't reach the server"). Tests:
 `CobaltKitTests/UnifiedQueueTests.swift`.
 
+
+## 13. Library search (added 2026-10-17)
+
+The server ranks the library by meaning (APP-API-CONTRACT 21: EmbeddingGemma on a private Space, `GET /library/search`)
+and says how each post sits in the index (`GET /library/search/post`). Both only when `Capabilities.search`
+(`features.search`); without it nothing below runs and the search field filters by name as before (CONTRACT-LIBRARY2
+decision 14).
+
+**Library screen.** The field's prompt is `search titles and what's in them` (`Copy.Search.prompt`). A query with at
+least two non-space characters waits **350 ms** after the last keystroke, then asks the server (`limit=50`, the same
+`v` as `GET /library`); every keystroke cancels the pause and any request in flight, and an answer for words no longer in
+the field is dropped. The local name filter answers at once and stays on screen until the server answers, and is the
+answer whenever the server cannot (search off, failed, offline). With results, `libraryRows` is the server's posts **in
+score order** (the loaded copy of each when there is one; the sort is ignored), then the loaded name matches the server
+did not return, in the sort's order; the show filter and the kind chip still apply. The same tiles, list, table, select
+mode and context menus draw them, and a tap opens the same `MediaDetail` (a result past the loaded pages resolves through
+`LibraryModel.post(id:)`). Clearing the field returns to the library at once. A quiet line under the field
+(`LibrarySearchLine`, `.bar` background like the loading-all line): `searching…`, `12 results`, `12 results · still
+indexing 3 posts` (`index.pending` > 0), `search is waking up…`, `couldn't search by meaning. showing name matches.`,
+`search by meaning is off on this server. showing name matches.`; none while idle. It fades in and out with
+`Motion.rows` (a crossfade under Reduce Motion). While the server is still looking and nothing matches by name, the
+content shows the loading state instead of `nothing matches`.
+
+**Errors.** `503 error.search.waking` → `.waking`, then **one** retry after **20 s** (typing in between drops it; a
+second waking answer stays `.waking`). `503 error.search.off` → `.off`, and no more server searches until
+`LibraryModel.reset()` (a server or key change). Anything else → `.failed`.
+
+**Detail.** With `features.search` and a library post, the detail ends with a read-only **search index** section
+(`SearchIndexSection`), loaded when the detail opens and again after a rename: a tinted badge (`indexed` green,
+`waiting to re-index` / `waiting` grey, `failed` / `gave up` red), a line (`indexed 2 h ago`, `retries in 40 min`,
+`gave up after 3 tries. renaming it tries again.`), `poster included yes/no`, the tries when they matter, and a
+disclosure `what it's searched by` with the exact title, text, poster URL and model. 404 → `not in the index yet.`;
+any other failure → `couldn't check the index.`
+
+**CobaltKit API** (public, additive):
+
+```swift
+extension Capabilities { public var search: Bool }                       // features.search; false when absent
+public struct LibrarySearchResult: Sendable, Equatable {
+    public struct Hit: Identifiable { post: LibraryPost; score: Double }
+    query: String; model: String?; hits: [Hit]; indexed: Int?; pending: Int?; posts: [LibraryPost] { get }
+}
+public enum LibrarySearchState: Equatable { case idle, searching, results(count: Int, pending: Int), waking, off, failed }
+public struct LibrarySearchStatus: Sendable, Equatable, Decodable {      // lenient: only post_key is required
+    public enum State: String { case indexed, stale, pending, failed, gaveUp = "gave_up", unknown }
+    public struct Input { title: String?; text: String?; imageURL: URL? }
+    postKey, state, model?, dims?, embeddedAt?, failedAt?, retryAt?, attempts, hasImage?, input?,
+    embeddedMatchesInput?, searchEnabled (false only when the server says `search_enabled: false`)
+}
+protocol CobaltClient {                                                    // both defaulted: throw .unsupported
+    func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult
+    func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus
+}
+extension CobaltClient { func librarySearch(query: String, limit: Int) async throws -> LibrarySearchResult }   // v=3
+extension LibraryModel {
+    var searchResults: [LibraryPost]? { get }        // nil while there is no server answer for the current query
+    var searchScores: [String: Double] { get }
+    var searchState: LibrarySearchState { get }
+    var activeSearchResults: [LibraryPost]? { get }  // searchResults while the query is not empty
+    var searchKnown: [String: LibraryPost] { get }   // every post a search returned, until reset()
+    func post(id: String) -> LibraryPost?             // loaded, else a search result
+    func searchStatus(postKey: String) async throws -> LibrarySearchStatus
+    static func searchErrorCode(_ error: Error) -> String?
+}
+public enum PreviewSearchMode { case off, ready, indexing, waking, stillWaking, failing, disabled }
+extension AppModel { static func previewSearch(_ mode: PreviewSearchMode = .ready) -> AppModel }
+```
+
+Copy: `Design/Copy+Search.swift`. Previews: `Screens/Library/LibrarySearchPreviews.swift`,
+`Screens/Detail/SearchIndexSection.swift`. Tests: `CobaltKitTests/LibrarySearchTests.swift` (wire, capability, HTTP
+query and errors, debounce and cancel, fallback, waking retry, off, clearing, a post's index state).
