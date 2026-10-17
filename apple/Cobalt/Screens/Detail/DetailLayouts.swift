@@ -36,6 +36,8 @@ struct DetailInfo: View {
     let rendition: Rendition
     /// The page on screen was never saved: its meta line says so instead of describing a file.
     var missing: Int?
+    /// The link to show for a public file: its rich link page when the server has them (APP-API-CONTRACT 22).
+    var shareLink: (URL) -> URL = { $0 }
 
     var body: some View {
         if let missing {
@@ -52,7 +54,7 @@ struct DetailInfo: View {
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .fixedSize(horizontal: false, vertical: true)
-            if let url = rendition.publicURL {
+            if let url = rendition.publicURL.map(shareLink) {
                 Text(DetailMeta.linkText(url))
                     .font(CobaltType.captionSmall)
                     .foregroundStyle(CobaltColor.linkBlue)
@@ -82,7 +84,7 @@ struct CompactDetail: View {
                 VStack(spacing: 12) {
                     RenditionTabs(item: c.item, selection: c.selection, maxSegments: maxSegments)
                     DetailHero(c: c, maxHeight: c.isGalleryLike ? 330 : 360)
-                    DetailInfo(item: c.item, rendition: c.rendition, missing: c.missingIndex)
+                    DetailInfo(item: c.item, rendition: c.rendition, missing: c.missingIndex, shareLink: c.model.capabilities.shareLink(for:))
                 }
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                 .listRowBackground(Color.clear)
@@ -135,7 +137,7 @@ struct WideDetail: View {
                                 LabeledContent(row.label) { Text(row.value).monospacedDigit() }
                                     .font(CobaltType.body)
                             }
-                            if let url = c.rendition.publicURL { linkRow(url) }
+                            if let url = c.rendition.publicURL { linkRow(c.model.capabilities.shareLink(for: url)) }
                         }
                     }
                     DetailControls(c: c)

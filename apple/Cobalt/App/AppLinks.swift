@@ -24,7 +24,7 @@ func handleAppLink(_ url: URL, model: AppModel) {
        let link = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
            .first(where: { $0.name == "url" })?.value,
        let target = URL(string: link), ["http", "https"].contains(target.scheme?.lowercased() ?? "") {
-        Pasteboard.copy(link)
+        Pasteboard.copy(model.capabilities.shareLink(for: target).absoluteString)
         model.selectedTab = .save
         #if os(iOS)
         if model.settings.haptics { UINotificationFeedbackGenerator().notificationOccurred(.success) }

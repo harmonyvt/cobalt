@@ -96,7 +96,7 @@ struct ShareRootView: View {
         .haptic(.success, trigger: pipeline.state, enabled: haptics) { if case .done = $0 { return true } else { return false } }
         .sheet(isPresented: $sharing) {
             if case .done(let result) = pipeline.state {
-                ActivitySheet(items: [result.url]).presentationDetents([.medium, .large])
+                ActivitySheet(items: [pipeline.shareLink(for: result.url)]).presentationDetents([.medium, .large])
             }
         }
         .accessibilityElement(children: .contain)
@@ -255,7 +255,7 @@ struct ShareRootView: View {
                         .font(CobaltType.bodySemibold)
                         .foregroundStyle(CobaltColor.text)
                     note(resultMeta(result))
-                    Text(displayURL(result.url))
+                    Text(displayURL(pipeline.shareLink(for: result.url)))
                         .font(CobaltType.caption)
                         .foregroundStyle(CobaltColor.caption)
                         .lineLimit(2)

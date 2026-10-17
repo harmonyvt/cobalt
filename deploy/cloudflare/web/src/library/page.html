@@ -271,6 +271,16 @@ var LIMIT_S = 10;                   // webp length limit (WEBP_MAX_SECONDS)
 var FREE_BYTES = 10e9;              // the 10 GB meter
 var PAGE_SIZE = 48;
 var DEFAULT_API = "https://api.capybaraharmony.com";
+var MEDIA_BASE = "https://media.capybaraharmony.com/";
+var SHARE_BASE = "https://share.capybaraharmony.com/";
+// A public file is handed out as its rich link page (APP-API-CONTRACT.md section 22): media.../<name>.<ext> -> share.../<name>.
+// Anything else (a studio page, another host) is returned as is.
+function shareUrl(u) {
+  var s = String(u || "");
+  if (s.indexOf(MEDIA_BASE) !== 0) return s;
+  var m = /^([A-Za-z0-9]{6,40})\.[A-Za-z0-9]{1,8}$/.exec(s.slice(MEDIA_BASE.length));
+  return m ? SHARE_BASE + m[1] : s;
+}
 // content type -> extension (the server accepts exactly these)
 var TYPES = { "image/gif": "gif", "image/webp": "webp", "image/png": "png", "image/jpeg": "jpg", "video/mp4": "mp4", "video/quicktime": "mov", "image/heic": "heic" };
 var EXT_TYPE = { gif: "image/gif", webp: "image/webp", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", mp4: "video/mp4", mov: "video/quicktime", heic: "image/heic", heif: "image/heic" };
@@ -529,7 +539,7 @@ function setLinkButtons(disabled) {
   document.querySelectorAll("#actions button").forEach(function (b) { b.disabled = disabled; });
 }
 function showResult(url, text) {
-  $("linkResultUrl").textContent = url;
+  $("linkResultUrl").textContent = shareUrl(url);
   $("openLinkResult").href = url;
   $("linkResult").hidden = false;
   linkStatus("ok", text);
@@ -631,7 +641,7 @@ function fileOptions(f) {
     o.push(remove);
   } else if (f.state === "done") {
     if (f.url) {
-      o.push(h("button", { type: "button", "data-fa": "copy", text: "copy link", onclick: function () { copyText(f.url); } }));
+      o.push(h("button", { type: "button", "data-fa": "copy", text: "copy link", onclick: function () { copyText(shareUrl(f.url)); } }));
       o.push(h("a", { class: "btn", "data-fa": "open", href: f.url, target: "_blank", rel: "noopener", text: "open" }));
     }
     o.push(remove);
@@ -955,7 +965,7 @@ function tileFor(e) {
       var pub = isPub(e.it);
       // one tile per original: the switch is where "host as-is" used to be (webps are always public)
       if (e.it.visibility_toggle) acts.push(visSwitch(e.it, busy));
-      if (pub && e.it.url) acts.push(h("button", { type: "button", "data-ga": "copy", text: "copy link", onclick: function () { copyText(e.it.url); } }));
+      if (pub && e.it.url) acts.push(h("button", { type: "button", "data-ga": "copy", text: "copy link", onclick: function () { copyText(shareUrl(e.it.url)); } }));
       if (e.it.visibility_toggle && (isVideoType(t) || t === "image/gif")) acts.push(h("button", { type: "button", "data-ga": "studio", disabled: busy, text: "open in studio", onclick: function () { privateToStudio(e.it); } }));
     }
     acts.push(h("button", { type: "button", class: "danger", "data-ga": "del", disabled: busy, text: "delete", onclick: function () { G.confirm = id; G.confirmAct = "delete"; renderGrid(); } }));
