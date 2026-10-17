@@ -88,6 +88,25 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// public host) and the server fetches and saves it as one item. False when absent: the app then downloads such a
     /// link on the device and sends it through the file upload instead.
     public var directLinks: Bool = false
+    /// `share_base_url` (APP-API-CONTRACT 22): the server's rich link pages. A public file
+    /// `<mediaBaseURL><name>.<ext>` has a page at `<shareBaseURL><name>` that unfurls as a playable video or a
+    /// full-size image in Discord, iMessage, X and the rest. Nil when absent: links are the files themselves.
+    public var shareBaseURL: URL?
+
+    /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
+    /// Anything that is not one of this server's public files is returned as is.
+    public func shareLink(for url: URL) -> URL {
+        guard let share = shareBaseURL, let media = mediaBaseURL else { return url }
+        let base = media.absoluteString.hasSuffix("/") ? media.absoluteString : media.absoluteString + "/"
+        let s = url.absoluteString
+        guard s.hasPrefix(base) else { return url }
+        let file = s.dropFirst(base.count)
+        let parts = file.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 2, (6...40).contains(parts[0].count), (1...8).contains(parts[1].count),
+              (parts[0] + parts[1]).allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { return url }
+        let shareBase = share.absoluteString.hasSuffix("/") ? share.absoluteString : share.absoluteString + "/"
+        return URL(string: shareBase + parts[0]) ?? url
+    }
 
     public static let unknown = Capabilities(
         kind: .unreachable, cobaltVersion: nil, studio: false, upload: false, library: false,

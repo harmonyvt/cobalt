@@ -114,7 +114,7 @@ struct InspectorColumn: View {
             }
             .buttonStyle(.plain)
             if let url = webp.publicURL {
-                Button { Pasteboard.copy(url.absoluteString) } label: {
+                Button { Pasteboard.copy(pipeline.shareLink(for: url).absoluteString) } label: {
                     Image(systemName: Symbol.copyLink).frame(width: 32, height: 32).contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
@@ -140,7 +140,7 @@ struct InspectorColumn: View {
                 Text("\(Format.bytes(bytes)) · \(Copy.publicLink)")
                     .font(CobaltType.caption).foregroundStyle(CobaltColor.caption)
                 if let url {
-                    Button(Copy.copyLink, systemImage: Symbol.copyLink) { Pasteboard.copy(url.absoluteString) }
+                    Button(Copy.copyLink, systemImage: Symbol.copyLink) { Pasteboard.copy(pipeline.shareLink(for: url).absoluteString) }
                         .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
                         .padding(.top, 4)
                 }

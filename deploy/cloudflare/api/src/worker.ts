@@ -28,6 +28,7 @@ import { lookupKey } from "./keys";
 import { SERVICE_KEY_ID } from "./library";
 import { publishStudio, type PublishBucket } from "./publish";
 import { serviceAuthorized } from "./service-auth";
+import { sharePage } from "./share";
 import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { ingestTelemetry } from "./telemetry";
 import {
@@ -78,6 +79,9 @@ export interface WorkerEnv {
     EMBED_URL?: string;
     EMBED_TOKEN?: string;
     EMBED_KEY?: string;
+    // Rich link pages (section 22): https://<share host>/ (a plain var). The Worker answers that host
+    // itself, before the gate. Absent or empty: no pages, `share_base_url: null`.
+    SHARE_BASE_URL?: string;
 }
 
 // The Space client, or null while search is not configured (embed.ts).
@@ -111,12 +115,28 @@ function withCors(res: Response, allowOrigin?: string): Response {
     return out;
 }
 
+// The hostname of SHARE_BASE_URL, or null while it is not set (or not an https URL).
+const shareHost = (env: WorkerEnv): string | null => {
+    if (!env.SHARE_BASE_URL) return null;
+    try {
+        const u = new URL(env.SHARE_BASE_URL);
+        return u.protocol === "https:" ? u.hostname : null;
+    } catch {
+        return null;
+    }
+};
+
 export async function handleRequest(
     incoming: Request,
     env: WorkerEnv,
     container: ContainerStub,
     deps: Partial<EdgeDeps> = {},
 ): Promise<Response> {
+    // The share host serves the public link pages and nothing else: no key, no container, no CORS.
+    const share = shareHost(env);
+    if (share && new URL(incoming.url).hostname === share) {
+        return sharePage({ db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, shareBaseUrl: env.SHARE_BASE_URL! }, incoming);
+    }
     const res = await handleInner(incoming, env, container, {
         now: deps.now ?? (() => Date.now()),
         sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
@@ -501,6 +521,7 @@ function appDeps(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps): AppD
         originals: env.ORIGINALS,
         media: env.MEDIA,
         mediaBaseUrl: env.MEDIA_BASE_URL,
+        shareBaseUrl: shareHost(env) ? env.SHARE_BASE_URL : undefined,
         apiUrl: env.API_URL,
         webUrl: env.CORS_URL,
         now: edge.now,

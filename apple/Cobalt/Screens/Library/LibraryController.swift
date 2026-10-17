@@ -339,7 +339,7 @@ final class LibraryController {
     // MARK: actions
 
     func copy(_ url: URL) {
-        Pasteboard.copy(url.absoluteString)
+        Pasteboard.copy(model.capabilities.shareLink(for: url).absoluteString)
         showStatus(Copy.Media.copied)
     }
 

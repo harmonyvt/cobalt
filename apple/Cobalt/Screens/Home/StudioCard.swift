@@ -33,7 +33,7 @@ struct SideActions: View {
             StatusButton(title: pipeline.hosting == .done ? Copy.copyLink : hostLabel,
                          systemImage: Symbol.host, status: pipeline.hosting, prominent: true) {
                 if pipeline.hosting == .done, let url = pipeline.hostedOriginalURL {
-                    Pasteboard.copy(url.absoluteString)
+                    Pasteboard.copy(pipeline.shareLink(for: url).absoluteString)
                 } else {
                     pipeline.hostOriginal()
                 }

@@ -989,6 +989,7 @@ describe("GET /capabilities", () => {
                 line_wait_ms: 1800000,
             },
             media_base_url: "https://media.capybaraharmony.com/",
+            share_base_url: null,
             key: "missing",
             key_name: null,
         });

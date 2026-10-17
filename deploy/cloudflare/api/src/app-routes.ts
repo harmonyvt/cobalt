@@ -110,6 +110,8 @@ export type AppDeps = {
     randomBytes?: (n: number) => Uint8Array;
     // Edge-cache purge for the public bucket's URLs (section 16); absent = not configured.
     purge?: PurgeFn;
+    // https://<share host>/ of the rich link pages (section 22); absent = not configured.
+    shareBaseUrl?: string;
 };
 
 // Re-exported for the callers that used to import it from here.
@@ -157,7 +159,7 @@ export async function resolveKeyState(
 }
 
 export async function capabilities(
-    d: Pick<AppDeps, "db" | "mediaBaseUrl" | "now">,
+    d: Pick<AppDeps, "db" | "mediaBaseUrl" | "now" | "shareBaseUrl">,
     auth: "service" | "missing" | "invalid" | "key",
     key: string | undefined,
     // the three APNs secrets are configured (Live Activity push, section 8)
@@ -241,6 +243,9 @@ export async function capabilities(
                 line_wait_ms: LINE_WAIT_MS,
             },
             media_base_url: withSlash(d.mediaBaseUrl),
+            // the rich link page of a public file https://media.../<name>.<ext> is <share_base_url><name>
+            // (section 22); null while not configured, and the app then copies the file's own URL
+            share_base_url: d.shareBaseUrl ? withSlash(d.shareBaseUrl) : null,
             key: state.key,
             key_name: state.key_name,
         },
