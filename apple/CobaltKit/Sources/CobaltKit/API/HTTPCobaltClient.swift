@@ -706,7 +706,8 @@ public struct HTTPCobaltClient: CobaltClient {
         return try await sendJSON(QueueSnapshot.self, req)
     }
 
-XX, "/studio/line/notify", keyed: true, timeout: 15)
+    public func setLineNotify() async throws -> Int {
+        let req = try makeRequest("PUT", "/studio/line/notify", keyed: true, timeout: 15)
         struct Wire: Decodable { var watching: Int? }
         let wire = try await sendJSON(Wire.self, req, body: Self.jsonBody([:]))
         return wire.watching ?? 0
