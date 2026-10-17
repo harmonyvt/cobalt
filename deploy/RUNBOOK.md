@@ -117,8 +117,9 @@ Contracts: `apple/CONTRACT-*.md`. Fork-only release tooling: `deploy/apple/`.
 
 ### 2.1 Version
 
-Edit `apple/project.yml`: `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` (1.16 and 18 on 2026-10-10). The build number
-must go up on every release or Feather will not offer the update. Commit and push the bump.
+Edit `MARKETING_VERSION` in `apple/project.yml` when the user-facing version changes. The build number is automatic on
+release: `release.sh` builds with one past the newest build in the Feather source (or `CURRENT_PROJECT_VERSION`, if that is
+higher), so it no longer needs a manual bump. Query telemetry by the build number the release printed.
 
 ### 2.2 Gate
 

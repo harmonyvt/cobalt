@@ -113,10 +113,48 @@ MIN_OS="$(yml_setting iOS)"
 [ -n "$VERSION" ] || die "could not read MARKETING_VERSION from apple/project.yml"
 [ -n "$BUILD" ] || die "could not read CURRENT_PROJECT_VERSION from apple/project.yml"
 [ -n "$MIN_OS" ] || die "could not read the iOS deploymentTarget from apple/project.yml"
+OUT_DIR="$APPLE/.build/feather"
+mkdir -p "$OUT_DIR"
+
+step "published source"
+# Previous published versions, so history survives. A 404 means first publish. Anything else is not
+# silently treated as empty (that would truncate the history on the next upload).
+PREV="$OUT_DIR/previous-source.json"
+rm -f "$PREV"
+HTTP_CODE="$(curl -sS --max-time 20 -o "$PREV" -w '%{http_code}' \
+    -H 'Cache-Control: no-cache' "$SOURCE_URL?cb=$(date +%s)" 2>/dev/null || echo 000)"
+PREV_VERSIONS='[]'
+case "$HTTP_CODE" in
+    200)
+        if jq -e '.apps[0].versions | type == "array"' "$PREV" >/dev/null 2>&1; then
+            PREV_VERSIONS="$(jq -c '.apps[0].versions' "$PREV")"
+            say "previous source has $(jq 'length' <<<"$PREV_VERSIONS") versions"
+        else
+            die "published source.json is not in the expected shape; refusing to overwrite it"
+        fi
+        ;;
+    404) say "no source published yet (first release)" ;;
+    *)
+        if [ "$DRY_RUN" -eq 1 ]; then
+            say "warning: could not read the published source (HTTP $HTTP_CODE); previewing as a first release"
+        else
+            die "could not read the published source (HTTP $HTTP_CODE); not publishing blind"
+        fi
+        ;;
+esac
+
+# The build number sets itself: one past the newest published build, unless apple/project.yml is already higher.
+# --replace keeps project.yml's number on purpose (it re-publishes that build).
+YML_BUILD="$BUILD"
+case "$BUILD" in *[!0-9]*) die "CURRENT_PROJECT_VERSION must be a whole number (got $BUILD)" ;; esac
+PUBLISHED_MAX="$(jq -r '[.[].buildVersion | tonumber? // empty] | max // 0' <<<"$PREV_VERSIONS")"
+if [ "$REPLACE" -eq 0 ] && [ "$BUILD" -le "$PUBLISHED_MAX" ]; then
+    BUILD=$((PUBLISHED_MAX + 1))
+    say "build number: $BUILD (newest published is $PUBLISHED_MAX; apple/project.yml says $YML_BUILD)"
+fi
 [ -n "$NOTES" ] || NOTES="cobalt $VERSION ($BUILD)"
 
 IPA_NAME="cobalt-$VERSION-$BUILD.ipa"
-OUT_DIR="$APPLE/.build/feather"
 DERIVED="$APPLE/.build/ipa"
 STAGE="$APPLE/.build/ipa-pack"
 IPA="$OUT_DIR/$IPA_NAME"
@@ -146,6 +184,7 @@ else
         -destination 'generic/platform=iOS' \
         -derivedDataPath "$DERIVED" \
         CODE_SIGNING_ALLOWED=NO \
+        CURRENT_PROJECT_VERSION="$BUILD" \
         build >"$BUILD_LOG" 2>&1; then
         tail -n 40 "$BUILD_LOG" >&2
         die "xcodebuild failed; full log: $BUILD_LOG"
@@ -158,7 +197,7 @@ APP_PLIST="$APP/Info.plist"
 BUILT_VERSION="$(plutil -extract CFBundleShortVersionString raw -o - "$APP_PLIST")"
 BUILT_BUILD="$(plutil -extract CFBundleVersion raw -o - "$APP_PLIST")"
 [ "$BUILT_VERSION" = "$VERSION" ] && [ "$BUILT_BUILD" = "$BUILD" ] \
-    || die "built app is $BUILT_VERSION ($BUILT_BUILD) but project.yml says $VERSION ($BUILD); rebuild without --skip-build"
+    || die "built app is $BUILT_VERSION ($BUILT_BUILD) but this release is $VERSION ($BUILD); rebuild without --skip-build"
 BUNDLE_ID="$(plutil -extract CFBundleIdentifier raw -o - "$APP_PLIST")"
 
 # --- pack the ipa ----------------------------------------------------------------------------------
@@ -205,32 +244,6 @@ say "local copies: $IPA_ARCHIVE/$IPA_NAME, ~/Downloads/$IPA_NAME"
 step "source.json"
 cp -f "$ICON_SRC" "$OUT_DIR/icon.png"
 
-# Previous published versions, so history survives. A 404 means first publish. Anything else is not
-# silently treated as empty (that would truncate the history on the next upload).
-PREV="$OUT_DIR/previous-source.json"
-rm -f "$PREV"
-HTTP_CODE="$(curl -sS --max-time 20 -o "$PREV" -w '%{http_code}' \
-    -H 'Cache-Control: no-cache' "$SOURCE_URL?cb=$(date +%s)" 2>/dev/null || echo 000)"
-PREV_VERSIONS='[]'
-case "$HTTP_CODE" in
-    200)
-        if jq -e '.apps[0].versions | type == "array"' "$PREV" >/dev/null 2>&1; then
-            PREV_VERSIONS="$(jq -c '.apps[0].versions' "$PREV")"
-            say "previous source has $(jq 'length' <<<"$PREV_VERSIONS") versions"
-        else
-            die "published source.json is not in the expected shape; refusing to overwrite it"
-        fi
-        ;;
-    404) say "no source published yet (first release)" ;;
-    *)
-        if [ "$DRY_RUN" -eq 1 ]; then
-            say "warning: could not read the published source (HTTP $HTTP_CODE); previewing as a first release"
-        else
-            die "could not read the published source (HTTP $HTTP_CODE); not publishing blind"
-        fi
-        ;;
-esac
-
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 IPA_URL="$PUBLIC_BASE/$IPA_NAME"
 ICON_URL="$PUBLIC_BASE/icon.png"
@@ -260,9 +273,9 @@ if jq -e --arg b "$BUILD" 'any(.[]; .buildVersion == $b)' \
     if [ "$REPLACE" -eq 1 ]; then
         say "warning: $VERSION ($BUILD) is already published; --replace overwrites $IPA_NAME"
     elif [ "$DRY_RUN" -eq 1 ]; then
-        say "warning: $VERSION ($BUILD) is already published; a real run refuses without --replace (bump CURRENT_PROJECT_VERSION)"
+        say "warning: $VERSION ($BUILD) is already published; a real run refuses without --replace"
     else
-        die "$VERSION ($BUILD) is already published; bump CURRENT_PROJECT_VERSION in apple/project.yml, or pass --replace to overwrite it"
+        die "$VERSION ($BUILD) is already published; pass --replace to overwrite it"
     fi
 fi
 
