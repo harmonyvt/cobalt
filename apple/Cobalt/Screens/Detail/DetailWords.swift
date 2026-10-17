@@ -34,6 +34,7 @@ enum DetailWords {
         #endif
     }
     static let doneSelecting = "done"
+    static let selectAll = "select all", selectNone = "select none"
     static func selected(_ n: Int) -> String { n == 0 ? "tick photos" : "\(n) selected" }
     static func deleteN(_ n: Int) -> String { "delete \(n)" }
 

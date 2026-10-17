@@ -4,6 +4,8 @@ import SwiftUI
 /// The keyboard gallery. Filters match the library. A tile with a video and a webp asks which to copy.
 struct KeyboardGalleryView: View {
     let model: KeyboardGalleryModel
+    /// Switches to typing mode (the keys and the ":" emote bar).
+    var startTyping: () -> Void = {}
 
     private static let widePanel: CGFloat = 420
 
@@ -57,21 +59,30 @@ struct KeyboardGalleryView: View {
                     }
                 }
                 .padding(.leading, Metrics.gutter)
-                // The globe owns the last 52pt. The glass sits just to its left.
-                .padding(.trailing, 96)
+                // The globe owns the last 52pt. The glass and the keys button sit just to its left.
+                .padding(.trailing, 132)
                 .padding(.vertical, 4)
             }
             .scrollBounceBehavior(.basedOnSize)
             .scrollEdgeEffectHidden(true)
 
-            Button { model.beginSearch() } label: {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 16, weight: .medium))
-                    .frame(width: 36, height: 36)
+            HStack(spacing: 0) {
+                Button(action: startTyping) {
+                    Image(systemName: "keyboard")
+                        .font(.system(size: 16, weight: .medium))
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("type")
+                Button { model.beginSearch() } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 16, weight: .medium))
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Copy.seventvA11y)
             }
-            .buttonStyle(.plain)
             .padding(.trailing, 52)
-            .accessibilityLabel(Copy.seventvA11y)
         }
     }
 
@@ -107,7 +118,8 @@ struct KeyboardGalleryView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+                    // lazy: only the emotes on screen are built, decoded and animated (the extension's memory is small)
+                    LazyHStack(spacing: 8) {
                         ForEach(model.emoteHits) { hit in
                             EmoteKeyTile(hit: hit, saving: model.savingEmoteID == hit.id) {
                                 model.onCopyEmote(hit)

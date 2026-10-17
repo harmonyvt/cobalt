@@ -15,6 +15,8 @@ extension Symbol {
         static let copyLink = "doc.on.doc"
         static let copied = "checkmark"
         static let share = "square.and.arrow.up"
+        /// Select mode: tick every post on screen, or clear them.
+        static let selectAll = "checklist.checked", selectNone = "checklist.unchecked"
         static let savePhotos = "photo.badge.arrow.down"
         static let rename = "pencil"
         /// Destructive role, last in the menu.

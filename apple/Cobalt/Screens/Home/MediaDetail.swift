@@ -112,9 +112,12 @@ struct MediaDetail: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .navigationTitle(title(item))
-        // omitted when not selecting: an empty subtitle reserves a blank line under the title
-        .selectionSubtitle(
-            !gone && controller.selecting ? DetailWords.selected(controller.pickedRenditions(in: item).count) : nil)
+        // omitted when not selecting (an empty subtitle reserves a blank line under the title). Set from an empty
+        // background so the on/off switch never swaps the detail itself, which threw away the player and the scroll.
+        .background {
+            Color.clear.selectionSubtitle(
+                !gone && controller.selecting ? DetailWords.selected(controller.pickedRenditions(in: item).count) : nil)
+        }
         // the title is a menu (iOS inline title, the Mac window title): `rename`
         .toolbarTitleMenu {
             if !gone { renameButton }

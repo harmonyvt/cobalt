@@ -67,9 +67,20 @@ struct AppShell: View {
     @Environment(\.scenePhase) private var scenePhase
     #if os(macOS)
     @Environment(\.openSettings) private var openSettings
+    #else
+    @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
 
-    private var tier: Tier { Tier(width: width) }
+    /// Until the first measurement the size class stands in, so an iPad or a Mac window never draws one compact frame
+    /// (which tore the library down and rebuilt it, its toolbar disappearing and coming back at launch).
+    private var tier: Tier {
+        if width > 0 { return Tier(width: width) }
+        #if os(macOS)
+        return .regular
+        #else
+        return sizeClass == .regular ? .regular : .compact
+        #endif
+    }
 
     var body: some View {
         navigation
@@ -78,6 +89,9 @@ struct AppShell: View {
             .environment(\.shell, actions)
             .environment(\.photoImport, photoImport)
             .overlay { if dropTargeted { dropHighlight } }
+            #if os(iOS)
+            .background { KeyboardShelfPublisher(store: model.store) }
+            #endif
             .overlay(alignment: .bottom) {
                 if let status {
                     StatusToast(text: status)
@@ -162,8 +176,7 @@ struct AppShell: View {
                 #if DEBUG
                 DebugHooks.log("AppShell .task")
                 #endif
-                await model.refreshServer()
-                await model.pickUpSharedJobs()
+                await model.foreground()
             }
             .onChange(of: scenePhase) { _, phase in
                 #if DEBUG
@@ -173,8 +186,7 @@ struct AppShell: View {
                 if phase == .background { model.queue.appLeft() }
                 guard phase == .active else { return }
                 Task {
-                    await model.pickUpSharedJobs()
-                    await model.refreshServer()
+                    await model.foreground()                 // shares the launch task's run when they overlap
                     await model.store.backfillPreviewFrames()
                 }
             }
@@ -287,12 +299,9 @@ struct AppShell: View {
             }
             if model.capabilities.library {
                 Tab(Copy.tab(.library), systemImage: icon(for: .library), value: AppTab.library) {
-                    // Regular widths bring their own split view (and its navigation bars).
-                    if tier == .compact {
-                        NavigationStack { LibraryScreen(model: model, tier: tier) }
-                    } else {
-                        LibraryScreen(model: model, tier: tier)
-                    }
+                    // One branch at every width: the screen brings its own navigation stack, so a width change (a
+                    // rotation, a split view) never replaces it and its selection, scroll and controller survive.
+                    LibraryScreen(model: model, tier: tier)
                 }
             }
             Tab(Copy.tab(.settings), systemImage: icon(for: .settings), value: AppTab.settings) {

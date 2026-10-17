@@ -39,12 +39,7 @@ private struct LibraryPreviewHost: View {
     }
 
     var body: some View {
-        let screen = LibraryScreen(model: model, tier: tier).environment(\.libraryDebugRows, extra)
-        if tier == .compact {
-            NavigationStack { screen }
-        } else {
-            screen
-        }
+        LibraryScreen(model: model, tier: tier).environment(\.libraryDebugRows, extra)
     }
 }
 
@@ -141,7 +136,7 @@ private struct SkeletonPreview: View {
 }
 #Preview("plain cobalt (no library tab)", traits: .fixedLayout(width: 390, height: 844)) {
     PreviewHost(.plainCobalt, tab: .library) { model in
-        NavigationStack { LibraryScreen(model: model, tier: .compact) }
+        LibraryScreen(model: model, tier: .compact)
     }
 }
 

@@ -71,10 +71,11 @@ struct LibraryTile: View, Equatable {
 
     var body: some View {
         Button {
-            if selecting { controller.togglePick(row.id) } else { controller.open(row) }
+            if selecting { controller.togglePick(row) } else { controller.open(row) }
         } label: { tile }
             .buttonStyle(TilePress())
-            .opacity(selecting && !ticked ? 0.7 : 1)
+            // a gallery cannot be ticked (galleries are not shared): dimmer, and no tick
+            .opacity(selecting ? (row.shareable ? (ticked ? 1 : 0.7) : 0.35) : 1)
             .frame(width: size.width, height: size.height)
             .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
             .modifier(LibraryRowMenu(row: row, controller: controller, enabled: !selecting, removing: $removing))
@@ -134,11 +135,17 @@ struct LibraryTile: View, Equatable {
             }
             .padding(5)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            // top right: the select tick, or the face's type (the badge would sit on the tick)
+            // top right: the select tick, or the face's type. While selecting the type moves to the bottom right, so
+            // what is being ticked (a video, a photo, a webp) stays clear. A gallery gets no tick.
             if selecting {
-                LibraryPickMark(ticked: ticked, onPhoto: true)
+                if row.shareable {
+                    LibraryPickMark(ticked: ticked, onPhoto: true)
+                        .padding(5)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                }
+                kindDot
                     .padding(5)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             } else {
                 typeBadge
                     .padding(5)
@@ -162,10 +169,22 @@ struct LibraryTile: View, Equatable {
                 }
             }
             .padding(.horizontal, 6)
+            .padding(.trailing, selecting ? 22 : 0)                   // clear of the kind dot
             .padding(.bottom, showsCaption ? 5 : 6)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         }
         .allowsHitTesting(false)
+    }
+
+    /// The face's kind as one symbol in a dot (film, photo, sparkles, stack): the narrow tile's badge, and every tile's
+    /// while selecting.
+    private var kindDot: some View {
+        Image(systemName: LibraryRowCopy.typeSymbol(row))
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(CobaltColor.badgeInk)
+            .frame(width: 20, height: 20)
+            .background(CobaltColor.badgeBack, in: Circle())
+            .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
     }
 
     @ViewBuilder
@@ -174,12 +193,7 @@ struct LibraryTile: View, Equatable {
             // a gallery: the stack and how many items it holds, however narrow the tile
             GalleryCountBadge(count: row.itemCount, style: .tile)
         } else if narrow {
-            Image(systemName: LibraryRowCopy.typeSymbol(row))
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(CobaltColor.badgeInk)
-                .frame(width: 20, height: 20)
-                .background(CobaltColor.badgeBack, in: Circle())
-                .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+            kindDot
         } else {
             Text(LibraryRowCopy.type(row))
                 .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))

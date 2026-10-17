@@ -33,6 +33,27 @@ extension Copy {
         static let doneSelecting = "done"                                      // the same checkbox, on
         /// The navigation subtitle while selecting: nothing ticked yet, or how many are.
         static func selected(_ n: Int) -> String { n == 0 ? "tick posts" : "\(n) selected" }
+        static let selectAll = "select all", selectNone = "select none"        // select mode, every post on screen
+        /// A kind chip's long press: tick everything under it, or tick it and share at once.
+        static func selectAllKind(_ kind: LibraryKindFilter) -> String { kind == .all ? selectAll : "select all \(name(kind))" }
+        static func shareAllKind(_ kind: LibraryKindFilter) -> String { kind == .all ? "share all" : "share all \(name(kind))" }
+
+        // the card while ticked posts are copied for the share sheet
+        static func sharePrepTitle(_ n: Int) -> String { n == 1 ? "getting 1 file ready" : "getting \(n) files ready" }
+        /// What is going out, by kind: `2 videos · 1 photo · 1 webp`.
+        static func sharePrepKinds(videos: Int, photos: Int, webps: Int) -> String {
+            func n(_ count: Int, _ one: String, _ many: String) -> String? { count == 0 ? nil : "\(count)\u{00A0}\((count == 1 ? one : many).replacingOccurrences(of: " ", with: "\u{00A0}"))" }
+            // a no-break space inside each part, so a wrap falls between kinds, never inside "2 videos"
+            return [n(videos, "video", "videos"), n(photos, "photo", "photos"), n(webps, "webp", "webps")]
+                .compactMap { $0 }.joined(separator: " · ")
+        }
+        static let shareKindVideo = "video", shareKindPhoto = "photo", shareKindWebp = "webp"
+        static let shareCancel = "cancel"
+        static func sharePrepCount(done: Int, of n: Int) -> String { "\(done) of \(n)" }
+        static func sharePrepMore(_ n: Int) -> String { "and \(n) more" }
+        static var shareOnDevice: String { "on this \(Copy.device)" }
+        static let shareWaiting = "waiting", shareDownloading = "downloading…"
+        static let shareReady = "ready", shareSkipped = "couldn't get this one"
 
         // table columns and cells
         static let colTitle = "title", colService = "service", colLength = "length"

@@ -114,6 +114,8 @@ public struct HTTPCobaltClient: CobaltClient {
                let caps = Self.parseForkCapabilities(data) {
                 return caps
             }
+            // A server error is a bad moment, not a different server: the caller keeps what it knew.
+            if let http = response as? HTTPURLResponse, http.statusCode >= 500 { return .unknown }
         } catch {
             return .unknown                                       // unreachable (the last known caps are kept by the caller)
         }

@@ -70,7 +70,18 @@ struct OrbitView: View {
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onFrame($0) }
         }
+        #if os(iOS)
+        // Dimmed with a scrim of the page colour on top: the same look as fading the orbit, without compositing the
+        // whole full-screen orbit (canvas, ~35 shadowed planets, players) offscreen on every frame. The Mac keeps the
+        // fade: its page is the window material, which a flat scrim would not match.
+        .overlay {
+            CobaltColor.bg.opacity(1 - dim)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        #else
         .opacity(dim)
+        #endif
         .animation(reduceMotion ? Motion.fade : Motion.lights, value: dim)
         .task(id: shown.map { "\($0.id)|\($0.face.id)|\($0.face.fileURL?.path ?? "")|\($0.items.count)|\($0.face.posterURL?.path ?? "")" }) {
             let planets = shown
@@ -121,14 +132,18 @@ struct OrbitView: View {
             // with it when the order changes, and when its face changes
             ForEach(items) { item in
                 if let media = item.media {
+                    // Only what holds still at rest goes in (the box, the band, its scale); the moving parts are
+                    // applied out here, so the planet's own body is skipped on frames where nothing about it changed.
                     OrbitThumb(
-                        media: media, slot: item.slot,
+                        media: media, box: item.slot.box, ring: item.slot.ring, scale: item.slot.scale,
                         isFront: front.contains(media.id),
                         playing: playersEnabled, flipbooks: flipbooksEnabled,
                         hasFile: files.onDisk.contains(media.id) || pool.players[media.id] != nil, pool: pool,
                         still: files.still[media.id], turn: files.turn[media.id] ?? [],
                         fresh: freshID == media.id, pops: popID == media.id, showsLabel: item.slot.ring == 0,
                         zoom: zoom)
+                        .equatable()
+                        .opacity(item.slot.opacity)
                         .position(item.slot.position)
                         .zIndex(item.slot.z)
                 } else {
@@ -275,9 +290,12 @@ private struct PlanetPicture: View {
     }
 }
 
-private struct OrbitThumb: View {
+private struct OrbitThumb: View, Equatable {
     let media: StoredMedia
-    let slot: OrbitSlot
+    /// The box the picture fills at scale 1, its band and the band's scale (all still at rest).
+    let box: CGSize
+    let ring: Int
+    let scale: CGFloat
     let isFront: Bool
     let playing: Bool
     let flipbooks: Bool
@@ -297,11 +315,18 @@ private struct OrbitThumb: View {
     @State private var sweep: Double = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var face: StoredVideo { media.face }
-    private var size: CGSize { slot.box }
+    /// Everything the body draws. The pool and the namespace live as long as the orbit and are left out.
+    nonisolated static func == (a: OrbitThumb, b: OrbitThumb) -> Bool {
+        a.box == b.box && a.ring == b.ring && a.scale == b.scale && a.isFront == b.isFront && a.playing == b.playing
+            && a.flipbooks == b.flipbooks && a.hasFile == b.hasFile && a.still == b.still && a.turn == b.turn
+            && a.fresh == b.fresh && a.pops == b.pops && a.showsLabel == b.showsLabel && a.media == b.media
+    }
+
+    private var size: CGSize { box }
 
     var body: some View {
-        let visibleShort = min(size.width, size.height) * slot.scale
+        let face = media.face                       // computed (a scan of the webps and made files): once per body
+        let visibleShort = min(size.width, size.height) * scale
         let counts = face.kind == .webp && media.webps.count > 1
         let shape = RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous)
         // The picture alone: this is what the detail's zoom grows out of (and returns to), so the zoom
@@ -310,7 +335,7 @@ private struct OrbitThumb: View {
             shape.fill(FrameGradient.fill(1))
             // the same planet, a new picture: the old face and the new crossfade
             PlanetPicture(
-                media: media, ring: slot.ring, isFront: isFront, playing: playing, flipbooks: flipbooks,
+                media: media, ring: ring, isFront: isFront, playing: playing, flipbooks: flipbooks,
                 hasFile: hasFile, pool: pool, still: still, turn: turn)
                 .id(face.id)
                 .transition(.opacity)
@@ -327,7 +352,7 @@ private struct OrbitThumb: View {
         .clipShape(shape)
         .matchedTransitionSource(id: media.id, in: zoom) { source in source.clipShape(shape) }
         .overlay(alignment: .bottomLeading) {
-            if showsLabel && size.width * slot.scale >= 58 && !PlanetStills.isStill(face) {
+            if showsLabel && size.width * scale >= 58 && !PlanetStills.isStill(face) {
                 Text(face.duration.map { Format.seconds($0) } ?? "video")
                     .font(CobaltType.badge)
                     .dynamicTypeSize(...DynamicTypeSize.large)
@@ -359,12 +384,11 @@ private struct OrbitThumb: View {
             if media.isGallery {
                 CardEdges(
                     size: size, radius: Metrics.thumbRadius,
-                    step: CardEdges.step(forShort: visibleShort) / max(0.01, slot.scale))
+                    step: CardEdges.step(forShort: visibleShort) / max(0.01, scale))
             }
         }
         .shadow(color: .black.opacity(0.35), radius: 8, y: 5)
-        .scaleEffect(slot.scale * popScale)
-        .opacity(slot.opacity)
+        .scaleEffect(scale * popScale)
         .accessibilityHidden(true)
         .onChange(of: pops) { _, isFresh in
             guard isFresh else { return }

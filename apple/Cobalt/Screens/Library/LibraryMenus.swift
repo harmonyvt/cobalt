@@ -164,16 +164,15 @@ struct LibraryRowMenu: ViewModifier {
     let enabled: Bool
     @Binding var removing: MediaItem?
 
-    @ViewBuilder
+    /// One structure either way: an `if` around the modifier gave every tile a new identity when select mode toggled
+    /// (pictures reloaded and fell back to the failed glyph, animations restarted). With no items no menu is shown.
     func body(content: Content) -> some View {
-        if enabled {
-            content.contextMenu {
+        content.contextMenu {
+            if enabled {
                 LibraryMenuItems(row: row, controller: controller) { removing = $0 }
-            } preview: {
-                LibraryPreviewCard(row: row)
             }
-        } else {
-            content
+        } preview: {
+            LibraryPreviewCard(row: row)
         }
     }
 }

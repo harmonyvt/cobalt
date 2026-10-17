@@ -49,6 +49,10 @@ enum Copy {
     static let emoteSearchMiss = "nothing on 7tv for that"
     static let emoteSearchDown = "7tv didn't answer."
     static let emoteSaveFirst = "save it first"
+    static func emoteRemoveTitle(_ name: String) -> String { "remove \(name)?" }
+    static let emoteRemoveMessage = "its saved copy and its link go away. you can save it again from 7tv."
+    static let emoteRemove = "remove", emoteKeep = "keep"
+    static let emoteSavedHint = "tap to remove", emoteSaveHint = "tap to save"
     /// The file circle's menu: where the file comes from.
     static let sourcePhotos = "photos"
     static let sourceFiles = "files"
