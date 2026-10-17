@@ -165,7 +165,8 @@ extension AppModel {
 
     /// Every public link of the post, one a line: the items in order, then what was made. Private files have none.
     public func copyAllLinks(_ item: MediaItem) -> String {
-        (item.items + item.made).compactMap { $0.isPublic ? $0.publicURL?.absoluteString : nil }.joined(separator: "\n")
+        (item.items + item.made).compactMap { $0.isPublic ? $0.publicURL.map { capabilities.shareLink(for: $0).absoluteString } : nil }
+            .joined(separator: "\n")
     }
 
     // MARK: - Photos (only on request)

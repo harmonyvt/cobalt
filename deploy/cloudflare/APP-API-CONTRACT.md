@@ -2257,3 +2257,15 @@ One vector per library post, made by Google's EmbeddingGemma 2 (text and image e
 `POST /library/search/index` (keyed) runs one indexer pass now and answers `{ "status": "success", "posts", "indexed", "failed", "removed", "pending", "unavailable" }`. The cron runs the same pass every 15 minutes: it embeds up to 8 posts whose inputs changed (newest first; a custom title or a new poster re-embeds), deletes the rows of posts that are gone, and calls the Space only when something needs a vector. A Space that is asleep, down or misconfigured holds nothing against any post; a post the Space refuses (4xx) is retried an hour later, three times, then left until its inputs change.
 
 `features.search` in `GET /capabilities` is true exactly while `EMBED_URL` (an https URL, a plain var) and the secret `EMBED_TOKEN` are set; `EMBED_KEY` (secret) is sent as `x-embed-key`. Apply migration 0010 before deploying.
+
+## 22. Rich link pages (addendum, built 2026-10-17; owner: "hold pressing should just process and give me a url ... rich embedding compatibility like fixupx does it")
+
+Every public file `https://media.capybaraharmony.com/<name>.<ext>` also has a page at `https://share.capybaraharmony.com/<name>` (`src/share.ts`). The page is plain HTML whose Open Graph and Twitter card tags point at the file, so the link unfurls in Discord, iMessage, X, Telegram, Slack and the like; someone who opens it sees the file on a black page. The API Worker answers the share host itself, before the key gate: no key, no CORS, the container is never woken.
+
+- `GET|HEAD /<name>` (also `/<name>.<ext>` and a trailing slash). `<name>` is 6..40 letters or digits. The row is the live `media_items` row whose public object is `<name>.<ext>` (`r2_key` in the public bucket, else `public_key`) and whose effective visibility is public. Anything else (private, deleted, unknown, any other path) is the same 404, so a page says nothing about a private file. Other methods 405. D1 down 503.
+- A video: `og:type video.other`, `og:video` / `og:video:secure_url` / `og:video:type` / width / height, `twitter:card player` with `twitter:player:stream`, and the server-made poster as `og:image` (only a poster on the media domain). An image or webp: `og:image` with its type and size, `twitter:card summary_large_image`. Title: the post's custom title, else the file's name without its extension. A video's `og:description` is its length (`0:10`).
+- Headers: `cache-control: public, max-age=60` (a file made private loses its page within a minute; the Worker does not cache it at the edge), a CSP that allows only the media origin, `noindex`. `/robots.txt` disallows everything.
+
+`GET /capabilities` gains top-level `share_base_url` (`https://share.capybaraharmony.com/`, or null while `SHARE_BASE_URL` is unset or not https). The app copies `<share_base_url><name>` wherever it copied a public file's URL (the hold menus, the result card, the detail screen, copy all links); without it, it copies the file's URL as before.
+
+No migration. Deploy the API Worker: `share.capybaraharmony.com` is a new custom domain in `api/cloudflare.config.ts`, created by `cf deploy`.

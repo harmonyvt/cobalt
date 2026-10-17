@@ -720,7 +720,7 @@ struct FocusLayer: View {
             if hasLink, let url = pipeline.hostedOriginalURL {
                 cardDivider
                 ResultRow(kind: .link, url: url, meta: nil, copied: copiedLink) {
-                    Pasteboard.copy(url.absoluteString)
+                    Pasteboard.copy(pipeline.shareLink(for: url).absoluteString)
                     flash($copiedLink)
                 }
                 .transition(.opacity)
@@ -987,7 +987,7 @@ struct FocusLayer: View {
             }
         case .copyVideo:
             PrimaryChoice(title: copiedLink ? Copy.copied : Copy.copyVideoLink, symbol: Symbol.copyLink, done: copiedLink) {
-                if let url = pipeline.hostedOriginalURL { Pasteboard.copy(url.absoluteString) }
+                if let url = pipeline.hostedOriginalURL { Pasteboard.copy(pipeline.shareLink(for: url).absoluteString) }
                 flash($copiedLink)
             }
         case .publicShare:

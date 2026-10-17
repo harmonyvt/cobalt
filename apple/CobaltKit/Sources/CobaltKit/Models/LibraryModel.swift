@@ -220,7 +220,7 @@ public final class LibraryModel {
 
     public func copyLink(_ file: LibraryFile) {
         guard let url = file.url else { return }
-        ctx.clipboard.copy(url.absoluteString)
+        ctx.clipboard.copy(ctx.capabilities.shareLink(for: url).absoluteString)
     }
 
     /// To Photos. On macOS the caller uses `fileExporter` with `localCopy` instead.
@@ -245,7 +245,7 @@ public final class LibraryModel {
     public func host(_ file: LibraryFile) async throws -> URL {
         do {
             let hosted = try await ctx.client.publish(item: file.id)
-            ctx.clipboard.copy(hosted.url.absoluteString)
+            ctx.clipboard.copy(ctx.capabilities.shareLink(for: hosted.url).absoluteString)
             await refresh()
             return hosted.url
         } catch {

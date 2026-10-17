@@ -508,7 +508,7 @@ struct ShareRootView: View {
             StatusButton(title: pipeline.hosting == .done ? Copy.copyLink : Copy.hostAsIs, systemImage: Symbol.host, status: pipeline.hosting, prominent: true) {
                 model.noteInteraction()
                 if pipeline.hosting == .done, let url = pipeline.hostedOriginalURL {
-                    UIPasteboard.general.string = url.absoluteString
+                    UIPasteboard.general.string = pipeline.shareLink(for: url).absoluteString
                 } else {
                     pipeline.hostOriginal()
                 }

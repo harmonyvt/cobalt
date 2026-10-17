@@ -920,6 +920,15 @@ Two additive features (owner, 2026-10-05: "by default videos are public and they
   linux/amd64 under emulation) on all six fixture clips (correct sizes, upright, 5 to 17 KB). **Not verified until deployed**: a poster
   write and the R2 to R2 copy from inside the Durable Object, real timings.
 
+## Rich link pages (`APP-API-CONTRACT.md` section 22)
+
+`https://share.capybaraharmony.com/<name>` is a page for the public file `https://media.capybaraharmony.com/<name>.<ext>`:
+Open Graph and Twitter card tags that make the link unfurl as a playable video or a full-size image (the fixupx idea).
+The API Worker answers that host itself (`src/share.ts`), without a key and without waking the container; only files that
+are public right now have a page. `SHARE_BASE_URL` in `api/cloudflare.config.ts` turns it on and must name one of the
+Worker's `domains`; `GET /capabilities` advertises it as `share_base_url` and the app copies those links instead of the
+file URLs. Check a page with `curl -s https://share.capybaraharmony.com/<name> | grep og:` or paste it in Discord.
+
 ## Library search (`APP-API-CONTRACT.md` section 21)
 
 Search runs EmbeddingGemma 2 on a private Hugging Face Space (`capybaraharmony/cobalt-embed`, CPU basic, needs HF PRO); the API Worker indexes posts every 15

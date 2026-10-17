@@ -680,8 +680,11 @@ public final class Pipeline: Identifiable {
 
     public func copyResultLink() {
         guard let r = result else { return }
-        ctx.clipboard.copy(r.url.absoluteString)
+        ctx.clipboard.copy(shareLink(for: r.url).absoluteString)
     }
+
+    /// The link to copy for a public file: its rich link page when the server has them (APP-API-CONTRACT 22).
+    public func shareLink(for url: URL) -> URL { ctx.capabilities.shareLink(for: url) }
 
     /// Stops polling and transfers; server work continues.
     public func cancel() {

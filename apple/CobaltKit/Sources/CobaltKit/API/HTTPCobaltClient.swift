@@ -201,6 +201,7 @@ public struct HTTPCobaltClient: CobaltClient {
             var features: Features?
             var limits: Limits?
             var mediaBaseUrl: String?
+            var shareBaseUrl: String?
             var key: String?
             var keyName: String?
         }
@@ -220,7 +221,7 @@ public struct HTTPCobaltClient: CobaltClient {
             if let wait = l.lineWaitMs { limits.lineWait = wait / 1000 }
         }
         let f = w.features
-        return Capabilities(
+        var caps = Capabilities(
             kind: .fork,
             cobaltVersion: w.cobalt?.version,
             studio: f?.studio ?? false,
@@ -247,6 +248,8 @@ public struct HTTPCobaltClient: CobaltClient {
             gallery: f?.gallery ?? false,
             galleryMake: (f?.gallery ?? false) && (f?.galleryMake ?? false),
             directLinks: f?.directLinks ?? false)
+        caps.shareBaseURL = w.shareBaseUrl.flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
+        return caps
     }
 
     // MARK: - Resolve and studio

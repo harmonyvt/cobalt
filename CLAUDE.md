@@ -77,6 +77,9 @@ the files and a real run before anything is called done.
 - Library search (`APP-API-CONTRACT.md` section 21): EmbeddingGemma 2 on a private Hugging Face Space
   (`deploy/huggingface/embed`), vectors in D1 `media_embeddings`, indexed by the API Worker's 15-minute cron
   (`api/src/embed.ts`), `GET /library/search`. Off unless `EMBED_TOKEN` is in the secrets file.
+- Rich link pages (`APP-API-CONTRACT.md` section 22): `share.capybaraharmony.com/<name>` (a second domain on the API
+  Worker, `src/share.ts`) serves Open Graph pages for public files so links unfurl in Discord, iMessage, X; the app
+  copies them when `GET /capabilities` has `share_base_url`.
 - Runtime lessons (all hit live): `pipeTo()` between streams is not implemented in the
   Workers runtime (copy with a reader/writer loop); AbortSignal timeouts on containerFetch
   are not honoured inside the DO (race your own timeout); work after a DO response does not

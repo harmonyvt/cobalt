@@ -170,7 +170,7 @@ final class DetailController {
     // MARK: - buttons
 
     func copy(_ url: URL, for id: String) {
-        Pasteboard.copy(url.absoluteString)
+        Pasteboard.copy(model.capabilities.shareLink(for: url).absoluteString)
         notice = nil
         copiedID = id
         Task {

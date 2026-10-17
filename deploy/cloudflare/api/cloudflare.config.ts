@@ -35,7 +35,9 @@ export default defineConfig({
 		// Worker + Durable Object console output and exceptions to Workers Logs.
 		observability: { enabled: true, logs: { enabled: true, invocationLogs: true } },
 		previewUrls: false,
-		domains: ["api.capybaraharmony.com"],
+		// share.: the rich link pages of public files (src/share.ts, APP-API-CONTRACT.md section 22).
+		// The Worker answers that host itself and never wakes the container for it.
+		domains: ["api.capybaraharmony.com", "share.capybaraharmony.com"],
 		// Daily 03:23 UTC: delete telemetry rows and crash objects older than 30
 		// days (src/telemetry.ts runTelemetryRetention, called from `scheduled`).
 		// Every 15 minutes: the library search indexer (src/embed.ts runIndexer; it
@@ -86,6 +88,10 @@ export default defineConfig({
 			// on the account) and a public custom domain, see ../README.md.
 			MEDIA: bindings.r2({ name: "cobalt-media" }),
 			MEDIA_BASE_URL: bindings.text("https://media.capybaraharmony.com/"),
+			// Rich link pages (APP-API-CONTRACT.md section 22): https://media.../<name>.<ext> is shared as
+			// <SHARE_BASE_URL><name>, a page whose Open Graph tags make Discord, iMessage, X and the rest
+			// show the video or image. Must be one of `domains` above; empty turns the pages off.
+			SHARE_BASE_URL: bindings.text("https://share.capybaraharmony.com/"),
 			// Edge-cache purge for the public bucket (APP-API-CONTRACT.md section 16): turning a
 			// file private deletes its public object, then purges its URL here so the edge stops
 			// serving it. MEDIA_ZONE_ID is the capybaraharmony.com zone id (not a secret);
