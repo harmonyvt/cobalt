@@ -620,7 +620,7 @@ instance may be open; a fork without a key answers 401 → `.keyMissing`), super
 could not read its row back); the client tolerates it.
 
 ```swift
-public enum AppTab: String, Sendable, CaseIterable { case save, library, settings }
+public enum AppTab: String, Sendable, CaseIterable { case save, library, queue, settings }   // queue: section 12
 public enum PreviewScenario: String, Sendable, CaseIterable {
     case happy, coldStart, noLink, privatePost, tooBig, renderBusy, renderLost, picker, image,
          shortClip, plainCobalt, legacyFork, revokedKey, emptyOrbit
@@ -940,3 +940,81 @@ extension; widgets; frame stepping and "play selection" buttons from the iPad bo
 preview loops the selection instead); deleting private copies or hosted mp4s from the app;
 YouTube-specific handling (`local-processing` posts show `.unsupported`); localisation; App
 Store distribution.
+
+## 12. Queue tab (added 2026-10-17)
+
+A fourth tab, **queue**, between library and settings (iPhone tab bar; iPad and Mac sidebar), always visible (it
+also lists this device's own work on plain cobalt). Everything cobalt is doing, in one list. The Save tab's
+`JobTray` stays as the quick glance: its header (the counts) and the pill's "open the queue" select the tab, and so
+does `cobalt-apple://jobs` (the Hark summary; it no longer sets `requestedJobs`).
+
+**Screen** (`Cobalt/Screens/Queue/QueueScreen.swift`, copy `Design/Copy+Queue.swift`, symbols `Design/Symbols+Queue.swift`):
+a header "3 running · 2 waiting · 1 failed" (+ "updated 12:46" / "can't reach the server · showing what it said
+last"), then the sections that have rows, in this order: **now**, **waiting**, **library indexing**, **downloads**,
+**photos**, **recently finished**, **failed**. This device's jobs are the tray's `JobCard`s; every other row is a
+`QueueRow` in the same glass card. Actions: the card's own buttons plus a context menu (cancel / stop, try again,
+dismiss, open); VoiceOver gets each as an accessibility action. Empty: "nothing in the queue" / "saves, webps,
+downloads and library indexing show up here while they run." Pull to refresh (iOS) and a refresh toolbar button
+(when the server has the route). Motion: rows `Motion.rows`, crossfade under Reduce Motion; numbers
+`.numericText()` (`.identity` under Reduce Motion). The tab's badge is the work in motion on this device
+(`badgeCount`).
+
+**CobaltKit API** (public, additive):
+
+```swift
+// GET /queue (keyed; APP-API-CONTRACT 23) only when `Capabilities.queue` (`features.queue`)
+public struct QueueSnapshot: Sendable, Equatable, Decodable {
+    public var now: Date?; public var line: ServerLineSnapshot?; public var search: Search?; public var posters: Posters?
+    public var isActive: Bool { get }          // line running/waiting, or an index pass running
+    public struct Search { enabled, posts, indexed, pending, failed, running: Bool?, lastRunAt: Date?,
+                           ratePerHour: Double?, next: [Next(postKey, title?)]; fraction: Double?; hasWork: Bool }
+    public struct Posters { pending }
+}
+protocol CobaltClient { func queue() async throws -> QueueSnapshot }   // defaulted: throws .unsupported
+
+public enum QueueSection: Int, CaseIterable { case now, waiting, indexing, downloads, photos, finished, failed }
+public enum QueueAction { case cancel, retry, dismiss, open }
+public enum QueueDestination { case job(Job.ID), media(String), library, settings }
+public struct ServerWork { kind, running, position?, mine, origin?, keyName?, sid?, job?, link? }
+public struct FinishedWork: Identifiable { id, title, outcome (.saved | .webp(WebpResult)), finishedAt, mediaID? }
+@MainActor public struct QueueItem: Identifiable {
+    public enum Kind { case job(Job), server(ServerWork), download(OfflineDownloadRow), photos(PhotosSync.Progress),
+                       indexing(QueueSnapshot.Search), posters(pending: Int), finished(FinishedWork) }
+    id: String; section: QueueSection; kind: Kind; actions: [QueueAction]; job: Job?; destination: QueueDestination?
+}
+@MainActor public struct QueueGroup: Identifiable { section; items }
+public struct QueueSummary { running, waiting, failed, finished; isQuiet }
+
+@MainActor @Observable public final class UnifiedQueue {      // AppModel.unifiedQueue
+    snapshot, updatedAt, serverProblem, finishedHistory, isVisible, isForeground
+    items: [QueueItem]; sections: [QueueGroup]; summary: QueueSummary; badgeCount: Int; isEmpty: Bool
+    func setVisible(_:)  func setForeground(_:)  func refresh() async -> Bool
+    func perform(_ action: QueueAction, on item: QueueItem) async          // cancel / retry / dismiss
+}
+extension AppModel { func perform(_:on:) async; func open(_ item: QueueItem) }   // open routes tabs and focus
+public struct OfflineDownloadRow { id (key), name, state, expectedBytes?, queuedAt; isFailed }
+extension OfflineDownloads { var rows: [OfflineDownloadRow]; func stop(key:); func retry(key:) }
+public enum QueuePreviewState { case off, busy, quiet, localOnly }; AppModel.previewQueue(_:)
+```
+
+**Merge** (`UnifiedQueue.build`, pure): (a) every `JobQueue` job: failed → failed; live with a line place →
+waiting; other live, or a picker → now; finished (its 5 s in the queue) → recently finished. (b) the snapshot's
+line: the running entry → now, entries → waiting (merged with local waiting jobs by position), **minus any entry
+whose `sid` is a local job's session or whose `job` is a local render/make job id** (each job shows once, as the
+job). (c) `OfflineDownloads.rows`: downloading / waiting → downloads, failed → failed. (d) the photos album while
+`status.progress` is set. (e) one index row while `search.pending > 0` or a pass runs; one posters row while
+`posters.pending > 0`. Recently finished also holds jobs that left `JobQueue` (`retireLapsed`) for 30 minutes (at
+most 20); a dismiss in the tray does not add one.
+
+**Actions** go to the owner's existing method, nothing new on the server: job → `JobQueue.cancel/retry/dismiss`
+(a picker's dismiss is `cancel`), download → `stop(key:)` / `retry(key:)`, a waiting line entry of this key's →
+the line's existing `cancelQueued(session:)` / `cancelQueued(session:job:)`, a finished line → forgotten; open →
+the focused job on the save tab, the media's detail (`requestedMediaID`), the library, or settings.
+
+**Polling rules**: `GET /queue` only while the queue tab is on screen (`setVisible`, from the screen's
+appear/disappear) **and** the app is active (`setForeground`, from the shell's scenePhase), and never without
+`features.queue` (turning it off stops the loop and drops the snapshot; a server change drops everything). First
+poll at once, then every **5 s** while `snapshot.isActive`, else every **30 s**; after an error **10, 20, 40, 80,
+then 120 s** until one succeeds (the last snapshot stays on screen with "can't reach the server"). Tests:
+`CobaltKitTests/UnifiedQueueTests.swift`.
+

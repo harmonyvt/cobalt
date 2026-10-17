@@ -38,6 +38,9 @@ public final class OfflineDownloads {
         var aliases: [String]
         var state: RenditionOffline
         var expected: Int64?
+        /// What the queue tab calls it (the post's title, else the file's name), read when the entry was tracked.
+        var name: String = ""
+        var queuedAt: Date = .distantPast
     }
     private var tracks: [String: Track] = [:]
 
@@ -120,7 +123,9 @@ public final class OfflineDownloads {
 
     private func track(_ entry: OfflineEntry, _ state: RenditionOffline) {
         let aliases = Array(Set(entry.job.aliases + [entry.key]))
-        var t = tracks[entry.key] ?? Track(aliases: aliases, state: state, expected: entry.job.expectedBytes)
+        var t = tracks[entry.key] ?? Track(
+            aliases: aliases, state: state, expected: entry.job.expectedBytes, name: Self.name(of: entry.job, store: store),
+            queuedAt: entry.queuedAt)
         t.state = state
         if case .downloading(let p) = state, let total = p.total { t.expected = total }
         tracks[entry.key] = t
@@ -136,6 +141,41 @@ public final class OfflineDownloads {
     func entries(forKeys keys: [String]) -> [OfflineEntry] {
         let wanted = Set(keys)
         return queue.all().filter { wanted.contains($0.key) || !wanted.isDisjoint(with: $0.job.aliases) }
+    }
+
+    // MARK: - The queue tab
+
+    /// Every download the engine is carrying or has given up on, one row per rendition (not per alias), oldest first.
+    /// The queue tab's "downloads" section (and its failed ones).
+    public var rows: [OfflineDownloadRow] {
+        tracks
+            .map { key, t in OfflineDownloadRow(id: key, name: t.name, state: t.state, expectedBytes: t.expected, queuedAt: t.queuedAt) }
+            .sorted { ($0.queuedAt, $0.id) < ($1.queuedAt, $1.id) }
+    }
+
+    /// "stop downloading" for one row (a failed row is taken off the list the same way).
+    public func stop(key: String) {
+        cancel(keys: [key])
+    }
+
+    /// "try again" for a failed row: the same job, queued again (what "keep offline" does for a failed rendition).
+    public func retry(key: String) {
+        guard let entry = queue.entry(key), case .failed = entry.state else { return }
+        enqueue([entry.job])
+    }
+
+    private static func name(of job: OfflineJob, store: OfflineStore) -> String {
+        switch job.target {
+        case .new(let n):
+            if let title = n.title, !title.isEmpty { return title }
+            return n.media.name.isEmpty ? job.fileName : n.media.name
+        case .existing(let id):
+            if let video = store.videos.first(where: { $0.id == id }) {
+                if let title = video.title, !title.isEmpty { return title }
+                return video.name
+            }
+            return job.fileName
+        }
     }
 
     // MARK: - Asking
@@ -562,3 +602,22 @@ public final class OfflineDownloads {
     }
 }
 
+/// One "keep offline" download as the queue tab shows it (`OfflineDownloads.rows`).
+public struct OfflineDownloadRow: Sendable, Equatable, Identifiable {
+    /// The queue's key (`OfflineKey`): pass it to `stop(key:)` / `retry(key:)`.
+    public var id: String
+    public var name: String
+    /// `.downloading`, `.waiting` or `.failed` (a row is never another state).
+    public var state: RenditionOffline
+    public var expectedBytes: Int64?
+    public var queuedAt: Date
+
+    public init(id: String, name: String, state: RenditionOffline, expectedBytes: Int64? = nil, queuedAt: Date) {
+        self.id = id; self.name = name; self.state = state; self.expectedBytes = expectedBytes; self.queuedAt = queuedAt
+    }
+
+    public var isFailed: Bool {
+        if case .failed = state { return true }
+        return false
+    }
+}

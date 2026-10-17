@@ -2254,7 +2254,7 @@ One vector per library post, made by Google's EmbeddingGemma 2 (text and image e
 
 `GET /library/search?q=<1..200 chars>&limit=<1..50, default 20>&v=<2|3>` (keyed or service) → 200 `{ "status": "success", "query", "model": "google/embeddinggemma-2", "posts": [ <GET /library post, same v rules> + "score" ], "index": { "posts": <posts with a vector>, "pending": <posts whose vector is missing or out of date> } }`, best first. `score` is the cosine plus 0.3 when the query is found as plain text in the title or text (so a post found by its name ranks first, even before its vector exists). There is no score cut-off; clients show the order. Errors: 400 `error.library.bad_request` (empty or long query, bad limit); 503 `error.search.off` (no Space configured); 503 `error.search.waking` (the Space is asleep or booting: the first search after a quiet spell, retry in a minute); 502 `error.search.failed`; 503 `error.api.generic`.
 
-`POST /library/search/index` (keyed) runs one indexer pass now and answers `{ "status": "success", "posts", "indexed", "failed", "removed", "pending", "unavailable" }`. The cron runs the same pass every 15 minutes: it embeds up to 8 posts whose inputs changed (newest first; a custom title or a new poster re-embeds), deletes the rows of posts that are gone, and calls the Space only when something needs a vector. A Space that is asleep, down or misconfigured holds nothing against any post; a post the Space refuses (4xx) is retried an hour later, three times, then left until its inputs change.
+`POST /library/search/index` (keyed) runs one indexer pass now and answers `{ "status": "success", "posts", "indexed", "failed", "removed", "pending", "unavailable" }`. With `?drain=1` it loops passes for up to 25 s and adds `"passes"` and `"stop"` (section 23.3); any other `drain` value is 400 `error.library.bad_request`. A pass embeds up to 8 posts whose inputs changed (newest first; a custom title or a new poster re-embeds), deletes the rows of posts that are gone, and calls the Space only when something needs a vector. The 15-minute cron drains: it loops passes until nothing is pending, the Space is unavailable or 10 minutes are up (section 22.3; about 96 posts a run at ~50 s a batch on the CPU Space, where one pass a run gave 8). A Space that is asleep, down or misconfigured holds nothing against any post; a post the Space refuses (4xx) is retried an hour later, three times, then left until its inputs change.
 
 `features.search` in `GET /capabilities` is true exactly while `EMBED_URL` (an https URL, a plain var) and the secret `EMBED_TOKEN` are set; `EMBED_KEY` (secret) is sent as `x-embed-key`. Apply migration 0010 before deploying.
 
@@ -2269,3 +2269,82 @@ Every public file `https://media.capybaraharmony.com/<name>.<ext>` also has a pa
 `GET /capabilities` gains top-level `share_base_url` (`https://share.capybaraharmony.com/`, or null while `SHARE_BASE_URL` is unset or not https). The app copies `<share_base_url><name>` wherever it copied a public file's URL (the hold menus, the result card, the detail screen, copy all links); without it, it copies the file's URL as before.
 
 No migration. Deploy the API Worker: `share.capybaraharmony.com` is a new custom domain in `api/cloudflare.config.ts`, created by `cf deploy`.
+
+## 23. Queue (addendum, built 2026-10-17; owner: one queue screen in the app for everything in flight)
+
+The app's queue screen shows its own jobs (downloads, saves, uploads, renders it started) and the server's work that it cannot see
+from its jobs: the line other callers fill, the search index and the posters. `GET /queue` is that server side in one call. Nothing
+under `api/` changes; the container is never woken.
+
+### 23.1 `GET /queue` (keyed)
+
+Keyed like `GET /studio/line`: `Authorization: Api-Key <key>`. No key or a bad one: 401 `error.api.auth.key.invalid`; the
+library-service credential and every other method: 404. `cache-control: no-store`. Always 200 once the key is valid: each part is
+fetched on its own and is `null` when it fails.
+
+```json
+{ "status": "success", "now": 1790000000000,
+  "line": { "status": "success", "now": 1790000000000, "running": null, "entries": [], "max": 50, "wait_ms": 1800000 },
+  "search": { "enabled": true, "posts": 284, "indexed": 32, "pending": 251, "failed": 1, "running": true,
+              "last_run_at": 1789999700000, "rate_per_hour": 96,
+              "next": [ { "post_key": "<sid or legacy key>", "title": "IMG_4021.mp4" } ] },
+  "posters": { "pending": 3 } }
+```
+
+- **`line`**: exactly the body `GET /studio/line` answers for this key (section 17.4), or `null` when the Durable Object fails,
+  answers non-2xx or takes over 5 s. The Worker asks the Durable Object for `GET /studio/line` with the caller's key id, the way it
+  proxies that route. The Durable Object answers it from its storage and D1 before any container code runs, so polling `/queue`
+  never starts the container. It is the same cost as polling `/studio/line` (which `/queue` replaces on this screen).
+- **`search`**: `{ "enabled": false }` alone while search is off (`features.search` false). Otherwise:
+  - `posts` = `indexed` + `pending` + `failed`, every live library post (the post key `GET /library` groups by).
+  - `indexed`: posts whose vector matches their current inputs.
+  - `pending`: posts the next pass would embed (never embedded, inputs changed, or a refusal whose hour is up).
+  - `failed`: posts the Space refused that wait, either for their retry hour or for good after three refusals (until their inputs
+    change).
+  - `next`: up to 5 pending posts in the order they will be embedded, newest first; `title` is what the post is embedded under (custom
+    title, else the lead file's name; may be null).
+  - `running`: a run (cron or `POST /library/search/index`) has started, has not finished, and started less than 11.5 minutes ago (the
+    10-minute budget plus one Space call). A run whose Worker died stops counting after that.
+  - `last_run_at`: when the latest run started (ms), or null before the first.
+  - `rate_per_hour`: posts embedded by the runs that started in the last hour; null when none started in that hour.
+  - `running`, `last_run_at` and `rate_per_hour` are null while migration 0011 is not applied.
+- **`posters`**: `{ "pending" }`, the originals that still need a server-made poster and are not in their one-day cooldown after a
+  failure (what the poster kick would queue, section 13). Null on a D1 failure.
+
+### 23.2 How the app merges it with its local jobs
+
+- Its own jobs stay the source of truth for what it started: progress comes from the session and render routes as before.
+- A line entry or `running` with `mine: true` carries `sid` (and `job` for a render). The app matches it to a local job by `sid` for a
+  save and by `sid` + `job` for a render, and shows the entry's `position` on that job ("2nd in line"). A `mine` entry with no local job
+  (the share extension, or another device using the same key) is shown as its own row, from `link` and `origin`.
+- Entries with `mine: false` are other callers' work: one row each with `key_name` and `kind`, no link. They explain why the app's own
+  job waits.
+- `search` is one row while `pending` > 0 or `running` is true: "Indexing for search: `indexed` of `posts`", with `next` titles under
+  it and, when `rate_per_hour` > 0, an estimate of `pending / rate_per_hour` hours. `failed` > 0 can show as a quiet note. Hidden when
+  `enabled` is false.
+- `posters` is one row while `pending` > 0.
+- A `null` part keeps the last known value for that part and marks it stale; it never removes the app's local jobs.
+- Poll while the screen is visible: every 5 s while the line has work or `search.running` is true, else every 30 s. Polling never
+  wakes the container.
+
+### 23.3 Indexing cadence
+
+- The cron (`*/15 * * * *`, `src/index.ts`) runs `drainIndexer` (`src/embed.ts`) and awaits it: passes of 8 posts until a stop.
+  Stops: `empty` (nothing pending), `unavailable` (the Space is asleep or down), `stalled` (a pass embedded and refused nothing),
+  `budget` (10 minutes, `SEARCH_RUN_BUDGET_MS`, would be passed by another pass as long as the last one), `error` (D1 threw). The
+  first pass always runs. At ~50 s a batch that is about 12 passes, ~96 posts a run, ~380 an hour, and a run ends before the next
+  one starts.
+- `POST /library/search/index` is one pass (`passes`/`stop` not in the answer); `?drain=1` is the same loop under 25 s
+  (`SEARCH_DRAIN_REQUEST_MS`), so it usually runs one or two passes.
+- New posts need no trigger: every pass compares all posts' inputs with their stored hashes, so the next run picks them up.
+- Every run is a row in D1 `search_index_runs` (migration `0011_search_runs.sql`): `trigger` (`cron` | `request`), `started_at`,
+  `finished_at` (null while running), `passes`, `indexed`, `failed`, `unavailable`, `stop`. It is updated after each pass, so
+  `GET /queue` shows progress mid-run. Rows older than 7 days are deleted when a run starts. Without the table the indexer still runs
+  and keeps no record.
+
+### 23.4 Capability, files, deploy
+
+`features.queue: true` in `GET /capabilities`. Files: `src/queue.ts` (the route), `src/embed.ts` (`drainIndexer`, `searchQueue`),
+`src/poster.ts` (`posterBacklog`), `src/gate.ts` (`queue`), `src/worker.ts`, `src/index.ts`; tests in `test/search.test.ts`. Apply
+migration 0011 (additive, one table), then deploy the API Worker. Either order works: without the table `GET /queue` answers null for
+the run fields and the cron drains without a record.

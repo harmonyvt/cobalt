@@ -61,6 +61,18 @@ export const posterEligible = (r: { content_type: string | null; source?: string
 const ELIGIBLE_SQL =
     "(content_type LIKE 'video/%' OR content_type = 'image/gif' OR content_type IN ('image/jpeg', 'image/png') OR (content_type = 'image/webp' AND source NOT IN ('webp', 'studio')))";
 
+// Originals still without a poster and not tried since ?1 (the cooldown): what a kick queues.
+const BACKLOG_WHERE = `deleted_at IS NULL AND bucket = 'originals' AND poster IS NULL AND (poster_at IS NULL OR poster_at < ?1) AND ${ELIGIBLE_SQL}`;
+
+// How many posters are still to be made (GET /queue).
+export async function posterBacklog(db: D1Database, now: number): Promise<number> {
+    const row = await db
+        .prepare(`SELECT COUNT(*) AS n FROM media_items WHERE ${BACKLOG_WHERE}`)
+        .bind(now - POSTER_COOLDOWN_MS)
+        .first<{ n: number }>();
+    return row?.n ?? 0;
+}
+
 export type PosterJob = {
     // helper attempts started
     attempts: number;
@@ -150,7 +162,7 @@ export class PosterService {
     async kick(limit: number = POSTER_BATCH): Promise<{ queued: number; eligible: number }> {
         const n = Math.max(1, Math.min(POSTER_MAX_BATCH, Math.floor(limit) || POSTER_BATCH));
         const since = this.d.now() - POSTER_COOLDOWN_MS;
-        const where = `deleted_at IS NULL AND bucket = 'originals' AND poster IS NULL AND (poster_at IS NULL OR poster_at < ?1) AND ${ELIGIBLE_SQL}`;
+        const where = BACKLOG_WHERE;
         const { results } = await this.d.db
             .prepare(`SELECT id FROM media_items WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT ?2`)
             .bind(since, n)

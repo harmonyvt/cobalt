@@ -3,10 +3,12 @@
 // `media_embeddings` (migration 0010) and searched here by brute force (a personal library is a few
 // thousand posts at most: 1 KB per vector).
 //
-// - runIndexer(): the cron's pass (every 15 minutes, index.ts). It reads every live post's inputs
-//   (title text and poster), embeds the posts whose inputs changed, a few per pass, and deletes the
-//   rows of posts that are gone. A Space that is asleep or down ends the pass without counting
-//   against any post; the next pass (by then the Space has woken) carries on.
+// - runIndexer(): one pass. It reads every live post's inputs (title text and poster), embeds the
+//   posts whose inputs changed, a batch per pass, and deletes the rows of posts that are gone. A
+//   Space that is asleep or down ends the pass without counting against any post.
+// - drainIndexer(): the cron's run (every 15 minutes, index.ts): passes until nothing is pending,
+//   the Space is unavailable or SEARCH_RUN_BUDGET_MS is up, recorded in `search_index_runs`.
+// - searchQueue(): the search part of GET /queue (app-routes.ts queueSnapshot).
 // - searchPosts(): GET /library/search. Embeds the query, scores every vector, and adds a bonus
 //   for a plain text match, so a post found by its name ranks first even before it is embedded.
 
@@ -290,6 +292,37 @@ export type IndexerResult = {
 
 const CHUNK = 50;
 
+type Planned = PostInput & { hash: string; row: EmbedRow | undefined };
+
+// Where every live post stands: `todo` needs a vector now (inputs changed, never embedded, or a
+// refusal whose hour is up), newest first; `failed` was refused and waits (its hour, or for good
+// after EMBED_MAX_ATTEMPTS); `done` has the vector of its current inputs.
+async function planIndex(
+    inputs: PostInput[],
+    existing: Map<string, EmbedRow>,
+    now: number,
+): Promise<{ todo: Planned[]; failed: number; done: number }> {
+    const todo: Planned[] = [];
+    let failed = 0;
+    let done = 0;
+    for (const p of inputs) {
+        const hash = await inputHash(p);
+        const row = existing.get(p.post_key);
+        if (row && row.input_hash === hash) {
+            if (row.failed_at === null && row.has_vector) {
+                done++;
+                continue;
+            }
+            if (row.attempts >= EMBED_MAX_ATTEMPTS || (row.failed_at !== null && row.failed_at > now - EMBED_RETRY_MS)) {
+                failed++;
+                continue;
+            }
+        }
+        todo.push({ ...p, hash, row });
+    }
+    return { todo, failed, done };
+}
+
 export async function runIndexer(d: IndexerDeps): Promise<IndexerResult> {
     const now = d.now();
     const inputs = await postInputs(d.db, d.mediaBaseUrl);
@@ -309,18 +342,7 @@ export async function runIndexer(d: IndexerDeps): Promise<IndexerResult> {
             .run();
     }
 
-    // posts whose inputs changed (or never embedded), newest first
-    const todo: (PostInput & { hash: string; row: EmbedRow | undefined })[] = [];
-    for (const p of inputs) {
-        const hash = await inputHash(p);
-        const row = existing.get(p.post_key);
-        if (row && row.input_hash === hash) {
-            if (row.failed_at === null && row.has_vector) continue;
-            if (row.attempts >= EMBED_MAX_ATTEMPTS) continue;
-            if (row.failed_at !== null && row.failed_at > now - EMBED_RETRY_MS) continue;
-        }
-        todo.push({ ...p, hash, row });
-    }
+    const { todo } = await planIndex(inputs, existing, now);
 
     const size = d.batch ?? EMBED_BATCH;
     const batch = todo.slice(0, size);
@@ -386,6 +408,157 @@ export async function runIndexer(d: IndexerDeps): Promise<IndexerResult> {
     }
     result.pending = todo.length - result.indexed - result.failed;
     return result;
+}
+
+// ---- the drain: passes until the queue is empty --------------------------------------------------
+
+// One cron run loops passes for at most this long, so it ends well before the next */15 run (a
+// scheduled handler may run 15 minutes). About 12 passes of 8 at ~50 s each: ~96 posts a run.
+export const SEARCH_RUN_BUDGET_MS = 10 * 60 * 1000;
+// POST /library/search/index?drain=1 loops under this (someone's request is waiting).
+export const SEARCH_DRAIN_REQUEST_MS = 25_000;
+// Run records older than this are deleted when a new run starts.
+export const SEARCH_RUNS_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+
+// "empty": nothing pending. "unavailable": the Space is asleep or down. "budget": the time is up
+// (or the next pass would not fit). "stalled": a pass moved nothing. "passes": maxPasses reached.
+// "error": a pass threw (D1).
+export type DrainStop = "empty" | "unavailable" | "budget" | "stalled" | "passes" | "error";
+
+export type DrainResult = IndexerResult & { passes: number; stop: DrainStop };
+
+export type DrainDeps = IndexerDeps & {
+    budgetMs: number;
+    maxPasses?: number;
+    // what started the run, kept in search_index_runs
+    trigger?: "cron" | "request";
+};
+
+// Passes of runIndexer until a stop (DrainStop). The first pass always runs; another starts only
+// if the last pass's length still fits in the budget. Each run is recorded in search_index_runs
+// (migration 0011); a missing table only loses the record.
+export async function drainIndexer(d: DrainDeps): Promise<DrainResult> {
+    const start = d.now();
+    const runId = await startRun(d.db, d.trigger ?? "cron", start);
+    const total: DrainResult = { posts: 0, indexed: 0, failed: 0, removed: 0, pending: 0, unavailable: false, passes: 0, stop: "empty" };
+    try {
+        for (;;) {
+            const t = d.now();
+            const r = await runIndexer(d);
+            const took = d.now() - t;
+            total.passes++;
+            total.posts = r.posts;
+            total.indexed += r.indexed;
+            total.failed += r.failed;
+            total.removed += r.removed;
+            total.pending = r.pending;
+            total.unavailable = r.unavailable;
+            if (r.unavailable) total.stop = "unavailable";
+            else if (r.pending === 0) total.stop = "empty";
+            else if (r.indexed + r.failed === 0) total.stop = "stalled";
+            else if (d.maxPasses !== undefined && total.passes >= d.maxPasses) total.stop = "passes";
+            else if (d.now() - start + took > d.budgetMs) total.stop = "budget";
+            else {
+                await recordRun(d.db, runId, total, null);
+                continue;
+            }
+            break;
+        }
+    } catch (e) {
+        total.stop = "error";
+        throw e;
+    } finally {
+        await recordRun(d.db, runId, total, d.now());
+    }
+    return total;
+}
+
+async function startRun(db: D1Database, trigger: string, now: number): Promise<number | null> {
+    try {
+        await db.prepare("DELETE FROM search_index_runs WHERE started_at < ?1").bind(now - SEARCH_RUNS_KEEP_MS).run();
+        const row = await db
+            .prepare("INSERT INTO search_index_runs (trigger, started_at) VALUES (?1, ?2) RETURNING id")
+            .bind(trigger, now)
+            .first<{ id: number }>();
+        return row?.id ?? null;
+    } catch (e) {
+        console.error("[search] run record failed", String(e));
+        return null;
+    }
+}
+
+// Progress after each pass (finished_at NULL), and the outcome at the end.
+async function recordRun(db: D1Database, id: number | null, r: DrainResult, finishedAt: number | null): Promise<void> {
+    if (id === null) return;
+    try {
+        await db
+            .prepare(
+                `UPDATE search_index_runs SET passes = ?2, indexed = ?3, failed = ?4, unavailable = ?5, stop = ?6, finished_at = ?7
+                 WHERE id = ?1`,
+            )
+            .bind(id, r.passes, r.indexed, r.failed, r.unavailable ? 1 : 0, finishedAt === null ? null : r.stop, finishedAt)
+            .run();
+    } catch (e) {
+        console.error("[search] run record failed", String(e));
+    }
+}
+
+// ---- GET /queue: where the index stands ----------------------------------------------------------
+
+export const QUEUE_NEXT = 5;
+
+export type SearchQueue =
+    | { enabled: false }
+    | {
+          enabled: true;
+          posts: number;
+          indexed: number;
+          pending: number;
+          failed: number;
+          running: boolean | null;
+          last_run_at: number | null;
+          rate_per_hour: number | null;
+          next: { post_key: string; title: string | null }[];
+      };
+
+// The index as runIndexer would see it now, plus the run records. `running`, `last_run_at` and
+// `rate_per_hour` are null while migration 0011 is not applied.
+export async function searchQueue(d: { db: D1Database; mediaBaseUrl: string; now: number; enabled: boolean }): Promise<SearchQueue> {
+    if (!d.enabled) return { enabled: false };
+    const inputs = await postInputs(d.db, d.mediaBaseUrl);
+    const { results: rows } = await d.db
+        .prepare("SELECT post_key, input_hash, attempts, failed_at, vector IS NOT NULL AS has_vector FROM media_embeddings")
+        .all<EmbedRow>();
+    const plan = await planIndex(inputs, new Map(rows.map((r) => [r.post_key, r])), d.now);
+    let running: boolean | null = null;
+    let lastRunAt: number | null = null;
+    let rate: number | null = null;
+    try {
+        const last = await d.db
+            .prepare("SELECT started_at, finished_at FROM search_index_runs ORDER BY started_at DESC, id DESC LIMIT 1")
+            .first<{ started_at: number; finished_at: number | null }>();
+        lastRunAt = last?.started_at ?? null;
+        // a run whose Worker died never finishes: only a recent one counts as running
+        running = !!last && last.finished_at === null && last.started_at > d.now - SEARCH_RUN_BUDGET_MS - EMBED_CALL_MS;
+        const hour = await d.db
+            .prepare("SELECT COUNT(*) AS runs, COALESCE(SUM(indexed), 0) AS indexed FROM search_index_runs WHERE started_at > ?1")
+            .bind(d.now - 60 * 60 * 1000)
+            .first<{ runs: number; indexed: number }>();
+        rate = hour && hour.runs > 0 ? hour.indexed : null;
+    } catch {
+        // no run table yet
+    }
+    return {
+        enabled: true,
+        posts: inputs.length,
+        indexed: plan.done,
+        pending: plan.todo.length,
+        failed: plan.failed,
+        running,
+        last_run_at: lastRunAt,
+        rate_per_hour: rate,
+        next: plan.todo.slice(0, QUEUE_NEXT).map((p) => ({ post_key: p.post_key, title: p.title })),
+    };
 }
 
 // ---- GET /library/search -----------------------------------------------------------------------
@@ -478,12 +651,27 @@ export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, 
     }
 }
 
-// POST /library/search/index: one indexer pass now (the cron runs the same every 15 minutes). Keyed.
-export async function librarySearchIndex(d: AppDeps & { embed: EmbedClient | null }): Promise<StudioReply> {
+// POST /library/search/index: one indexer pass now; `?drain=1` loops passes for up to
+// SEARCH_DRAIN_REQUEST_MS (the cron drains for up to SEARCH_RUN_BUDGET_MS every 15 minutes). Keyed.
+export async function librarySearchIndex(d: AppDeps & { embed: EmbedClient | null }, q = new URLSearchParams()): Promise<StudioReply> {
+    const drain = q.get("drain");
+    if (drain !== null && !["", "0", "1", "false", "true"].includes(drain)) {
+        return { status: 400, body: { status: "error", error: { code: "error.library.bad_request" } } };
+    }
     if (!d.embed) return { status: 503, body: { status: "error", error: { code: "error.search.off" } } };
+    const loop = drain === "1" || drain === "true";
     try {
-        const r = await runIndexer({ db: d.db, client: d.embed, mediaBaseUrl: d.mediaBaseUrl, now: d.now });
-        return { status: 200, body: { status: "success", ...r } };
+        const r = await drainIndexer({
+            db: d.db,
+            client: d.embed,
+            mediaBaseUrl: d.mediaBaseUrl,
+            now: d.now,
+            trigger: "request",
+            budgetMs: SEARCH_DRAIN_REQUEST_MS,
+            maxPasses: loop ? undefined : 1,
+        });
+        const { passes, stop, ...pass } = r;
+        return { status: 200, body: { status: "success", ...pass, ...(loop ? { passes, stop } : {}) } };
     } catch (e) {
         console.error("[search] index failed", String(e));
         return { status: 503, body: { status: "error", error: { code: "error.api.generic" } } };

@@ -5,12 +5,13 @@ import Testing
 /// The links that land in the queue (CONTRACT-PARALLEL.md 3.3): the Hark summary, and a hand-off over a busy home.
 @MainActor
 struct JobLinksTests {
-    @Test func theJobsLinkAsksForTheTray() {
+    @Test func theJobsLinkOpensTheQueueTab() {
         let rig = LineRig(.server)
         rig.app.selectedTab = .library
         #expect(!rig.app.requestedJobs)
         rig.app.open(URL(string: "cobalt-apple://jobs")!)
-        #expect(rig.app.requestedJobs && rig.app.selectedTab == .save)
+        // the queue tab (apple/CONTRACT.md 12) replaced "open the tray"
+        #expect(rig.app.selectedTab == .queue && !rig.app.requestedJobs)
         // it is not a run link
         #expect(!rig.app.openRunLink(URL(string: "cobalt-apple://jobs")!))
     }

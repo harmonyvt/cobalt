@@ -78,6 +78,8 @@ export type LookupThen =
     | "library_posters_backfill"
     | "library_search"
     | "library_search_index"
+    // GET /queue (APP-API-CONTRACT.md section 23)
+    | "queue"
     | "live_start_token"
     | "live_run"
     | "live_state"
@@ -199,6 +201,13 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         return "key" in parsed
             ? { action: "capabilities", auth: "key", key: parsed.key }
             : { action: "capabilities", auth: "invalid" };
+    }
+
+    // The server's work in one snapshot (APP-API-CONTRACT.md section 23): keyed GET only; the
+    // library-service credential and every other method are 404.
+    if (req.pathname === "/queue") {
+        if (req.service) return reject(404);
+        return req.method === "GET" ? lookupThen(req, "queue") : reject(404);
     }
 
     // Library adoption is for the web Worker's service credential only; an

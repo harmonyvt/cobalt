@@ -931,11 +931,11 @@ file URLs. Check a page with `curl -s https://share.capybaraharmony.com/<name> |
 
 ## Library search (`APP-API-CONTRACT.md` section 21)
 
-Search runs EmbeddingGemma 2 on a private Hugging Face Space (`capybaraharmony/cobalt-embed`, CPU basic, needs HF PRO); the API Worker indexes posts every 15
-minutes and answers `GET /library/search`. Owner steps, once:
+Search runs EmbeddingGemma 2 on a private Hugging Face Space (`capybaraharmony/cobalt-embed`, CPU basic, needs HF PRO); the API Worker drains the index queue every 15
+minutes (up to 10 minutes a run, ~96 posts; section 23.3) and answers `GET /library/search`. Owner steps, once:
 
 1. Create the Space from `deploy/huggingface/embed` (its README: private Docker Space `cobalt-embed`, secret `EMBED_KEY`).
-2. Apply migration 0010 (the D1 command at the top of this file).
+2. Apply migrations 0010 and 0011 (the D1 command at the top of this file; 0011 only adds the run records `GET /queue` shows).
 3. Add `EMBED_TOKEN` (a Hugging Face token that can call the private Space) and `EMBED_KEY` to
    `~/.config/cobalt/secrets.json`, then `deploy/cobalt-deploy api`.
 4. Check: `POST /library/search/index` with an Api-Key answers `indexed` > 0 (the first call may say

@@ -27,6 +27,7 @@ import { KEY_ID_HEADER, SERVICE_HEADER, stripInternalHeaders } from "./headers";
 import { lookupKey } from "./keys";
 import { SERVICE_KEY_ID } from "./library";
 import { publishStudio, type PublishBucket } from "./publish";
+import { queueSnapshot } from "./queue";
 import { serviceAuthorized } from "./service-auth";
 import { sharePage } from "./share";
 import { deleteSwitchedWebp, purgeFrom } from "./visibility";
@@ -321,11 +322,33 @@ async function handleInner(
         }
         if (decision.then === "library_search" || decision.then === "library_search_index") {
             const deps = { ...appDeps(env, container, edge), embed: embedFrom(env) };
-            const r = decision.then === "library_search" ? await librarySearch(deps, url.searchParams) : await librarySearchIndex(deps);
+            const r =
+                decision.then === "library_search"
+                    ? await librarySearch(deps, url.searchParams)
+                    : await librarySearchIndex(deps, url.searchParams);
             return new Response(JSON.stringify(r.body), {
                 status: r.status,
                 headers: { "content-type": "application/json", "cache-control": "no-store" },
             });
+        }
+        // GET /queue (section 23): D1, plus the Durable Object's line answer (never the container).
+        if (decision.then === "queue") {
+            const id = keyId;
+            const r = await queueSnapshot({
+                db: env.DB,
+                mediaBaseUrl: env.MEDIA_BASE_URL,
+                now: edge.now,
+                searchEnabled: embedFrom(env) !== null,
+                line: async () => {
+                    const res = await container.fetch(
+                        new Request("https://do.internal/studio/line", { headers: { [KEY_ID_HEADER]: id } }),
+                    );
+                    return res.ok ? await res.json() : null;
+                },
+            });
+            const res = json(r.status, r.body, allowOrigin);
+            res.headers.set("cache-control", "no-store");
+            return res;
         }
         if (decision.then === "emotes_search" || decision.then === "emotes_save") {
             const deps = appDeps(env, container, edge);

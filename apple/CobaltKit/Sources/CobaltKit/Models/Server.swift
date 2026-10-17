@@ -88,6 +88,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// public host) and the server fetches and saves it as one item. False when absent: the app then downloads such a
     /// link on the device and sends it through the file upload instead.
     public var directLinks: Bool = false
+    /// `features.queue` (APP-API-CONTRACT 23): `GET /queue` answers one snapshot of the server's work (the line, the
+    /// search index's backlog, the posters) for the queue tab. False when absent: the tab then shows only what this
+    /// device knows (its jobs, downloads and the photos album) and never asks the server.
+    public var queue: Bool = false
     /// `share_base_url` (APP-API-CONTRACT 22): the server's rich link pages. A public file
     /// `<mediaBaseURL><name>.<ext>` has a page at `<shareBaseURL><name>` that unfurls as a playable video or a
     /// full-size image in Discord, iMessage, X and the rest. Nil when absent: links are the files themselves.
