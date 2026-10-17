@@ -145,3 +145,16 @@ migration `0008_visibility.sql` applied before this Worker is deployed; the data
   switching off asks "make private? the public link stops working." first, then posts `/private`. The
   badge shows `visibility`; the public/private chips use the new filter. The add-from-link "host as-is"
   action still goes through `POST /api/library/studio/<sid>/publish` (the API's route).
+
+## Search (addendum, 2026-10-17; `APP-API-CONTRACT.md` section 21)
+
+- `GET /api/library/search?q=<1..200 chars>&limit=<1..50>` → the API's `GET /library/search` (service auth, `v=3`; only
+  `q`, trimmed, and `limit` are forwarded) flattened into tiles: `{ status, query, model, posts: <count>, items: [<GET
+  /api/library item> + post_key + score], index: { posts, pending } }`, best post first. The API's errors keep their
+  status and code (400 `error.library.bad_request`, 503 `error.search.off` / `error.search.waking` / `error.api.generic`,
+  502 `error.search.failed`); upstream 401/403 → 502 `error.library.upstream`.
+- `GET /api/library/search/post?key=<post_key>` → the API's `GET /library/search/post` answered as is (404 passes through).
+- `GET /api/library` items gain `post_key` (the API's post-key rule; null when the lookup fails).
+- Page: a search box above the grid (`/` focuses, Esc clears, 300 ms debounce or Enter); results replace the grid in score
+  order with the same tiles; one automatic retry 20 s after `error.search.waking`. Clicking a tile's caption opens the
+  post's details with its search-index state and the exact embedded title/text (collapsed).

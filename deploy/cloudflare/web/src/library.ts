@@ -21,6 +21,11 @@ export const MAX_WAIT = 25;
 const MAX_LINK_CHARS = 2048;
 const MAX_NAME_CHARS = 120;
 const MAX_BODY_BYTES = 8192;
+// Library search (APP-API-CONTRACT.md section 21): the API's own limits.
+export const MAX_QUERY_CHARS = 200;
+export const MAX_SEARCH_LIMIT = 50;
+// A post key is an item id, a session id or a link (links are capped at 2048 when saved).
+const MAX_POST_KEY_CHARS = 2100;
 
 // Pinned by LIBRARY-CONTRACT.md: like the studio page, plus same-origin API
 // calls and media/images from the public bucket.
@@ -167,6 +172,8 @@ type Route =
     | { name: "list" }
     | { name: "link" }
     | { name: "upload" }
+    | { name: "search" }
+    | { name: "searchPost" }
     | { name: "webp"; id: string }
     | { name: "studio"; id: string }
     | { name: "studioPublish"; id: string }
@@ -181,6 +188,8 @@ const ALLOWED: Record<Route["name"], string[]> = {
     list: ["GET"],
     link: ["POST"],
     upload: ["PUT"],
+    search: ["GET"],
+    searchPost: ["GET"],
     webp: ["GET"],
     studio: ["GET"],
     studioPublish: ["POST"],
@@ -196,6 +205,8 @@ export function matchRoute(pathname: string): Route | null {
     if (pathname === "/api/library") return { name: "list" };
     if (pathname === "/api/library/link") return { name: "link" };
     if (pathname === "/api/library/upload") return { name: "upload" };
+    if (pathname === "/api/library/search") return { name: "search" };
+    if (pathname === "/api/library/search/post") return { name: "searchPost" };
     let m: RegExpExecArray | null;
     if ((m = /^\/api\/library\/webp\/([0-9A-Za-z]{16,32})$/.exec(pathname))) return { name: "webp", id: m[1]! };
     if ((m = /^\/api\/library\/studio\/([0-9A-Za-z]{22})$/.exec(pathname))) return { name: "studio", id: m[1]! };
@@ -246,6 +257,10 @@ export async function handleLibrary(request: Request, env: Env, deps?: Partial<L
                 return await link(ctx, request);
             case "upload":
                 return await upload(ctx, request, searchParams);
+            case "search":
+                return await search(ctx, searchParams);
+            case "searchPost":
+                return await searchPost(ctx, searchParams);
             case "webp":
                 return await relayGet(ctx, `/webp/${route.id}`, searchParams, true);
             case "studio":
@@ -407,13 +422,31 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
         }
     }
 
+    // Each item's post key (the API's grouping, used by the page's search-index panel,
+    // GET /api/library/search/post). Best effort: without the 0009 column the lookup fails and
+    // the page shows no panel.
+    const postKeys = new Map<string, string>();
+    if (ids.length > 0) {
+        try {
+            const { results } = await DB.prepare(
+                `SELECT m.id AS id, ${POST_KEY_SQL} AS post_key FROM media_items m
+                 WHERE m.id IN (${ids.map((_, i) => `?${i + 1}`).join(", ")})`,
+            )
+                .bind(...ids)
+                .all<{ id: string; post_key: string }>();
+            for (const r of results) postKeys.set(r.id, r.post_key);
+        } catch (e) {
+            console.error("[library] post key lookup failed", String(e));
+        }
+    }
+
     const webOrigin = ctx.env.WEB_ORIGIN.replace(/\/+$/, "");
     return json(200, {
         items: page
             .filter((e) => e.t === "item")
             .map((e) => {
                 const row = (e as Extract<Entry, { t: "item" }>).row;
-                return { ...itemShape(row), custom_title: titles.get(row.id) ?? null };
+                return { ...itemShape(row), custom_title: titles.get(row.id) ?? null, post_key: postKeys.get(row.id) ?? null };
             }),
         studios: page
             .filter((e) => e.t === "studio")
@@ -496,6 +529,89 @@ async function relayGet(ctx: Ctx, path: string, q: URLSearchParams, job: boolean
 async function relayPost(ctx: Ctx, path: string, body: unknown, map: (b: Record<string, unknown>) => Record<string, unknown>): Promise<Response> {
     const res = await callApi(ctx, path, { method: "POST", body });
     return relayResponse(res, map);
+}
+
+// ---------- GET /api/library/search and /search/post ----------
+
+// GET /api/library/search?q=<1..200 chars>&limit=<1..50>: the API's GET /library/search (v=3, every
+// file of a post) flattened into the grid's tiles, best post first, each tile carrying its post's
+// `post_key` and `score`. Only q and limit are forwarded. Errors (400 bad_request, 503 search.off,
+// 503 search.waking, 502 search.failed, 503 api.generic) keep the API's status and code.
+async function search(ctx: Ctx, q: URLSearchParams): Promise<Response> {
+    const text = (q.get("q") ?? "").trim().replace(/\s+/g, " ");
+    if (!text || text.length > MAX_QUERY_CHARS) return err(400, "error.library.bad_request");
+    const out = new URLSearchParams({ q: text });
+    if (q.has("limit")) {
+        const n = intParam(q.get("limit"));
+        if (n === null || n < 1 || n > MAX_SEARCH_LIMIT) return err(400, "error.library.bad_request");
+        out.set("limit", String(n));
+    }
+    out.set("v", "3");
+    const res = await callApi(ctx, `/library/search?${out}`, { method: "GET" });
+    return relayResponse(res, (b) => {
+        const posts = Array.isArray(b.posts) ? b.posts.filter(isObject) : [];
+        const items: Record<string, unknown>[] = [];
+        for (const p of posts) {
+            const files = Array.isArray(p.files) ? p.files.filter(isObject) : [];
+            for (const f of files) {
+                if (typeof f.id !== "string") continue;
+                items.push(searchItem(p, f));
+            }
+        }
+        const index = isObject(b.index) ? b.index : {};
+        return {
+            status: "success",
+            query: typeof b.query === "string" ? b.query : text,
+            model: typeof b.model === "string" ? b.model : null,
+            posts: posts.length,
+            items,
+            index: {
+                posts: typeof index.posts === "number" ? index.posts : null,
+                pending: typeof index.pending === "number" ? index.pending : 0,
+            },
+        };
+    });
+}
+
+const orNull = <T>(v: unknown, ok: (v: unknown) => v is T): T | null => (ok(v) ? v : null);
+const isStr = (v: unknown): v is string => typeof v === "string";
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+// One API post file (v3 shape) as a grid tile: the same keys as GET /api/library's items, plus
+// post_key and score. `link` and `custom_title` are the post's; session_id is the open session's.
+function searchItem(p: Record<string, unknown>, f: Record<string, unknown>): Record<string, unknown> {
+    const session = isObject(p.session) ? p.session : null;
+    return {
+        id: f.id,
+        kind: orNull(f.kind, isStr),
+        source: orNull(f.source, isStr),
+        name: isStr(f.name) ? f.name : "",
+        url: orNull(f.url, isStr),
+        content_type: orNull(f.content_type, isStr),
+        bytes: orNull(f.bytes, isNum),
+        width: orNull(f.width, isNum),
+        height: orNull(f.height, isNum),
+        duration: orNull(f.duration, isNum),
+        link: orNull(p.link, isStr),
+        session_id: session ? orNull(session.id, isStr) : null,
+        created_at: isNum(f.created_at) ? f.created_at : 0,
+        poster_url: orNull(f.poster_url, isStr),
+        custom_title: orNull(p.custom_title, isStr),
+        visibility: f.visibility === "private" ? "private" : f.visibility === "public" ? "public" : null,
+        visibility_toggle: f.visibility_toggle === true,
+        post_key: orNull(p.id, isStr),
+        score: isNum(p.score) ? p.score : null,
+    };
+}
+
+// GET /api/library/search/post?key=<post_key>: one post's search-index record, the API's
+// GET /library/search/post answered as is (404 error.library.not_found passes through).
+async function searchPost(ctx: Ctx, q: URLSearchParams): Promise<Response> {
+    const key = q.get("key") ?? "";
+    // eslint-disable-next-line no-control-regex
+    if (!key || key.length > MAX_POST_KEY_CHARS || /[\u0000-\u001f\u007f]/.test(key)) return err(400, "error.library.bad_request");
+    const res = await callApi(ctx, `/library/search/post?${new URLSearchParams({ key })}`, { method: "GET" });
+    return relayResponse(res, (b) => b);
 }
 
 // ---------- POST /api/library/link ----------

@@ -154,6 +154,35 @@ a { color: inherit; }
 .more { display: flex; justify-content: center; }
 .toast { position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: calc(100vw - 24px); background: var(--secondary); color: var(--primary); padding: 8px 14px; border-radius: 99px; font-size: 12.5px; display: flex; gap: 10px; align-items: center; z-index: 5; }
 .toast a { color: inherit; font-weight: 600; }
+
+/* search */
+.search { display: grid; gap: 4px; }
+.search .omni input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+.search .omni kbd { align-self: center; font: inherit; font-size: 11px; color: var(--gray); padding: 1px 7px; border-radius: 6px; box-shadow: 0 0 0 1px var(--input-border) inset; margin-right: 4px; }
+.search .omni button { min-height: 36px; font-size: 12px; padding: 0 10px; }
+@media (pointer: coarse), (max-width: 640px) { .search .omni kbd { display: none; } .search .omni button { min-height: 44px; } }
+.status.warn { color: var(--orange); }
+.tile .cap.open { cursor: pointer; border-radius: 6px; }
+.tile .cap.open:hover .name { text-decoration: underline; }
+.tile .cap.open:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+/* post details */
+dialog.sheet { width: min(560px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); border: 0; padding: 0; border-radius: 14px; background: var(--page); color: var(--secondary); box-shadow: 0 0 0 1px var(--input-border), 0 18px 60px rgba(0,0,0,.35); }
+dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
+.sheet .in { padding: 16px; display: grid; gap: 14px; }
+.sheet .head { display: flex; gap: 10px; align-items: start; justify-content: space-between; }
+.sheet .head h2 { font-size: 15px; overflow-wrap: anywhere; }
+.sheet .head button { min-height: 36px; flex: none; }
+.sheet section { display: grid; gap: 8px; }
+.sheet h3 { font-size: 12px; font-weight: 600; color: var(--gray); text-transform: lowercase; letter-spacing: .02em; }
+.sheet .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; font-size: 12.5px; }
+.sheet .kv dt { color: var(--gray); }
+.sheet .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.badge.ok { color: var(--green); } .badge.wait { color: var(--orange); } .badge.bad { color: var(--red); } .badge.off { color: var(--gray); }
+.sheet details { background: var(--button); border-radius: 8px; box-shadow: 0 0 0 1px var(--button-stroke) inset; }
+.sheet summary { cursor: pointer; padding: 8px 10px; font-size: 12.5px; min-height: 36px; display: flex; align-items: center; }
+.sheet pre { margin: 0; padding: 0 10px 10px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--f-mono); }
+.sheet pre b { color: var(--gray); font-weight: 500; }
 </style>
 </head>
 <body>
@@ -212,6 +241,14 @@ a { color: inherit; }
         </div>
         <div class="meter-wrap"><span id="usage">&nbsp;</span><div class="meter" id="meter" role="img" aria-label="storage used"><i id="meterFill" style="width:0"></i></div></div>
       </div>
+      <div class="search">
+        <form class="omni" id="searchForm" role="search" autocomplete="off">
+          <input id="q" type="search" maxlength="200" enterkeyhint="search" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="search your library" aria-label="search your library" aria-describedby="searchStatus">
+          <kbd aria-hidden="true">/</kbd>
+          <button id="qClear" type="button" hidden>clear</button>
+        </form>
+        <div class="status" id="searchStatus" role="status" aria-live="polite"></div>
+      </div>
       <div class="grid" id="grid"></div>
       <div class="empty" id="gridNote" role="status" aria-live="polite">loading your library…</div>
       <div class="more" id="more" hidden><button id="moreBtn" type="button">load more</button></div>
@@ -219,6 +256,13 @@ a { color: inherit; }
   </main>
 </div>
 <div class="toast" id="toast" role="status" hidden></div>
+<dialog class="sheet" id="sheet" aria-labelledby="sheetTitle">
+  <div class="in">
+    <div class="head"><h2 id="sheetTitle">post</h2><button id="sheetClose" type="button" aria-label="close">close</button></div>
+    <section id="sheetPost" aria-label="post"></section>
+    <section id="sheetIndex" aria-label="search index"><h3>search index</h3><div id="sheetIndexBody"></div></section>
+  </div>
+</dialog>
 
 <script>
 /* ---------- constants ---------- */
@@ -320,7 +364,10 @@ var MESSAGES = {
   "error.studio.storage": "couldn't copy the file to public storage. try again.",
   "error.webp.too_long": "this clip is over 10 s. use \"open in studio\" to pick a part.",
   "error.webp.busy": "another webp is being made right now. try again in a moment.",
-  "error.webp.invalid_params": "that clip can't be made into a webp."
+  "error.webp.invalid_params": "that clip can't be made into a webp.",
+  "error.search.off": "search isn't set up on the server.",
+  "error.search.waking": "search is waking up, try again in a minute.",
+  "error.search.failed": "search failed. try again in a moment."
 };
 function messageFor(code) {
   if (MESSAGES[code]) return MESSAGES[code];
@@ -876,10 +923,15 @@ function tileFor(e) {
     var it = e.it;
     name = it.custom_title || it.name;
     badge = h("span", { class: "badge " + (isPub(it) ? "pub" : "priv"), text: isPub(it) ? "public" : "private" });
-    sub = (SOURCES[it.source] || it.source) + (it.link && hostOf(it.link) ? " · " + hostOf(it.link) : "");
+    sub = [it.source ? SOURCES[it.source] || it.source : "", it.link && hostOf(it.link) ? hostOf(it.link) : ""].filter(Boolean).join(" · ");
     meta2 = [it.bytes != null ? fmtBytes(it.bytes) : "", ago(it.created_at)];
   }
-  var cap = h("div", { class: "cap" },
+  var openable = e.t === "item" && !!e.it.post_key;
+  var cap = h("div", openable
+      ? { class: "cap open", role: "button", tabindex: "0", "aria-label": "details for " + name, title: "details and search index",
+          onclick: function () { openPost(e.it); },
+          onkeydown: function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openPost(e.it); } } }
+      : { class: "cap" },
     h("div", { class: "name", text: name, title: name }),
     h("div", { class: "meta" }, badge, h("span", { text: sub })),
     h("div", { class: "meta" }, ...meta2.filter(Boolean).map(function (t) { return h("span", { text: t }); })));
@@ -912,6 +964,8 @@ function tileFor(e) {
   return h("div", { class: "tile", "data-id": id, "data-kind": e.t === "studio" ? "studio" : (isPub(e.it) ? "public" : "private") }, thumb, cap, tail);
 }
 function entries() {
+  // search results: tiles in score order, exactly as the server ranked them
+  if (S.active) return S.items.map(function (it) { return { t: "item", id: it.id, at: it.created_at, it: it }; });
   var all = G.items.map(function (it) { return { t: "item", id: it.id, at: it.created_at, it: it }; })
     .concat(G.studios.map(function (s) { return { t: "studio", id: s.id, at: s.created_at, s: s }; }));
   all.sort(function (a, b) { return b.at - a.at; });
@@ -931,14 +985,18 @@ function renderGrid() {
   grid.textContent = "";
   list.forEach(function (e) { grid.append(tileFor(e)); });
   var note = $("gridNote");
-  if (G.loading && !list.length) { note.hidden = false; note.textContent = "loading your library…"; }
+  if (S.active) {
+    if (!list.length && S.done) { note.hidden = false; note.textContent = "nothing matches \u201c" + S.q + "\u201d."; }
+    else note.hidden = true;
+  }
+  else if (G.loading && !list.length) { note.hidden = false; note.textContent = "loading your library…"; }
   else if (G.error && !list.length) {
     note.hidden = false; note.textContent = "couldn't load your library. ";
     note.append(h("button", { type: "button", text: "try again", onclick: function () { refreshGrid(); } }));
   }
   else if (!list.length) { note.hidden = false; note.textContent = EMPTY[G.filter]; }
   else note.hidden = true;
-  $("more").hidden = !G.next;
+  $("more").hidden = S.active || !G.next;
   $("moreBtn").disabled = G.loading;
   document.querySelectorAll("#filters button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.f === G.filter)); });
   renderUsage();
@@ -970,7 +1028,11 @@ async function reloadUsage() {
   try { var r = await lib("/api/library?filter=public&limit=1"); if (r.body && r.body.usage) { G.usage = r.body.usage; renderUsage(); } } catch (e) {}
 }
 document.querySelectorAll("#filters button").forEach(function (b) {
-  b.onclick = function () { if (G.filter === b.dataset.f) return; G.filter = b.dataset.f; G.confirm = null; loadPage(true); };
+  b.onclick = function () {
+    if (S.active) clearSearch(true);
+    if (G.filter === b.dataset.f) { renderGrid(); return; }
+    G.filter = b.dataset.f; G.confirm = null; loadPage(true);
+  };
 });
 $("moreBtn").onclick = function () { loadPage(false); };
 
@@ -982,6 +1044,7 @@ async function doDelete(e) {
     if (e.t === "studio") G.studios = G.studios.filter(function (s) { return s.id !== e.id; });
     else {
       G.items = G.items.filter(function (i) { return i.id !== e.id; });
+      S.items = S.items.filter(function (i) { return i.id !== e.id; });
       // deleting a private original closes the studios made from it
       if (e.it.kind === "private") { reloadStudiosSoon(); }
     }
@@ -1011,6 +1074,7 @@ async function setVisibility(it, makePublic) {
     delete G.busy[it.id];
     var next = r.item;
     G.items = G.items.map(function (i) { return i.id === it.id && next ? Object.assign({}, i, next) : i; });
+    S.items = S.items.map(function (i) { return i.id === it.id && next ? Object.assign({}, i, next) : i; });
     // under the public/private chips a file that just switched no longer belongs
     if ((G.filter === "public" || G.filter === "private") && next && next.visibility !== G.filter) {
       G.items = G.items.filter(function (i) { return i.id !== it.id; });
@@ -1026,6 +1090,170 @@ function privateToStudio(it) {
     return ok(await libPost("/api/library/items/" + it.id + "/studio")).url;
   }).then(function () { delete G.busy[it.id]; renderGrid(); refreshGrid(); }, function (e) { delete G.busy[it.id]; renderGrid(); toast(describe(e).text); });
 }
+
+/* ---------- search (APP-API-CONTRACT.md section 21, relayed by /api/library/search) ---------- */
+var SEARCH_LIMIT = 50;
+var WAKE_RETRY_MS = 20000;
+// q: the query shown; active: the grid shows results; done: an answer arrived for q.
+var S = { q: "", active: false, done: false, items: [], seq: 0, timer: 0, retryTimer: 0, retried: false };
+function searchStatus(kind, text, code, spinning) {
+  var el = $("searchStatus");
+  el.className = "status" + (kind ? " " + kind : "");
+  el.textContent = "";
+  if (!text) return;
+  if (spinning) el.append(h("span", { class: "spin", "aria-hidden": "true" }));
+  el.append(h("span", { text: text }));
+  if (code) el.append(h("code", { text: code }));
+}
+function clearSearch(keepFocus) {
+  clearTimeout(S.timer); clearTimeout(S.retryTimer);
+  S.seq++; S.q = ""; S.active = false; S.done = false; S.items = []; S.retried = false;
+  $("q").value = ""; $("qClear").hidden = true;
+  searchStatus("", "");
+  G.confirm = null;
+  renderGrid();
+  if (keepFocus !== true) $("q").blur();
+}
+async function runSearch(isRetry) {
+  clearTimeout(S.timer); clearTimeout(S.retryTimer);
+  var q = $("q").value.trim().replace(/\s+/g, " ");
+  if (!q) { clearSearch(true); return; }
+  if (!isRetry) S.retried = false;
+  var seq = ++S.seq;
+  if (q !== S.q) { S.done = false; S.items = []; }
+  S.q = q; S.active = true; G.confirm = null;
+  renderGrid();
+  searchStatus("", isRetry ? "trying again…" : "searching…", "", true);
+  var r;
+  try { r = await lib("/api/library/search?q=" + encodeURIComponent(q) + "&limit=" + SEARCH_LIMIT, {}, 45000); }
+  catch (e) {
+    if (seq !== S.seq) return;
+    var d = describe(e); searchStatus("bad", d.text, d.code); return;
+  }
+  if (seq !== S.seq) return;
+  var b = r.body;
+  if (r.status === 200 && b && b.status === "success") {
+    S.items = Array.isArray(b.items) ? b.items : [];
+    S.done = true;
+    var n = b.posts || 0;
+    var line = n + " result" + (n === 1 ? "" : "s");
+    var pending = b.index && b.index.pending || 0;
+    if (pending > 0) line += " · still indexing " + pending + " post" + (pending === 1 ? "" : "s");
+    searchStatus(pending > 0 ? "warn" : "", line);
+    renderGrid();
+    return;
+  }
+  var code = errCode(r) || "error.library.upstream";
+  S.done = false; renderGrid();   // the status line says why; no "nothing matches" under it
+  if (code === "error.search.waking") {
+    if (!S.retried) {
+      S.retried = true;
+      searchStatus("warn", "search is waking up, trying again in " + Math.round(WAKE_RETRY_MS / 1000) + " s…", "", true);
+      S.retryTimer = setTimeout(function () { if (seq === S.seq) runSearch(true); }, WAKE_RETRY_MS);
+    } else searchStatus("warn", messageFor(code));
+    return;
+  }
+  searchStatus(code === "error.search.off" ? "" : "bad", messageFor(code), code === "error.search.off" ? "" : code);
+}
+$("q").addEventListener("input", function () {
+  $("qClear").hidden = !$("q").value;
+  clearTimeout(S.timer);
+  if (!$("q").value.trim()) { clearSearch(true); return; }
+  S.timer = setTimeout(function () { runSearch(false); }, 300);
+});
+$("q").addEventListener("keydown", function (e) {
+  if (e.key === "Escape") { e.preventDefault(); clearSearch(); }
+});
+$("searchForm").addEventListener("submit", function (e) { e.preventDefault(); runSearch(false); });
+$("qClear").onclick = function () { clearSearch(true); $("q").focus(); };
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+  var t = e.target, tag = t && t.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable) || $("sheet").open) return;
+  e.preventDefault();
+  $("q").focus(); $("q").select();
+});
+
+/* ---------- post details and its search index (/api/library/search/post) ---------- */
+var P = { seq: 0, key: null };
+function when(ms) {
+  try { return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }); } catch (e) { return new Date(ms).toISOString(); }
+}
+function kv(rows) {
+  var dl = h("dl", { class: "kv" });
+  rows.forEach(function (r) { if (r && r[1] != null && r[1] !== "") dl.append(h("dt", { text: r[0] }), h("dd", {}, typeof r[1] === "string" ? document.createTextNode(r[1]) : r[1])); });
+  return dl;
+}
+function indexBadge(b) {
+  var st = b.state;
+  if (b.search_enabled === false && st !== "indexed") return ["off", "search is off"];
+  if (st === "indexed") return ["ok", "indexed"];
+  if (st === "stale") return ["wait", "waiting to re-index"];
+  if (st === "pending") return ["wait", "waiting to be indexed"];
+  if (st === "failed") return ["bad", b.retry_at ? "failed, retries " + (b.retry_at > Date.now() ? "at " + when(b.retry_at) : "on the next pass") : "failed"];
+  if (st === "gave_up") return ["bad", "gave up"];
+  return ["off", st || "unknown"];
+}
+function renderIndex(b) {
+  var body = $("sheetIndexBody");
+  body.textContent = "";
+  var bd = indexBadge(b);
+  var rows = [
+    ["state", h("span", { class: "badge " + bd[0], text: bd[1] })],
+    ["indexed", b.embedded_at ? when(b.embedded_at) + " (" + ago(b.embedded_at) + ")" : "not yet"],
+    ["image", b.has_image === true ? "poster image included" : b.has_image === false ? (b.input && b.input.image_url ? "poster not included yet" : "no poster, text only") : (b.input && b.input.image_url ? "poster will be included" : "no poster, text only")],
+    ["tries", b.attempts ? String(b.attempts) + (b.failed_at ? " · last failed " + ago(b.failed_at) : "") : ""],
+    ["model", b.model ? b.model + (b.dims ? " · " + b.dims + " dims" : "") : ""]
+  ];
+  if (b.state === "indexed" && b.embedded_matches_input === false) rows.push(["note", "changed since it was indexed"]);
+  if (b.search_enabled === false) rows.push(["note", "search isn't set up on the server, nothing is being indexed"]);
+  body.append(kv(rows));
+  var inp = b.input || {};
+  var pre = h("pre", {});
+  pre.append(h("b", { text: "title: " }), document.createTextNode((inp.title || "") + "\n"), h("b", { text: "text:  " }), document.createTextNode(inp.text || ""));
+  if (inp.image_url) pre.append(document.createTextNode("\n"), h("b", { text: "image: " }), document.createTextNode(inp.image_url));
+  body.append(h("details", {}, h("summary", { text: b.embedded_matches_input === false ? "what will be embedded" : "what's embedded" }), pre));
+}
+async function loadIndex(key) {
+  var seq = ++P.seq;
+  var body = $("sheetIndexBody");
+  body.textContent = "";
+  body.append(h("div", { class: "status" }, h("span", { class: "spin", "aria-hidden": "true" }), h("span", { text: "loading…" })));
+  var r;
+  try { r = await lib("/api/library/search/post?key=" + encodeURIComponent(key), {}, 20000); }
+  catch (e) { if (seq !== P.seq) return; var d = describe(e); body.textContent = ""; body.append(h("div", { class: "status bad", text: d.text })); return; }
+  if (seq !== P.seq) return;
+  if (r.status === 200 && r.body && r.body.status === "success") { renderIndex(r.body); return; }
+  var code = errCode(r) || "error.library.upstream";
+  body.textContent = "";
+  var msg = code === "error.library.not_found" ? "this post isn't in the search index's library anymore." : messageFor(code);
+  var line = h("div", { class: "status bad" }, h("span", { text: msg }), h("code", { text: code }));
+  line.append(h("button", { type: "button", text: "try again", onclick: function () { loadIndex(key); } }));
+  body.append(line);
+}
+function openPost(it) {
+  var name = it.custom_title || it.name;
+  $("sheetTitle").textContent = name;
+  var post = $("sheetPost");
+  post.textContent = "";
+  var link = it.link && /^https?:\/\//i.test(it.link) ? h("a", { href: it.link, target: "_blank", rel: "noopener noreferrer", text: it.link }) : null;
+  post.append(kv([
+    ["file", it.custom_title && it.custom_title !== it.name ? it.name : ""],
+    ["from", SOURCES[it.source] || it.source || ""],
+    ["link", link],
+    ["public", isPub(it) && it.url ? h("a", { href: it.url, target: "_blank", rel: "noopener", text: it.url }) : (isPub(it) ? "" : "private")],
+    ["size", it.bytes != null ? fmtBytes(it.bytes) + (it.duration ? " · " + fmtSecs(it.duration) : "") : ""],
+    ["added", it.created_at ? when(it.created_at) : ""],
+    ["match", S.active && typeof it.score === "number" ? "score " + it.score.toFixed(3) + " for \u201c" + S.q + "\u201d" : ""]
+  ]));
+  P.key = it.post_key;
+  var d = $("sheet");
+  if (typeof d.showModal === "function") { if (!d.open) d.showModal(); } else d.setAttribute("open", "");
+  loadIndex(it.post_key);
+}
+$("sheetClose").onclick = function () { var d = $("sheet"); if (d.close) d.close(); else d.removeAttribute("open"); };
+$("sheet").addEventListener("click", function (e) { if (e.target === $("sheet")) $("sheetClose").onclick(); });
+$("sheet").addEventListener("close", function () { P.seq++; P.key = null; });
 
 setPane("link");
 refreshGrid();
