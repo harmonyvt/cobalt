@@ -472,6 +472,10 @@ extension Settings {
         return known.capabilities
     }
 
+    /// The link to hand out for a public file, by what the current server last said: its rich link page when the server
+    /// has them (APP-API-CONTRACT 22), else the file's URL. For the extensions, which have no app model.
+    public func shareLink(for url: URL) -> URL { (knownCapabilities ?? .unknown).shareLink(for: url) }
+
     /// Remembers a cobalt's answer for the current server; anything else (not cobalt, unreachable) keeps or clears it.
     func remember(_ caps: Capabilities) {
         switch caps.kind {

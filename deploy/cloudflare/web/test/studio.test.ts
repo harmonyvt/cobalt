@@ -127,7 +127,7 @@ describe("embedded page", () => {
         // every absolute URL it may load is on the CSP allow list
         const hosts = new Set([...STUDIO_HTML.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]));
         for (const h of hosts) {
-            expect(["api.capybaraharmony.com", "fonts.googleapis.com", "fonts.gstatic.com", "media.capybaraharmony.com"]).toContain(h);
+            expect(["api.capybaraharmony.com", "fonts.googleapis.com", "fonts.gstatic.com", "media.capybaraharmony.com", "share.capybaraharmony.com"]).toContain(h);
         }
     });
 

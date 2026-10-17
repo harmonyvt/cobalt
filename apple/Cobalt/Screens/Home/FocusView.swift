@@ -709,7 +709,7 @@ struct FocusLayer: View {
             if hasWebp, let result = pipeline.webpResult {
                 cardDivider
                 ResultRow(
-                    kind: .webp, url: result.url, meta: "\(Format.size(result.width, result.height)) · \(Format.bytes(result.bytes))",
+                    kind: .webp, url: pipeline.shareLink(for: result.url), meta: "\(Format.size(result.width, result.height)) · \(Format.bytes(result.bytes))",
                     copied: copiedWebp
                 ) {
                     pipeline.copyResultLink()
@@ -719,7 +719,7 @@ struct FocusLayer: View {
             }
             if hasLink, let url = pipeline.hostedOriginalURL {
                 cardDivider
-                ResultRow(kind: .link, url: url, meta: nil, copied: copiedLink) {
+                ResultRow(kind: .link, url: pipeline.shareLink(for: url), meta: nil, copied: copiedLink) {
                     Pasteboard.copy(pipeline.shareLink(for: url).absoluteString)
                     flash($copiedLink)
                 }

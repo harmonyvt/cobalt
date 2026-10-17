@@ -279,6 +279,8 @@ export type NotifyDeps = {
     fetch: (url: string, init: RequestInit) => Promise<Response>;
     // Arms the job sweep (a failed send is retried by it).
     scheduleSweep?: () => void | Promise<void>;
+    // A public file's link as the owner should hand it out: its rich link page (section 22). Absent: the file URL.
+    shareLink?: (url: string) => string;
     httpMs?: number;
     // Log lines: only "hark sent <status>" / "hark failed <status>" with a session id
     // prefix. Never the URL, the key, the message or an error text.
@@ -409,6 +411,10 @@ export class NotifyService implements NotifyHooks, SweepNotify {
 
     constructor(private d: NotifyDeps) {}
 
+    private link(url: string | null): string | null {
+        return url && this.d.shareLink ? this.d.shareLink(url) : url;
+    }
+
     enabled(): boolean {
         return !!this.d.webhookUrl;
     }
@@ -538,7 +544,7 @@ export class NotifyService implements NotifyHooks, SweepNotify {
         if (!want) return;
         let msg: { title: string; body: string };
         if (e.kind === "success") {
-            msg = renderedMessage(e, want.label);
+            msg = renderedMessage({ ...e, url: this.link(e.url) }, want.label);
         } else if (e.chained && e.what) {
             msg = savedButFailedMessage(describeJob(want.label, await this.sessionRow(sid)), e.chained.saved, e.what, e.code, e.chained.length);
         } else {
@@ -642,7 +648,7 @@ export class NotifyService implements NotifyHooks, SweepNotify {
                     cur.members[member] = "saved";
                 } else if (outcome.kind === "rendered") {
                     cur.members[member] = "rendered";
-                    cur.webps[member] = { url: outcome.url, bytes: outcome.bytes, width: outcome.width, height: outcome.height, ...(outcome.what ? { what: outcome.what } : {}) };
+                    cur.webps[member] = { url: this.link(outcome.url), bytes: outcome.bytes, width: outcome.width, height: outcome.height, ...(outcome.what ? { what: outcome.what } : {}) };
                 } else {
                     cur.members[member] = `failed:${outcome.code}`;
                 }

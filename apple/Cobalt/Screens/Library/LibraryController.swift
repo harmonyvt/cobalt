@@ -266,7 +266,7 @@ final class LibraryController {
     /// The face's public link, else its file on this device.
     func shareURL(_ item: MediaItem) -> URL? {
         let face = item.face
-        if let url = face.publicURL { return url }
+        if let url = face.publicURL { return model.capabilities.shareLink(for: url) }
         if let url = face.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url }
         return nil
     }

@@ -301,6 +301,16 @@ var THUMBS = 12;
 var MEASURED = { seconds: 9.6, bytes: 1283290, width: 480, encodeS: 50.6 };
 var QFACTOR = { low: 0.72, med: 1, high: 1.45 };
 var DEFAULT_API = "https://api.capybaraharmony.com";
+var MEDIA_BASE = "https://media.capybaraharmony.com/";
+var SHARE_BASE = "https://share.capybaraharmony.com/";
+// A public file is handed out as its rich link page (APP-API-CONTRACT.md section 22): media.../<name>.<ext> -> share.../<name>.
+// Anything else (a studio page, another host) is returned as is.
+function shareUrl(u) {
+  var s = String(u || "");
+  if (s.indexOf(MEDIA_BASE) !== 0) return s;
+  var m = /^([A-Za-z0-9]{6,40})\.[A-Za-z0-9]{1,8}$/.exec(s.slice(MEDIA_BASE.length));
+  return m ? SHARE_BASE + m[1] : s;
+}
 
 /* ---------- session id + api base ---------- */
 var m = /^\/studio\/([0-9A-Za-z]{22})$/.exec(location.pathname);
@@ -793,8 +803,8 @@ async function makeWebp() {
 function showResult(item) {
   if (S.featured) S.renders.unshift(S.featured);
   S.featured = item;
-  $("outUrl").textContent = item.url;
-  $("dLink").textContent = item.url; $("dLink").setAttribute("href", item.url);
+  $("outUrl").textContent = shareUrl(item.url);
+  $("dLink").textContent = shareUrl(item.url); $("dLink").setAttribute("href", shareUrl(item.url));
   $("dImg").setAttribute("src", item.url);
   show("result", true);
   $("toast").textContent = "";
@@ -802,14 +812,14 @@ function showResult(item) {
   var card = $("result");
   card.scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
   say("webp ready. " + mb(item.bytes || 0) + ".");
-  notifyReady(item.url);
-  copyText(item.url, $("outUrl")).then(function (ok) {
+  notifyReady(shareUrl(item.url));
+  copyText(shareUrl(item.url), $("outUrl")).then(function (ok) {
     $("toast").textContent = ok ? "copied to your clipboard. paste it in discord." : "tap copy link to copy it.";
   });
 }
 $("copy").addEventListener("click", function () {
   if (!S.featured) return;
-  copyText(S.featured.url, $("outUrl")).then(function (ok) {
+  copyText(shareUrl(S.featured.url), $("outUrl")).then(function (ok) {
     $("toast").textContent = ok ? "copied. paste it in discord." : "couldn't copy automatically. the link is selected: copy it by hand.";
     say(ok ? "link copied" : "copy failed, the link is selected");
   });
@@ -820,13 +830,13 @@ function paintRenders() {
   $("webpsTitle").textContent = S.featured ? "earlier in this studio" : "made in this studio";
   var box = $("hist"); box.textContent = "";
   list.forEach(function (r) {
-    var name = String(r.url || "").replace(/^https?:\/\//, "");
+    var name = shareUrl(r.url).replace(/^https?:\/\//, "");
     var meta = fmt(r.start || 0) + "–" + fmt((r.start || 0) + (r.length || 0)) + " · " + (r.width || "?") + " px" + (r.bytes ? " · " + mb(r.bytes) : "");
     var a = h("a", { href: r.url, target: "_blank", rel: "noopener noreferrer", text: name });
     var code = h("code", null, a);
     var btn = h("button", { type: "button", text: "copy", "aria-label": "copy link to " + name });
     btn.addEventListener("click", function () {
-      copyText(r.url, code).then(function (ok) { btn.textContent = ok ? "copied" : "select+copy"; setTimeout(function () { btn.textContent = "copy"; }, 1800); });
+      copyText(shareUrl(r.url), code).then(function (ok) { btn.textContent = ok ? "copied" : "select+copy"; setTimeout(function () { btn.textContent = "copy"; }, 1800); });
     });
     box.append(h("div", { "class": "item" }, h("div", { "class": "meta" }, code, h("span", { "class": "muted", text: meta })), btn));
   });

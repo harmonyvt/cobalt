@@ -3,6 +3,7 @@
 // exactly-once record, the bounded retries and what may reach a log.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KEY_ID_HEADER } from "../src/headers";
+import { shareLinkFrom } from "../src/share";
 import {
     HARK_MAX_BODY,
     HARK_MAX_TITLE,
@@ -53,7 +54,7 @@ class FakeHark {
     };
 }
 
-function wire(opts: { webhookUrl?: string | null; httpMs?: number; notifyMs?: number } = {}) {
+function wire(opts: { webhookUrl?: string | null; httpMs?: number; notifyMs?: number; shareLink?: (url: string) => string } = {}) {
     const db = createFakeD1();
     const clock = new Clock();
     const kv = new MemoryKV();
@@ -82,6 +83,7 @@ function wire(opts: { webhookUrl?: string | null; httpMs?: number; notifyMs?: nu
             armed.push(clock.t);
         },
         httpMs: opts.httpMs,
+        shareLink: opts.shareLink,
     });
     const studio = new StudioService({
         db,
@@ -394,6 +396,19 @@ describe("saved", () => {
         const e = { kind: "success" as const, url: "https://media.capybaraharmony.com/aaaaaaaaaa.webp", bytes: 1500, width: 480, height: 560 };
         await Promise.all([w.notify.onRender(sid, "J".repeat(20), e), w.notify.onRender(sid, "J".repeat(20), e)]);
         expect(w.hark.calls).toHaveLength(1);
+    });
+    it("a render's message carries the webp's share page when the server has them (section 22)", async () => {
+        const w = wire({ shareLink: shareLinkFrom({ MEDIA_BASE_URL: "https://media.capybaraharmony.com/", SHARE_BASE_URL: "https://share.capybaraharmony.com/" }) });
+        const sid = await savedSession(w, { on: ["rendered"] });
+        w.hark.calls.length = 0;
+        await w.notify.onRender(sid, "K".repeat(20), { kind: "success", url: "https://media.capybaraharmony.com/aaaaaaaaaa.webp", bytes: 1500, width: 480, height: 560 });
+        expect(w.hark.calls).toHaveLength(1);
+        expect(w.hark.calls[0]!.json.body).toContain("https://share.capybaraharmony.com/aaaaaaaaaa");
+        expect(w.hark.calls[0]!.json.body).not.toContain("media.capybaraharmony.com");
+    });
+    it("shareLinkFrom is off without an https SHARE_BASE_URL", () => {
+        expect(shareLinkFrom({ MEDIA_BASE_URL: "https://media.capybaraharmony.com/" })).toBeUndefined();
+        expect(shareLinkFrom({ MEDIA_BASE_URL: "https://media.capybaraharmony.com/", SHARE_BASE_URL: "http://share.capybaraharmony.com/" })).toBeUndefined();
     });
     it("the sweep alone finishes the save and tells the owner (nobody polling)", async () => {
         const w = wire();
