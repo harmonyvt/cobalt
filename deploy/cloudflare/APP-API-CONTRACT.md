@@ -2350,3 +2350,28 @@ fetched on its own and is `null` when it fails.
 `src/poster.ts` (`posterBacklog`), `src/gate.ts` (`queue`), `src/worker.ts`, `src/index.ts`; tests in `test/search.test.ts`. Apply
 migration 0011 (additive, one table), then deploy the API Worker. Either order works: without the table `GET /queue` answers null for
 the run fields and the cron drains without a record.
+
+## 24. Gallery share links (addendum, built 2026-10-17; owner: "select and then hit a button to create a shareable link with gallery in the rich ... the button can not work if I exceed the limit", "a separate tab for all created gallery links and I can revoke anytime")
+
+A share set is 2..4 public files under one link, `https://share.capybaraharmony.com/g/<id>`. In Discord it shows as one embed with the files in a grid (videos play); other apps show the first file. `<id>` is 19 random digits (Discord's post renderer expects numeric status ids; ~63 bits, unguessable). D1 table `share_sets` (migration `0012_share_sets.sql`).
+
+### 24.1 Routes (keyed `Authorization: Api-Key`; the library service and other methods 404)
+
+- `POST /share/sets` body `{ "items": ["<library file id>", ...], "title"?: "<1..80 chars>" }` → 201 `{ "status": "success", "set": <set> }`. `items` is 2..4 distinct ids (`share_set_max`), in the order shown. Each must be a live file that is public now (the same rows the library calls `visibility: "public"` with a `url`). Errors: 400 `error.share.bad_request` (not 2..4, duplicates, bad shape, title too long); 409 `error.share.not_public` with `"items": [<ids that are missing or private>]`; 503 `error.api.generic`.
+- `GET /share/sets` → 200 `{ "status": "success", "sets": [<set>, ...] }`, live sets only, newest first, at most 200.
+- `DELETE /share/sets/<id>` → 200 `{ "status": "success" }` (revoked: the link is a 404 at once; repeat is 200). Unknown id 404 `error.share.not_found`.
+
+`<set>` = `{ "id", "url": "<share_base_url>g/<id>", "title": string|null, "created_at": <ms>, "items": [ { "id", "url": <public file URL, or null when it is no longer public>, "content_type", "poster_url", "width", "height", "duration" } ] }`. A set whose files all went private or were deleted stays listed (its page is a 404) until revoked.
+
+`GET /capabilities`: `features.share_sets` is true exactly while `share_base_url` is non-null; `limits.share_set_max` is 4.
+
+### 24.2 The page (`share.` host, no key)
+
+- `GET|HEAD /g/<id>`: Open Graph like section 22, built from the set's files that are still public, in order (none left, revoked or unknown: the same 404). The first video is `og:video`; every image, webp and video poster is an `og:image` (Discord draws several as a grid). For Discord's crawler only (user agent contains `Discordbot`), the head also has `<link rel="alternate" type="application/activity+json" href="https://share.../users/cobalt/statuses/<id>">` and an oEmbed link; Discord then reads the set as a Mastodon post and shows every file, videos included, as attachments.
+- `GET /api/v1/statuses/<id>` and `GET /users/cobalt/statuses/<id>`: a Mastodon v1 Status (`id`, `url`, `uri`, `created_at`, `content` = the escaped title, `visibility: "public"`, an `account` named cobalt, `media_attachments` with `type` image / gifv / video, `url`, `preview_url`, `meta.original` width/height). Videos over 1920 px on a side report half their size (Discord refuses larger). Same 404 rules.
+- `GET /owoembed?id=<id>` → oEmbed `{ "version": "1.0", "type": "rich", "title": "Embed", "provider_name": "cobalt", "provider_url": "<share_base_url>", "author_name": <title or "N files"> }`.
+- This is Discord's undocumented Mastodon embed path (the one fixupx-style services use); if Discord stops reading it, Discord falls back to the Open Graph tags.
+
+### 24.3 App
+
+The library gets a select mode; with 2..4 public files selected, `make share link` creates a set and copies its link; with more than 4, or any private file, the button is off and says why. A `links` tab (shown only with `features.share_sets`) lists the sets (thumbnails, title, created date, copy, revoke with a confirm). No migration of anything existing. Deploy: apply 0012, then the API Worker.
