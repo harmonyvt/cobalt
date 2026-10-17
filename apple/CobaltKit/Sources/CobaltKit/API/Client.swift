@@ -59,6 +59,9 @@ public protocol CobaltClient: Sendable {
     func setLineNotify() async throws -> Int
     /// `DELETE /studio/line/notify` (idempotent).
     func cancelLineNotify() async throws
+    /// `GET /queue` (keyed; APP-API-CONTRACT 23, only when `features.queue`): the line, the search index's backlog and
+    /// the posters, in one snapshot for the queue tab. Defaulted below (`.unsupported`) so older fakes compile.
+    func queue() async throws -> QueueSnapshot
     func deleteMedia(name: String) async throws                                   // DELETE /media/<name>
     /// `DELETE /library/items/<id>/post` (CONTRACT-MEDIA 6.1), only when `features.delete_post`: deletes
     /// the whole post the file `itemID` belongs to. A partial result is returned, not thrown.
@@ -148,6 +151,7 @@ extension CobaltClient {
     public func line() async throws -> ServerLineSnapshot { throw PipelineFailure.unsupported }
     public func setLineNotify() async throws -> Int { 0 }
     public func cancelLineNotify() async throws {}
+    public func queue() async throws -> QueueSnapshot { throw PipelineFailure.unsupported }
     public func setNotify(session id: String, _ optIn: NotifyOptIn) async throws {}
     public func cancelNotify(session id: String) async throws {}
     public func createStudio(url: URL, options: StudioCreateOptions) async throws -> StudioCreated {

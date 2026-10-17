@@ -184,6 +184,8 @@ struct AppShell: View {
                 #endif
                 // leaving with work on the server: one summary opt-in for all of it (CONTRACT-PARALLEL 6; idempotent)
                 if phase == .background { model.queue.appLeft() }
+                // the queue tab polls the server only while the app is in front (apple/CONTRACT.md 12)
+                model.unifiedQueue.setForeground(phase == .active)
                 guard phase == .active else { return }
                 Task {
                     await model.foreground()                 // shares the launch task's run when they overlap
@@ -304,6 +306,11 @@ struct AppShell: View {
                     LibraryScreen(model: model, tier: tier)
                 }
             }
+            // everything cobalt is doing (apple/CONTRACT.md 12); the badge is the work in motion on this device
+            Tab(Copy.tab(.queue), systemImage: icon(for: .queue), value: AppTab.queue) {
+                NavigationStack { QueueScreen(model: model) }
+            }
+            .badge(model.unifiedQueue.badgeCount)
             Tab(Copy.tab(.settings), systemImage: icon(for: .settings), value: AppTab.settings) {
                 NavigationStack { SettingsScreen(model: model) }
             }
@@ -317,6 +324,7 @@ struct AppShell: View {
                 ForEach(model.visibleTabs.filter { $0 != .settings }, id: \.self) { tab in
                     Label(Copy.tab(tab), systemImage: icon(for: tab))
                         .font(Font.cobalt(13, .regular, relativeTo: .body))
+                        .badge(tab == .queue ? model.unifiedQueue.badgeCount : 0)
                         .tag(tab)
                 }
             }
@@ -326,6 +334,7 @@ struct AppShell: View {
             switch model.selectedTab {
             case .save: HomeScreen(model: model, tier: tier)
             case .library: LibraryScreen(model: model, tier: tier)
+            case .queue: NavigationStack { QueueScreen(model: model) }
             case .settings: SettingsScreen(model: model)
             }
         }
@@ -545,6 +554,7 @@ func icon(for tab: AppTab) -> String {
     switch tab {
     case .save: return Symbol.save
     case .library: return Symbol.library
+    case .queue: return Symbol.queue
     case .settings: return Symbol.settings
     }
 }
@@ -555,6 +565,9 @@ func icon(for tab: AppTab) -> String {
 }
 #Preview("shell · library tab") {
     PreviewHost(.happy, tab: .library) { AppShell(model: $0) }
+}
+#Preview("shell · queue tab") {
+    PreviewHost(.happy, tab: .queue) { AppShell(model: $0) }
 }
 #Preview("shell · settings tab") {
     PreviewHost(.happy, tab: .settings) { AppShell(model: $0) }

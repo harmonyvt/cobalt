@@ -8,7 +8,8 @@ import SwiftUI
 // to open the cards over the top of the screen.
 //
 // The tray decides nothing about the line or the focus: it shows `JobQueue.alongside` in the order the queue pinned,
-// and its buttons call `focus`, `cancel`, `retry`, `dismiss` (3.4, 5.1).
+// and its buttons call `focus`, `cancel`, `retry`, `dismiss` (3.4, 5.1). It is the quick glance: its header (the
+// counts) opens the queue tab, where everything cobalt is doing is listed (apple/CONTRACT.md 12).
 
 struct JobTray: View {
     enum Style: Equatable {
@@ -155,6 +156,17 @@ struct JobTray: View {
                     .scrollIndicators(.hidden)
                     .frame(maxHeight: 440)
                     .fixedSize(horizontal: false, vertical: true)
+                    Button(action: openQueue) {
+                        Label(Copy.Queue.openQueueA11y, systemImage: Symbol.queue)
+                            .font(Font.cobalt(11, .medium, relativeTo: .caption2))
+                            .foregroundStyle(CobaltColor.text)
+                            .padding(.horizontal, 14)
+                            .frame(height: 32)
+                            .glassEffect(.regular.interactive(), in: Capsule())
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
                 }
             }
             noteView(message)
@@ -197,11 +209,26 @@ struct JobTray: View {
 
     private func header(_ counts: Counts, folds: Bool) -> some View {
         HStack(spacing: 8) {
-            Text(counts.text)
-                .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
+            // the counts are the way into the queue tab
+            Button(action: openQueue) {
+                HStack(spacing: 5) {
+                    Text(counts.text)
+                        .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.forward")
+                        .font(.system(size: 9, weight: .bold))
+                        .accessibilityHidden(true)
+                }
                 .foregroundStyle(CobaltColor.text)
-                .lineLimit(1)
-                .accessibilityAddTraits(.updatesFrequently)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(counts.text)
+            .accessibilityHint(Copy.Queue.openQueueA11y)
+            .accessibilityAddTraits(.updatesFrequently)
+            #if os(macOS)
+            .help(Copy.Queue.openQueueA11y)
+            #endif
             if folds {
                 Spacer(minLength: 0)
                 Button { folded.toggle() } label: {
@@ -246,6 +273,12 @@ struct JobTray: View {
     private func open(_ job: Job) {
         queue.focus(job.id)
         pillOpen = false
+    }
+
+    /// The tray is the quick glance; the queue tab is the whole list.
+    private func openQueue() {
+        pillOpen = false
+        model.selectedTab = .queue
     }
 
     // MARK: the note

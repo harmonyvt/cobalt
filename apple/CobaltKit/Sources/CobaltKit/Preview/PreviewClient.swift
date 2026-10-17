@@ -40,9 +40,16 @@ final class PreviewServer: Sendable {
         var titleCalls: [String] = []          // "<item id> <title or ->" for every `setTitle`, in order
         var line = PreviewLineState()
         var failMadeDownloads = false
+        var queueFails = false
     }
 
     private let state = Mutex(State())
+
+    /// Tests: `GET /queue` fails (a network error) while this is true.
+    var queueFails: Bool {
+        get { state.withLock { $0.queueFails } }
+        set { state.withLock { $0.queueFails = newValue } }
+    }
 
     /// Tests: a made file cannot be downloaded from the library (it stays on the "server"; the save is untouched).
     var failMadeDownloads: Bool {
@@ -171,6 +178,12 @@ public struct PreviewClient: CobaltClient {
     let lineMode: LinePreviewMode
     /// What the "server" holds for the galleries this client created (`PreviewGallery.swift`).
     let galleries = PreviewGalleryServer()
+    /// `features.queue` (`AppModel.previewQueue(_:)`): `GET /queue` answers `PreviewData.queueSnapshot` for `.busy`
+    /// and `.quiet`; every other preview is `.off`.
+    let queueState: QueuePreviewState
+    var queueFeature: Bool { queueState.hasRoute }
+    /// When this client was made: the preview index moves on from here (`PreviewData.queueSnapshot`).
+    let startedAt: Date
 
     public var baseURL: URL { PreviewData.base }
 
@@ -180,14 +193,16 @@ public struct PreviewClient: CobaltClient {
 
     init(
         scenario: PreviewScenario, timeScale: Double, clock: any PipelineClock, visibility: VisibilityPreviewMode = .off,
-        line: LinePreviewMode = .off
+        line: LinePreviewMode = .off, queue: QueuePreviewState = .off
     ) {
         self.scenario = scenario
         self.timeScale = max(0.01, timeScale)
         self.clock = clock
         self.visibility = visibility
         self.lineMode = line
+        self.queueState = queue
         let now = clock.now()
+        self.startedAt = now
         let scale = self.timeScale
         server.seedLine(mode: line, at: now, timeScale: scale)
     }
@@ -200,6 +215,7 @@ public struct PreviewClient: CobaltClient {
     public func capabilities() async -> Capabilities {
         var caps = PreviewData.capabilities(for: scenario)
         caps.line = lineMode.hasLine
+        caps.queue = queueFeature && caps.kind == .fork
         return caps
     }
 
@@ -727,6 +743,22 @@ public struct PreviewClient: CobaltClient {
         server.recordLineCall("GET line")
         if server.lineFails { throw CobaltError.network(.timedOut) }
         return server.withLine(at: clock.now()) { $0.snapshot(now: clock.now()) }
+    }
+
+    /// `GET /queue`: the preview index (284 posts, moving on at the boards' pace) and the line: this server's own when it
+    /// holds one (`LinePreviewMode`), else one save from the "mac" key running.
+    public func queue() async throws -> QueueSnapshot {
+        guard queueFeature else { throw PipelineFailure.unsupported }
+        server.recordLineCall("GET queue")
+        if server.queueFails { throw CobaltError.network(.timedOut) }
+        let now = clock.now()
+        let line: ServerLineSnapshot
+        if lineMode.hasLine {
+            line = server.withLine(at: now) { state in state.snapshot(now: now) }
+        } else {
+            line = PreviewData.queueLine
+        }
+        return PreviewData.queueSnapshot(queueState, now: now, since: startedAt, timeScale: timeScale, line: line)
     }
 
     public func setLineNotify() async throws -> Int {

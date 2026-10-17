@@ -189,6 +189,7 @@ public struct HTTPCobaltClient: CobaltClient {
                 var gallery: Bool?
                 var galleryMake: Bool?
                 var directLinks: Bool?
+                var queue: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -247,7 +248,8 @@ public struct HTTPCobaltClient: CobaltClient {
             line: f?.line ?? false,
             gallery: f?.gallery ?? false,
             galleryMake: (f?.gallery ?? false) && (f?.galleryMake ?? false),
-            directLinks: f?.directLinks ?? false)
+            directLinks: f?.directLinks ?? false,
+            queue: f?.queue ?? false)
         caps.shareBaseURL = w.shareBaseUrl.flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
         return caps
     }
@@ -699,8 +701,12 @@ public struct HTTPCobaltClient: CobaltClient {
         return try await sendJSON(ServerLineSnapshot.self, req)
     }
 
-    public func setLineNotify() async throws -> Int {
-        let req = try makeRequest("PUT", "/studio/line/notify", keyed: true, timeout: 15)
+    public func queue() async throws -> QueueSnapshot {
+        let req = try makeRequest("GET", "/queue", keyed: true, timeout: 15)
+        return try await sendJSON(QueueSnapshot.self, req)
+    }
+
+XX, "/studio/line/notify", keyed: true, timeout: 15)
         struct Wire: Decodable { var watching: Int? }
         let wire = try await sendJSON(Wire.self, req, body: Self.jsonBody([:]))
         return wire.watching ?? 0

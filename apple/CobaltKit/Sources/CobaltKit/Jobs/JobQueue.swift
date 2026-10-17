@@ -39,6 +39,9 @@ public final class JobQueue {
     /// Finished jobs that left the queue after their time in the tray (`retireLapsed`): still counted in `summary`.
     @ObservationIgnored private var retiredFinished = 0
     @ObservationIgnored private var retireTask: Task<Void, Never>?
+    /// A finished job is leaving after its time in the tray (`retireLapsed`): the queue tab keeps a line for it under
+    /// "recently finished" (`UnifiedQueue`). Not called for a dismiss: the owner asked for that one to go.
+    @ObservationIgnored var onRetireFinished: (@MainActor (Job) -> Void)?
 
     /// What the pipelines wait in right now.
     var activeLine: any JobLine { lineMode == .server ? serverLine : localLine }
@@ -562,6 +565,7 @@ public final class JobQueue {
             let p = job.pipeline
             if p.keepRequest != nil || p.hosting == .working || p.photos == .working { continue }
             retiredFinished += 1
+            onRetireFinished?(job)
             remove(job.id)
             released = true
         }

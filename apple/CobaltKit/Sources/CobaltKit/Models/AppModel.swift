@@ -2,7 +2,8 @@ import Foundation
 import Observation
 import UserNotifications
 
-public enum AppTab: String, Sendable, CaseIterable { case save, library, settings }
+/// The tabs, in the order they show. `queue` is everything cobalt is doing (apple/CONTRACT.md section 12).
+public enum AppTab: String, Sendable, CaseIterable { case save, library, queue, settings }
 
 public enum PreviewScenario: String, Sendable, CaseIterable {
     case happy, coldStart, noLink, privatePost, tooBig, renderBusy, renderLost, picker, image,
@@ -56,6 +57,9 @@ public final class AppModel {
     public internal(set) var isCheckingServer: Bool = false
     /// Every run of the app (CONTRACT-PARALLEL.md): the jobs, which one is focused, the tray's order, the lines.
     public let queue: JobQueue
+    /// The queue tab (apple/CONTRACT.md section 12): the jobs, the server's line, downloads, the photos album and the
+    /// search index in one list. Polls `GET /queue` only while the tab is on screen.
+    public let unifiedQueue: UnifiedQueue
     /// What the focus screens read: the focused job's pipeline, or an idle one when nothing is focused. A run started
     /// on it by hand becomes the focused job at once.
     public var pipeline: Pipeline { queue.focused?.pipeline ?? queue.idlePipeline }
@@ -66,8 +70,8 @@ public final class AppModel {
     /// opens that media's detail and sets this back to nil.
     public var requestedMediaID: String?
 
-    /// `cobalt-apple://jobs` (the Hark summary for a batch, APP-API-CONTRACT 17.8) asks the save tab to show the tray
-    /// (iPhone: the pill's cards; the Mac's tray is already on screen). The view that shows it sets this back to false.
+    /// Asks the save tab to open the tray fully; the view that shows it sets this back to false. `cobalt-apple://jobs`
+    /// (the Hark summary, APP-API-CONTRACT 17.8) used to set it; it now opens the queue tab (apple/CONTRACT.md 12).
     public var requestedJobs = false
 
     /// Live Activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
@@ -112,11 +116,13 @@ public final class AppModel {
         self.library = library
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
-        self.queue = JobQueue(
+        let jobQueue = JobQueue(
             context: context,
             ledger: ledger ?? JobLedger(
                 fileURL: context.store.root.deletingLastPathComponent().appendingPathComponent("job-ledger.json"),
                 now: { [clock = context.clock] in clock.now() }))
+        self.queue = jobQueue
+        self.unifiedQueue = UnifiedQueue(context: context, jobs: jobQueue, offline: offline, photos: sync)
         self.makeClient = makeClient
         context.keyRejected = { [weak self] in self?.markKeyInvalid() }
         context.capabilitiesChanged = { [weak self] caps in self?.apply(caps) }
@@ -252,6 +258,7 @@ public final class AppModel {
         if !ctx.isPreview { settings.remember(caps) }
         if selectedTab == .library, !caps.library, caps.kind != .unreachable { selectedTab = .save }
         liveManager?.capabilitiesChanged()
+        unifiedQueue.capabilitiesChanged()            // `features.queue` came or went: poll, or stop
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
     }
 
@@ -277,6 +284,7 @@ public final class AppModel {
     func serverChanged() {
         queue.serverChanged()                    // first: every job's Live Activity ends against the server it belonged to
         savePull.serverChanged()                 // another library: a new baseline for the pull
+        unifiedQueue.serverChanged()             // nothing from the old server's queue is kept
         ctx.background.cancelAll()               // detached runs belonged to the old server too
         ctx.client = makeClient(settings)
         apply(.unknown)
@@ -295,7 +303,7 @@ public final class AppModel {
             return
         }
         if url.host(percentEncoded: false)?.lowercased() == "jobs" {
-            requestedJobs = true                        // the Hark summary (APP-API-CONTRACT 17.8): show the tray
+            selectedTab = .queue                        // the Hark summary (APP-API-CONTRACT 17.8): the queue tab
             return
         }
         guard url.host(percentEncoded: false)?.lowercased() == "job",
