@@ -229,6 +229,9 @@ export async function capabilities(
                 // GET /library/search and POST /library/search/index (APP-API-CONTRACT.md section 21): only
                 // while the embedding Space is configured
                 search: search === true,
+                // GET /queue: the line, the search index and the posters in one snapshot (APP-API-CONTRACT.md
+                // section 23)
+                queue: true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,

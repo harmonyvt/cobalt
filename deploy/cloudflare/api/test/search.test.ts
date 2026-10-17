@@ -10,10 +10,13 @@ import {
     EMBED_MODEL,
     EMBED_RETRY_MS,
     EmbedError,
+    SEARCH_RUN_BUDGET_MS,
     decodeVector,
+    drainIndexer,
     dot,
     encodeVector,
     librarySearch,
+    librarySearchIndex,
     normalize,
     postInputs,
     runIndexer,
@@ -22,8 +25,10 @@ import {
     type EmbedInput,
 } from "../src/embed";
 import { decide, type GateRequest } from "../src/gate";
+import { KEY_ID_HEADER } from "../src/headers";
 import { hashKey } from "../src/keys";
 import { handleRequest, type WorkerEnv } from "../src/worker";
+import { queueSnapshot } from "../src/queue";
 import { type FakeD1 } from "../../test-support/d1-sqlite";
 import { createBatchD1 } from "./d1-batch";
 import { MemoryMedia, MemoryOriginals } from "./studio-fakes";
@@ -132,9 +137,13 @@ function world() {
         },
     };
     const index = (batch?: number) => runIndexer({ db: d.db, client: space, mediaBaseUrl: MEDIA, now: () => now, batch });
+    const drain = (budgetMs = SEARCH_RUN_BUDGET_MS, batch?: number) =>
+        drainIndexer({ db: d.db, client: space, mediaBaseUrl: MEDIA, now: () => now, batch, budgetMs });
+    const runs = () => db.raw.prepare("SELECT * FROM search_index_runs ORDER BY id").all() as any[];
     const rows = () => db.raw.prepare("SELECT * FROM media_embeddings ORDER BY post_key").all() as any[];
     const search = (q: string, extra = "") => librarySearch({ ...d, embed: space }, new URLSearchParams(`q=${encodeURIComponent(q)}${extra}`));
-    return { db, d, space, index, rows, search, tick: (ms: number) => (now += ms) };
+    const tick = (ms: number) => (now += ms);
+    return { db, d, space, index, drain, runs, rows, search, tick, now: () => now };
 }
 
 // ---- vectors -----------------------------------------------------------------------------------
@@ -260,6 +269,98 @@ describe("indexer", () => {
         w.space.fail = null;
         expect(await w.index()).toMatchObject({ indexed: 1 });
         expect(bad()).toMatchObject({ attempts: 0, failed_at: null });
+    });
+});
+
+// ---- the cron's drain ---------------------------------------------------------------------------
+
+describe("drain", () => {
+    const posts = (w: ReturnType<typeof world>, k: number) => {
+        for (let i = 0; i < k; i++) addFile(w.db, { session_id: `s${i}`, name: `clip${i}.mp4` });
+    };
+
+    it("loops passes until nothing is pending, and records the run", async () => {
+        const w = world();
+        posts(w, 20);
+        const r = await w.drain();
+        expect(r).toMatchObject({ posts: 20, indexed: 20, failed: 0, pending: 0, unavailable: false, passes: 3, stop: "empty" });
+        expect(w.space.calls).toHaveLength(3);
+        expect(w.runs()).toEqual([
+            { id: 1, trigger: "cron", started_at: w.now(), finished_at: w.now(), passes: 3, indexed: 20, failed: 0, unavailable: 0, stop: "empty" },
+        ]);
+        // nothing to do: one pass, no Space call, still recorded
+        expect(await w.drain()).toMatchObject({ indexed: 0, passes: 1, stop: "empty" });
+        expect(w.space.calls).toHaveLength(3);
+        expect(w.runs()).toHaveLength(2);
+    });
+
+    it("stops when the Space is unavailable", async () => {
+        const w = world();
+        posts(w, 20);
+        w.space.fail = () => (w.space.calls.length > 1 ? new EmbedError("unavailable", 503) : null);
+        const r = await w.drain();
+        expect(r).toMatchObject({ indexed: 8, pending: 12, unavailable: true, passes: 2, stop: "unavailable" });
+        expect(w.runs()[0]).toMatchObject({ passes: 2, indexed: 8, unavailable: 1, stop: "unavailable" });
+    });
+
+    it("stops when the next pass would not fit in the budget (~96 posts in 10 minutes at 50 s a batch)", async () => {
+        const w = world();
+        posts(w, 200);
+        const embed = w.space.embed.bind(w.space);
+        w.space.embed = async (kind, inputs) => {
+            w.tick(50_000);
+            return embed(kind, inputs);
+        };
+        const start = w.now();
+        const r = await w.drain();
+        expect(r).toMatchObject({ indexed: 96, pending: 104, passes: 12, stop: "budget" });
+        expect(w.now() - start).toBeLessThanOrEqual(SEARCH_RUN_BUDGET_MS);
+        expect(w.runs()[0]).toMatchObject({ started_at: start, finished_at: w.now(), indexed: 96, stop: "budget" });
+    });
+
+    it("stops when a pass moves nothing", async () => {
+        const w = world();
+        posts(w, 3);
+        expect(await w.drain(SEARCH_RUN_BUDGET_MS, 0)).toMatchObject({ indexed: 0, pending: 3, passes: 1, stop: "stalled" });
+    });
+
+    it("shows progress while it runs, and the queue says running", async () => {
+        const w = world();
+        posts(w, 12);
+        const seen: any[] = [];
+        const embed = w.space.embed.bind(w.space);
+        w.space.embed = async (kind, inputs) => {
+            if (w.space.calls.length === 1) {
+                seen.push(w.runs()[0]);
+                seen.push(await queueSnapshot({ db: w.d.db, mediaBaseUrl: MEDIA, now: w.now, searchEnabled: true, line: async () => null }));
+            }
+            return embed(kind, inputs);
+        };
+        await w.drain();
+        expect(seen[0]).toMatchObject({ passes: 1, indexed: 8, finished_at: null, stop: null });
+        expect(seen[1].body.search).toMatchObject({ running: true, indexed: 8, pending: 4 });
+        expect(w.runs()[0]).toMatchObject({ passes: 2, indexed: 12, stop: "empty" });
+    });
+
+    it("still indexes without the run table (migration 0011 not applied yet)", async () => {
+        const w = world();
+        posts(w, 2);
+        w.db.raw.exec("DROP TABLE search_index_runs");
+        expect(await w.drain()).toMatchObject({ indexed: 2, stop: "empty" });
+    });
+
+    it("POST /library/search/index is one pass; ?drain=1 loops under the request budget; anything else is 400", async () => {
+        const w = world();
+        posts(w, 20);
+        const call = (q: string) => librarySearchIndex({ ...w.d, embed: w.space }, new URLSearchParams(q));
+        const one = await call("");
+        expect(one).toEqual({
+            status: 200,
+            body: { status: "success", posts: 20, indexed: 8, failed: 0, removed: 0, pending: 12, unavailable: false },
+        });
+        expect((await call("drain=1")).body).toMatchObject({ indexed: 12, pending: 0, passes: 2, stop: "empty" });
+        expect(w.runs().map((r) => r.trigger)).toEqual(["request", "request"]);
+        expect((await call("drain=yes")).status).toBe(400);
     });
 });
 
@@ -448,5 +549,134 @@ describe("routing", () => {
         const off = (await capabilities(w.d, "missing", undefined)).body as any;
         expect(on.features.search).toBe(true);
         expect(off.features.search).toBe(false);
+        expect(on.features.queue).toBe(true);
+        expect(off.features.queue).toBe(true);
+    });
+});
+
+// ---- GET /queue --------------------------------------------------------------------------------
+
+describe("GET /queue", () => {
+    const KEY = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
+    const snapshot = (w: ReturnType<typeof world>, over: Partial<Parameters<typeof queueSnapshot>[0]> = {}) =>
+        queueSnapshot({ db: w.d.db, mediaBaseUrl: MEDIA, now: w.now, searchEnabled: true, line: async () => null, ...over });
+
+    it("search: posts = indexed + pending + failed, the next five newest first, and the run numbers", async () => {
+        const w = world();
+        for (let i = 0; i < 9; i++) addFile(w.db, { session_id: `s${i}`, name: `clip${i}.mp4` });
+        let body = (await snapshot(w)).body as any;
+        expect(body.search).toMatchObject({ enabled: true, posts: 9, indexed: 0, pending: 9, failed: 0, running: false, last_run_at: null, rate_per_hour: null });
+
+        const start = w.now();
+        await w.drain(SEARCH_RUN_BUDGET_MS, 2);
+        // keep two vectors, and have the Space refuse the next newest post
+        w.db.raw.exec("DELETE FROM media_embeddings WHERE post_key NOT IN ('s8', 's7')");
+        w.space.fail = (inputs) => (inputs.some((i) => i.title === "clip6.mp4") ? new EmbedError("rejected", 400) : null);
+        await w.index(1);
+        w.tick(1000);
+
+        body = (await snapshot(w)).body as any;
+        expect(body.now).toBe(w.now());
+        expect(body.search).toEqual({
+            enabled: true,
+            posts: 9,
+            indexed: 2,
+            pending: 6,
+            failed: 1,
+            running: false,
+            last_run_at: start,
+            rate_per_hour: 9,
+            next: [5, 4, 3, 2, 1].map((i) => ({ post_key: `s${i}`, title: `clip${i}.mp4` })),
+        });
+        // rate counts the runs of the last hour only
+        w.tick(60 * 60 * 1000);
+        expect(((await snapshot(w)).body as any).search.rate_per_hour).toBeNull();
+    });
+
+    it("search off is { enabled: false }; posters counts the originals still without a poster", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "a" });
+        addFile(w.db, { session_id: "b", poster: `${MEDIA}posters/aaaaaaaaaa.jpg` });
+        addFile(w.db, { session_id: "c", content_type: "image/heic" });
+        const body = (await snapshot(w, { searchEnabled: false })).body as any;
+        expect(body.search).toEqual({ enabled: false });
+        expect(body.posters).toEqual({ pending: 1 });
+        expect(body.line).toBeNull();
+    });
+
+    it("a part that fails is null; the answer is still 200", async () => {
+        const w = world();
+        w.db.breakIt();
+        const r = await snapshot(w, { line: async () => ({ status: "success", entries: [] }) });
+        expect(r.status).toBe(200);
+        expect(r.body).toMatchObject({ line: { status: "success", entries: [] }, search: null, posters: null });
+        const hung = await snapshot(world(), { line: () => new Promise(() => {}) });
+        expect((hung.body as any).line).toBeNull();
+    }, 10_000);
+
+    it("the gate: keyed GET only; the service credential and other methods are 404", () => {
+        const req = (method: string, over: Partial<GateRequest> = {}): GateRequest => ({
+            method,
+            pathname: "/queue",
+            searchParams: new URLSearchParams(),
+            origin: null,
+            authorization: `Api-Key ${KEY}`,
+            service: false,
+            ...over,
+        });
+        const cfg = { corsUrl: "x", now: 0 };
+        expect(decide(req("GET"), cfg)).toMatchObject({ action: "lookup", then: "queue" });
+        expect(decide(req("POST"), cfg)).toMatchObject({ action: "reject", status: 404 });
+        expect(decide(req("GET", { service: true }), cfg)).toMatchObject({ action: "reject", status: 404 });
+        expect(decide(req("GET", { authorization: null }), cfg)).toMatchObject({ action: "reject", status: 401 });
+    });
+
+    it("the Worker: 401 without a key; with one, the line comes from the Durable Object's GET /studio/line for that key", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "s1", name: "one.mp4" });
+        w.db.raw
+            .prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)")
+            .run("k1", "test", await hashKey(KEY), "0b5f2c3e", 1);
+        const env: WorkerEnv = {
+            API_URL: "https://api.capybaraharmony.com/",
+            CORS_URL: "https://cobalt.capybaraharmony.com",
+            COBALT_API_KEY: "9d3a1c6e-2f4b-4c8d-8e7a-5b1f0a2c3d4e",
+            DB: w.d.db,
+            ORIGINALS: new MemoryOriginals(),
+            MEDIA: new MemoryMedia(),
+            MEDIA_BASE_URL: MEDIA,
+            EMBED_URL: SPACE,
+            EMBED_TOKEN: "hf_tok",
+        };
+        const line = { status: "success", now: 1, running: null, entries: [], max: 50, wait_ms: 1800000 };
+        const seen: Request[] = [];
+        let lineStatus = 200;
+        const container = {
+            fetch: async (r: Request) => {
+                seen.push(r);
+                return new Response(JSON.stringify(line), { status: lineStatus });
+            },
+        };
+        const call = (headers: Record<string, string> = {}) =>
+            handleRequest(new Request("https://api.capybaraharmony.com/queue", { headers }), env, container, { now: () => T0 + 5 });
+
+        const anon = await call();
+        expect(anon.status).toBe(401);
+        expect(seen).toHaveLength(0);
+
+        const res = await call({ Authorization: `Api-Key ${KEY}` });
+        expect(res.status).toBe(200);
+        expect(res.headers.get("cache-control")).toBe("no-store");
+        const body = (await res.json()) as any;
+        expect(body).toMatchObject({ status: "success", now: T0 + 5, line, posters: { pending: 1 } });
+        expect(body.search).toMatchObject({ enabled: true, posts: 1, pending: 1, next: [{ post_key: "s1", title: "one.mp4" }] });
+        expect(seen).toHaveLength(1);
+        expect(seen[0]!.method).toBe("GET");
+        expect(new URL(seen[0]!.url).pathname).toBe("/studio/line");
+        expect(seen[0]!.headers.get(KEY_ID_HEADER)).toBe("k1");
+        expect(seen[0]!.headers.get("authorization")).toBeNull();
+
+        lineStatus = 503;
+        expect(((await (await call({ Authorization: `Api-Key ${KEY}` })).json()) as any).line).toBeNull();
     });
 });

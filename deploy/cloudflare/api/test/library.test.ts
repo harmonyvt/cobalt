@@ -975,6 +975,7 @@ describe("GET /capabilities", () => {
                 direct_links: false,
                 // no embedding Space in this world's env (section 21)
                 search: false,
+                queue: true,
             },
             limits: {
                 max_webp_seconds: 10,

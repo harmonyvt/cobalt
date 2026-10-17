@@ -40,8 +40,9 @@ export default defineConfig({
 		domains: ["api.capybaraharmony.com", "share.capybaraharmony.com"],
 		// Daily 03:23 UTC: delete telemetry rows and crash objects older than 30
 		// days (src/telemetry.ts runTelemetryRetention, called from `scheduled`).
-		// Every 15 minutes: the library search indexer (src/embed.ts runIndexer; it
-		// calls the Hugging Face Space only when a post needs a vector).
+		// Every 15 minutes: the library search indexer (src/embed.ts drainIndexer:
+		// passes of 8 posts for up to 10 minutes; it calls the Hugging Face Space
+		// only when a post needs a vector).
 		triggers: [
 			triggers.scheduled({ schedule: "23 3 * * *" }),
 			triggers.scheduled({ schedule: "*/15 * * * *" }),

@@ -8,7 +8,7 @@ import { handleStudioRoute, isStudioRoute, StudioService } from "./studio";
 import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
 import { purgeFrom } from "./visibility";
-import { runIndexer } from "./embed";
+import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
 import { embedFrom, handleRequest, type WorkerEnv } from "./worker";
 
 export interface Env extends WorkerEnv {
@@ -340,19 +340,25 @@ export default {
     // Durable Object only writes records and arms its sweep; the container wakes only if
     // there is something to do, and a row that failed is not tried again for a day).
     async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-        // Every 15 minutes (the second trigger): the library search indexer (APP-API-CONTRACT.md
-        // section 21). D1 and the Hugging Face Space only; the container is not touched.
+        // Every 15 minutes (the second trigger): the library search indexer drains its queue for up to
+        // SEARCH_RUN_BUDGET_MS (APP-API-CONTRACT.md sections 21 and 23). D1 and the Hugging Face Space
+        // only; the container is not touched. Awaited, not waitUntil: the run is the handler's work.
         if (controller.cron === SEARCH_CRON) {
             const client = embedFrom(env);
             if (!client) return;
-            ctx.waitUntil(
-                runIndexer({ db: env.DB, client, mediaBaseUrl: env.MEDIA_BASE_URL, now: () => Date.now() }).then(
-                    (r) => {
-                        if (r.indexed || r.failed || r.removed || r.unavailable) console.log("[search] index", JSON.stringify(r));
-                    },
-                    (e) => console.error("[search] index failed", e instanceof Error ? e.name : "error"),
-                ),
-            );
+            try {
+                const r = await drainIndexer({
+                    db: env.DB,
+                    client,
+                    mediaBaseUrl: env.MEDIA_BASE_URL,
+                    now: () => Date.now(),
+                    budgetMs: SEARCH_RUN_BUDGET_MS,
+                    trigger: "cron",
+                });
+                if (r.indexed || r.failed || r.removed || r.unavailable) console.log("[search] index", JSON.stringify(r));
+            } catch (e) {
+                console.error("[search] index failed", e instanceof Error ? e.name : "error");
+            }
             return;
         }
         ctx.waitUntil(
