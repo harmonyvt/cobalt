@@ -71,10 +71,11 @@ struct LibraryTile: View, Equatable {
 
     var body: some View {
         Button {
-            if selecting { controller.togglePick(row.id) } else { controller.open(row) }
+            if selecting { controller.togglePick(row) } else { controller.open(row) }
         } label: { tile }
             .buttonStyle(TilePress())
-            .opacity(selecting && !ticked ? 0.7 : 1)
+            // a gallery cannot be ticked (galleries are not shared): dimmer, and no tick
+            .opacity(selecting ? (row.shareable ? (ticked ? 1 : 0.7) : 0.35) : 1)
             .frame(width: size.width, height: size.height)
             .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
             .modifier(LibraryRowMenu(row: row, controller: controller, enabled: !selecting, removing: $removing))
@@ -135,11 +136,13 @@ struct LibraryTile: View, Equatable {
             .padding(5)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             // top right: the select tick, or the face's type. While selecting the type moves to the bottom right, so
-            // what is being ticked (a video, a photo, a webp, a gallery) stays clear.
+            // what is being ticked (a video, a photo, a webp) stays clear. A gallery gets no tick.
             if selecting {
-                LibraryPickMark(ticked: ticked, onPhoto: true)
-                    .padding(5)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                if row.shareable {
+                    LibraryPickMark(ticked: ticked, onPhoto: true)
+                        .padding(5)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                }
                 kindDot
                     .padding(5)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
