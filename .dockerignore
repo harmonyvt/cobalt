@@ -22,3 +22,13 @@ docker-compose.yml
 
 # fork: the native Apple app (apple/) and its GBs of build output never belong in an image
 apple
+
+# fork: mirror deploy/cloudflare/api/Dockerfile.dockerignore here too. The cf container
+# build does not pick up <Dockerfile>.dockerignore, so without these the context pulls in
+# every nested node_modules, mobile/ and deploy/ (7.7 GB on 2026-10-17, which filled the disk).
+**/node_modules
+**/.wrangler
+mobile
+deploy
+!deploy/cloudflare/api/.gitinfo
+!deploy/cloudflare/api/helper
