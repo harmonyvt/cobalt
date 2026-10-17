@@ -88,6 +88,10 @@ final class LibraryController {
     var picked: Set<String> = []
     /// A share of the ticked posts is copying files. A second tap while this is set does nothing.
     var preparingShare = false
+    /// A share link is being made (`make share link`). A second tap while this is set does nothing.
+    var makingShareLink = false
+    /// Bumped when a share link was made and copied: the success haptic.
+    var shareLinksMade = 0
     /// What the share card lists while `preparingShare` is set. Cleared when the copy finishes.
     var sharePrep: [SharePrepRow] = []
     /// The card's `cancel`: the copy stops before the next post and no sheet opens.
@@ -241,6 +245,40 @@ final class LibraryController {
         if shareCancelled { return [] }
         if urls.isEmpty { showStatus(Copy.actionFailed) }
         return urls
+    }
+
+    // MARK: gallery share link (APP-API-CONTRACT 24)
+
+    /// The picked posts that are on screen (`rows` order) with the public library file that stands for each, nil when
+    /// the post has no public file. What the select bar's verdict and the button both read, so they cannot disagree.
+    func shareLinkPicks(_ rows: [LibraryRow]) -> [(row: LibraryRow, fileID: String?)] {
+        rows.filter { $0.shareable && picked.contains($0.id) }.map { ($0, ShareSetRule.fileID(for: $0.item)) }
+    }
+
+    func shareLinkVerdict(_ rows: [LibraryRow]) -> ShareSetVerdict {
+        ShareSetRule.verdict(
+            publicFlags: shareLinkPicks(rows).map { $0.fileID != nil }, max: model.capabilities.limits.shareSetMax)
+    }
+
+    /// Makes one link for the picked posts and copies it. True when it was made (the caller leaves select mode).
+    /// A second call while one runs does nothing. `.notPublic` says so; any other failure is the generic one.
+    func makeShareLink(_ rows: [LibraryRow]) async -> Bool {
+        guard !makingShareLink, shareLinkVerdict(rows) == .ready else { return false }
+        let ids = shareLinkPicks(rows).compactMap(\.fileID)
+        makingShareLink = true
+        defer { makingShareLink = false }
+        do {
+            let set = try await model.shareSets.create(items: ids, title: nil)
+            Pasteboard.copy(set.url.absoluteString)
+            showStatus(Copy.Media.copied)
+            shareLinksMade += 1
+            return true
+        } catch ShareSetError.notPublic {
+            showStatus(Copy.Links.makeThesePublic)
+        } catch {
+            showStatus(Copy.actionFailed)
+        }
+        return false
     }
 
     private func setShareState(_ id: String, _ state: SharePrepRow.State) {

@@ -27,6 +27,7 @@ enum Copy {
         switch tab {
         case .save: return "save"
         case .library: return "library"
+        case .links: return Links.title
         case .queue: return "queue"
         case .settings: return "settings"
         }

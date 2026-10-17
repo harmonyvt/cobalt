@@ -191,12 +191,14 @@ public struct HTTPCobaltClient: CobaltClient {
                 var directLinks: Bool?
                 var queue: Bool?
                 var search: Bool?
+                var shareSets: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
                 var renderFps: Int?; var maxUploadBytes: Int64?; var maxSourceBytes: Int64?
                 var sessionTtlMs: Double?
                 var lineMax: Int?; var lineWaitMs: Double?
+                var shareSetMax: Int?
             }
             var server: String?
             var cobalt: Cobalt?
@@ -221,6 +223,7 @@ public struct HTTPCobaltClient: CobaltClient {
             if let ttl = l.sessionTtlMs { limits.sessionTTL = ttl / 1000 }
             limits.lineMax = l.lineMax ?? limits.lineMax
             if let wait = l.lineWaitMs { limits.lineWait = wait / 1000 }
+            limits.shareSetMax = max(ShareSetRule.minimum, l.shareSetMax ?? limits.shareSetMax)
         }
         let f = w.features
         var caps = Capabilities(
@@ -253,6 +256,7 @@ public struct HTTPCobaltClient: CobaltClient {
             queue: f?.queue ?? false)
         caps.search = f?.search ?? false
         caps.shareBaseURL = w.shareBaseUrl.flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
+        caps.shareSets = (f?.shareSets ?? false) && caps.shareBaseURL != nil
         return caps
     }
 
@@ -550,6 +554,61 @@ public struct HTTPCobaltClient: CobaltClient {
     public func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus {
         let req = try makeRequest("GET", "/library/search/post", query: [("key", postKey)], keyed: true, timeout: 20)
         return try await sendJSON(LibrarySearchStatus.self, req)
+    }
+
+    // MARK: - Gallery share links (APP-API-CONTRACT 24; `features.share_sets`; keyed)
+
+    /// `POST /share/sets` `{items, title?}` (keyed): one link for 2..`share_set_max` public files, in the order given.
+    /// `409 error.share.not_public` is `ShareSetError.notPublic(ids)` (the ids missing or private), `400
+    /// error.share.bad_request` is `.badRequest`, `503` is `.unavailable`.
+    public func createShareSet(items: [String], title: String?) async throws -> ShareSet {
+        let req = try makeRequest("POST", "/share/sets", keyed: true, timeout: 30)
+        var body: [String: Any] = ["items": items]
+        if let title { body["title"] = title }
+        let (data, http) = try await send(req, body: Self.jsonBody(body))
+        guard (200..<300).contains(http.statusCode) else { throw shareSetError(data, status: http.statusCode) }
+        struct Wire: Decodable { var set: ShareSet }
+        guard let wire = try? CobaltJSON.decoder().decode(Wire.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return wire.set
+    }
+
+    /// `GET /share/sets` (keyed): the live sets, newest first.
+    public func shareSets() async throws -> [ShareSet] {
+        let req = try makeRequest("GET", "/share/sets", keyed: true, timeout: 20)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw shareSetError(data, status: http.statusCode) }
+        struct Wire: Decodable { var sets: [Lossy<ShareSet>] }
+        guard let wire = try? CobaltJSON.decoder().decode(Wire.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return wire.sets.compactMap(\.value)
+    }
+
+    /// `DELETE /share/sets/<id>` (keyed): the link is a 404 at once. A repeat is 200; an unknown id is `.notFound`.
+    public func revokeShareSet(id: String) async throws {
+        let req = try makeRequest("DELETE", "/share/sets/\(Self.encode(id))", keyed: true, timeout: 20)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw shareSetError(data, status: http.statusCode) }
+    }
+
+    /// The share routes' refusals as `ShareSetError`; any other code stays the generic `CobaltError.api`.
+    private func shareSetError(_ data: Data, status: Int) -> Error {
+        struct Body: Decodable {
+            struct Err: Decodable { var code: String? }
+            var error: Err?
+            var items: [String]?
+        }
+        let body = try? JSONDecoder().decode(Body.self, from: data)
+        switch body?.error?.code {
+        case "error.share.not_public": return ShareSetError.notPublic(body?.items ?? [])
+        case "error.share.bad_request": return ShareSetError.badRequest
+        case "error.share.not_found": return ShareSetError.notFound
+        default:
+            if status == 503 { return ShareSetError.unavailable }
+            return apiError(data, status: status)
+        }
     }
 
     public func deleteMedia(name: String) async throws {

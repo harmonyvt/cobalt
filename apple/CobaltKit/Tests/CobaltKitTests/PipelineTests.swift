@@ -68,7 +68,8 @@ struct PipelineStateMachineTests {
 
         // and the link copies
         p.copyResultLink()
-        #expect(h.clipboard.last == result.url.absoluteString)
+        // (`.happy` advertises `share_base_url` since the gallery share links, so the copy is the file's rich link page)
+        #expect(h.clipboard.last == h.app.capabilities.shareLink(for: result.url).absoluteString)
     }
 
     @Test func renderTakesTheLabsFourPointSevenSeconds() async throws {

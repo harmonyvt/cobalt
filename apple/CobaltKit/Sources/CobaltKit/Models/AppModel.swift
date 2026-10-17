@@ -3,7 +3,19 @@ import Observation
 import UserNotifications
 
 /// The tabs, in the order they show. `queue` is everything cobalt is doing (apple/CONTRACT.md section 12).
-public enum AppTab: String, Sendable, CaseIterable { case save, library, queue, settings }
+/// `links` lists the gallery share links (APP-API-CONTRACT 24) and shows only with `features.share_sets`.
+public enum AppTab: String, Sendable, CaseIterable {
+    case save, library, links, queue, settings
+
+    /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`.
+    public func isAvailable(with caps: Capabilities) -> Bool {
+        switch self {
+        case .library: return caps.library
+        case .links: return caps.shareSets
+        case .save, .queue, .settings: return true
+        }
+    }
+}
 
 public enum PreviewScenario: String, Sendable, CaseIterable {
     case happy, coldStart, noLink, privatePost, tooBig, renderBusy, renderLost, picker, image,
@@ -27,6 +39,12 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// with `gallery` but not `gallery_make`; `galleryMakeFails`: 10 photos, and the first make fails
     /// (`error.webp.encode_failed`), the second works.
     case galleryInstagram, galleryX, galleryMixed, galleryOne, galleryPartial, galleryNoMake, galleryMakeFails
+    /// Gallery share links (APP-API-CONTRACT 24; `PreviewShare.swift`): `.renditions` data on a server with
+    /// `features.share_sets` and no links yet. `.happy` and `.renditions` have the same server with three sample links.
+    case shareLinksEmpty
+    /// Like `.shareLinksEmpty`, but `GET /share/sets` always fails (`503`), so the links tab shows its failed state.
+    /// Making a link works.
+    case shareLinksFail
 }
 
 public struct ServerSummary: Sendable, Equatable {
@@ -44,6 +62,8 @@ public final class AppModel {
     public let store: OfflineStore
     public let jobs: SharedJobStore
     public let library: LibraryModel
+    /// The gallery share links (the links tab; the library's select bar makes them). Idle until `refresh()`.
+    public let shareSets: ShareSetStore
     /// The photos album (CONTRACT-SYNC.md): `PhotosSync.preview(_:)` in previews.
     public let photosSync: PhotosSync
     /// The Mac's Finder folder, the store's visible root (CONTRACT-OFFLINE.md section 13, Folder/MacFolder.swift):
@@ -114,6 +134,7 @@ public final class AppModel {
         self.store = context.store
         self.jobs = context.jobs
         self.library = library
+        self.shareSets = ShareSetStore(context: context)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
         let jobQueue = JobQueue(
@@ -257,6 +278,7 @@ public final class AppModel {
         ctx.capabilities = caps
         if !ctx.isPreview { settings.remember(caps) }
         if selectedTab == .library, !caps.library, caps.kind != .unreachable { selectedTab = .save }
+        if selectedTab == .links, !caps.shareSets, caps.kind != .unreachable { selectedTab = .save }
         liveManager?.capabilitiesChanged()
         unifiedQueue.capabilitiesChanged()            // `features.queue` came or went: poll, or stop
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
@@ -289,6 +311,7 @@ public final class AppModel {
         ctx.client = makeClient(settings)
         apply(.unknown)
         library.reset()
+        shareSets.reset()
     }
 
     // MARK: - Links, handoffs
