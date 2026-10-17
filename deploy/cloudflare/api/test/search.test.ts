@@ -17,6 +17,8 @@ import {
     encodeVector,
     librarySearch,
     librarySearchIndex,
+    librarySearchPost,
+    MAX_POST_KEY_CHARS,
     normalize,
     postInputs,
     runIndexer,
@@ -25,7 +27,7 @@ import {
     type EmbedInput,
 } from "../src/embed";
 import { decide, type GateRequest } from "../src/gate";
-import { KEY_ID_HEADER } from "../src/headers";
+import { KEY_ID_HEADER, SERVICE_HEADER } from "../src/headers";
 import { hashKey } from "../src/keys";
 import { handleRequest, type WorkerEnv } from "../src/worker";
 import { queueSnapshot } from "../src/queue";
@@ -678,5 +680,189 @@ describe("GET /queue", () => {
 
         lineStatus = 503;
         expect(((await (await call({ Authorization: `Api-Key ${KEY}` })).json()) as any).line).toBeNull();
+    });
+});
+
+// ---- GET /library/search/post ------------------------------------------------------------------
+
+describe("GET /library/search/post", () => {
+    const status = (w: ReturnType<typeof world>, key: string, searchEnabled = true) =>
+        librarySearchPost({ db: w.d.db, mediaBaseUrl: MEDIA, searchEnabled }, new URLSearchParams({ key }));
+    const body = async (w: ReturnType<typeof world>, key: string, searchEnabled = true) => {
+        const r = await status(w, key, searchEnabled);
+        expect(r.status).toBe(200);
+        return r.body as any;
+    };
+
+    it("pending: never embedded; the input is what would be embedded now", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "p1", name: "IMG_1.mp4", link: "https://x.com/a/status/1", poster: `${MEDIA}posters/aaaaaaaaaa.jpg` });
+        addFile(w.db, { session_id: "other", name: "other.mp4" });
+        const b = await body(w, "p1");
+        expect(b).toEqual({
+            status: "success",
+            post_key: "p1",
+            state: "pending",
+            search_enabled: true,
+            attempts: 0,
+            input: { title: "IMG_1.mp4", text: "IMG_1.mp4 · x.com/a/status/1", image_url: `${MEDIA}posters/aaaaaaaaaa.jpg` },
+            embedded_matches_input: false,
+        });
+        // the one-post input is the same as the whole-library one
+        const all = (await postInputs(w.d.db, MEDIA)).find((p) => p.post_key === "p1")!;
+        expect(b.input).toEqual({ title: all.title, text: all.text, image_url: all.image_url });
+    });
+
+    it("indexed: the vector of the current input, with model, dims, when and whether the poster was seen; never the vector", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "p1", poster: `${MEDIA}posters/aaaaaaaaaa.jpg` });
+        await w.index();
+        const b = await body(w, "p1");
+        expect(b).toMatchObject({
+            state: "indexed",
+            model: EMBED_MODEL,
+            dims: EMBED_DIMS,
+            embedded_at: w.now(),
+            has_image: true,
+            attempts: 0,
+            embedded_matches_input: true,
+        });
+        expect(b).not.toHaveProperty("vector");
+        expect(b).not.toHaveProperty("failed_at");
+        expect(b).not.toHaveProperty("retry_at");
+    });
+
+    it("stale: a vector of an older input (renamed); indexed again after the next pass", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "p1", name: "a.mp4" });
+        await w.index();
+        w.db.raw.prepare("INSERT INTO media_titles (post_key, title, updated_at) VALUES ('p1', 'renamed', 1)").run();
+        const b = await body(w, "p1");
+        expect(b).toMatchObject({ state: "stale", model: EMBED_MODEL, embedded_matches_input: false, input: { title: "renamed" } });
+        await w.index();
+        expect((await body(w, "p1")).state).toBe("indexed");
+    });
+
+    it("failed: refused, with failed_at, attempts and retry_at; gave_up after the last attempt; a changed input starts over", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "bad", name: "poison.mp4" });
+        w.space.fail = () => new EmbedError("rejected", 400);
+        await w.index();
+        const failedAt = w.now();
+        let b = await body(w, "bad");
+        expect(b).toMatchObject({ state: "failed", failed_at: failedAt, retry_at: failedAt + EMBED_RETRY_MS, attempts: 1, embedded_matches_input: false });
+        expect(b).not.toHaveProperty("model");
+        for (let i = 2; i <= EMBED_MAX_ATTEMPTS; i++) {
+            w.tick(EMBED_RETRY_MS + 1);
+            await w.index();
+        }
+        b = await body(w, "bad");
+        expect(b).toMatchObject({ state: "gave_up", attempts: EMBED_MAX_ATTEMPTS, failed_at: w.now() });
+        expect(b).not.toHaveProperty("retry_at");
+
+        w.db.raw.prepare("INSERT INTO media_titles (post_key, title, updated_at) VALUES ('bad', 'better', 1)").run();
+        expect(await body(w, "bad")).toMatchObject({ state: "pending", attempts: 0, failed_at: expect.any(Number) });
+    });
+
+    it("a refusal after an earlier vector: failed (the old vector is kept, stale), not indexed", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "p1", name: "a.mp4" });
+        await w.index();
+        w.db.raw.prepare("INSERT INTO media_titles (post_key, title, updated_at) VALUES ('p1', 'poison', 1)").run();
+        w.space.fail = () => new EmbedError("rejected", 400);
+        await w.index();
+        const b = await body(w, "p1");
+        expect(b).toMatchObject({ state: "failed", model: EMBED_MODEL, attempts: 1, embedded_matches_input: false });
+    });
+
+    it("search off still answers from D1 with search_enabled: false", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "p1" });
+        await w.index();
+        expect(await body(w, "p1", false)).toMatchObject({ state: "indexed", search_enabled: false });
+    });
+
+    it("404 for a key that is not a live post (unknown or deleted); 400 for a missing or oversized key", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "gone", deleted_at: T0 });
+        for (const key of ["nope", "gone"]) {
+            const r = await status(w, key);
+            expect(r).toEqual({ status: 404, body: { status: "error", error: { code: "error.library.not_found" } } });
+        }
+        for (const q of ["", "key=", `key=${"a".repeat(MAX_POST_KEY_CHARS + 1)}`]) {
+            const r = await librarySearchPost({ db: w.d.db, mediaBaseUrl: MEDIA, searchEnabled: true }, new URLSearchParams(q));
+            expect(r).toEqual({ status: 400, body: { status: "error", error: { code: "error.library.bad_request" } } });
+        }
+    });
+
+    it("the gate: GET keyed or service; other methods 404; no credential 401", () => {
+        const req = (method: string, over: Partial<GateRequest> = {}): GateRequest => ({
+            method,
+            pathname: "/library/search/post",
+            searchParams: new URLSearchParams("key=p1"),
+            origin: null,
+            authorization: "Api-Key 0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+            service: false,
+            ...over,
+        });
+        const cfg = { corsUrl: "x", now: 0 };
+        expect(decide(req("GET"), cfg)).toMatchObject({ action: "lookup", then: "library_search_post" });
+        expect(decide(req("GET", { service: true, authorization: null }), cfg)).toMatchObject({ action: "service", then: "library_search_post" });
+        for (const m of ["POST", "PUT", "PATCH", "DELETE"]) expect(decide(req(m), cfg)).toMatchObject({ action: "reject", status: 404 });
+        expect(decide(req("GET", { authorization: null }), cfg)).toMatchObject({ action: "reject", status: 401 });
+    });
+
+    it("the Worker: keyed and service answer from D1 without the container or the Space; 401 without a credential", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "p1", name: "one.mp4" });
+        await w.index();
+        const KEY = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
+        const INTERNAL = "9d3a1c6e-2f4b-4c8d-8e7a-5b1f0a2c3d4e";
+        w.db.raw
+            .prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)")
+            .run("k1", "test", await hashKey(KEY), "0b5f2c3e", 1);
+        const fetches: string[] = [];
+        vi.stubGlobal("fetch", async (u: string) => {
+            fetches.push(u);
+            return new Response("no", { status: 500 });
+        });
+        const env: WorkerEnv = {
+            API_URL: "https://api.capybaraharmony.com/",
+            CORS_URL: "https://cobalt.capybaraharmony.com",
+            COBALT_API_KEY: INTERNAL,
+            DB: w.d.db,
+            ORIGINALS: new MemoryOriginals(),
+            MEDIA: new MemoryMedia(),
+            MEDIA_BASE_URL: MEDIA,
+            EMBED_URL: SPACE,
+            EMBED_TOKEN: "hf_tok",
+        };
+        const container = { fetch: async () => new Response("container must not be called", { status: 500 }) };
+        const call = (headers: Record<string, string>, e: WorkerEnv = env, key = "p1") =>
+            handleRequest(
+                new Request(`https://api.capybaraharmony.com/library/search/post?key=${encodeURIComponent(key)}`, { headers }),
+                e,
+                container,
+                { now: () => T0 + 1_000_000 },
+            );
+        try {
+            const keyed = await call({ Authorization: `Api-Key ${KEY}` });
+            expect(keyed.status).toBe(200);
+            expect(keyed.headers.get("cache-control")).toBe("no-store");
+            expect(await keyed.json()).toMatchObject({ status: "success", post_key: "p1", state: "indexed", search_enabled: true });
+
+            const svc = await call({ [SERVICE_HEADER]: INTERNAL });
+            expect(svc.status).toBe(200);
+            expect(((await svc.json()) as any).state).toBe("indexed");
+
+            const off = await call({ Authorization: `Api-Key ${KEY}` }, { ...env, EMBED_TOKEN: undefined });
+            expect(await off.json()).toMatchObject({ state: "indexed", search_enabled: false });
+
+            expect((await call({ Authorization: `Api-Key ${KEY}` }, env, "missing")).status).toBe(404);
+            expect((await call({})).status).toBe(401);
+            expect(fetches).toEqual([]);
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 });

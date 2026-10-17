@@ -1,7 +1,7 @@
 // The Worker's request handling, separated from index.ts (which imports the
 // Containers library and so cannot load under plain node) so the whole flow,
 // gate -> D1 lookup -> Durable Object / container, is testable with fakes.
-import { type EmbedClient, librarySearch, librarySearchIndex, spaceClient } from "./embed";
+import { type EmbedClient, librarySearch, librarySearchIndex, librarySearchPost, spaceClient } from "./embed";
 import {
     capabilities,
     libraryFile,
@@ -326,6 +326,16 @@ async function handleInner(
                 decision.then === "library_search"
                     ? await librarySearch(deps, url.searchParams)
                     : await librarySearchIndex(deps, url.searchParams);
+            return new Response(JSON.stringify(r.body), {
+                status: r.status,
+                headers: { "content-type": "application/json", "cache-control": "no-store" },
+            });
+        }
+        if (decision.then === "library_search_post") {
+            const r = await librarySearchPost(
+                { db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, searchEnabled: embedFrom(env) !== null },
+                url.searchParams,
+            );
             return new Response(JSON.stringify(r.body), {
                 status: r.status,
                 headers: { "content-type": "application/json", "cache-control": "no-store" },

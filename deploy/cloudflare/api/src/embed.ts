@@ -219,18 +219,21 @@ function lead(fs: InputRow[]): InputRow | undefined {
     );
 }
 
-// Every live post's inputs, newest post first. Posters are used only from the public media domain
-// (the Space fetches them itself and refuses any other URL).
-export async function postInputs(db: D1Database, mediaBaseUrl: string): Promise<PostInput[]> {
-    const { results: files } = await db
-        .prepare(
-            `SELECT * FROM (SELECT m.name, m.link, m.poster, m.content_type, m.bucket, m.source, m.role, m.item_index,
-                                   m.created_at, ${POST_KEY_SQL} AS post_key
-                            FROM media_items m WHERE m.deleted_at IS NULL)
-             ORDER BY created_at DESC`,
-        )
-        .all<InputRow>();
-    const { results: titleRows } = await db.prepare("SELECT post_key, title FROM media_titles").all<{ post_key: string; title: string }>();
+// Every live post's inputs, newest post first (or only `onlyPostKey`'s, which D1 filters: one post's
+// rows and title come back, not the whole library's). Posters are used only from the public media
+// domain (the Space fetches them itself and refuses any other URL).
+export async function postInputs(db: D1Database, mediaBaseUrl: string, onlyPostKey?: string): Promise<PostInput[]> {
+    const one = onlyPostKey !== undefined;
+    const filesStmt = db.prepare(
+        `SELECT * FROM (SELECT m.name, m.link, m.poster, m.content_type, m.bucket, m.source, m.role, m.item_index,
+                               m.created_at, ${POST_KEY_SQL} AS post_key
+                        FROM media_items m WHERE m.deleted_at IS NULL)${one ? " WHERE post_key = ?1" : ""}
+         ORDER BY created_at DESC`,
+    );
+    const { results: files } = await (one ? filesStmt.bind(onlyPostKey) : filesStmt).all<InputRow>();
+    if (one && files.length === 0) return [];
+    const titlesStmt = db.prepare(`SELECT post_key, title FROM media_titles${one ? " WHERE post_key = ?1" : ""}`);
+    const { results: titleRows } = await (one ? titlesStmt.bind(onlyPostKey) : titlesStmt).all<{ post_key: string; title: string }>();
     const titles = new Map(titleRows.map((t) => [t.post_key, t.title]));
 
     const byPost = new Map<string, InputRow[]>();
@@ -675,5 +678,74 @@ export async function librarySearchIndex(d: AppDeps & { embed: EmbedClient | nul
     } catch (e) {
         console.error("[search] index failed", String(e));
         return { status: 503, body: { status: "error", error: { code: "error.api.generic" } } };
+    }
+}
+
+// GET /library/search/post?key=<post_key>: what the search index holds for one post, for the post's
+// detail screen. Keyed or service (the web Worker). Answers from D1 even while the Space is not
+// configured (`search_enabled: false`). Never returns the vector.
+export const MAX_POST_KEY_CHARS = 2048;
+
+export type PostIndexState = "indexed" | "stale" | "pending" | "failed" | "gave_up";
+
+export async function librarySearchPost(
+    d: { db: D1Database; mediaBaseUrl: string; searchEnabled: boolean },
+    q: URLSearchParams,
+): Promise<StudioReply> {
+    const fail = (status: number, code: string): StudioReply => ({ status, body: { status: "error", error: { code } } });
+    const key = q.get("key") ?? "";
+    if (key.length === 0 || key.length > MAX_POST_KEY_CHARS) return fail(400, "error.library.bad_request");
+    try {
+        const [p] = await postInputs(d.db, d.mediaBaseUrl, key);
+        if (!p) return fail(404, "error.library.not_found");
+        const row = await d.db
+            .prepare(
+                `SELECT model, dims, vector IS NOT NULL AS has_vector, input_hash, has_image, embedded_at, failed_at, attempts
+                 FROM media_embeddings WHERE post_key = ?1`,
+            )
+            .bind(key)
+            .first<{
+                model: string;
+                dims: number;
+                has_vector: number;
+                input_hash: string;
+                has_image: number;
+                embedded_at: number | null;
+                failed_at: number | null;
+                attempts: number;
+            }>();
+        const hash = await inputHash(p);
+        const same = !!row && row.input_hash === hash;
+        const hasVector = !!row && !!row.has_vector;
+        // A refusal keeps the old vector but writes the new input's hash and failed_at (runIndexer), so
+        // a vector matches the current input only when the hash matches and nothing failed since.
+        const matches = same && hasVector && row!.failed_at === null;
+        let state: PostIndexState;
+        if (matches) state = "indexed";
+        else if (same && row!.attempts >= EMBED_MAX_ATTEMPTS) state = "gave_up";
+        else if (same && row!.failed_at !== null) state = "failed";
+        else if (hasVector) state = "stale";
+        else state = "pending";
+        return {
+            status: 200,
+            body: {
+                status: "success",
+                post_key: p.post_key,
+                state,
+                search_enabled: d.searchEnabled,
+                ...(hasVector
+                    ? { model: row!.model, dims: row!.dims, embedded_at: row!.embedded_at, has_image: !!row!.has_image }
+                    : {}),
+                ...(row && row.failed_at !== null ? { failed_at: row.failed_at } : {}),
+                ...(state === "failed" ? { retry_at: row!.failed_at! + EMBED_RETRY_MS } : {}),
+                // attempts count against the current input only (a changed input starts over)
+                attempts: same ? row!.attempts : 0,
+                input: { title: p.title, text: p.text, image_url: p.image_url },
+                embedded_matches_input: matches,
+            },
+        };
+    } catch (e) {
+        console.error("[search] post status failed", String(e));
+        return fail(503, "error.api.generic");
     }
 }

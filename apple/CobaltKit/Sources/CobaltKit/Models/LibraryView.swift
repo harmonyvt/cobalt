@@ -217,8 +217,11 @@ extension LibraryModel {
 
 extension AppModel {
     /// The posts as rows: joined with the device's media, filtered by `show`, searched by `query`, sorted
-    /// by `sort`.
+    /// by `sort`. While the server's search has answered the query (`LibraryModel.activeSearchResults`), its posts come
+    /// first in score order (the loaded copy of each when there is one), then the name matches it did not return, in
+    /// `sort` order; `show` and the kind chip still apply.
     public var libraryRows: [LibraryRow] {
+        if let results = library.activeSearchResults { return searchRows(results) }
         var rows = library.posts.map { LibraryRow(item: mediaItem(for: $0)) }
         if library.show != .everything { rows = rows.filter { $0.passes(library.show) } }
         rows = rows.filter { library.kindFilter.passes(kind: $0.kind, emote: $0.emote) }
@@ -229,5 +232,29 @@ extension AppModel {
         }
         let sort = library.sort
         return rows.sorted { LibraryRow.areInIncreasingOrder($0, $1, by: sort) }
+    }
+
+    /// `libraryRows` while the server's results are in.
+    private func searchRows(_ results: [LibraryPost]) -> [LibraryRow] {
+        let loaded = Dictionary(library.posts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let show = library.show
+        let kind = library.kindFilter
+        func keeps(_ row: LibraryRow) -> Bool {
+            (show == .everything || row.passes(show)) && kind.passes(kind: row.kind, emote: row.emote)
+        }
+        var seen = Set<String>()
+        var rows: [LibraryRow] = []
+        for post in results where seen.insert(post.id).inserted {
+            let row = LibraryRow(item: mediaItem(for: loaded[post.id] ?? post))
+            if keeps(row) { rows.append(row) }
+        }
+        let folded = library.trimmedQuery.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        let sort = library.sort
+        let extra = library.posts
+            .filter { !seen.contains($0.id) }
+            .map { LibraryRow(item: mediaItem(for: $0)) }
+            .filter { keeps($0) && $0.matches(folded: folded) }
+            .sorted { LibraryRow.areInIncreasingOrder($0, $1, by: sort) }
+        return rows + extra
     }
 }

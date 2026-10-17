@@ -239,5 +239,9 @@ struct DetailControls: View {
             }
             OfflineCopySection(model: c.model, item: c.item, rendition: c.rendition)
         }
+        // how the post sits in the server's search index (APP-API-CONTRACT 21), last: read-only
+        if c.model.capabilities.search, let post = c.item.post {
+            SearchIndexSection(model: c.model, postKey: post.id, refreshKey: c.item.titleText)
+        }
     }
 }

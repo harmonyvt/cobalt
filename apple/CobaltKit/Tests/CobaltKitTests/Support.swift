@@ -25,6 +25,8 @@ final class VirtualClock: PipelineClock, Sendable {
     var elapsed: Double { state.withLock { $0.now } }
     var registrations: Int { state.withLock { $0.registrations } }
     var pending: Int { state.withLock { $0.sleepers.count } }
+    /// When the earliest sleeper wakes, in seconds since the start (nil while nobody sleeps).
+    var nextWake: Double? { state.withLock { $0.sleepers.map(\.wake).min() } }
 
     func sleep(seconds: Double) async throws {
         guard seconds > 0 else { return }

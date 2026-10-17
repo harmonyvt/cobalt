@@ -136,6 +136,12 @@ final class PipelineContext {
         return try await client.library(cursor: cursor, limit: limit, v2: capabilities.visibility)
     }
 
+    /// `GET /library/search` with the posts in the same shape `libraryPage` asks for.
+    func librarySearch(query: String, limit: Int) async throws -> LibrarySearchResult {
+        let version: Int? = capabilities.gallery ? 3 : (capabilities.visibility ? 2 : nil)
+        return try await client.librarySearch(query: query, limit: limit, version: version)
+    }
+
     func refreshCapabilities() async -> Capabilities {
         let fresh = await client.capabilities()
         capabilities = fresh

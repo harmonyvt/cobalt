@@ -231,6 +231,8 @@ const ROUTES: [string, string][] = [
     ["GET", "/api/library"],
     ["POST", "/api/library/link"],
     ["PUT", "/api/library/upload?name=a.gif"],
+    ["GET", "/api/library/search?q=cats"],
+    ["GET", "/api/library/search/post?key=abc"],
     ["GET", `/api/library/webp/${JOB}`],
     ["GET", `/api/library/studio/${SID}`],
     ["POST", `/api/library/studio/${SID}/publish`],
@@ -324,6 +326,8 @@ describe("route shape", () => {
         ["GET", "/api/library/"],
         ["GET", "/library/"],
         ["GET", "/library/x"],
+        ["GET", "/api/library/search/"],
+        ["GET", "/api/library/search/post/x"],
         ["GET", "/api/library/webp/short"],
         ["GET", `/api/library/webp/${"a".repeat(33)}`],
         ["GET", `/api/library/studio/${SID.slice(1)}`],
@@ -352,6 +356,8 @@ describe("route shape", () => {
         ["GET", "/api/library/items/aaaaaaaaaaaaaaaa", "DELETE"],
         ["POST", `/api/library/studios/${SID}`, "DELETE"],
         ["POST", "/library", "GET, HEAD"],
+        ["POST", "/api/library/search?q=a", "GET"],
+        ["DELETE", "/api/library/search/post?key=a", "GET"],
     ])("%s %s is 405 with allow: %s", async (method, path, allow) => {
         const r = await call(method, path, { body: {} });
         expect(r.status).toBe(405);
@@ -437,11 +443,11 @@ describe("GET /api/library", () => {
             {
                 id: pub.id, kind: "public", source: "webp", name: "a.webp", url: pub.url, content_type: "image/webp",
                 bytes: 600, width: 480, height: 270, duration: 3.5, link: "https://x.com/a", session_id: SID, created_at: pub.created_at,
-                poster_url: null, custom_title: null, visibility: "public", visibility_toggle: false,
+                poster_url: null, custom_title: null, visibility: "public", visibility_toggle: false, post_key: SID,
             },
         ]);
         expect(Object.keys(b.items[0]).sort()).toEqual(
-            ["id", "kind", "source", "name", "url", "content_type", "bytes", "width", "height", "duration", "link", "session_id", "created_at", "poster_url", "custom_title", "visibility", "visibility_toggle"].sort(),
+            ["id", "kind", "source", "name", "url", "content_type", "bytes", "width", "height", "duration", "link", "session_id", "created_at", "poster_url", "custom_title", "visibility", "visibility_toggle", "post_key"].sort(),
         );
         expect(b.studios).toEqual([
             {
@@ -704,6 +710,184 @@ describe("service calls", () => {
     it("garbage from upstream is a 502", async () => {
         apiReply = () => new Response("<html>oops</html>", { status: 200 });
         expect((await call("GET", `/api/library/studio/${SID}`)).status).toBe(502);
+    });
+});
+
+describe("GET /api/library/search", () => {
+    const FILE_A = {
+        id: "aaaaaaaaaaaaaaaa", kind: "public", source: "webp", name: "cat.webp", url: `${MEDIA}AbCdEfGhIj.webp`,
+        content_type: "image/webp", bytes: 4500, width: 480, height: 270, duration: 3.2, created_at: NOW - 1000,
+        media_name: "AbCdEfGhIj.webp", deletable: true, poster_url: null, visibility: "public", visibility_toggle: true,
+        role: null, item_index: null, made_from: [], made_spec: null,
+    };
+    const FILE_B = {
+        ...FILE_A, id: "bbbbbbbbbbbbbbbb", kind: "private", source: "saved", name: "cat", url: null, content_type: "video/mp4",
+        media_name: null, deletable: false, poster_url: `${MEDIA}PoStErAbCd.jpg`, visibility: "private",
+    };
+    const FILE_C = { ...FILE_A, id: "cccccccccccccccc", name: "dog.webp" };
+    const POSTS = [
+        {
+            id: SID, service: "x", link: "https://x.com/a/status/1", title: "cat", custom_title: "my cat", score: 1.12,
+            session: { id: SID, status: "ready", expires_at: NOW + 1000, source_url: `${API_BASE}/studio/${SID}/source` },
+            files: [FILE_A, FILE_B], visibility: "private", kind: "video",
+        },
+        { id: "https://x.com/b", service: "x", link: "https://x.com/b", title: "dog", custom_title: null, score: 0.41, session: null, files: [FILE_C] },
+    ];
+    const ok = (extra: Record<string, unknown> = {}) =>
+        jsonRes(200, { status: "success", query: "cat", model: "google/embeddinggemma-2", posts: POSTS, index: { posts: 40, pending: 3 }, ...extra });
+
+    it("forwards q (trimmed), limit and v=3 with the service key, and nothing from the browser", async () => {
+        apiReply = () => ok();
+        const r = await call("GET", "/api/library/search?q=%20%20black%20%20cat%20&limit=50&v=1&filter=x&before=9", {
+            headers: { cookie: "CF_Authorization=secret", authorization: "Api-Key leak" },
+        });
+        expect(r.status).toBe(200);
+        expect(apiCalls).toHaveLength(1);
+        const c = apiCalls[0]!;
+        expect(c.method).toBe("GET");
+        expect(c.url).toBe(`${API_BASE}/library/search?q=black+cat&limit=50&v=3`);
+        expect(c.headers["x-cobalt-service"]).toBe(SERVICE_KEY);
+        for (const h of ["authorization", "cookie", "cf-access-jwt-assertion"]) expect(c.headers[h]).toBeUndefined();
+        expect(await r.text()).not.toContain(SERVICE_KEY);
+    });
+    it("omits limit when absent (the API's default)", async () => {
+        apiReply = () => ok();
+        await call("GET", "/api/library/search?q=cat");
+        expect(apiCalls[0]!.url).toBe(`${API_BASE}/library/search?q=cat&v=3`);
+    });
+    it("flattens posts into grid tiles in score order, each with post_key and score", async () => {
+        apiReply = () => ok();
+        const b = await json(await call("GET", "/api/library/search?q=cat"));
+        expect(b).toMatchObject({ status: "success", query: "cat", model: "google/embeddinggemma-2", posts: 2, index: { posts: 40, pending: 3 } });
+        expect(b.items.map((i: any) => [i.id, i.post_key, i.score])).toEqual([
+            ["aaaaaaaaaaaaaaaa", SID, 1.12],
+            ["bbbbbbbbbbbbbbbb", SID, 1.12],
+            ["cccccccccccccccc", "https://x.com/b", 0.41],
+        ]);
+        // the same keys as GET /api/library's items, plus score
+        expect(Object.keys(b.items[0]).sort()).toEqual(
+            ["id", "kind", "source", "name", "url", "content_type", "bytes", "width", "height", "duration", "link", "session_id", "created_at", "poster_url", "custom_title", "visibility", "visibility_toggle", "post_key", "score"].sort(),
+        );
+        expect(b.items[1]).toMatchObject({
+            kind: "private", url: null, link: "https://x.com/a/status/1", session_id: SID, custom_title: "my cat",
+            poster_url: `${MEDIA}PoStErAbCd.jpg`, visibility: "private", visibility_toggle: true,
+        });
+        expect(b.items[2]).toMatchObject({ session_id: null, custom_title: null, link: "https://x.com/b" });
+        expect(JSON.stringify(b)).not.toMatch(/media_name|deletable|made_spec/);
+    });
+    it("an empty result and a missing index are still a success", async () => {
+        apiReply = () => jsonRes(200, { status: "success", query: "zz", model: "m", posts: [] });
+        const b = await json(await call("GET", "/api/library/search?q=zz"));
+        expect(b).toEqual({ status: "success", query: "zz", model: "m", posts: 0, items: [], index: { posts: null, pending: 0 } });
+    });
+    it.each([
+        ["no q", "/api/library/search"],
+        ["empty q", "/api/library/search?q="],
+        ["blank q", "/api/library/search?q=%20%20"],
+        ["q over 200 chars", `/api/library/search?q=${"a".repeat(201)}`],
+        ["limit 0", "/api/library/search?q=a&limit=0"],
+        ["limit 51", "/api/library/search?q=a&limit=51"],
+        ["limit not a number", "/api/library/search?q=a&limit=ten"],
+        ["negative limit", "/api/library/search?q=a&limit=-1"],
+    ])("rejects %s with 400 and never calls the API", async (_n, path) => {
+        const r = await call("GET", path);
+        expect(r.status).toBe(400);
+        expect(await errorCode(r)).toBe("error.library.bad_request");
+        expect(apiCalls).toEqual([]);
+    });
+    it("accepts exactly 200 chars", async () => {
+        apiReply = () => ok();
+        expect((await call("GET", `/api/library/search?q=${"a".repeat(200)}`)).status).toBe(200);
+    });
+    it.each([
+        [400, "error.library.bad_request"],
+        [503, "error.search.off"],
+        [503, "error.search.waking"],
+        [502, "error.search.failed"],
+        [503, "error.api.generic"],
+    ])("passes the API's %i %s through", async (status, code) => {
+        apiReply = () => jsonRes(status, { status: "error", error: { code } });
+        const r = await call("GET", "/api/library/search?q=cat");
+        expect(r.status).toBe(status);
+        expect(await json(r)).toEqual({ status: "error", error: { code } });
+    });
+    it("an upstream 401/403 is 502 (never 'login expired'), a downed API is 502", async () => {
+        apiReply = () => jsonRes(401, { status: "error", error: { code: "error.api.auth.key.invalid" } });
+        expect((await call("GET", "/api/library/search?q=cat")).status).toBe(502);
+        apiThrows = true;
+        const r = await call("GET", "/api/library/search?q=cat");
+        expect(r.status).toBe(502);
+        expect(await errorCode(r)).toBe("error.library.upstream");
+    });
+});
+
+describe("GET /api/library/search/post", () => {
+    const RECORD = {
+        status: "success", post_key: "https://x.com/a?b=1&c=2", state: "failed", model: "google/embeddinggemma-2", dims: 256,
+        failed_at: NOW - 60_000, retry_at: NOW + 3_540_000, attempts: 2, has_image: true,
+        input: { title: "my cat", text: "cat.webp · x.com/a", image_url: `${MEDIA}PoStErAbCd.jpg` }, embedded_matches_input: false,
+    };
+    it("forwards only the key (encoded) with the service key and answers the record as is", async () => {
+        apiReply = () => jsonRes(200, RECORD);
+        const key = "https://x.com/a?b=1&c=2";
+        const r = await call("GET", `/api/library/search/post?key=${encodeURIComponent(key)}&q=x&v=3`);
+        expect(r.status).toBe(200);
+        expect(await json(r)).toEqual(RECORD);
+        const c = apiCalls[0]!;
+        expect(c.method).toBe("GET");
+        expect(c.url).toBe(`${API_BASE}/library/search/post?key=${encodeURIComponent(key)}`);
+        expect(new URL(c.url).searchParams.get("key")).toBe(key);
+        expect(c.headers["x-cobalt-service"]).toBe(SERVICE_KEY);
+    });
+    it.each([
+        ["no key", "/api/library/search/post"],
+        ["empty key", "/api/library/search/post?key="],
+        ["control characters", "/api/library/search/post?key=a%0Ab"],
+        ["a key over 2100 chars", `/api/library/search/post?key=${"a".repeat(2101)}`],
+    ])("rejects %s with 400 and never calls the API", async (_n, path) => {
+        const r = await call("GET", path);
+        expect(r.status).toBe(400);
+        expect(apiCalls).toEqual([]);
+    });
+    it("passes 404 not_found and other errors through; upstream 403 is 502", async () => {
+        apiReply = () => jsonRes(404, { status: "error", error: { code: "error.library.not_found" } });
+        let r = await call("GET", "/api/library/search/post?key=gone");
+        expect(r.status).toBe(404);
+        expect(await errorCode(r)).toBe("error.library.not_found");
+        apiReply = () => jsonRes(503, { status: "error", error: { code: "error.api.generic" } });
+        r = await call("GET", "/api/library/search/post?key=x");
+        expect(r.status).toBe(503);
+        apiReply = () => jsonRes(403, { status: "error", error: { code: "error.api.auth.key.invalid" } });
+        r = await call("GET", "/api/library/search/post?key=x");
+        expect(r.status).toBe(502);
+    });
+});
+
+describe("GET /api/library: post_key", () => {
+    it("each item carries the API's post key (session, upload adoption, link, else its own id)", async () => {
+        const lone = seedItem({ kind: "public", link: null, session_id: null });
+        const linked = seedItem({ kind: "public", link: "https://x.com/z", session_id: null });
+        const up = seedItem({ kind: "private", source: "upload" });
+        seedStudio({ id: SID2, link: `upload:${up.id}` });
+        const render = seedItem({ kind: "public", source: "studio", session_id: SID2 });
+        const b = await json(await call("GET", "/api/library?filter=public&limit=100"));
+        const by = Object.fromEntries(b.items.map((i: any) => [i.id, i.post_key]));
+        expect(by[lone.id]).toBe(lone.id);
+        expect(by[linked.id]).toBe("https://x.com/z");
+        expect(by[render.id]).toBe(up.id);
+    });
+});
+
+describe("embedded page: search", () => {
+    it("has the search box, its relays, the keyboard shortcuts and the index panel", () => {
+        expect(LIBRARY_HTML).toContain('id="q" type="search" maxlength="200"');
+        expect(LIBRARY_HTML).toContain('"/api/library/search?q="');
+        expect(LIBRARY_HTML).toContain('"/api/library/search/post?key="');
+        expect(LIBRARY_HTML).toContain('e.key !== "/"');
+        expect(LIBRARY_HTML).toContain('e.key === "Escape"');
+        expect(LIBRARY_HTML).toContain("search is waking up");
+        expect(LIBRARY_HTML).toContain("still indexing");
+        expect(LIBRARY_HTML).toContain("search index");
     });
 });
 
@@ -1652,10 +1836,10 @@ describe("server-made posters", () => {
             const log = { posts: [] as string[], renders: 0, usage: 0, toasts: [] as unknown[][] };
             const G: any = { filter: "all", items: [] as any[], confirm: null, confirmAct: "delete", busy: {} };
             const api = new Function(
-                "h", "G", "renderGrid", "reloadUsage", "libPost", "ok", "describe", "toast",
+                "h", "G", "S", "renderGrid", "reloadUsage", "libPost", "ok", "describe", "toast",
                 `${isPubSrc}\n${sw}\nreturn { visSwitch, setVisibility, isPub };`,
             )(
-                el, G, () => { log.renders++; }, () => { log.usage++; },
+                el, G, { items: [] }, () => { log.renders++; }, () => { log.usage++; },
                 async (path: string) => { log.posts.push(path); return reply; },
                 (r: any) => { if (r.status >= 200 && r.status < 300 && r.body.status !== "error") return r.body; throw { code: r.body?.error?.code }; },
                 (e: any) => ({ text: e.code, code: e.code }),

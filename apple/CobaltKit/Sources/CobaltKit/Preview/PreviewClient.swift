@@ -184,6 +184,9 @@ public struct PreviewClient: CobaltClient {
     var queueFeature: Bool { queueState.hasRoute }
     /// When this client was made: the preview index moves on from here (`PreviewData.queueSnapshot`).
     let startedAt: Date
+    /// `features.search` (`AppModel.previewSearch(_:)`, `PreviewSearch.swift`); `.off` everywhere else.
+    let searchMode: PreviewSearchMode
+    let searchState = PreviewSearchState()
 
     public var baseURL: URL { PreviewData.base }
 
@@ -193,9 +196,10 @@ public struct PreviewClient: CobaltClient {
 
     init(
         scenario: PreviewScenario, timeScale: Double, clock: any PipelineClock, visibility: VisibilityPreviewMode = .off,
-        line: LinePreviewMode = .off, queue: QueuePreviewState = .off
+        line: LinePreviewMode = .off, queue: QueuePreviewState = .off, search: PreviewSearchMode = .off
     ) {
         self.scenario = scenario
+        self.searchMode = search
         self.timeScale = max(0.01, timeScale)
         self.clock = clock
         self.visibility = visibility
@@ -216,6 +220,7 @@ public struct PreviewClient: CobaltClient {
         var caps = PreviewData.capabilities(for: scenario)
         caps.line = lineMode.hasLine
         caps.queue = queueFeature && caps.kind == .fork
+        caps.search = searchMode != .off && caps.kind == .fork
         return caps
     }
 
