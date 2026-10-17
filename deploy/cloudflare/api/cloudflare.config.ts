@@ -38,7 +38,12 @@ export default defineConfig({
 		domains: ["api.capybaraharmony.com"],
 		// Daily 03:23 UTC: delete telemetry rows and crash objects older than 30
 		// days (src/telemetry.ts runTelemetryRetention, called from `scheduled`).
-		triggers: [triggers.scheduled({ schedule: "23 3 * * *" })],
+		// Every 15 minutes: the library search indexer (src/embed.ts runIndexer; it
+		// calls the Hugging Face Space only when a post needs a vector).
+		triggers: [
+			triggers.scheduled({ schedule: "23 3 * * *" }),
+			triggers.scheduled({ schedule: "*/15 * * * *" }),
+		],
 		env: {
 			API_URL: bindings.text("https://api.capybaraharmony.com/"),
 			CORS_URL: bindings.text("https://cobalt.capybaraharmony.com"),
@@ -89,6 +94,14 @@ export default defineConfig({
 			// still works and answers `cache_cleared: null`.
 			MEDIA_ZONE_ID: bindings.text("560c4ad4961a65fa19899b4dfa8b5702"),
 			MEDIA_PURGE_TOKEN: bindings.secret(),
+			// Library search (APP-API-CONTRACT.md section 21, deploy/huggingface/embed): the private
+			// Hugging Face Space that runs EmbeddingGemma 2. EMBED_TOKEN (a Hugging Face token that can
+			// call the private Space) and EMBED_KEY (the Space's own secret) are SECRETS from
+			// ~/.config/cobalt/secrets.json. Missing or empty token: search is off
+			// (`features.search: false`) and the indexer does nothing.
+			EMBED_URL: bindings.text("https://capybaraharmony-cobalt-embed.hf.space"),
+			EMBED_TOKEN: bindings.secret(),
+			EMBED_KEY: bindings.secret(),
 			// cobalt studio (POST /studio): PRIVATE copies of saved source
 			// videos, originals/<session id>.<ext>. No public domain; only the
 			// Worker reads it (GET /studio/<id>/source). Bucket already exists.

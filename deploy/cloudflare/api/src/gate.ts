@@ -76,6 +76,8 @@ export type LookupThen =
     | "library_post_delete"
     | "library_post_title"
     | "library_posters_backfill"
+    | "library_search"
+    | "library_search_index"
     | "live_start_token"
     | "live_run"
     | "live_state"
@@ -218,6 +220,13 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     // The app's library (keyed): GET /library, then per item /library/items/<id>/<sub>.
     if (req.pathname === "/library") {
         return req.method === "GET" ? lookupThen(req, "library_list") : reject(404);
+    }
+    // Library search (APP-API-CONTRACT.md section 21): keyed or service.
+    if (req.pathname === "/library/search") {
+        return req.method === "GET" ? lookupThen(req, "library_search") : reject(404);
+    }
+    if (req.pathname === "/library/search/index") {
+        return req.method === "POST" ? lookupThen(req, "library_search_index") : reject(404);
     }
     // Queue the missing server-made posters (APP-API-CONTRACT.md section 13): keyed or service.
     if (req.pathname === "/library/posters/backfill") {

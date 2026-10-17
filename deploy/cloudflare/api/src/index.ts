@@ -8,7 +8,8 @@ import { handleStudioRoute, isStudioRoute, StudioService } from "./studio";
 import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
 import { purgeFrom } from "./visibility";
-import { handleRequest, type WorkerEnv } from "./worker";
+import { runIndexer } from "./embed";
+import { embedFrom, handleRequest, type WorkerEnv } from "./worker";
 
 export interface Env extends WorkerEnv {
     COBALT: DurableObjectNamespace<CobaltContainer>;
@@ -326,6 +327,9 @@ export class CobaltContainer extends Container<Env> {
     }
 }
 
+// The search indexer's trigger (cloudflare.config.ts); any other cron is the daily one.
+const SEARCH_CRON = "*/15 * * * *";
+
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         return handleRequest(request, env, getContainer(env.COBALT, "main"));
@@ -335,7 +339,22 @@ export default {
     // a kick that queues up to 100 saved videos still without a server-made poster (the
     // Durable Object only writes records and arms its sweep; the container wakes only if
     // there is something to do, and a row that failed is not tried again for a day).
-    async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+        // Every 15 minutes (the second trigger): the library search indexer (APP-API-CONTRACT.md
+        // section 21). D1 and the Hugging Face Space only; the container is not touched.
+        if (controller.cron === SEARCH_CRON) {
+            const client = embedFrom(env);
+            if (!client) return;
+            ctx.waitUntil(
+                runIndexer({ db: env.DB, client, mediaBaseUrl: env.MEDIA_BASE_URL, now: () => Date.now() }).then(
+                    (r) => {
+                        if (r.indexed || r.failed || r.removed || r.unavailable) console.log("[search] index", JSON.stringify(r));
+                    },
+                    (e) => console.error("[search] index failed", e instanceof Error ? e.name : "error"),
+                ),
+            );
+            return;
+        }
         ctx.waitUntil(
             runTelemetryRetention({ db: env.DB, originals: env.ORIGINALS, now: () => Date.now() }).then(
                 (r) => console.log("[telemetry] retention", JSON.stringify(r)),

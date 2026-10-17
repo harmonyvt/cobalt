@@ -683,7 +683,11 @@ describe("capability and deploy config", () => {
     });
     it("the cf config has a daily cron trigger for the retention run and the private ORIGINALS bucket bound", () => {
         const worker = (config as any).worker;
-        expect(worker.triggers).toEqual([{ type: "scheduled", schedule: "23 3 * * *" }]);
+        // plus the library search indexer's 15-minute trigger (APP-API-CONTRACT.md section 21)
+        expect(worker.triggers).toEqual([
+            { type: "scheduled", schedule: "23 3 * * *" },
+            { type: "scheduled", schedule: "*/15 * * * *" },
+        ]);
         expect(worker.env.ORIGINALS).toMatchObject({ type: "r2", name: "cobalt-originals" });
         expect(worker.domains).toEqual(["api.capybaraharmony.com"]);
     });

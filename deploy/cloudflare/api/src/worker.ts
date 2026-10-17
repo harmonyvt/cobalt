@@ -1,6 +1,7 @@
 // The Worker's request handling, separated from index.ts (which imports the
 // Containers library and so cannot load under plain node) so the whole flow,
 // gate -> D1 lookup -> Durable Object / container, is testable with fakes.
+import { type EmbedClient, librarySearch, librarySearchIndex, spaceClient } from "./embed";
 import {
     capabilities,
     libraryFile,
@@ -72,7 +73,16 @@ export interface WorkerEnv {
     // token (a secret). Absent or empty: no purge, `cache_cleared: null`.
     MEDIA_ZONE_ID?: string;
     MEDIA_PURGE_TOKEN?: string;
+    // Library search (section 21): the private Hugging Face Space's URL (a plain var), the Hugging Face
+    // token that may call it and the Space's own EMBED_KEY (secrets). No URL or token: search is off.
+    EMBED_URL?: string;
+    EMBED_TOKEN?: string;
+    EMBED_KEY?: string;
 }
+
+// The Space client, or null while search is not configured (embed.ts).
+export const embedFrom = (env: WorkerEnv): EmbedClient | null =>
+    spaceClient({ url: env.EMBED_URL, token: env.EMBED_TOKEN, key: env.EMBED_KEY });
 
 // The single "main" Container Durable Object (a stub in production).
 export interface ContainerStub {
@@ -212,6 +222,7 @@ async function handleInner(
             livePushConfigured(env),
             harkConfigured(env),
             ...(await helperHas(container)),
+            embedFrom(env) !== null,
         );
         return new Response(JSON.stringify(r.body), {
             status: r.status,
@@ -287,6 +298,14 @@ async function handleInner(
         if (decision.then === "library_list") {
             const r = await libraryList(appDeps(env, container, edge), url.searchParams);
             return json(r.status, r.body, allowOrigin);
+        }
+        if (decision.then === "library_search" || decision.then === "library_search_index") {
+            const deps = { ...appDeps(env, container, edge), embed: embedFrom(env) };
+            const r = decision.then === "library_search" ? await librarySearch(deps, url.searchParams) : await librarySearchIndex(deps);
+            return new Response(JSON.stringify(r.body), {
+                status: r.status,
+                headers: { "content-type": "application/json", "cache-control": "no-store" },
+            });
         }
         if (decision.then === "emotes_search" || decision.then === "emotes_save") {
             const deps = appDeps(env, container, edge);

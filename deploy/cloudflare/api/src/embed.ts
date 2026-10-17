@@ -1,0 +1,491 @@
+// Library search (APP-API-CONTRACT.md section 21): one EmbeddingGemma 2 vector per library post,
+// made by the private Hugging Face Space in deploy/huggingface/embed, stored in D1
+// `media_embeddings` (migration 0010) and searched here by brute force (a personal library is a few
+// thousand posts at most: 1 KB per vector).
+//
+// - runIndexer(): the cron's pass (every 15 minutes, index.ts). It reads every live post's inputs
+//   (title text and poster), embeds the posts whose inputs changed, a few per pass, and deletes the
+//   rows of posts that are gone. A Space that is asleep or down ends the pass without counting
+//   against any post; the next pass (by then the Space has woken) carries on.
+// - searchPosts(): GET /library/search. Embeds the query, scores every vector, and adds a bonus
+//   for a plain text match, so a post found by its name ranks first even before it is embedded.
+
+import { assemblePosts, libraryHide, POST_KEY_SQL, type AppDeps } from "./app-routes";
+import type { StudioReply } from "./studio";
+
+export const EMBED_MODEL = "google/embeddinggemma-2";
+export const EMBED_DIMS = 256;
+// Posts embedded per cron pass (the free Space runs on 2 CPUs, about a second or two each).
+export const EMBED_BATCH = 8;
+// A post the Space refused is tried again this long after, and given up on after
+// EMBED_MAX_ATTEMPTS refusals until its inputs change.
+export const EMBED_RETRY_MS = 60 * 60 * 1000;
+export const EMBED_MAX_ATTEMPTS = 3;
+// Wall-clock caps on one call to the Space: a document batch (a cold Space may be loading the
+// model) and a search query (someone is waiting).
+export const EMBED_CALL_MS = 90_000;
+export const QUERY_CALL_MS = 25_000;
+// Ranking: a query found as plain text in the post's title or text adds this to its score.
+export const TEXT_MATCH_BONUS = 0.3;
+export const MAX_QUERY_CHARS = 200;
+export const DEFAULT_SEARCH_LIMIT = 20;
+export const MAX_SEARCH_LIMIT = 50;
+
+export type EmbedInput = { title: string | null; text: string; image_url: string | null };
+export type EmbedResult = { model: string; vectors: number[][]; images: boolean[] };
+
+// "unavailable": the Space is asleep, booting, down or slow (nothing is held against the posts).
+// "rejected": it answered 4xx to this input.
+export class EmbedError extends Error {
+    constructor(
+        readonly kind: "unavailable" | "rejected",
+        readonly status: number | null,
+    ) {
+        super(`embed ${kind}${status === null ? "" : ` ${status}`}`);
+        this.name = "EmbedError";
+    }
+}
+
+export type EmbedClient = {
+    embed(kind: "document" | "query", inputs: EmbedInput[], timeoutMs: number): Promise<EmbedResult>;
+};
+
+export type EmbedConfig = { url?: string; token?: string; key?: string };
+
+// The Space is configured when its URL is https and the Hugging Face token is set.
+export const embedConfigured = (c: EmbedConfig): boolean =>
+    typeof c.url === "string" && /^https:\/\/[^/\s]+/.test(c.url) && typeof c.token === "string" && c.token.length > 0;
+
+// The HTTP client for the Space (README there has the contract). `fetchFn` is injectable for tests.
+export function spaceClient(c: EmbedConfig, fetchFn: typeof fetch = fetch): EmbedClient | null {
+    if (!embedConfigured(c)) return null;
+    const endpoint = `${c.url!.replace(/\/+$/, "")}/embed`;
+    return {
+        async embed(kind, inputs, timeoutMs) {
+            const headers: Record<string, string> = {
+                "content-type": "application/json",
+                authorization: `Bearer ${c.token}`,
+            };
+            if (c.key) headers["x-embed-key"] = c.key;
+            const ctrl = new AbortController();
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const timeout = new Promise<never>((_, reject) => {
+                timer = setTimeout(() => {
+                    ctrl.abort();
+                    reject(new EmbedError("unavailable", null));
+                }, timeoutMs);
+            });
+            try {
+                const call = (async () => {
+                    let res: Response;
+                    try {
+                        res = await fetchFn(endpoint, {
+                            method: "POST",
+                            headers,
+                            body: JSON.stringify({ kind, dims: EMBED_DIMS, inputs }),
+                            signal: ctrl.signal,
+                        });
+                    } catch {
+                        throw new EmbedError("unavailable", null);
+                    }
+                    if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+                        // 401/403/404 from the Hugging Face proxy is a configuration problem, not this
+                        // input's fault: never held against a post.
+                        if (res.status === 401 || res.status === 403 || res.status === 404) {
+                            throw new EmbedError("unavailable", res.status);
+                        }
+                        throw new EmbedError("rejected", res.status);
+                    }
+                    if (!res.ok) throw new EmbedError("unavailable", res.status);
+                    let body: unknown;
+                    try {
+                        body = await res.json();
+                    } catch {
+                        // a booting Space answers with its HTML page
+                        throw new EmbedError("unavailable", res.status);
+                    }
+                    const parsed = parseResult(body, inputs.length);
+                    if (!parsed) throw new EmbedError("unavailable", res.status);
+                    return parsed;
+                })();
+                return await Promise.race([call, timeout]);
+            } finally {
+                clearTimeout(timer);
+            }
+        },
+    };
+}
+
+function parseResult(body: unknown, n: number): EmbedResult | null {
+    if (!body || typeof body !== "object") return null;
+    const b = body as { model?: unknown; vectors?: unknown; images?: unknown };
+    if (typeof b.model !== "string" || !Array.isArray(b.vectors) || b.vectors.length !== n) return null;
+    const vectors: number[][] = [];
+    for (const v of b.vectors) {
+        if (!Array.isArray(v) || v.length !== EMBED_DIMS || !v.every((x) => typeof x === "number" && Number.isFinite(x))) {
+            return null;
+        }
+        vectors.push(normalize(v as number[]));
+    }
+    const images = Array.isArray(b.images) && b.images.length === n ? b.images.map((x) => x === true) : vectors.map(() => false);
+    return { model: b.model, vectors, images };
+}
+
+// ---- vectors -----------------------------------------------------------------------------------
+
+export function normalize(v: number[]): number[] {
+    let s = 0;
+    for (const x of v) s += x * x;
+    const n = Math.sqrt(s);
+    return n > 0 ? v.map((x) => x / n) : v;
+}
+
+// base64 of little-endian float32, the column format.
+export function encodeVector(v: number[]): string {
+    const buf = new ArrayBuffer(v.length * 4);
+    const view = new DataView(buf);
+    v.forEach((x, i) => view.setFloat32(i * 4, x, true));
+    let bin = "";
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
+    return btoa(bin);
+}
+
+export function decodeVector(s: string): Float32Array | null {
+    let bin: string;
+    try {
+        bin = atob(s);
+    } catch {
+        return null;
+    }
+    if (bin.length % 4 !== 0) return null;
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const view = new DataView(bytes.buffer);
+    const out = new Float32Array(bin.length / 4);
+    for (let i = 0; i < out.length; i++) out[i] = view.getFloat32(i * 4, true);
+    return out;
+}
+
+export function dot(a: ArrayLike<number>, b: ArrayLike<number>): number {
+    const n = Math.min(a.length, b.length);
+    let s = 0;
+    for (let i = 0; i < n; i++) s += a[i]! * b[i]!;
+    return s;
+}
+
+async function sha256(s: string): Promise<string> {
+    const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+    return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// ---- what a post is embedded from -------------------------------------------------------------
+
+export type PostInput = EmbedInput & { post_key: string; latest: number };
+
+type InputRow = {
+    post_key: string;
+    name: string | null;
+    link: string | null;
+    poster: string | null;
+    content_type: string | null;
+    bucket: string;
+    source: string;
+    role: string | null;
+    item_index: number | null;
+    created_at: number;
+};
+
+function linkWords(link: string | null): string {
+    if (!link || !/^https?:\/\//i.test(link)) return "";
+    try {
+        const u = new URL(link);
+        return `${u.hostname.replace(/^www\./, "")}${u.pathname === "/" ? "" : u.pathname}`;
+    } catch {
+        return "";
+    }
+}
+
+// The post's lead file, as GET /library picks it (app-routes.ts leadOf): a gallery's first video, else
+// its first item; else the original.
+function lead(fs: InputRow[]): InputRow | undefined {
+    const items = fs.filter((f) => f.role === "item").sort((a, b) => (a.item_index ?? 0) - (b.item_index ?? 0));
+    return (
+        items.find((f) => (f.content_type ?? "").startsWith("video/")) ??
+        items[0] ??
+        fs.find((f) => f.bucket === "originals" && (f.source === "saved" || f.source === "upload"))
+    );
+}
+
+// Every live post's inputs, newest post first. Posters are used only from the public media domain
+// (the Space fetches them itself and refuses any other URL).
+export async function postInputs(db: D1Database, mediaBaseUrl: string): Promise<PostInput[]> {
+    const { results: files } = await db
+        .prepare(
+            `SELECT * FROM (SELECT m.name, m.link, m.poster, m.content_type, m.bucket, m.source, m.role, m.item_index,
+                                   m.created_at, ${POST_KEY_SQL} AS post_key
+                            FROM media_items m WHERE m.deleted_at IS NULL)
+             ORDER BY created_at DESC`,
+        )
+        .all<InputRow>();
+    const { results: titleRows } = await db.prepare("SELECT post_key, title FROM media_titles").all<{ post_key: string; title: string }>();
+    const titles = new Map(titleRows.map((t) => [t.post_key, t.title]));
+
+    const byPost = new Map<string, InputRow[]>();
+    for (const f of files) {
+        const list = byPost.get(f.post_key);
+        if (list) list.push(f);
+        else byPost.set(f.post_key, [f]);
+    }
+    const base = mediaBaseUrl.endsWith("/") ? mediaBaseUrl : `${mediaBaseUrl}/`;
+    const out: PostInput[] = [];
+    for (const [post_key, fs] of byPost) {
+        const l = lead(fs);
+        const names = [...new Set(fs.map((f) => (f.name ?? "").trim()).filter(Boolean))].slice(0, 5);
+        const link = l?.link ?? fs.find((f) => f.link)?.link ?? null;
+        const poster = l?.poster ?? fs.find((f) => f.poster)?.poster ?? null;
+        const title = titles.get(post_key) ?? l?.name ?? names[0] ?? null;
+        const text = [names.join(" · "), linkWords(link)].filter(Boolean).join(" · ").slice(0, 2000);
+        out.push({
+            post_key,
+            latest: fs[0]!.created_at,
+            title: title ? title.slice(0, 400) : null,
+            text,
+            image_url: poster && poster.startsWith(base) ? poster : null,
+        });
+    }
+    out.sort((a, b) => b.latest - a.latest || (a.post_key < b.post_key ? 1 : -1));
+    return out;
+}
+
+export const inputHash = (p: EmbedInput): Promise<string> =>
+    sha256(JSON.stringify([EMBED_MODEL, EMBED_DIMS, p.title ?? "", p.text, p.image_url ?? ""]));
+
+// ---- the cron's pass ---------------------------------------------------------------------------
+
+type EmbedRow = {
+    post_key: string;
+    input_hash: string;
+    attempts: number;
+    failed_at: number | null;
+    has_vector: number;
+};
+
+export type IndexerDeps = {
+    db: D1Database;
+    client: EmbedClient;
+    mediaBaseUrl: string;
+    now: () => number;
+    batch?: number;
+};
+
+export type IndexerResult = {
+    posts: number;
+    indexed: number;
+    failed: number;
+    removed: number;
+    pending: number;
+    unavailable: boolean;
+};
+
+const CHUNK = 50;
+
+export async function runIndexer(d: IndexerDeps): Promise<IndexerResult> {
+    const now = d.now();
+    const inputs = await postInputs(d.db, d.mediaBaseUrl);
+    const { results: rows } = await d.db
+        .prepare("SELECT post_key, input_hash, attempts, failed_at, vector IS NOT NULL AS has_vector FROM media_embeddings")
+        .all<EmbedRow>();
+    const existing = new Map(rows.map((r) => [r.post_key, r]));
+
+    // posts that are gone
+    const live = new Set(inputs.map((p) => p.post_key));
+    const gone = rows.filter((r) => !live.has(r.post_key)).map((r) => r.post_key);
+    for (let i = 0; i < gone.length; i += CHUNK) {
+        const part = gone.slice(i, i + CHUNK);
+        await d.db
+            .prepare(`DELETE FROM media_embeddings WHERE post_key IN (${part.map(() => "?").join(", ")})`)
+            .bind(...part)
+            .run();
+    }
+
+    // posts whose inputs changed (or never embedded), newest first
+    const todo: (PostInput & { hash: string; row: EmbedRow | undefined })[] = [];
+    for (const p of inputs) {
+        const hash = await inputHash(p);
+        const row = existing.get(p.post_key);
+        if (row && row.input_hash === hash) {
+            if (row.failed_at === null && row.has_vector) continue;
+            if (row.attempts >= EMBED_MAX_ATTEMPTS) continue;
+            if (row.failed_at !== null && row.failed_at > now - EMBED_RETRY_MS) continue;
+        }
+        todo.push({ ...p, hash, row });
+    }
+
+    const size = d.batch ?? EMBED_BATCH;
+    const batch = todo.slice(0, size);
+    const result: IndexerResult = {
+        posts: inputs.length,
+        indexed: 0,
+        failed: 0,
+        removed: gone.length,
+        pending: todo.length,
+        unavailable: false,
+    };
+    if (batch.length === 0) return result;
+
+    const strip = (p: PostInput): EmbedInput => ({ title: p.title, text: p.text, image_url: p.image_url });
+    const save = async (p: (typeof batch)[number], vector: number[], image: boolean, model: string) => {
+        await d.db
+            .prepare(
+                `INSERT INTO media_embeddings (post_key, model, dims, vector, input_hash, has_image, embedded_at, failed_at, attempts)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 0)
+                 ON CONFLICT (post_key) DO UPDATE SET model = ?2, dims = ?3, vector = ?4, input_hash = ?5,
+                     has_image = ?6, embedded_at = ?7, failed_at = NULL, attempts = 0`,
+            )
+            .bind(p.post_key, model, EMBED_DIMS, encodeVector(vector), p.hash, image ? 1 : 0, now)
+            .run();
+        result.indexed++;
+    };
+    // A refusal keeps the old vector (stale, still searchable) and counts an attempt against this input.
+    const refuse = async (p: (typeof batch)[number]) => {
+        await d.db
+            .prepare(
+                `INSERT INTO media_embeddings (post_key, model, dims, vector, input_hash, has_image, embedded_at, failed_at, attempts)
+                 VALUES (?1, ?2, ?3, NULL, ?4, 0, NULL, ?5, 1)
+                 ON CONFLICT (post_key) DO UPDATE SET
+                     attempts = CASE WHEN input_hash = ?4 THEN attempts + 1 ELSE 1 END,
+                     input_hash = ?4, failed_at = ?5`,
+            )
+            .bind(p.post_key, EMBED_MODEL, EMBED_DIMS, p.hash, now)
+            .run();
+        result.failed++;
+    };
+
+    try {
+        const r = await d.client.embed("document", batch.map(strip), EMBED_CALL_MS);
+        for (let i = 0; i < batch.length; i++) await save(batch[i]!, r.vectors[i]!, r.images[i]!, r.model);
+    } catch (e) {
+        if (!(e instanceof EmbedError) || e.kind === "unavailable") {
+            result.unavailable = true;
+        } else {
+            // One input spoiled the batch: each alone, so only the bad one is held back.
+            for (const p of batch) {
+                try {
+                    const r = await d.client.embed("document", [strip(p)], EMBED_CALL_MS);
+                    await save(p, r.vectors[0]!, r.images[0]!, r.model);
+                } catch (e2) {
+                    if (!(e2 instanceof EmbedError) || e2.kind === "unavailable") {
+                        result.unavailable = true;
+                        break;
+                    }
+                    await refuse(p);
+                }
+            }
+        }
+    }
+    result.pending = todo.length - result.indexed - result.failed;
+    return result;
+}
+
+// ---- GET /library/search -----------------------------------------------------------------------
+
+export type SearchHit = { post_key: string; score: number; latest: number };
+
+export type SearchOutcome =
+    | { ok: true; hits: SearchHit[]; indexed: number; pending: number }
+    | { ok: false; status: number; code: string };
+
+export async function searchPosts(
+    d: { db: D1Database; client: EmbedClient | null; mediaBaseUrl: string },
+    rawQuery: string,
+    limit: number,
+): Promise<SearchOutcome> {
+    const q = rawQuery.trim().replace(/\s+/g, " ");
+    if (q.length === 0 || q.length > MAX_QUERY_CHARS) return { ok: false, status: 400, code: "error.library.bad_request" };
+    if (!d.client) return { ok: false, status: 503, code: "error.search.off" };
+
+    let qv: number[];
+    try {
+        const r = await d.client.embed("query", [{ title: null, text: q, image_url: null }], QUERY_CALL_MS);
+        qv = r.vectors[0]!;
+    } catch (e) {
+        // asleep or booting: the client says "waking up, try again"
+        if (!(e instanceof EmbedError) || e.kind === "unavailable") return { ok: false, status: 503, code: "error.search.waking" };
+        return { ok: false, status: 502, code: "error.search.failed" };
+    }
+
+    const inputs = await postInputs(d.db, d.mediaBaseUrl);
+    const { results: rows } = await d.db
+        .prepare("SELECT post_key, vector, input_hash FROM media_embeddings WHERE model = ? AND dims = ? AND vector IS NOT NULL")
+        .bind(EMBED_MODEL, EMBED_DIMS)
+        .all<{ post_key: string; vector: string; input_hash: string }>();
+    const vectors = new Map(rows.map((r) => [r.post_key, r]));
+
+    const needle = q.toLowerCase();
+    const hits: SearchHit[] = [];
+    let indexed = 0;
+    let pending = 0;
+    for (const p of inputs) {
+        const row = vectors.get(p.post_key);
+        const v = row ? decodeVector(row.vector) : null;
+        if (v) indexed++;
+        if (!row || row.input_hash !== (await inputHash(p))) pending++;
+        const hay = `${p.title ?? ""} ${p.text}`.toLowerCase();
+        const bonus = hay.includes(needle) ? TEXT_MATCH_BONUS : 0;
+        if (!v && bonus === 0) continue;
+        hits.push({ post_key: p.post_key, score: (v ? dot(qv, v) : 0) + bonus, latest: p.latest });
+    }
+    hits.sort((a, b) => b.score - a.score || (a.post_key < b.post_key ? -1 : 1));
+    return { ok: true, hits: hits.slice(0, limit), indexed, pending };
+}
+
+// GET /library/search?q=<words>&limit=<1..50>&v=<2|3>: the posts that best match, best first, in the
+// GET /library post shape plus `score`. Keyed or service (the web Worker).
+export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, q: URLSearchParams): Promise<StudioReply> {
+    const fail = (status: number, code: string): StudioReply => ({ status, body: { status: "error", error: { code } } });
+    let limit = DEFAULT_SEARCH_LIMIT;
+    if (q.has("limit")) {
+        const raw = q.get("limit") ?? "";
+        if (!/^\d{1,3}$/.test(raw)) return fail(400, "error.library.bad_request");
+        limit = Number(raw);
+        if (limit < 1 || limit > MAX_SEARCH_LIMIT) return fail(400, "error.library.bad_request");
+    }
+    try {
+        const r = await searchPosts({ db: d.db, client: d.embed, mediaBaseUrl: d.mediaBaseUrl }, q.get("q") ?? "", limit);
+        if (!r.ok) return fail(r.status, r.code);
+        const v3 = q.get("v") === "3";
+        const v2 = v3 || q.get("v") === "2";
+        const page = r.hits.map((h) => ({ post_key: h.post_key, latest: h.latest }));
+        const { posts } = await assemblePosts(d, page, { v2, v3, hide: libraryHide(v2, v3), now: d.now() });
+        const scores = new Map(r.hits.map((h) => [h.post_key, h.score]));
+        const out = posts
+            .filter((p) => Array.isArray(p.files) && p.files.length > 0)
+            .map((p) => ({ ...p, score: Math.round((scores.get(p.id) ?? 0) * 10000) / 10000 }));
+        return {
+            status: 200,
+            body: {
+                status: "success",
+                query: (q.get("q") ?? "").trim(),
+                model: EMBED_MODEL,
+                posts: out,
+                index: { posts: r.indexed, pending: r.pending },
+            },
+        };
+    } catch (e) {
+        console.error("[search] failed", String(e));
+        return fail(503, "error.api.generic");
+    }
+}
+
+// POST /library/search/index: one indexer pass now (the cron runs the same every 15 minutes). Keyed.
+export async function librarySearchIndex(d: AppDeps & { embed: EmbedClient | null }): Promise<StudioReply> {
+    if (!d.embed) return { status: 503, body: { status: "error", error: { code: "error.search.off" } } };
+    try {
+        const r = await runIndexer({ db: d.db, client: d.embed, mediaBaseUrl: d.mediaBaseUrl, now: d.now });
+        return { status: 200, body: { status: "success", ...r } };
+    } catch (e) {
+        console.error("[search] index failed", String(e));
+        return { status: 503, body: { status: "error", error: { code: "error.api.generic" } } };
+    }
+}
