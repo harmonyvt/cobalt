@@ -457,7 +457,7 @@ Fable; `project.yml` is CORE's; no lane commits or pushes.
 ## 8. Gates and evidence
 
 **Gates** (every lane; Fable reruns): the four commands of `CONTRACT.md` section 9 (xcodegen; the
-iOS build on iPhone 17 Pro / iOS 26.5; the macOS build; `cd apple/CobaltKit && swift test`), with
+iOS build on iPhone 17 Pro / iOS 27.0; the macOS build; `cd apple/CobaltKit && swift test`), with
 no `warning:` lines from `apple/`. Also `plutil -lint apple/Config/*.plist`, and for lane S
 `cd deploy/cloudflare/api && npm test && npm run typecheck`.
 
@@ -491,7 +491,7 @@ transport):
   - a manual save records its key, and app album mode puts it in the album;
   - 3305 → waiting + `.outOfSpace`; 3 failures → gaveUp; disable stops new adds.
 
-**V checklist** (iPhone 17 Pro simulator, iOS 26.5; save every screenshot and log):
+**V checklist** (iPhone 17 Pro simulator, iOS 27.0; save every screenshot and log):
 1. Settings: both new sections in each access state. Use `xcrun simctl privacy booted grant|revoke
    photos` / `photos-add` for `com.capybaraharmony.cobalt`. Include the backfill dialog and the
    needs-keep footnote.

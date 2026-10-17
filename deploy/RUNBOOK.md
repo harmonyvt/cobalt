@@ -131,7 +131,7 @@ xcodebuild -project Cobalt.xcodeproj -scheme Cobalt -destination 'platform=macOS
 cd CobaltKit && swift test                                      # 1624 tests on 2026-10-10
 ```
 
-- Use the generic iOS destination: `CLAUDE.md` mentions an iOS 26.5 simulator that no longer exists here (only 27.0).
+- Simulators are iOS 27 only: build on iPhone 17 Pro, `OS=27.0` (as in `CLAUDE.md`).
 - Known load-sensitive tests: `TelemetryUploaderTests`, `InstantShareTests` (sub-second asserts), `Offline*`,
   `PhotoCropTests`, `GalleryPipelineTests`. Rerun the suite alone before calling it a regression.
 - Delete your `.build/<lane>-*` folders afterwards.

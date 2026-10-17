@@ -631,7 +631,7 @@ confirms); no lane commits or pushes.
 ## 9. Gates, tests, evidence
 
 **Gates** (every lane; Fable reruns): the four commands of `CONTRACT.md` section 9 (xcodegen; iOS
-build on iPhone 17 Pro / iOS 26.5; macOS build; `cd apple/CobaltKit && swift test`), no `warning:`
+build on iPhone 17 Pro / iOS 27.0; macOS build; `cd apple/CobaltKit && swift test`), no `warning:`
 lines from `apple/`. Lane W also `cd deploy/cloudflare/web && npm test && npm run typecheck`.
 
 **CORE tests** (temp dirs, injected clock):
@@ -664,7 +664,7 @@ lines from `apple/`. Lane W also `cd deploy/cloudflare/web && npm test && npm ru
   privateCopy:)` true/false per what the post had, a failing webp → `.partial(remaining: 1)`;
   `isBusy` true while the pipeline's session belongs to the media; Photos ledger untouched.
 
-**V checklist** (iPhone 17 Pro sim iOS 26.5, iPad sim, Mac; `-previewScenario renditions`; save
+**V checklist** (iPhone 17 Pro sim iOS 27.0, iPad sim, Mac; `-previewScenario renditions`; save
 every screenshot/recording and the log):
 1. orbit: one planet for `Dd7P496wolG` with `webp ×3`, showing the newest webp (`PrEvIeW006`,
    4:5); no second planet for the video; `-previewOrbitCount 30` badge spread;

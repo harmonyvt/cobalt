@@ -745,7 +745,7 @@ Fable. Gates: CONTRACT.md 9's four commands, no `warning:` lines from `apple/`. 
   `.picker` otherwise; `.gallery` starts the save of `"all"` with no choice; `make` before the save ends is sent after it, once;
   store: items join one media by session, made records by role, `kind`; `FolderNaming` names of 1.8 (a remake replaces the file, R8); `MediaTitle`
   handle rule; `RenderRequest.item` encoding.
-- **V checklist** (iPhone 17 Pro sim iOS 26.5, then the owner's phone; preview server first, the live server only after S0/S1 are
+- **V checklist** (iPhone 17 Pro sim iOS 27.0, then the owner's phone; preview server first, the live server only after S0/S1 are
   deployed by the owner, on throwaway posts): 1 the 1.13 build shares the X 4-photo post after S0 → it lands in the library (record
   what 1.13 shows for the image session); 2 the new build: paste the Instagram carousel → saving 1..10 → one planet, a Files folder
   with 01-10.jpg, nothing new in Photos; 3 tap `slideshow webp` mid-save → it runs after the save; result tab plays; `slideshow.webp`
