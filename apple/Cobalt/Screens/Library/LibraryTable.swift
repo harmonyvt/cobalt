@@ -80,10 +80,10 @@ struct LibraryTable: View {
         Table(rows, selection: $controller.selection, sortOrder: sortOrder) {
             TableColumn(Copy.Library2.colTitle, value: \.title) { row in
                 HStack(spacing: 8) {
-                    if controller.selecting {
+                    if controller.selecting, row.shareable {
                         // A click that only moves the inspector selection does not run `primaryAction`, so the tick
                         // itself toggles. It is not its own VoiceOver control; the cell carries `.isSelected`.
-                        Button { controller.togglePick(row.id) } label: {
+                        Button { controller.togglePick(row) } label: {
                             LibraryPickMark(ticked: controller.picked.contains(row.id))
                                 .frame(width: 28, height: 28)
                                 .contentShape(Rectangle())
@@ -155,7 +155,7 @@ struct LibraryTable: View {
         } primaryAction: { ids in
             guard let id = ids.first else { return }
             if controller.selecting {
-                controller.togglePick(id)
+                if let row = rows.first(where: { $0.id == id }) { controller.togglePick(row) }
             } else if let row = rows.first(where: { $0.id == id }) {
                 controller.open(row)
             }
@@ -224,9 +224,9 @@ struct LibraryListRow: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if selecting { LibraryPickMark(ticked: ticked) }
+            if selecting, row.shareable { LibraryPickMark(ticked: ticked) }
         }
-        .opacity(selecting && !ticked ? 0.7 : 1)
+        .opacity(selecting ? (row.shareable ? (ticked ? 1 : 0.7) : 0.35) : 1)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(minHeight: stacked ? nil : 44)
         .contentShape(Rectangle())
@@ -253,7 +253,7 @@ struct LibraryList: View {
                     ForEach(rows) { row in
                         let selecting = controller.selecting
                         Button {
-                            if selecting { controller.togglePick(row.id) } else { controller.open(row) }
+                            if selecting { controller.togglePick(row) } else { controller.open(row) }
                         } label: {
                             LibraryListRow(
                                 row: row, model: controller.model, reload: controller.reload,

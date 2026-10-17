@@ -18,6 +18,11 @@ struct LibraryReveal: Equatable {
     let token = UUID()
 }
 
+extension LibraryRow {
+    /// Whether select mode can tick it. Galleries are not shared, so they cannot be ticked.
+    var shareable: Bool { kind != .gallery }
+}
+
 /// One row of the card shown while ticked posts are being copied for the share sheet.
 struct SharePrepRow: Identifiable, Equatable {
     enum State: Equatable {
@@ -28,9 +33,9 @@ struct SharePrepRow: Identifiable, Equatable {
         var done: Bool { self == .onDevice || self == .ready || self == .skipped }
     }
 
-    /// What the shared file is (the face: a gallery sends its cover photo).
+    /// What the shared file is. Galleries are never shared, so never a row here.
     enum Kind: Equatable {
-        case video, photo, webp, galleryCover
+        case video, photo, webp
     }
 
     let id: String
@@ -47,9 +52,7 @@ struct SharePrepRow: Identifiable, Equatable {
         title = row.title
         item = row.item
         self.state = state
-        if row.kind == .gallery {
-            kind = .galleryCover
-        } else if row.item.face.isWebp {
+        if row.item.face.isWebp {
             kind = .webp
         } else if row.originalIsImage || row.kind == .photo {
             kind = .photo
@@ -172,25 +175,27 @@ final class LibraryController {
         picked = []
     }
 
-    func togglePick(_ id: String) {
-        if picked.contains(id) { picked.remove(id) } else { picked.insert(id) }
+    /// Ticks or unticks one post. A gallery cannot be ticked: galleries are not shared.
+    func togglePick(_ row: LibraryRow) {
+        guard row.shareable else { return }
+        if picked.contains(row.id) { picked.remove(row.id) } else { picked.insert(row.id) }
     }
 
-    /// Ticks every post on screen (the kind chip, the search and the show filter decide which), or clears them all
-    /// when every one is already ticked.
+    /// Ticks every post on screen that can be shared (the kind chip, the search and the show filter decide which), or
+    /// clears them all when every one is already ticked.
     func toggleAll(_ rows: [LibraryRow]) {
-        let ids = Set(rows.map(\.id))
+        let ids = Set(rows.filter(\.shareable).map(\.id))
         if ids.isSubset(of: picked) { picked.subtract(ids) } else { picked.formUnion(ids) }
     }
 
     /// Select mode with exactly these posts ticked: a kind chip's `select all` / `share all`.
     func pickOnly(_ rows: [LibraryRow]) {
         selecting = true
-        picked = Set(rows.map(\.id))
+        picked = Set(rows.filter(\.shareable).map(\.id))
     }
 
     /// Local files for the ticked posts, in `rows` order. One file per picked row: that row's face only
-    /// (not every item of a gallery, not `post.link`, never `publicURL`). One download at a time.
+    /// (never a gallery, not `post.link`, never `publicURL`). One download at a time.
     /// The URL `localCopy` returns is kept — deleting it can destroy the only copy.
     /// Empty means nothing could be shared (`Copy.actionFailed` is already shown). `[]` while a share is
     /// already being prepared: the caller does nothing.
@@ -198,6 +203,7 @@ final class LibraryController {
         guard !preparingShare else { return [] }
         preparingShare = true
         let chosen = picked
+        let rows = rows.filter(\.shareable)
         shareCancelled = false
         sharePrep = rows.filter { chosen.contains($0.id) }.map { SharePrepRow($0, state: Self.shareState(of: $0.item.face)) }
         defer {

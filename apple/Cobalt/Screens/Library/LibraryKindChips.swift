@@ -81,7 +81,8 @@ struct LibraryKindChips: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            if let pickAll, count != 0 {
+            // galleries are not shared, so their chip offers neither
+            if let pickAll, count != 0, kind != .galleries {
                 Button(Copy.Library2.selectAllKind(kind), systemImage: Symbol.Gallery.selectPhotos) { pickAll(kind, false) }
                 Button(Copy.Library2.shareAllKind(kind), systemImage: Symbol.Library.share) { pickAll(kind, true) }
             }

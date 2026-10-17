@@ -132,7 +132,7 @@ private struct LibraryContent: View {
         let rows = self.rows
         let phase = phase(rows)
         // Ticks a search, a filter or a delete took off screen are neither counted nor shared.
-        let pickedCount = controller.selecting ? rows.reduce(0) { $0 + (controller.picked.contains($1.id) ? 1 : 0) } : 0
+        let pickedCount = controller.selecting ? rows.reduce(0) { $0 + ($1.shareable && controller.picked.contains($1.id) ? 1 : 0) } : 0
         content(rows: rows, phase: phase)
             .navigationTitle(Copy.library)
             #if os(iOS)
@@ -260,7 +260,7 @@ private struct LibraryContent: View {
                 }
                 .labelStyle(.iconOnly)
                 .help(allPicked ? Copy.Library2.selectNone : Copy.Library2.selectAll)
-                .disabled(rows.isEmpty)
+                .disabled(!rows.contains(where: \.shareable))
                 // always there (disabled until something is ticked): appearing on the first tick moved the icons under
                 // the finger, and a second tap meant for select-none landed on share
                 Button(Copy.Library2.share, systemImage: Symbol.Library.share) { Task { await sharePicked() } }
@@ -296,7 +296,7 @@ private struct LibraryContent: View {
 
     /// Every post on screen is ticked (the select-all button then clears them).
     private var allPicked: Bool {
-        let rows = self.rows
+        let rows = self.rows.filter(\.shareable)
         return !rows.isEmpty && rows.allSatisfy { controller.picked.contains($0.id) }
     }
 
@@ -581,7 +581,7 @@ private struct LibrarySharePrepCard: View {
     private var kinds: String {
         func count(_ kind: SharePrepRow.Kind) -> Int { rows.filter { $0.kind == kind }.count }
         return Copy.Library2.sharePrepKinds(
-            videos: count(.video), photos: count(.photo), webps: count(.webp), covers: count(.galleryCover))
+            videos: count(.video), photos: count(.photo), webps: count(.webp))
     }
 }
 
@@ -633,7 +633,6 @@ private struct SharePrepThumb: View {
         case .video: return Symbol.Library.typeVideo
         case .photo: return Symbol.Library.typePhoto
         case .webp: return Symbol.Library.typeWebp
-        case .galleryCover: return Symbol.Gallery.gallery
         }
     }
 }
@@ -675,7 +674,6 @@ private struct SharePrepLine: View {
         case .video: return Copy.Library2.shareKindVideo
         case .photo: return Copy.Library2.shareKindPhoto
         case .webp: return Copy.Library2.shareKindWebp
-        case .galleryCover: return Copy.Library2.shareKindCover
         }
     }
 
