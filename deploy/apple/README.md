@@ -24,7 +24,7 @@ other (AltStore would). Every build stays in the file and in R2 as its own `coba
 is deleted unless you pass `--keep <n>` (or set `"keep": n` in `feather.json`), which prunes to the newest n. Publishing
 a version + build that is already in the source is refused unless you pass `--replace`. (From Feather's source:
 the list shows the newest version string and download; whether it also flags an already-installed copy as outdated was
-not confirmed, so check the version shown against the one on the device.) Bump the version for every release (below).
+not confirmed, so check the version shown against the one on the device.) The build number sets itself on every release (below).
 
 ## Cutting a release
 
@@ -32,8 +32,10 @@ not confirmed, so check the version shown against the one on the device.) Bump t
 exactly that commit from a temporary worktree, `deploy/cobalt-deploy ios list` shows every published build (and which
 are in `~/cobalt-ipas/`), and `deploy/cobalt-deploy ios url` prints the source URL.
 
-1. Bump `MARKETING_VERSION` and/or `CURRENT_PROJECT_VERSION` in `apple/project.yml` (`CURRENT_PROJECT_VERSION` must
-   change on every release; it is the build number and part of the ipa name).
+1. Bump `MARKETING_VERSION` in `apple/project.yml` when the user-facing version should change. The build number is
+   automatic: `release.sh` uses one past the newest published build, or `CURRENT_PROJECT_VERSION` from
+   `apple/project.yml` if that is higher, and passes it to `xcodebuild`, so the ipa, the app's `CFBundleVersion` and the
+   source all agree. `--replace` keeps `project.yml`'s number to re-publish that build.
 2. `deploy/apple/release.sh --dry-run` first: builds, packs, copies dSYMs and the ipa (below), prints the
    `source.json` it would publish, uploads nothing.
 3. `deploy/apple/release.sh` publishes: ipa and icon first, `source.json` last, then deletes ipas that fell out of the
