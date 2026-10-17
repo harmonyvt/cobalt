@@ -16,7 +16,11 @@ app with the owner's own Apple developer account when installing it. Fork-only; 
 Each release rewrites `source.json` so `versions[0]` is the newest build (the file also repeats it as the legacy
 top-level `version` / `downloadURL`, as Feather's own repo file does). Feather reads `versions[0]` as the current
 build, so once it refreshes the source the app's row shows the new version, date and release note; tap **Get** again to
-install over the old one. Every build stays in the file and in R2 as its own `cobalt-<version>-<build>.ipa`; nothing
+install over the old one. Each version is labeled `<version> (<build>)`, e.g. `2.1 (26)`: Feather uses that label in
+**Version History** (open the app) and **Previous Versions** (long-press the row), and flags an installed copy for update
+only when the label changes, so a bare `2.1` would make every 2.1 build look identical and hide updates. The source's
+`version` therefore differs from the app's `CFBundleShortVersionString` (`2.1`); Feather does not check them against each
+other (AltStore would). Every build stays in the file and in R2 as its own `cobalt-<version>-<build>.ipa`; nothing
 is deleted unless you pass `--keep <n>` (or set `"keep": n` in `feather.json`), which prunes to the newest n. Publishing
 a version + build that is already in the source is refused unless you pass `--replace`. (From Feather's source:
 the list shows the newest version string and download; whether it also flags an already-installed copy as outdated was

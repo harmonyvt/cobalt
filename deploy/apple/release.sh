@@ -240,15 +240,22 @@ ICON_URL="$PUBLIC_BASE/icon.png"
 ENTITLEMENTS="$(plutil -convert json -o - "$APPLE/Config/Cobalt-iOS.entitlements" | jq -c 'keys')"
 PRIVACY="$(plutil -convert json -o - "$APP_PLIST" | jq -c 'with_entries(select(.key | test("^NS.*UsageDescription$")))')"
 
+# Feather shows `version` as the label in Version History / Previous Versions and flags an update only when it changes,
+# so it carries the build number too ("2.1 (26)"); a bare "2.1" made every 2.1 build look the same and hid updates.
+VERSION_LABEL="$VERSION ($BUILD)"
 NEW_VERSION="$(jq -n -c \
-    --arg version "$VERSION" --arg build "$BUILD" --arg date "$NOW" --arg notes "$NOTES" \
+    --arg version "$VERSION_LABEL" --arg build "$BUILD" --arg date "$NOW" --arg notes "$NOTES" \
     --arg url "$IPA_URL" --argjson size "$IPA_BYTES" --arg minos "$MIN_OS" \
     '{version: $version, buildVersion: $build, date: $date, localizedDescription: $notes,
       downloadURL: $url, size: $size, minOSVersion: $minos}')"
 
-# The same version + build already published would be overwritten in place (same ipa name). Refuse unless asked:
+# Entries published before the label carried the build ("2.1") get it added, so the whole history reads the same.
+PREV_VERSIONS="$(jq -c 'map(if (.buildVersion // "") != "" and ((.version // "") | endswith(")") | not)
+                            then .version = "\(.version) (\(.buildVersion))" else . end)' <<<"$PREV_VERSIONS")"
+
+# The same build already published would be overwritten in place (same ipa name). Refuse unless asked:
 # that is how an earlier build silently disappears.
-if jq -e --arg v "$VERSION" --arg b "$BUILD" 'any(.[]; .version == $v and .buildVersion == $b)' \
+if jq -e --arg b "$BUILD" 'any(.[]; .buildVersion == $b)' \
     <<<"$PREV_VERSIONS" >/dev/null; then
     if [ "$REPLACE" -eq 1 ]; then
         say "warning: $VERSION ($BUILD) is already published; --replace overwrites $IPA_NAME"
@@ -262,8 +269,8 @@ fi
 # Newest first (Feather reads versions[0]); this build replaces an earlier upload of the same build.
 # keep 0 keeps every version.
 VERSIONS="$(jq -c -n --argjson new "$NEW_VERSION" --argjson prev "$PREV_VERSIONS" \
-    --arg v "$VERSION" --arg b "$BUILD" --argjson keep "$KEEP_VERSIONS" \
-    '[$new] + [$prev[] | select((.version != $v) or (.buildVersion != $b))]
+    --arg b "$BUILD" --argjson keep "$KEEP_VERSIONS" \
+    '[$new] + [$prev[] | select(.buildVersion != $b)]
      | if $keep > 0 then .[:$keep] else . end')"
 
 SOURCE_JSON="$OUT_DIR/source.json"

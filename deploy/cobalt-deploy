@@ -50,11 +50,11 @@ ios_list() {
               ((.size // 0) / 1048576 * 10 | floor / 10 | tostring) + " MB",
               (.downloadURL | split("/") | last)] | @tsv' <<<"$body" \
     | {
-        printf '%-10s %-6s %-17s %-9s %s\n' VERSION BUILD "DATE (UTC)" SIZE LOCAL
+        printf '%-14s %-6s %-17s %-9s %s\n' VERSION BUILD "DATE (UTC)" SIZE LOCAL
         first=1
         while IFS=$'\t' read -r version build date size file; do
             if [ -f "$IPA_ARCHIVE/$file" ]; then here="${IPA_ARCHIVE/#"$HOME"/\~}/$file"; else here="-"; fi
-            printf '%-10s %-6s %-17s %-9s %s%s\n' "$version" "$build" "$date" "$size" "$here" \
+            printf '%-14s %-6s %-17s %-9s %s%s\n' "$version" "$build" "$date" "$size" "$here" \
                 "$([ "$first" -eq 1 ] && echo "   (current in Feather)")"
             first=0
         done
