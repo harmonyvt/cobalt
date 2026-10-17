@@ -32,3 +32,6 @@ mobile
 deploy
 !deploy/cloudflare/api/.gitinfo
 !deploy/cloudflare/api/helper
+
+# fork: Claude Code worktrees and caches (GBs of build output on 2026-10-17)
+.claude
