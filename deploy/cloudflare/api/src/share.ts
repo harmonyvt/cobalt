@@ -7,6 +7,7 @@
 // container is never involved. Free of Cloudflare imports so it runs under plain node in the tests.
 
 import { POST_KEY_SQL } from "./app-routes";
+import { shareSetRoute } from "./share-sets";
 import { ITEM_COLUMNS, effectiveVisibility, extOf, type MediaRow } from "./visibility";
 
 export type ShareDeps = {
@@ -118,6 +119,9 @@ export async function sharePage(d: ShareDeps, request: Request): Promise<Respons
     const url = new URL(request.url);
     const media = withSlash(d.mediaBaseUrl);
     if (url.pathname === "/" || url.pathname === "") return NOT_FOUND();
+    // gallery share links (section 24): /g/<id>, the Mastodon status Discord reads, its oEmbed
+    const set = await shareSetRoute({ ...d, now: () => Date.now() }, request);
+    if (set) return set;
     if (url.pathname === "/robots.txt") {
         // Link unfurlers fetch pages, they do not crawl; search engines may not index the pages.
         return new Response("User-agent: *\nDisallow: /\n", { headers: { "content-type": "text/plain" } });

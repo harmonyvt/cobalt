@@ -35,7 +35,7 @@ extension AppModel {
     }
 
     var visibleTabs: [AppTab] {
-        AppTab.allCases.filter { $0 != .library || capabilities.library }
+        AppTab.allCases.filter { $0.isAvailable(with: capabilities) }
     }
 }
 
@@ -306,6 +306,12 @@ struct AppShell: View {
                     LibraryScreen(model: model, tier: tier)
                 }
             }
+            // the gallery share links made from the library's select mode (APP-API-CONTRACT 24)
+            if model.capabilities.shareSets {
+                Tab(Copy.tab(.links), systemImage: icon(for: .links), value: AppTab.links) {
+                    NavigationStack { LinksScreen(model: model) }
+                }
+            }
             // everything cobalt is doing (apple/CONTRACT.md 12); the badge is the work in motion on this device
             Tab(Copy.tab(.queue), systemImage: icon(for: .queue), value: AppTab.queue) {
                 NavigationStack { QueueScreen(model: model) }
@@ -334,6 +340,7 @@ struct AppShell: View {
             switch model.selectedTab {
             case .save: HomeScreen(model: model, tier: tier)
             case .library: LibraryScreen(model: model, tier: tier)
+            case .links: NavigationStack { LinksScreen(model: model) }
             case .queue: NavigationStack { QueueScreen(model: model) }
             case .settings: SettingsScreen(model: model)
             }
@@ -554,6 +561,7 @@ func icon(for tab: AppTab) -> String {
     switch tab {
     case .save: return Symbol.save
     case .library: return Symbol.library
+    case .links: return Symbol.links
     case .queue: return Symbol.queue
     case .settings: return Symbol.settings
     }
@@ -565,6 +573,9 @@ func icon(for tab: AppTab) -> String {
 }
 #Preview("shell · library tab") {
     PreviewHost(.happy, tab: .library) { AppShell(model: $0) }
+}
+#Preview("shell · links tab") {
+    PreviewHost(.happy, tab: .links) { AppShell(model: $0) }
 }
 #Preview("shell · queue tab") {
     PreviewHost(.happy, tab: .queue) { AppShell(model: $0) }

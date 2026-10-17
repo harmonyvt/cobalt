@@ -81,6 +81,10 @@ export type LookupThen =
     | "library_search_post"
     // GET /queue (APP-API-CONTRACT.md section 23)
     | "queue"
+    // gallery share links (APP-API-CONTRACT.md section 24)
+    | "share_sets_create"
+    | "share_sets_list"
+    | "share_sets_revoke"
     | "live_start_token"
     | "live_run"
     | "live_state"
@@ -116,6 +120,8 @@ export const STUDIO_JOB_REGEX = /^[A-Za-z0-9]{20}$/;
 
 // Library item id: 16 base62 chars (mintItemId, the web's base62(16)).
 export const ITEM_ID_REGEX = /^[A-Za-z0-9]{16}$/;
+// a gallery share link's id (section 24): 19 digits
+export const SHARE_SET_ID_REGEX = /^[0-9]{19}$/;
 
 export const isStudioPath = (pathname: string) =>
     pathname === "/studio" || pathname.startsWith("/studio/");
@@ -209,6 +215,19 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     if (req.pathname === "/queue") {
         if (req.service) return reject(404);
         return req.method === "GET" ? lookupThen(req, "queue") : reject(404);
+    }
+
+    // Gallery share links (APP-API-CONTRACT.md section 24): keyed only.
+    if (req.pathname === "/share/sets" || req.pathname.startsWith("/share/sets/")) {
+        if (req.service) return reject(404);
+        if (req.pathname === "/share/sets") {
+            if (req.method === "GET") return lookupThen(req, "share_sets_list");
+            if (req.method === "POST") return lookupThen(req, "share_sets_create");
+            return reject(404);
+        }
+        const id = req.pathname.slice("/share/sets/".length);
+        if (!SHARE_SET_ID_REGEX.test(id) || req.method !== "DELETE") return reject(404);
+        return lookupThen(req, "share_sets_revoke", { id });
     }
 
     // Library adoption is for the web Worker's service credential only; an
