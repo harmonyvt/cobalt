@@ -559,7 +559,7 @@ K2 and U run in parallel against the pinned API. U uses the preview model only u
 
 iOS simulator and macOS builds as `CLAUDE.md` gives them; the share extension builds (it links the store).
 
-### 8.3 Runtime evidence (V; iOS 26.5 simulator, then the owner's phone; every screenshot and log path returned with a pass/fail list)
+### 8.3 Runtime evidence (V; iOS 27.0 simulator, then the owner's phone; every screenshot and log path returned with a pass/fail list)
 
 - **G-F:** the Files app shows On My iPhone › cobalt with friendly names after migrating a seeded 1.10 store
   (`DebugHooks` seed).

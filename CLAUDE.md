@@ -109,7 +109,7 @@ backend routes it uses; nothing under `api/` changes). Design source: `apple/moc
   `group.com.capybaraharmony.cobalt`, URL scheme `cobalt-apple`.
 - Build and test (from the repo root):
   - `cd apple && xcodegen generate`
-  - `xcodebuild -project apple/Cobalt.xcodeproj -scheme Cobalt -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -derivedDataPath apple/.build/ios CODE_SIGNING_ALLOWED=NO build`
+  - `xcodebuild -project apple/Cobalt.xcodeproj -scheme Cobalt -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=27.0' -derivedDataPath apple/.build/ios CODE_SIGNING_ALLOWED=NO build`
   - the same with `-destination 'platform=macOS' -derivedDataPath apple/.build/mac`
   - `cd apple/CobaltKit && swift test`
 - Previews and tests run on `PreviewClient` / `AppModel.preview(<scenario>)`, which replay

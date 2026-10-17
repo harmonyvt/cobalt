@@ -595,7 +595,7 @@ evidence); K2 ≈ 1 session (≈ 400 lines, the store/share edits are small but 
 ## 9. Gates, tests, evidence
 
 **Gates** (every lane; Fable reruns): `CONTRACT.md` section 9's four commands (xcodegen; iOS build on
-iPhone 17 Pro / iOS 26.5; macOS build; `cd apple/CobaltKit && swift test`), no `warning:` lines from
+iPhone 17 Pro / iOS 27.0; macOS build; `cd apple/CobaltKit && swift test`), no `warning:` lines from
 `apple/`; S and W also their `npm test && npm run typecheck`.
 
 **K tests** (`swift test`):
@@ -630,7 +630,7 @@ all line; plain cobalt (no library tab, nothing to preview).
 behind it); rename alert (fork, local-only message); detail title menu; share card with the title
 row; Lock Screen with a title caption.
 
-**V checklist** (iPhone 17 Pro sim iOS 26.5, iPad sim 1194×834, Mac; `-previewScenario renditions`;
+**V checklist** (iPhone 17 Pro sim iOS 27.0, iPad sim 1194×834, Mac; `-previewScenario renditions`;
 every screenshot/recording and log saved to a session path):
 1. mosaic: 3 columns, real aspects, badges, captions; scroll → only ≤ 4 webps animate, none while
    scrolling, none with Reduce Motion or Low Power (toggle both); a failing tile shows the glyph and

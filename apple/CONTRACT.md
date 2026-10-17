@@ -880,7 +880,7 @@ Every lane, before reporting done (Fable reruns them):
 ```sh
 cd apple && xcodegen generate && cd ..
 xcodebuild -project apple/Cobalt.xcodeproj -scheme Cobalt \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=27.0' \
   -derivedDataPath apple/.build/ios CODE_SIGNING_ALLOWED=NO build
 xcodebuild -project apple/Cobalt.xcodeproj -scheme Cobalt \
   -destination 'platform=macOS' \

@@ -578,7 +578,7 @@ exported rows. Save the report JSON and the before/after counts.
   picture (legacy shape).
 
 Gates (every lane; Fable reruns): the four Apple commands (`xcodegen generate`; iOS build on iPhone 17 Pro / iOS
-26.5; macOS build; `cd apple/CobaltKit && swift test`) for K/U/U0; `npm test && npm run typecheck` in `api` and
+27.0; macOS build; `cd apple/CobaltKit && swift test`) for K/U/U0; `npm test && npm run typecheck` in `api` and
 `web` for A1/A2/A3.
 
 ---
