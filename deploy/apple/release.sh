@@ -121,8 +121,13 @@ step "published source"
 # silently treated as empty (that would truncate the history on the next upload).
 PREV="$OUT_DIR/previous-source.json"
 rm -f "$PREV"
-HTTP_CODE="$(curl -sS --max-time 20 -o "$PREV" -w '%{http_code}' \
-    -H 'Cache-Control: no-cache' "$SOURCE_URL?cb=$(date +%s)" 2>/dev/null || echo 000)"
+# A network blip reads as HTTP 000; try a few times before giving up.
+for attempt in 1 2 3; do
+    HTTP_CODE="$(curl -sS --max-time 20 -o "$PREV" -w '%{http_code}' \
+        -H 'Cache-Control: no-cache' "$SOURCE_URL?cb=$(date +%s)" 2>/dev/null || echo 000)"
+    case "$HTTP_CODE" in 200|404) break ;; esac
+    [ "$attempt" -lt 3 ] && sleep 5
+done
 PREV_VERSIONS='[]'
 case "$HTTP_CODE" in
     200)
@@ -432,7 +437,7 @@ else
     else
         say "warning: the published source.json does not show build $BUILD yet (got: ${GOT:-nothing}); check the URL and cache rules"
     fi
-    IPA_REMOTE_BYTES="$(curl -sSI --max-time 20 "$IPA_URL" 2>/dev/null | tr -d '\r' | sed -n 's/^[Cc]ontent-length:[[:space:]]*//p' | head -n 1)"
+    IPA_REMOTE_BYTES="$(curl -sSI --max-time 20 "$IPA_URL" 2>/dev/null | tr -d '\r' | sed -n 's/^[Cc]ontent-length:[[:space:]]*//p' | head -n 1 || true)"
     if [ "$IPA_REMOTE_BYTES" = "$IPA_BYTES" ]; then
         say "ipa downloads at $IPA_REMOTE_BYTES bytes"
     else
