@@ -16,22 +16,32 @@ app with the owner's own Apple developer account when installing it. Fork-only; 
 Each release rewrites `source.json` so `versions[0]` is the newest build (the file also repeats it as the legacy
 top-level `version` / `downloadURL`, as Feather's own repo file does). Feather reads `versions[0]` as the current
 build, so once it refreshes the source the app's row shows the new version, date and release note; tap **Get** again to
-install over the old one. The last 5 builds stay in the file; older ipas are deleted from R2. (From Feather's source:
+install over the old one. Every build stays in the file and in R2 as its own `cobalt-<version>-<build>.ipa`; nothing
+is deleted unless you pass `--keep <n>` (or set `"keep": n` in `feather.json`), which prunes to the newest n. Publishing
+a version + build that is already in the source is refused unless you pass `--replace`. (From Feather's source:
 the list shows the newest version string and download; whether it also flags an already-installed copy as outdated was
 not confirmed, so check the version shown against the one on the device.) Bump the version for every release (below).
 
 ## Cutting a release
 
+`deploy/cobalt-deploy ios ...` is the front door: it runs `release.sh` with the same options, `--commit <ref>` ships
+exactly that commit from a temporary worktree, `deploy/cobalt-deploy ios list` shows every published build (and which
+are in `~/cobalt-ipas/`), and `deploy/cobalt-deploy ios url` prints the source URL.
+
 1. Bump `MARKETING_VERSION` and/or `CURRENT_PROJECT_VERSION` in `apple/project.yml` (`CURRENT_PROJECT_VERSION` must
    change on every release; it is the build number and part of the ipa name).
-2. `deploy/apple/release.sh --dry-run` first: builds, packs, copies dSYMs and `~/Downloads/cobalt.ipa`, prints the
+2. `deploy/apple/release.sh --dry-run` first: builds, packs, copies dSYMs and the ipa (below), prints the
    `source.json` it would publish, uploads nothing.
 3. `deploy/apple/release.sh` publishes: ipa and icon first, `source.json` last, then deletes ipas that fell out of the
-   5-version window, then fetches the published source back to check it shows the new build.
+   `--keep` window (only with `--keep`), then fetches the published source back to check it shows the new build.
+
+Local copies, all named `cobalt-<version>-<build>.ipa` so a new build never overwrites an old one: `~/cobalt-ipas/` (the
+archive, never pruned; `COBALT_IPA_ARCHIVE` overrides it), `~/Downloads/`, and the Taildropped file.
 
 Flags: `--dry-run`, `--show-url` (print the real URL), `--taildrop <device>` (also `tailscale file cp` the ipa to a
 device; ignored by `--dry-run`), `--notes "text"` (release note shown in Feather; default `cobalt <version> (<build>)`),
-`--skip-build` (reuse the Release app already in `apple/.build/ipa`).
+`--skip-build` (reuse the Release app already in `apple/.build/ipa`), `--keep <n>` (prune to the newest n builds; default
+keeps all), `--replace` (re-publish a version + build that is already published).
 
 Needs `xcodegen`, Xcode, `jq`, and the global `cf` logged in (`cf r2 objects put/list/delete`). Outputs land in
 `apple/.build/feather/` (gitignored): the ipa, `source.json`, `icon.png`, `build.log`.

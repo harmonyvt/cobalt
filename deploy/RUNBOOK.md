@@ -141,20 +141,21 @@ cd CobaltKit && swift test                                      # 1624 tests on 
 `release.sh` builds the working tree. To ship exactly a commit and not unfinished work:
 
 ```bash
-R=/tmp/cobalt-rel && git worktree add --detach "$R" <sha> && (cd "$R" && deploy/apple/release.sh --taildrop harmony --notes "…")
-git worktree remove --force "$R"
+deploy/cobalt-deploy ios --commit <sha> --taildrop harmony --notes "…"   # temp worktree, removed afterwards
 ```
 
 ### 2.4 iPhone (Feather source + Taildrop)
 
 ```bash
-deploy/apple/release.sh --dry-run                                   # build + pack, uploads nothing
-deploy/apple/release.sh --taildrop harmony --notes "what's new"     # from the repo root
+deploy/cobalt-deploy ios --dry-run                                  # build + pack, uploads nothing
+deploy/cobalt-deploy ios --taildrop harmony --notes "what's new"    # from the repo root (runs deploy/apple/release.sh)
+deploy/cobalt-deploy ios list                                       # every published build, newest first
 ```
 
 It builds Release unsigned, packs the ipa, copies dSYMs to `~/cobalt-dsyms/<ver>-<build>/`, uploads the ipa to R2 under
-`apps/<token>/`, publishes the Feather/AltStore `source.json`, purges its cached copy, keeps the last 5 builds and
-Taildrops the ipa to the device named `harmony`. Success line to look for: `source.json serves build <N>`.
+`apps/<token>/`, publishes the Feather/AltStore `source.json`, purges its cached copy, keeps every build (`--keep <n>` prunes), archives
+the ipa in `~/cobalt-ipas/` and Taildrops `cobalt-<version>-<build>.ipa` to the device named `harmony`. Re-publishing
+an already published build is refused without `--replace`. Success line to look for: `source.json serves build <N>`.
 Needs `~/.config/cobalt/feather.json` and an authenticated `cf`. Details: `deploy/apple/README.md`.
 The owner then updates from the Feather source or opens the Taildropped ipa.
 
