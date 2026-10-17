@@ -171,6 +171,8 @@ export async function capabilities(
     helperMake = false,
     // ... and `direct=1`: a link to a media file that cobalt has no service for is saved as that file (section 19)
     helperDirect = false,
+    // the Hugging Face Space is configured: GET /library/search (section 21)
+    search = false,
 ): Promise<StudioReply> {
     const state = await resolveKeyState(d.db, auth, key, d.now());
     const version: unknown = apiVersion;
@@ -222,6 +224,9 @@ export async function capabilities(
                 // a pasted link straight to an image or video file (a Discord CDN attachment, ...) just saves
                 // (APP-API-CONTRACT.md section 19): only while the helper that runs said `direct=1`
                 direct_links: helperDirect === true,
+                // GET /library/search and POST /library/search/index (APP-API-CONTRACT.md section 21): only
+                // while the embedding Space is configured
+                search: search === true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,
@@ -673,6 +678,10 @@ function listFiles(fs: FileRow[], v2: boolean, tombs: Map<string, Tomb>, v3 = fa
     return out;
 }
 
+// The rows GET /library leaves out for older clients (sections 16 and 18.3); "" for `v=3`.
+export const libraryHide = (v2: boolean, v3: boolean): string =>
+    (v2 ? "" : ` AND NOT (m.source IN ('webp', 'studio') AND ${visSql("m.")} = 'private')`) + (v3 ? "" : LEGACY_GALLERY_HIDE);
+
 export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<StudioReply> {
     const bad = () => err(400, "error.library.bad_request");
     let limit = DEFAULT_LIBRARY_LIMIT;
@@ -700,8 +709,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
     // of a gallery post; without it a gallery is its lead item and its webps, nothing made.
     const v3 = q.get("v") === "3";
     const v2 = v3 || q.get("v") === "2";
-    const hide =
-        (v2 ? "" : ` AND NOT (m.source IN ('webp', 'studio') AND ${visSql("m.")} = 'private')`) + (v3 ? "" : LEGACY_GALLERY_HIDE);
+    const hide = libraryHide(v2, v3);
 
     try {
         // 1. the page of posts: newest file first, ties broken by the post key
@@ -718,117 +726,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
         const more = keys.length > limit;
         const page = keys.slice(0, limit);
 
-        let files: FileRow[] = [];
-        let sessions: SessionRowLite[] = [];
-        const titles = new Map<string, string>();
-        if (page.length > 0) {
-            const marks = placeholders(page.length);
-            const binds = page.map((k) => k.post_key);
-            // 2. every live file of those posts, and their sessions
-            files = (
-                await db
-                    .prepare(
-                        `SELECT * FROM (SELECT ${ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${GALLERY_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${POST_KEY_SQL} AS post_key
-                                        FROM media_items m WHERE m.deleted_at IS NULL${hide})
-                         WHERE post_key IN (${marks}) ORDER BY created_at DESC, id DESC`,
-                    )
-                    .bind(...binds)
-                    .all<FileRow>()
-            ).results;
-            sessions = (
-                await db
-                    .prepare(
-                        `SELECT * FROM (SELECT s.id, s.status, s.service, s.expires_at, s.created_at, s.items,
-                                                CASE WHEN s.link LIKE 'upload:%' THEN substr(s.link, 8) ELSE s.id END AS post_key
-                                         FROM studio_sessions s)
-                         WHERE post_key IN (${marks}) ORDER BY created_at DESC, id DESC`,
-                    )
-                    .bind(...binds)
-                    .all<SessionRowLite>()
-            ).results;
-            // 3. the posts' custom titles (section 15); a post with no row has none
-            const { results: custom } = await db
-                .prepare(`SELECT post_key, title FROM media_titles WHERE post_key IN (${marks})`)
-                .bind(...binds)
-                .all<{ post_key: string; title: string }>();
-            for (const t of custom) titles.set(t.post_key, t.title);
-        }
-
-        const filesByPost = new Map<string, FileRow[]>();
-        for (const f of files) {
-            const list = filesByPost.get(f.post_key) ?? [];
-            list.push(f);
-            filesByPost.set(f.post_key, list);
-        }
-        const sessionsByPost = new Map<string, SessionRowLite[]>();
-        for (const s of sessions) {
-            const list = sessionsByPost.get(s.post_key) ?? [];
-            list.push(s);
-            sessionsByPost.set(s.post_key, list);
-        }
-
-        // legacy only: the retired host row of a merged pair keeps the old file's id and time
-        const tombs = new Map<string, Tomb>();
-        if (!v2) {
-            const pids = files.filter((f) => f.bucket === "originals" && f.visibility === "public" && f.public_id).map((f) => f.public_id!);
-            if (pids.length > 0) {
-                const { results } = await db
-                    .prepare(
-                        `SELECT id, name, content_type, bytes, width, height, duration, created_at, poster FROM media_items WHERE id IN (${placeholders(pids.length)}) AND merged_into IS NOT NULL`,
-                    )
-                    .bind(...pids)
-                    .all<Tomb>();
-                for (const t of results) tombs.set(t.id, t);
-            }
-        }
-
-        const api = noSlash(d.apiUrl);
-        const posts = page.map((k) => {
-            const raw = filesByPost.get(k.post_key) ?? []; // newest first
-            const fs = v3 ? sortV3(raw) : raw;
-            const ss = sessionsByPost.get(k.post_key) ?? []; // newest first
-            const original = leadOf(fs);
-            const meta = original ?? fs.find(isVideoish) ?? null;
-            const link = original?.link ?? fs.find((f) => f.link)?.link ?? null;
-            const open = ss.find((s) => s.expires_at > now && (s.status === "saving" || s.status === "ready")) ?? null;
-            const service = ss[0]?.service ?? (link ? serviceFromUrl(link) : null);
-            // the post's public link: its original's (section 16), else the newest unmerged host copy's
-            const hosted = fs.find((f) => f.kind === "public" && f.source === "host" && f.url);
-            return {
-                id: k.post_key,
-                service,
-                link,
-                title: meta?.name ?? null,
-                // the owner's own title for the post (PATCH .../post), null = none (section 15)
-                custom_title: titles.get(k.post_key) ?? null,
-                duration: meta?.duration ?? null,
-                width: meta?.width ?? null,
-                height: meta?.height ?? null,
-                // the post's thumbnail: the original's, else any file's (null until made)
-                poster_url: original?.poster ?? fs.find((f) => f.poster)?.poster ?? null,
-                public_url: original?.url ?? hosted?.url ?? null,
-                created_at: k.latest,
-                session: open
-                    ? {
-                          id: open.id,
-                          status: open.status,
-                          expires_at: open.expires_at,
-                          source_url: `${api}/studio/${open.id}/source`,
-                      }
-                    : null,
-                files: listFiles(fs, v2, tombs, v3),
-                ...(v2
-                    ? {
-                          visibility: original
-                              ? effectiveVisibility(original)
-                              : fs.some((f) => effectiveVisibility(f) === "public")
-                                ? "public"
-                                : "private",
-                      }
-                    : {}),
-                ...(v3 ? postGalleryFields(fs, ss, original) : {}),
-            };
-        });
+        const { posts, files } = await assemblePosts(d, page, { v2, v3, hide, now });
 
         // A page showing originals that still have no poster (and were not tried in the last
         // day) asks the Durable Object to queue them (section 13); it only writes records, the
@@ -880,6 +778,129 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
         console.error("[library] list failed", String(e));
         return err(503, "error.api.generic");
     }
+}
+
+// The posts of `page` in the GET /library shape (also GET /library/search, embed.ts). `hide` is
+// libraryHide(v2, v3). Posts with no file left under `hide` come back with `files: []`.
+export async function assemblePosts(
+    d: AppDeps,
+    page: { post_key: string; latest: number }[],
+    o: { v2: boolean; v3: boolean; hide: string; now: number },
+): Promise<{ posts: any[]; files: FileRow[] }> {
+    const db = d.db;
+    const { v2, v3, hide, now } = o;
+    let files: FileRow[] = [];
+    let sessions: SessionRowLite[] = [];
+    const titles = new Map<string, string>();
+    if (page.length > 0) {
+        const marks = placeholders(page.length);
+        const binds = page.map((k) => k.post_key);
+        // 2. every live file of those posts, and their sessions
+        files = (
+            await db
+                .prepare(
+                    `SELECT * FROM (SELECT ${ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${GALLERY_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${POST_KEY_SQL} AS post_key
+                                    FROM media_items m WHERE m.deleted_at IS NULL${hide})
+                     WHERE post_key IN (${marks}) ORDER BY created_at DESC, id DESC`,
+                )
+                .bind(...binds)
+                .all<FileRow>()
+        ).results;
+        sessions = (
+            await db
+                .prepare(
+                    `SELECT * FROM (SELECT s.id, s.status, s.service, s.expires_at, s.created_at, s.items,
+                                            CASE WHEN s.link LIKE 'upload:%' THEN substr(s.link, 8) ELSE s.id END AS post_key
+                                     FROM studio_sessions s)
+                     WHERE post_key IN (${marks}) ORDER BY created_at DESC, id DESC`,
+                )
+                .bind(...binds)
+                .all<SessionRowLite>()
+        ).results;
+        // 3. the posts' custom titles (section 15); a post with no row has none
+        const { results: custom } = await db
+            .prepare(`SELECT post_key, title FROM media_titles WHERE post_key IN (${marks})`)
+            .bind(...binds)
+            .all<{ post_key: string; title: string }>();
+        for (const t of custom) titles.set(t.post_key, t.title);
+    }
+
+    const filesByPost = new Map<string, FileRow[]>();
+    for (const f of files) {
+        const list = filesByPost.get(f.post_key) ?? [];
+        list.push(f);
+        filesByPost.set(f.post_key, list);
+    }
+    const sessionsByPost = new Map<string, SessionRowLite[]>();
+    for (const s of sessions) {
+        const list = sessionsByPost.get(s.post_key) ?? [];
+        list.push(s);
+        sessionsByPost.set(s.post_key, list);
+    }
+
+    // legacy only: the retired host row of a merged pair keeps the old file's id and time
+    const tombs = new Map<string, Tomb>();
+    if (!v2) {
+        const pids = files.filter((f) => f.bucket === "originals" && f.visibility === "public" && f.public_id).map((f) => f.public_id!);
+        if (pids.length > 0) {
+            const { results } = await db
+                .prepare(
+                    `SELECT id, name, content_type, bytes, width, height, duration, created_at, poster FROM media_items WHERE id IN (${placeholders(pids.length)}) AND merged_into IS NOT NULL`,
+                )
+                .bind(...pids)
+                .all<Tomb>();
+            for (const t of results) tombs.set(t.id, t);
+        }
+    }
+
+    const api = noSlash(d.apiUrl);
+    const posts = page.map((k) => {
+        const raw = filesByPost.get(k.post_key) ?? []; // newest first
+        const fs = v3 ? sortV3(raw) : raw;
+        const ss = sessionsByPost.get(k.post_key) ?? []; // newest first
+        const original = leadOf(fs);
+        const meta = original ?? fs.find(isVideoish) ?? null;
+        const link = original?.link ?? fs.find((f) => f.link)?.link ?? null;
+        const open = ss.find((s) => s.expires_at > now && (s.status === "saving" || s.status === "ready")) ?? null;
+        const service = ss[0]?.service ?? (link ? serviceFromUrl(link) : null);
+        // the post's public link: its original's (section 16), else the newest unmerged host copy's
+        const hosted = fs.find((f) => f.kind === "public" && f.source === "host" && f.url);
+        return {
+            id: k.post_key,
+            service,
+            link,
+            title: meta?.name ?? null,
+            // the owner's own title for the post (PATCH .../post), null = none (section 15)
+            custom_title: titles.get(k.post_key) ?? null,
+            duration: meta?.duration ?? null,
+            width: meta?.width ?? null,
+            height: meta?.height ?? null,
+            // the post's thumbnail: the original's, else any file's (null until made)
+            poster_url: original?.poster ?? fs.find((f) => f.poster)?.poster ?? null,
+            public_url: original?.url ?? hosted?.url ?? null,
+            created_at: k.latest,
+            session: open
+                ? {
+                      id: open.id,
+                      status: open.status,
+                      expires_at: open.expires_at,
+                      source_url: `${api}/studio/${open.id}/source`,
+                  }
+                : null,
+            files: listFiles(fs, v2, tombs, v3),
+            ...(v2
+                ? {
+                      visibility: original
+                          ? effectiveVisibility(original)
+                          : fs.some((f) => effectiveVisibility(f) === "public")
+                            ? "public"
+                            : "private",
+                  }
+                : {}),
+            ...(v3 ? postGalleryFields(fs, ss, original) : {}),
+        };
+    });
+    return { posts, files };
 }
 
 // ---- 5b. GET|HEAD /library/items/<id>/file ------------------------------------------------

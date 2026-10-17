@@ -920,6 +920,22 @@ Two additive features (owner, 2026-10-05: "by default videos are public and they
   linux/amd64 under emulation) on all six fixture clips (correct sizes, upright, 5 to 17 KB). **Not verified until deployed**: a poster
   write and the R2 to R2 copy from inside the Durable Object, real timings.
 
+## Library search (`APP-API-CONTRACT.md` section 21)
+
+Search runs EmbeddingGemma 2 on a free, private Hugging Face Space; the API Worker indexes posts every 15
+minutes and answers `GET /library/search`. Owner steps, once:
+
+1. Create the Space from `deploy/huggingface/embed` (its README: private Docker Space `cobalt-embed`, secret `EMBED_KEY`).
+2. Apply migration 0010 (the D1 command at the top of this file).
+3. Add `EMBED_TOKEN` (a Hugging Face token that can call the private Space) and `EMBED_KEY` to
+   `~/.config/cobalt/secrets.json`, then `deploy/cobalt-deploy api`.
+4. Check: `POST /library/search/index` with an Api-Key answers `indexed` > 0 (the first call may say
+   `unavailable: true` while the Space boots; the cron carries on), then `GET /library/search?q=...`.
+
+Accepted trade-offs: a free Space sleeps when idle, so the first search after a quiet spell answers
+`error.search.waking`; search scores every vector in the Worker (fine for thousands of posts, not millions);
+only the poster frame is looked at, not the whole video or its audio.
+
 ## One file per rendition, public or private (`APP-API-CONTRACT.md` section 16, `apple/CONTRACT-VISIBILITY.md`)
 
 A library row is the media file: the canonical bytes stay private (`cobalt-originals`) and "public" is a mirror object in `cobalt-media`

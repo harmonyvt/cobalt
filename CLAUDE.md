@@ -74,6 +74,9 @@ the files and a real run before anything is called done.
   record of everything in D1 `media_items`. The studio (/studio/<sid>) and library
   (/library) pages are self-contained HTML embedded in the web Worker; the only upstream
   edit for them is the sidebar "library" tab (Sidebar.svelte, SidebarTab.svelte).
+- Library search (`APP-API-CONTRACT.md` section 21): EmbeddingGemma 2 on a private Hugging Face Space
+  (`deploy/huggingface/embed`), vectors in D1 `media_embeddings`, indexed by the API Worker's 15-minute cron
+  (`api/src/embed.ts`), `GET /library/search`. Off unless `EMBED_TOKEN` is in the secrets file.
 - Runtime lessons (all hit live): `pipeTo()` between streams is not implemented in the
   Workers runtime (copy with a reader/writer loop); AbortSignal timeouts on containerFetch
   are not honoured inside the DO (race your own timeout); work after a DO response does not

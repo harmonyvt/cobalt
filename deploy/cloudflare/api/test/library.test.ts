@@ -973,6 +973,8 @@ describe("GET /capabilities", () => {
                 gallery: false,
                 gallery_make: false,
                 direct_links: false,
+                // no embedding Space in this world's env (section 21)
+                search: false,
             },
             limits: {
                 max_webp_seconds: 10,

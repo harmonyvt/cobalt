@@ -1,0 +1,452 @@
+// Library search (APP-API-CONTRACT.md section 21): the post inputs, the cron's indexer, the Space
+// client and GET /library/search, on the real migrations (node:sqlite). The Space is a fake that
+// "sees" a poster through a table of words per poster URL, so a word that is only in the picture
+// still finds the post, as the real multimodal model does.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { capabilities, type AppDeps } from "../src/app-routes";
+import {
+    EMBED_DIMS,
+    EMBED_MAX_ATTEMPTS,
+    EMBED_MODEL,
+    EMBED_RETRY_MS,
+    EmbedError,
+    decodeVector,
+    dot,
+    encodeVector,
+    librarySearch,
+    normalize,
+    postInputs,
+    runIndexer,
+    spaceClient,
+    type EmbedClient,
+    type EmbedInput,
+} from "../src/embed";
+import { decide, type GateRequest } from "../src/gate";
+import { hashKey } from "../src/keys";
+import { handleRequest, type WorkerEnv } from "../src/worker";
+import { type FakeD1 } from "../../test-support/d1-sqlite";
+import { createBatchD1 } from "./d1-batch";
+import { MemoryMedia, MemoryOriginals } from "./studio-fakes";
+
+const MEDIA = "https://media.capybaraharmony.com/";
+const SPACE = "https://capybaraharmony-cobalt-embed.hf.space";
+const T0 = 1_800_000_000_000;
+
+// ---- a fake Space ------------------------------------------------------------------------------
+
+const PICTURES: Record<string, string> = {
+    [`${MEDIA}posters/aaaaaaaaaa.jpg`]: "cat skateboard",
+    [`${MEDIA}posters/bbbbbbbbbb.jpg`]: "beach sunset",
+};
+
+function wordVector(words: string): number[] {
+    const v = new Array(EMBED_DIMS).fill(0);
+    for (const w of words.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)) {
+        let h = 0;
+        for (const c of w) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+        v[h % EMBED_DIMS] += 1;
+    }
+    v[EMBED_DIMS - 1] += 0.01; // never all zero
+    return normalize(v);
+}
+
+class FakeSpace implements EmbedClient {
+    calls: { kind: string; inputs: EmbedInput[] }[] = [];
+    fail: ((inputs: EmbedInput[]) => EmbedError | null) | null = null;
+    async embed(kind: "document" | "query", inputs: EmbedInput[]) {
+        this.calls.push({ kind, inputs });
+        const e = this.fail?.(inputs);
+        if (e) throw e;
+        return {
+            model: EMBED_MODEL,
+            vectors: inputs.map((i) =>
+                wordVector(`${kind === "document" ? (i.title ?? "") : ""} ${i.text} ${i.image_url ? (PICTURES[i.image_url] ?? "") : ""}`),
+            ),
+            images: inputs.map((i) => Boolean(i.image_url && PICTURES[i.image_url])),
+        };
+    }
+}
+
+// ---- the library -------------------------------------------------------------------------------
+
+let n = 0;
+function addFile(
+    db: FakeD1,
+    over: Partial<{
+        id: string;
+        name: string;
+        link: string | null;
+        poster: string | null;
+        session_id: string | null;
+        source: string;
+        bucket: string;
+        content_type: string;
+        role: string | null;
+        item_index: number | null;
+        created_at: number;
+        deleted_at: number | null;
+    }> = {},
+) {
+    n++;
+    const id = over.id ?? `item${String(n).padStart(12, "0")}`;
+    db.raw
+        .prepare(
+            `INSERT INTO media_items (id, kind, source, bucket, r2_key, name, content_type, link, poster, session_id, role, item_index, created_at, deleted_at)
+             VALUES (?, 'private', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+            id,
+            over.source ?? "saved",
+            over.bucket ?? "originals",
+            `originals/${id}.mp4`,
+            over.name ?? "clip.mp4",
+            over.content_type ?? "video/mp4",
+            over.link ?? null,
+            over.poster ?? null,
+            over.session_id ?? null,
+            over.role ?? null,
+            over.item_index ?? null,
+            over.created_at ?? T0 + n,
+            over.deleted_at ?? null,
+        );
+    return id;
+}
+
+function world() {
+    const db: FakeD1 = createBatchD1();
+    let now = T0 + 1_000_000;
+    const space = new FakeSpace();
+    const d: AppDeps = {
+        db: db as unknown as D1Database,
+        originals: new MemoryOriginals(),
+        media: new MemoryMedia(),
+        mediaBaseUrl: MEDIA,
+        apiUrl: "https://api.capybaraharmony.com/",
+        webUrl: "https://cobalt.capybaraharmony.com",
+        now: () => now,
+        fixedLength: () => {
+            throw new Error("unused");
+        },
+        adopt: async () => {
+            throw new Error("unused");
+        },
+    };
+    const index = (batch?: number) => runIndexer({ db: d.db, client: space, mediaBaseUrl: MEDIA, now: () => now, batch });
+    const rows = () => db.raw.prepare("SELECT * FROM media_embeddings ORDER BY post_key").all() as any[];
+    const search = (q: string, extra = "") => librarySearch({ ...d, embed: space }, new URLSearchParams(`q=${encodeURIComponent(q)}${extra}`));
+    return { db, d, space, index, rows, search, tick: (ms: number) => (now += ms) };
+}
+
+// ---- vectors -----------------------------------------------------------------------------------
+
+describe("vectors", () => {
+    it("round-trip through the column format as float32", () => {
+        const v = wordVector("hello world");
+        const back = decodeVector(encodeVector(v))!;
+        expect(back.length).toBe(EMBED_DIMS);
+        expect(dot(back, v)).toBeCloseTo(1, 5);
+        expect(encodeVector(v).length).toBe(Math.ceil((EMBED_DIMS * 4) / 3) * 4);
+    });
+
+    it("refuse a column that is not whole floats", () => {
+        expect(decodeVector("AAA=")).toBeNull();
+        expect(decodeVector("%%%")).toBeNull();
+    });
+});
+
+// ---- inputs ------------------------------------------------------------------------------------
+
+describe("post inputs", () => {
+    it("one input per live post: custom title first, names and link words, poster only from the media domain", () => {
+        const w = world();
+        addFile(w.db, { session_id: "sessA", name: "IMG_4021.mp4", link: "https://x.com/someone/status/1", poster: `${MEDIA}posters/aaaaaaaaaa.jpg` });
+        addFile(w.db, { session_id: "sessA", name: "IMG_4021.webp", source: "webp", bucket: "media", content_type: "image/webp" });
+        addFile(w.db, { session_id: "sessB", name: "other.mp4", poster: "https://evil.example/p.jpg" });
+        addFile(w.db, { session_id: "sessC", name: "gone.mp4", deleted_at: T0 });
+        w.db.raw.prepare("INSERT INTO media_titles (post_key, title, updated_at) VALUES ('sessA', 'my cat', 1)").run();
+
+        return postInputs(w.d.db, MEDIA).then((inputs) => {
+            expect(inputs.map((p) => p.post_key)).toEqual(["sessB", "sessA"]);
+            const a = inputs.find((p) => p.post_key === "sessA")!;
+            expect(a.title).toBe("my cat");
+            expect(a.text).toContain("IMG_4021.mp4");
+            expect(a.text).toContain("IMG_4021.webp");
+            expect(a.text).toContain("x.com/someone/status/1");
+            expect(a.image_url).toBe(`${MEDIA}posters/aaaaaaaaaa.jpg`);
+            const b = inputs.find((p) => p.post_key === "sessB")!;
+            expect(b.title).toBe("other.mp4");
+            expect(b.image_url).toBeNull();
+        });
+    });
+});
+
+// ---- indexer -----------------------------------------------------------------------------------
+
+describe("indexer", () => {
+    it("embeds new posts a batch at a time, newest first, then nothing while inputs stay the same", async () => {
+        const w = world();
+        for (let i = 0; i < 5; i++) addFile(w.db, { session_id: `s${i}`, name: `clip${i}.mp4` });
+        const r1 = await w.index(3);
+        expect(r1).toMatchObject({ posts: 5, indexed: 3, failed: 0, pending: 2, unavailable: false });
+        expect(w.space.calls[0]!.inputs.map((i) => i.title)).toEqual(["clip4.mp4", "clip3.mp4", "clip2.mp4"]);
+        const r2 = await w.index(3);
+        expect(r2).toMatchObject({ indexed: 2, pending: 0 });
+        const r3 = await w.index(3);
+        expect(r3).toMatchObject({ indexed: 0, pending: 0 });
+        expect(w.space.calls).toHaveLength(2);
+        const row = w.rows()[0];
+        expect(row).toMatchObject({ model: EMBED_MODEL, dims: EMBED_DIMS, attempts: 0, failed_at: null });
+        expect(decodeVector(row.vector)!.length).toBe(EMBED_DIMS);
+    });
+
+    it("re-embeds a post whose title or poster changed, and deletes the rows of posts that are gone", async () => {
+        const w = world();
+        const keep = addFile(w.db, { session_id: "sKeep", name: "a.mp4" });
+        addFile(w.db, { session_id: "sGone", name: "b.mp4" });
+        await w.index();
+        expect(w.rows()).toHaveLength(2);
+
+        w.db.raw.prepare("INSERT INTO media_titles (post_key, title, updated_at) VALUES ('sKeep', 'renamed', 1)").run();
+        w.db.raw.prepare("UPDATE media_items SET poster = ? WHERE id = ?").run(`${MEDIA}posters/aaaaaaaaaa.jpg`, keep);
+        w.db.raw.prepare("UPDATE media_items SET deleted_at = 1 WHERE session_id = 'sGone'").run();
+        const r = await w.index();
+        expect(r).toMatchObject({ indexed: 1, removed: 1 });
+        expect(w.space.calls[1]!.inputs[0]).toMatchObject({ title: "renamed", image_url: `${MEDIA}posters/aaaaaaaaaa.jpg` });
+        expect(w.rows().map((x) => x.post_key)).toEqual(["sKeep"]);
+        expect(w.rows()[0].has_image).toBe(1);
+    });
+
+    it("a Space that is asleep or down holds nothing against the posts", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "s1" });
+        w.space.fail = () => new EmbedError("unavailable", 503);
+        for (let i = 0; i < 5; i++) {
+            const r = await w.index();
+            expect(r).toMatchObject({ indexed: 0, failed: 0, pending: 1, unavailable: true });
+        }
+        expect(w.rows()).toHaveLength(0);
+        w.space.fail = null;
+        expect(await w.index()).toMatchObject({ indexed: 1 });
+    });
+
+    it("a refused batch is retried one by one; only the bad post waits an hour, and is given up after three refusals", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "good", name: "fine.mp4" });
+        addFile(w.db, { session_id: "bad", name: "poison.mp4" });
+        w.space.fail = (inputs) => (inputs.some((i) => i.title === "poison.mp4") ? new EmbedError("rejected", 400) : null);
+
+        const r1 = await w.index();
+        expect(r1).toMatchObject({ indexed: 1, failed: 1, pending: 0 });
+        const bad = () => w.rows().find((x) => x.post_key === "bad");
+        expect(bad()).toMatchObject({ vector: null, attempts: 1, failed_at: expect.any(Number) });
+
+        // not again within the hour
+        const calls = w.space.calls.length;
+        expect(await w.index()).toMatchObject({ indexed: 0, failed: 0 });
+        expect(w.space.calls.length).toBe(calls);
+
+        for (let i = 2; i <= EMBED_MAX_ATTEMPTS; i++) {
+            w.tick(EMBED_RETRY_MS + 1);
+            await w.index();
+            expect(bad().attempts).toBe(i);
+        }
+        w.tick(EMBED_RETRY_MS + 1);
+        const before = w.space.calls.length;
+        await w.index();
+        expect(w.space.calls.length).toBe(before);
+
+        // a changed input starts over
+        w.db.raw.prepare("INSERT INTO media_titles (post_key, title, updated_at) VALUES ('bad', 'better', 1)").run();
+        w.space.fail = null;
+        expect(await w.index()).toMatchObject({ indexed: 1 });
+        expect(bad()).toMatchObject({ attempts: 0, failed_at: null });
+    });
+});
+
+// ---- search ------------------------------------------------------------------------------------
+
+describe("GET /library/search", () => {
+    async function library() {
+        const w = world();
+        addFile(w.db, { session_id: "catpost", name: "IMG_4021.mp4", poster: `${MEDIA}posters/aaaaaaaaaa.jpg`, link: "https://x.com/a/status/1" });
+        addFile(w.db, { session_id: "beachpost", name: "IMG_4022.mp4", poster: `${MEDIA}posters/bbbbbbbbbb.jpg` });
+        addFile(w.db, { session_id: "named", name: "skateboard tricks compilation.mp4" });
+        await w.index();
+        return w;
+    }
+
+    it("finds a post by what its poster shows, in the GET /library post shape with a score", async () => {
+        const w = await library();
+        const r = await w.search("cat");
+        expect(r.status).toBe(200);
+        const body = r.body as any;
+        expect(body.posts[0]).toMatchObject({ id: "catpost", title: "IMG_4021.mp4", poster_url: `${MEDIA}posters/aaaaaaaaaa.jpg` });
+        expect(body.posts[0].files.length).toBe(1);
+        expect(typeof body.posts[0].score).toBe("number");
+        expect(body.index).toEqual({ posts: 3, pending: 0 });
+        expect(w.space.calls.at(-1)).toMatchObject({ kind: "query", inputs: [{ text: "cat" }] });
+    });
+
+    it("a plain text match ranks first, even for a post not embedded yet", async () => {
+        const w = await library();
+        addFile(w.db, { session_id: "fresh", name: "sunset drive.mp4" });
+        const body = (await w.search("sunset drive")).body as any;
+        expect(body.posts[0].id).toBe("fresh");
+        expect(body.index.pending).toBe(1);
+        const sk = (await w.search("skateboard")).body as any;
+        expect(sk.posts.slice(0, 2).map((p: any) => p.id).sort()).toEqual(["catpost", "named"]);
+        expect(sk.posts[0].id).toBe("named");
+    });
+
+    it("never returns a deleted post, and honours limit", async () => {
+        const w = await library();
+        w.db.raw.prepare("UPDATE media_items SET deleted_at = 1 WHERE session_id = 'catpost'").run();
+        const body = (await w.search("cat", "&limit=1")).body as any;
+        expect(body.posts).toHaveLength(1);
+        expect(body.posts[0].id).not.toBe("catpost");
+    });
+
+    it("refuses an empty or too long query and a bad limit", async () => {
+        const w = await library();
+        for (const q of ["", "   ", "x".repeat(201)]) expect((await w.search(q)).status).toBe(400);
+        for (const l of ["0", "51", "abc"]) expect((await w.search("cat", `&limit=${l}`)).status).toBe(400);
+    });
+
+    it("a sleeping Space answers 503 error.search.waking; none configured is error.search.off", async () => {
+        const w = await library();
+        w.space.fail = () => new EmbedError("unavailable", null);
+        const r = await w.search("cat");
+        expect(r).toEqual({ status: 503, body: { status: "error", error: { code: "error.search.waking" } } });
+        const off = await librarySearch({ ...w.d, embed: null }, new URLSearchParams("q=cat"));
+        expect(off).toEqual({ status: 503, body: { status: "error", error: { code: "error.search.off" } } });
+    });
+});
+
+// ---- the Space client --------------------------------------------------------------------------
+
+describe("Space client", () => {
+    const vec = () => new Array(EMBED_DIMS).fill(0).map((_, i) => (i === 0 ? 2 : 0));
+    const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+    it("is off without an https URL or a token", () => {
+        expect(spaceClient({ url: SPACE })).toBeNull();
+        expect(spaceClient({ url: "http://x.hf.space", token: "hf_x" })).toBeNull();
+        expect(spaceClient({ url: SPACE, token: "" })).toBeNull();
+        expect(spaceClient({ url: SPACE, token: "hf_x" })).not.toBeNull();
+    });
+
+    it("posts the contract with both credentials and normalizes what comes back", async () => {
+        const seen: { url: string; init: RequestInit }[] = [];
+        const c = spaceClient({ url: `${SPACE}/`, token: "hf_tok", key: "space-key" }, (async (url: string, init: RequestInit) => {
+            seen.push({ url, init });
+            return ok({ model: EMBED_MODEL, dims: EMBED_DIMS, vectors: [vec()], images: [true] });
+        }) as unknown as typeof fetch)!;
+        const r = await c.embed("document", [{ title: "t", text: "x", image_url: null }], 1000);
+        expect(seen[0]!.url).toBe(`${SPACE}/embed`);
+        const h = seen[0]!.init.headers as Record<string, string>;
+        expect(h.authorization).toBe("Bearer hf_tok");
+        expect(h["x-embed-key"]).toBe("space-key");
+        expect(JSON.parse(seen[0]!.init.body as string)).toEqual({ kind: "document", dims: EMBED_DIMS, inputs: [{ title: "t", text: "x", image_url: null }] });
+        expect(r.vectors[0]![0]).toBeCloseTo(1, 6);
+        expect(r.images).toEqual([true]);
+    });
+
+    it("maps failures: 400 rejected; 401/403/404, 5xx, a booting HTML page, a wrong shape and a timeout unavailable", async () => {
+        const run = async (res: () => Promise<Response>, timeout = 1000) => {
+            const c = spaceClient({ url: SPACE, token: "hf" }, (async () => res()) as unknown as typeof fetch)!;
+            try {
+                await c.embed("query", [{ title: null, text: "q", image_url: null }], timeout);
+                return "ok";
+            } catch (e) {
+                return e instanceof EmbedError ? `${e.kind}:${e.status}` : "other";
+            }
+        };
+        expect(await run(async () => ok({ detail: "inputs" }, 400))).toBe("rejected:400");
+        expect(await run(async () => ok({}, 401))).toBe("unavailable:401");
+        expect(await run(async () => ok({}, 404))).toBe("unavailable:404");
+        expect(await run(async () => ok({}, 503))).toBe("unavailable:503");
+        expect(await run(async () => new Response("<html>building</html>", { status: 200 }))).toBe("unavailable:200");
+        expect(await run(async () => ok({ model: EMBED_MODEL, vectors: [[1, 2, 3]] }))).toBe("unavailable:200");
+        expect(await run(async () => Promise.reject(new TypeError("network")))).toBe("unavailable:null");
+        expect(await run(() => new Promise<Response>(() => {}), 20)).toBe("unavailable:null");
+    });
+});
+
+// ---- the gate, the Worker and capabilities ------------------------------------------------------
+
+describe("routing", () => {
+    const req = (method: string, pathname: string): GateRequest => ({
+        method,
+        pathname,
+        searchParams: new URLSearchParams(),
+        origin: null,
+        authorization: "Api-Key 0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+        service: false,
+    });
+
+    it("GET /library/search and POST /library/search/index are keyed routes; other methods 404", () => {
+        expect(decide(req("GET", "/library/search"), { corsUrl: "x", now: 0 })).toMatchObject({ action: "lookup", then: "library_search" });
+        expect(decide(req("POST", "/library/search/index"), { corsUrl: "x", now: 0 })).toMatchObject({ action: "lookup", then: "library_search_index" });
+        expect(decide(req("POST", "/library/search"), { corsUrl: "x", now: 0 })).toMatchObject({ action: "reject", status: 404 });
+        expect(decide(req("GET", "/library/search/index"), { corsUrl: "x", now: 0 })).toMatchObject({ action: "reject", status: 404 });
+        expect(decide({ ...req("GET", "/library/search"), authorization: null }, { corsUrl: "x", now: 0 }).action).toBe("reject");
+    });
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("the Worker answers a keyed search through the Space configured in its env, without the container", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "catpost", poster: `${MEDIA}posters/aaaaaaaaaa.jpg` });
+        await w.index();
+        const KEY = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
+        w.db.raw
+            .prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)")
+            .run("k1", "test", await hashKey(KEY), "0b5f2c3e", 1);
+        const space = new FakeSpace();
+        const calls: string[] = [];
+        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+            calls.push(url);
+            const body = JSON.parse(init.body as string);
+            return new Response(JSON.stringify(await space.embed(body.kind, body.inputs)), { status: 200 });
+        });
+        const env: WorkerEnv = {
+            API_URL: "https://api.capybaraharmony.com/",
+            CORS_URL: "https://cobalt.capybaraharmony.com",
+            COBALT_API_KEY: "9d3a1c6e-2f4b-4c8d-8e7a-5b1f0a2c3d4e",
+            DB: w.d.db,
+            ORIGINALS: new MemoryOriginals(),
+            MEDIA: new MemoryMedia(),
+            MEDIA_BASE_URL: MEDIA,
+            EMBED_URL: SPACE,
+            EMBED_TOKEN: "hf_tok",
+        };
+        const container = { fetch: async () => new Response("container must not be called", { status: 500 }) };
+        const res = await handleRequest(
+            new Request("https://api.capybaraharmony.com/library/search?q=skateboard&v=3", { headers: { Authorization: `Api-Key ${KEY}` } }),
+            env,
+            container,
+            { now: () => T0 + 1_000_000 },
+        );
+        expect(res.status).toBe(200);
+        expect(res.headers.get("cache-control")).toBe("no-store");
+        const body = (await res.json()) as any;
+        expect(body.posts.map((p: any) => p.id)).toEqual(["catpost"]);
+        expect(calls).toEqual([`${SPACE}/embed`]);
+
+        const off = await handleRequest(
+            new Request("https://api.capybaraharmony.com/library/search?q=cat", { headers: { Authorization: `Api-Key ${KEY}` } }),
+            { ...env, EMBED_TOKEN: undefined },
+            container,
+        );
+        expect(off.status).toBe(503);
+        expect(((await off.json()) as any).error.code).toBe("error.search.off");
+    });
+
+    it("capabilities says features.search only while the Space is configured", async () => {
+        const w = world();
+        const on = (await capabilities(w.d, "missing", undefined, false, false, false, false, false, true)).body as any;
+        const off = (await capabilities(w.d, "missing", undefined)).body as any;
+        expect(on.features.search).toBe(true);
+        expect(off.features.search).toBe(false);
+    });
+});
