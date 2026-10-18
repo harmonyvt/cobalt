@@ -117,6 +117,10 @@ export default defineConfig({
 			ANTHROPIC_API_KEY: bindings.secret(),
 			ROAST_BASE_URL: bindings.secret(),
 			ROAST_MODEL: bindings.text("claude-haiku-5-5"),
+			// Chat (APP-API-CONTRACT.md section 27): the model (same key as the captions), and the Worker
+			// Loader the model's code runs in (a fresh Dynamic Worker per run, no network: src/chat-loader.ts).
+			CHAT_MODEL: bindings.text("claude-haiku-5-5"),
+			LOADER: bindings.workerLoader(),
 			// cobalt studio (POST /studio): PRIVATE copies of saved source
 			// videos, originals/<session id>.<ext>. No public domain; only the
 			// Worker reads it (GET /studio/<id>/source). Bucket already exists.

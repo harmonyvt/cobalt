@@ -176,6 +176,8 @@ export async function capabilities(
     helperDirect = false,
     // the Hugging Face Space is configured: GET /library/search (section 21)
     search = false,
+    // the Anthropic key and the code sandbox are there: /chat (section 27)
+    chat = false,
 ): Promise<StudioReply> {
     const state = await resolveKeyState(d.db, auth, key, d.now());
     const version: unknown = apiVersion;
@@ -239,6 +241,9 @@ export async function capabilities(
                 // GET|POST /share/collections, PATCH|DELETE /share/collections/<id>: named folders of gallery
                 // links (APP-API-CONTRACT.md section 26), with the share host
                 share_collections: !!d.shareBaseUrl,
+                // /chat/threads: threads with Claude about the library, code mode in a sandbox (APP-API-CONTRACT.md
+                // section 27): with the Anthropic key and the Worker Loader binding
+                chat: chat === true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,

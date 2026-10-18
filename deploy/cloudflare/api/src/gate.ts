@@ -89,6 +89,13 @@ export type LookupThen =
     | "collections_create"
     | "collections_update"
     | "collections_delete"
+    // chat (APP-API-CONTRACT.md section 27)
+    | "chat_list"
+    | "chat_create"
+    | "chat_get"
+    | "chat_rename"
+    | "chat_delete"
+    | "chat_send"
     | "live_start_token"
     | "live_run"
     | "live_state"
@@ -247,6 +254,25 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         if (!COLLECTION_ID_REGEX.test(id)) return reject(404);
         if (req.method === "PATCH") return lookupThen(req, "collections_update", { id });
         if (req.method === "DELETE") return lookupThen(req, "collections_delete", { id });
+        return reject(404);
+    }
+
+    // Chat (APP-API-CONTRACT.md section 27): keyed only.
+    if (req.pathname === "/chat/threads" || req.pathname.startsWith("/chat/threads/")) {
+        if (req.service) return reject(404);
+        if (req.pathname === "/chat/threads") {
+            if (req.method === "GET") return lookupThen(req, "chat_list");
+            if (req.method === "POST") return lookupThen(req, "chat_create");
+            return reject(404);
+        }
+        const rest = req.pathname.slice("/chat/threads/".length);
+        const [id, sub, ...more] = rest.split("/");
+        if (!COLLECTION_ID_REGEX.test(id ?? "") || more.length > 0) return reject(404);
+        if (sub === "messages") return req.method === "POST" ? lookupThen(req, "chat_send", { id: id! }) : reject(404);
+        if (sub !== undefined) return reject(404);
+        if (req.method === "GET") return lookupThen(req, "chat_get", { id: id! });
+        if (req.method === "PATCH") return lookupThen(req, "chat_rename", { id: id! });
+        if (req.method === "DELETE") return lookupThen(req, "chat_delete", { id: id! });
         return reject(404);
     }
 

@@ -34,6 +34,7 @@ import { createShareSet, listShareSets, revokeShareSet } from "./share-sets";
 import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { captionerFrom } from "./roast";
 import { createCollection, deleteCollection, listCollections, updateCollection } from "./share-collections";
+import { chatModelFrom, createThread, deleteThread, getThread, listThreads, renameThread, sendMessage } from "./chat";
 import { ingestTelemetry } from "./telemetry";
 import {
     linkFrom,
@@ -90,7 +91,15 @@ export interface WorkerEnv {
     ANTHROPIC_API_KEY?: string;
     ROAST_BASE_URL?: string;
     ROAST_MODEL?: string;
+    // Chat (section 27): the model (a plain var; the key is ANTHROPIC_API_KEY) and the Worker Loader
+    // binding the model's code runs in. The runner itself comes in through EdgeDeps (index.ts).
+    CHAT_MODEL?: string;
+    LOADER?: unknown;
 }
+
+// Chat is on with a model (the Anthropic key) and a code runner (the LOADER binding, index.ts).
+const chatOn = (env: WorkerEnv, edge: EdgeDeps): boolean =>
+    (edge.chatModel === undefined ? chatModelFrom(env) : edge.chatModel) !== null && !!edge.codeRunner;
 
 // The Space client, or null while search is not configured (embed.ts).
 export const embedFrom = (env: WorkerEnv): EmbedClient | null =>
@@ -150,6 +159,9 @@ export async function handleRequest(
         sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
         fixedLength: deps.fixedLength,
         captioner: deps.captioner,
+        chatModel: deps.chatModel,
+        codeRunner: deps.codeRunner,
+        waitUntil: deps.waitUntil,
     });
     // Every /studio* response, rejections included, carries the studio page's
     // origin (STUDIO-CONTRACT.md); the page is the only intended caller.
@@ -252,6 +264,7 @@ async function handleInner(
             harkConfigured(env),
             ...(await helperHas(container)),
             embedFrom(env) !== null,
+            chatOn(env, edge),
         );
         return new Response(JSON.stringify(r.body), {
             status: r.status,
@@ -382,6 +395,56 @@ async function handleInner(
             const res = json(r.status, r.body, allowOrigin);
             res.headers.set("cache-control", "no-store");
             return res;
+        }
+        // Chat (section 27): D1, the model, and the code sandbox.
+        if (
+            decision.then === "chat_list" ||
+            decision.then === "chat_create" ||
+            decision.then === "chat_get" ||
+            decision.then === "chat_rename" ||
+            decision.then === "chat_delete" ||
+            decision.then === "chat_send"
+        ) {
+            const model = edge.chatModel === undefined ? chatModelFrom(env) : edge.chatModel;
+            const runner = edge.codeRunner ?? null;
+            const noStore = (r: { status: number; body: unknown }) => {
+                const res = json(r.status, r.body, allowOrigin);
+                res.headers.set("cache-control", "no-store");
+                return res;
+            };
+            if (!model || !runner) return noStore({ status: 404, body: { status: "error", error: { code: "error.chat.off" } } });
+            const app = appDeps(env, container, edge);
+            const cd = {
+                db: env.DB,
+                app,
+                mediaBaseUrl: env.MEDIA_BASE_URL,
+                shareBaseUrl: shareHost(env) ? env.SHARE_BASE_URL : undefined,
+                embed: embedFrom(env),
+                model,
+                runner,
+                now: edge.now,
+                waitUntil: edge.waitUntil,
+            };
+            const id = decision.params?.id ?? "";
+            if (decision.then === "chat_send") {
+                const r = await sendMessage(cd, request, id);
+                if (r instanceof Response) {
+                    if (allowOrigin) r.headers.set("access-control-allow-origin", allowOrigin);
+                    return r;
+                }
+                return noStore(r);
+            }
+            const r =
+                decision.then === "chat_list"
+                    ? await listThreads(cd)
+                    : decision.then === "chat_create"
+                      ? await createThread(cd, request, keyId)
+                      : decision.then === "chat_get"
+                        ? await getThread(cd, id)
+                        : decision.then === "chat_rename"
+                          ? await renameThread(cd, request, id)
+                          : await deleteThread(cd, id);
+            return noStore(r);
         }
         // Share link collections (section 26): D1 only.
         if (

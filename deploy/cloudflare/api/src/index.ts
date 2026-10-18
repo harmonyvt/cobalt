@@ -13,6 +13,7 @@ import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
 import { backfillCaptions, captionerFrom } from "./roast";
 import { setRoastInput } from "./share-sets";
 import { embedFrom, handleRequest, type WorkerEnv } from "./worker";
+import { loaderRunner } from "./chat-loader";
 
 export interface Env extends WorkerEnv {
     COBALT: DurableObjectNamespace<CobaltContainer>;
@@ -338,8 +339,13 @@ const SEARCH_CRON = "*/15 * * * *";
 const ROAST_RUN_BUDGET_MS = 90_000;
 
 export default {
-    async fetch(request: Request, env: Env): Promise<Response> {
-        return handleRequest(request, env, getContainer(env.COBALT, "main"));
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+        return handleRequest(request, env, getContainer(env.COBALT, "main"), {
+            // chat (APP-API-CONTRACT.md section 27): the model's code runs in a Dynamic Worker; a reply keeps
+            // going after the app goes away
+            codeRunner: env.LOADER ? loaderRunner(env.LOADER as WorkerLoader) : undefined,
+            waitUntil: (p) => ctx.waitUntil(p),
+        });
     },
     // Daily cron (cloudflare.config.ts triggers): telemetry retention, 30 days (D1 and R2
     // only, the container and the Durable Object are not touched), and the poster backfill:

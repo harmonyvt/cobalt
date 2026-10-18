@@ -952,6 +952,17 @@ gallery links get theirs at creation, everything else from the 15-minute cron. T
 `"ANTHROPIC_API_KEY": "sk-ant-..."` to `~/.config/cobalt/secrets.json` (optional `"ROAST_BASE_URL"` for Cloudflare AI
 Gateway), apply migration 0013, then deploy the API. A title set in the app always wins over the roast.
 
+## Chat (`APP-API-CONTRACT.md` section 27)
+
+Threads with Claude Haiku 5.5 about the library (`src/chat.ts`, D1 `chat_threads` and `chat_messages`, migration
+0015), keyed routes under `/chat/threads`, replies streamed as server-sent events. Code mode: the model's only tool is
+`run_code`; its JavaScript runs in a fresh Dynamic Worker from the `LOADER` Worker Loader binding (`src/chat-loader.ts`,
+no network, 30 s, 5 s CPU, 50 tool calls) and reaches the library only through the read-only `cobalt` API in
+`src/chat-tools.ts`. On with `ANTHROPIC_API_KEY` (the same key as the captions) and the binding; `CHAT_MODEL` picks the
+model. Deploy: apply 0015, then the API. Checked against a local workerd: tool calls over RPC, `fetch` refused, syntax
+errors, the call cap and the 30 s timeout. The CPU cap (an endless loop) is enforced only on Cloudflare, not in a local
+workerd.
+
 ## Library search (`APP-API-CONTRACT.md` section 21)
 
 Search runs EmbeddingGemma 2 on a private Hugging Face Space (`capybaraharmony/cobalt-embed`, CPU basic, needs HF PRO); the API Worker drains the index queue every 15

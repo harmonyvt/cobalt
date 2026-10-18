@@ -36,6 +36,10 @@ export type EdgeDeps = {
     };
     // Roast captions (section 25): injectable for tests; undefined = from the env (null = off).
     captioner?: import("./roast").Captioner | null;
+    // Chat (section 27): undefined model = from the env (null = off); no runner = off.
+    chatModel?: import("./chat").ChatModel | null;
+    codeRunner?: import("./chat").CodeRunner;
+    waitUntil?: (p: Promise<unknown>) => void;
 };
 
 // The one "main" Container Durable Object (a stub in production).
