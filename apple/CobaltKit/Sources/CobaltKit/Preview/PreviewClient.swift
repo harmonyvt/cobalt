@@ -189,6 +189,8 @@ public struct PreviewClient: CobaltClient {
     let searchState = PreviewSearchState()
     /// The gallery share links the "server" holds (`PreviewShare.swift`).
     let shareState = PreviewShareState()
+    /// The chat threads the "server" holds (`PreviewChat.swift`).
+    let chatState = PreviewChatState()
 
     public var baseURL: URL { PreviewData.base }
 
@@ -216,6 +218,12 @@ public struct PreviewClient: CobaltClient {
             shareState.seed(empty ? [] : PreviewData.shareSets(now: now),
                             collections: empty ? [] : PreviewData.shareCollections(now: now),
                             listFails: scenario == .shareLinksFail)
+        }
+        if scenario.hasChat {
+            let seed = PreviewData.chatSeed(now: now)
+            let empty = scenario == .chatEmpty || scenario == .chatFail
+            chatState.seed(empty ? [] : seed.threads, messages: empty ? [:] : seed.messages,
+                           listFails: scenario == .chatFail, replyFails: scenario == .chatReplyFails)
         }
     }
 

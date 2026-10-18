@@ -36,6 +36,9 @@ struct LinksScreen: View {
             .background(CobaltColor.bg)
             .navigationTitle(Copy.Links.title)
             .toolbar {
+                #if os(iOS)
+                QueueToolbarItem(model: model)
+                #endif
                 ToolbarItem(placement: .primaryAction) {
                     Button(Copy.Links.refresh, systemImage: Symbol.retry) { Task { await store.refresh() } }
                         .disabled(store.state == .loading)

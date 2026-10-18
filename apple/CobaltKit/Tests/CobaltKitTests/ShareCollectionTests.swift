@@ -177,6 +177,51 @@ struct ShareCollectionHTTPTests {
         await #expect(throws: ShareCollectionError.notFound) { try await client(server).deleteShareCollection(id: "nope") }
     }
 
+    @Test func rerollIsAKeyedPostWithNoBody() async throws {
+        let answer = """
+        {"status":"success","collection":\(wireCollection),"replaced":{"9000000000000000002":"9100000000000000007","9000000000000000001":"9100000000000000008"}}
+        """
+        let server = try await LoopbackServer.start { req in
+            req.method == "POST" && req.path == "/share/collections/AbCd1234EfGh5678/reroll"
+                ? .json(answer) : .init(status: 404)
+        }
+        defer { server.stop() }
+        let result = try await client(server).rerollShareCollection(id: "AbCd1234EfGh5678")
+        let req = try #require(server.requests.first)
+        #expect(server.requests.count == 1 && req.method == "POST" && req.path == "/share/collections/AbCd1234EfGh5678/reroll")
+        #expect(req.headers["authorization"] == "Api-Key \(colKey)" && req.body.isEmpty)
+        #expect(result.collection.id == "AbCd1234EfGh5678" && result.collection.setIDs == ["9000000000000000002", "9000000000000000001"])
+        #expect(result.replaced == ["9000000000000000002": "9100000000000000007", "9000000000000000001": "9100000000000000008"])
+    }
+
+    @Test func rerollRefusalsAreMapped() async throws {
+        let cases: [(String, Int, ShareCollectionError)] = [
+            (#"{"status":"error","error":{"code":"error.collection.not_found"}}"#, 404, .notFound),
+            (#"{"status":"error","error":{"code":"error.collection.empty"}}"#, 409, .empty),
+            (#"{"status":"error","error":{"code":"error.api.generic"}}"#, 503, .unavailable),
+        ]
+        for (body, status, expected) in cases {
+            let server = try await refusing(body, status: status)
+            defer { server.stop() }
+            let c = client(server)
+            await #expect(throws: expected, "reroll \(status) \(expected)") { try await c.rerollShareCollection(id: "AbCd1234EfGh5678") }
+        }
+    }
+
+    @Test func rerollWithAnUnreadableAnswerIsInvalid() async throws {
+        let server = try await refusing(#"{"status":"success"}"#, status: 200)
+        defer { server.stop() }
+        await #expect(throws: CobaltError.invalidResponse(httpStatus: 200)) {
+            try await client(server).rerollShareCollection(id: "AbCd1234EfGh5678")
+        }
+    }
+
+    @Test func rerollWithoutReplacedDecodesEmpty() throws {
+        let json = #"{"status":"success","collection":"# + wireCollection + "}"
+        let r = try CobaltJSON.decoder().decode(ShareCollectionReroll.self, from: Data(json.utf8))
+        #expect(r.replaced.isEmpty && r.collection.name == "memes")
+    }
+
     private func refusing(_ body: String, status: Int) async throws -> LoopbackServer {
         try await LoopbackServer.start { _ in .json(body, status: status) }
     }
@@ -242,6 +287,7 @@ struct ShareCollectionHTTPTests {
         await #expect(throws: PipelineFailure.unsupported) { try await bare.createShareCollection(name: "x", setIDs: []) }
         await #expect(throws: PipelineFailure.unsupported) { try await bare.updateShareCollection(id: "x", name: "y", add: [], remove: []) }
         await #expect(throws: PipelineFailure.unsupported) { try await bare.deleteShareCollection(id: "x") }
+        await #expect(throws: PipelineFailure.unsupported) { try await bare.rerollShareCollection(id: "x") }
     }
 }
 
@@ -303,6 +349,19 @@ struct ShareCollectionStoreTests {
         #expect(app.shareSets.sets(in: odd).map(\.id) == [three, one])
         #expect(app.shareSets.collections(containing: one).map(\.id) == [memes])
         #expect(app.shareSets.collections(containing: three).map(\.id) == [discord])
+    }
+
+    @Test func copyAllJoinsTheLiveLinksOnePerLineInTheCollectionsOrder() async throws {
+        let app = await loaded()
+        let memesCollection = try #require(app.shareSets.collection(memes))
+        let urls = app.shareSets.sets(in: memesCollection).map(\.url.absoluteString)
+        #expect(urls.count == 2)
+        #expect(app.shareSets.linksText(in: memesCollection) == urls.joined(separator: "\n"))
+        #expect(app.shareSets.linksText(in: memesCollection)?.hasPrefix("https://share.capybaraharmony.com/g/") == true)
+        let ghostOnly = ShareCollection(id: "y", name: "y", createdAt: .now, updatedAt: .now, setIDs: ["ghost"])
+        #expect(app.shareSets.linksText(in: ghostOnly) == nil)
+        let empty = ShareCollection(id: "z", name: "z", createdAt: .now, updatedAt: .now, setIDs: [])
+        #expect(app.shareSets.linksText(in: empty) == nil)
     }
 
     @Test func createInsertsFirstWithItsLinks() async throws {
@@ -414,6 +473,65 @@ struct ShareCollectionStoreTests {
         // and the server agrees
         await app.shareSets.refresh()
         #expect(app.shareSets.collection(memes)?.setIDs == [two] && app.shareSets.collection(discord)?.setIDs == [three])
+    }
+
+    // MARK: reroll all links
+
+    @Test func rerollSwapsTheLinksInEveryCollectionAndRelistsTheSets() async throws {
+        let app = await loaded()
+        _ = try await app.shareSets.addLink(one, to: discord)          // `one` is in memes and for discord now
+        let client = try #require(app.ctx.client as? PreviewClient)
+        let answer = try await app.shareSets.rerollCollection(memes)
+        #expect(Set(answer.replaced.keys) == [two, one] && answer.replaced.values.allSatisfy { $0.count == 19 && !$0.hasPrefix("9000") })
+        let newTwo = try #require(answer.replaced[two]), newOne = try #require(answer.replaced[one])
+        // the rerolled collection: same order, new ids, first in the list
+        #expect(app.shareSets.collections.first?.id == memes)
+        #expect(app.shareSets.collection(memes)?.setIDs == [newTwo, newOne])
+        // the other collection held `one`: it holds `newOne` in place, and its other link is untouched
+        #expect(app.shareSets.collection(discord)?.setIDs == [newOne, three])
+        // the sets were listed again: old gone, new there with their URLs, the untouched one stays
+        #expect(!app.shareSets.sets.contains { $0.id == one || $0.id == two })
+        #expect(Set(app.shareSets.sets.map(\.id)) == [newOne, newTwo, three])
+        #expect(app.shareSets.sets.first { $0.id == newOne }?.url == PreviewData.shareURL(id: newOne))
+        #expect(app.shareSets.sets.first { $0.id == newOne }?.title == nil, "no typed title: the caption is the title")
+        #expect(app.shareSets.sets.first { $0.id == newTwo }?.items.map(\.id) == ["PrEvIeWitem000005", "PrEvIeWitem000010"], "same files")
+        #expect(client.shareState.calls.suffix(2) == ["POST collections reroll " + memes, "GET"])
+        #expect(app.shareSets.state == .loaded)
+        // a refresh agrees with what the store holds
+        await app.shareSets.refresh()
+        #expect(app.shareSets.collection(memes)?.setIDs == [newTwo, newOne] && app.shareSets.collection(discord)?.setIDs == [newOne, three])
+        #expect(app.shareSets.sets(in: try #require(app.shareSets.collection(memes))).count == 2)
+    }
+
+    @Test func rerollOfAnUnknownCollectionDropsItAndThrowsNotFound() async throws {
+        let app = await loaded()
+        let client = try #require(app.ctx.client as? PreviewClient)
+        try await client.deleteShareCollection(id: discord)             // gone on the server, still local
+        await #expect(throws: ShareCollectionError.notFound) { try await app.shareSets.rerollCollection(discord) }
+        #expect(app.shareSets.collection(discord) == nil && app.shareSets.collection(memes) != nil)
+        #expect(app.shareSets.sets.count == 3, "nothing else changed")
+    }
+
+    @Test func rerollOfACollectionWithNoLiveLinksIsEmptyAndChangesNothing() async throws {
+        let app = await loaded()
+        let made = try await app.shareSets.createCollection(name: "later")
+        await #expect(throws: ShareCollectionError.empty) { try await app.shareSets.rerollCollection(made.id) }
+        #expect(app.shareSets.collection(made.id) != nil && app.shareSets.sets.count == 3)
+        #expect(app.shareSets.collection(memes)?.setIDs == [two, one])
+    }
+
+    @Test func rerollRepeatedlyKeepsMintingFreshLinks() async throws {
+        let app = await loaded()
+        let first = try await app.shareSets.rerollCollection(discord)
+        let second = try await app.shareSets.rerollCollection(discord)
+        let a = try #require(first.replaced[three]), b = try #require(second.replaced[a])
+        #expect(a != b && app.shareSets.collection(discord)?.setIDs == [b])
+        #expect(app.shareSets.sets.count == 3)
+    }
+
+    @Test func rerollOnAServerWithoutRoutesIsUnsupported() async {
+        let app = await loaded(.renditionsLegacy)
+        await #expect(throws: PipelineFailure.unsupported) { try await app.shareSets.rerollCollection("x") }
     }
 
     @Test func aServerChangeForgetsTheCollections() async {

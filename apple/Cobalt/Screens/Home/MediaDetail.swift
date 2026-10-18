@@ -158,7 +158,7 @@ struct MediaDetail: View {
                 ToolbarItem(placement: .primaryAction) {
                     DetailMenu(
                         controller: controller, item: item, rendition: selected,
-                        openInLibrary: { openInLibrary(item) }, rename: { renaming = true })
+                        openInLibrary: { openInLibrary(item) }, askAbout: { askAbout(item) }, rename: { renaming = true })
                 }
             }
         }
@@ -242,6 +242,19 @@ struct MediaDetail: View {
         gone = true
         if let status = controller.exitStatus { shell.showStatus(status) }
         dismiss()
+    }
+
+    /// "ask about this": a new chat with this post attached, the chat tab open on it.
+    private func askAbout(_ item: MediaItem) {
+        guard let post = item.post else { return }
+        Task {
+            do {
+                try await model.askAbout([post])
+                dismiss()
+            } catch {
+                shell.showStatus(Copy.Chat.message(for: error))
+            }
+        }
     }
 
     private func openInLibrary(_ item: MediaItem) {

@@ -193,6 +193,7 @@ public struct HTTPCobaltClient: CobaltClient {
                 var search: Bool?
                 var shareSets: Bool?
                 var shareCollections: Bool?
+                var chat: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -259,6 +260,7 @@ public struct HTTPCobaltClient: CobaltClient {
         caps.shareBaseURL = w.shareBaseUrl.flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
         caps.shareSets = (f?.shareSets ?? false) && caps.shareBaseURL != nil
         caps.shareCollections = (f?.shareCollections ?? false) && caps.shareSets
+        caps.chat = f?.chat ?? false
         return caps
     }
 
@@ -654,6 +656,17 @@ public struct HTTPCobaltClient: CobaltClient {
         guard (200..<300).contains(http.statusCode) else { throw shareCollectionError(data, status: http.statusCode) }
     }
 
+    /// `POST /share/collections/<id>/reroll` (keyed, no body): `{collection, replaced}`.
+    public func rerollShareCollection(id: String) async throws -> ShareCollectionReroll {
+        let req = try makeRequest("POST", "/share/collections/\(Self.encode(id))/reroll", keyed: true, timeout: 60)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw shareCollectionError(data, status: http.statusCode) }
+        guard let answer = try? CobaltJSON.decoder().decode(ShareCollectionReroll.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return answer
+    }
+
     private func shareCollectionAnswer(_ data: Data, _ http: HTTPURLResponse) throws -> ShareCollection {
         guard (200..<300).contains(http.statusCode) else { throw shareCollectionError(data, status: http.statusCode) }
         struct Wire: Decodable { var collection: ShareCollection }
@@ -678,10 +691,124 @@ public struct HTTPCobaltClient: CobaltClient {
         case "error.collection.link_not_found": return ShareCollectionError.linkNotFound(body?.setIds ?? [])
         case "error.collection.too_many": return ShareCollectionError.tooMany
         case "error.collection.full": return ShareCollectionError.full
+        case "error.collection.empty": return ShareCollectionError.empty
         default:
             if status == 503 { return ShareCollectionError.unavailable }
             return apiError(data, status: status)
         }
+    }
+
+    // MARK: - Chat (APP-API-CONTRACT 27; `features.chat`; keyed)
+
+    /// `GET /chat/threads` (keyed): most recently updated first (at most 200).
+    public func chatThreads() async throws -> [ChatThread] {
+        let req = try makeRequest("GET", "/chat/threads", keyed: true, timeout: 20)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw chatError(data, status: http.statusCode) }
+        struct Wire: Decodable { var threads: [Lossy<ChatThread>] }
+        guard let wire = try? CobaltJSON.decoder().decode(Wire.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return wire.threads.compactMap(\.value)
+    }
+
+    /// `POST /chat/threads` `{title?}` (keyed): `201` with the thread. The field is left out for a nil title.
+    public func createChatThread(title: String?) async throws -> ChatThread {
+        let req = try makeRequest("POST", "/chat/threads", keyed: true, timeout: 30)
+        var body: [String: Any] = [:]
+        if let title { body["title"] = title }
+        let (data, http) = try await send(req, body: Self.jsonBody(body))
+        return try chatThreadAnswer(data, http)
+    }
+
+    /// `GET /chat/threads/<id>` (keyed): the thread, its messages (oldest first) and the `posts` map.
+    public func chatThread(id: String) async throws -> ChatThreadDetail {
+        let req = try makeRequest("GET", "/chat/threads/\(Self.encode(id))", keyed: true, timeout: 30)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw chatError(data, status: http.statusCode) }
+        guard let detail = try? CobaltJSON.decoder().decode(ChatThreadDetail.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return detail
+    }
+
+    /// `PATCH /chat/threads/<id>` `{title}` (keyed): the thread as it is now.
+    public func renameChatThread(id: String, title: String) async throws -> ChatThread {
+        let req = try makeRequest("PATCH", "/chat/threads/\(Self.encode(id))", keyed: true, timeout: 30)
+        let (data, http) = try await send(req, body: Self.jsonBody(["title": title]))
+        return try chatThreadAnswer(data, http)
+    }
+
+    /// `DELETE /chat/threads/<id>` (keyed): the thread and its messages.
+    public func deleteChatThread(id: String) async throws {
+        let req = try makeRequest("DELETE", "/chat/threads/\(Self.encode(id))", keyed: true, timeout: 20)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw chatError(data, status: http.statusCode) }
+    }
+
+    /// `POST /chat/threads/<id>/messages` `{text, post_ids?}` (keyed), answered as `text/event-stream`. The bytes go through
+    /// `ChatSSEParser` as they arrive. A refusal before the stream (the status is not 2xx) finishes the stream with the
+    /// `ChatError` and no event; a transport failure at any point finishes it with `CobaltError.network`. Dropping the
+    /// consumer cancels the request.
+    public func sendChatMessage(threadID: String, text: String, postIDs: [String]) -> AsyncThrowingStream<ChatEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var req = try makeRequest("POST", "/chat/threads/\(Self.encode(threadID))/messages", keyed: true, timeout: 90)
+                    req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    var body: [String: Any] = ["text": text]
+                    if !postIDs.isEmpty { body["post_ids"] = postIDs }
+                    req.httpBody = Self.jsonBody(body)
+                    let (bytes, response) = try await urlSession.bytes(for: req)
+                    guard let http = response as? HTTPURLResponse else { throw CobaltError.invalidResponse(httpStatus: 0) }
+                    guard (200..<300).contains(http.statusCode) else {
+                        var data = Data()
+                        for try await byte in bytes {
+                            data.append(byte)
+                            if data.count >= 16_384 { break }
+                        }
+                        throw chatError(data, status: http.statusCode)
+                    }
+                    var parser = ChatSSEParser()
+                    var line: [UInt8] = []
+                    for try await byte in bytes {
+                        line.append(byte)
+                        if byte == 0x0A {                      // a whole line at a time
+                            for event in parser.feed(line) { continuation.yield(event) }
+                            line.removeAll(keepingCapacity: true)
+                        }
+                    }
+                    for event in parser.feed(line) { continuation.yield(event) }
+                    for event in parser.finish() { continuation.yield(event) }
+                    continuation.finish()
+                } catch let e as URLError {
+                    continuation.finish(throwing: e.code == .cancelled ? CancellationError() : CobaltError.network(e.code))
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func chatThreadAnswer(_ data: Data, _ http: HTTPURLResponse) throws -> ChatThread {
+        guard (200..<300).contains(http.statusCode) else { throw chatError(data, status: http.statusCode) }
+        struct Wire: Decodable { var thread: ChatThread }
+        guard let wire = try? CobaltJSON.decoder().decode(Wire.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return wire.thread
+    }
+
+    /// The chat routes' refusals as `ChatError`; any other code stays the generic `CobaltError.api`.
+    private func chatError(_ data: Data, status: Int) -> Error {
+        if let env = try? JSONDecoder().decode(ErrorEnvelope.self, from: data), let code = env.error?.code,
+           let known = ChatError(code: code) {
+            return known
+        }
+        if status == 503 { return ChatError.unavailable }
+        return apiError(data, status: status)
     }
 
     public func deleteMedia(name: String) async throws {

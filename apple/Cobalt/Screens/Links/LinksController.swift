@@ -32,6 +32,10 @@ final class LinksController {
     var copiedToken = 0
     /// The collection the owner chose `delete` for: the confirm is open on it.
     var deleting: ShareCollection?
+    /// The collection the owner chose `reroll all links` for: the confirm is open on it.
+    var rerolling: ShareCollection?
+    /// Collections whose reroll is in flight (the item is disabled; a second tap does nothing).
+    var rerollingIDs: Set<String> = []
     /// The new / rename sheet.
     var sheet: CollectionSheetRequest?
 
@@ -49,6 +53,14 @@ final class LinksController {
     /// The usual copy: the link on the pasteboard and `copied` over the shell.
     func copy(_ link: ShareSet, shell: ShellActions) {
         Pasteboard.copy(link.url.absoluteString)
+        shell.showStatus(Copy.Media.copied)
+        copiedToken += 1
+    }
+
+    /// Every link in the collection, one per line, on the pasteboard, and `copied` over the shell.
+    func copyAll(_ collection: ShareCollection, shell: ShellActions) {
+        guard let text = store.linksText(in: collection) else { return }
+        Pasteboard.copy(text)
         shell.showStatus(Copy.Media.copied)
         copiedToken += 1
     }
@@ -102,6 +114,28 @@ final class LinksController {
         }
     }
 
+    /// Whether `reroll all links` is offered on this collection: it has loaded links and none is running on it.
+    func canReroll(_ collection: ShareCollection) -> Bool {
+        store.linksText(in: collection) != nil && !rerollingIDs.contains(collection.id)
+    }
+
+    /// Replaces every live link of the collection with a new one (after the confirm). The store swaps the ids and lists
+    /// the links again; the status says what happened.
+    func reroll(_ collection: ShareCollection, shell: ShellActions) {
+        guard !rerollingIDs.contains(collection.id) else { return }
+        rerollingIDs.insert(collection.id)
+        shell.showStatus(Copy.Collections.rerolling)
+        Task {
+            defer { rerollingIDs.remove(collection.id) }
+            do {
+                try await store.rerollCollection(collection.id)
+                shell.showStatus(Copy.Collections.rerolled)
+            } catch {
+                shell.showStatus(Copy.Collections.message(for: error))
+            }
+        }
+    }
+
     func delete(_ collection: ShareCollection, shell: ShellActions) {
         Task {
             do {
@@ -142,6 +176,15 @@ private struct LinkPresentations: ViewModifier {
             } message: { _ in
                 Text(Copy.Collections.deleteMessage)
             }
+            .confirmationDialog(
+                Copy.Collections.rerollTitle, isPresented: rerollingPresented, titleVisibility: .visible,
+                presenting: controller.rerolling
+            ) { collection in
+                Button(Copy.Collections.rerollConfirm, role: .destructive) { controller.reroll(collection, shell: shell) }
+                Button(Copy.Collections.keep, role: .cancel) {}
+            } message: { _ in
+                Text(Copy.Collections.rerollMessage)
+            }
             .sheet(item: $controller.sheet) { request in
                 CollectionSheet(model: controller.model, request: request)
             }
@@ -150,6 +193,10 @@ private struct LinkPresentations: ViewModifier {
 
     private var revokingPresented: Binding<Bool> {
         Binding(get: { controller.revoking != nil }, set: { if !$0 { controller.revoking = nil } })
+    }
+
+    private var rerollingPresented: Binding<Bool> {
+        Binding(get: { controller.rerolling != nil }, set: { if !$0 { controller.rerolling = nil } })
     }
 
     private var deletingPresented: Binding<Bool> {

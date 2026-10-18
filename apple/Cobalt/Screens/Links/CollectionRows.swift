@@ -35,6 +35,7 @@ struct CollectionRow: View {
     let collection: ShareCollection
     let store: ShareSetStore
     let controller: LinksController
+    @Environment(\.shell) private var shell
 
     var body: some View {
         let links = store.sets(in: collection)
@@ -68,6 +69,13 @@ struct CollectionRow: View {
         .listRowBackground(Color.clear)
         .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
         #if os(iOS)
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            Button(Copy.Collections.copyAll, systemImage: Symbol.collectionCopyAll) {
+                controller.copyAll(collection, shell: shell)
+            }
+            .tint(CobaltColor.focus)
+            .disabled(controller.store.linksText(in: collection) == nil)
+        }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(Copy.Collections.delete, systemImage: Symbol.collectionDelete, role: .destructive) {
                 controller.deleting = collection
@@ -79,7 +87,11 @@ struct CollectionRow: View {
         }
         #endif
         .contextMenu {
+            Button(Copy.Collections.copyAll, systemImage: Symbol.collectionCopyAll) { controller.copyAll(collection, shell: shell) }
+                .disabled(controller.store.linksText(in: collection) == nil)
             Button(Copy.Collections.rename, systemImage: Symbol.collectionRename) { controller.sheet = .rename(collection) }
+            Button(Copy.Collections.reroll, systemImage: Symbol.collectionReroll) { controller.rerolling = collection }
+                .disabled(!controller.canReroll(collection))
             Divider()
             Button(Copy.Collections.delete, systemImage: Symbol.collectionDelete, role: .destructive) {
                 controller.deleting = collection

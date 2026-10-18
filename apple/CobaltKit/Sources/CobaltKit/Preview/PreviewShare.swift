@@ -169,6 +169,35 @@ final class PreviewShareState: Sendable {
         }
     }
 
+    /// `POST .../reroll`: each live link of the collection becomes a new link (same items, no title, new 19-digit id), the
+    /// old ones are revoked, and every collection holding an old one holds the new one in place. `notFound`, or `empty`
+    /// when the collection has no live link.
+    func reroll(_ id: String, at now: Date) throws -> ShareCollectionReroll {
+        try state.withLock { s in
+            guard let index = s.collections.firstIndex(where: { $0.id == id }) else { throw ShareCollectionError.notFound }
+            let live = s.collections[index].setIDs.compactMap { sid in s.sets.first { $0.id == sid } }
+            guard !live.isEmpty else { throw ShareCollectionError.empty }
+            var replaced: [String: String] = [:]
+            var fresh: [ShareSet] = []
+            for (i, old) in live.enumerated() {
+                s.counter += 1
+                let newID = "9100000000000000" + String(format: "%03d", s.counter)
+                replaced[old.id] = newID
+                // the collection's order is newest first, so the first one gets the latest time
+                fresh.append(ShareSet(
+                    id: newID, url: PreviewData.shareURL(id: newID), title: nil,
+                    createdAt: now.addingTimeInterval(-Double(i) * 0.001), items: old.items))
+            }
+            s.sets.removeAll { replaced[$0.id] != nil }
+            s.sets.insert(contentsOf: fresh, at: 0)
+            for i in s.collections.indices {
+                s.collections[i].setIDs = s.collections[i].setIDs.map { replaced[$0] ?? $0 }
+            }
+            s.collections[index].updatedAt = now
+            return ShareCollectionReroll(collection: s.collections[index], replaced: replaced)
+        }
+    }
+
     func removeCollection(_ id: String) -> Bool {
         state.withLock { s in
             guard s.collections.contains(where: { $0.id == id }) else { return false }
@@ -266,5 +295,13 @@ extension PreviewClient {
         try await clock.sleep(seconds: 0.3 * timeScale)
         guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
         guard shareState.removeCollection(id) else { throw ShareCollectionError.notFound }
+    }
+
+    /// `POST /share/collections/<id>/reroll`: new links for the collection's live ones (see `PreviewShareState.reroll`).
+    public func rerollShareCollection(id: String) async throws -> ShareCollectionReroll {
+        shareState.record("POST collections reroll " + id)
+        try await clock.sleep(seconds: 0.6 * timeScale)
+        guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
+        return try shareState.reroll(id, at: clock.now())
     }
 }

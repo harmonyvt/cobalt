@@ -50,8 +50,31 @@ public enum ShareCollectionError: Error, Sendable, Equatable {
     case tooMany
     /// `409 error.collection.full`: 200 links already in the collection.
     case full
+    /// `409 error.collection.empty`: a reroll with no live links in the collection; nothing changed.
+    case empty
     /// `503 error.api.generic`: the server cannot take it right now.
     case unavailable
+}
+
+/// What `POST /share/collections/<id>/reroll` answers: the collection with its new link ids (same order) and which
+/// old link became which new one (`replaced[old] = new`). Every collection that held an old link now holds the new one
+/// in place, so the store swaps the ids in all of them.
+public struct ShareCollectionReroll: Sendable, Equatable, Decodable {
+    public var collection: ShareCollection
+    public var replaced: [String: String]
+
+    public init(collection: ShareCollection, replaced: [String: String]) {
+        self.collection = collection
+        self.replaced = replaced
+    }
+
+    enum CodingKeys: String, CodingKey { case collection, replaced }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        collection = try c.decode(ShareCollection.self, forKey: .collection)
+        replaced = try c.decodeIfPresent([String: String].self, forKey: .replaced) ?? [:]
+    }
 }
 
 /// The naming rule of a collection, shared by the sheets' save button and the tests (the server enforces the same).

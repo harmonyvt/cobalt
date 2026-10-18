@@ -262,6 +262,10 @@ private struct LibraryContent: View {
         #else
         ToolbarItem(placement: .navigation) { LibraryViewSwitcher(library: library) }
         #endif
+        #if os(iOS)
+        // the queue is a sheet on iPhone and iPad (not a tab); select mode keeps its controls and drops this button
+        if !controller.selecting { QueueToolbarItem(model: model) }
+        #endif
         ToolbarItemGroup(placement: .primaryAction) {
             // Select mode keeps the view switcher and replaces the rest of this capsule.
             if controller.selecting {

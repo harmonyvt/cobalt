@@ -115,6 +115,9 @@ enum PreviewData {
             caps.shareCollections = true
             caps.limits.shareSetMax = 4
         }
+        if scenario.hasChat && caps.kind == .fork {
+            caps.chat = true
+        }
         if scenario.isGallery {
             caps.gallery = true
             caps.galleryMake = scenario != .galleryNoMake

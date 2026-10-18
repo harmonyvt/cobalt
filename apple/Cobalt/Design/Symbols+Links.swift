@@ -26,6 +26,9 @@ extension Symbol {
     static let collectionRemove = "folder.badge.minus"
     /// Rename a collection.
     static let collectionRename = "pencil"
+    static let collectionCopyAll = "doc.on.doc"
+    /// Reroll all of a collection's links: new addresses, old ones revoked.
+    static let collectionReroll = "arrow.triangle.2.circlepath"
     /// Delete a collection.
     static let collectionDelete = "trash"
     /// A collection screen's menu.

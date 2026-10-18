@@ -23,10 +23,15 @@ extension Copy {
         static let emptyBody = "add links from their menu"
         static let menu = "collection"
         static let rename = "rename"
+        static let copyAll = "copy all links"
         static let delete = "delete"
         static let deleteTitle = "delete this collection?"
         static let deleteMessage = "its links keep working."
         static let keep = "keep"
+        static let reroll = "reroll all links"
+        static let rerollTitle = "reroll all links?"
+        static let rerollMessage = "every link gets a new address and a new title. the old links stop working."
+        static let rerollConfirm = "reroll"
 
         // MARK: a link's menu
 
@@ -56,6 +61,10 @@ extension Copy {
         static let linkGone = "that link is gone"
         static let tooMany = "100 collections at most"
         static let full = "this collection is full"
+        static let rerolling = "rerolling…"
+        static let rerolled = "links rerolled"
+        static let nothingToReroll = "nothing to reroll"
+        static let collectionGone = "that collection is gone"
 
         /// The status line for a refused or failed collection call: the three the server names, else the usual.
         static func message(for error: Error) -> String {
@@ -63,6 +72,8 @@ extension Copy {
             case ShareCollectionError.linkNotFound: return linkGone
             case ShareCollectionError.tooMany: return tooMany
             case ShareCollectionError.full: return full
+            case ShareCollectionError.empty: return nothingToReroll
+            case ShareCollectionError.notFound: return collectionGone
             default: return Copy.actionFailed
             }
         }

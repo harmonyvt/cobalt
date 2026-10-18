@@ -142,6 +142,25 @@ public protocol CobaltClient: Sendable {
     func updateShareCollection(id: String, name: String?, add: [String], remove: [String]) async throws -> ShareCollection
     /// `DELETE /share/collections/<id>`: the folder goes; its links stay live. An unknown id is `.notFound`.
     func deleteShareCollection(id: String) async throws
+    /// `POST /share/collections/<id>/reroll` (no body): every live link of the collection is replaced by a new link with
+    /// the same files and a fresh title; the old ones are revoked. `.notFound`, `.empty` (no live links), `.unavailable`.
+    func rerollShareCollection(id: String) async throws -> ShareCollectionReroll
+    // Chat (APP-API-CONTRACT 27; keyed; only when `features.chat`). Defaulted below (`.unsupported`) so older fakes
+    // compile. The routes throw `ChatError` for the server's refusals.
+    /// `GET /chat/threads`: most recently updated first.
+    func chatThreads() async throws -> [ChatThread]
+    /// `POST /chat/threads` `{title?}`: an empty thread (nil `title` omits the field; it is "new chat" until its first message).
+    func createChatThread(title: String?) async throws -> ChatThread
+    /// `GET /chat/threads/<id>`: the thread, its messages oldest first, and the library posts they reference.
+    func chatThread(id: String) async throws -> ChatThreadDetail
+    /// `PATCH /chat/threads/<id>` `{title}`: the thread as it is now. The caller sends a title `ChatRule.cleanTitle` accepted.
+    func renameChatThread(id: String, title: String) async throws -> ChatThread
+    /// `DELETE /chat/threads/<id>`: the thread and its messages.
+    func deleteChatThread(id: String) async throws
+    /// `POST /chat/threads/<id>/messages` `{text, post_ids?}` (empty `postIDs` omits the field): the reply as it is
+    /// written, event by event (`text/event-stream`). Refusals before the stream (`busy`, `full`, `notFound`, …) finish
+    /// the stream with the `ChatError` before any event; a stream that drops later finishes with the transport's error.
+    func sendChatMessage(threadID: String, text: String, postIDs: [String]) -> AsyncThrowingStream<ChatEvent, Error>
 }
 
 extension CobaltClient {
@@ -220,6 +239,15 @@ extension CobaltClient {
     public func createShareCollection(name: String, setIDs: [String]) async throws -> ShareCollection { throw PipelineFailure.unsupported }
     public func updateShareCollection(id: String, name: String?, add: [String], remove: [String]) async throws -> ShareCollection { throw PipelineFailure.unsupported }
     public func deleteShareCollection(id: String) async throws { throw PipelineFailure.unsupported }
+    public func rerollShareCollection(id: String) async throws -> ShareCollectionReroll { throw PipelineFailure.unsupported }
+    public func chatThreads() async throws -> [ChatThread] { throw PipelineFailure.unsupported }
+    public func createChatThread(title: String?) async throws -> ChatThread { throw PipelineFailure.unsupported }
+    public func chatThread(id: String) async throws -> ChatThreadDetail { throw PipelineFailure.unsupported }
+    public func renameChatThread(id: String, title: String) async throws -> ChatThread { throw PipelineFailure.unsupported }
+    public func deleteChatThread(id: String) async throws { throw PipelineFailure.unsupported }
+    public func sendChatMessage(threadID: String, text: String, postIDs: [String]) -> AsyncThrowingStream<ChatEvent, Error> {
+        AsyncThrowingStream { $0.finish(throwing: PipelineFailure.unsupported) }
+    }
     /// Likewise: a client that predates titles says the server cannot do it.
     public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult { throw PipelineFailure.unsupported }
 }
