@@ -118,6 +118,9 @@ enum PreviewData {
         if scenario.hasChat && caps.kind == .fork {
             caps.chat = true
         }
+        if scenario == .skyMap && caps.kind == .fork {
+            caps.search = true
+        }
         if scenario.isGallery {
             caps.gallery = true
             caps.galleryMake = scenario != .galleryNoMake

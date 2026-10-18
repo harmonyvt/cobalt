@@ -122,6 +122,9 @@ public protocol CobaltClient: Sendable {
     func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult
     /// `GET /library/search/post?key=` (keyed; only when `features.search`): how one post sits in the search index.
     func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus
+    /// `GET /library/map` (APP-API-CONTRACT 21; keyed): every embedded post with its int8 vector, newest first, for the
+    /// sky map. Defaulted below (`.unsupported`) so older fakes compile.
+    func libraryMap() async throws -> LibraryMap
     // Gallery share links (APP-API-CONTRACT 24; keyed; only when `features.share_sets`). Defaulted below
     // (`.unsupported`) so older fakes compile.
     /// `POST /share/sets` `{items, title?}`: one link for 2..`share_set_max` public library files, in the order given
@@ -235,6 +238,7 @@ extension CobaltClient {
         throw PipelineFailure.unsupported
     }
     public func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus { throw PipelineFailure.unsupported }
+    public func libraryMap() async throws -> LibraryMap { throw PipelineFailure.unsupported }
     public func createShareSet(items: [String], title: String?) async throws -> ShareSet { throw PipelineFailure.unsupported }
     public func shareSets() async throws -> [ShareSet] { throw PipelineFailure.unsupported }
     public func revokeShareSet(id: String) async throws { throw PipelineFailure.unsupported }
