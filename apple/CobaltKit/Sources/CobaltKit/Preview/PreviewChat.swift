@@ -4,6 +4,8 @@ import Synchronization
 // Chat in previews (APP-API-CONTRACT 27): a server with `features.chat`, three sample threads (one with code steps and
 // shown posts, one with a failed step, one with a deleted post), and a canned reply that streams the way the real one does:
 // the user message, a running code step that finishes, the text word by word, the shown posts, a new title, the end.
+// A fourth thread ("every cat i saved") ends in a collage (27.5): 95 generated posts, served 30 at a time, with one of them
+// deleted since; the replies in that thread (and any message that says "collage") stream a `collage` event too.
 // `PreviewScenario.chatEmpty` has no threads, `.chatFail` cannot list them, `.chatReplyFails` ends every reply in
 // `error.chat.model`. `.happy` and `.renditions` have the three samples.
 
@@ -21,7 +23,45 @@ extension PreviewData {
     /// The post ids the canned reply shows (the first three of the preview library), in order.
     static func chatShownPostIDs(now: Date) -> [String] { Array(libraryPage(now: now).posts.prefix(3).map(\.id)) }
 
-    static let chatThreadIDs = ["PrEvIeWchat00001", "PrEvIeWchat00002", "PrEvIeWchat00003"]
+    static let chatThreadIDs = ["PrEvIeWchat00001", "PrEvIeWchat00002", "PrEvIeWchat00003", "PrEvIeWchat00004"]
+    /// The sample thread that ends in a collage, and the id of that message.
+    static let collageThreadID = chatThreadIDs[3]
+    static let collageMessageID = "132"
+    /// What the preview collage says it holds, and what it is called.
+    static let collageTotal = 95
+    static let collage = ChatCollage(title: "every cat", query: "cats", total: collageTotal)
+    /// The position of the collage post that "was deleted since": its page comes back one post short.
+    static let collageGoneIndex = 41
+
+    /// The collage's `collageTotal` posts, in order: the preview library's posts again under new ids, at mixed aspects.
+    static func collagePosts(now: Date) -> [LibraryPost] {
+        let base = libraryPage(now: now).posts
+        guard !base.isEmpty else { return [] }
+        let shapes: [(Int, Int)] = [(720, 1280), (1080, 1080), (1920, 1080), (480, 600), (1080, 1350), (1280, 720), (720, 1280)]
+        let names = [
+            "sleepy cat", "cat versus cucumber", "the cat on the stairs", "loaf", "window cat", "kitten, first day", "zoomies at 3 am",
+            "cat and the printer", "cat in a box", "slow blink",
+        ]
+        return (0..<collageTotal).map { i in
+            var post = base[i % base.count]
+            let shape = shapes[i % shapes.count]
+            post.id = String(format: "PrEvIeWcat%04d", i)
+            post.link = nil
+            post.session = nil
+            post.title = i < names.count ? names[i] : "\(names[i % names.count]) \(i / names.count + 1)"
+            post.customTitle = nil
+            post.width = shape.0
+            post.height = shape.1
+            post.files = post.files.enumerated().map { n, file in
+                var file = file
+                file.id = "PrEvIeWcatfile\(i)-\(n)"
+                if file.width != nil { file.width = shape.0 }
+                if file.height != nil { file.height = shape.1 }
+                return file
+            }
+            return post
+        }
+    }
     /// A post a sample message shows that the library no longer has (the "removed" tile).
     static let chatGonePostID = "PrEvIeWgone000001"
 
@@ -114,9 +154,25 @@ extension PreviewData {
                 text: "it is a kitchen timer counting down to a pasta joke. the other file is gone from your library.",
                 postIDs: [shown[1], chatGonePostID], createdAt: t(2 * 1_440 - 3)),
         ]
+
+        let thread4 = ChatThread(
+            id: collageThreadID, title: "every cat i saved", createdAt: t(5 * 1_440), updatedAt: t(5 * 1_440 - 2),
+            preview: "found 95 posts with a cat in them. all of them are below, newest first.", messageCount: 2)
+        let messages4 = [
+            ChatMessage(id: "131", role: .user, text: "show me every cat i saved", createdAt: t(5 * 1_440)),
+            ChatMessage(
+                id: collageMessageID, role: .assistant,
+                text: "found **95 posts** with a cat in them. all of them are below, newest first. the three i would start with are up here:",
+                postIDs: shown,
+                steps: [ChatStep(
+                    id: "toolu_21", status: .done,
+                    code: "const cats = await cobalt.search(\"cats\", 500);\nawait cobalt.show(cats.slice(0, 3).map(p => p.id));\nawait cobalt.collage(cats.map(p => p.id), { title: \"every cat\", query: \"cats\" });\nreturn cats.length;",
+                    logs: ["95 cats"], result: "95", durationMS: 940)],
+                collage: collage, createdAt: t(5 * 1_440 - 2)),
+        ]
         return (
-            [thread1, thread2, thread3],
-            [thread1.id: messages1, thread2.id: messages2, thread3.id: messages3])
+            [thread1, thread2, thread3, thread4],
+            [thread1.id: messages1, thread2.id: messages2, thread3.id: messages3, thread4.id: messages4])
     }
 }
 
@@ -131,6 +187,7 @@ final class PreviewChatState: Sendable {
         var listFails = false
         var replyFails = false
         var readFails = false
+        var collageFails = false
         /// The sends in flight (one reply at a time per thread).
         var replying: Set<String> = []
     }
@@ -154,6 +211,12 @@ final class PreviewChatState: Sendable {
     var listFails: Bool {
         get { state.withLock { $0.listFails } }
         set { state.withLock { $0.listFails = newValue } }
+    }
+
+    /// Tests: every collage page answers 503 while this is true.
+    var collageFails: Bool {
+        get { state.withLock { $0.collageFails } }
+        set { state.withLock { $0.collageFails = newValue } }
     }
 
     /// Tests: every reply ends in `error.chat.model` while this is true.
@@ -287,6 +350,28 @@ extension PreviewClient {
         return ChatThreadDetail(thread: thread, messages: messages, posts: posts)
     }
 
+    /// `GET /chat/threads/<id>/messages/<message id>/collage?offset=&limit=` (27.5): a page of the collage, from the
+    /// generated posts; the one "deleted since" is left out of its page (so that page is a post short). `notFound` for a
+    /// message with no collage, `badRequest` for an offset below 0 or a limit outside 1...60.
+    public func chatCollage(threadID: String, messageID: String, offset: Int, limit: Int) async throws -> ChatCollagePage {
+        chatState.record("COLLAGE \(threadID) \(messageID) \(offset) \(limit)")
+        try await clock.sleep(seconds: 0.35 * timeScale)
+        guard scenario.hasChat else { throw PipelineFailure.unsupported }
+        guard offset >= 0, (1...60).contains(limit) else { throw ChatError.badRequest }
+        guard chatState.thread(threadID) != nil,
+              let collage = chatState.messages(threadID).first(where: { $0.id == messageID })?.collage
+        else { throw ChatError.notFound }
+        if chatState.collageFails { throw ChatError.unavailable }
+        let all = PreviewData.collagePosts(now: startedAt)
+        let end = min(collage.total, all.count, offset + limit)
+        let slice = offset < end ? Array(all[offset..<end]) : []
+        let kept = slice.enumerated().filter { offset + $0.offset != PreviewData.collageGoneIndex }.map(\.element)
+        return ChatCollagePage(
+            title: collage.title, query: collage.query, total: collage.total, offset: offset,
+            next: end < collage.total ? end : nil, postIDs: kept.map(\.id),
+            posts: Dictionary(uniqueKeysWithValues: kept.map { ($0.id, $0) }))
+    }
+
     /// `PATCH /chat/threads/<id>`: `badRequest` unless the title cleans to 1..60 code points.
     public func renameChatThread(id: String, title: String) async throws -> ChatThread {
         chatState.record("PATCH " + id)
@@ -417,6 +502,14 @@ extension PreviewClient {
         chatState.update(reply.id, in: threadID) { $0.postIDs = shown }
         emit(.posts(ids: shown, posts: shownPosts))
         try await pause(0.3)
+
+        // the collage thread (and a message that says "collage") also attaches the 95-post collage
+        if threadID == PreviewData.collageThreadID || text.localizedCaseInsensitiveContains("collage") {
+            reply.collage = PreviewData.collage
+            chatState.update(reply.id, in: threadID) { $0.collage = PreviewData.collage }
+            emit(.collage(PreviewData.collage))
+            try await pause(0.3)
+        }
 
         if isFirst, let thread = chatState.setTitle("the harbour clips", of: threadID) {
             emit(.title(thread))

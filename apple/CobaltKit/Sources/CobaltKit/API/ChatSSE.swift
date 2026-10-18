@@ -101,6 +101,7 @@ public struct ChatSSEParser: Sendable {
         var postIds: [String]
         var posts: [String: Lossy<LibraryPost>]?
     }
+    private struct CollageWire: Decodable { var collage: ChatCollage }
     private struct TitleWire: Decodable { var thread: ChatThread }
     private struct DoneWire: Decodable { var message: ChatMessage; var thread: ChatThread }
     private struct ErrorWire: Decodable {
@@ -130,6 +131,7 @@ public struct ChatSSEParser: Sendable {
             let ordered = wire.postIds.compactMap { byID[$0] }
             let extra = byID.values.filter { post in !wire.postIds.contains(post.id) }
             return .posts(ids: wire.postIds, posts: ordered + extra.sorted { $0.id < $1.id })
+        case "collage": return (try? decoder.decode(CollageWire.self, from: data)).map { .collage($0.collage) }
         case "title": return (try? decoder.decode(TitleWire.self, from: data)).map { .title($0.thread) }
         case "done": return (try? decoder.decode(DoneWire.self, from: data)).map { .done($0.message, $0.thread) }
         case "error": return (try? decoder.decode(ErrorWire.self, from: data)).map { .error(code: $0.code, message: $0.message) }

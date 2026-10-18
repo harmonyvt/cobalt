@@ -20,4 +20,17 @@ extension AppModel {
         library.expandedPostID = postID
         selectedTab = .library
     }
+
+    /// "open in library" on a chat collage (27.5): the library tab opens with the collage's search words in its search field.
+    /// A filter that would hide results (a kind chip, "private only") is cleared, as "reveal" does. Words that are blank
+    /// do nothing.
+    public func openInLibrary(search query: String) {
+        let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return }
+        library.show = .everything
+        library.kindFilter = .all
+        library.query = words
+        queueShown = false                 // a sheet over the shell would hide the tab
+        selectedTab = .library
+    }
 }

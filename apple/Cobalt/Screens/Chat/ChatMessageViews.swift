@@ -88,6 +88,7 @@ struct ChatMessageView: View {
     let model: AppModel
     let message: ChatMessage
     let content: ChatThreadContent
+    var tier: Tier = .compact
     /// A shown post was tapped.
     let open: (LibraryPost) -> Void
     /// "try again" on a failed reply, with the text it answered.
@@ -142,6 +143,10 @@ struct ChatMessageView: View {
             }
             if !message.postIDs.isEmpty {
                 ChatPostStrip(model: model, ids: message.postIDs, posts: content.posts, side: 104, showsTitles: true, open: open)
+            }
+            if let collage = message.collage {
+                ChatCollageView(
+                    model: model, threadID: content.thread.id, messageID: message.id, collage: collage, tier: tier, open: open)
             }
             if message.status == .error { failure }
         }

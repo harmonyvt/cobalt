@@ -370,7 +370,7 @@ final class KeyboardViewController: UIInputViewController {
         guard let query = typing.query, model.savingEmoteID == nil else { return }
         Task { @MainActor in
             guard let url = await self.linkSaving(hit) else { return }
-            self.replaceTrigger(query, with: url.absoluteString + " ")
+            self.replaceTrigger(query, with: self.model.shareLink(for: url).absoluteString + " ")
         }
     }
 
