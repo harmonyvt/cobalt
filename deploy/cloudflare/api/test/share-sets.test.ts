@@ -187,7 +187,7 @@ describe("the share host", () => {
         const doc = JSON.parse(m![1]);
         expect(Object.keys(doc)).toEqual(["component"]);
         expect(doc.component.type).toBe(17);
-        expect(doc.component.components[0]).toEqual({ type: 10, content: "\\<b\\>trip\\</b\\>" });
+        expect(doc.component.components[0]).toEqual({ type: 10, content: "**\\<b\\>trip\\</b\\>**" });
         expect(doc.component.components[1]).toEqual({
             type: 12,
             items: [`${MEDIA}ViDeO00001.mp4`, `${MEDIA}WeBpWeBp01.webp`, `${MEDIA}PhOtO00001.jpg`].map((url) => ({ media: { url } })),

@@ -32,6 +32,7 @@ import { serviceAuthorized } from "./service-auth";
 import { sharePage } from "./share";
 import { createShareSet, listShareSets, revokeShareSet } from "./share-sets";
 import { deleteSwitchedWebp, purgeFrom } from "./visibility";
+import { captionerFrom } from "./roast";
 import { ingestTelemetry } from "./telemetry";
 import {
     linkFrom,
@@ -84,6 +85,10 @@ export interface WorkerEnv {
     // Rich link pages (section 22): https://<share host>/ (a plain var). The Worker answers that host
     // itself, before the gate. Absent or empty: no pages, `share_base_url: null`.
     SHARE_BASE_URL?: string;
+    // Roast captions (section 25): the Anthropic key and optional AI Gateway URL (secrets), the model.
+    ANTHROPIC_API_KEY?: string;
+    ROAST_BASE_URL?: string;
+    ROAST_MODEL?: string;
 }
 
 // The Space client, or null while search is not configured (embed.ts).
@@ -143,6 +148,7 @@ export async function handleRequest(
         now: deps.now ?? (() => Date.now()),
         sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
         fixedLength: deps.fixedLength,
+        captioner: deps.captioner,
     });
     // Every /studio* response, rejections included, carries the studio page's
     // origin (STUDIO-CONTRACT.md); the page is the only intended caller.
@@ -365,7 +371,7 @@ async function handleInner(
         if (decision.then === "share_sets_create" || decision.then === "share_sets_list" || decision.then === "share_sets_revoke") {
             const shareBaseUrl = shareHost(env) ? env.SHARE_BASE_URL : undefined;
             if (!shareBaseUrl) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
-            const sd = { db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, shareBaseUrl, now: edge.now };
+            const sd = { db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, shareBaseUrl, now: edge.now, captioner: edge.captioner ?? captionerFrom(env) };
             const r =
                 decision.then === "share_sets_create"
                     ? await createShareSet(sd, request, keyId)

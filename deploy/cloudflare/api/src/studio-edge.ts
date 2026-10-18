@@ -34,6 +34,8 @@ export type EdgeDeps = {
         readable: ReadableStream<Uint8Array>;
         writable: WritableStream<Uint8Array>;
     };
+    // Roast captions (section 25): injectable for tests; undefined = from the env (null = off).
+    captioner?: import("./roast").Captioner | null;
 };
 
 // The one "main" Container Durable Object (a stub in production).

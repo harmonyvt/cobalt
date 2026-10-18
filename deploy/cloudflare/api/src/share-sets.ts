@@ -3,6 +3,7 @@
 // the Open Graph page, and the Mastodon-shaped status Discord reads to draw every file as attachments.
 // D1 only, the container is never involved. Free of Cloudflare imports so it runs under plain node.
 
+import { captionOf, fileOf, setSubject, writeCaption, type Caption, type Captioner, type RoastInput } from "./roast";
 import { ITEM_COLUMNS, effectiveVisibility, type MediaRow } from "./visibility";
 import { escapeHtml } from "./share";
 import type { StudioReply } from "./studio";
@@ -19,7 +20,12 @@ export type ShareSetDeps = {
     shareBaseUrl: string;
     now: () => number;
     randomBytes?: (n: number) => Uint8Array;
+    // roast captions (section 25): written at creation, waiting at most captionWaitMs (the cron fills misses)
+    captioner?: Captioner | null;
+    captionWaitMs?: number;
 };
+
+export const CAPTION_WAIT_MS = 6000;
 
 type SetRow = { id: string; items: string; title: string | null; created_at: number; revoked_at: number | null };
 
@@ -154,6 +160,15 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
             .prepare("INSERT INTO share_sets (id, items, title, key_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
             .bind(row.id, row.items, row.title, keyId, row.created_at)
             .run();
+        if (d.captioner) {
+            const input: RoastInput = { files: ids.map((id) => rows.get(id)!).map((r, i) => fileOf(r, shaped[i]!.url)), userTitle: row.title };
+            const wait = d.captionWaitMs ?? CAPTION_WAIT_MS;
+            // our own timeout: a slow model must not hold the link (the row is recorded either way)
+            await Promise.race([
+                writeCaption({ db: d.db, captioner: d.captioner, now: d.now }, setSubject(row.id), input),
+                new Promise((r) => setTimeout(r, wait)),
+            ]);
+        }
         return { status: 201, body: { status: "success", set: setShape(d, row, shaped) } };
     } catch {
         return err(503, "error.api.generic");
@@ -196,7 +211,7 @@ export async function revokeShareSet(d: ShareSetDeps, id: string): Promise<Studi
 
 // ---- the share host --------------------------------------------------------------------------------
 
-type LiveSet = { set: SetRow; files: (SetItem & { url: string })[] };
+type LiveSet = { set: SetRow; files: (SetItem & { url: string })[]; caption?: Caption | null };
 
 async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl">, id: string): Promise<LiveSet | null> {
     if (!SET_ID_REGEX.test(id)) return null;
@@ -207,7 +222,25 @@ async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl">, id: string)
     if (!set) return null;
     const ids = parseItems(set.items);
     const files = itemsOf(ids, await rowsById(d.db, ids), d.mediaBaseUrl).filter((i): i is SetItem & { url: string } => i.url !== null);
-    return files.length > 0 ? { set, files } : null;
+    return files.length > 0 ? { set, files, caption: await captionOf(d.db, setSubject(set.id)) } : null;
+}
+
+// The roast model input for a live gallery link, or null when none of its files is public any more.
+export async function setRoastInput(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl">, id: string): Promise<RoastInput | null> {
+    const set = await d.db
+        .prepare("SELECT id, items, title, created_at, revoked_at FROM share_sets WHERE id = ?1 AND revoked_at IS NULL")
+        .bind(id)
+        .first<SetRow>();
+    if (!set) return null;
+    const ids = parseItems(set.items);
+    const rows = await rowsById(d.db, ids);
+    const files = ids
+        .map((i) => rows.get(i))
+        .filter((r): r is MediaRow => !!r)
+        .map((r) => ({ r, url: publicUrlOf(r, d.mediaBaseUrl) }))
+        .filter((x) => x.url !== null)
+        .map((x) => fileOf(x.r, x.url));
+    return files.length > 0 ? { files, userTitle: set.title } : null;
 }
 
 const NOT_FOUND = () =>
@@ -228,7 +261,10 @@ const kindOf = (t: string | null): "video" | "gif" | "image" => {
     return "image";
 };
 
-const titleText = (s: LiveSet) => s.set.title ?? `${s.files.length} files`;
+// A title Harmony typed wins; then the roast caption; then "N files".
+const titleText = (s: LiveSet) => s.set.title ?? s.caption?.title ?? `${s.files.length} files`;
+const descText = (s: LiveSet) => s.caption?.description || "";
+const mdEscape = (t: string) => t.replace(/[\\*_~`|>#\[\]<@]/g, (c) => `\\${c}`);
 
 // Discord refuses a video over 1920 px on a side: report half (the player scales).
 function videoSize(w: number | null, h: number | null): { width: number; height: number } | null {
@@ -316,7 +352,7 @@ export function componentEmbed(s: LiveSet): string {
         component: {
             type: 17,
             components: [
-                { type: 10, content: titleText(s).replace(/[\\*_~`|>#\[\]<@]/g, (c) => `\\${c}`) },
+                { type: 10, content: [`**${mdEscape(titleText(s))}**`, descText(s) ? mdEscape(descText(s)) : ""].filter(Boolean).join("\n") },
                 { type: 12, items: s.files.map((f) => ({ media: { url: f.url } })) },
             ],
         },
@@ -335,6 +371,7 @@ function pageHtml(d: ShareSetDeps, s: LiveSet, discord: boolean): string {
         `<meta property="og:url" content="${e(pageUrl)}">`,
         `<meta name="twitter:title" content="${e(title)}">`,
         `<meta name="theme-color" content="#000000">`,
+        ...(descText(s) ? [`<meta property="og:description" content="${e(descText(s))}">`, `<meta name="twitter:description" content="${e(descText(s))}">`] : []),
     ];
     const video = s.files.find((f) => kindOf(f.content_type) === "video");
     if (video) {

@@ -938,6 +938,14 @@ one Media Gallery, videos playable; https://docs.discord.com/developers/link-pre
 to the Open Graph tags. Test a page in https://discord.com/developers/embeds. The Mastodon status routes still answer
 but are no longer linked (Discord showed only thumbnails through them). Apply migration 0012 before deploying.
 
+## Roast captions (`APP-API-CONTRACT.md` section 25)
+
+Claude Haiku 5.5 writes a funny title and description (Harmony the capybara roasting Harmony) for every public file
+and gallery link, once, into D1 `media_captions` (`src/roast.ts`); the share pages and Discord's embed show them. New
+gallery links get theirs at creation, everything else from the 15-minute cron. Turn it on by adding
+`"ANTHROPIC_API_KEY": "sk-ant-..."` to `~/.config/cobalt/secrets.json` (optional `"ROAST_BASE_URL"` for Cloudflare AI
+Gateway), apply migration 0013, then deploy the API. A title set in the app always wins over the roast.
+
 ## Library search (`APP-API-CONTRACT.md` section 21)
 
 Search runs EmbeddingGemma 2 on a private Hugging Face Space (`capybaraharmony/cobalt-embed`, CPU basic, needs HF PRO); the API Worker drains the index queue every 15
