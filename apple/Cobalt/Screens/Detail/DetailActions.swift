@@ -26,7 +26,7 @@ struct DetailActions: View {
     private var canMake: Bool { controller.canMakeWebp(item) }
     private var shareURL: URL? {
         if let url = rendition.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url }
-        return rendition.publicURL
+        return rendition.publicURL.map(model.capabilities.shareLink(for:))
     }
     private var videoLink: URL? { rendition.hosted?.url ?? rendition.publicURL }
     private var canSave: Bool { RenditionPhotos.canSave(rendition) }

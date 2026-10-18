@@ -8,6 +8,7 @@ import { handleStudioRoute, isStudioRoute, StudioService } from "./studio";
 import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
 import { purgeFrom } from "./visibility";
+import { shareLinkFrom } from "./share";
 import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
 import { embedFrom, handleRequest, type WorkerEnv } from "./worker";
 
@@ -152,6 +153,8 @@ export class CobaltContainer extends Container<Env> {
             fetch: (url, init) => fetch(url, init),
             // a failed send is retried by the sweep: arm it
             scheduleSweep: () => this.scheduleSweepSoon(),
+            // a webp's link in the message is its rich link page (section 22)
+            shareLink: shareLinkFrom(env),
         });
 
         // cobalt studio: saves a link into the private R2 bucket (advanced by

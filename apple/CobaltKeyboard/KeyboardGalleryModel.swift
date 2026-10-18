@@ -196,6 +196,13 @@ final class KeyboardGalleryModel {
     @ObservationIgnored var onHoldEmote: @MainActor (EmoteHit) -> Void = { _ in }
 
     @ObservationIgnored private var client: HTTPCobaltClient?
+    /// What the server said on the last library load; nil before one.
+    @ObservationIgnored private var capabilities: Capabilities?
+
+    /// The link to insert for a public file: its rich link page when the server has them (APP-API-CONTRACT 22).
+    func shareLink(for url: URL) -> URL {
+        capabilities?.shareLink(for: url) ?? Settings.shared().shareLink(for: url)
+    }
     @ObservationIgnored private var nextCursor: String?
     @ObservationIgnored private var loading = false
 
@@ -520,6 +527,7 @@ final class KeyboardGalleryModel {
         let cursor = reset ? nil : nextCursor
         do {
             let caps = await client.capabilities()
+            if caps.kind != .unreachable { capabilities = caps }
             let page: LibraryPage
             if caps.gallery {
                 page = try await client.library(cursor: cursor, limit: Self.pageLimit, v3: true)

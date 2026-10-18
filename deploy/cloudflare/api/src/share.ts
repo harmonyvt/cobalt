@@ -48,6 +48,19 @@ export function shareUrlFor(mediaUrl: string, mediaBaseUrl: string, shareBaseUrl
     return m ? `${withSlash(shareBaseUrl)}${m[1]}` : null;
 }
 
+// The mapper for messages that carry a public link (the Hark notifications), or undefined while
+// SHARE_BASE_URL is unset or not https.
+export function shareLinkFrom(env: { MEDIA_BASE_URL: string; SHARE_BASE_URL?: string }): ((url: string) => string) | undefined {
+    const share = env.SHARE_BASE_URL;
+    if (!share) return undefined;
+    try {
+        if (new URL(share).protocol !== "https:") return undefined;
+    } catch {
+        return undefined;
+    }
+    return (url) => shareUrlFor(url, env.MEDIA_BASE_URL, share) ?? url;
+}
+
 type Found = MediaRow & { custom_title: string | null };
 
 // The live public row whose public object is `<base>.<ext>` (or exactly `<base>.<ext>` when the link

@@ -297,7 +297,7 @@ final class KeyboardViewController: UIInputViewController {
         guard model.busyID == nil, model.savingEmoteID == nil else { return }
         Task { @MainActor in
             guard let url = await self.linkSaving(hit) else { return }
-            self.textDocumentProxy.insertText(url.absoluteString)
+            self.textDocumentProxy.insertText(self.model.shareLink(for: url).absoluteString)
             self.model.notice = nil
         }
     }
@@ -398,7 +398,7 @@ final class KeyboardViewController: UIInputViewController {
             model.notice = .failed(KeyboardWords.noPublicLinks)
             return
         }
-        textDocumentProxy.insertText(url.absoluteString)
+        textDocumentProxy.insertText(model.shareLink(for: url).absoluteString)
         model.notice = nil
     }
 }
