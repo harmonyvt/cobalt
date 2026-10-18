@@ -171,6 +171,8 @@ export async function handleRequest(
         chatModel: deps.chatModel,
         codeRunner: deps.codeRunner,
         waitUntil: deps.waitUntil,
+        // the Anthropic relay (src/model-fetch.ts): without it, chat and captions call from the local colo
+        modelFetch: deps.modelFetch,
     });
     // Every /studio* response, rejections included, carries the studio page's
     // origin (STUDIO-CONTRACT.md); the page is the only intended caller.
