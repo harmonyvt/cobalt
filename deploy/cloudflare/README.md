@@ -938,6 +938,12 @@ one Media Gallery, videos playable; https://docs.discord.com/developers/link-pre
 to the Open Graph tags. Test a page in https://discord.com/developers/embeds. The Mastodon status routes still answer
 but are no longer linked (Discord showed only thumbnails through them). Apply migration 0012 before deploying.
 
+## Share link collections (`APP-API-CONTRACT.md` section 26)
+
+Named folders of gallery links (`src/share-collections.ts`, D1 `share_collections` and `share_collection_items`,
+migration 0014): `GET|POST /share/collections`, `PATCH|DELETE /share/collections/<id>`, client keys only. Deleting a
+collection keeps its links; revoking a link removes it from every collection.
+
 ## Roast captions (`APP-API-CONTRACT.md` section 25)
 
 Claude Haiku 5.5 writes a funny title and description (Harmony the capybara roasting Harmony) for every public file

@@ -236,6 +236,9 @@ export async function capabilities(
                 // POST|GET /share/sets and DELETE /share/sets/<id>, gallery links on the share host
                 // (APP-API-CONTRACT.md section 24): exactly while the share host is configured
                 share_sets: !!d.shareBaseUrl,
+                // GET|POST /share/collections, PATCH|DELETE /share/collections/<id>: named folders of gallery
+                // links (APP-API-CONTRACT.md section 26), with the share host
+                share_collections: !!d.shareBaseUrl,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,

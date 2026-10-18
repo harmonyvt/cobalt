@@ -979,6 +979,7 @@ describe("GET /capabilities", () => {
                 queue: true,
                 // no share host in this world's env (section 24)
                 share_sets: false,
+                share_collections: false,
             },
             limits: {
                 max_webp_seconds: 10,

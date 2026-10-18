@@ -33,6 +33,7 @@ import { sharePage } from "./share";
 import { createShareSet, listShareSets, revokeShareSet } from "./share-sets";
 import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { captionerFrom } from "./roast";
+import { createCollection, deleteCollection, listCollections, updateCollection } from "./share-collections";
 import { ingestTelemetry } from "./telemetry";
 import {
     linkFrom,
@@ -378,6 +379,27 @@ async function handleInner(
                     : decision.then === "share_sets_list"
                       ? await listShareSets(sd)
                       : await revokeShareSet(sd, decision.params!.id);
+            const res = json(r.status, r.body, allowOrigin);
+            res.headers.set("cache-control", "no-store");
+            return res;
+        }
+        // Share link collections (section 26): D1 only.
+        if (
+            decision.then === "collections_list" ||
+            decision.then === "collections_create" ||
+            decision.then === "collections_update" ||
+            decision.then === "collections_delete"
+        ) {
+            if (!shareHost(env)) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
+            const cd = { db: env.DB, now: edge.now };
+            const r =
+                decision.then === "collections_list"
+                    ? await listCollections(cd)
+                    : decision.then === "collections_create"
+                      ? await createCollection(cd, request, keyId)
+                      : decision.then === "collections_update"
+                        ? await updateCollection(cd, request, decision.params!.id)
+                        : await deleteCollection(cd, decision.params!.id);
             const res = json(r.status, r.body, allowOrigin);
             res.headers.set("cache-control", "no-store");
             return res;

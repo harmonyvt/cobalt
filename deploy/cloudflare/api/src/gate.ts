@@ -85,6 +85,10 @@ export type LookupThen =
     | "share_sets_create"
     | "share_sets_list"
     | "share_sets_revoke"
+    | "collections_list"
+    | "collections_create"
+    | "collections_update"
+    | "collections_delete"
     | "live_start_token"
     | "live_run"
     | "live_state"
@@ -122,6 +126,7 @@ export const STUDIO_JOB_REGEX = /^[A-Za-z0-9]{20}$/;
 export const ITEM_ID_REGEX = /^[A-Za-z0-9]{16}$/;
 // a gallery share link's id (section 24): 19 digits
 export const SHARE_SET_ID_REGEX = /^[0-9]{19}$/;
+const COLLECTION_ID_REGEX = /^[A-Za-z0-9]{16}$/;
 
 export const isStudioPath = (pathname: string) =>
     pathname === "/studio" || pathname.startsWith("/studio/");
@@ -228,6 +233,21 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         const id = req.pathname.slice("/share/sets/".length);
         if (!SHARE_SET_ID_REGEX.test(id) || req.method !== "DELETE") return reject(404);
         return lookupThen(req, "share_sets_revoke", { id });
+    }
+
+    // Share link collections (APP-API-CONTRACT.md section 26): keyed only.
+    if (req.pathname === "/share/collections" || req.pathname.startsWith("/share/collections/")) {
+        if (req.service) return reject(404);
+        if (req.pathname === "/share/collections") {
+            if (req.method === "GET") return lookupThen(req, "collections_list");
+            if (req.method === "POST") return lookupThen(req, "collections_create");
+            return reject(404);
+        }
+        const id = req.pathname.slice("/share/collections/".length);
+        if (!COLLECTION_ID_REGEX.test(id)) return reject(404);
+        if (req.method === "PATCH") return lookupThen(req, "collections_update", { id });
+        if (req.method === "DELETE") return lookupThen(req, "collections_delete", { id });
+        return reject(404);
     }
 
     // Library adoption is for the web Worker's service credential only; an

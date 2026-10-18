@@ -2383,3 +2383,16 @@ The library gets a select mode; with 2..4 public files selected, `make share lin
 - When: a new gallery link at `POST /share/sets` (the Worker waits at most 6 s, its own timeout; a miss is left to the cron), everything else from the 15-minute cron (gallery links first, then public files newest first, up to 90 s a run, before the search indexer).
 - Where: single-file pages (section 22) use the caption as `og:title` unless the post has a title set in the app, and its description as `og:description`/`twitter:description` (followed by the video length). Gallery pages (section 24) use the link's own title if Harmony typed one, else the caption's, and its description; Discord's component embed shows `**title**` then the description above the gallery.
 - Off unless `ANTHROPIC_API_KEY` is in the secrets file; optional `ROAST_BASE_URL` (secret) sends calls through Cloudflare AI Gateway (`https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic`). No app change; no new route.
+
+## 26. Share link collections (addendum, built 2026-10-18; owner: "CRUD collections which have shares in them")
+
+A collection is a named folder of gallery links (section 24). Keyed routes only (a service credential gets 404), D1 only, `cache-control: no-store`, 404 `error.share.off` while the share host is not configured. `GET /capabilities` has `features.share_collections` (true exactly with `share_sets`).
+
+Shape: `{ "id": "<16 letters/digits>", "name": "memes", "created_at": <ms>, "updated_at": <ms>, "set_ids": ["<19-digit set id>", ...] }`. `set_ids` lists the collection's live links, most recently added first; a revoked link drops out of every collection on its own. A link may be in several collections. The app joins `set_ids` with `GET /share/sets` for thumbnails and URLs.
+
+- `GET /share/collections` → `200 { "status": "success", "collections": [shape, ...] }`, most recently changed first (at most 100).
+- `POST /share/collections` `{ "name": "memes", "set_ids": [...]? }` → `201 { "status": "success", "collection": shape }`. Name: trimmed, control characters removed, 1..60 code points. `set_ids` optional, at most 200, live links only.
+- `PATCH /share/collections/<id>` `{ "name"?: "...", "add"?: [...], "remove"?: [...] }` (at least one) → `200 { "status": "success", "collection": shape }`. Adding a link already there is a no-op; removing one that is not there is a no-op. Bumps `updated_at`.
+- `DELETE /share/collections/<id>` → `200 { "status": "success" }`. Deletes the folder only: its links stay live and keep working.
+- Errors: `400 error.collection.bad_request` (bad JSON, name or id list), `404 error.collection.not_found` (unknown collection), `409 error.collection.link_not_found` with `set_ids` (unknown or revoked links in `set_ids`/`add`; nothing changed), `409 error.collection.too_many` (100 collections), `409 error.collection.full` (200 links), `503 error.api.generic`.
+- App: in the Links tab, collections as folders: create (name, optionally with the selected links), rename, delete (confirm: "delete this collection? its links keep working"), add a link to collections from its row, remove it from one. Migration 0014 must be applied before the API deploy that ships these routes.
