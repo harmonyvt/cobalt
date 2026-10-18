@@ -2367,10 +2367,10 @@ A share set is 2..4 public files under one link, `https://share.capybaraharmony.
 
 ### 24.2 The page (`share.` host, no key)
 
-- `GET|HEAD /g/<id>`: Open Graph like section 22, built from the set's files that are still public, in order (none left, revoked or unknown: the same 404). The first video is `og:video`; every image, webp and video poster is an `og:image` (Discord draws several as a grid). For Discord's crawler only (user agent contains `Discordbot`), the head also has `<link rel="alternate" type="application/activity+json" href="https://share.../users/cobalt/statuses/<id>">` and an oEmbed link; Discord then reads the set as a Mastodon post and shows every file, videos included, as attachments.
+- `GET|HEAD /g/<id>`: Open Graph like section 22, built from the set's files that are still public, in order (none left, revoked or unknown: the same 404). The first video is `og:video`; every image, webp and video poster is an `og:image`. For Discord's crawler only (user agent contains `Discordbot`), the head also carries a component embed (https://docs.discord.com/developers/link-previews/component-embeds): `<script id="discord:component-embed" type="application/json">` with `{"component":{"type":17,"components":[{"type":10,"content":<title or "N files", markdown-escaped>},{"type":12,"items":[{"media":{"url":<file url>}},...]}]}}` (under 3,000 bytes, `<` escaped). Discord shows every file in one media gallery, videos with play controls; the Open Graph tags are its fallback.
 - `GET /api/v1/statuses/<id>` and `GET /users/cobalt/statuses/<id>`: a Mastodon v1 Status (`id`, `url`, `uri`, `created_at`, `content` = the escaped title, `visibility: "public"`, an `account` named cobalt, `media_attachments` with `type` image / gifv / video, `url`, `preview_url`, `meta.original` width/height). Videos over 1920 px on a side report half their size (Discord refuses larger). Same 404 rules.
 - `GET /owoembed?id=<id>` → oEmbed `{ "version": "1.0", "type": "rich", "title": "Embed", "provider_name": "cobalt", "provider_url": "<share_base_url>", "author_name": <title or "N files"> }`.
-- This is Discord's undocumented Mastodon embed path (the one fixupx-style services use); if Discord stops reading it, Discord falls back to the Open Graph tags.
+- The status and oEmbed routes are Discord's undocumented Mastodon path. They still answer, but the page no longer links them: Discord showed only thumbnails through it.
 
 ### 24.3 App
 

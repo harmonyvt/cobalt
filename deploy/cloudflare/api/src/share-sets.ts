@@ -309,6 +309,21 @@ function statusJson(d: ShareSetDeps, s: LiveSet) {
     };
 }
 
+// https://docs.discord.com/developers/link-previews/component-embeds: one Container (17) holding a Text
+// Display (10) and a Media Gallery (12); at most 3,000 bytes. `<` is escaped so the JSON cannot end the script.
+export function componentEmbed(s: LiveSet): string {
+    const json = JSON.stringify({
+        component: {
+            type: 17,
+            components: [
+                { type: 10, content: titleText(s).replace(/[\\*_~`|>#\[\]<@]/g, (c) => `\\${c}`) },
+                { type: 12, items: s.files.map((f) => ({ media: { url: f.url } })) },
+            ],
+        },
+    });
+    return json.replace(/</g, "\\u003c");
+}
+
 function pageHtml(d: ShareSetDeps, s: LiveSet, discord: boolean): string {
     const e = escapeHtml;
     const share = withSlash(d.shareBaseUrl);
@@ -338,12 +353,9 @@ function pageHtml(d: ShareSetDeps, s: LiveSet, discord: boolean): string {
     const pictures = s.files.map((f) => (kindOf(f.content_type) === "video" ? f.poster_url : f.url)).filter((u): u is string => !!u);
     for (const p of pictures) meta.push(`<meta property="og:image" content="${e(p)}">`, `<meta name="twitter:image" content="${e(p)}">`);
     meta.push(`<meta name="twitter:card" content="summary_large_image">`);
-    if (discord) {
-        meta.push(
-            `<link rel="alternate" type="application/activity+json" href="${e(`${share}users/cobalt/statuses/${s.set.id}`)}">`,
-            `<link rel="alternate" type="application/json+oembed" href="${e(`${share}owoembed?id=${s.set.id}`)}">`,
-        );
-    }
+    // Discord's component embed: every file in one Media Gallery, videos playable, animated images moving.
+    // Open Graph above stays as the fallback. The Mastodon status routes remain but are no longer linked.
+    if (discord) meta.push(`<script id="discord:component-embed" type="application/json">${componentEmbed(s)}</script>`);
     const body = s.files
         .map((f) =>
             kindOf(f.content_type) === "video"

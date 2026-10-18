@@ -179,10 +179,22 @@ describe("the share host", () => {
         expect(html).not.toContain("activity+json");
         expect(html).not.toContain("<b>trip");
     });
-    it("Discord's crawler also gets the Mastodon and oEmbed links", async () => {
+    it("Discord's crawler gets a component embed: every file in one media gallery", async () => {
         const html = await (await get(`${SHARE}g/${set.id}`, { headers: { "user-agent": "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)" } })).text();
-        expect(html).toContain(`<link rel="alternate" type="application/activity+json" href="${SHARE}users/cobalt/statuses/${set.id}">`);
-        expect(html).toContain(`href="${SHARE}owoembed?id=${set.id}"`);
+        const m = /<script id="discord:component-embed" type="application\/json">([^<]*)<\/script>/.exec(html);
+        expect(m).not.toBeNull();
+        expect(m![1].length).toBeLessThanOrEqual(3000);
+        const doc = JSON.parse(m![1]);
+        expect(Object.keys(doc)).toEqual(["component"]);
+        expect(doc.component.type).toBe(17);
+        expect(doc.component.components[0]).toEqual({ type: 10, content: "\\<b\\>trip\\</b\\>" });
+        expect(doc.component.components[1]).toEqual({
+            type: 12,
+            items: [`${MEDIA}ViDeO00001.mp4`, `${MEDIA}WeBpWeBp01.webp`, `${MEDIA}PhOtO00001.jpg`].map((url) => ({ media: { url } })),
+        });
+        expect(html).not.toContain("activity+json");
+        // Open Graph stays as the fallback
+        expect(meta(html, "og:video")).toBe(`${MEDIA}ViDeO00001.mp4`);
     });
     it("the status lists every file as an attachment, big videos halved", async () => {
         for (const path of [`api/v1/statuses/${set.id}`, `users/cobalt/statuses/${set.id}`]) {

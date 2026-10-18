@@ -933,9 +933,10 @@ file URLs. Check a page with `curl -s https://share.capybaraharmony.com/<name> |
 
 `https://share.capybaraharmony.com/g/<19 digits>` shows 2..4 public files as one embed (`src/share-sets.ts`). The app
 makes them (`POST /share/sets`), lists them (`GET /share/sets`, the links tab) and revokes them
-(`DELETE /share/sets/<id>`). Discord's crawler gets a Mastodon `activity+json` link and reads
-`/api/v1/statuses/<id>`, which lists every file as an attachment (videos play in the grid); that path is undocumented
-Discord behaviour, and Discord falls back to the Open Graph tags when it fails. Apply migration 0012 before deploying.
+(`DELETE /share/sets/<id>`). Discord's crawler gets a component embed (a `discord:component-embed` JSON script with
+one Media Gallery, videos playable; https://docs.discord.com/developers/link-previews/component-embeds) and falls back
+to the Open Graph tags. Test a page in https://discord.com/developers/embeds. The Mastodon status routes still answer
+but are no longer linked (Discord showed only thumbnails through them). Apply migration 0012 before deploying.
 
 ## Library search (`APP-API-CONTRACT.md` section 21)
 
