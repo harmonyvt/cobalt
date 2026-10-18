@@ -192,6 +192,7 @@ public struct HTTPCobaltClient: CobaltClient {
                 var queue: Bool?
                 var search: Bool?
                 var shareSets: Bool?
+                var shareCollections: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -257,6 +258,7 @@ public struct HTTPCobaltClient: CobaltClient {
         caps.search = f?.search ?? false
         caps.shareBaseURL = w.shareBaseUrl.flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
         caps.shareSets = (f?.shareSets ?? false) && caps.shareBaseURL != nil
+        caps.shareCollections = (f?.shareCollections ?? false) && caps.shareSets
         return caps
     }
 
@@ -607,6 +609,77 @@ public struct HTTPCobaltClient: CobaltClient {
         case "error.share.not_found": return ShareSetError.notFound
         default:
             if status == 503 { return ShareSetError.unavailable }
+            return apiError(data, status: status)
+        }
+    }
+
+    // MARK: - Share link collections (APP-API-CONTRACT 26; `features.share_collections`; keyed)
+
+    /// `GET /share/collections` (keyed): the collections, most recently changed first.
+    public func shareCollections() async throws -> [ShareCollection] {
+        let req = try makeRequest("GET", "/share/collections", keyed: true, timeout: 20)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw shareCollectionError(data, status: http.statusCode) }
+        struct Wire: Decodable { var collections: [Lossy<ShareCollection>] }
+        guard let wire = try? CobaltJSON.decoder().decode(Wire.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return wire.collections.compactMap(\.value)
+    }
+
+    /// `POST /share/collections` `{name, set_ids?}` (keyed): `set_ids` is left out when empty.
+    public func createShareCollection(name: String, setIDs: [String]) async throws -> ShareCollection {
+        let req = try makeRequest("POST", "/share/collections", keyed: true, timeout: 30)
+        var body: [String: Any] = ["name": name]
+        if !setIDs.isEmpty { body["set_ids"] = setIDs }
+        let (data, http) = try await send(req, body: Self.jsonBody(body))
+        return try shareCollectionAnswer(data, http)
+    }
+
+    /// `PATCH /share/collections/<id>` `{name?, add?, remove?}` (keyed): only what is given is sent.
+    public func updateShareCollection(id: String, name: String?, add: [String], remove: [String]) async throws -> ShareCollection {
+        let req = try makeRequest("PATCH", "/share/collections/\(Self.encode(id))", keyed: true, timeout: 30)
+        var body: [String: Any] = [:]
+        if let name { body["name"] = name }
+        if !add.isEmpty { body["add"] = add }
+        if !remove.isEmpty { body["remove"] = remove }
+        let (data, http) = try await send(req, body: Self.jsonBody(body))
+        return try shareCollectionAnswer(data, http)
+    }
+
+    /// `DELETE /share/collections/<id>` (keyed): the folder only; its links keep working.
+    public func deleteShareCollection(id: String) async throws {
+        let req = try makeRequest("DELETE", "/share/collections/\(Self.encode(id))", keyed: true, timeout: 20)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw shareCollectionError(data, status: http.statusCode) }
+    }
+
+    private func shareCollectionAnswer(_ data: Data, _ http: HTTPURLResponse) throws -> ShareCollection {
+        guard (200..<300).contains(http.statusCode) else { throw shareCollectionError(data, status: http.statusCode) }
+        struct Wire: Decodable { var collection: ShareCollection }
+        guard let wire = try? CobaltJSON.decoder().decode(Wire.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return wire.collection
+    }
+
+    /// The collection routes' refusals as `ShareCollectionError`; any other code stays the generic `CobaltError.api`.
+    /// (`404 error.share.off` is the generic one: the share host is not set up.)
+    private func shareCollectionError(_ data: Data, status: Int) -> Error {
+        struct Body: Decodable {
+            struct Err: Decodable { var code: String? }
+            var error: Err?
+            var setIds: [String]?
+        }
+        let body = try? CobaltJSON.decoder().decode(Body.self, from: data)
+        switch body?.error?.code {
+        case "error.collection.bad_request": return ShareCollectionError.badRequest
+        case "error.collection.not_found": return ShareCollectionError.notFound
+        case "error.collection.link_not_found": return ShareCollectionError.linkNotFound(body?.setIds ?? [])
+        case "error.collection.too_many": return ShareCollectionError.tooMany
+        case "error.collection.full": return ShareCollectionError.full
+        default:
+            if status == 503 { return ShareCollectionError.unavailable }
             return apiError(data, status: status)
         }
     }

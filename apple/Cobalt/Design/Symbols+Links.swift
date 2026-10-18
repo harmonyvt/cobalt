@@ -13,4 +13,25 @@ extension Symbol {
     static let linkFilePrivate = "lock.fill"
     /// A video in a link's strip.
     static let linkFilePlay = "play.fill"
+
+    // MARK: collections (APP-API-CONTRACT section 26)
+
+    /// A collection: its row and its screen.
+    static let collection = "folder"
+    /// "new collection" (the row, the menu item).
+    static let collectionNew = "folder.badge.plus"
+    /// "add to collection" in a link's menu.
+    static let collectionAdd = "folder.badge.plus"
+    /// "remove from collection".
+    static let collectionRemove = "folder.badge.minus"
+    /// Rename a collection.
+    static let collectionRename = "pencil"
+    /// Delete a collection.
+    static let collectionDelete = "trash"
+    /// A collection screen's menu.
+    static let collectionMenu = "ellipsis.circle"
+    /// A picked link in the new-collection sheet.
+    static let linkPicked = "checkmark.circle.fill"
+    /// A link not picked.
+    static let linkNotPicked = "circle"
 }

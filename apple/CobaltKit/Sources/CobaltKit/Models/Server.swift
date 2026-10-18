@@ -107,6 +107,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `share_base_url`, and so does the app: false whenever `shareBaseURL` is nil. False when absent: no select mode in
     /// the library and no links tab.
     public var shareSets: Bool = false
+    /// `features.share_collections` (APP-API-CONTRACT 26): named folders of gallery links (`/share/collections`). The
+    /// server sets it exactly with `share_sets`, and so does the app: false whenever `shareSets` is false. False when
+    /// absent: no collections in the links tab.
+    public var shareCollections: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

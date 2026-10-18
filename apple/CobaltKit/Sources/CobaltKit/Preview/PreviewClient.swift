@@ -212,7 +212,9 @@ public struct PreviewClient: CobaltClient {
         let scale = self.timeScale
         server.seedLine(mode: line, at: now, timeScale: scale)
         if scenario.hasShareLinks {
-            shareState.seed(scenario == .shareLinksEmpty || scenario == .shareLinksFail ? [] : PreviewData.shareSets(now: now),
+            let empty = scenario == .shareLinksEmpty || scenario == .shareLinksFail
+            shareState.seed(empty ? [] : PreviewData.shareSets(now: now),
+                            collections: empty ? [] : PreviewData.shareCollections(now: now),
                             listFails: scenario == .shareLinksFail)
         }
     }

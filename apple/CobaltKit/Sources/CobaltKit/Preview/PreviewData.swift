@@ -112,6 +112,7 @@ enum PreviewData {
         if scenario.hasShareLinks && caps.kind == .fork {
             caps.shareBaseURL = shareBase
             caps.shareSets = true
+            caps.shareCollections = true
             caps.limits.shareSetMax = 4
         }
         if scenario.isGallery {

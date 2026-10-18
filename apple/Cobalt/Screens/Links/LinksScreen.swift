@@ -3,25 +3,27 @@ import SwiftUI
 
 // The links tab (APP-API-CONTRACT section 24): every gallery share link the owner made, newest first, each with its
 // files as a strip of thumbnails, its title and date, and copy / share / revoke. Revoke asks first. The list is
-// `model.shareSets` (the library's select bar adds to it, a refresh on appear and a pull keep it honest).
+// `model.shareSets` (the library's select bar adds to it, a refresh on appear and a pull keep it honest). While the
+// server has `features.share_collections` (section 26) a "collections" section sits at the top of the list: one row per
+// collection (a push to `CollectionScreen`) and a "new collection" row. The row menus gain "add to collection".
 
 struct LinksScreen: View {
     let model: AppModel
 
     @Environment(\.shell) private var shell
-    @Environment(\.hapticsEnabled) private var haptics
-    /// The link the owner chose `revoke` for: the confirm is open on it.
-    @State private var revoking: ShareSet?
-    /// Links whose DELETE is in flight (dimmed; a second tap does nothing).
-    @State private var revokingIDs: Set<String> = []
-    @State private var copiedToken = 0
+    @State private var controller: LinksController
+
+    init(model: AppModel) {
+        self.model = model
+        _controller = State(initialValue: LinksController(model: model))
+    }
 
     private var store: ShareSetStore { model.shareSets }
 
     private enum Phase { case loading, failed, empty, list }
 
     private var phase: Phase {
-        if !store.sets.isEmpty { return .list }
+        if !store.sets.isEmpty || (controller.collectionsEnabled && !store.collections.isEmpty) { return .list }
         switch store.state {
         case .idle, .loading: return .loading
         case .failed: return .failed
@@ -44,19 +46,10 @@ struct LinksScreen: View {
                 }
             }
             .task { await store.refresh() }
-            .confirmationDialog(
-                Copy.Links.revokeTitle, isPresented: revokingPresented, titleVisibility: .visible, presenting: revoking
-            ) { link in
-                Button(Copy.Links.revoke, role: .destructive) { revoke(link) }
-                Button(Copy.Links.keep, role: .cancel) {}
-            } message: { _ in
-                Text(Copy.Links.revokeMessage)
+            .navigationDestination(for: CollectionRoute.self) { route in
+                CollectionScreen(model: model, collectionID: route.id)
             }
-            .haptic(.success, trigger: copiedToken, enabled: haptics)
-    }
-
-    private var revokingPresented: Binding<Bool> {
-        Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } })
+            .linkPresentations(controller)
     }
 
     @ViewBuilder
@@ -103,23 +96,28 @@ struct LinksScreen: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
-            ForEach(store.sets) { link in
-                LinkRow(
-                    link: link, busy: revokingIDs.contains(link.id),
-                    copy: { copy(link) }, revoke: { revoking = link }
-                )
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-                #if os(iOS)
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(Copy.Links.revoke, systemImage: Symbol.revokeLink, role: .destructive) { revoking = link }
+            if controller.collectionsEnabled {
+                Section {
+                    Button { controller.newCollection(including: nil) } label: {
+                        NewCollectionRow()
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    ForEach(store.collections) { collection in
+                        CollectionRow(collection: collection, store: store, controller: controller)
+                    }
+                } header: {
+                    SectionLabel(text: Copy.Collections.section)
                 }
-                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                    Button(Copy.Links.copyLink, systemImage: Symbol.copyLink) { copy(link) }
-                        .tint(CobaltColor.focus)
+                .motion(Motion.rows, value: store.collections.map(\.id))
+            }
+            Section {
+                ForEach(store.sets) { link in
+                    LinkItemRow(link: link, collection: nil, controller: controller)
                 }
-                #endif
-                .contextMenu { LinkMenu(link: link, copy: { copy(link) }, revoke: { revoking = link }) }
+            } header: {
+                if controller.collectionsEnabled { SectionLabel(text: Copy.Collections.linksHeader) }
             }
         }
         .listStyle(.plain)
@@ -127,55 +125,120 @@ struct LinksScreen: View {
         .motion(Motion.rows, value: store.sets.map(\.id))
         .refreshable { await store.refresh() }
     }
+}
 
-    // MARK: actions
+/// A small caption over a list section (lowercase, in the caption colour).
+struct SectionLabel: View {
+    let text: String
 
-    /// The usual copy: the link on the pasteboard and `copied` over the shell.
-    private func copy(_ link: ShareSet) {
-        Pasteboard.copy(link.url.absoluteString)
-        shell.showStatus(Copy.Media.copied)
-        copiedToken += 1
+    var body: some View {
+        Text(text)
+            .font(CobaltType.captionSmall)
+            .foregroundStyle(CobaltColor.caption)
+            .textCase(nil)
+            .accessibilityAddTraits(.isHeader)
     }
+}
 
-    private func revoke(_ link: ShareSet) {
-        guard !revokingIDs.contains(link.id) else { return }
-        revokingIDs.insert(link.id)
-        Task {
-            defer { revokingIDs.remove(link.id) }
-            do {
-                try await store.revoke(link.id)
-                shell.showStatus(Copy.Links.revoked)
-            } catch {
-                shell.showStatus(Copy.actionFailed)
+// MARK: - one link as a list row
+
+/// A link's row with everything a list gives it: copy and revoke by swipe (iPhone, iPad), the context menu, and, inside
+/// a collection, "remove from collection". `collection` is nil in the main list.
+struct LinkItemRow: View {
+    let link: ShareSet
+    let collection: ShareCollection?
+    let controller: LinksController
+
+    @Environment(\.shell) private var shell
+
+    var body: some View {
+        LinkRow(link: link, collection: collection, controller: controller)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+            #if os(iOS)
+            .swipeActions(edge: .trailing, allowsFullSwipe: collection != nil) {
+                if let collection {
+                    Button(Copy.Collections.removeFrom, systemImage: Symbol.collectionRemove) {
+                        controller.remove(link, from: collection, shell: shell)
+                    }
+                    .tint(CobaltColor.focus)
+                }
+                Button(Copy.Links.revoke, systemImage: Symbol.revokeLink, role: .destructive) { controller.revoking = link }
             }
-        }
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                Button(Copy.Links.copyLink, systemImage: Symbol.copyLink) { controller.copy(link, shell: shell) }
+                    .tint(CobaltColor.focus)
+            }
+            #endif
+            .contextMenu { LinkMenu(link: link, collection: collection, controller: controller) }
     }
 }
 
 // MARK: - the context menu (iPhone, iPad and Mac)
 
-private struct LinkMenu: View {
+struct LinkMenu: View {
     let link: ShareSet
-    let copy: () -> Void
-    let revoke: () -> Void
+    let collection: ShareCollection?
+    let controller: LinksController
+
+    @Environment(\.shell) private var shell
 
     var body: some View {
-        Button(Copy.Links.copyLink, systemImage: Symbol.copyLink, action: copy)
+        Button(Copy.Links.copyLink, systemImage: Symbol.copyLink) { controller.copy(link, shell: shell) }
         ShareLink(item: link.url) { Label(Copy.Links.share, systemImage: Symbol.share) }
+        if controller.collectionsEnabled {
+            Divider()
+            CollectionMenu(link: link, controller: controller)
+            if let collection {
+                Button(Copy.Collections.removeFrom, systemImage: Symbol.collectionRemove) {
+                    controller.remove(link, from: collection, shell: shell)
+                }
+            }
+        }
         Divider()
-        Button(Copy.Links.revoke, systemImage: Symbol.revokeLink, role: .destructive, action: revoke)
+        Button(Copy.Links.revoke, systemImage: Symbol.revokeLink, role: .destructive) { controller.revoking = link }
+    }
+}
+
+/// "add to collection": a submenu listing the collections, a check on the ones the link is in (a tap puts it in or takes
+/// it out), then "new collection…" (opens the sheet with this link ticked). In a context menu it nests as a submenu; on
+/// the Mac the row shows it as its own icon button.
+struct CollectionMenu: View {
+    let link: ShareSet
+    let controller: LinksController
+
+    @Environment(\.shell) private var shell
+
+    var body: some View {
+        let store = controller.store
+        Menu {
+            ForEach(store.collections) { collection in
+                Toggle(collection.name, isOn: Binding(
+                    get: { store.collection(collection.id)?.contains(link.id) ?? false },
+                    set: { _ in controller.toggle(link, in: collection, shell: shell) }))
+            }
+            if !store.collections.isEmpty { Divider() }
+            Button(Copy.Collections.newEllipsis, systemImage: Symbol.collectionNew) {
+                controller.newCollection(including: link)
+            }
+        } label: {
+            Label(Copy.Collections.addTo, systemImage: Symbol.collectionAdd)
+        }
     }
 }
 
 // MARK: - a row
 
 /// Up to four thumbnails, then the title, the file count and date, the short link, and a note when files went private.
-/// iPhone: copy button at the end (share and revoke by swipe or the long press); Mac: copy, share and revoke buttons.
-private struct LinkRow: View {
+/// iPhone: copy button at the end (share, revoke and collections by swipe or the long press); Mac: copy, share, a
+/// collections menu and revoke buttons.
+struct LinkRow: View {
     let link: ShareSet
-    let busy: Bool
-    let copy: () -> Void
-    let revoke: () -> Void
+    let collection: ShareCollection?
+    let controller: LinksController
+
+    @Environment(\.shell) private var shell
+    private var busy: Bool { controller.revokingIDs.contains(link.id) }
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -231,10 +294,21 @@ private struct LinkRow: View {
     @ViewBuilder
     private var buttons: some View {
         HStack(spacing: 2) {
-            Button(Copy.Links.copyLink, systemImage: Symbol.copyLink, action: copy)
+            Button(Copy.Links.copyLink, systemImage: Symbol.copyLink) { controller.copy(link, shell: shell) }
             #if os(macOS)
             ShareLink(item: link.url) { Label(Copy.Links.share, systemImage: Symbol.share) }
-            Button(Copy.Links.revoke, systemImage: Symbol.revokeLink, role: .destructive, action: revoke)
+            if controller.collectionsEnabled {
+                CollectionMenu(link: link, controller: controller)
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                if let collection {
+                    Button(Copy.Collections.removeFrom, systemImage: Symbol.collectionRemove) {
+                        controller.remove(link, from: collection, shell: shell)
+                    }
+                }
+            }
+            Button(Copy.Links.revoke, systemImage: Symbol.revokeLink, role: .destructive) { controller.revoking = link }
             #endif
         }
         .labelStyle(.iconOnly)

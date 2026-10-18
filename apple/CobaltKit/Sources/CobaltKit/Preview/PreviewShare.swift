@@ -3,7 +3,9 @@ import Synchronization
 
 // Gallery share links in previews (APP-API-CONTRACT 24): a server with `features.share_sets` and a `share_base_url`,
 // three sample links, and the real rule (2..4 distinct files, all public now). `PreviewScenario.shareLinksEmpty` has no
-// links yet; `.shareLinksFail` cannot list them. `.happy` and `.renditions` have the three samples.
+// links yet; `.shareLinksFail` cannot list them. `.happy` and `.renditions` have the three samples. The same server
+// answers `/share/collections` (APP-API-CONTRACT 26): two sample collections over the three links, the real name rule,
+// the 100/200 caps, and a revoked link dropping out of every collection.
 
 extension PreviewScenario {
     /// The preview server has `features.share_sets`.
@@ -20,6 +22,20 @@ extension PreviewData {
     static let shareBase = URL(string: "https://share.capybaraharmony.com/")!
 
     static func shareURL(id: String) -> URL { shareBase.appendingPathComponent("g").appendingPathComponent(id) }
+
+    /// The two sample collections, most recently changed first (`now` is when the preview server started):
+    /// - `PrEvIeWcoll00001` "memes" (1 hour ago): the two newest links.
+    /// - `PrEvIeWcoll00002` "for discord" (5 hours ago): the kitchen link.
+    static func shareCollections(now: Date) -> [ShareCollection] {
+        [
+            ShareCollection(
+                id: "PrEvIeWcoll00001", name: "memes", createdAt: now.addingTimeInterval(-3 * 86_400),
+                updatedAt: now.addingTimeInterval(-3_600), setIDs: ["9000000000000000002", "9000000000000000001"]),
+            ShareCollection(
+                id: "PrEvIeWcoll00002", name: "for discord", createdAt: now.addingTimeInterval(-2 * 86_400),
+                updatedAt: now.addingTimeInterval(-5 * 3_600), setIDs: ["9000000000000000003"]),
+        ]
+    }
 
     /// The three sample links, newest first (`now` is when the preview server started):
     /// - `9000000000000000001` "harbour and the dog" (20 minutes ago): a video with its poster, a webp, a photo.
@@ -60,7 +76,9 @@ extension PreviewData {
 final class PreviewShareState: Sendable {
     private struct State {
         var sets: [ShareSet] = []
+        var collections: [ShareCollection] = []
         var counter = 0
+        var collectionCounter = 0
         var calls: [String] = []
         var listFails = false
     }
@@ -70,8 +88,10 @@ final class PreviewShareState: Sendable {
     var sets: [ShareSet] { state.withLock { $0.sets } }
     var calls: [String] { state.withLock { $0.calls } }
 
-    func seed(_ sets: [ShareSet], listFails: Bool) {
-        state.withLock { $0.sets = sets; $0.listFails = listFails }
+    var collections: [ShareCollection] { state.withLock { $0.collections } }
+
+    func seed(_ sets: [ShareSet], collections: [ShareCollection] = [], listFails: Bool) {
+        state.withLock { $0.sets = sets; $0.collections = collections; $0.listFails = listFails }
     }
 
     /// Tests: `GET /share/sets` answers 503 while this is true.
@@ -96,10 +116,63 @@ final class PreviewShareState: Sendable {
         }
     }
 
+    /// Revokes a link: it goes from the list and from every collection.
     func remove(_ id: String) -> Bool {
         state.withLock { s in
             guard s.sets.contains(where: { $0.id == id }) else { return false }
             s.sets.removeAll { $0.id == id }
+            for i in s.collections.indices { s.collections[i].setIDs.removeAll { $0 == id } }
+            return true
+        }
+    }
+
+    // MARK: collections
+
+    func listCollections() -> [ShareCollection]? {
+        state.withLock { $0.listFails ? nil : $0.collections.sorted { $0.updatedAt > $1.updatedAt } }
+    }
+
+    /// `POST`: `tooMany` at 100, `linkNotFound` for ids that are not live links (nothing changes), else the new one.
+    func addCollection(name: String, setIDs: [String], at now: Date) throws -> ShareCollection {
+        try state.withLock { s in
+            let unknown = setIDs.filter { id in !s.sets.contains { $0.id == id } }
+            guard unknown.isEmpty else { throw ShareCollectionError.linkNotFound(unknown) }
+            guard s.collections.count < ShareCollectionRule.collectionLimit else { throw ShareCollectionError.tooMany }
+            var seen = Set<String>()
+            let ids = setIDs.filter { seen.insert($0).inserted }
+            guard ids.count <= ShareCollectionRule.linkLimit else { throw ShareCollectionError.badRequest }
+            s.collectionCounter += 1
+            let id = "PrEvIeWnewc" + String(format: "%05d", s.collectionCounter)
+            let made = ShareCollection(id: id, name: name, createdAt: now, updatedAt: now, setIDs: ids)
+            s.collections.insert(made, at: 0)
+            return made
+        }
+    }
+
+    /// `PATCH`: rename, add (most recently added first; one already there stays where it is), remove. `notFound` for an
+    /// unknown collection, `linkNotFound` for ids that are not live links, `full` past 200 links.
+    func change(_ id: String, name: String?, add: [String], remove: [String], at now: Date) throws -> ShareCollection {
+        try state.withLock { s in
+            guard let index = s.collections.firstIndex(where: { $0.id == id }) else { throw ShareCollectionError.notFound }
+            let unknown = add.filter { id in !s.sets.contains { $0.id == id } }
+            guard unknown.isEmpty else { throw ShareCollectionError.linkNotFound(unknown) }
+            var collection = s.collections[index]
+            if let name { collection.name = name }
+            collection.setIDs.removeAll { remove.contains($0) }
+            var fresh: [String] = []
+            for id in add where !collection.setIDs.contains(id) && !fresh.contains(id) { fresh.append(id) }
+            guard collection.setIDs.count + fresh.count <= ShareCollectionRule.linkLimit else { throw ShareCollectionError.full }
+            collection.setIDs = fresh.reversed() + collection.setIDs
+            collection.updatedAt = now
+            s.collections[index] = collection
+            return collection
+        }
+    }
+
+    func removeCollection(_ id: String) -> Bool {
+        state.withLock { s in
+            guard s.collections.contains(where: { $0.id == id }) else { return false }
+            s.collections.removeAll { $0.id == id }
             return true
         }
     }
@@ -150,5 +223,48 @@ extension PreviewClient {
         try await clock.sleep(seconds: 0.3 * timeScale)
         guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
         guard shareState.remove(id) else { throw ShareSetError.notFound }
+    }
+
+    // MARK: collections (APP-API-CONTRACT 26)
+
+    /// `GET /share/collections`: most recently changed first; `.shareLinksFail` answers `503`.
+    public func shareCollections() async throws -> [ShareCollection] {
+        shareState.record("GET collections")
+        try await clock.sleep(seconds: 0.3 * timeScale)
+        guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
+        guard let list = shareState.listCollections() else { throw ShareCollectionError.unavailable }
+        return list
+    }
+
+    /// `POST /share/collections`: `badRequest` unless the name cleans to 1..60 code points; `linkNotFound(ids)`,
+    /// `tooMany` as the server does.
+    public func createShareCollection(name: String, setIDs: [String]) async throws -> ShareCollection {
+        shareState.record("POST collections " + setIDs.joined(separator: ","))
+        try await clock.sleep(seconds: 0.4 * timeScale)
+        guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
+        guard let cleaned = ShareCollectionRule.cleanName(name) else { throw ShareCollectionError.badRequest }
+        return try shareState.addCollection(name: cleaned, setIDs: setIDs, at: clock.now())
+    }
+
+    /// `PATCH /share/collections/<id>`: `badRequest` for nothing to change or a bad name; the rest as the server.
+    public func updateShareCollection(id: String, name: String?, add: [String], remove: [String]) async throws -> ShareCollection {
+        shareState.record("PATCH collections " + id)
+        try await clock.sleep(seconds: 0.3 * timeScale)
+        guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
+        var cleaned: String?
+        if let name {
+            guard let c = ShareCollectionRule.cleanName(name) else { throw ShareCollectionError.badRequest }
+            cleaned = c
+        }
+        guard cleaned != nil || !add.isEmpty || !remove.isEmpty else { throw ShareCollectionError.badRequest }
+        return try shareState.change(id, name: cleaned, add: add, remove: remove, at: clock.now())
+    }
+
+    /// `DELETE /share/collections/<id>`: the folder goes, its links stay; an unknown id is `.notFound`.
+    public func deleteShareCollection(id: String) async throws {
+        shareState.record("DELETE collections " + id)
+        try await clock.sleep(seconds: 0.3 * timeScale)
+        guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
+        guard shareState.removeCollection(id) else { throw ShareCollectionError.notFound }
     }
 }
