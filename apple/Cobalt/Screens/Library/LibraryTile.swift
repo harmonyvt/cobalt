@@ -10,6 +10,7 @@ private struct TilePress: ButtonStyle {
 
 /// One mosaic tile (CONTRACT-LIBRARY2 decision 12): the face's picture at its real aspect, filling the slot
 /// `MasonryPlan` gave it, with badges (the face's type top right, a `globe` (public) or `lock.fill` (private) dot top left,
+/// or in its place the blue link badge when the post is already in a share link,
 /// the length bottom left on a video face tall enough to hold it) and a one-line title on a soft dark scrim.
 /// A webp face moves while the budget lets it. A tile whose picture failed keeps its frame, badges and caption
 /// with a glyph, and still opens. Tap opens, unless the library is selecting: then it ticks this post and the
@@ -31,6 +32,8 @@ struct LibraryTile: View, Equatable {
     let selecting: Bool
     let ticked: Bool
     let reload: Int
+    /// The links and collections the post is already in (the blue link badge and the amber folder dot).
+    let share: ShareStatus
 
     // Not part of what the tile draws:
     let controller: LibraryController
@@ -46,7 +49,7 @@ struct LibraryTile: View, Equatable {
         a.row == b.row && a.index == b.index && a.size == b.size && a.centerY == b.centerY && a.maxPixel == b.maxPixel
             && a.showsCaption == b.showsCaption && a.lit == b.lit && a.selected == b.selected
             && a.selecting == b.selecting && a.ticked == b.ticked && a.reload == b.reload
-            && a.nearEnd == b.nearEnd
+            && a.share == b.share && a.nearEnd == b.nearEnd
     }
 
     private var face: Rendition { row.item.face }
@@ -65,6 +68,7 @@ struct LibraryTile: View, Equatable {
     private var accessibilityValue: String {
         var parts = [LibraryRowCopy.meta(row, now: Date()), row.isPublic ? Copy.Library2.publicBadgeA11y : Copy.Library2.privateBadgeA11y]
         if let offline = OfflineMark(item: row.item, model: controller.model).spoken { parts.append(offline) }
+        if let shared = Copy.Library2.sharedA11y(share) { parts.append(shared) }
         if failed { parts.append(Copy.Library2.pictureFailed) }
         return parts.joined(separator: ", ")
     }
@@ -125,12 +129,21 @@ struct LibraryTile: View, Equatable {
             // while it is private; never "some webp is public". Beside it the offline badge (CONTRACT-OFFLINE
             // decision 11): filled when all is kept, outline for some, a ring while it downloads, nothing otherwise.
             HStack(spacing: 4) {
-                Image(systemName: row.isPublic ? Symbol.Library.isPublic : Symbol.Library.isPrivate)
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(CobaltColor.badgeInk)
-                    .frame(width: 20, height: 20)
-                    .background(CobaltColor.badgeBack, in: Circle())
-                    .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+                // Already shared: the link badge (how many links hold the post, then a folder when one of them is in a
+                // collection). A shared post that is public needs no globe beside it (the link says so), which keeps
+                // a 3-column iPhone tile clear of the type badge.
+                let showsShared = share.isShared && !narrow
+                if !(showsShared && row.isPublic) {
+                    Image(systemName: row.isPublic ? Symbol.Library.isPublic : Symbol.Library.isPrivate)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(CobaltColor.badgeInk)
+                        .frame(width: 20, height: 20)
+                        .background(CobaltColor.badgeBack, in: Circle())
+                        .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+                }
+                if showsShared {
+                    SharedTileBadges(share: share)
+                }
                 OfflineBadge(item: row.item, model: controller.model, style: .tile)
             }
             .padding(5)
@@ -192,7 +205,8 @@ struct LibraryTile: View, Equatable {
         if row.kind == .gallery {
             // a gallery: the stack and how many items it holds, however narrow the tile
             GalleryCountBadge(count: row.itemCount, style: .tile)
-        } else if narrow {
+        } else if narrow || (share.isShared && size.width < 150) {
+            // a narrow tile, or one whose top left holds the link badges: the dot, so the two never meet
             kindDot
         } else {
             Text(LibraryRowCopy.type(row))
@@ -248,5 +262,38 @@ extension View {
         #else
         self
         #endif
+    }
+}
+
+/// A tile's "already shared" badges: a blue link capsule with how many links hold the post, then an amber folder dot
+/// when one of those links is in a collection. Same back and ring as the tile's other badges.
+struct SharedTileBadges: View {
+    let share: ShareStatus
+
+    var body: some View {
+        HStack(spacing: 4) {
+            HStack(spacing: 2) {
+                Image(systemName: Symbol.link)
+                    .font(.system(size: 9, weight: .bold))
+                Text("\(share.links)")
+                    .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(CobaltColor.sharedInk)
+            .padding(.horizontal, 6)
+            .frame(height: 20)
+            .background(CobaltColor.badgeBack, in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+            if share.collections > 0 {
+                Image(systemName: Symbol.collection)
+                    .symbolVariant(.fill)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(CobaltColor.collectionOnTile)
+                    .frame(width: 20, height: 20)
+                    .background(CobaltColor.badgeBack, in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+            }
+        }
+        .fixedSize()
     }
 }

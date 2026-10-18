@@ -87,6 +87,12 @@ enum CobaltColor {
     static let frameBottomDeep = Color(hex: 0x1b1b1e)
     static let badgeBack = Color.black.opacity(0.65)
     static let badgeInk = Color(hex: 0xe1e1e1)
+    /// The library's "already shared" badges, drawn on a tile's dark badge back in either appearance: a link's blue and
+    /// a collection's amber (the collection chips use `collection` on `collectionBack`).
+    static let sharedInk = Color(hex: 0x8ab8ff)
+    static let collection = Color(light: 0x8a5a00, dark: 0xf0b44c)
+    static let collectionBack = Color(light: 0xfbefd6, dark: 0x2a2418)
+    static let collectionOnTile = Color(hex: 0xf0b44c)
 }
 
 enum Metrics {

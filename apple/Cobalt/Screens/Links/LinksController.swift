@@ -30,6 +30,8 @@ final class LinksController {
     /// Links whose DELETE is in flight (dimmed; a second tap does nothing).
     var revokingIDs: Set<String> = []
     var copiedToken = 0
+    /// The link copied last: its row's button says "copied" for a moment.
+    var copiedID: String?
     /// +1 when a revoke, an add or remove, a reroll or a delete lands (success haptic) or fails (error haptic).
     var doneToken = 0
     var failedToken = 0
@@ -58,6 +60,12 @@ final class LinksController {
         Pasteboard.copy(link.url.absoluteString)
         shell.showStatus(Copy.Media.copied)
         copiedToken += 1
+        copiedID = link.id
+        let token = copiedToken
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if copiedToken == token { copiedID = nil }
+        }
     }
 
     /// Every link in the collection, one per line, on the pasteboard, and `copied` over the shell.

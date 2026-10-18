@@ -32,6 +32,8 @@ extension Symbol {
         /// The inspector toggle (iPad, Mac).
         static let inspector = "sidebar.trailing"
         static let refresh = "arrow.clockwise"
+        /// The iPhone's "more" menu in the library bar: paste a link, photos, files.
+        static let more = "ellipsis"
         /// The face type dots of a narrow tile.
         static let typeVideo = "film"
         static let typeWebp = "sparkles"

@@ -481,3 +481,55 @@ struct ShareSetStoreTests {
         #expect(app.selectedTab == .save)
     }
 }
+
+// MARK: - what the library badges: a post's links and collections
+
+struct ShareSetIndexTests {
+    private func item(_ post: LibraryPost) throws -> MediaItem { try #require(MediaItem.merge(local: nil, post: post)) }
+
+    private func set(_ id: String, _ files: [String]) -> ShareSet {
+        ShareSet(
+            id: id, url: URL(string: "https://share.capybaraharmony.com/g/\(id)")!, createdAt: t0,
+            items: files.map { ShareSetItem(id: $0, url: URL(string: pubMP4)) })
+    }
+
+    private func collection(_ id: String, _ sets: [String]) -> ShareCollection {
+        ShareCollection(id: id, name: id, createdAt: t0, updatedAt: t0, setIDs: sets)
+    }
+
+    private var post: LibraryPost {
+        lpost([
+            lf("orig", .private, .saved, visibility: .private),
+            lf("webp", .public, .studio, type: "image/webp", url: pubWebp(1), visibility: .public, at: 10),
+        ])
+    }
+
+    @Test func aPostInNoLinkIsNotShared() throws {
+        let index = ShareSetIndex(sets: [set("a", ["x", "y"])], collections: [])
+        #expect(index.status(for: try item(post)) == .none)
+        #expect(!index.status(for: try item(post)).isShared)
+        #expect(ShareSetIndex.empty.status(for: try item(post)) == .none)
+    }
+
+    @Test func anyFileOfThePostCountsAndEachLinkOnce() throws {
+        let index = ShareSetIndex(
+            sets: [set("a", ["webp", "x"]), set("b", ["orig", "webp"]), set("c", ["y", "z"])], collections: [])
+        let status = index.status(for: try item(post))
+        #expect(status == ShareStatus(links: 2, collections: 0))
+        #expect(status.isShared)
+    }
+
+    @Test func collectionsCountThroughTheirLinksAndIgnoreLinksThatAreGone() throws {
+        let index = ShareSetIndex(
+            sets: [set("a", ["webp", "x"]), set("b", ["orig", "y"])],
+            collections: [collection("memes", ["a", "b"]), collection("cats", ["b"]), collection("old", ["revoked"]),
+                          collection("other", ["c"])])
+        #expect(index.status(for: try item(post)) == ShareStatus(links: 2, collections: 2))
+    }
+
+    @Test func theFileIDsAreEveryRenditionsFileAndHostedLink() throws {
+        let hosted = lpost([lf("host", .public, .host, url: pubMP4), lf("orig", .private, .saved)])
+        #expect(ShareSetIndex.fileIDs(of: try item(hosted)) == ["host", "orig"])
+        #expect(ShareSetIndex.fileIDs(of: try item(post)) == ["orig", "webp"])
+    }
+}

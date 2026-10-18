@@ -13,6 +13,14 @@ struct LibraryKindChips: View {
     var extra: [LibraryRow] = []
     /// A chip's long press: tick every post of that kind (`false`), or tick them and share (`true`). Nil offers neither.
     var pickAll: ((LibraryKindFilter, Bool) -> Void)?
+    /// The iPhone's way into select mode: a `select` / `done` chip pinned at the start of the row (the top bar has no
+    /// room left for it). Nil leaves it in the top bar.
+    var selectChip: SelectChip?
+
+    struct SelectChip {
+        let selecting: Bool
+        let toggle: () -> Void
+    }
 
     private var library: LibraryModel { model.library }
 
@@ -47,8 +55,39 @@ struct LibraryKindChips: View {
 
     var body: some View {
         let counts = counts
+        chips(counts)
+        .background(.bar)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Copy.Library2.kindFilter)
+        .haptic(.selection, trigger: model.library.kindFilter)
+    }
+
+    /// First in the row: an outlined `select`, a filled `done`. Inside the scroll view with the kind chips: pinned beside
+    /// it, outside the scroll view, the button drew but never received the tap on iOS 27.
+    private func selectButton(_ chip: SelectChip) -> some View {
+        Button(action: chip.toggle) {
+            Text(chip.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select)
+                .font(Font.cobalt(11.5, .semibold, relativeTo: .caption))
+                .foregroundStyle(chip.selecting ? CobaltColor.onText : Color.primary)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 12)
+                .frame(minHeight: 30)
+                .background(Capsule().fill(chip.selecting ? CobaltColor.text : Color.clear))
+                .overlay(Capsule().strokeBorder(CobaltColor.text, lineWidth: 1.25))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(chip.selecting ? .isSelected : [])
+    }
+
+    private func chips(_ counts: [LibraryKindFilter: Int]?) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                if let selectChip {
+                    selectButton(selectChip)
+                        .padding(.trailing, 4)
+                }
                 ForEach(LibraryKindFilter.allCases, id: \.self) { kind in
                     chip(kind, count: counts.map { $0[kind] ?? 0 })
                 }
@@ -57,10 +96,6 @@ struct LibraryKindChips: View {
             .padding(.vertical, 6)
         }
         .scrollBounceBehavior(.basedOnSize)
-        .background(.bar)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(Copy.Library2.kindFilter)
-        .haptic(.selection, trigger: model.library.kindFilter)
     }
 
     private func chip(_ kind: LibraryKindFilter, count: Int?) -> some View {
