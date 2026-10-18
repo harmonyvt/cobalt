@@ -473,7 +473,8 @@ struct ShortcutWaitTests {
         }.get()
         #expect(saved.saves.count == 2 && saved.saves.allSatisfy { $0.state == .saved })
         let ids = saved.saves.map(\.id)
-        #expect(saved.saves.map(\.publicLink) == ids.map { URL(string: "https://media.capybaraharmony.com/\($0).mp4") })
+        // handed out as share pages, never the file itself (owner: "any direct video links should be replaced with share links")
+        #expect(saved.saves.map(\.publicLink) == ids.map { URL(string: "https://share.capybaraharmony.com/\($0)") })
         #expect(saved.saves.allSatisfy { $0.duration == 14.8 && $0.hasVideo })
         #expect(steps.first?.0 == 0 && steps.last?.0 == 2 && steps.allSatisfy { $0.1 == 2 })
         #expect(zip(steps, steps.dropFirst()).allSatisfy { $0.0 <= $1.0 }, "never goes back")
@@ -650,7 +651,7 @@ struct ShortcutMakeWebpTests {
         let t = ShortcutRig(.server)
         var steps: [(Int64, Int64)] = []
         let url = try await t.run { try await t.actions.makeWebp(of: nil, progress: { steps.append(($0, $1)) }) }.get()
-        #expect(url.pathExtension == "webp")
+        #expect(url.host == "share.capybaraharmony.com" && url.pathExtension.isEmpty)   // the webp's share page
         #expect(t.calls.contains("POST render queue=true priority=-"), "queue, and no priority: nobody is looking at a Shortcut")
         #expect(t.wrapper.renders.all.map(\.session) == ["PrEvIeWsession0000000a1"], "the newest post of the library fixture")
         #expect(steps.first?.0 == 0 && steps.last?.0 == 100 && steps.allSatisfy { $0.1 == 100 })
@@ -688,7 +689,7 @@ struct ShortcutMakeWebpTests {
         }
         t.rig.app.library.reset()
         let url = try await t.run { try await t.actions.makeWebp(of: nil) }.get()
-        #expect(url.pathExtension == "webp")
+        #expect(url.host == "share.capybaraharmony.com" && url.pathExtension.isEmpty)   // the webp's share page
         let reopen = t.calls.firstIndex { $0.hasPrefix("POST library/items/") && $0.hasSuffix("/studio queue=true") }
         let render = t.calls.firstIndex { $0.hasPrefix("POST render") }
         #expect(reopen != nil && render != nil && reopen! < render!, "reopened (queued) first, rendered once it was ready")
