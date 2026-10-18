@@ -109,6 +109,8 @@ final class LibraryController {
     var makingPrivate: MediaItem?
     /// The gallery the owner chose `make from this post…` for: the combine sheet is open on it (`LibraryCombineSheet`).
     var combining: MediaItem?
+    /// The sky map (`SkyMap/LibrarySkyMapHook.swift`) is open.
+    var showingSkyMap = false
 
     /// True on the phone layout (a push); false where the detail is an inspector.
     @ObservationIgnored var compact = true

@@ -59,7 +59,7 @@ extension Copy {
         static let serverRunning = "running on the server"
         /// "3rd in line".
         static func serverWaiting(_ place: Int) -> String { Copy.Jobs.line(place) }
-        static let serverNote = "the server runs it whether or not cobalt is open."
+        static let serverNote = "the server runs it whether or not capystore is open."
 
         // MARK: the index
 

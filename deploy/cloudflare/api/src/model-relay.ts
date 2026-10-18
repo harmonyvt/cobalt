@@ -10,6 +10,9 @@ export class ModelRelay extends DurableObject {
         const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
         const upstream = upstreamRequest(request, body);
         if (!upstream) return new Response("bad relay target", { status: 400 });
-        return fetch(upstream);
+        const res = await fetch(upstream);
+        // the ray id ends in the Cloudflare location the call left from (e.g. "-IAD")
+        if (!res.ok) console.error("[relay] upstream", res.status, res.headers.get("cf-ray") ?? "");
+        return res;
     }
 }

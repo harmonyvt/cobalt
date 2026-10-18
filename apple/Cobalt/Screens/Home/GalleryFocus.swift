@@ -182,7 +182,7 @@ struct GalleryFacts {
     /// "Files › On My iPhone › cobalt › instagram · Ddy0-gpGg5U".
     private static func place(title: String, single: Bool, model: AppModel) -> String? {
         let device = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
-        let base = "Files › On My \(device) › cobalt"
+        let base = "Files › On My \(device) › capystore"
         return single ? base : "\(base) › \(title)"
     }
     #endif
@@ -330,14 +330,14 @@ enum GalleryRetry {
 
 /// The few words the board has that `Copy.Gallery` does not (lowercase, as the board).
 enum GalleryFocusCopy {
-    static let savedToCobalt = "saved to cobalt · in your library"
+    static let savedToCobalt = "saved to capystore · in your library"
     static let afterTheSave = "after the save"
     static let makingNow = "making"
     static let needsTwo = "needs 2"
     static let done = "done"
     static let makeAgainHint = "try again"
     static func fetchingAgain(_ name: String) -> String { "fetching \(name) again" }
-    static let resolvesAnew = "cobalt resolves the post anew"
+    static let resolvesAnew = "capystore resolves the post anew"
     /// Where a made file went: the Mac names the folder it is in, the iPhone and iPad the files app.
     static func inFolder(_ place: String, title: String, file: String) -> String {
         Platform.isMac ? "in Finder: \(place)/\(file)" : Copy.Gallery.inFiles("\(title)/\(file)")

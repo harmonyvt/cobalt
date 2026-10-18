@@ -257,11 +257,11 @@ struct ShareHandoffTests {
     @Test func notificationsCarryTheJobLinkTheAppOpens() {
         let id = UUID()
         let still = Notifications.request(.stillMaking, jobID: id)
-        #expect(still.content.title == "cobalt is still making your webp")
+        #expect(still.content.title == "capystore is still making your webp")
         #expect(still.content.userInfo["url"] as? String == "cobalt-apple://job/\(id.uuidString)")
         #expect(still.trigger == nil && still.identifier == "job-\(id.uuidString)-stillMaking")
         let trim = Notifications.request(.trimInCobalt, jobID: id)
-        #expect(trim.content.title == "your clip is saved · tap to trim in cobalt")
+        #expect(trim.content.title == "your clip is saved · tap to trim in capystore")
         #expect(trim.identifier != still.identifier)
         // what the app delegate hands to `AppModel.open`
         #expect(URL(string: Notifications.url(forJob: id))?.scheme == "cobalt-apple")

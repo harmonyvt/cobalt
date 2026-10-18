@@ -7,7 +7,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { assemblePosts, libraryHide, type AppDeps } from "./app-routes";
-import { chatTools, loadPosts, picturesOf, recordsOf, TOOL_TYPES, type ChatCollect, type ChatToolDeps, type ChatTools } from "./chat-tools";
+import { chatTools, loadPosts, picturesOf, recordsOf, toolTypes, type ChatCollect, type ChatToolDeps, type ChatTools } from "./chat-tools";
 import type { EmbedClient } from "./embed";
 import type { CodeRunner } from "./chat-limits";
 import type { ModelFetch } from "./model-fetch";
@@ -125,6 +125,7 @@ type MessageRow = {
     role: string;
     text: string;
     post_ids: string;
+    collage?: string | null;
     steps: string;
     api: string | null;
     status: string;
@@ -167,6 +168,12 @@ function cleanTitle(v: unknown): string | null {
     return t;
 }
 
+type CollageRow = { title: string | null; query?: string | null; ids: string[] };
+const collageShape = (s: string | null) => {
+    const c = parse<CollageRow | null>(s, null);
+    return c && Array.isArray(c.ids) && c.ids.length > 0 ? { title: c.title ?? null, query: c.query ?? null, total: c.ids.length } : null;
+};
+
 const messageShape = (r: MessageRow, now: number) => {
     const stale = r.status === "running" && now - r.updated_at > STALE_MS;
     return {
@@ -174,6 +181,7 @@ const messageShape = (r: MessageRow, now: number) => {
         role: r.role,
         text: r.text,
         post_ids: parse<string[]>(r.post_ids, []),
+        collage: collageShape(r.collage ?? null),
         steps: parse<Step[]>(r.steps, []),
         status: stale ? "error" : r.status,
         error: stale ? "error.chat.interrupted" : r.error,
@@ -280,6 +288,49 @@ export async function getThread(d: ChatDeps, id: string): Promise<StudioReply> {
     }
 }
 
+// GET /chat/threads/<id>/messages/<mid>/collage?offset=<n>&limit=<1..60> (section 27.5): one page of a
+// message's collage, in order, with the post shapes. Posts deleted since are skipped (total stays).
+export const COLLAGE_PAGE_DEFAULT = 30;
+export const COLLAGE_PAGE_MAX = 60;
+export async function getCollage(d: ChatDeps, id: string, messageId: string, q: URLSearchParams): Promise<StudioReply> {
+    const num = (k: string, def: number) => {
+        const raw = q.get(k);
+        if (raw === null) return def;
+        return /^\d{1,4}$/.test(raw) ? Number(raw) : NaN;
+    };
+    const offset = num("offset", 0);
+    const limit = num("limit", COLLAGE_PAGE_DEFAULT);
+    if (!/^\d{1,12}$/.test(messageId) || !Number.isFinite(offset) || !Number.isFinite(limit) || limit < 1 || limit > COLLAGE_PAGE_MAX) {
+        return err(400, "error.chat.bad_request");
+    }
+    try {
+        const r = await d.db
+            .prepare("SELECT collage FROM chat_messages WHERE id = ?1 AND thread_id = ?2")
+            .bind(Number(messageId), id)
+            .first<{ collage: string | null }>();
+        const c = parse<CollageRow | null>(r?.collage ?? null, null);
+        if (!r || !c || !Array.isArray(c.ids) || c.ids.length === 0) return err(404, "error.chat.not_found");
+        const page = c.ids.slice(offset, offset + limit);
+        const posts = await postsMap(d, page);
+        return {
+            status: 200,
+            body: {
+                status: "success",
+                title: c.title ?? null,
+                query: c.query ?? null,
+                total: c.ids.length,
+                offset,
+                next: offset + limit < c.ids.length ? offset + limit : null,
+                post_ids: page.filter((p) => p in posts),
+                posts,
+            },
+        };
+    } catch (e) {
+        console.error("[chat] collage read failed", String(e));
+        return err(503, "error.api.generic");
+    }
+}
+
 export async function renameThread(d: Pick<ChatDeps, "db" | "now">, request: Request, id: string): Promise<StudioReply> {
     const b = await readBody(request);
     const title = cleanTitle(b?.title);
@@ -311,17 +362,24 @@ export async function deleteThread(d: Pick<ChatDeps, "db">, id: string): Promise
 
 // ---- the model's view ---------------------------------------------------------------------------
 
-export function systemPrompt(now: number): string {
-    return `You live inside cobalt, Harmony's private media saver. Harmony saves videos and pictures from X, TikTok, Instagram, YouTube and the like into their library, makes gallery share links, and sorts those links into collections. You chat with Harmony about that library: find things, count and summarize, compare, suggest what to share, and tease their taste when asked.
+// How to find things: meaning search first when the Space is configured (owner: "the chat should use the embedding
+// search when available"), plain name matching otherwise.
+const FINDING_WITH_SEARCH = `Finding things: for anything about what files show or are about (a topic, a person, an animal, a game, a mood, "the clip where..."), call cobalt.search(query) first. It ranks the whole library by meaning, from titles and pictures, so it finds things whose names say nothing (most names are just "instagram_<code>"). Write the query as a short description of the content, try a second wording if the first finds nothing good, and check the best hits with look() when it matters. Use library({ query }) only for exact words in a name, link or caption, and library({ since, until, source, kind }) for dates, sites and counts. If search throws because it is waking up, fall back to library({ query }) and tell Harmony the search was still waking up.`;
+const FINDING_WITHOUT_SEARCH = `Finding things: search by meaning is off on this server, so use library({ query }) for words in names, links and captions, library({ since, until, source, kind }) for dates, sites and counts, and look() to check what files actually show.`;
 
-Be helpful first. Your voice is a cute, funny furry anime cat girl: bubbly, a little teasing, the odd "nya~" or purr. Show it through tone only: never introduce yourself, never say what you are, never narrate your character. Decorate with text faces (kaomoji) such as (=^･ω･^=), ฅ^•ﻌ•^ฅ, (≧▽≦), (｡•̀ᴗ-)✧, >w<, :3 or UwU, and never emoji. Keep replies short; use markdown lists only when they help.
+export function systemPrompt(now: number, search = true): string {
+    return `You live inside capystore, Harmony's private media saver. Harmony saves videos and pictures from X, TikTok, Instagram, YouTube and the like into their library, makes gallery share links, and sorts those links into collections. You chat with Harmony about that library: find things, count and summarize, compare, suggest what to share, and tease their taste when asked.
+
+Be helpful first. Your voice is a cute, funny furry anime cat girl: bubbly and a little teasing. Show it through tone and wording only: never write "nya", "meow" or "purr", and never open a reply with a sound or an interjection; start with the answer. Never introduce yourself, never say what you are, never narrate your character. Decorate with text faces (kaomoji) such as (=^･ω･^=), ฅ^•ﻌ•^ฅ, (≧▽≦), (｡•̀ᴗ-)✧, >w<, :3 or UwU, and never emoji. Keep replies short; use markdown lists only when they help.
 
 You see the library only through the run_code tool. It runs JavaScript (not TypeScript) as the body of an async function in a sandbox with no network: call the global \`cobalt\` API, compute what you need, and \`return\` a small result (an array of a few fields beats whole records). console.log works. Do as much as you can in one run: filter, sort and count in code instead of returning everything. Today is ${new Date(now).toISOString().slice(0, 10)}.
 
-To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbnails under your reply, so never paste ids or raw URLs into your text; refer to files by title. To see what a picture or video actually looks like, call cobalt.look(ids) and you get the pictures after the run. Never claim to have seen something you did not look at. Files Harmony attaches to a message are listed with it.
+To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbnails under your reply, so never paste ids or raw URLs into your text; refer to files by title. When Harmony asks for a link, give the file's share_url (or a gallery link's url), never a media URL. To see what a picture or video actually looks like, call cobalt.look(ids) and you get the pictures after the run. Never claim to have seen something you did not look at. Files Harmony attaches to a message are listed with it. When the answer is a big set (all the cats, every TikTok from March), put the whole ordered set in cobalt.collage(ids, { title, query }): Harmony pages through it as a collage under your reply, so say how many there are instead of listing them, and keep show() for a few highlights.
+
+${search ? FINDING_WITH_SEARCH : FINDING_WITHOUT_SEARCH}
 
 The API:
-${TOOL_TYPES}`;
+${toolTypes(search)}`;
 }
 
 const RUN_CODE_TOOL = {
@@ -511,14 +569,15 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
     let text = "";
     const steps: Step[] = [];
     const api: any[] = [];
-    const collect: ChatCollect = { look: [], show: [] };
+    const collect: ChatCollect = { look: [], show: [], collage: null };
     const toolDeps: ChatToolDeps = { db: d.db, mediaBaseUrl: d.mediaBaseUrl, shareBaseUrl: d.shareBaseUrl, embed: d.embed };
     let lastSave = now();
-    const row = (status: string, error: string | null) => ({ ...c.botRow, text, post_ids: JSON.stringify(collect.show), steps: JSON.stringify(steps), status, error, updated_at: now() });
+    const collageJson = () => (collect.collage ? JSON.stringify(collect.collage) : null);
+    const row = (status: string, error: string | null) => ({ ...c.botRow, text, post_ids: JSON.stringify(collect.show), collage: collageJson(), steps: JSON.stringify(steps), status, error, updated_at: now() });
     const save = async (status: string, error: string | null) => {
         await d.db
-            .prepare("UPDATE chat_messages SET text = ?2, post_ids = ?3, steps = ?4, api = ?5, status = ?6, error = ?7, updated_at = ?8 WHERE id = ?1")
-            .bind(c.botRow.id, text, JSON.stringify(collect.show), JSON.stringify(steps), status === "running" ? null : JSON.stringify(api), status, error, now())
+            .prepare("UPDATE chat_messages SET text = ?2, post_ids = ?3, steps = ?4, api = ?5, status = ?6, error = ?7, updated_at = ?8, collage = ?9 WHERE id = ?1")
+            .bind(c.botRow.id, text, JSON.stringify(collect.show), JSON.stringify(steps), status === "running" ? null : JSON.stringify(api), status, error, now(), collageJson())
             .run();
     };
     const progress = async () => {
@@ -536,7 +595,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
             { type: "text", text: c.text + attachedNote(records) },
         ];
         const messages = mergeRoles([...prior, { role: "user", content: userContent }]);
-        const system = systemPrompt(now());
+        const system = systemPrompt(now(), d.embed !== null);
         let runs = 0;
         let looked = 0;
         for (let turn = 0; turn <= MAX_CODE_RUNS + 1; turn++) {
@@ -575,6 +634,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 steps.push(step);
                 c.emit("step", { step });
                 const shownBefore = collect.show.length;
+                const collageBefore = collageJson();
                 const t0 = Date.now();
                 const out = await d.runner(u.input.code, chatTools(toolDeps, collect));
                 step.duration_ms = Date.now() - t0;
@@ -588,6 +648,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                     const added = collect.show.slice(shownBefore);
                     c.emit("posts", { post_ids: added, posts: await postsMap(d, added) });
                 }
+                if (collageJson() !== collageBefore) c.emit("collage", { collage: collageShape(collageJson()) });
                 const body = out.error !== undefined
                     ? { error: out.error, logs: step.logs }
                     : { result: full!.length > RESULT_MAX ? `${full!.slice(0, RESULT_MAX)}… (cut: return less)` : out.result ?? null, logs: step.logs };

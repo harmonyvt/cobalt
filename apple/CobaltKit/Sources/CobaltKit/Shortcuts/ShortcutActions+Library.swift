@@ -70,6 +70,23 @@ extension ShortcutSave {
             created: s.createdAt, hasVideo: hasVideo, kind: kind, itemCount: count)
     }
 
+    /// `init(post:)` with every public link turned into what the app hands out: the server's share page
+    /// (`Capabilities.shareLink(for:)`, APP-API-CONTRACT 22) when it has them, else the file's own URL.
+    init(post: LibraryPost, caps: Capabilities) {
+        self.init(post: post)
+        self = sharing(caps)
+    }
+
+    /// The same save with its links as share links (owner: "any direct video links should be replaced with share links").
+    func sharing(_ caps: Capabilities) -> ShortcutSave {
+        var s = self
+        s.publicLink = publicLink.map(caps.shareLink(for:))
+        s.webpLinks = webpLinks.map(caps.shareLink(for:))
+        s.itemLinks = itemLinks.map(caps.shareLink(for:))
+        s.madeLinks = madeLinks.map(caps.shareLink(for:))
+        return s
+    }
+
     /// A post's files told apart: its gallery items, what was made from it, and the plain originals and webps.
     struct Parts {
         /// A gallery's originals (`role item`), in the post's order.
@@ -136,7 +153,7 @@ extension ShortcutActions {
         let n = min(max(count, 1), 20)
         guard ctx.capabilities.library else { throw ShortcutError.failed(.unsupported) }
         let posts = try await libraryPosts { Self.matches($0, kind).count >= n }
-        let saves = Self.matches(posts, kind).prefix(n).map { ShortcutSave(post: $0) }
+        let saves = Self.matches(posts, kind).prefix(n).map { ShortcutSave(post: $0, caps: ctx.capabilities) }
         logRun(action: "latest", inputs: n, accepted: saves.count, failed: 0, began: began, outcome: "ok")
         return Array(saves)
     }
@@ -162,14 +179,14 @@ extension ShortcutActions {
         guard !ids.isEmpty else { return [] }
         var found: [String: ShortcutSave] = [:]
         let loaded = Dictionary(model.library.posts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for id in ids { if let post = loaded[id] { found[id] = ShortcutSave(post: post) } }
+        for id in ids { if let post = loaded[id] { found[id] = ShortcutSave(post: post, caps: ctx.capabilities) } }
         let client = ctx.client
         for id in ids where found[id] == nil {
-            if let session = try? await client.session(id, wait: 0) { found[id] = ShortcutSave(session: session) }
+            if let session = try? await client.session(id, wait: 0) { found[id] = ShortcutSave(session: session).sharing(ctx.capabilities) }
         }
         if ids.contains(where: { found[$0] == nil }), ctx.capabilities.library,
            let page = try? await ctx.libraryPage(cursor: nil, limit: 20) {
-            for post in page.posts where found[post.id] == nil && ids.contains(post.id) { found[post.id] = ShortcutSave(post: post) }
+            for post in page.posts where found[post.id] == nil && ids.contains(post.id) { found[post.id] = ShortcutSave(post: post, caps: ctx.capabilities) }
         }
         return ids.compactMap { found[$0] }
     }
@@ -178,9 +195,9 @@ extension ShortcutActions {
     public func suggestedSaves() async -> [ShortcutSave] {
         guard ctx.capabilities.library || !model.library.posts.isEmpty else { return [] }
         if let page = try? await ctx.libraryPage(cursor: nil, limit: 20) {
-            return page.posts.sorted { $0.createdAt > $1.createdAt }.map { ShortcutSave(post: $0) }
+            return page.posts.sorted { $0.createdAt > $1.createdAt }.map { ShortcutSave(post: $0, caps: ctx.capabilities) }
         }
-        return model.library.posts.prefix(20).map { ShortcutSave(post: $0) }
+        return model.library.posts.prefix(20).map { ShortcutSave(post: $0, caps: ctx.capabilities) }
     }
 
     // MARK: - Errors

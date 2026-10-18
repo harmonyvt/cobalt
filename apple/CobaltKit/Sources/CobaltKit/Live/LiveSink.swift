@@ -77,7 +77,7 @@ extension Pipeline {
         case nil:
             // library "trim a new webp", a handoff without a link: no service to name
             return LiveRunAttributes(
-                run: liveRunID, input: "link", service: "cobalt", ref: media?.name ?? "video", origin: origin)
+                run: liveRunID, input: "link", service: "capystore", ref: media?.name ?? "video", origin: origin)
         }
     }
 

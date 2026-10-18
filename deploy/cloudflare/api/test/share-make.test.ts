@@ -34,7 +34,7 @@ describe("a save with a slideshow webp: one request, one message", () => {
         expect(row.content_type).toBe("image/webp");
         expect(L.hark.calls).toHaveLength(1);
         expect(L.hark.calls[0]).toEqual({
-            title: "cobalt",
+            title: "capystore",
             body: `${LABEL} · slideshow webp ready · 480×600 · 3 KB\n${MEDIA_BASE}${row.public_key}`,
             url: `cobalt-apple://session/${r.id}`,
         });
@@ -110,18 +110,18 @@ describe("what goes wrong, in one message", () => {
         const r = await run(L, { slideshow: slideshow({ items: [0, 1, 2], seconds: [2, 2, 2] }) });
         expect(renderRow(L, r.make.job)).toMatchObject({ status: "error", error_code: "error.studio.fetch_failed" });
         expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]).toMatchObject({ title: "cobalt couldn't finish" });
+        expect(L.hark.calls[0]).toMatchObject({ title: "capystore couldn't finish" });
         expect(L.hark.calls[0]!.body).toContain(`couldn't save ${LABEL}`);
     });
 
-    it("the save works and a webp would run over 60 s: `saved <n> items. the slideshow webp would be <m:ss> and webps stop at 60 s. open cobalt to make the mp4.`", async () => {
+    it("the save works and a webp would run over 60 s: `saved <n> items. the slideshow webp would be <m:ss> and webps stop at 60 s. open capystore to make the mp4.`", async () => {
         const L = await lineWorld();
         L.helper.gallery = [{ type: "photo" }, { type: "video", duration: 70 }];
         const r = await run(L, { item_count: 2, slideshow: slideshow({ items: [0, 1], seconds: [2, null] }) });
         expect(renderRow(L, r.make.job)).toMatchObject({ status: "error", error_code: "error.webp.too_long" });
         expect(itemRows(L as any, r.id)).toHaveLength(2); // the save stays
         expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toBe(`${LABEL} · saved 2 items. the slideshow webp would be 1:12 and webps stop at 60 s. open cobalt to make the mp4.`);
+        expect(L.hark.calls[0]!.body).toBe(`${LABEL} · saved 2 items. the slideshow webp would be 1:12 and webps stop at 60 s. open capystore to make the mp4.`);
     });
 
     it("the save works and the helper cannot make it: `saved <n> items. the <what> couldn't be made — <reason>`", async () => {
@@ -130,7 +130,7 @@ describe("what goes wrong, in one message", () => {
         L.helper.galleryError = "error.webp.encode_failed";
         await run(L, { gallery_image: gallery() });
         expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]).toMatchObject({ title: "cobalt" });
+        expect(L.hark.calls[0]).toMatchObject({ title: "capystore" });
         expect(L.hark.calls[0]!.body).toBe(`${LABEL} · saved 5 items. the gallery image couldn't be made — something went wrong on the server`);
     });
 

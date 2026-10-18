@@ -130,7 +130,7 @@ extension ShortcutActions {
             case .success(let r):
                 units(100)
                 logRun(action: "webp", inputs: 1, accepted: 1, failed: 0, began: began, outcome: "ok", waited: true)
-                return r.url
+                return ctx.capabilities.shareLink(for: r.url)
             case .failed(let code):
                 throw ShortcutError.from(mapFailure(code: code, during: .rendering, limits: limits), lineMax: readiness.lineMax)
             }
@@ -188,7 +188,7 @@ extension ShortcutActions {
             if post == nil { throw ShortcutError.noVideo }
         }
         guard let post else { throw ShortcutError.saveNotFound }
-        let save = ShortcutSave(post: post)
+        let save = ShortcutSave(post: post, caps: ctx.capabilities)
         guard save.hasVideo else { throw ShortcutError.noVideo }
         if let s = post.session, s.status == .ready, s.expiresAt > ctx.clock.now() {
             // a gallery's session renders its first video item (the server's lead, APP-API-CONTRACT 18.1)

@@ -196,12 +196,12 @@ struct ContinuedWordsTests {
     }
 
     @Test func theWaitingNoticeNamesWhatIsWaiting() {
-        #expect(WaitingNotice(links: 0, uploads: 1).title == "1 upload is waiting for cobalt")
-        #expect(WaitingNotice(links: 0, uploads: 1).body == "open cobalt to finish it.")
-        #expect(WaitingNotice(links: 2, uploads: 0).title == "2 links are waiting for cobalt")
-        #expect(WaitingNotice(links: 2, uploads: 0).body == "open cobalt to finish them.")
-        #expect(WaitingNotice(links: 1, uploads: 1).title == "2 jobs are waiting for cobalt")
-        #expect(WaitingNotice(links: 1, uploads: 0).title == "1 link is waiting for cobalt")
+        #expect(WaitingNotice(links: 0, uploads: 1).title == "1 upload is waiting for capystore")
+        #expect(WaitingNotice(links: 0, uploads: 1).body == "open capystore to finish it.")
+        #expect(WaitingNotice(links: 2, uploads: 0).title == "2 links are waiting for capystore")
+        #expect(WaitingNotice(links: 2, uploads: 0).body == "open capystore to finish them.")
+        #expect(WaitingNotice(links: 1, uploads: 1).title == "2 jobs are waiting for capystore")
+        #expect(WaitingNotice(links: 1, uploads: 0).title == "1 link is waiting for capystore")
     }
 }
 
@@ -314,7 +314,7 @@ struct ContinuedQueueTests {
         rig.controller.appResigned()
         await yieldMain()
         #expect(rig.notifier.waiting == [WaitingNotice(links: 0, uploads: 1)], "\(rig.notifier.waiting)")
-        #expect(rig.notifier.waiting.first?.title == "1 upload is waiting for cobalt")
+        #expect(rig.notifier.waiting.first?.title == "1 upload is waiting for capystore")
         // coming back says it is no longer true
         rig.activity.isActive = true
         rig.controller.appBecameActive()

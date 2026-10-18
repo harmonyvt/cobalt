@@ -350,7 +350,7 @@ export function startPayload(a: RunAttributes, state: LiveState, now: number) {
             "content-state": canonical(state),
             "stale-date": staleDate(state, now),
             "input-push-token": 1,
-            alert: { title: "cobalt", body: a.input === "file" ? `uploading ${a.ref}` : `fetching from ${a.service}` },
+            alert: { title: "capystore", body: a.input === "file" ? `uploading ${a.ref}` : `fetching from ${a.service}` },
         },
     };
 }
@@ -373,7 +373,7 @@ export function endPayload(a: RunAttributes, state: LiveState, now: number, imme
         };
     } else {
         aps["dismissal-date"] = secs(now) + DISMISS_FAILED_S;
-        aps.alert = { title: "cobalt couldn't finish", body: "open cobalt to see what happened." };
+        aps.alert = { title: "capystore couldn't finish", body: "open capystore to see what happened." };
     }
     return { aps };
 }

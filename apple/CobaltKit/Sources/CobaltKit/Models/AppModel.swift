@@ -52,6 +52,10 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// threads. `.chatEmpty`: no threads yet. `.chatFail`: `GET /chat/threads` always fails (`503`), so the tab shows its
     /// failed state. `.chatReplyFails`: the sample threads, but every reply ends in `error.chat.model` after a few words.
     case chatEmpty, chatFail, chatReplyFails
+    /// The library's sky map (APP-API-CONTRACT 21, `PreviewSkyMap.swift`): a server with `features.search` whose
+    /// `GET /library/map` hands over about 150 mock posts in eight clusters (cats, minecraft, anime, cooking, coffee, the
+    /// harbour, guitar, skate). `.happy` and `.renditions` serve the same map but do not advertise `features.search`.
+    case skyMap
 }
 
 public struct ServerSummary: Sendable, Equatable {
@@ -73,6 +77,8 @@ public final class AppModel {
     public let shareSets: ShareSetStore
     /// The chat threads (the chat tab; APP-API-CONTRACT 27). Idle until `refresh()`.
     public let chat: ChatStore
+    /// The library as a sky map (APP-API-CONTRACT 21, `GET /library/map`). Idle until `load()`.
+    public let skyMap: SkyMapModel
     /// The photos album (CONTRACT-SYNC.md): `PhotosSync.preview(_:)` in previews.
     public let photosSync: PhotosSync
     /// The Mac's Finder folder, the store's visible root (CONTRACT-OFFLINE.md section 13, Folder/MacFolder.swift):
@@ -149,6 +155,7 @@ public final class AppModel {
         self.library = library
         self.shareSets = ShareSetStore(context: context)
         self.chat = ChatStore(context: context)
+        self.skyMap = SkyMapModel(context: context)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
         let jobQueue = JobQueue(
@@ -328,6 +335,7 @@ public final class AppModel {
         library.reset()
         shareSets.reset()
         chat.reset()
+        skyMap.reset()
     }
 
     // MARK: - Links, handoffs

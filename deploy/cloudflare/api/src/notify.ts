@@ -123,8 +123,8 @@ export function describeJob(
 export function savedMessage(what: string, duration: number | null): { title: string; body: string } {
     const dur = duration !== null && Number.isFinite(duration) && duration > 0 ? ` · ${secondsText(duration)} s` : "";
     return {
-        title: "cobalt",
-        body: clip(`${what} is saved${dur} — open cobalt to make a webp`, HARK_MAX_BODY),
+        title: "capystore",
+        body: clip(`${what} is saved${dur} — open capystore to make a webp`, HARK_MAX_BODY),
     };
 }
 
@@ -147,7 +147,7 @@ export function renderedMessage(r: RenderSuccess, label?: string | null): { titl
     if (r.width && r.height) parts.push(`${r.width}×${r.height}`);
     if (r.bytes && r.bytes > 0) parts.push(formatBytes(r.bytes));
     const head = label && r.what ? `${label} · ` : "";
-    return { title: "cobalt", body: clip(`${head}${parts.join(" · ")}${r.url ? `\n${r.url}` : ""}`, HARK_MAX_BODY) };
+    return { title: "capystore", body: clip(`${head}${parts.join(" · ")}${r.url ? `\n${r.url}` : ""}`, HARK_MAX_BODY) };
 }
 
 // A short plain reason for an error code the owner may see on the lock screen.
@@ -198,7 +198,7 @@ export function plainReason(code: string): string {
 
 export function failedMessage(phase: "saving" | "rendering", what: string, code: string, made?: MakeWhat): { title: string; body: string } {
     const lead = phase === "saving" ? `couldn't save ${what}` : `couldn't make the ${made ?? "webp"}`;
-    return { title: "cobalt couldn't finish", body: clip(`${lead} — ${plainReason(code)}`, HARK_MAX_BODY) };
+    return { title: "capystore couldn't finish", body: clip(`${lead} — ${plainReason(code)}`, HARK_MAX_BODY) };
 }
 
 // A make that came with its save (POST /studio `slideshow` / `gallery_image`, 18.12): the save worked and the make did
@@ -207,9 +207,9 @@ export function savedButFailedMessage(label: string, saved: number, what: MakeWh
     const lead = `${label} · saved ${saved} ${saved === 1 ? "item" : "items"}. `;
     const rest =
         code === "error.webp.too_long" && what === "slideshow webp" && length
-            ? `the slideshow webp would be ${length} and webps stop at 60 s. open cobalt to make the mp4.`
+            ? `the slideshow webp would be ${length} and webps stop at 60 s. open capystore to make the mp4.`
             : `the ${what} couldn't be made — ${plainReason(code)}`;
-    return { title: "cobalt", body: clip(`${lead}${rest}`, HARK_MAX_BODY) };
+    return { title: "capystore", body: clip(`${lead}${rest}`, HARK_MAX_BODY) };
 }
 
 // ---- records ----------------------------------------------------------------------
@@ -397,7 +397,7 @@ export function lineSummaryMessage(
     }
     const one = webps.length === 1 ? rec.webps[webps[0]!.key] : undefined;
     if (one?.url) lines.push(one.url);
-    return { title: "cobalt", body: lines.join("\n"), url: JOBS_URL, sid: first.sid };
+    return { title: "capystore", body: lines.join("\n"), url: JOBS_URL, sid: first.sid };
 }
 
 // ---- the service (Durable Object) -----------------------------------------------------

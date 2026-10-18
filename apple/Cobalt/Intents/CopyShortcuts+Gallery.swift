@@ -6,7 +6,7 @@ import Foundation
 /// `Copy+Shortcuts.swift` is compiled into the share extension and widgets too and these words are the app's alone.
 extension Copy.Shortcuts {
     /// Asked to bring cobalt forward on a system that cannot wait for the make (before iOS and macOS 27).
-    static let continueForMake = "cobalt has to stay open to make it."
+    static let continueForMake = "capystore has to stay open to make it."
 
     /// The dialog "Save links" ends with: nothing when everything went and was only handed over.
     /// - partial: "saved 2 of 3 links; 1 couldn't be sent: …".
@@ -41,7 +41,7 @@ extension Copy.Shortcuts {
         switch code {
         case "error.webp.too_long":
             return what == "slideshow webp"
-                ? "webps stop at 60 s. open cobalt to make the mp4."
+                ? "webps stop at 60 s. open capystore to make the mp4."
                 : "it would be too long."
         case "error.studio.too_few_photos": return "a gallery image needs 2 photos."
         case "error.studio.not_gallery": return "a slideshow needs 2 or more items."

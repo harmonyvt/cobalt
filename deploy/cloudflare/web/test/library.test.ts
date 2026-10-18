@@ -15,6 +15,12 @@ import {
     AUD, NOW, OWNER, TEAM, WEB_ORIGIN, goodClaims, makeJwksFetch, makeSigner, newCache, type Signer,
 } from "./support";
 
+// the page's shareUrl(): a public media URL becomes its share page link, anything else is unchanged
+const pageShareUrl = (u: string) => {
+    const m = /^https:\/\/media\.capybaraharmony\.com\/([A-Za-z0-9]{6,40})\.[A-Za-z0-9]{1,8}$/.exec(String(u || ""));
+    return m ? `https://share.capybaraharmony.com/${m[1]}` : u;
+};
+
 const SERVICE_KEY = "7a1d1b0e-3f0c-4a53-8f55-2f1b8a9d0c11";
 const SID = "q3Zk9vT1mW8aLm2xPq8Rt4";
 const SID2 = "Zz9kRt1mW8aLm2xPq8Rt4A";
@@ -1797,7 +1803,7 @@ describe("server-made posters", () => {
         };
         const make = () =>
             new Function(
-                "h", "placeholder", "isImageType", "isVideoType", "extOf", "TYPES",
+                "h", "placeholder", "isImageType", "isVideoType", "extOf", "TYPES", "shareUrl",
                 `${src}\nreturn { itemThumb, studioThumb };`,
             )(
                 el,
@@ -1806,6 +1812,7 @@ describe("server-made posters", () => {
                 (t: string | null) => !!t && t.startsWith("video/"),
                 (n: string) => (/\.([0-9A-Za-z]{1,8})$/.exec(n || "")?.[1] ?? "").toLowerCase(),
                 { "video/mp4": "mp4", "image/gif": "gif" },
+                pageShareUrl,
             ) as { itemThumb(it: any): El; studioThumb(s: any): El };
         const kidsOf = (e: El) => e.kids.map((k) => k.tag + (k.attrs.src ? `:${k.attrs.src}` : k.attrs.icon ? `:${k.attrs.icon}` : ""));
 
@@ -1873,7 +1880,7 @@ describe("server-made posters", () => {
             const log = { posts: [] as string[], renders: 0, usage: 0, toasts: [] as unknown[][] };
             const G: any = { filter: "all", items: [] as any[], confirm: null, confirmAct: "delete", busy: {} };
             const api = new Function(
-                "h", "G", "S", "renderGrid", "reloadUsage", "libPost", "ok", "describe", "toast",
+                "h", "G", "S", "renderGrid", "reloadUsage", "libPost", "ok", "describe", "toast", "shareUrl",
                 `${isPubSrc}\n${sw}\nreturn { visSwitch, setVisibility, isPub };`,
             )(
                 el, G, { items: [] }, () => { log.renders++; }, () => { log.usage++; },
@@ -1881,6 +1888,7 @@ describe("server-made posters", () => {
                 (r: any) => { if (r.status >= 200 && r.status < 300 && r.body.status !== "error") return r.body; throw { code: r.body?.error?.code }; },
                 (e: any) => ({ text: e.code, code: e.code }),
                 (...a: unknown[]) => { log.toasts.push(a); },
+                pageShareUrl,
             ) as { visSwitch(it: any, busy: boolean): El; setVisibility(it: any, on: boolean): Promise<void>; isPub(it: any): boolean };
             return { api, G, log };
         };
@@ -1916,7 +1924,7 @@ describe("server-made posters", () => {
             expect(G.items[0]).toMatchObject({ visibility: "public", url: item.url, custom_title: "Kyoto" });
             expect(G.busy).toEqual({});
             expect(log.usage).toBe(1);
-            expect(log.toasts[0]).toEqual(["public: link ready", { href: item.url, label: "open" }]);
+            expect(log.toasts[0]).toEqual(["public: link ready", { href: pageShareUrl(item.url), label: "open" }]);
         });
         it("turning it off asks first (nothing is posted); 'make private' posts /private", async () => {
             const item = { id: "Orig000000000001", visibility: "private", url: null };

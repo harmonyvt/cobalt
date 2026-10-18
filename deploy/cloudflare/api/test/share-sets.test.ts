@@ -212,7 +212,7 @@ describe("the share host", () => {
             expect(st.media_attachments[0].preview_url).toBe(`${MEDIA}PoStEr0001.jpg`);
         }
         const oe = (await (await get(`${SHARE}owoembed?id=${set.id}`)).json()) as any;
-        expect(oe).toMatchObject({ version: "1.0", type: "rich", provider_name: "cobalt", author_name: "<b>trip</b>" });
+        expect(oe).toMatchObject({ version: "1.0", type: "rich", provider_name: "capystore", author_name: "<b>trip</b>" });
     });
     it("a file made private drops out; with none left the set is a 404", async () => {
         db.raw.prepare("UPDATE media_items SET visibility = 'private' WHERE id = ?").run(video.id);

@@ -37,7 +37,7 @@ extension Copy {
         }
 
         static func lineFull(max: Int = 50) -> String {
-            "cobalt's line is full (\(max)). try again when a few have finished."
+            "capystore's line is full (\(max)). try again when a few have finished."
         }
 
         // MARK: the tray
@@ -65,7 +65,7 @@ extension Copy {
         // MARK: what a paste or a drop says
 
         static let noLink = "no link found in that text."
-        static let nothingDropped = "nothing cobalt can save was dropped."
+        static let nothingDropped = "nothing capystore can save was dropped."
         static let duplicate = "already saving that one."
 
         /// "saving 3 links alongside." (a job added while another has the screen, or from a review).
@@ -123,14 +123,14 @@ extension Copy {
 
         static func leavingLinks(_ count: Int) -> (title: String, body: String) {
             count == 1
-                ? ("1 link is waiting for cobalt", "open cobalt to finish it.")
-                : ("\(count) links are waiting for cobalt", "open cobalt to finish them.")
+                ? ("1 link is waiting for capystore", "open capystore to finish it.")
+                : ("\(count) links are waiting for capystore", "open capystore to finish them.")
         }
 
         static func leavingUploads(_ count: Int) -> (title: String, body: String) {
             count == 1
-                ? ("1 upload is waiting for cobalt", "open cobalt to finish it.")
-                : ("\(count) uploads are waiting for cobalt", "open cobalt to finish them.")
+                ? ("1 upload is waiting for capystore", "open capystore to finish it.")
+                : ("\(count) uploads are waiting for capystore", "open capystore to finish them.")
         }
 
         // MARK: the Live Activity summary (two or more jobs)

@@ -164,7 +164,7 @@ struct SharedGalleryOnTheAppTests {
         // time passing changes nothing: no checking sheet at 700 ms, no `saving everything` at 8 s, still one request
         await rig.clock.advance(by: .seconds(9))
         #expect(rig.sender.sent == [.plain(reel)] && !rig.flow.sheetShown)
-        #expect(rig.notices.posted.map(\.head) == ["saving to cobalt"])
+        #expect(rig.notices.posted.map(\.head) == ["saving to capystore"])
     }
 
     @Test func aPostLinkStillAsksTheServerAndKeepsTheGalleryFlow() async {

@@ -31,7 +31,7 @@ describe("R1: the save failed, then the make job is polled", () => {
         await L.settle(r.id);
         await L.sweeps(3);
         expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.title).toBe("cobalt couldn't finish");
+        expect(L.hark.calls[0]!.title).toBe("capystore couldn't finish");
         const poll = await L.studio.renderStatus(r.id, r.make.job, 0);
         expect(asBody(poll).error.code).toBe("error.studio.fetch_failed");
         await L.studio.renderStatus(r.id, r.make.job, 0);

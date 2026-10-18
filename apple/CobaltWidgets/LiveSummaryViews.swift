@@ -43,7 +43,7 @@ extension Copy.Live {
     }
 
     /// The header of a finished summary (the run's own source line would name the first job only).
-    static let summaryDoneSource = "cobalt"
+    static let summaryDoneSource = "capystore"
 }
 
 // MARK: - what the summary adds to `LiveFacts`
@@ -133,8 +133,8 @@ struct LiveSummaryDone: View {
     private var detail: String? {
         let failed = facts.state.failedCount ?? 0
         let finished = (facts.state.savedCount ?? 0) + (facts.state.webpCount ?? 0)
-        if failed > 0, finished > 0 { return "open cobalt to try the rest again." }
-        if failed > 0 { return "open cobalt to try again." }
+        if failed > 0, finished > 0 { return "open capystore to try the rest again." }
+        if failed > 0 { return "open capystore to try again." }
         return nil
     }
 }

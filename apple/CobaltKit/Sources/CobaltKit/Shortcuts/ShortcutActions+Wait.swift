@@ -103,7 +103,7 @@ extension ShortcutActions {
                 if let duration = session.duration { result.saves[index].duration = duration }
                 if result.saves[index].service == nil, let service = session.service, service != "upload" { result.saves[index].service = service }
                 // a ready session says what the post is (a gallery's `item_count`); the library, read below, says the rest
-                let known = ShortcutSave(session: session)
+                let known = ShortcutSave(session: session).sharing(ctx.capabilities)
                 result.saves[index].kind = known.kind ?? result.saves[index].kind
                 result.saves[index].itemCount = known.itemCount ?? result.saves[index].itemCount
                 if known.kind == .gallery { result.saves[index].hasVideo = known.hasVideo }
@@ -133,7 +133,7 @@ extension ShortcutActions {
             for index in result.saves.indices {
                 guard let end = endsByID[result.saves[index].id] else { continue }
                 // the library lists a made file the moment the server has it; the make's own answer covers a list that lags
-                if let url = end.url, !result.saves[index].madeLinks.contains(url) { result.saves[index].madeLinks.insert(url, at: 0) }
+                if let url = end.url.map(ctx.capabilities.shareLink(for:)), !result.saves[index].madeLinks.contains(url) { result.saves[index].madeLinks.insert(url, at: 0) }
                 if let failure = end.failure {
                     result.makeFailures.append(ShortcutMakeFailure(title: result.saves[index].title, what: what, failure: failure))
                 }
@@ -223,7 +223,7 @@ extension ShortcutActions {
             for post in page.posts {
                 // a post is the save's `id`, or holds the session the save is
                 guard let key = [post.id, post.session?.id].compactMap({ $0 }).first(where: { wanted.contains($0) }) else { continue }
-                found[key] = ShortcutSave(post: post)
+                found[key] = ShortcutSave(post: post, caps: ctx.capabilities)
                 wanted.remove(key)
             }
             guard !wanted.isEmpty, let next = page.next else { break }

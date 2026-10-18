@@ -92,7 +92,7 @@ struct ChatThreadScreen: View {
                     if content.messages.isEmpty { emptyHint }
                     ForEach(content.messages) { message in
                         ChatMessageView(
-                            model: model, message: message, content: content, open: open,
+                            model: model, message: message, content: content, tier: tier, open: open,
                             retry: { send($0, attaching: false) }, canRetry: !busy)
                             .id(message.id)
                     }
@@ -103,7 +103,13 @@ struct ChatThreadScreen: View {
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
             }
-            .defaultScrollAnchor(.bottom)
+            // Short threads sit at the bottom. The start at the newest message is a `scrollTo` below, not an anchor: an
+            // initial-offset anchor keeps re-applying until the first drag, so a collage loading more pinned the list to
+            // its new bottom instead of leaving it where "show 30 more" was.
+            .defaultScrollAnchor(.bottom, for: .alignment)
+            .defaultScrollAnchor(.top, for: .sizeChanges)
+            .defaultScrollAnchor(.top, for: .initialOffset)
+            .onAppear { DispatchQueue.main.async { proxy.scrollTo(Self.bottom, anchor: .bottom) } }
             .scrollDismissesKeyboard(.interactively)
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 72

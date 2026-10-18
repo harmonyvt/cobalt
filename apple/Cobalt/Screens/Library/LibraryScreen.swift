@@ -172,6 +172,7 @@ private struct LibraryContent: View {
             }
             .modifier(LibraryInspector(model: model, controller: controller, enabled: tier != .compact))
             .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: tier == .compact))
+            .modifier(LibrarySkyMapPresenter(model: model, controller: controller))
             .renameAlert(item: $controller.renaming, model: model)
             .modifier(LibraryCombineSheet(model: model, controller: controller))
             .confirmationDialog(
@@ -261,9 +262,14 @@ private struct LibraryContent: View {
             ForEach(LibraryViewMode.allCases, id: \.self) { mode in
                 LibraryViewButton(library: library, mode: mode)
             }
+            // the sky map is a third way to look at the library (only where the search has embedded the posts)
+            if model.capabilities.search, !controller.selecting { LibrarySkyMapButton(controller: controller) }
         }
         #else
         ToolbarItem(placement: .navigation) { LibraryViewSwitcher(library: library) }
+        if model.capabilities.search, !controller.selecting {
+            ToolbarItem(placement: .navigation) { LibrarySkyMapButton(controller: controller) }
+        }
         #endif
         #if os(iOS)
         // the queue is a sheet on iPhone and iPad (not a tab); select mode keeps its controls and drops this button

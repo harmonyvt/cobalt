@@ -18,7 +18,7 @@ enum ShareCopy {
         "continuing in background in \(s) seconds. choose stay to keep this open."
     }
     static let notifyWhenDone = "we'll notify you when it's done."
-    static let openLater = "open cobalt later to see it."
+    static let openLater = "open capystore later to see it."
     static func savingPhotos(_ step: PhotosStep) -> String {
         if case .downloading(let progress) = step, let total = progress.total, total > 0 {
             return "getting the video · \(Int(Double(progress.bytes) / Double(total) * 100))%"
@@ -26,25 +26,25 @@ enum ShareCopy {
         return "saving to photos"
     }
     static let tapToTryAgain = "try saving again"
-    static let photosDenied = "allow cobalt to add to photos in settings, then try again."
+    static let photosDenied = "allow capystore to add to photos in settings, then try again."
     static let photosFailed = "photos couldn't save this one."
     static let previewFailed = "couldn't load the preview \u{2014} the webp still works."
     static let webpReady = "your webp is ready."
 
     // The quick card (CONTRACT-SHARE-QUICK.md section 5).
-    static let quickSaving = "saving to cobalt"
+    static let quickSaving = "saving to capystore"
     /// Under "saving to cobalt" until the link is known.
     static let quickChecking = "reading the link"
-    static let quickHeld = "cobalt has it"
+    static let quickHeld = "capystore has it"
     static let quickNotify = "we'll notify you when it's saved"
-    static let quickOpenLater = "open cobalt to see it"
+    static let quickOpenLater = "open capystore to see it"
     static let quickFailed = "couldn't save"
-    static let quickOpenCobalt = "open cobalt"
+    static let quickOpenCobalt = "open capystore"
     static let quickExpandA11y = "show the full sheet"
 
     // The compact gallery sheet (CONTRACT-GALLERY.md 1.12; the rest of its copy is `Copy.Gallery`).
     /// Under `save now` while the sheet is still checking the link.
-    static let saveNowSub = "everything, into cobalt and Files"
+    static let saveNowSub = "everything, into capystore and Files"
     static let closeLabel = "close"
     static let crossfade = "crossfade"
     /// The webp row's sub when the post has videos: their lengths are not known here, so the server decides.
@@ -55,8 +55,8 @@ enum ShareCopy {
     /// each: what happened, and the card's button says what to do (open cobalt).
     static func instantFailure(_ failure: InstantShare.Failure) -> String {
         switch failure {
-        case .noKey: return "cobalt can't find your key from here"
-        case .noLink: return "there's no link here that cobalt can save"
+        case .noKey: return "capystore can't find your key from here"
+        case .noLink: return "there's no link here that capystore can save"
         case .couldNotStart: return "couldn't start the save"
         case .rejected(let status) where status == 401 || status == 403: return "the server didn't accept your key"
         case .rejected(let status) where status == 429: return "the server is busy, try again in a moment"

@@ -87,6 +87,80 @@ public struct ChatStep: Sendable, Equatable, Identifiable, Decodable {
     }
 }
 
+// MARK: - a collage
+
+/// The big result set a reply attaches (27.5): up to 500 posts, paged by `GET /chat/threads/<id>/messages/<id>/collage`.
+/// The message only carries what to title the grid with and how many posts it holds.
+public struct ChatCollage: Sendable, Equatable, Codable {
+    /// "every cat"; nil when the model gave none.
+    public var title: String?
+    /// The search words, for "open in library"; nil when the model gave none.
+    public var query: String?
+    /// How many posts the collage holds.
+    public var total: Int
+
+    public init(title: String? = nil, query: String? = nil, total: Int) {
+        self.title = title
+        self.query = query
+        self.total = total
+    }
+
+    enum CodingKeys: String, CodingKey { case title, query, total }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = Self.clean(try? c.decodeIfPresent(String.self, forKey: .title))
+        query = Self.clean(try? c.decodeIfPresent(String.self, forKey: .query))
+        total = max(0, (try? c.decodeIfPresent(Int.self, forKey: .total)) ?? 0)
+    }
+
+    /// An empty or blank string is the same as none.
+    private static func clean(_ raw: String?) -> String? {
+        guard let text = raw else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+/// One page of a collage (`GET .../collage?offset=&limit=`): the ids in order, minus posts deleted since (so a page can be
+/// shorter than the limit while `total` stays), and the posts they name.
+public struct ChatCollagePage: Sendable, Equatable, Decodable {
+    public var title: String?
+    public var query: String?
+    public var total: Int
+    public var offset: Int
+    /// The offset to ask for next; nil on the last page.
+    public var next: Int?
+    public var postIDs: [String]
+    public var posts: [String: LibraryPost]
+
+    public init(
+        title: String? = nil, query: String? = nil, total: Int, offset: Int = 0, next: Int? = nil,
+        postIDs: [String] = [], posts: [String: LibraryPost] = [:]
+    ) {
+        self.title = title
+        self.query = query
+        self.total = total
+        self.offset = offset
+        self.next = next
+        self.postIDs = postIDs
+        self.posts = posts
+    }
+
+    enum CodingKeys: String, CodingKey { case title, query, total, offset, next, postIDs = "postIds", posts }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? nil
+        query = (try? c.decodeIfPresent(String.self, forKey: .query)) ?? nil
+        total = try c.decodeIfPresent(Int.self, forKey: .total) ?? 0
+        offset = try c.decodeIfPresent(Int.self, forKey: .offset) ?? 0
+        next = (try? c.decodeIfPresent(Int.self, forKey: .next)) ?? nil
+        postIDs = try c.decodeIfPresent([String].self, forKey: .postIDs) ?? []
+        posts = ChatThreadDetail.decodePosts(from: c)
+    }
+}
+
 // MARK: - a message
 
 /// One message (27.1). A user message carries the files the owner attached; an assistant message carries the files the
@@ -111,11 +185,13 @@ public struct ChatMessage: Sendable, Equatable, Identifiable, Decodable {
     public var status: Status
     /// The error code of a failed message (`error.chat.model`, `error.chat.interrupted`, `error.api.generic`).
     public var error: String?
+    /// The big result set the reply attached (27.5); nil when it has none (always nil on a user message).
+    public var collage: ChatCollage?
     public var createdAt: Date
 
     public init(
         id: String, role: Role, text: String = "", postIDs: [String] = [], steps: [ChatStep] = [],
-        status: Status = .done, error: String? = nil, createdAt: Date
+        status: Status = .done, error: String? = nil, collage: ChatCollage? = nil, createdAt: Date
     ) {
         self.id = id
         self.role = role
@@ -124,6 +200,7 @@ public struct ChatMessage: Sendable, Equatable, Identifiable, Decodable {
         self.steps = steps
         self.status = status
         self.error = error
+        self.collage = collage
         self.createdAt = createdAt
     }
 
@@ -131,7 +208,7 @@ public struct ChatMessage: Sendable, Equatable, Identifiable, Decodable {
     public var isLocal: Bool { id.hasPrefix(ChatMessage.localPrefix) }
     static let localPrefix = "local-"
 
-    enum CodingKeys: String, CodingKey { case id, role, text, postIDs = "postIds", steps, status, error, createdAt }
+    enum CodingKeys: String, CodingKey { case id, role, text, postIDs = "postIds", steps, status, error, collage, createdAt }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -151,6 +228,7 @@ public struct ChatMessage: Sendable, Equatable, Identifiable, Decodable {
         steps = (try? c.decodeIfPresent([Lossy<ChatStep>].self, forKey: .steps)).flatMap { $0 }?.compactMap(\.value) ?? []
         status = (try? c.decodeIfPresent(String.self, forKey: .status)).flatMap { $0 }.flatMap(Status.init(rawValue:)) ?? .done
         error = try c.decodeIfPresent(String.self, forKey: .error)
+        collage = (try? c.decodeIfPresent(ChatCollage.self, forKey: .collage)) ?? nil
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date(timeIntervalSince1970: 0)
     }
 }
@@ -208,6 +286,8 @@ public enum ChatEvent: Sendable, Equatable {
     case step(ChatStep)
     /// Files the model chose to show: appended to the message's `postIDs`, with their shapes.
     case posts(ids: [String], posts: [LibraryPost])
+    /// The reply attached a collage (27.5): set on the running message; `done` carries it too.
+    case collage(ChatCollage)
     /// The model renamed the thread (after the first reply only).
     case title(ChatThread)
     /// The final, saved assistant message and the thread as it is now. Last event.
@@ -292,6 +372,8 @@ public enum ChatRule {
     /// At most 200 messages in a thread, 200 threads.
     public static let messageCap = 200
     public static let threadCap = 200
+    /// Posts per collage page: the server allows 1...60, the app asks for 30 (27.5).
+    public static let collagePage = 30
     /// The title a thread has before its first message names it.
     public static let defaultTitle = "new chat"
 

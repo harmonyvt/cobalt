@@ -261,7 +261,7 @@ private func ms(_ n: Int) -> Duration { .milliseconds(n) }
         #expect(options.notify == NotifyOptIn(on: [.saved, .failed], label: igTitle))
         #expect(options.slideshow == nil && options.galleryImage == nil)
         #expect(rig.notices.posted.count == 1)
-        #expect(rig.notices.posted.first?.head == "saving everything to cobalt" && rig.notices.posted.first?.body == "open cobalt to make something from it")
+        #expect(rig.notices.posted.first?.head == "saving everything to capystore" && rig.notices.posted.first?.body == "open capystore to make something from it")
         #expect(rig.flow.finish == nil && rig.flow.phase == .sent(.timeout), "the sheet is on screen: `sent` holds a moment")
         await rig.clock.advance(by: ms(500))
         #expect(rig.flow.finish == .sent)
@@ -300,7 +300,7 @@ private func ms(_ n: Int) -> Duration { .milliseconds(n) }
         #expect(rig.sender.sent == [.plain(igLink)])
         #expect(!rig.flow.sheetShown)
         #expect(rig.flow.finish == .sent, "nothing is shown, so nothing is held")
-        #expect(rig.notices.posted.map(\.head) == ["saving to cobalt"] && rig.notices.posted.first?.body == igTitle)
+        #expect(rig.notices.posted.map(\.head) == ["saving to capystore"] && rig.notices.posted.first?.body == igTitle)
     }
 
     @Test func aOnePhotoPickerIsASingleItemToo() async {
@@ -353,7 +353,7 @@ private func ms(_ n: Int) -> Duration { .milliseconds(n) }
         #expect(o.items == .all && o.itemCount == 10 && o.origin == "share" && o.queue && o.makePublic == true)
         #expect(o.notify == NotifyOptIn(on: [.saved, .failed], label: igTitle))
         #expect(o.slideshow == nil && o.galleryImage == nil)
-        #expect(rig.notices.posted.first?.head == "saving 10 photos to cobalt" && rig.notices.posted.first?.body == igTitle)
+        #expect(rig.notices.posted.first?.head == "saving 10 photos to capystore" && rig.notices.posted.first?.body == igTitle)
         #expect(rig.flow.phase == .sent(.saveAll))
         await rig.clock.advance(by: ms(500))
         #expect(rig.flow.finish == .sent)
@@ -369,7 +369,7 @@ private func ms(_ n: Int) -> Duration { .milliseconds(n) }
         #expect(plan.format == .webp && plan.items == Array(0..<10) && plan.photoSeconds == 2 && plan.fade)
         #expect(plan.frame == .asPosted && plan.sound == .none && plan.quality == .med && plan.width == 480)
         #expect(o.galleryImage == nil && o.itemCount == 10)
-        #expect(rig.notices.posted.first?.head == "saving 10 photos to cobalt" && rig.notices.posted.first?.body == "making a slideshow webp · \(igTitle)")
+        #expect(rig.notices.posted.first?.head == "saving 10 photos to capystore" && rig.notices.posted.first?.body == "making a slideshow webp · \(igTitle)")
     }
 
     @Test(arguments: GalleryLayout.allCases)
@@ -401,7 +401,7 @@ private func ms(_ n: Int) -> Duration { .milliseconds(n) }
         await gsSettle()
         let o = try #require(rig.sender.options)
         #expect(o.items == .all && o.itemCount == nil && o.notify == NotifyOptIn(on: [.saved, .failed], label: igTitle))
-        #expect(rig.notices.posted.first?.head == "saving everything to cobalt")
+        #expect(rig.notices.posted.first?.head == "saving everything to capystore")
         // the answer that comes later changes nothing: one request, ever
         await rig.answer(gsPicker([.photo, .photo]))
         #expect(rig.sender.sent.count == 1)
@@ -415,7 +415,7 @@ private func ms(_ n: Int) -> Duration { .milliseconds(n) }
         await gsSettle()
         let plan = try #require(webp.sender.options?.slideshow)
         #expect(plan.seconds(for: webp.sender.options?.itemInfo ?? []) == [2, nil, 2, nil])
-        #expect(webp.notices.posted.first?.head == "saving 4 items to cobalt")
+        #expect(webp.notices.posted.first?.head == "saving 4 items to capystore")
         let image = await choosing(kinds)
         image.flow.choose(.galleryImage(.grid3))
         await gsSettle()
@@ -706,18 +706,18 @@ private func ms(_ n: Int) -> Duration { .milliseconds(n) }
     }
 
     @Test func theNotificationsReadLikeTheContract() {
-        #expect(ShareGalleryText.saving(summary(photos: 10, videos: 0)) == "saving 10 photos to cobalt")
-        #expect(ShareGalleryText.saving(summary(photos: 2, videos: 2)) == "saving 4 items to cobalt")
-        #expect(ShareGalleryText.saving(summary(photos: 1, videos: 0)) == "saving 1 photo to cobalt")
-        #expect(ShareGalleryText.saving(nil) == "saving everything to cobalt")
+        #expect(ShareGalleryText.saving(summary(photos: 10, videos: 0)) == "saving 10 photos to capystore")
+        #expect(ShareGalleryText.saving(summary(photos: 2, videos: 2)) == "saving 4 items to capystore")
+        #expect(ShareGalleryText.saving(summary(photos: 1, videos: 0)) == "saving 1 photo to capystore")
+        #expect(ShareGalleryText.saving(nil) == "saving everything to capystore")
     }
 
     @Test func theLocalNotificationCarriesTheSameWords() {
-        let request = Notifications.instantSavingRequest(job: UUID(), title: "saving 10 photos to cobalt", body: "making a gallery image · x · @a")
-        #expect(request.content.title == "saving 10 photos to cobalt" && request.content.body == "making a gallery image · x · @a")
+        let request = Notifications.instantSavingRequest(job: UUID(), title: "saving 10 photos to capystore", body: "making a gallery image · x · @a")
+        #expect(request.content.title == "saving 10 photos to capystore" && request.content.body == "making a gallery image · x · @a")
         #expect(request.content.userInfo["url"] as? String == Notifications.openURL)
         let plain = Notifications.instantSavingRequest(job: UUID(), label: "instagram · Dc2QA4ng-US")
-        #expect(plain.content.title == "saving to cobalt" && plain.content.body == "instagram · Dc2QA4ng-US")
+        #expect(plain.content.title == "saving to capystore" && plain.content.body == "instagram · Dc2QA4ng-US")
     }
 
     @Test func theTitleIsTheServiceAndHandle() {

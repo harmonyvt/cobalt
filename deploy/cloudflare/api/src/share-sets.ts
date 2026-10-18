@@ -280,7 +280,7 @@ function statusJson(d: ShareSetDeps, s: LiveSet) {
         id: "1",
         username: "cobalt",
         acct: "cobalt",
-        display_name: "cobalt",
+        display_name: "capystore",
         locked: false,
         bot: false,
         discoverable: false,
@@ -366,7 +366,7 @@ function pageHtml(d: ShareSetDeps, s: LiveSet, discord: boolean): string {
     const pageUrl = `${share}g/${s.set.id}`;
     const title = titleText(s);
     const meta: string[] = [
-        `<meta property="og:site_name" content="cobalt">`,
+        `<meta property="og:site_name" content="capystore">`,
         `<meta property="og:title" content="${e(title)}">`,
         `<meta property="og:url" content="${e(pageUrl)}">`,
         `<meta name="twitter:title" content="${e(title)}">`,
@@ -457,7 +457,7 @@ export async function shareSetRoute(d: ShareSetDeps, request: Request): Promise<
             version: "1.0",
             type: "rich",
             title: "Embed",
-            provider_name: "cobalt",
+            provider_name: "capystore",
             provider_url: withSlash(d.shareBaseUrl),
             author_name: titleText(s),
         });
