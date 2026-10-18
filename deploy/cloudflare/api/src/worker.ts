@@ -152,7 +152,16 @@ export async function handleRequest(
     // The share host serves the public link pages and nothing else: no key, no container, no CORS.
     const share = shareHost(env);
     if (share && new URL(incoming.url).hostname === share) {
-        return sharePage({ db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, shareBaseUrl: env.SHARE_BASE_URL! }, incoming);
+        return sharePage(
+            {
+                db: env.DB,
+                mediaBaseUrl: env.MEDIA_BASE_URL,
+                shareBaseUrl: env.SHARE_BASE_URL!,
+                captioner: deps.captioner === undefined ? captionerFrom(env, deps.modelFetch) : deps.captioner,
+                waitUntil: deps.waitUntil,
+            },
+            incoming,
+        );
     }
     const res = await handleInner(incoming, env, container, {
         now: deps.now ?? (() => Date.now()),
