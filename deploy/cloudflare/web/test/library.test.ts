@@ -233,6 +233,7 @@ const ROUTES: [string, string][] = [
     ["PUT", "/api/library/upload?name=a.gif"],
     ["GET", "/api/library/search?q=cats"],
     ["GET", "/api/library/search/post?key=abc"],
+    ["GET", "/api/library/map"],
     ["GET", `/api/library/webp/${JOB}`],
     ["GET", `/api/library/studio/${SID}`],
     ["POST", `/api/library/studio/${SID}/publish`],
@@ -863,6 +864,32 @@ describe("GET /api/library/search/post", () => {
     });
 });
 
+describe("GET /api/library/map", () => {
+    const MAP = {
+        status: "success", model: "google/embeddinggemma-2", dims: 256, search_enabled: true, unmapped: 1,
+        posts: [{ post_key: "p1", title: "my cat", text: "cat.webp", image_url: null, latest: NOW, v8: "AAAA" }],
+    };
+    it("relays the API's map with the service key, forwarding no query", async () => {
+        apiReply = () => jsonRes(200, MAP);
+        const r = await call("GET", "/api/library/map?x=1");
+        expect(r.status).toBe(200);
+        expect(await json(r)).toEqual(MAP);
+        const c = apiCalls[0]!;
+        expect(c.method).toBe("GET");
+        expect(c.url).toBe(`${API_BASE}/library/map`);
+        expect(c.headers["x-cobalt-service"]).toBe(SERVICE_KEY);
+    });
+    it("passes errors through; upstream 403 is 502", async () => {
+        apiReply = () => jsonRes(503, { status: "error", error: { code: "error.api.generic" } });
+        let r = await call("GET", "/api/library/map");
+        expect(r.status).toBe(503);
+        expect(await errorCode(r)).toBe("error.api.generic");
+        apiReply = () => jsonRes(403, { status: "error", error: { code: "error.api.auth.key.invalid" } });
+        r = await call("GET", "/api/library/map");
+        expect(r.status).toBe(502);
+    });
+});
+
 describe("GET /api/library: post_key", () => {
     it("each item carries the API's post key (session, upload adoption, link, else its own id)", async () => {
         const lone = seedItem({ kind: "public", link: null, session_id: null });
@@ -875,6 +902,16 @@ describe("GET /api/library: post_key", () => {
         expect(by[lone.id]).toBe(lone.id);
         expect(by[linked.id]).toBe("https://x.com/z");
         expect(by[render.id]).toBe(up.id);
+    });
+});
+
+describe("embedded page: sky map", () => {
+    it("has the grid/sky map switch, the map relay and the per-post embedding panel", () => {
+        expect(LIBRARY_HTML).toContain('data-v="map"');
+        expect(LIBRARY_HTML).toContain('"/api/library/map"');
+        expect(LIBRARY_HTML).toContain('id="sheetEmbBody"');
+        expect(LIBRARY_HTML).toContain("function tsneStep");
+        expect(LIBRARY_HTML).toContain("prefers-reduced-motion: reduce");
     });
 });
 

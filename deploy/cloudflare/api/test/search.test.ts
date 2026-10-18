@@ -18,6 +18,8 @@ import {
     librarySearch,
     librarySearchIndex,
     librarySearchPost,
+    libraryMap,
+    quantizeVector,
     MAX_POST_KEY_CHARS,
     normalize,
     postInputs,
@@ -859,6 +861,106 @@ describe("GET /library/search/post", () => {
             expect(await off.json()).toMatchObject({ state: "indexed", search_enabled: false });
 
             expect((await call({ Authorization: `Api-Key ${KEY}` }, env, "missing")).status).toBe(404);
+            expect((await call({})).status).toBe(401);
+            expect(fetches).toEqual([]);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+});
+
+// ---- GET /library/map --------------------------------------------------------------------------
+
+describe("GET /library/map", () => {
+    const decode8 = (s: string) => Int8Array.from(atob(s), (c) => (c.charCodeAt(0) << 24) >> 24);
+
+    it("every embedded post with its int8 vector, newest first; unembedded and deleted posts left out", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "p1", name: "cat.mp4", poster: `${MEDIA}posters/aaaaaaaaaa.jpg` });
+        addFile(w.db, { session_id: "p2", name: "beach.mp4", link: "https://x.com/a/status/2" });
+        await w.index();
+        addFile(w.db, { session_id: "p3", name: "new.mp4" });
+        addFile(w.db, { session_id: "gone", deleted_at: T0 });
+        const r = await libraryMap({ db: w.d.db, mediaBaseUrl: MEDIA, searchEnabled: true });
+        expect(r.status).toBe(200);
+        const b = r.body as any;
+        expect(b).toMatchObject({ status: "success", model: EMBED_MODEL, dims: EMBED_DIMS, search_enabled: true, unmapped: 1 });
+        expect(b.posts.map((p: any) => p.post_key)).toEqual(["p2", "p1"]);
+        expect(b.posts[1]).toMatchObject({ title: "cat.mp4", text: "cat.mp4", image_url: `${MEDIA}posters/aaaaaaaaaa.jpg` });
+        expect(b.posts[0]).toMatchObject({ title: "beach.mp4", text: "beach.mp4 · x.com/a/status/2", image_url: null });
+        // the int8 vector points the same way as the stored one
+        for (const p of b.posts) {
+            const q = decode8(p.v8);
+            expect(q.length).toBe(EMBED_DIMS);
+            expect(Math.max(...Array.from(q, Math.abs))).toBe(127);
+            const stored = decodeVector(w.rows().find((x) => x.post_key === p.post_key).vector)!;
+            const qn = normalize(Array.from(q));
+            expect(dot(qn, stored)).toBeGreaterThan(0.999);
+        }
+    });
+
+    it("an empty library is an empty map; an all-zero vector quantizes to zeros", async () => {
+        const w = world();
+        const r = await libraryMap({ db: w.d.db, mediaBaseUrl: MEDIA, searchEnabled: false });
+        expect(r.body).toEqual({ status: "success", model: EMBED_MODEL, dims: EMBED_DIMS, search_enabled: false, posts: [], unmapped: 0 });
+        expect(Array.from(decode8(quantizeVector([0, 0, 0])))).toEqual([0, 0, 0]);
+        expect(Array.from(decode8(quantizeVector([0.5, -1, 0.25])))).toEqual([64, -127, 32]);
+    });
+
+    it("the gate: GET keyed or service; other methods 404; no credential 401", () => {
+        const req = (method: string, over: Partial<GateRequest> = {}): GateRequest => ({
+            method,
+            pathname: "/library/map",
+            searchParams: new URLSearchParams(),
+            origin: null,
+            authorization: "Api-Key 0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+            service: false,
+            ...over,
+        });
+        const cfg = { corsUrl: "x", now: 0 };
+        expect(decide(req("GET"), cfg)).toMatchObject({ action: "lookup", then: "library_map" });
+        expect(decide(req("GET", { service: true, authorization: null }), cfg)).toMatchObject({ action: "service", then: "library_map" });
+        for (const m of ["POST", "PUT", "PATCH", "DELETE"]) expect(decide(req(m), cfg)).toMatchObject({ action: "reject", status: 404 });
+        expect(decide(req("GET", { authorization: null }), cfg)).toMatchObject({ action: "reject", status: 401 });
+    });
+
+    it("the Worker: keyed and service answer from D1 without the container or the Space", async () => {
+        const w = world();
+        addFile(w.db, { session_id: "p1", name: "one.mp4" });
+        await w.index();
+        const KEY = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
+        const INTERNAL = "9d3a1c6e-2f4b-4c8d-8e7a-5b1f0a2c3d4e";
+        w.db.raw
+            .prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)")
+            .run("k1", "test", await hashKey(KEY), "0b5f2c3e", 1);
+        const fetches: string[] = [];
+        vi.stubGlobal("fetch", async (u: string) => {
+            fetches.push(u);
+            return new Response("no", { status: 500 });
+        });
+        const env: WorkerEnv = {
+            API_URL: "https://api.capybaraharmony.com/",
+            CORS_URL: "https://cobalt.capybaraharmony.com",
+            COBALT_API_KEY: INTERNAL,
+            DB: w.d.db,
+            ORIGINALS: new MemoryOriginals(),
+            MEDIA: new MemoryMedia(),
+            MEDIA_BASE_URL: MEDIA,
+            EMBED_URL: SPACE,
+            EMBED_TOKEN: "hf_tok",
+        };
+        const container = { fetch: async () => new Response("container must not be called", { status: 500 }) };
+        const call = (headers: Record<string, string>) =>
+            handleRequest(new Request("https://api.capybaraharmony.com/library/map", { headers }), env, container, {
+                now: () => T0 + 1_000_000,
+            });
+        try {
+            const keyed = await call({ Authorization: `Api-Key ${KEY}` });
+            expect(keyed.status).toBe(200);
+            expect(keyed.headers.get("cache-control")).toBe("no-store");
+            expect(((await keyed.json()) as any).posts.map((p: any) => p.post_key)).toEqual(["p1"]);
+            const svc = await call({ [SERVICE_HEADER]: INTERNAL });
+            expect(svc.status).toBe(200);
             expect((await call({})).status).toBe(401);
             expect(fetches).toEqual([]);
         } finally {

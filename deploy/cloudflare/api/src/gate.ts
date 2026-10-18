@@ -79,6 +79,7 @@ export type LookupThen =
     | "library_search"
     | "library_search_index"
     | "library_search_post"
+    | "library_map"
     // GET /queue (APP-API-CONTRACT.md section 23)
     | "queue"
     | "live_start_token"
@@ -238,6 +239,10 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     // One post's index status (section 21): keyed or service.
     if (req.pathname === "/library/search/post") {
         return req.method === "GET" ? lookupThen(req, "library_search_post") : reject(404);
+    }
+    // The library map's vectors (section 21): keyed or service.
+    if (req.pathname === "/library/map") {
+        return req.method === "GET" ? lookupThen(req, "library_map") : reject(404);
     }
     if (req.pathname === "/library/search/index") {
         return req.method === "POST" ? lookupThen(req, "library_search_index") : reject(404);

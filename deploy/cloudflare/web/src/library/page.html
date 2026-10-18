@@ -183,6 +183,42 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
 .sheet summary { cursor: pointer; padding: 8px 10px; font-size: 12.5px; min-height: 36px; display: flex; align-items: center; }
 .sheet pre { margin: 0; padding: 0 10px 10px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--f-mono); }
 .sheet pre b { color: var(--gray); font-weight: 500; }
+/* the library's sky: embeddings laid out in 2D as stars and constellations */
+:root {
+  --sky-top: #fbf7ec; --sky-bottom: #e9e0ca; --sky-star: #1c2448; --sky-line: rgba(28,36,72,.30);
+  --sky-label: #3c4777; --sky-halo: rgba(251,247,236,.9); --sky-hit: #c2410c; --sky-tip: rgba(253,250,242,.95);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sky-top: #141c44; --sky-bottom: #04050d; --sky-star: #fbf7ee; --sky-line: rgba(176,196,255,.32);
+    --sky-label: #c3ceff; --sky-halo: rgba(4,5,13,.85); --sky-hit: #ffd27a; --sky-tip: rgba(10,13,32,.92);
+  }
+}
+.views { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; }
+.views .status { flex: 1 1 240px; }
+.mapwrap { position: relative; border-radius: 14px; background: var(--sky-bottom); box-shadow: 0 0 0 1px var(--button-stroke) inset; overflow: hidden; touch-action: none; }
+.mapwrap canvas { display: block; cursor: grab; }
+.mapwrap canvas.drag { cursor: grabbing; }
+.mapwrap canvas.hot { cursor: pointer; }
+.mapwrap .tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 6px; }
+.mapwrap .tools button { min-height: 32px; font-size: 11px; padding: 0 10px; background: var(--sky-tip); color: var(--sky-label); box-shadow: 0 0 0 1px var(--sky-line) inset; letter-spacing: .04em; }
+.maptip { position: absolute; pointer-events: none; z-index: 2; width: 190px; background: var(--sky-tip); color: var(--secondary); border-radius: 12px; box-shadow: 0 0 0 1px var(--sky-line), 0 10px 30px rgba(0,0,0,.3); overflow: hidden; font-size: 11.5px; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.maptip img { display: block; width: 100%; aspect-ratio: 16 / 11; object-fit: cover; background: var(--track); }
+.maptip div { padding: 7px 9px; display: grid; gap: 2px; }
+.maptip b { font-weight: 500; overflow-wrap: anywhere; }
+.maptip span { color: var(--sky-label); font-size: 10.5px; letter-spacing: .03em; }
+#sheetEmbBody { display: grid; gap: 8px; }
+.emb { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
+.emb figure { margin: 0; display: grid; gap: 6px; justify-items: start; }
+.emb figcaption { font-size: 11px; color: var(--gray); max-width: 208px; }
+.emb canvas { display: block; border-radius: 10px; box-shadow: 0 0 0 1px var(--button-stroke) inset; }
+.near { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.near button { width: 100%; justify-content: flex-start; min-height: 36px; font-size: 12px; font-weight: 400; gap: 10px; text-align: left; }
+.near button b { font-weight: 600; font-variant-numeric: tabular-nums; flex: none; width: 3.2em; color: var(--blue); }
+.near button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chips span { font-size: 11px; padding: 2px 9px; border-radius: 99px; box-shadow: 0 0 0 1px var(--input-border) inset; letter-spacing: .03em; }
+@media (pointer: coarse), (max-width: 640px) { .near button { min-height: 44px; } .mapwrap .tools button { min-height: 44px; } }
 </style>
 </head>
 <body>
@@ -249,9 +285,25 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
         </form>
         <div class="status" id="searchStatus" role="status" aria-live="polite"></div>
       </div>
-      <div class="grid" id="grid"></div>
-      <div class="empty" id="gridNote" role="status" aria-live="polite">loading your library…</div>
-      <div class="more" id="more" hidden><button id="moreBtn" type="button">load more</button></div>
+      <div class="views">
+        <div class="seg" role="group" aria-label="view" id="views">
+          <button type="button" data-v="grid" aria-pressed="true">grid</button>
+          <button type="button" data-v="map" aria-pressed="false">sky map</button>
+        </div>
+        <div class="status" id="mapStatus" role="status" aria-live="polite"></div>
+      </div>
+      <div id="mapView" hidden>
+        <div class="mapwrap" id="mapWrap">
+          <canvas id="map" role="img" aria-label="your library as a sky: posts with similar meaning sit close together"></canvas>
+          <div class="tools"><button id="mapReset" type="button">reset view</button></div>
+          <div class="maptip" id="mapTip" hidden></div>
+        </div>
+      </div>
+      <div id="gridView">
+        <div class="grid" id="grid"></div>
+        <div class="empty" id="gridNote" role="status" aria-live="polite">loading your library…</div>
+        <div class="more" id="more" hidden><button id="moreBtn" type="button">load more</button></div>
+      </div>
     </section>
   </main>
 </div>
@@ -261,6 +313,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
     <div class="head"><h2 id="sheetTitle">post</h2><button id="sheetClose" type="button" aria-label="close">close</button></div>
     <section id="sheetPost" aria-label="post"></section>
     <section id="sheetIndex" aria-label="search index"><h3>search index</h3><div id="sheetIndexBody"></div></section>
+    <section id="sheetEmb" aria-label="embedding"><h3>embedding</h3><div id="sheetEmbBody"></div></section>
   </div>
 </dialog>
 
@@ -1010,6 +1063,7 @@ function renderGrid() {
   $("moreBtn").disabled = G.loading;
   document.querySelectorAll("#filters button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.f === G.filter)); });
   renderUsage();
+  if (M.view === "map") { drawMap(); mapStatusLine(); }
 }
 async function loadPage(reset) {
   var seq = ++G.seq;
@@ -1251,7 +1305,7 @@ function openPost(it) {
     ["file", it.custom_title && it.custom_title !== it.name ? it.name : ""],
     ["from", SOURCES[it.source] || it.source || ""],
     ["link", link],
-    ["public", isPub(it) && it.url ? h("a", { href: it.url, target: "_blank", rel: "noopener", text: it.url }) : (isPub(it) ? "" : "private")],
+    ["public", it.mapOnly ? "" : isPub(it) && it.url ? h("a", { href: it.url, target: "_blank", rel: "noopener", text: it.url }) : (isPub(it) ? "" : "private")],
     ["size", it.bytes != null ? fmtBytes(it.bytes) + (it.duration ? " · " + fmtSecs(it.duration) : "") : ""],
     ["added", it.created_at ? when(it.created_at) : ""],
     ["match", S.active && typeof it.score === "number" ? "score " + it.score.toFixed(3) + " for \u201c" + S.q + "\u201d" : ""]
@@ -1260,10 +1314,676 @@ function openPost(it) {
   var d = $("sheet");
   if (typeof d.showModal === "function") { if (!d.open) d.showModal(); } else d.setAttribute("open", "");
   loadIndex(it.post_key);
+  loadEmb(it.post_key);
 }
 $("sheetClose").onclick = function () { var d = $("sheet"); if (d.close) d.close(); else d.removeAttribute("open"); };
 $("sheet").addEventListener("click", function (e) { if (e.target === $("sheet")) $("sheetClose").onclick(); });
-$("sheet").addEventListener("close", function () { P.seq++; P.key = null; });
+$("sheet").addEventListener("close", function () { P.seq++; P.key = null; E.seq++; E.key = null; });
+
+/* ---------- the map: embeddings laid out in 2D (/api/library/map, APP-API-CONTRACT.md section 21) ---------- */
+// The server hands over each indexed post's vector; the page lays them out with t-SNE (posts with
+// similar meaning land close together), shades the dense areas and labels each cluster with the words
+// its posts share. Everything below runs in the browser.
+var MAP_MAX = 3000;              // newest posts kept on the map (t-SNE is n^2)
+var MAP_STALE_MS = 10 * 60 * 1000;
+var MAP_ITERS = 650;
+var STOP = {};
+("the and for with this that you your from are was but not all have has its it's our out who what when how why " +
+ "com www http https status video videos mp4 mov gif webp jpg jpeg png heic heif img image images clip clips file files " +
+ "untitled photo photos watch html php reel reels post posts share amp utm source original saved upload copy new " +
+ "final edit edited export trim trimmed").split(" ").forEach(function (w) { STOP[w] = 1; });
+// M: the map. data: the API answer; pts: decoded posts; Y: 2D positions (x0, y0, x1, y1, ...).
+var M = { view: "grid", data: null, at: 0, loading: null, error: "", pts: [], Y: null, run: null, done: false,
+  clusters: [], edges: [], nebula: null, zoom: 1, panX: 0, panY: 0, hover: -1, drag: null };
+
+function rng(seed) {   // mulberry32: the same library lays out the same way every time
+  return function () {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    var t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function decode8(b64) {
+  var bin = atob(b64), v = new Float32Array(bin.length), s = 0, i;
+  for (i = 0; i < bin.length; i++) { var x = bin.charCodeAt(i); v[i] = x > 127 ? x - 256 : x; s += v[i] * v[i]; }
+  s = Math.sqrt(s) || 1;
+  for (i = 0; i < v.length; i++) v[i] /= s;
+  return v;
+}
+function cosine(a, b) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
+// Words for the keyword labels: the title and file names, plus the link's path (the host is dropped,
+// it would only name the site).
+function wordsOf(p) {
+  var segs = ((p.title || "") + " · " + (p.text || "")).split(" · ").map(function (seg) {
+    return seg.replace(/^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}(?=\/|$)/i, " ");
+  });
+  var out = {}, toks = segs.join(" ").toLowerCase().split(/[^\p{L}\p{N}]+/u);
+  toks.forEach(function (w) {
+    if (w.length < 3 || w.length > 24 || STOP[w] || /\d/.test(w)) return;
+    out[w] = 1;
+  });
+  return Object.keys(out);
+}
+function postName(p) { return p.title || "untitled"; }
+function mapItem(p) {
+  // the real grid tile when it's loaded (it has visibility, size, ...), else what the map knows
+  var all = G.items.concat(S.items);
+  for (var i = 0; i < all.length; i++) if (all[i].post_key === p.post_key) return all[i];
+  return { mapOnly: true, name: postName(p), post_key: p.post_key, created_at: p.latest };
+}
+
+async function loadMap(force) {
+  if (M.loading) return M.loading;
+  if (M.data && !force && Date.now() - M.at < MAP_STALE_MS) return M.data;
+  M.loading = (async function () {
+    M.error = "";
+    var r;
+    try { r = await lib("/api/library/map", {}, 30000); }
+    catch (e) { M.error = describe(e).text; return M.data; }
+    if (r.status !== 200 || !r.body || r.body.status !== "success" || !Array.isArray(r.body.posts)) {
+      M.error = messageFor(errCode(r) || "error.library.upstream"); return M.data;
+    }
+    var posts = r.body.posts.slice(0, MAP_MAX);
+    var sig = posts.map(function (p) { return p.post_key + ":" + p.v8.length; }).join("|");
+    M.data = r.body; M.at = Date.now();
+    if (sig !== M.sig) {
+      M.sig = sig;
+      if (M.run) cancelAnimationFrame(M.run.raf);
+      M.run = null; M.done = false; M.Y = null; M.clusters = []; M.edges = []; M.nebula = null; M.hover = -1;
+      M.pts = posts.map(function (p) { return { post_key: p.post_key, title: p.title, text: p.text, image_url: p.image_url, latest: p.latest, v: decode8(p.v8), words: null, c: -1 }; });
+      var df = {};
+      M.pts.forEach(function (p) { p.words = wordsOf(p); p.words.forEach(function (w) { df[w] = (df[w] || 0) + 1; }); });
+      M.df = df;
+    }
+    return M.data;
+  })();
+  try { return await M.loading; } finally { M.loading = null; }
+}
+
+// ---- t-SNE (exact; fine for a personal library) ----
+function tsneInit(pts) {
+  var n = pts.length, i, j;
+  var P = new Float64Array(n * n);
+  var perp = Math.max(2, Math.min(30, (n - 1) / 3)), target = Math.log(perp);
+  var D = new Float64Array(n);
+  for (i = 0; i < n; i++) {
+    for (j = 0; j < n; j++) D[j] = i === j ? 0 : Math.max(0, 2 - 2 * cosine(pts[i].v, pts[j].v));
+    var lo = 0, hi = Infinity, beta = 1, row = i * n;
+    for (var t = 0; t < 60; t++) {
+      var sum = 0, hsum = 0;
+      for (j = 0; j < n; j++) { if (j === i) continue; var e = Math.exp(-D[j] * beta); P[row + j] = e; sum += e; hsum += D[j] * e; }
+      sum = sum || 1e-12;
+      var H = Math.log(sum) + beta * hsum / sum;
+      for (j = 0; j < n; j++) if (j !== i) P[row + j] /= sum;
+      if (Math.abs(H - target) < 1e-5) break;
+      if (H > target) { lo = beta; beta = hi === Infinity ? beta * 2 : (beta + hi) / 2; }
+      else { hi = beta; beta = (beta + lo) / 2; }
+    }
+    P[row + i] = 0;
+  }
+  for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) {
+    var s = Math.max((P[i * n + j] + P[j * n + i]) / (2 * n), 1e-12);
+    P[i * n + j] = s; P[j * n + i] = s;
+  }
+  var r = rng(42), Y = new Float64Array(2 * n);
+  for (i = 0; i < 2 * n; i++) Y[i] = (r() - 0.5) * 1e-2;
+  return { n: n, P: P, Y: Y, it: 0, gains: new Float64Array(2 * n).fill(1), vel: new Float64Array(2 * n),
+    lr: Math.max(n / 12 / 4, 50), num: new Float64Array(n * n), G: new Float64Array(2 * n) };
+}
+function tsneStep(T) {
+  var n = T.n, P = T.P, Y = T.Y, num = T.num, Gr = T.G, i, j, Z = 0;
+  var exag = T.it < 100 ? 12 : 1, mom = T.it < 250 ? 0.5 : 0.8;
+  for (i = 0; i < n; i++) {
+    num[i * n + i] = 0;
+    for (j = i + 1; j < n; j++) {
+      var dx = Y[2 * i] - Y[2 * j], dy = Y[2 * i + 1] - Y[2 * j + 1];
+      var q = 1 / (1 + dx * dx + dy * dy);
+      num[i * n + j] = q; num[j * n + i] = q; Z += 2 * q;
+    }
+  }
+  Z = Z || 1e-12;
+  for (i = 0; i < n; i++) {
+    var gx = 0, gy = 0, row = i * n;
+    for (j = 0; j < n; j++) {
+      if (i === j) continue;
+      var q2 = num[row + j], m = (exag * P[row + j] - q2 / Z) * q2;
+      gx += m * (Y[2 * i] - Y[2 * j]); gy += m * (Y[2 * i + 1] - Y[2 * j + 1]);
+    }
+    Gr[2 * i] = 4 * gx; Gr[2 * i + 1] = 4 * gy;
+  }
+  for (i = 0; i < 2 * n; i++) {
+    var same = (Gr[i] > 0) === (T.vel[i] > 0);
+    T.gains[i] = Math.max(0.01, same ? T.gains[i] * 0.8 : T.gains[i] + 0.2);
+    T.vel[i] = mom * T.vel[i] - T.lr * T.gains[i] * Gr[i];
+    Y[i] += T.vel[i];
+  }
+  // keep it centred
+  var mx = 0, my = 0;
+  for (i = 0; i < n; i++) { mx += Y[2 * i]; my += Y[2 * i + 1]; }
+  mx /= n; my /= n;
+  for (i = 0; i < n; i++) { Y[2 * i] -= mx; Y[2 * i + 1] -= my; }
+  T.it++;
+}
+// Lays the map out once (animated when the map is on screen). Resolves when it's done.
+function ensureLayout() {
+  if (M.done) return Promise.resolve();
+  if (M.run) return M.run.promise;
+  var n = M.pts.length;
+  if (n === 0) { M.done = true; return Promise.resolve(); }
+  if (n < 3) {
+    M.Y = new Float64Array(2 * n);
+    for (var i = 0; i < n; i++) M.Y[2 * i] = i;
+    M.done = true; finishLayout(); return Promise.resolve();
+  }
+  var run = { raf: 0 };
+  run.promise = new Promise(function (resolve) {
+    var T = null;
+    function frame() {
+      var t0 = performance.now();
+      if (!T) { T = tsneInit(M.pts); M.Y = T.Y; }
+      else while (T.it < MAP_ITERS && performance.now() - t0 < 14) tsneStep(T);
+      if (T.it >= MAP_ITERS) { M.run = null; M.done = true; finishLayout(); if (M.view === "map") { drawMap(); mapStatusLine(); } resolve(); return; }
+      if (M.view === "map") drawMap();
+      run.raf = requestAnimationFrame(frame);
+    }
+    run.raf = requestAnimationFrame(frame);
+  });
+  M.run = run;
+  return run.promise;
+}
+
+// ---- constellations: clusters, their keywords, star lines and nebulae ----
+// Nebula hues, one per constellation (vivid on the night sky, a watercolour wash on the day chart).
+var HUES = ["#7b6cff", "#2fb7c9", "#e3609d", "#f0a64b", "#57c98b", "#a07cf2", "#4f90f7", "#d670e0", "#5fd4c4", "#f07c5c"];
+function finishLayout() {
+  var n = M.pts.length, Y = M.Y, i, j;
+  var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (i = 0; i < n; i++) { minX = Math.min(minX, Y[2 * i]); maxX = Math.max(maxX, Y[2 * i]); minY = Math.min(minY, Y[2 * i + 1]); maxY = Math.max(maxY, Y[2 * i + 1]); }
+  M.bounds = { minX: minX, maxX: maxX, minY: minY, maxY: maxY };
+  M.clusters = []; M.edges = []; M.nebula = null;
+  M.pts.forEach(function (p) { p.c = -1; p.deg = 0; });
+  if (n < 2) return;
+  var k = n < 8 ? 1 : Math.max(2, Math.min(12, Math.round(Math.sqrt(n / 2.5)))), r = rng(7);
+  // k-means++ on the 2D layout, so each constellation is an island you can see
+  var C = [Math.floor(r() * n)].map(function (ix) { return [Y[2 * ix], Y[2 * ix + 1]]; });
+  while (C.length < k) {
+    var d2 = [], tot = 0;
+    for (i = 0; i < n; i++) {
+      var best = Infinity;
+      C.forEach(function (c) { var dx = Y[2 * i] - c[0], dy = Y[2 * i + 1] - c[1]; best = Math.min(best, dx * dx + dy * dy); });
+      d2.push(best); tot += best;
+    }
+    var pick = r() * tot, ix = 0;
+    for (i = 0; i < n; i++) { pick -= d2[i]; if (pick <= 0) { ix = i; break; } }
+    C.push([Y[2 * ix], Y[2 * ix + 1]]);
+  }
+  for (var round = 0; round < 50; round++) {
+    var moved = false;
+    for (i = 0; i < n; i++) {
+      var bi = 0, bd = Infinity;
+      for (j = 0; j < k; j++) { var ex = Y[2 * i] - C[j][0], ey = Y[2 * i + 1] - C[j][1], dd = ex * ex + ey * ey; if (dd < bd) { bd = dd; bi = j; } }
+      if (M.pts[i].c !== bi) { M.pts[i].c = bi; moved = true; }
+    }
+    var acc = C.map(function () { return [0, 0, 0]; });
+    for (i = 0; i < n; i++) { var a = acc[M.pts[i].c]; a[0] += Y[2 * i]; a[1] += Y[2 * i + 1]; a[2]++; }
+    acc.forEach(function (a2, j2) { if (a2[2]) C[j2] = [a2[0] / a2[2], a2[1] / a2[2]]; });
+    if (!moved) break;
+  }
+  for (j = 0; j < k; j++) {
+    var idx = [];
+    for (i = 0; i < n; i++) if (M.pts[i].c === j) idx.push(i);
+    if (!idx.length) continue;
+    var cl = { id: M.clusters.length, idx: idx, x: C[j][0], y: C[j][1], hue: HUES[M.clusters.length % HUES.length],
+      words: idx.length >= 2 ? keywords(idx.map(function (q) { return M.pts[q]; }), 3) : [] };
+    idx.forEach(function (q) { M.pts[q].c = cl.id; });
+    // the constellation's lines: a minimum spanning tree over its stars, minus the long jumps
+    var edges = mst(idx);
+    if (edges.length) {
+      var lens = edges.map(function (e) { return e[2]; }).sort(function (a3, b3) { return a3 - b3; });
+      var cut = lens[Math.floor(lens.length / 2)] * 2.6;
+      edges.forEach(function (e) { if (e[2] <= cut) { M.edges.push([e[0], e[1], cl.id]); M.pts[e[0]].deg++; M.pts[e[1]].deg++; } });
+    }
+    // the label sits above the constellation's top edge
+    var top = Infinity;
+    idx.forEach(function (q) { top = Math.min(top, Y[2 * q + 1]); });
+    cl.top = top;
+    M.clusters.push(cl);
+  }
+}
+function mst(idx) {
+  var m = idx.length, Y = M.Y, inTree = new Uint8Array(m), dist = new Float64Array(m).fill(Infinity), from = new Int32Array(m).fill(-1), out = [];
+  if (m < 2) return out;
+  dist[0] = 0;
+  for (var step = 0; step < m; step++) {
+    var u = -1;
+    for (var i = 0; i < m; i++) if (!inTree[i] && (u < 0 || dist[i] < dist[u])) u = i;
+    inTree[u] = 1;
+    if (from[u] >= 0) out.push([idx[from[u]], idx[u], Math.sqrt(dist[u])]);
+    for (var v = 0; v < m; v++) {
+      if (inTree[v]) continue;
+      var dx = Y[2 * idx[u]] - Y[2 * idx[v]], dy = Y[2 * idx[u] + 1] - Y[2 * idx[v] + 1], d = dx * dx + dy * dy;
+      if (d < dist[v]) { dist[v] = d; from[v] = u; }
+    }
+  }
+  return out;
+}
+// The words that set a group of posts apart: how many of them use a word, weighted by how rare the
+// word is across the whole library (tf-idf).
+function keywords(members, max) {
+  var tf = {}, n = M.pts.length;
+  members.forEach(function (p) { p.words.forEach(function (w) { tf[w] = (tf[w] || 0) + 1; }); });
+  var minCount = members.length >= 4 ? 2 : 1;
+  return Object.keys(tf).filter(function (w) { return tf[w] >= minCount; })
+    .map(function (w) { return [w, tf[w] / members.length * Math.log((n + 1) / (M.df[w] + 1) + 1)]; })
+    .sort(function (a, b) { return b[1] - a[1] || (a[0] < b[0] ? -1 : 1); })
+    .slice(0, max).map(function (x) { return x[0]; });
+}
+
+// ---- the sky's look (tokens in CSS: --sky-*, light and dark) ----
+function token(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function hexRgb(c, fb) {
+  var m = /^#([0-9a-f]{6})$/i.exec(String(c).trim());
+  if (!m) return fb;
+  var v = parseInt(m[1], 16);
+  return [v >> 16 & 255, v >> 8 & 255, v & 255];
+}
+function skyTheme() {
+  var dark = !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  return {
+    dark: dark,
+    top: token("--sky-top") || (dark ? "#141c44" : "#fbf7ec"),
+    bottom: token("--sky-bottom") || (dark ? "#04050d" : "#ebe3cf"),
+    star: token("--sky-star") || (dark ? "#fbf7ee" : "#1c2448"),
+    line: token("--sky-line") || (dark ? "rgba(176,196,255,.32)" : "rgba(28,36,72,.30)"),
+    label: token("--sky-label") || (dark ? "#c3ceff" : "#3c4777"),
+    halo: token("--sky-halo") || (dark ? "rgba(4,5,13,.85)" : "rgba(251,247,236,.9)"),
+    hit: token("--sky-hit") || (dark ? "#ffd27a" : "#c2410c"),
+    font: token("--f-mono") || "monospace"
+  };
+}
+// A soft round glow, drawn once per colour and stamped under every star.
+var SPRITES = {};
+function glowSprite(rgb) {
+  var key = rgb.join(",");
+  if (SPRITES[key]) return SPRITES[key];
+  var cv = document.createElement("canvas"); cv.width = cv.height = 64;
+  var cx = cv.getContext("2d"), g = cx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, "rgba(" + key + ",0.9)"); g.addColorStop(0.18, "rgba(" + key + ",0.35)"); g.addColorStop(1, "rgba(" + key + ",0)");
+  cx.fillStyle = g; cx.fillRect(0, 0, 64, 64);
+  return (SPRITES[key] = cv);
+}
+// Nebulae: a small density image per constellation in its hue, drawn scaled up (smoothed).
+// The image covers the layout's bounds grown by NEB_PAD on every side, so clouds fade out instead of
+// stopping at the outer stars.
+var NEB_PAD = 0.3;
+function nebulaBox(b) {
+  var px = ((b.maxX - b.minX) || 1) * NEB_PAD, py = ((b.maxY - b.minY) || 1) * NEB_PAD;
+  return { minX: b.minX - px, maxX: b.maxX + px, minY: b.minY - py, maxY: b.maxY + py };
+}
+function nebulaImages(b0, theme) {
+  var b = nebulaBox(b0), W = 96, H = 96, Y = M.Y, spanX = (b.maxX - b.minX) || 1, spanY = (b.maxY - b.minY) || 1, sig = 0.05;
+  var rad = Math.ceil(3 * sig * W);
+  return M.clusters.map(function (cl) {
+    var grid = new Float32Array(W * H), max = 0, i, x, y;
+    cl.idx.forEach(function (q) {
+      var px = (Y[2 * q] - b.minX) / spanX * (W - 1), py = (Y[2 * q + 1] - b.minY) / spanY * (H - 1);
+      for (y = Math.max(0, Math.floor(py - rad)); y <= Math.min(H - 1, Math.ceil(py + rad)); y++)
+        for (x = Math.max(0, Math.floor(px - rad)); x <= Math.min(W - 1, Math.ceil(px + rad)); x++) {
+          var dx = (x - px) / (sig * W), dy = (y - py) / (sig * H);
+          grid[y * W + x] += Math.exp(-(dx * dx + dy * dy) / 2);
+        }
+    });
+    for (i = 0; i < grid.length; i++) max = Math.max(max, grid[i]);
+    // a lone star gets a faint wisp, a dense constellation a bright cloud
+    var norm = Math.max(max, 3), rgb = hexRgb(cl.hue, [120, 120, 255]);
+    var cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+    var cx = cv.getContext("2d"), img = cx.createImageData(W, H);
+    for (i = 0; i < grid.length; i++) {
+      var a = Math.pow(Math.min(1, grid[i] / norm), 0.9);
+      img.data[4 * i] = rgb[0]; img.data[4 * i + 1] = rgb[1]; img.data[4 * i + 2] = rgb[2];
+      img.data[4 * i + 3] = Math.round(a * (theme.dark ? 125 : 95));
+    }
+    cx.putImageData(img, 0, 0);
+    return cv;
+  });
+}
+// The faint background star field: fixed per canvas size, drifts a little when you pan.
+function starField(w, h) {
+  var key = w + "x" + h;
+  if (M.field && M.field.key === key) return M.field.stars;
+  var r = rng(1234), stars = [], count = Math.round(w * h / 2600);
+  for (var i = 0; i < count; i++) stars.push({ x: r() * w, y: r() * h, r: r() < 0.9 ? 0.5 + r() * 0.5 : 1 + r() * 0.6, a: 0.15 + r() * 0.45, t: r() * Math.PI * 2, s: 0.6 + r() * 1.6 });
+  M.field = { key: key, stars: stars };
+  return stars;
+}
+function paintSky(cx, w, h, theme, t, panX, panY) {
+  var g = cx.createRadialGradient(w * 0.5, h * 0.35, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.75);
+  g.addColorStop(0, theme.top); g.addColorStop(1, theme.bottom);
+  cx.fillStyle = g; cx.fillRect(0, 0, w, h);
+  cx.fillStyle = theme.star;
+  starField(w, h).forEach(function (s) {
+    var tw = REDUCED ? 1 : 0.65 + 0.35 * Math.sin(t * 0.001 * s.s + s.t);
+    var x = ((s.x + panX * 0.15) % w + w) % w, y = ((s.y + panY * 0.15) % h + h) % h;
+    cx.globalAlpha = s.a * tw * (theme.dark ? 1 : 0.55);
+    cx.beginPath(); cx.arc(x, y, s.r, 0, Math.PI * 2); cx.fill();
+  });
+  cx.globalAlpha = 1;
+}
+var REDUCED = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+
+// ---- drawing ----
+function liveBounds() {
+  if (M.done && M.bounds) return M.bounds;
+  var n = M.pts.length, Y = M.Y, b = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+  for (var i = 0; i < n; i++) { b.minX = Math.min(b.minX, Y[2 * i]); b.maxX = Math.max(b.maxX, Y[2 * i]); b.minY = Math.min(b.minY, Y[2 * i + 1]); b.maxY = Math.max(b.maxY, Y[2 * i + 1]); }
+  return b;
+}
+// world -> canvas pixels: fit the layout into the box with a margin, then the user's zoom and pan
+function fitter(b, w, h, pad, zoom, panX, panY) {
+  var spanX = (b.maxX - b.minX) || 1, spanY = (b.maxY - b.minY) || 1;
+  var s = Math.min((w - 2 * pad) / spanX, (h - 2 * pad) / spanY);
+  var ox = (w - spanX * s) / 2, oy = (h - spanY * s) / 2;
+  return {
+    x: function (v) { return ((v - b.minX) * s + ox - w / 2) * zoom + w / 2 + panX; },
+    y: function (v) { return ((v - b.minY) * s + oy - h / 2) * zoom + h / 2 + panY; }
+  };
+}
+function sizeCanvas(cv, w, h) {
+  var dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  cv.style.width = w + "px"; cv.style.height = h + "px";
+  var cx = cv.getContext("2d");
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return cx;
+}
+function searchHits() {
+  if (!S.active || !S.done) return null;
+  var set = {};
+  S.items.forEach(function (it) { if (it.post_key) set[it.post_key] = 1; });
+  return set;
+}
+// Draws one sky: nebulae, constellation lines, stars, labels. `o` picks the extras.
+function paintStars(cx, f, b, theme, o) {
+  var Y = M.Y, n = M.pts.length, i;
+  if (M.done && o.nebulae !== false) {
+    if (!M.nebula || M.nebula.dark !== theme.dark) M.nebula = { dark: theme.dark, imgs: nebulaImages(b, theme) };
+    var nb = nebulaBox(b), x0 = f.x(nb.minX), y0 = f.y(nb.minY), x1 = f.x(nb.maxX), y1 = f.y(nb.maxY);
+    cx.save();
+    cx.globalCompositeOperation = theme.dark ? "lighter" : "multiply";
+    cx.imageSmoothingEnabled = true;
+    M.nebula.imgs.forEach(function (img) { cx.drawImage(img, x0, y0, x1 - x0, y1 - y0); });
+    cx.restore();
+  }
+  if (M.done && o.lines !== false) {
+    cx.strokeStyle = theme.line; cx.lineWidth = o.lineWidth || 1;
+    cx.beginPath();
+    M.edges.forEach(function (e) { cx.moveTo(f.x(Y[2 * e[0]]), f.y(Y[2 * e[0] + 1])); cx.lineTo(f.x(Y[2 * e[1]]), f.y(Y[2 * e[1] + 1])); });
+    cx.stroke();
+  }
+  var starRgb = hexRgb(theme.star, theme.dark ? [251, 247, 238] : [28, 36, 72]);
+  var hitRgb = hexRgb(theme.hit, [255, 210, 122]);
+  var hits = o.hits, scale = o.scale || 1;
+  for (i = 0; i < n; i++) {
+    var p = M.pts[i], x = f.x(Y[2 * i]), y = f.y(Y[2 * i + 1]);
+    var hit = hits && hits[p.post_key], dim = hits && !hit, focus = o.focus === i, near = o.near && o.near[i];
+    // brighter stars are the hubs of their constellation
+    var r = (1.3 + 0.55 * Math.min(p.deg || 0, 4)) * scale;
+    if (hit || focus) r += 1.2 * scale;
+    var rgb = hit || focus ? hitRgb : starRgb;
+    cx.globalAlpha = dim ? 0.22 : 1;
+    if (theme.dark || hit || focus) {
+      var gs = r * (hit || focus ? 9 : 6);
+      cx.drawImage(glowSprite(rgb), x - gs / 2, y - gs / 2, gs, gs);
+    }
+    cx.fillStyle = "rgb(" + rgb.join(",") + ")";
+    cx.beginPath(); cx.arc(x, y, r * (near ? 1.25 : 1), 0, Math.PI * 2); cx.fill();
+    // a four-point twinkle on the brightest stars (night only)
+    if (theme.dark && !dim && (p.deg >= 3 || focus || hit)) {
+      cx.globalAlpha = (dim ? 0.2 : 0.55);
+      cx.strokeStyle = "rgb(" + rgb.join(",") + ")"; cx.lineWidth = 0.7;
+      var L = r * 3.2;
+      cx.beginPath(); cx.moveTo(x - L, y); cx.lineTo(x + L, y); cx.moveTo(x, y - L); cx.lineTo(x, y + L); cx.stroke();
+    }
+  }
+  cx.globalAlpha = 1;
+  if (M.done && o.labels) {
+    cx.font = "600 11px " + theme.font;
+    cx.textAlign = "center"; cx.textBaseline = "bottom"; cx.lineJoin = "round";
+    try { cx.letterSpacing = "2px"; } catch (e) {}
+    M.clusters.forEach(function (cl) {
+      if (!cl.words.length || cl.idx.length < 2) return;
+      var label = cl.words.join(" · ").toUpperCase(), lx = f.x(cl.x), ly = f.y(cl.top) - 12;
+      cx.lineWidth = 4; cx.strokeStyle = theme.halo; cx.strokeText(label, lx, ly);
+      cx.fillStyle = theme.label; cx.fillText(label, lx, ly);
+    });
+    try { cx.letterSpacing = "0px"; } catch (e) {}
+  }
+}
+function drawMap(t) {
+  var cv = $("map"), wrap = $("mapWrap");
+  var w = wrap.clientWidth;
+  if (!w) return;
+  var h = Math.round(Math.max(380, Math.min(700, w * 0.7, window.innerHeight * 0.78)));
+  var cx = sizeCanvas(cv, w, h), theme = skyTheme();
+  M.h = h;
+  paintSky(cx, w, h, theme, t || performance.now(), M.panX, M.panY);
+  if (!M.pts.length || !M.Y) { M.f = null; return; }
+  var b = liveBounds(), f = fitter(b, w, h, 48, M.zoom, M.panX, M.panY);
+  M.f = f;
+  paintStars(cx, f, b, theme, { hits: searchHits(), focus: M.hover, labels: true, scale: Math.min(1.6, Math.sqrt(M.zoom)) });
+  if (M.hover >= 0 && M.hover < M.pts.length) {
+    var x = f.x(M.Y[2 * M.hover]), y = f.y(M.Y[2 * M.hover + 1]);
+    cx.strokeStyle = theme.hit; cx.lineWidth = 1.2; cx.globalAlpha = 0.9;
+    cx.beginPath(); cx.arc(x, y, 10, 0, Math.PI * 2); cx.stroke();
+    cx.globalAlpha = 1;
+  }
+}
+// The background stars twinkle while the map is on screen (not with reduced motion).
+var lastTick = 0;
+function twinkle(t) {
+  if (M.view !== "map" || document.hidden) { M.anim = 0; return; }
+  if (!M.run && t - lastTick > 66) { lastTick = t; drawMap(t); }
+  M.anim = requestAnimationFrame(twinkle);
+}
+function startTwinkle() { if (!REDUCED && !M.anim) M.anim = requestAnimationFrame(twinkle); }
+document.addEventListener("visibilitychange", function () { if (!document.hidden && M.view === "map") startTwinkle(); });
+
+function mapStatus(kind, text, spinning) {
+  var el = $("mapStatus");
+  el.className = "status" + (kind ? " " + kind : "");
+  el.textContent = "";
+  if (!text) return;
+  if (spinning) el.append(h("span", { class: "spin", "aria-hidden": "true" }));
+  el.append(h("span", { text: text }));
+}
+function mapStatusLine() {
+  if (M.view !== "map") { mapStatus("", ""); return; }
+  if (M.error && !M.data) { mapStatus("bad", M.error); return; }
+  if (!M.data) { mapStatus("", "loading your sky…", true); return; }
+  var n = M.pts.length;
+  if (!n) { mapStatus("", M.data.unmapped ? "nothing is indexed yet, so the sky is empty." : "your library is empty."); return; }
+  if (!M.done) { mapStatus("", "placing " + n + " stars…", true); return; }
+  var line = n + " stars in " + M.clusters.length + " constellation" + (M.clusters.length === 1 ? "" : "s") + " · close together = similar · glow = hotspot";
+  var hits = searchHits();
+  if (hits) line = Object.keys(hits).length + " lit up for “" + S.q + "” · " + line;
+  if (M.data.unmapped) line += " · " + M.data.unmapped + " not indexed yet";
+  if (M.data.posts.length > n) line += " · newest " + n + " shown";
+  mapStatus("", line);
+}
+async function setView(v) {
+  M.view = v;
+  document.querySelectorAll("#views button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.v === v)); });
+  $("mapView").hidden = v !== "map";
+  $("gridView").hidden = v === "map";
+  if (v !== "map") { mapStatus("", ""); hideTip(); return; }
+  mapStatusLine();
+  drawMap();
+  startTwinkle();
+  await loadMap(false);
+  if (M.view !== "map") return;
+  mapStatusLine();
+  drawMap();
+  await ensureLayout();
+  if (M.view === "map") { drawMap(); mapStatusLine(); }
+}
+document.querySelectorAll("#views button").forEach(function (b) { b.onclick = function () { setView(b.dataset.v); }; });
+$("mapReset").onclick = function () { M.zoom = 1; M.panX = 0; M.panY = 0; drawMap(); };
+
+// ---- hover, click, pan and zoom ----
+function nearest(px, py) {
+  if (!M.f || !M.Y) return -1;
+  var best = -1, bd = 14 * 14;
+  for (var i = 0; i < M.pts.length; i++) {
+    var dx = M.f.x(M.Y[2 * i]) - px, dy = M.f.y(M.Y[2 * i + 1]) - py, d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+function hideTip() { $("mapTip").hidden = true; }
+function showTip(i, px, py) {
+  var p = M.pts[i], tip = $("mapTip"), wrap = $("mapWrap");
+  tip.textContent = "";
+  if (p.image_url) tip.append(h("img", { src: p.image_url, alt: "", loading: "lazy" }));
+  var cl = p.c >= 0 ? M.clusters[p.c] : null;
+  var sub = [cl && cl.words.length ? cl.words.join(" · ") : "", p.latest ? ago(p.latest) : ""].filter(Boolean).join(" — ");
+  tip.append(h("div", {}, h("b", { text: postName(p) }), h("span", { text: sub })));
+  tip.hidden = false;
+  var tw = 190, th = tip.offsetHeight || 60, W = wrap.clientWidth;
+  var left = px + 16 + tw > W ? px - 16 - tw : px + 16;
+  var top = Math.max(6, Math.min(py - th / 2, (M.h || 400) - th - 6));
+  tip.style.left = Math.max(6, left) + "px"; tip.style.top = top + "px";
+}
+function local(e) { var r = $("map").getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+$("map").addEventListener("pointerdown", function (e) {
+  var p = local(e);
+  M.drag = { x: p[0], y: p[1], panX: M.panX, panY: M.panY, moved: false };
+  try { $("map").setPointerCapture(e.pointerId); } catch (err) {}
+});
+$("map").addEventListener("pointermove", function (e) {
+  var p = local(e), cv = $("map");
+  if (M.drag) {
+    var dx = p[0] - M.drag.x, dy = p[1] - M.drag.y;
+    if (!M.drag.moved && dx * dx + dy * dy > 25) { M.drag.moved = true; cv.classList.add("drag"); hideTip(); }
+    if (M.drag.moved) { M.panX = M.drag.panX + dx; M.panY = M.drag.panY + dy; drawMap(); return; }
+  }
+  if (e.pointerType === "touch") return;
+  var i = nearest(p[0], p[1]);
+  cv.classList.toggle("hot", i >= 0);
+  if (i !== M.hover) { M.hover = i; drawMap(); }
+  if (i >= 0) showTip(i, p[0], p[1]); else hideTip();
+});
+$("map").addEventListener("pointerup", function (e) {
+  var d = M.drag; M.drag = null; $("map").classList.remove("drag");
+  if (!d || d.moved) return;
+  var p = local(e), i = nearest(p[0], p[1]);
+  if (i >= 0) { hideTip(); openPost(mapItem(M.pts[i])); }
+});
+$("map").addEventListener("pointercancel", function () { M.drag = null; $("map").classList.remove("drag"); });
+$("map").addEventListener("pointerleave", function () { if (M.hover !== -1) { M.hover = -1; drawMap(); } hideTip(); });
+$("map").addEventListener("wheel", function (e) {
+  e.preventDefault();
+  var p = local(e), w = $("mapWrap").clientWidth, hh = M.h || 400;
+  var z = Math.max(0.5, Math.min(12, M.zoom * Math.exp(-e.deltaY * 0.0015))), k = z / M.zoom;
+  // keep the point under the cursor still
+  M.panX = (p[0] - w / 2) - ((p[0] - w / 2) - M.panX) * k;
+  M.panY = (p[1] - hh / 2) - ((p[1] - hh / 2) - M.panY) * k;
+  M.zoom = z;
+  hideTip(); drawMap();
+}, { passive: false });
+if (typeof ResizeObserver === "function") new ResizeObserver(function () { if (M.view === "map") drawMap(); }).observe($("mapWrap"));
+if (window.matchMedia) {
+  var mq = window.matchMedia("(prefers-color-scheme: dark)");
+  var onScheme = function () { SPRITES = {}; M.nebula = null; if (M.view === "map") drawMap(); if (E.key && $("sheet").open) loadEmb(E.key); };
+  if (mq.addEventListener) mq.addEventListener("change", onScheme);
+}
+
+/* ---------- one post's embedding, in the post details ---------- */
+var E = { seq: 0, key: null };
+// The post's 256 numbers as a 16 x 16 field of stars: size and brightness = how big the number is,
+// cool white-blue above zero, warm amber below.
+function fingerprint(v) {
+  var cv = h("canvas", { width: "1", height: "1", role: "img", "aria-label": "the post's 256 embedding numbers as a 16 by 16 field of stars" });
+  var cell = 13, side = 16 * cell, cx = sizeCanvas(cv, side, side), theme = skyTheme();
+  paintSky(cx, side, side, theme, 0, 0, 0);
+  var max = 0, i;
+  for (i = 0; i < v.length; i++) max = Math.max(max, Math.abs(v[i]));
+  var cool = theme.dark ? [180, 205, 255] : [37, 74, 170], warm = theme.dark ? [255, 196, 120] : [176, 84, 20];
+  for (i = 0; i < 256 && i < v.length; i++) {
+    var a = max > 0 ? Math.abs(v[i]) / max : 0, rgb = v[i] >= 0 ? cool : warm;
+    var x = (i % 16) * cell + cell / 2, y = Math.floor(i / 16) * cell + cell / 2;
+    if (theme.dark && a > 0.35) { var g = cell * 2.2 * a; cx.globalAlpha = a; cx.drawImage(glowSprite(rgb), x - g / 2, y - g / 2, g, g); }
+    cx.globalAlpha = 0.25 + 0.75 * a;
+    cx.fillStyle = "rgb(" + rgb.join(",") + ")";
+    cx.beginPath(); cx.arc(x, y, 0.6 + 2.6 * a, 0, Math.PI * 2); cx.fill();
+  }
+  cx.globalAlpha = 1;
+  return cv;
+}
+function miniMap(idx, near) {
+  var cv = h("canvas", { width: "1", height: "1", role: "img", "aria-label": "where this post sits among your library's constellations" });
+  var side = 208, cx = sizeCanvas(cv, side, side), theme = skyTheme();
+  paintSky(cx, side, side, theme, 0, 0, 0);
+  // zoomed in around the post, so its neighbourhood reads at this size
+  var b = M.bounds, Z = M.pts.length > 30 ? 4.5 : 1, base = fitter(b, side, side, 14, Z, 0, 0), nearSet = {};
+  var f = fitter(b, side, side, 14, Z, side / 2 - base.x(M.Y[2 * idx]), side / 2 - base.y(M.Y[2 * idx + 1]));
+  near.forEach(function (j) { nearSet[j] = 1; });
+  cx.save(); cx.globalAlpha = 1;
+  paintStars(cx, f, b, theme, { focus: idx, near: nearSet, labels: false, scale: 1, lineWidth: 0.8 });
+  // lines from the post to its closest posts
+  cx.strokeStyle = theme.hit; cx.globalAlpha = 0.5; cx.lineWidth = 0.8; cx.setLineDash([2, 3]);
+  cx.beginPath();
+  near.forEach(function (j) { cx.moveTo(f.x(M.Y[2 * idx]), f.y(M.Y[2 * idx + 1])); cx.lineTo(f.x(M.Y[2 * j]), f.y(M.Y[2 * j + 1])); });
+  cx.stroke();
+  cx.setLineDash([]); cx.globalAlpha = 0.9; cx.lineWidth = 1.2;
+  cx.beginPath(); cx.arc(side / 2, side / 2, 11, 0, Math.PI * 2); cx.stroke();
+  cx.restore();
+  return cv;
+}
+async function loadEmb(key) {
+  var seq = ++E.seq;
+  E.key = key;
+  var body = $("sheetEmbBody");
+  body.textContent = "";
+  body.append(h("div", { class: "status" }, h("span", { class: "spin", "aria-hidden": "true" }), h("span", { text: "loading…" })));
+  await loadMap(false);
+  if (seq !== E.seq) return;
+  var idx = -1;
+  for (var i = 0; i < M.pts.length; i++) if (M.pts[i].post_key === key) { idx = i; break; }
+  body.textContent = "";
+  if (!M.data) { body.append(h("div", { class: "status bad", text: M.error || messageFor("error.library.upstream") })); return; }
+  if (idx < 0) { body.append(h("div", { class: "status", text: "not indexed yet, so there's no star for it." })); return; }
+  var p = M.pts[idx];
+  var sims = M.pts.map(function (q, j) { return [j, j === idx ? -2 : cosine(p.v, q.v)]; })
+    .sort(function (a, b) { return b[1] - a[1]; }).filter(function (x) { return x[1] > -2; });
+  var words = keywords([p].concat(sims.slice(0, 10).map(function (x) { return M.pts[x[0]]; })), 6);
+  sims = sims.slice(0, 6);
+
+  var row = h("div", { class: "emb" });
+  row.append(h("figure", {}, fingerprint(p.v), h("figcaption", { text: "its 256 numbers as stars: bigger = stronger, blue above zero, amber below" })));
+  var mapFig = h("figure", {});
+  row.append(mapFig);
+  body.append(row);
+  if (words.length) {
+    var chips = h("div", { class: "chips", "aria-label": "keywords nearby" });
+    words.forEach(function (w) { chips.append(h("span", { text: w })); });
+    body.append(h("div", { class: "small muted", text: "what its neighbourhood is about" }), chips);
+  }
+  if (sims.length) {
+    var list = h("ul", { class: "near", "aria-label": "most similar posts" });
+    sims.forEach(function (x) {
+      var q = M.pts[x[0]];
+      list.append(h("li", {}, h("button", { type: "button", onclick: function () { openPost(mapItem(q)); } },
+        h("b", { text: Math.round(Math.max(0, x[1]) * 100) + "%" }), h("span", { text: postName(q) }))));
+    });
+    body.append(h("div", { class: "small muted", text: "closest stars" }), list);
+  }
+  mapFig.append(h("div", { class: "status" }, h("span", { class: "spin", "aria-hidden": "true" }), h("span", { text: "finding it in the sky…" })));
+  await ensureLayout();
+  if (seq !== E.seq) return;
+  mapFig.textContent = "";
+  mapFig.append(miniMap(idx, sims.map(function (x) { return x[0]; })), h("figcaption", { text: "where it sits in your sky, joined to its closest stars" }));
+}
 
 setPane("link");
 refreshGrid();

@@ -749,3 +749,56 @@ export async function librarySearchPost(
         return fail(503, "error.api.generic");
     }
 }
+
+// ---- GET /library/map --------------------------------------------------------------------------
+
+// GET /library/map: every indexed post with its vector, for the library's map view (the page lays the
+// posts out in 2D itself, so the server only hands over vectors). Keyed or service (the web Worker).
+// Vectors go out as `v8`: base64 of int8, each vector scaled so its largest component is ±127. Only
+// the direction matters for similarity, so this keeps the map faithful at a quarter of float32's size.
+// Answers from D1 even while the Space is not configured.
+export function quantizeVector(v: ArrayLike<number>): string {
+    let max = 0;
+    for (let i = 0; i < v.length; i++) max = Math.max(max, Math.abs(v[i]!));
+    const bytes = new Uint8Array(v.length);
+    for (let i = 0; i < v.length; i++) {
+        const q = max > 0 ? Math.round((v[i]! / max) * 127) : 0;
+        bytes[i] = q & 0xff;
+    }
+    let bin = "";
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
+    return btoa(bin);
+}
+
+export async function libraryMap(d: { db: D1Database; mediaBaseUrl: string; searchEnabled: boolean }): Promise<StudioReply> {
+    try {
+        const inputs = await postInputs(d.db, d.mediaBaseUrl);
+        const { results: rows } = await d.db
+            .prepare("SELECT post_key, vector FROM media_embeddings WHERE model = ? AND dims = ? AND vector IS NOT NULL")
+            .bind(EMBED_MODEL, EMBED_DIMS)
+            .all<{ post_key: string; vector: string }>();
+        const vectors = new Map(rows.map((r) => [r.post_key, r.vector]));
+        const posts: { post_key: string; title: string | null; text: string; image_url: string | null; latest: number; v8: string }[] = [];
+        for (const p of inputs) {
+            const raw = vectors.get(p.post_key);
+            const v = raw ? decodeVector(raw) : null;
+            if (!v || v.length !== EMBED_DIMS) continue;
+            posts.push({ post_key: p.post_key, title: p.title, text: p.text, image_url: p.image_url, latest: p.latest, v8: quantizeVector(v) });
+        }
+        return {
+            status: 200,
+            body: {
+                status: "success",
+                model: EMBED_MODEL,
+                dims: EMBED_DIMS,
+                search_enabled: d.searchEnabled,
+                posts,
+                // live posts not on the map yet (never embedded)
+                unmapped: inputs.length - posts.length,
+            },
+        };
+    } catch (e) {
+        console.error("[search] map failed", String(e));
+        return { status: 503, body: { status: "error", error: { code: "error.api.generic" } } };
+    }
+}

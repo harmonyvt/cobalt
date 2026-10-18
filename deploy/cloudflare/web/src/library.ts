@@ -174,6 +174,7 @@ type Route =
     | { name: "upload" }
     | { name: "search" }
     | { name: "searchPost" }
+    | { name: "map" }
     | { name: "webp"; id: string }
     | { name: "studio"; id: string }
     | { name: "studioPublish"; id: string }
@@ -190,6 +191,7 @@ const ALLOWED: Record<Route["name"], string[]> = {
     upload: ["PUT"],
     search: ["GET"],
     searchPost: ["GET"],
+    map: ["GET"],
     webp: ["GET"],
     studio: ["GET"],
     studioPublish: ["POST"],
@@ -207,6 +209,7 @@ export function matchRoute(pathname: string): Route | null {
     if (pathname === "/api/library/upload") return { name: "upload" };
     if (pathname === "/api/library/search") return { name: "search" };
     if (pathname === "/api/library/search/post") return { name: "searchPost" };
+    if (pathname === "/api/library/map") return { name: "map" };
     let m: RegExpExecArray | null;
     if ((m = /^\/api\/library\/webp\/([0-9A-Za-z]{16,32})$/.exec(pathname))) return { name: "webp", id: m[1]! };
     if ((m = /^\/api\/library\/studio\/([0-9A-Za-z]{22})$/.exec(pathname))) return { name: "studio", id: m[1]! };
@@ -261,6 +264,8 @@ export async function handleLibrary(request: Request, env: Env, deps?: Partial<L
                 return await search(ctx, searchParams);
             case "searchPost":
                 return await searchPost(ctx, searchParams);
+            case "map":
+                return relayResponse(await callApi(ctx, "/library/map", { method: "GET" }), (b) => b);
             case "webp":
                 return await relayGet(ctx, `/webp/${route.id}`, searchParams, true);
             case "studio":
