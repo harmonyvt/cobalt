@@ -60,6 +60,39 @@ extension View {
     }
 }
 
+private struct EnvironmentHaptic<T: Equatable>: ViewModifier {
+    @Environment(\.hapticsEnabled) private var enabled
+    let feedback: SensoryFeedback
+    let trigger: T
+    let accepts: (T, T) -> Bool
+
+    func body(content: Content) -> some View {
+        content.sensoryFeedback(trigger: trigger) { old, new in enabled && accepts(old, new) ? feedback : nil }
+    }
+}
+
+extension View {
+    /// A haptic that reads Settings › haptics from the environment: plays whenever the trigger changes.
+    func haptic<T: Equatable>(_ feedback: SensoryFeedback, trigger: T) -> some View {
+        modifier(EnvironmentHaptic(feedback: feedback, trigger: trigger, accepts: { _, _ in true }))
+    }
+
+    /// The same, played only when the trigger changes to a value the predicate accepts.
+    func haptic<T: Equatable>(_ feedback: SensoryFeedback, trigger: T, when accepts: @escaping (T) -> Bool) -> some View {
+        modifier(EnvironmentHaptic(feedback: feedback, trigger: trigger, accepts: { _, new in accepts(new) }))
+    }
+
+    /// The same, played only for a change the predicate accepts (it sees the old value and the new).
+    func hapticChange<T: Equatable>(_ feedback: SensoryFeedback, trigger: T, when accepts: @escaping (_ old: T, _ new: T) -> Bool) -> some View {
+        modifier(EnvironmentHaptic(feedback: feedback, trigger: trigger, accepts: accepts))
+    }
+
+    /// The same, played only when a count goes up (a new failure, a new item), never when it drops.
+    func haptic<T: Comparable>(_ feedback: SensoryFeedback, rising trigger: T) -> some View {
+        modifier(EnvironmentHaptic(feedback: feedback, trigger: trigger, accepts: { old, new in new > old }))
+    }
+}
+
 /// A transition that is a spring-and-blur on its way in, and a plain fade under Reduce Motion.
 struct DevelopModifier: ViewModifier {
     let developed: Bool

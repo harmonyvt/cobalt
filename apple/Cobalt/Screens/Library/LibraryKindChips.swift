@@ -60,6 +60,7 @@ struct LibraryKindChips: View {
         .background(.bar)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Library2.kindFilter)
+        .haptic(.selection, trigger: model.library.kindFilter)
     }
 
     private func chip(_ kind: LibraryKindFilter, count: Int?) -> some View {

@@ -68,6 +68,9 @@ struct FullScreenPhoto: View {
                     if abs(value.translation.height) > 110 { close() } else { withAnimation(Motion.card) { dismissDrag = 0 } }
                 },
             including: zoomed ? .subviews : .all)
+        // a tick at zoom, and where letting go would close (like Photos)
+        .haptic(.impact(weight: .light), trigger: zoomed)
+        .haptic(.impact(weight: .light), trigger: abs(dismissDrag) > 110) { $0 }
         .preferredColorScheme(.dark)
         .task(id: source) { image = await PhotoDecoder.load(source, maxPixel: 3600) }
     }

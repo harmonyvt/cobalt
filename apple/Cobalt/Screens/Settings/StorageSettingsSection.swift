@@ -13,6 +13,8 @@ struct StorageSettingsSection: View {
     let model: AppModel
 
     @State private var confirmClear = false
+    /// +1 once a clear of the offline copies finished (success haptic).
+    @State private var clearedTick = 0
     /// A limit below what is stored asks first: the choice waits here for the dialog's answer.
     @State private var pendingLimit: StorageLimit?
     @State private var pendingFree: Int64 = 0
@@ -87,8 +89,14 @@ struct StorageSettingsSection: View {
             .accessibilityElement(children: .combine)
             Button(Copy.Offline.clearCache, systemImage: Symbol.clearOffline, role: .destructive) { confirmClear = true }
                 .disabled(usage.cache.count == 0)
+                .haptic(.success, trigger: clearedTick)
                 .confirmationDialog(Copy.Offline.clearCacheTitle, isPresented: $confirmClear, titleVisibility: .visible) {
-                    Button(Copy.Offline.clear, role: .destructive) { Task { await model.store.clearCache() } }
+                    Button(Copy.Offline.clear, role: .destructive) {
+                        Task {
+                            await model.store.clearCache()
+                            clearedTick += 1
+                        }
+                    }
                     Button(Copy.keep, role: .cancel) {}
                 } message: {
                     Text(Copy.Offline.clearCacheMessage)

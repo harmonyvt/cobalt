@@ -206,6 +206,12 @@ private struct OfflineToggleSection: View {
         }
         .labelStyle(DetailRowLabelStyle())
         .font(CobaltType.body)
+        // the download landing on this device, or failing
+        .hapticChange(.success, trigger: state) { old, new in
+            if case .downloading = old, case .offline = new { return true }
+            return false
+        }
+        .haptic(.error, trigger: state) { if case .failed = $0 { return true } else { return false } }
     }
 
     @ViewBuilder

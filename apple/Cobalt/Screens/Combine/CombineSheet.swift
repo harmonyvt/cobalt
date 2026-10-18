@@ -88,6 +88,14 @@ struct CombineSheet: View {
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .motion(Motion.card, value: phase.isEdit)
+        // the make landing or failing, a tile chosen or ticked, a setting changed: felt as well as seen
+        .haptic(.success, trigger: phase) { if case .done = $0 { return true } else { return false } }
+        .haptic(.error, trigger: phase) { if case .failed = $0 { return true } else { return false } }
+        .haptic(.selection, trigger: combine.selected)
+        .haptic(.selection, trigger: combine.tickedIDs)
+        .haptic(.selection, trigger: combine.output)
+        .haptic(.selection, trigger: combine.frame)
+        .haptic(.selection, trigger: combine.sound)
         #if DEBUG
         .task { CombineSnapshot.say("sheet appeared"); configure?(combine) }
         #endif

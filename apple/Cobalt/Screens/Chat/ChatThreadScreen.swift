@@ -75,6 +75,9 @@ struct ChatThreadScreen: View {
             dismiss()
         }
         .haptic(.impact(weight: .light), trigger: sent, enabled: haptics)
+        // the reply finishing, or failing: felt as well as seen
+        .hapticChange(.success, trigger: content?.messages.last?.status) { old, new in old == .running && new == .done }
+        .hapticChange(.error, trigger: content?.messages.last?.status) { old, new in old == .running && new == .error }
     }
 
     // MARK: the messages

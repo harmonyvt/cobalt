@@ -238,6 +238,8 @@ private struct FullScreenWebp: View {
                 .onEnded { value in
                     if abs(value.translation.height) > 90 { close() } else { withAnimation(Motion.card) { drag = 0 } }
                 })
+        // a tick where letting go would close
+        .haptic(.impact(weight: .light), trigger: abs(drag) > 90) { $0 }
         .preferredColorScheme(.dark)
     }
 }

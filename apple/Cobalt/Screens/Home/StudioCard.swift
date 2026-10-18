@@ -10,6 +10,7 @@ struct SideActions: View {
     var hostLabel = Copy.hostOriginal
     var showsPhotos = true
     @Environment(\.hapticsEnabled) private var haptics
+    @State private var copiedTick = 0
 
     var body: some View {
         ButtonRow {
@@ -34,11 +35,13 @@ struct SideActions: View {
                          systemImage: Symbol.host, status: pipeline.hosting, prominent: true) {
                 if pipeline.hosting == .done, let url = pipeline.hostedOriginalURL {
                     Pasteboard.copy(pipeline.shareLink(for: url).absoluteString)
+                    copiedTick += 1
                 } else {
                     pipeline.hostOriginal()
                 }
             }
         }
+        .haptic(.success, trigger: copiedTick, enabled: haptics)
         .haptic(.success, trigger: pipeline.photos, enabled: haptics) { $0 == .done }
         .haptic(.success, trigger: pipeline.hosting, enabled: haptics) { $0 == .done }
         .haptic(.error, trigger: pipeline.photos, enabled: haptics) { if case .failed = $0 { return true } else { return false } }

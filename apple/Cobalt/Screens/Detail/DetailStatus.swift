@@ -48,6 +48,14 @@ struct DetailStatus: View {
         }
         .motion(Motion.rows, value: phase)
         .motion(Motion.rows, value: controller.flash)
+        // a delete that lands, half lands or fails, and a save to photos: felt as well as seen (Settings › haptics)
+        .hapticChange(.success, trigger: phase) { old, new in old == .deleting && new == .idle }
+        .hapticChange(.error, trigger: phase) { _, new in new == .failed }
+        .hapticChange(.warning, trigger: phase) { _, new in
+            if case .partial = new { return true }
+            return new == .busy
+        }
+        .haptic(.success, rising: controller.photos.values.filter { $0 == .done }.count)
         .frame(maxWidth: .infinity)
     }
 

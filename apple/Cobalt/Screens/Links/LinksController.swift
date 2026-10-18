@@ -30,6 +30,9 @@ final class LinksController {
     /// Links whose DELETE is in flight (dimmed; a second tap does nothing).
     var revokingIDs: Set<String> = []
     var copiedToken = 0
+    /// +1 when a revoke, an add or remove, a reroll or a delete lands (success haptic) or fails (error haptic).
+    var doneToken = 0
+    var failedToken = 0
     /// The collection the owner chose `delete` for: the confirm is open on it.
     var deleting: ShareCollection?
     /// The collection the owner chose `reroll all links` for: the confirm is open on it.
@@ -73,8 +76,10 @@ final class LinksController {
             do {
                 try await store.revoke(link.id)
                 shell.showStatus(Copy.Links.revoked)
+                doneToken += 1
             } catch {
                 shell.showStatus(Copy.actionFailed)
+                failedToken += 1
             }
         }
     }
@@ -95,8 +100,10 @@ final class LinksController {
                 do {
                     try await store.addLink(link.id, to: collection.id)
                     shell.showStatus(Copy.Collections.added)
+                    doneToken += 1
                 } catch {
                     shell.showStatus(Copy.Collections.message(for: error))
+                    failedToken += 1
                 }
             }
         }
@@ -108,8 +115,10 @@ final class LinksController {
             do {
                 try await store.removeLink(link.id, from: collection.id)
                 shell.showStatus(Copy.Collections.removed)
+                doneToken += 1
             } catch {
                 shell.showStatus(Copy.Collections.message(for: error))
+                failedToken += 1
             }
         }
     }
@@ -130,8 +139,10 @@ final class LinksController {
             do {
                 try await store.rerollCollection(collection.id)
                 shell.showStatus(Copy.Collections.rerolled)
+                doneToken += 1
             } catch {
                 shell.showStatus(Copy.Collections.message(for: error))
+                failedToken += 1
             }
         }
     }
@@ -141,8 +152,10 @@ final class LinksController {
             do {
                 try await store.deleteCollection(collection.id)
                 shell.showStatus(Copy.Collections.deleted)
+                doneToken += 1
             } catch {
                 shell.showStatus(Copy.Collections.message(for: error))
+                failedToken += 1
             }
         }
     }
@@ -189,6 +202,8 @@ private struct LinkPresentations: ViewModifier {
                 CollectionSheet(model: controller.model, request: request)
             }
             .haptic(.success, trigger: controller.copiedToken, enabled: haptics)
+            .haptic(.success, trigger: controller.doneToken, enabled: haptics)
+            .haptic(.error, trigger: controller.failedToken, enabled: haptics)
     }
 
     private var revokingPresented: Binding<Bool> {

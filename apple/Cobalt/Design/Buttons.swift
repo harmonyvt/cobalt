@@ -65,21 +65,35 @@ struct CobaltButtonStyle: PrimitiveButtonStyle {
     }
 
     private func base(_ configuration: Configuration, ink: Color?) -> some View {
-        Button(role: configuration.role, action: configuration.trigger) {
-            configuration.label
-                .labelStyle(.titleAndIcon)
-                .font(font)
-                .foregroundStyle(ink ?? .primary)
-                .lineLimit(1)
-                // A label is never wrapped or cut: it keeps its natural width, and a `ButtonRow`
-                // stacks its buttons when they would not fit side by side.
-                .fixedSize(horizontal: true, vertical: false)
-                .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: minHeight)
+        TapHaptic { tap in
+            Button(role: configuration.role, action: { tap(); configuration.trigger() }) {
+                configuration.label
+                    .labelStyle(.titleAndIcon)
+                    .font(font)
+                    .foregroundStyle(ink ?? .primary)
+                    .lineLimit(1)
+                    // A label is never wrapped or cut: it keeps its natural width, and a `ButtonRow`
+                    // stacks its buttons when they would not fit side by side.
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: minHeight)
+            }
+            .controlSize(size)
+            #if os(iOS)
+            .buttonBorderShape(.capsule)
+            #endif
         }
-        .controlSize(size)
-        #if os(iOS)
-        .buttonBorderShape(.capsule)
-        #endif
+    }
+}
+
+/// A soft tick on every press of a card button (Settings › haptics). What the press then does (copied, saved,
+/// failed) plays its own success or error on top.
+struct TapHaptic<Content: View>: View {
+    @ViewBuilder let content: (_ tap: @escaping () -> Void) -> Content
+    @State private var taps = 0
+
+    var body: some View {
+        content { taps += 1 }
+            .haptic(.impact(weight: .light, intensity: 0.7), trigger: taps)
     }
 }
 
@@ -120,6 +134,7 @@ struct CircleButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(CobaltColor.circleInk)
+            .haptic(.impact(weight: .medium), trigger: configuration.isPressed) { $0 }
             .frame(width: diameter, height: diameter)
             .glassEffect(.regular.tint(CobaltColor.circle).interactive(), in: .circle)
             .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)

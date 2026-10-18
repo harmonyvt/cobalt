@@ -196,6 +196,7 @@ struct PasteReviewSheet: View {
             }
             .frame(maxHeight: .infinity, alignment: .top)
             .scrollBounceBehavior(.basedOnSize)
+            .haptic(.selection, trigger: count)
             ButtonRow {
                 Button(Copy.Jobs.reviewCancel) { cancel() }
                     .buttonStyle(.cobaltSecondary())

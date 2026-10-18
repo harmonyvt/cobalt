@@ -44,6 +44,7 @@ struct RenditionTabs: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel(Copy.Media.tabsA11y)
+            .haptic(.selection, trigger: selection)
         }
     }
 
