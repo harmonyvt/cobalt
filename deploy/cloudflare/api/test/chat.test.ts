@@ -244,6 +244,31 @@ describe("chat: a reply", () => {
         expect(read.thread.title).toBe("tiktok cat hunt");
     });
 
+    it("sends the real model's requests through the relay fetch from the Worker entry", async () => {
+        const urls: string[] = [];
+        const relay = async (input: any, init?: any) => {
+            urls.push(new Request(input, init).url);
+            return Response.json({ error: { type: "forbidden", message: "Request not allowed" } }, { status: 403 });
+        };
+        const t = await newThread();
+        const r = await call(
+            `/chat/threads/${t.id}/messages`,
+            { method: "POST", headers: { ...AUTH, "content-type": "application/json" }, body: JSON.stringify({ text: "hi" }) },
+            { codeRunner: runner, modelFetch: relay },
+        );
+        // no chatModel injected: the Worker builds the real one from ANTHROPIC_API_KEY, with the relay
+        env.ANTHROPIC_API_KEY = "sk-ant-test";
+        const r2 = await call(
+            `/chat/threads/${t.id}/messages`,
+            { method: "POST", headers: { ...AUTH, "content-type": "application/json" }, body: JSON.stringify({ text: "hi" }) },
+            { codeRunner: runner, modelFetch: relay },
+        );
+        expect(r.status).toBe(404); // no key yet: chat is off
+        const ev = await events(r2);
+        expect(ev[ev.length - 1]!.event).toBe("error");
+        expect(urls[0]).toBe("https://api.anthropic.com/v1/messages");
+    });
+
     it("attaches a big result set as a collage and pages it", async () => {
         const cats = Array.from({ length: 70 }, (_, i) => item({ name: `cat ${i}.mp4`, link: `https://x.com/c/status/${i + 1}`, created_at: 10_000 + i }));
         item({ name: "dog.mp4", link: "https://x.com/d/status/999", created_at: 20_000 });
