@@ -12,6 +12,8 @@ struct QueueScreen: View {
     let model: AppModel
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// +1 per cancel, retry, dismiss or open the owner asks for (a light tap).
+    @State private var actionTicks = 0
 
     private var unified: UnifiedQueue { model.unifiedQueue }
 
@@ -50,6 +52,8 @@ struct QueueScreen: View {
                 }
             }
         }
+        .haptic(.impact(weight: .light), trigger: actionTicks)
+        .haptic(.error, rising: unified.summary.failed)
         .onAppear { unified.setVisible(true) }
         .onDisappear { unified.setVisible(false) }
     }
@@ -143,6 +147,7 @@ struct QueueScreen: View {
     }
 
     private func run(_ action: QueueAction, _ item: QueueItem) {
+        if action != .open { actionTicks += 1 }
         Task { await model.perform(action, on: item) }
     }
 

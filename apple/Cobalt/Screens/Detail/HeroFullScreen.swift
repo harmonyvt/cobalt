@@ -203,6 +203,10 @@ private struct FullScreenWebp: View {
     let close: () -> Void
     @State private var drag: CGFloat = 0
 
+    /// Letting go here closes.
+    private var pastClose: Bool { abs(drag) > 90 }
+    private static func isOn(_ on: Bool) -> Bool { on }
+
     var body: some View {
         ZStack {
             Color.black.opacity(1 - min(Double(abs(drag)) / 500, 0.5)).ignoresSafeArea()
@@ -238,6 +242,8 @@ private struct FullScreenWebp: View {
                 .onEnded { value in
                     if abs(value.translation.height) > 90 { close() } else { withAnimation(Motion.card) { drag = 0 } }
                 })
+        // a tick where letting go would close
+        .haptic(.impact(weight: .light), trigger: pastClose, when: Self.isOn)
         .preferredColorScheme(.dark)
     }
 }

@@ -38,6 +38,8 @@ struct JobTray: View {
     /// Bumped each second while a finished card lingers, so the queue's 5 s window is re-read.
     @State private var tick = 0
     @State private var announced: Set<Job.ID> = []
+    /// +1 per stop, try again or dismiss on a card (a light tap).
+    @State private var actionTicks = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var queue: JobQueue { model.queue }
@@ -74,6 +76,10 @@ struct JobTray: View {
         .animation(reduceMotion ? Motion.fade : Motion.rows, value: folded)
         .animation(reduceMotion ? Motion.fade : Motion.rows, value: pillOpen)
         .animation(reduceMotion ? Motion.fade : Motion.rows, value: message)
+        .haptic(.impact(weight: .light), trigger: actionTicks)
+        .haptic(.selection, trigger: pillOpen)
+        .haptic(.selection, trigger: folded)
+        .haptic(.selection, trigger: showsAll)
         .onChange(of: all.isEmpty && message == nil) { _, gone in if gone { onFrame(.zero) } }
         .onChange(of: openRequest) { _, _ in
             folded = false
@@ -181,9 +187,9 @@ struct JobTray: View {
             JobCard(
                 job: job, lineMax: model.capabilities.limits.lineMax, lineMode: queue.lineMode,
                 onOpen: { open(job) },
-                onExit: { Task { await queue.cancel(job.id) } },
-                onRetry: { queue.retry(job.id) },
-                onDismiss: { queue.dismiss(job.id) })
+                onExit: { actionTicks += 1; Task { await queue.cancel(job.id) } },
+                onRetry: { actionTicks += 1; queue.retry(job.id) },
+                onDismiss: { actionTicks += 1; queue.dismiss(job.id) })
                 .transition(reduceMotion ? .opacity : .asymmetric(
                     insertion: .scale(scale: 0.94, anchor: .bottom).combined(with: .opacity), removal: .opacity))
         }

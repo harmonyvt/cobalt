@@ -92,6 +92,11 @@ final class LibraryController {
     var makingShareLink = false
     /// Bumped when a share link was made and copied: the success haptic.
     var shareLinksMade = 0
+    /// Bumped when a copy, a save, a visibility switch or a delete lands (success haptic), half lands (warning) or
+    /// fails (error).
+    var doneTick = 0
+    var warnTick = 0
+    var failTick = 0
     /// What the share card lists while `preparingShare` is set. Cleared when the copy finishes.
     var sharePrep: [SharePrepRow] = []
     /// The card's `cancel`: the copy stops before the next post and no sheet opens.
@@ -245,7 +250,7 @@ final class LibraryController {
             }
         }
         if shareCancelled { return [] }
-        if urls.isEmpty { showStatus(Copy.actionFailed) }
+        if urls.isEmpty { showStatus(Copy.actionFailed); failTick += 1 }
         return urls
     }
 
@@ -277,8 +282,10 @@ final class LibraryController {
             return true
         } catch ShareSetError.notPublic {
             showStatus(Copy.Links.makeThesePublic)
+            warnTick += 1
         } catch {
             showStatus(Copy.actionFailed)
+            failTick += 1
         }
         return false
     }
@@ -381,6 +388,7 @@ final class LibraryController {
     func copy(_ url: URL) {
         Pasteboard.copy(model.capabilities.shareLink(for: url).absoluteString)
         showStatus(Copy.Media.copied)
+        doneTick += 1
     }
 
     /// The video's link on or off, said in the shell's status line. Off asks first (`makingPrivate`); the library's
@@ -397,6 +405,7 @@ final class LibraryController {
                 } else {
                     cacheCleared = try await model.setPublic(makePublic, for: item).cacheCleared
                 }
+                doneTick += 1
                 if makePublic {
                     showStatus(Copy.Library2.nowPublic)
                 } else {
@@ -404,6 +413,7 @@ final class LibraryController {
                 }
             } catch {
                 showStatus(makePublic ? Copy.Media.makeLinkFailed : Copy.Media.turnOffFailed)
+                failTick += 1
             }
         }
     }
@@ -424,8 +434,10 @@ final class LibraryController {
                 #if os(iOS)
                 showStatus(Copy.savedPhotos)
                 #endif
+                doneTick += 1
             } catch {
                 showStatus(Self.words(error))
+                failTick += 1
             }
         }
     }
@@ -437,8 +449,10 @@ final class LibraryController {
             do {
                 try await model.saveToPhotos(item.items.filter { RenditionPhotos.canSave($0) }, of: item)
                 showStatus(Copy.savedPhotos)
+                doneTick += 1
             } catch {
                 showStatus(Self.words(error))
+                failTick += 1
             }
         }
         #endif
@@ -449,10 +463,12 @@ final class LibraryController {
         let text = model.copyAllLinks(item)
         guard !text.isEmpty else {
             showStatus(Copy.Library2.noPublicLinks)
+            warnTick += 1
             return
         }
         Pasteboard.copy(text)
         showStatus(Copy.Library2.copiedLinks(text.split(separator: "\n").count))
+        doneTick += 1
     }
 
     /// `make from this post…`: the combine sheet on this gallery.
@@ -465,6 +481,7 @@ final class LibraryController {
         Task {
             if model.isBusy(item) {
                 showStatus(Copy.Media.deleteBusy)
+                warnTick += 1
                 return
             }
             showStatus(Copy.Media.deleting)
@@ -472,14 +489,18 @@ final class LibraryController {
                 switch try await model.deleteEverything(item) {
                 case .done:
                     showStatus(Copy.Media.deleted)
+                    doneTick += 1
                     if let id = item.post?.id, selection == id { selection = nil }
                 case .partial(let remaining):
                     showStatus(Copy.Media.deletePartial(remaining: remaining))
+                    warnTick += 1
                 case .leftOnServer:
                     showStatus(Copy.Media.stillOnServer)
+                    warnTick += 1
                 }
             } catch {
                 showStatus((error as? PipelineFailure) == .serverBusy ? Copy.Media.deleteBusy : Copy.Media.deleteFailed)
+                failTick += 1
             }
         }
     }

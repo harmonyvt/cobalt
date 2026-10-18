@@ -75,6 +75,7 @@ struct ChatThreadScreen: View {
             dismiss()
         }
         .haptic(.impact(weight: .light), trigger: sent, enabled: haptics)
+        .modifier(ReplyHaptics(status: content?.messages.last?.status))
     }
 
     // MARK: the messages
@@ -232,5 +233,21 @@ struct ChatThreadScreen: View {
         // after the push has settled: focus asked for sooner is dropped
         try? await Task.sleep(for: .milliseconds(600))
         composerFocused = true
+    }
+}
+
+/// The reply finishing, or failing: felt as well as seen. Its own modifier so the screen's chain stays small enough
+/// for the type checker.
+private struct ReplyHaptics: ViewModifier {
+    let status: ChatMessage.Status?
+
+    func body(content: Content) -> some View {
+        content
+            .hapticChange(.success, trigger: status) { (old: ChatMessage.Status?, new: ChatMessage.Status?) in
+                old == .running && new == .done
+            }
+            .hapticChange(.error, trigger: status) { (old: ChatMessage.Status?, new: ChatMessage.Status?) in
+                old == .running && new == .error
+            }
     }
 }

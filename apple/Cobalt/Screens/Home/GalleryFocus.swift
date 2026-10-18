@@ -513,6 +513,8 @@ struct GalleryControls: View {
     let open: () -> Void
     let done: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// +1 per make tile pressed (a light tap).
+    @State private var chooseTicks = 0
 
     private var offersMake: Bool { !facts.isSingle && !facts.run.isFailedPhase }
 
@@ -526,6 +528,7 @@ struct GalleryControls: View {
         .allowsHitTesting(lifted)
         .offset(y: lifted ? 0 : 20)
         .animation(reduceMotion ? Motion.fade : FocusMotion.content.delay(lifted ? 0.28 : 0), value: lifted)
+        .haptic(.impact(weight: .light), trigger: chooseTicks)
     }
 
     private var caption: String {
@@ -565,7 +568,7 @@ struct GalleryControls: View {
 
     private func tile(_ kind: GalleryMakeKind, stacked: Bool) -> some View {
         let t = facts.tile(kind)
-        return Button { choose(kind) } label: {
+        return Button { chooseTicks += 1; choose(kind) } label: {
             Group {
                 if stacked {
                     VStack(spacing: 2) {

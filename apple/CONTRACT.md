@@ -841,7 +841,12 @@ cubic-beziers (the boards' numbers are the target, not an exact conversion).
 | fold / resize | regroup between tiers | `.spring(duration: 0.75, bounce: 0.12)` | jump |
 | share → app | the app opens on the trim (clip reveal from the sheet) | `.spring(duration: 0.6, bounce: 0.1)` | crossfade |
 
-Haptics obey `settings.haptics`. Players: the orbit keeps a pool of 3 `AVPlayer`s (muted,
+Haptics obey `settings.haptics` (`.haptic(_:trigger:)` in `Design/Motion.swift` reads it from the environment).
+The map: a light tick on every card button press (`CobaltButtonStyle`) and a medium one on the paste and file
+circles; `.selection` when a choice moves (tabs, kind chips, gallery pages, ticks, combine settings); `.success`
+when something lands (copied, saved to photos, made public, deleted, a download kept, a reply finished);
+`.warning` when it half lands (a partial delete, busy, nothing public to copy); `.error` when it fails. Long-press
+previews use the system context menu, which plays its own. Players: the orbit keeps a pool of 3 `AVPlayer`s (muted,
 `AVPlayerLooper` over the first 3 s) bound to the 3 front-most items; webp items animate with
 `CGAnimateImageAtURLWithBlock`; everything else shows its poster.
 

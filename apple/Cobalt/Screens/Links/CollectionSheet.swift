@@ -57,6 +57,8 @@ struct CollectionSheet: View {
             }
             buttons
         }
+        .haptic(.selection, trigger: picked.count)
+        .haptic(.error, trigger: problem) { $0 != nil }
         .padding(.horizontal, 16)
         .padding(.top, 20)
         .padding(.bottom, 12)

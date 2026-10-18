@@ -206,6 +206,7 @@ private struct OfflineToggleSection: View {
         }
         .labelStyle(DetailRowLabelStyle())
         .font(CobaltType.body)
+        .modifier(OfflineHaptics(state: state))
     }
 
     @ViewBuilder
@@ -285,3 +286,21 @@ struct OfflineSectionsPreview: View {
     OfflineSectionsPreview()
 }
 #endif
+
+/// The download landing on this device, or failing. Its own modifier so the section's chain stays small enough for the
+/// type checker.
+private struct OfflineHaptics: ViewModifier {
+    let state: RenditionOffline
+
+    private static func kept(_ old: RenditionOffline, _ new: RenditionOffline) -> Bool {
+        if case .downloading = old, case .offline = new { return true }
+        return false
+    }
+    private static func failed(_ s: RenditionOffline) -> Bool { if case .failed = s { return true } else { return false } }
+
+    func body(content: Content) -> some View {
+        content
+            .hapticChange(.success, trigger: state, when: Self.kept)
+            .haptic(.error, trigger: state, when: Self.failed)
+    }
+}

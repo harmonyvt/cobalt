@@ -162,6 +162,8 @@ struct SettingsScreen: View {
             Toggle(isOn: Binding(get: { settings.haptics }, set: { settings.haptics = $0 })) {
                 Label(Copy.haptics, systemImage: Symbol.haptics)
             }
+            // turning haptics on answers with one, so the owner feels what they turned on
+            .haptic(.impact(weight: .medium), trigger: settings.haptics) { $0 }
             row(Copy.motion, Symbol.motion) { value(Copy.motionFollows) }
         } header: {
             header(Copy.groupFeel)

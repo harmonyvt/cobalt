@@ -23,6 +23,9 @@ final class ChatController {
     var making = false
     /// Threads whose DELETE is in flight.
     var deletingIDs: Set<String> = []
+    /// +1 when a delete lands (success haptic) or a new chat or a delete fails (error haptic).
+    var doneTick = 0
+    var failTick = 0
 
     init(model: AppModel) {
         self.model = model
@@ -42,6 +45,7 @@ final class ChatController {
                 store.focusComposer()
             } catch {
                 shell.showStatus(Copy.Chat.message(for: error))
+                failTick += 1
             }
         }
     }
@@ -55,9 +59,11 @@ final class ChatController {
             do {
                 try await store.delete(thread.id)
                 shell.showStatus(Copy.Chat.deleted)
+                doneTick += 1
                 done()
             } catch {
                 shell.showStatus(Copy.Chat.message(for: error))
+                failTick += 1
             }
         }
     }
@@ -83,6 +89,8 @@ private struct ChatPresentations: ViewModifier {
             .sheet(item: $controller.renaming) { thread in
                 ChatRenameSheet(model: controller.model, thread: thread)
             }
+            .haptic(.success, trigger: controller.doneTick)
+            .haptic(.error, trigger: controller.failTick)
     }
 
     private var deletingPresented: Binding<Bool> {

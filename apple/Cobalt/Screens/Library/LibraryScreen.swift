@@ -216,6 +216,9 @@ private struct LibraryContent: View {
             .haptic(.impact(weight: .light), trigger: controller.selecting, enabled: haptics)
             .haptic(.success, trigger: filesToShare.isEmpty, enabled: haptics) { !$0 }
             .haptic(.success, trigger: controller.shareLinksMade, enabled: haptics)
+            .haptic(.success, trigger: controller.doneTick, enabled: haptics)
+            .haptic(.warning, trigger: controller.warnTick, enabled: haptics)
+            .haptic(.error, trigger: controller.failTick, enabled: haptics)
             .onAppear { controller.showStatus = { shell.showStatus($0) } }
             .task(id: library.needsWholeLibrary) {
                 if library.needsWholeLibrary { await library.loadAll() }

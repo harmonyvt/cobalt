@@ -14,6 +14,10 @@ struct FullScreenPhoto: View {
     @State private var dismissDrag: CGFloat = 0
     @State private var zoomed = false
 
+    /// Letting go here closes.
+    private var pastClose: Bool { abs(dismissDrag) > 110 }
+    private static func isOn(_ on: Bool) -> Bool { on }
+
     var body: some View {
         ZStack {
             Color.black.opacity(1 - min(Double(abs(dismissDrag)) / 500, 0.5)).ignoresSafeArea()
@@ -68,6 +72,9 @@ struct FullScreenPhoto: View {
                     if abs(value.translation.height) > 110 { close() } else { withAnimation(Motion.card) { dismissDrag = 0 } }
                 },
             including: zoomed ? .subviews : .all)
+        // a tick at zoom, and where letting go would close (like Photos)
+        .haptic(.impact(weight: .light), trigger: zoomed)
+        .haptic(.impact(weight: .light), trigger: pastClose, when: Self.isOn)
         .preferredColorScheme(.dark)
         .task(id: source) { image = await PhotoDecoder.load(source, maxPixel: 3600) }
     }

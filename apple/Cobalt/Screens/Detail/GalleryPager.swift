@@ -28,6 +28,7 @@ struct GalleryPager: View {
                 }
             }
             .background { arrowKeys }
+            .haptic(.selection, trigger: page.index)
             .onChange(of: c.item.missing) { _, missing in
                 // a retried photo that now exists (or no longer fails) is no longer "fetching"
                 c.controller.retrying.formIntersection(missing)
