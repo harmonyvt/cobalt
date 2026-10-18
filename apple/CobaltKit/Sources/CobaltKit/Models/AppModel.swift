@@ -3,7 +3,22 @@ import Observation
 import UserNotifications
 
 /// The tabs, in the order they show. `queue` is everything cobalt is doing (apple/CONTRACT.md section 12).
-public enum AppTab: String, Sendable, CaseIterable { case save, library, queue, settings }
+/// `links` lists the gallery share links (APP-API-CONTRACT 24) and shows only with `features.share_sets`; `chat` holds the
+/// threads with Claude about the library (APP-API-CONTRACT 27) and shows only with `features.chat`.
+public enum AppTab: String, Sendable, CaseIterable {
+    case save, library, links, chat, queue, settings
+
+    /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`,
+    /// chat needs `features.chat`.
+    public func isAvailable(with caps: Capabilities) -> Bool {
+        switch self {
+        case .library: return caps.library
+        case .links: return caps.shareSets
+        case .chat: return caps.chat
+        case .save, .queue, .settings: return true
+        }
+    }
+}
 
 public enum PreviewScenario: String, Sendable, CaseIterable {
     case happy, coldStart, noLink, privatePost, tooBig, renderBusy, renderLost, picker, image,
@@ -27,6 +42,16 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// with `gallery` but not `gallery_make`; `galleryMakeFails`: 10 photos, and the first make fails
     /// (`error.webp.encode_failed`), the second works.
     case galleryInstagram, galleryX, galleryMixed, galleryOne, galleryPartial, galleryNoMake, galleryMakeFails
+    /// Gallery share links (APP-API-CONTRACT 24; `PreviewShare.swift`): `.renditions` data on a server with
+    /// `features.share_sets` and no links yet. `.happy` and `.renditions` have the same server with three sample links.
+    case shareLinksEmpty
+    /// Like `.shareLinksEmpty`, but `GET /share/sets` always fails (`503`), so the links tab shows its failed state.
+    /// Making a link works.
+    case shareLinksFail
+    /// Chat (APP-API-CONTRACT 27; `PreviewChat.swift`): `.happy` and `.renditions` have `features.chat` with three sample
+    /// threads. `.chatEmpty`: no threads yet. `.chatFail`: `GET /chat/threads` always fails (`503`), so the tab shows its
+    /// failed state. `.chatReplyFails`: the sample threads, but every reply ends in `error.chat.model` after a few words.
+    case chatEmpty, chatFail, chatReplyFails
 }
 
 public struct ServerSummary: Sendable, Equatable {
@@ -44,6 +69,10 @@ public final class AppModel {
     public let store: OfflineStore
     public let jobs: SharedJobStore
     public let library: LibraryModel
+    /// The gallery share links (the links tab; the library's select bar makes them). Idle until `refresh()`.
+    public let shareSets: ShareSetStore
+    /// The chat threads (the chat tab; APP-API-CONTRACT 27). Idle until `refresh()`.
+    public let chat: ChatStore
     /// The photos album (CONTRACT-SYNC.md): `PhotosSync.preview(_:)` in previews.
     public let photosSync: PhotosSync
     /// The Mac's Finder folder, the store's visible root (CONTRACT-OFFLINE.md section 13, Folder/MacFolder.swift):
@@ -64,6 +93,10 @@ public final class AppModel {
     /// on it by hand becomes the focused job at once.
     public var pipeline: Pipeline { queue.focused?.pipeline ?? queue.idlePipeline }
     public var selectedTab: AppTab = .save
+    /// iPhone and iPad: the queue is a sheet over the shell (opened from a toolbar button), not a tab. Use `showQueue()`
+    /// to open it from anywhere; the shell presents the sheet while this is true. The Mac keeps the queue as a tab and
+    /// never sets this.
+    public var queueShown = false
 
     /// A stored media a run link asks the home screen to open (CONTRACT-SHARE-QUICK.md R3): set by
     /// `openRunLink` when the run it names has settled and its original is in the store; the home screen
@@ -114,6 +147,8 @@ public final class AppModel {
         self.store = context.store
         self.jobs = context.jobs
         self.library = library
+        self.shareSets = ShareSetStore(context: context)
+        self.chat = ChatStore(context: context)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
         let jobQueue = JobQueue(
@@ -257,6 +292,8 @@ public final class AppModel {
         ctx.capabilities = caps
         if !ctx.isPreview { settings.remember(caps) }
         if selectedTab == .library, !caps.library, caps.kind != .unreachable { selectedTab = .save }
+        if selectedTab == .links, !caps.shareSets, caps.kind != .unreachable { selectedTab = .save }
+        if selectedTab == .chat, !caps.chat, caps.kind != .unreachable { selectedTab = .save }
         liveManager?.capabilitiesChanged()
         unifiedQueue.capabilitiesChanged()            // `features.queue` came or went: poll, or stop
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
@@ -289,21 +326,33 @@ public final class AppModel {
         ctx.client = makeClient(settings)
         apply(.unknown)
         library.reset()
+        shareSets.reset()
+        chat.reset()
     }
 
     // MARK: - Links, handoffs
+
+    /// Shows the queue: the Mac selects its tab, iPhone and iPad present the queue sheet (apple/CONTRACT.md section 12).
+    public func showQueue() {
+        #if os(macOS)
+        selectedTab = .queue
+        #else
+        queueShown = true
+        #endif
+    }
 
     /// `cobalt-apple://job/<uuid>`, `cobalt-apple://library` ("your webp is ready") and
     /// `cobalt-apple://open`.
     public func open(_ url: URL) {
         guard url.scheme?.lowercased() == "cobalt-apple" else { return }
+        queueShown = false                              // a link to somewhere else leaves the queue sheet behind
         selectedTab = .save
         if url.host(percentEncoded: false)?.lowercased() == "library" {
             if capabilities.library || capabilities.kind == .unreachable { selectedTab = .library }
             return
         }
         if url.host(percentEncoded: false)?.lowercased() == "jobs" {
-            selectedTab = .queue                        // the Hark summary (APP-API-CONTRACT 17.8): the queue tab
+            showQueue()                                 // the Hark summary (APP-API-CONTRACT 17.8): the queue (a tab on the Mac, a sheet elsewhere)
             return
         }
         guard url.host(percentEncoded: false)?.lowercased() == "job",

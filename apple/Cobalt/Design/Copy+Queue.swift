@@ -124,6 +124,8 @@ extension Copy {
         static let openSettings = "open settings"
         /// The JobTray's header, as a button: "open the queue".
         static let openQueueA11y = "open the queue"
+        /// The toolbar button's value while work runs on this device (the badge): "2 in progress".
+        static func inProgressA11y(_ count: Int) -> String { "\(count) in progress" }
         static func sectionA11y(_ name: String, count: Int) -> String { "\(name), \(count) \(count == 1 ? "item" : "items")" }
     }
 }

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The detail's `more` menu (CONTRACT-MEDIA 1.10, CONTRACT-LIBRARY2 decision 5, CONTRACT-OFFLINE decision 11), in the
 /// contract's order: rename (first, on every width), open in library (from the orbit,
-/// when the library has the post), show in finder / show in files, keep everything offline (only while some of
+/// when the library has the post), ask about this (with chat), show in finder / show in files, keep everything offline (only while some of
 /// the media is offline and the rest can be fetched), remove from this iphone, delete this webp (webp tab only), delete everything
 /// (destructive, last, only when the media has something on the server and a way to delete it).
 struct DetailMenu: View {
@@ -11,6 +11,8 @@ struct DetailMenu: View {
     let item: MediaItem
     let rendition: Rendition
     var openInLibrary: () -> Void
+    /// Starts a chat about this post ("ask about this", only while the server has chat and the media has a post).
+    var askAbout: () -> Void = {}
     /// Opens the rename alert; the same item sits in the detail's title menu.
     var rename: () -> Void = {}
 
@@ -23,6 +25,9 @@ struct DetailMenu: View {
     private var showsOpenInLibrary: Bool {
         model.capabilities.library && item.post != nil && model.selectedTab != .library
     }
+
+    /// With chat on the server, a media that has a library post can start a thread (APP-API-CONTRACT 27.4).
+    private var showsAskAbout: Bool { model.capabilities.chat && item.post != nil }
 
     /// Some of the media is kept offline and the rest can still be fetched (nothing runs for it right now).
     private var showsKeepEverything: Bool {
@@ -114,6 +119,9 @@ struct DetailMenu: View {
                 .disabled(deleting)
             if showsOpenInLibrary {
                 Button(Copy.Media.openInLibrary, systemImage: Symbol.Media.openInLibrary, action: openInLibrary)
+            }
+            if showsAskAbout {
+                Button(Copy.Chat.askAbout, systemImage: Symbol.chatAsk, action: askAbout)
             }
             if item.detailShape != .classic { galleryItems(deleting: deleting) }
             ShowInFinderButton(model: model, item: item)

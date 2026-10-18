@@ -162,6 +162,14 @@ private struct LibraryContent: View {
                 }
                 .motion(Motion.rows, value: library.searchState)
             }
+            // select mode on a server that makes gallery share links: the `make share link` bar (above the tab bar)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if controller.selecting, model.capabilities.shareSets {
+                    LibraryShareBar(
+                        verdict: controller.shareLinkVerdict(rows), count: pickedCount, making: controller.makingShareLink
+                    ) { Task { await makeShareLink() } }
+                }
+            }
             .modifier(LibraryInspector(model: model, controller: controller, enabled: tier != .compact))
             .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: tier == .compact))
             .renameAlert(item: $controller.renaming, model: model)
@@ -206,6 +214,7 @@ private struct LibraryContent: View {
             .haptic(.selection, trigger: controller.picked, enabled: haptics)
             .haptic(.impact(weight: .light), trigger: controller.selecting, enabled: haptics)
             .haptic(.success, trigger: filesToShare.isEmpty, enabled: haptics) { !$0 }
+            .haptic(.success, trigger: controller.shareLinksMade, enabled: haptics)
             .onAppear { controller.showStatus = { shell.showStatus($0) } }
             .task(id: library.needsWholeLibrary) {
                 if library.needsWholeLibrary { await library.loadAll() }
@@ -252,6 +261,10 @@ private struct LibraryContent: View {
         }
         #else
         ToolbarItem(placement: .navigation) { LibraryViewSwitcher(library: library) }
+        #endif
+        #if os(iOS)
+        // the queue is a sheet on iPhone and iPad (not a tab); select mode keeps its controls and drops this button
+        if !controller.selecting { QueueToolbarItem(model: model) }
         #endif
         ToolbarItemGroup(placement: .primaryAction) {
             // Select mode keeps the view switcher and replaces the rest of this capsule.
@@ -313,6 +326,15 @@ private struct LibraryContent: View {
         guard !urls.isEmpty else { return }
         filesToShare = urls
         withAnimation(Motion.rows) { controller.endSelecting() }
+    }
+
+    /// Makes one link for the ticked posts that are on screen and copies it, then leaves select mode (as the share sheet
+    /// does). The bar's verdict keeps the button off for too few, too many and private files; a second tap while this
+    /// runs does nothing.
+    private func makeShareLink() async {
+        if await controller.makeShareLink(rows) {
+            withAnimation(Motion.rows) { controller.endSelecting() }
+        }
     }
 
     /// A kind chip's long press: the chip's posts ticked in one go, and shared at once for `share all`.

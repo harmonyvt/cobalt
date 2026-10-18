@@ -396,7 +396,7 @@ struct AppAndLibraryTests {
                 await h.driveToSettled()
                 if case .gallery = p.state {} else { Issue.record("\(scenario): \(p.state)") }
                 #expect(p.galleryRun?.isSaved == true, "\(scenario)")
-            case .happy, .coldStart, .shortClip, .legacyFork, .emptyOrbit, .renditions, .renditionsLegacy, .renameFails, .offline:
+            case .happy, .coldStart, .shortClip, .legacyFork, .emptyOrbit, .renditions, .renditionsLegacy, .renameFails, .offline, .shareLinksEmpty, .shareLinksFail, .chatEmpty, .chatFail, .chatReplyFails:
                 p.start(link: URL(string: pastedLink)!)
                 await h.driveToSettled()
                 #expect(p.state == .ready, "\(scenario)")
@@ -460,10 +460,11 @@ struct AppAndLibraryTests {
         // copy / host
         app.library.copyLink(library.posts[2].files[0])
         let clip = (app.ctx.clipboard as! MemoryClipboard)
-        #expect(clip.last == "https://media.capybaraharmony.com/PrEvIeW002.webp")
+        // (the preview server advertises `share_base_url`: a copied public file is its rich link page)
+        #expect(clip.last == "https://share.capybaraharmony.com/PrEvIeW002")
         let url = try await library.host(library.posts[2].files[1])
         #expect(url.absoluteString.hasPrefix("https://media.capybaraharmony.com/"))
-        #expect(clip.last == url.absoluteString)
+        #expect(clip.last == app.capabilities.shareLink(for: url).absoluteString)
 
         // the deleted file stays gone after a refresh
         await library.refresh()

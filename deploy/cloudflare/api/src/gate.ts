@@ -82,6 +82,22 @@ export type LookupThen =
     | "library_map"
     // GET /queue (APP-API-CONTRACT.md section 23)
     | "queue"
+    // gallery share links (APP-API-CONTRACT.md section 24)
+    | "share_sets_create"
+    | "share_sets_list"
+    | "share_sets_revoke"
+    | "collections_list"
+    | "collections_create"
+    | "collections_update"
+    | "collections_delete"
+    | "collections_reroll"
+    // chat (APP-API-CONTRACT.md section 27)
+    | "chat_list"
+    | "chat_create"
+    | "chat_get"
+    | "chat_rename"
+    | "chat_delete"
+    | "chat_send"
     | "live_start_token"
     | "live_run"
     | "live_state"
@@ -117,6 +133,9 @@ export const STUDIO_JOB_REGEX = /^[A-Za-z0-9]{20}$/;
 
 // Library item id: 16 base62 chars (mintItemId, the web's base62(16)).
 export const ITEM_ID_REGEX = /^[A-Za-z0-9]{16}$/;
+// a gallery share link's id (section 24): 19 digits
+export const SHARE_SET_ID_REGEX = /^[0-9]{19}$/;
+const COLLECTION_ID_REGEX = /^[A-Za-z0-9]{16}$/;
 
 export const isStudioPath = (pathname: string) =>
     pathname === "/studio" || pathname.startsWith("/studio/");
@@ -210,6 +229,59 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     if (req.pathname === "/queue") {
         if (req.service) return reject(404);
         return req.method === "GET" ? lookupThen(req, "queue") : reject(404);
+    }
+
+    // Gallery share links (APP-API-CONTRACT.md section 24): keyed only.
+    if (req.pathname === "/share/sets" || req.pathname.startsWith("/share/sets/")) {
+        if (req.service) return reject(404);
+        if (req.pathname === "/share/sets") {
+            if (req.method === "GET") return lookupThen(req, "share_sets_list");
+            if (req.method === "POST") return lookupThen(req, "share_sets_create");
+            return reject(404);
+        }
+        const id = req.pathname.slice("/share/sets/".length);
+        if (!SHARE_SET_ID_REGEX.test(id) || req.method !== "DELETE") return reject(404);
+        return lookupThen(req, "share_sets_revoke", { id });
+    }
+
+    // Share link collections (APP-API-CONTRACT.md section 26): keyed only.
+    if (req.pathname === "/share/collections" || req.pathname.startsWith("/share/collections/")) {
+        if (req.service) return reject(404);
+        if (req.pathname === "/share/collections") {
+            if (req.method === "GET") return lookupThen(req, "collections_list");
+            if (req.method === "POST") return lookupThen(req, "collections_create");
+            return reject(404);
+        }
+        const rest = req.pathname.slice("/share/collections/".length);
+        if (rest.endsWith("/reroll")) {
+            const rid = rest.slice(0, -"/reroll".length);
+            if (!COLLECTION_ID_REGEX.test(rid) || req.method !== "POST") return reject(404);
+            return lookupThen(req, "collections_reroll", { id: rid });
+        }
+        const id = rest;
+        if (!COLLECTION_ID_REGEX.test(id)) return reject(404);
+        if (req.method === "PATCH") return lookupThen(req, "collections_update", { id });
+        if (req.method === "DELETE") return lookupThen(req, "collections_delete", { id });
+        return reject(404);
+    }
+
+    // Chat (APP-API-CONTRACT.md section 27): keyed only.
+    if (req.pathname === "/chat/threads" || req.pathname.startsWith("/chat/threads/")) {
+        if (req.service) return reject(404);
+        if (req.pathname === "/chat/threads") {
+            if (req.method === "GET") return lookupThen(req, "chat_list");
+            if (req.method === "POST") return lookupThen(req, "chat_create");
+            return reject(404);
+        }
+        const rest = req.pathname.slice("/chat/threads/".length);
+        const [id, sub, ...more] = rest.split("/");
+        if (!COLLECTION_ID_REGEX.test(id ?? "") || more.length > 0) return reject(404);
+        if (sub === "messages") return req.method === "POST" ? lookupThen(req, "chat_send", { id: id! }) : reject(404);
+        if (sub !== undefined) return reject(404);
+        if (req.method === "GET") return lookupThen(req, "chat_get", { id: id! });
+        if (req.method === "PATCH") return lookupThen(req, "chat_rename", { id: id! });
+        if (req.method === "DELETE") return lookupThen(req, "chat_delete", { id: id! });
+        return reject(404);
     }
 
     // Library adoption is for the web Worker's service credential only; an

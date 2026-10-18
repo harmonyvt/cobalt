@@ -35,7 +35,7 @@ extension AppModel {
     }
 
     var visibleTabs: [AppTab] {
-        AppTab.allCases.filter { $0 != .library || capabilities.library }
+        AppTab.allCases.filter { $0.isAvailable(with: capabilities) }
     }
 }
 
@@ -306,11 +306,20 @@ struct AppShell: View {
                     LibraryScreen(model: model, tier: tier)
                 }
             }
-            // everything cobalt is doing (apple/CONTRACT.md 12); the badge is the work in motion on this device
-            Tab(Copy.tab(.queue), systemImage: icon(for: .queue), value: AppTab.queue) {
-                NavigationStack { QueueScreen(model: model) }
+            // the gallery share links made from the library's select mode (APP-API-CONTRACT 24)
+            if model.capabilities.shareSets {
+                Tab(Copy.tab(.links), systemImage: icon(for: .links), value: AppTab.links) {
+                    NavigationStack { LinksScreen(model: model) }
+                }
             }
-            .badge(model.unifiedQueue.badgeCount)
+            // threads with Claude about the library (APP-API-CONTRACT 27)
+            if model.capabilities.chat {
+                Tab(Copy.tab(.chat), systemImage: icon(for: .chat), value: AppTab.chat) {
+                    NavigationStack { ChatScreen(model: model, tier: tier) }
+                }
+            }
+            // the queue is not a tab here: it is a sheet opened from the toolbar button on save, library, links and chat
+            // (apple/CONTRACT.md 12; `AppModel.showQueue()`)
             Tab(Copy.tab(.settings), systemImage: icon(for: .settings), value: AppTab.settings) {
                 NavigationStack { SettingsScreen(model: model) }
             }
@@ -318,6 +327,13 @@ struct AppShell: View {
         .tabViewStyle(.sidebarAdaptable)
         // always expanded: a collapsed bar hid the other two tabs after any scroll (owner's live run)
         .tabBarMinimizeBehavior(.never)
+        .sheet(isPresented: $model.queueShown) { queueSheet }
+        // Anything that still selects the queue tab (a launch argument, a preview) opens the sheet instead.
+        .onChange(of: model.selectedTab, initial: true) { _, tab in
+            guard tab == .queue else { return }
+            model.selectedTab = .save
+            model.queueShown = true
+        }
         #else
         NavigationSplitView {
             List(selection: sidebarSelection) {
@@ -334,12 +350,27 @@ struct AppShell: View {
             switch model.selectedTab {
             case .save: HomeScreen(model: model, tier: tier)
             case .library: LibraryScreen(model: model, tier: tier)
+            case .links: NavigationStack { LinksScreen(model: model) }
+            case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
             case .queue: NavigationStack { QueueScreen(model: model) }
             case .settings: SettingsScreen(model: model)
             }
         }
         #endif
     }
+
+    #if os(iOS)
+    /// The queue on iPhone and iPad: the whole screen in a large sheet, closed with the x like the other sheets.
+    private var queueSheet: some View {
+        NavigationStack {
+            QueueScreen(model: model)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { CloseButton { model.queueShown = false } } }
+        }
+        .presentationDetents([.large])
+        .cobaltRoot(model: model)
+        .environment(\.shell, actions)
+    }
+    #endif
 
     #if os(macOS)
     private var sidebarSelection: Binding<AppTab?> {
@@ -554,20 +585,48 @@ func icon(for tab: AppTab) -> String {
     switch tab {
     case .save: return Symbol.save
     case .library: return Symbol.library
+    case .links: return Symbol.links
+    case .chat: return Symbol.chat
     case .queue: return Symbol.queue
     case .settings: return Symbol.settings
     }
 }
 
 #if DEBUG
+/// The shell over `AppModel.previewQueue(.busy)`: two links waiting and downloads running, so the toolbar button
+/// carries its badge; `sheet` opens the queue sheet over it (iPhone and iPad; the Mac has the tab).
+private struct QueueShellPreview: View {
+    @State private var model: AppModel
+
+    init(sheet: Bool) {
+        let model = AppModel.previewQueue(.busy)
+        model.queueShown = sheet
+        _model = State(initialValue: model)
+    }
+
+    var body: some View { AppShell(model: model) }
+}
+
 #Preview("shell · compact") {
     PreviewHost(.happy) { AppShell(model: $0) }
 }
 #Preview("shell · library tab") {
     PreviewHost(.happy, tab: .library) { AppShell(model: $0) }
 }
-#Preview("shell · queue tab") {
+#Preview("shell · links tab") {
+    PreviewHost(.happy, tab: .links) { AppShell(model: $0) }
+}
+#Preview("shell · chat tab") {
+    PreviewHost(.happy, tab: .chat) { AppShell(model: $0) }
+}
+#Preview("shell · queue sheet") {
     PreviewHost(.happy, tab: .queue) { AppShell(model: $0) }
+}
+#Preview("shell · queue badge") {
+    QueueShellPreview(sheet: false)
+}
+#Preview("shell · queue badge, sheet open") {
+    QueueShellPreview(sheet: true)
 }
 #Preview("shell · settings tab") {
     PreviewHost(.happy, tab: .settings) { AppShell(model: $0) }

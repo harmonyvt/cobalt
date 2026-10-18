@@ -1,0 +1,447 @@
+import Foundation
+import Synchronization
+
+// Chat in previews (APP-API-CONTRACT 27): a server with `features.chat`, three sample threads (one with code steps and
+// shown posts, one with a failed step, one with a deleted post), and a canned reply that streams the way the real one does:
+// the user message, a running code step that finishes, the text word by word, the shown posts, a new title, the end.
+// `PreviewScenario.chatEmpty` has no threads, `.chatFail` cannot list them, `.chatReplyFails` ends every reply in
+// `error.chat.model`. `.happy` and `.renditions` have the three samples.
+
+extension PreviewScenario {
+    /// The preview server has `features.chat`.
+    var hasChat: Bool {
+        switch self {
+        case .happy, .renditions, .chatEmpty, .chatFail, .chatReplyFails: return true
+        default: return false
+        }
+    }
+}
+
+extension PreviewData {
+    /// The post ids the canned reply shows (the first three of the preview library), in order.
+    static func chatShownPostIDs(now: Date) -> [String] { Array(libraryPage(now: now).posts.prefix(3).map(\.id)) }
+
+    static let chatThreadIDs = ["PrEvIeWchat00001", "PrEvIeWchat00002", "PrEvIeWchat00003"]
+    /// A post a sample message shows that the library no longer has (the "removed" tile).
+    static let chatGonePostID = "PrEvIeWgone000001"
+
+    /// The three sample threads, newest first, with their messages.
+    static func chatSeed(now: Date) -> (threads: [ChatThread], messages: [String: [ChatMessage]]) {
+        func t(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
+        let shown = chatShownPostIDs(now: now)
+
+        let code1 = """
+        const yesterday = await cobalt.library({ since: "2026-10-17", until: "2026-10-18", limit: 50 });
+        const funny = await cobalt.search("funny", 10);
+        const ids = new Set(yesterday.map(p => p.id));
+        const hits = funny.filter(p => ids.has(p.id)).slice(0, 3);
+        await cobalt.show(hits.map(p => p.id));
+        return hits.map(p => ({ id: p.id, title: p.title, source: p.source }));
+        """
+        let result1 = """
+        [{"id":"Dd7P496wolG","title":"the dog at the harbour","source":"instagram.com"},
+         {"id":"2105435404002562056","title":"the timer one","source":"x.com"},
+         {"id":"Dd5JFkMDt4N","title":"coffee and the city","source":"instagram.com"}]
+        """
+        let reply1 = """
+        you saved **12 posts** yesterday. the three funniest:
+
+        1. the dog at the harbour, 14 s. the dog gives up halfway
+        2. the timer one, 5 s
+        3. coffee and the city, 10 s
+
+        want only the videos, or should i look at the day before too?
+        """
+        let broken = """
+        const longest = await cobalt.library({ limit: 200 }).sort((a, b) => b.duration - a.duration)[0];
+        return longest;
+        """
+        let fixed = """
+        const all = await cobalt.library({ limit: 200 });
+        all.sort((a, b) => (b.duration ?? 0) - (a.duration ?? 0));
+        return { id: all[0].id, duration: all[0].duration, title: all[0].title };
+        """
+
+        let thread1 = ChatThread(
+            id: chatThreadIDs[0], title: "funny things from yesterday", createdAt: t(40), updatedAt: t(12),
+            preview: "the longest one is the harbour clip at 37 s. it is also the one with the dog.", messageCount: 4)
+        let messages1 = [
+            ChatMessage(id: "101", role: .user, text: "what did i save yesterday? show me the funniest", createdAt: t(40)),
+            ChatMessage(
+                id: "102", role: .assistant, text: reply1, postIDs: shown,
+                steps: [ChatStep(
+                    id: "toolu_01", status: .done, code: code1, logs: ["12 posts yesterday", "3 funny ones"],
+                    result: result1, durationMS: 820)],
+                createdAt: t(39)),
+            ChatMessage(id: "103", role: .user, text: "which one is the longest?", createdAt: t(13)),
+            ChatMessage(
+                id: "104", role: .assistant,
+                text: "the longest one is the harbour clip at 37 s. it is also the one with the dog.",
+                postIDs: [shown[0]],
+                steps: [
+                    ChatStep(
+                        id: "toolu_02", status: .error, code: broken, error: "TypeError: cobalt.library(...).sort is not a function",
+                        durationMS: 40),
+                    ChatStep(
+                        id: "toolu_03", status: .done, code: fixed, logs: ["scanned 15 posts"],
+                        result: #"{"id":"Dd55fEyN1Yy","duration":37.43,"title":"harbour and the dog"}"#, durationMS: 310),
+                ],
+                createdAt: t(12)),
+        ]
+
+        let thread2 = ChatThread(
+            id: chatThreadIDs[1], title: "roast my taste", createdAt: t(200), updatedAt: t(180),
+            preview: "mostly dogs, coffee and one very specific obsession with kitchen timers.", messageCount: 2)
+        let messages2 = [
+            ChatMessage(id: "111", role: .user, text: "roast my taste", createdAt: t(200)),
+            ChatMessage(
+                id: "112", role: .assistant,
+                text: "mostly dogs, coffee and one very specific obsession with kitchen timers.\n\nthree of your last ten saves are the same timer. you are fine. it is fine.",
+                steps: [ChatStep(
+                    id: "toolu_11", status: .done, code: "return (await cobalt.library({ limit: 10 })).map(p => p.title);",
+                    logs: [], result: #"["the dog at the harbour","the timer one","the timer, again"]"#, durationMS: 450)],
+                createdAt: t(199)),
+        ]
+
+        let thread3 = ChatThread(
+            id: chatThreadIDs[2], title: "what is this twitter webp", createdAt: t(2 * 1_440), updatedAt: t(2 * 1_440 - 3),
+            preview: "it is a kitchen timer counting down to a pasta joke. the other file is gone from your library.", messageCount: 2)
+        let messages3 = [
+            ChatMessage(
+                id: "121", role: .user, text: "what is this one about?", postIDs: [shown[1]], createdAt: t(2 * 1_440)),
+            ChatMessage(
+                id: "122", role: .assistant,
+                text: "it is a kitchen timer counting down to a pasta joke. the other file is gone from your library.",
+                postIDs: [shown[1], chatGonePostID], createdAt: t(2 * 1_440 - 3)),
+        ]
+        return (
+            [thread1, thread2, thread3],
+            [thread1.id: messages1, thread2.id: messages2, thread3.id: messages3])
+    }
+}
+
+/// What the preview "server" holds for `/chat`, and every call made (`"GET"`, `"POST"`, `"GET <id>"`, `"SEND <id> <text>"`).
+final class PreviewChatState: Sendable {
+    private struct State {
+        var threads: [ChatThread] = []
+        var messages: [String: [ChatMessage]] = [:]
+        var counter = 300
+        var threadCounter = 0
+        var calls: [String] = []
+        var listFails = false
+        var replyFails = false
+        var readFails = false
+        /// The sends in flight (one reply at a time per thread).
+        var replying: Set<String> = []
+    }
+
+    private let state = Mutex(State())
+
+    var threads: [ChatThread] { state.withLock { $0.threads } }
+    var calls: [String] { state.withLock { $0.calls } }
+    func messages(_ id: String) -> [ChatMessage] { state.withLock { $0.messages[id] ?? [] } }
+
+    func seed(_ threads: [ChatThread], messages: [String: [ChatMessage]], listFails: Bool, replyFails: Bool) {
+        state.withLock {
+            $0.threads = threads
+            $0.messages = messages
+            $0.listFails = listFails
+            $0.replyFails = replyFails
+        }
+    }
+
+    /// Tests: `GET /chat/threads` answers 503 while this is true.
+    var listFails: Bool {
+        get { state.withLock { $0.listFails } }
+        set { state.withLock { $0.listFails = newValue } }
+    }
+
+    /// Tests: every reply ends in `error.chat.model` while this is true.
+    var replyFails: Bool {
+        get { state.withLock { $0.replyFails } }
+        set { state.withLock { $0.replyFails = newValue } }
+    }
+
+    func record(_ call: String) { state.withLock { $0.calls.append(call) } }
+
+    func list() -> [ChatThread]? {
+        state.withLock { $0.listFails ? nil : $0.threads.sorted { $0.updatedAt > $1.updatedAt } }
+    }
+
+    func thread(_ id: String) -> ChatThread? { state.withLock { s in s.threads.first { $0.id == id } } }
+
+    func nextMessageID() -> String {
+        state.withLock { s in
+            s.counter += 1
+            return String(s.counter)
+        }
+    }
+
+    func add(title: String?, at now: Date) throws -> ChatThread {
+        try state.withLock { s in
+            guard s.threads.count < ChatRule.threadCap else { throw ChatError.tooMany }
+            s.threadCounter += 1
+            let id = "PrEvIeWnew" + String(format: "%06d", s.threadCounter)
+            let made = ChatThread(id: id, title: title ?? ChatRule.defaultTitle, createdAt: now, updatedAt: now)
+            s.threads.insert(made, at: 0)
+            s.messages[id] = []
+            return made
+        }
+    }
+
+    func rename(_ id: String, to title: String, at now: Date) throws -> ChatThread {
+        try state.withLock { s in
+            guard let i = s.threads.firstIndex(where: { $0.id == id }) else { throw ChatError.notFound }
+            s.threads[i].title = title
+            s.threads[i].updatedAt = now
+            return s.threads[i]
+        }
+    }
+
+    func remove(_ id: String) -> Bool {
+        state.withLock { s in
+            guard s.threads.contains(where: { $0.id == id }) else { return false }
+            s.threads.removeAll { $0.id == id }
+            s.messages[id] = nil
+            return true
+        }
+    }
+
+    /// Takes the thread's one reply slot: `busy` while a reply is running, `full` at 200 messages.
+    func beginReply(_ id: String) throws {
+        try state.withLock { s in
+            guard s.threads.contains(where: { $0.id == id }) else { throw ChatError.notFound }
+            guard !s.replying.contains(id) else { throw ChatError.busy }
+            guard (s.messages[id]?.count ?? 0) + 2 <= ChatRule.messageCap else { throw ChatError.full }
+            s.replying.insert(id)
+        }
+    }
+
+    func endReply(_ id: String) { state.withLock { _ = $0.replying.remove(id) } }
+
+    func append(_ message: ChatMessage, to id: String) {
+        state.withLock { s in
+            s.messages[id, default: []].append(message)
+            if let i = s.threads.firstIndex(where: { $0.id == id }) {
+                s.threads[i].messageCount = s.messages[id]?.count ?? 0
+                s.threads[i].updatedAt = message.createdAt
+                if !message.text.isEmpty { s.threads[i].preview = String(message.text.prefix(120)) }
+            }
+        }
+    }
+
+    func update(_ messageID: String, in id: String, _ change: (inout ChatMessage) -> Void) {
+        state.withLock { s in
+            guard let i = s.messages[id]?.firstIndex(where: { $0.id == messageID }) else { return }
+            change(&s.messages[id]![i])
+            if let t = s.threads.firstIndex(where: { $0.id == id }), !(s.messages[id]![i].text.isEmpty), s.messages[id]![i].role == .assistant {
+                s.threads[t].preview = String(s.messages[id]![i].text.prefix(120))
+            }
+        }
+    }
+
+    func setTitle(_ title: String, of id: String) -> ChatThread? {
+        state.withLock { s in
+            guard let i = s.threads.firstIndex(where: { $0.id == id }) else { return nil }
+            s.threads[i].title = title
+            return s.threads[i]
+        }
+    }
+}
+
+extension PreviewClient {
+    /// `GET /chat/threads`; `.chatFail` answers `503`.
+    public func chatThreads() async throws -> [ChatThread] {
+        chatState.record("GET")
+        try await clock.sleep(seconds: 0.3 * timeScale)
+        guard scenario.hasChat else { throw PipelineFailure.unsupported }
+        guard let list = chatState.list() else { throw ChatError.unavailable }
+        return list
+    }
+
+    /// `POST /chat/threads`: "new chat" until the first message; `tooMany` at 200.
+    public func createChatThread(title: String?) async throws -> ChatThread {
+        chatState.record("POST")
+        try await clock.sleep(seconds: 0.3 * timeScale)
+        guard scenario.hasChat else { throw PipelineFailure.unsupported }
+        var cleaned: String?
+        if let title {
+            guard let c = ChatRule.cleanTitle(title) else { throw ChatError.badRequest }
+            cleaned = c
+        }
+        return try chatState.add(title: cleaned, at: clock.now())
+    }
+
+    /// `GET /chat/threads/<id>`: the messages oldest first and the `posts` the preview library has.
+    public func chatThread(id: String) async throws -> ChatThreadDetail {
+        chatState.record("GET " + id)
+        try await clock.sleep(seconds: 0.25 * timeScale)
+        guard scenario.hasChat else { throw PipelineFailure.unsupported }
+        guard let thread = chatState.thread(id) else { throw ChatError.notFound }
+        let messages = chatState.messages(id)
+        let library = PreviewData.libraryPage(now: startedAt).posts
+        var posts: [String: LibraryPost] = [:]
+        for postID in Set(messages.flatMap(\.postIDs)) {
+            if let post = library.first(where: { $0.id == postID }) { posts[postID] = post }
+        }
+        return ChatThreadDetail(thread: thread, messages: messages, posts: posts)
+    }
+
+    /// `PATCH /chat/threads/<id>`: `badRequest` unless the title cleans to 1..60 code points.
+    public func renameChatThread(id: String, title: String) async throws -> ChatThread {
+        chatState.record("PATCH " + id)
+        try await clock.sleep(seconds: 0.3 * timeScale)
+        guard scenario.hasChat else { throw PipelineFailure.unsupported }
+        guard let cleaned = ChatRule.cleanTitle(title) else { throw ChatError.badRequest }
+        return try chatState.rename(id, to: cleaned, at: clock.now())
+    }
+
+    /// `DELETE /chat/threads/<id>`: an unknown id is `.notFound`.
+    public func deleteChatThread(id: String) async throws {
+        chatState.record("DELETE " + id)
+        try await clock.sleep(seconds: 0.3 * timeScale)
+        guard scenario.hasChat else { throw PipelineFailure.unsupported }
+        guard chatState.remove(id) else { throw ChatError.notFound }
+    }
+
+    /// `POST /chat/threads/<id>/messages`: the real reply's shape, event by event, with small delays. A refusal
+    /// (`busy`, `full`, `notFound`, `badRequest`) finishes the stream before any event.
+    public func sendChatMessage(threadID: String, text: String, postIDs: [String]) -> AsyncThrowingStream<ChatEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard scenario.hasChat else { throw PipelineFailure.unsupported }
+                    chatState.record("SEND \(threadID) \(text)")
+                    guard let cleaned = ChatRule.cleanMessage(text), postIDs.count <= ChatRule.attachmentLimit else { throw ChatError.badRequest }
+                    try chatState.beginReply(threadID)
+                    defer { chatState.endReply(threadID) }
+                    try await streamReply(threadID: threadID, text: cleaned, postIDs: postIDs) { continuation.yield($0) }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func pause(_ seconds: Double) async throws { try await clock.sleep(seconds: seconds * timeScale) }
+
+    private func streamReply(threadID: String, text: String, postIDs: [String], emit: @Sendable (ChatEvent) -> Void) async throws {
+        let now = clock.now()
+        let isFirst = chatState.messages(threadID).isEmpty
+        let library = PreviewData.libraryPage(now: startedAt).posts
+        let attached = postIDs.filter { id in library.contains { $0.id == id } }
+
+        // the saved user message; a new thread is titled from it (trimmed to 60 code points)
+        let user = ChatMessage(id: chatState.nextMessageID(), role: .user, text: text, postIDs: attached, createdAt: now)
+        chatState.append(user, to: threadID)
+        if isFirst, chatState.thread(threadID)?.title == ChatRule.defaultTitle {
+            _ = chatState.setTitle(String(text.unicodeScalars.prefix(ChatRule.titleLimit).map(Character.init)), of: threadID)
+        }
+        emit(.user(user))
+        try await pause(0.25)
+
+        var reply = ChatMessage(id: chatState.nextMessageID(), role: .assistant, status: .running, createdAt: clock.now())
+        chatState.append(reply, to: threadID)
+        emit(.assistant(reply))
+        try await pause(0.35)
+
+        // a code step: running, then done with its logs and result
+        let code = """
+        const posts = await cobalt.search(\(Self.jsString(text)), 12);
+        const top = posts.slice(0, 3);
+        console.log(`found ${posts.length}, showing ${top.length}`);
+        await cobalt.show(top.map(p => p.id));
+        return top.map(p => ({ id: p.id, title: p.title, score: p.score }));
+        """
+        var step = ChatStep(id: "toolu_\(reply.id)", status: .running, code: code)
+        reply.steps = [step]
+        chatState.update(reply.id, in: threadID) { $0.steps = [step] }
+        emit(.step(step))
+        try await pause(1.4)
+
+        if chatState.replyFails {
+            step.status = .error
+            step.error = "the search is waking up"
+            step.durationMS = 1_400
+            emit(.step(step))
+            let partial = "let me look at that"
+            for word in Self.words(partial) {
+                try await pause(0.05)
+                emit(.text(word))
+            }
+            reply.text = partial
+            reply.steps = [step]
+            reply.status = .error
+            reply.error = ChatError.model.code
+            chatState.update(reply.id, in: threadID) { $0 = reply }
+            emit(.error(code: ChatError.model.code, message: reply))
+            return
+        }
+
+        step.status = .done
+        step.logs = ["found 12, showing 3"]
+        step.result = #"[{"id":"Dd55fEyN1Yy","score":0.62},{"id":"Dd7P496wolG","score":0.58},{"id":"2105435404002562056","score":0.51}]"#
+        step.durationMS = 820
+        reply.steps = [step]
+        chatState.update(reply.id, in: threadID) { $0.steps = [step] }
+        emit(.step(step))
+        try await pause(0.3)
+
+        // the text, a word or two at a time
+        let body = """
+        found **12 posts** that fit. these three are the closest:
+
+        1. the harbour clip, 37 s
+        2. the dog at the harbour, 14 s
+        3. the timer one, 5 s
+
+        say the word and i will narrow it to the videos only.
+        """
+        var streamed = ""
+        for word in Self.words(body) {
+            try await pause(0.045)
+            streamed += word
+            emit(.text(word))
+        }
+        reply.text = streamed
+        chatState.update(reply.id, in: threadID) { $0.text = streamed }
+        try await pause(0.2)
+
+        let shown = PreviewData.chatShownPostIDs(now: startedAt)
+        let shownPosts = shown.compactMap { id in library.first { $0.id == id } }
+        reply.postIDs = shown
+        chatState.update(reply.id, in: threadID) { $0.postIDs = shown }
+        emit(.posts(ids: shown, posts: shownPosts))
+        try await pause(0.3)
+
+        if isFirst, let thread = chatState.setTitle("the harbour clips", of: threadID) {
+            emit(.title(thread))
+        }
+        reply.status = .done
+        chatState.update(reply.id, in: threadID) { $0.status = .done }
+        guard let thread = chatState.thread(threadID) else { throw ChatError.notFound }
+        emit(.done(reply, thread))
+    }
+
+    /// Text in pieces that keep their trailing space or newline, so joining them gives the text back.
+    static func words(_ text: String) -> [String] {
+        var out: [String] = []
+        var current = ""
+        for ch in text {
+            current.append(ch)
+            if ch == " " || ch == "\n" { out.append(current); current = "" }
+        }
+        if !current.isEmpty { out.append(current) }
+        return out
+    }
+
+    private static func jsString(_ text: String) -> String {
+        let escaped = text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: " ")
+        return "\"\(escaped.prefix(60))\""
+    }
+}

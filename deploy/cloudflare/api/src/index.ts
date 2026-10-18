@@ -10,7 +10,10 @@ import { runTelemetryRetention } from "./telemetry";
 import { purgeFrom } from "./visibility";
 import { shareLinkFrom } from "./share";
 import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
+import { backfillCaptions, captionerFrom } from "./roast";
+import { setRoastInput } from "./share-sets";
 import { embedFrom, handleRequest, type WorkerEnv } from "./worker";
+import { loaderRunner } from "./chat-loader";
 
 export interface Env extends WorkerEnv {
     COBALT: DurableObjectNamespace<CobaltContainer>;
@@ -332,10 +335,17 @@ export class CobaltContainer extends Container<Env> {
 
 // The search indexer's trigger (cloudflare.config.ts); any other cron is the daily one.
 const SEARCH_CRON = "*/15 * * * *";
+// The roast backfill's share of each 15-minute run (the search indexer gets the rest).
+const ROAST_RUN_BUDGET_MS = 90_000;
 
 export default {
-    async fetch(request: Request, env: Env): Promise<Response> {
-        return handleRequest(request, env, getContainer(env.COBALT, "main"));
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+        return handleRequest(request, env, getContainer(env.COBALT, "main"), {
+            // chat (APP-API-CONTRACT.md section 27): the model's code runs in a Dynamic Worker; a reply keeps
+            // going after the app goes away
+            codeRunner: env.LOADER ? loaderRunner(env.LOADER as WorkerLoader) : undefined,
+            waitUntil: (p) => ctx.waitUntil(p),
+        });
     },
     // Daily cron (cloudflare.config.ts triggers): telemetry retention, 30 days (D1 and R2
     // only, the container and the Durable Object are not touched), and the poster backfill:
@@ -347,6 +357,24 @@ export default {
         // SEARCH_RUN_BUDGET_MS (APP-API-CONTRACT.md sections 21 and 23). D1 and the Hugging Face Space
         // only; the container is not touched. Awaited, not waitUntil: the run is the handler's work.
         if (controller.cron === SEARCH_CRON) {
+            // Roast captions (section 25): new public files and gallery links, and the backfill. Anthropic
+            // and D1 only; up to ROAST_RUN_BUDGET_MS, then the search indexer below.
+            const captioner = captionerFrom(env);
+            if (captioner) {
+                try {
+                    const r = await backfillCaptions({
+                        db: env.DB,
+                        captioner,
+                        mediaBaseUrl: env.MEDIA_BASE_URL,
+                        now: () => Date.now(),
+                        budgetMs: ROAST_RUN_BUDGET_MS,
+                        setInput: (id) => setRoastInput({ db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL }, id),
+                    });
+                    if (r.written || r.failed) console.log("[roast] captions", JSON.stringify(r));
+                } catch (e) {
+                    console.error("[roast] backfill failed", e instanceof Error ? e.name : "error");
+                }
+            }
             const client = embedFrom(env);
             if (!client) return;
             try {

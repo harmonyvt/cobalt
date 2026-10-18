@@ -2352,3 +2352,99 @@ fetched on its own and is `null` when it fails.
 `src/poster.ts` (`posterBacklog`), `src/gate.ts` (`queue`), `src/worker.ts`, `src/index.ts`; tests in `test/search.test.ts`. Apply
 migration 0011 (additive, one table), then deploy the API Worker. Either order works: without the table `GET /queue` answers null for
 the run fields and the cron drains without a record.
+
+## 24. Gallery share links (addendum, built 2026-10-17; owner: "select and then hit a button to create a shareable link with gallery in the rich ... the button can not work if I exceed the limit", "a separate tab for all created gallery links and I can revoke anytime")
+
+A share set is 2..4 public files under one link, `https://share.capybaraharmony.com/g/<id>`. In Discord it shows as one embed with the files in a grid (videos play); other apps show the first file. `<id>` is 19 random digits (Discord's post renderer expects numeric status ids; ~63 bits, unguessable). D1 table `share_sets` (migration `0012_share_sets.sql`).
+
+### 24.1 Routes (keyed `Authorization: Api-Key`; the library service and other methods 404)
+
+- `POST /share/sets` body `{ "items": ["<library file id>", ...], "title"?: "<1..80 chars>" }` → 201 `{ "status": "success", "set": <set> }`. `items` is 2..4 distinct ids (`share_set_max`), in the order shown. Each must be a live file that is public now (the same rows the library calls `visibility: "public"` with a `url`). Errors: 400 `error.share.bad_request` (not 2..4, duplicates, bad shape, title too long); 409 `error.share.not_public` with `"items": [<ids that are missing or private>]`; 503 `error.api.generic`.
+- `GET /share/sets` → 200 `{ "status": "success", "sets": [<set>, ...] }`, live sets only, newest first, at most 200.
+- `DELETE /share/sets/<id>` → 200 `{ "status": "success" }` (revoked: the link is a 404 at once; repeat is 200). Unknown id 404 `error.share.not_found`.
+
+`<set>` = `{ "id", "url": "<share_base_url>g/<id>", "title": string|null, "created_at": <ms>, "items": [ { "id", "url": <public file URL, or null when it is no longer public>, "content_type", "poster_url", "width", "height", "duration" } ] }`. A set whose files all went private or were deleted stays listed (its page is a 404) until revoked.
+
+`GET /capabilities`: `features.share_sets` is true exactly while `share_base_url` is non-null; `limits.share_set_max` is 4.
+
+### 24.2 The page (`share.` host, no key)
+
+- `GET|HEAD /g/<id>`: Open Graph like section 22, built from the set's files that are still public, in order (none left, revoked or unknown: the same 404). The first video is `og:video`; every image, webp and video poster is an `og:image`. For Discord's crawler only (user agent contains `Discordbot`), the head also carries a component embed (https://docs.discord.com/developers/link-previews/component-embeds): `<script id="discord:component-embed" type="application/json">` with `{"component":{"type":17,"components":[{"type":10,"content":<title or "N files", markdown-escaped>},{"type":12,"items":[{"media":{"url":<file url>}},...]}]}}` (under 3,000 bytes, `<` escaped). Discord shows every file in one media gallery, videos with play controls; the Open Graph tags are its fallback.
+- `GET /api/v1/statuses/<id>` and `GET /users/cobalt/statuses/<id>`: a Mastodon v1 Status (`id`, `url`, `uri`, `created_at`, `content` = the escaped title, `visibility: "public"`, an `account` named cobalt, `media_attachments` with `type` image / gifv / video, `url`, `preview_url`, `meta.original` width/height). Videos over 1920 px on a side report half their size (Discord refuses larger). Same 404 rules.
+- `GET /owoembed?id=<id>` → oEmbed `{ "version": "1.0", "type": "rich", "title": "Embed", "provider_name": "cobalt", "provider_url": "<share_base_url>", "author_name": <title or "N files"> }`.
+- The status and oEmbed routes are Discord's undocumented Mastodon path. They still answer, but the page no longer links them: Discord showed only thumbnails through it.
+
+### 24.3 App
+
+The library gets a select mode; with 2..4 public files selected, `make share link` creates a set and copies its link; with more than 4, or any private file, the button is off and says why. A `links` tab (shown only with `features.share_sets`) lists the sets (thumbnails, title, created date, copy, revoke with a confirm). No migration of anything existing. Deploy: apply 0012, then the API Worker.
+
+## 25. Roast captions (addendum, built 2026-10-18; owner: "use haiku ... to adjust the title and description of the rich embed ... set once for all media and share ... funny and why Harmony the capybara chose this content with emojis, more of a roast of me")
+
+- Claude Haiku 5.5 (`claude-haiku-5-5`, `ROAST_MODEL`) writes one title (at most 100 code points) and description (at most 280) per public file and per live gallery link, in the voice of Harmony the capybara roasting Harmony, with emojis. It reads the post's title or file name, where it was saved from, the duration, and one still per file (a video's poster, an image itself; jpeg/png/gif/webp only). It never downloads a video and never sees an embedding.
+- Stored once in D1 `media_captions` (migration 0013), keyed `item:<media_items id>` or `set:<share_sets id>`; previews never wait on the model. A failure stores `title NULL` and is retried after a day, at most 3 attempts; a row with nothing to caption is marked as used up.
+- When: a new gallery link at `POST /share/sets` (the Worker waits at most 6 s, its own timeout; a miss is left to the cron), everything else from the 15-minute cron (gallery links first, then public files newest first, up to 90 s a run, before the search indexer).
+- Where: single-file pages (section 22) use the caption as `og:title` unless the post has a title set in the app, and its description as `og:description`/`twitter:description` (followed by the video length). Gallery pages (section 24) use the link's own title if Harmony typed one, else the caption's, and its description; Discord's component embed shows `**title**` then the description above the gallery.
+- Revised 2026-10-18 (owner: "just make it one sentence summary of all the content ... you dont have to be a capybara ... a cute furry cat girl ... don't announce urself", "furry anime girl ascii emoji cute funny", "the ai summary can just be the title ... not additional description", "update the existing rich embeds too"): the caption is now ONE sentence (at most 160 code points) summing up all the content, in a cute, funny furry anime cat-girl voice with kaomoji text faces such as (=^･ω･^=) or >w<, never emoji (removed on save), never introducing or naming itself. It is the title only: the description is stored empty and ignored, so pages show `og:description` as before captions (the video length) and Discord's component embed shows just `**title**` above the gallery. The stored `model` carries the caption style (`claude-haiku-5-5+v3-kaomoji-catgirl`); the cron rewrites every caption written in an older style, gallery links first, then files newest first, and an older caption stays up until its own is rewritten.
+- Length (2026-10-18, after the first rewrite cut sentences off): the model is asked for at most 110 characters, kaomoji included; a sentence over 140 is asked for again once ("write it again in at most 110"), and only a second long answer is cut at a word boundary with "..." and its closing kaomoji kept. Style `v4-kaomoji-catgirl-short`: captions of the previous style (`v3-kaomoji-catgirl`) are rewritten only when they contain "..." (were cut); every older one is rewritten.
+- Off unless `ANTHROPIC_API_KEY` is in the secrets file; optional `ROAST_BASE_URL` (secret) sends calls through Cloudflare AI Gateway (`https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic`). No app change; no new route.
+
+## 26. Share link collections (addendum, built 2026-10-18; owner: "CRUD collections which have shares in them")
+
+A collection is a named folder of gallery links (section 24). Keyed routes only (a service credential gets 404), D1 only, `cache-control: no-store`, 404 `error.share.off` while the share host is not configured. `GET /capabilities` has `features.share_collections` (true exactly with `share_sets`).
+
+Shape: `{ "id": "<16 letters/digits>", "name": "memes", "created_at": <ms>, "updated_at": <ms>, "set_ids": ["<19-digit set id>", ...] }`. `set_ids` lists the collection's live links, most recently added first; a revoked link drops out of every collection on its own. A link may be in several collections. The app joins `set_ids` with `GET /share/sets` for thumbnails and URLs.
+
+- `GET /share/collections` → `200 { "status": "success", "collections": [shape, ...] }`, most recently changed first (at most 100).
+- `POST /share/collections` `{ "name": "memes", "set_ids": [...]? }` → `201 { "status": "success", "collection": shape }`. Name: trimmed, control characters removed, 1..60 code points. `set_ids` optional, at most 200, live links only.
+- `PATCH /share/collections/<id>` `{ "name"?: "...", "add"?: [...], "remove"?: [...] }` (at least one) → `200 { "status": "success", "collection": shape }`. Adding a link already there is a no-op; removing one that is not there is a no-op. Bumps `updated_at`.
+- `DELETE /share/collections/<id>` → `200 { "status": "success" }`. Deletes the folder only: its links stay live and keep working.
+- Errors: `400 error.collection.bad_request` (bad JSON, name or id list), `404 error.collection.not_found` (unknown collection), `409 error.collection.link_not_found` with `set_ids` (unknown or revoked links in `set_ids`/`add`; nothing changed), `409 error.collection.too_many` (100 collections), `409 error.collection.full` (200 links), `503 error.api.generic`.
+- `POST /share/collections/<id>/reroll` (owner: "reroll links in a collection all at once", "Link urls which will be the title too") → `200 { "status": "success", "collection": shape, "replaced": { "<old set id>": "<new set id>", ... } }`. Every live link in the collection gets a new URL: a new share set with the same files and no typed title (so its title is a fresh caption, section 25, written within about 8 s, the rest by the cron); the old link is revoked (its page is a 404 at once) and every collection that held it holds the new one in the same place. `404 error.collection.not_found`, `409 error.collection.empty` (no live links). The app refetches `GET /share/sets` afterwards and confirms first ("the old links stop working"). Discord caches previews per URL, so a reroll is how a link gets a fresh preview there.
+- App: in the Links tab, collections as folders: create (name, optionally with the selected links), rename, delete (confirm: "delete this collection? its links keep working"), add a link to collections from its row, remove it from one. Migration 0014 must be applied before the API deploy that ships these routes.
+
+## 27. Chat (addendum, pinned 2026-10-18; owner: "an ai for creating threads and talking about files", "Haiku, chat (tools look at the data and run its own sandbox and use tools as code in sandbox)")
+
+Threads with Claude Haiku 5.5 (`claude-haiku-5-5`, `CHAT_MODEL`) about the library. The model has one tool, `run_code`: it writes JavaScript that calls the library tools below, and the Worker runs that code in a fresh Cloudflare Dynamic Worker (Worker Loader binding `LOADER`, "code mode"): no network (`globalOutbound: null`), 30 s wall, 5,000 ms CPU, the tools reached only over RPC, read-only except `show`/`look`. D1 tables `chat_threads`, `chat_messages` (migration 0015). Keyed routes only (a service credential gets 404), `cache-control: no-store`. `GET /capabilities`: `features.chat` is true exactly while `ANTHROPIC_API_KEY` is set and the Worker has `LOADER`; otherwise every `/chat` route answers 404 `error.chat.off`.
+
+### 27.1 Shapes
+
+- `<thread>` = `{ "id": "<16 letters/digits>", "title": "cat clips from october", "created_at": <ms>, "updated_at": <ms>, "preview": "<first 120 chars of the last message's text>", "message_count": <n> }`. A new thread is titled from its first message (trimmed, 60 code points); after the first reply the model renames it (at most 60) unless it was renamed by hand.
+- `<message>` = `{ "id": "<number as string>", "role": "user"|"assistant", "text": "<markdown>", "post_ids": [<library post ids>], "steps": [<step>], "status": "done"|"running"|"error", "error": null|"<code>", "created_at": <ms> }`.
+  - `post_ids`: on a user message, the files the user attached ("ask about this", at most 20); on an assistant message, the files the model chose to show (at most 12), in order. Post ids are the `GET /library` post `id`s.
+  - `<step>` = `{ "id": "<tool_use id>", "kind": "code", "status": "running"|"done"|"error", "code": "<the JavaScript, up to 8,000 chars>", "logs": ["..."], "result": "<JSON preview, up to 2,000 chars>"|null, "error": null|"<message>", "duration_ms": <n>|null }`. The app shows steps collapsed ("ran code · 3 tools · 0.8 s"), expandable to code, logs, result.
+  - `status: "running"` means a reply is still being written (or the stream broke: a message still running after 3 minutes is answered as `error: "error.chat.interrupted"`).
+- `posts`: thread reads carry `"posts": { "<post id>": <GET /library?v=3 post shape>, ... }` for every post any message references and that still exists. A deleted post is missing from the map; the app shows a "removed" placeholder.
+
+### 27.2 Routes
+
+- `GET /chat/threads` → `200 { "status": "success", "threads": [<thread>, ...] }`, most recently updated first, at most 200.
+- `POST /chat/threads` `{ "title"?: "..." }` → `201 { "status": "success", "thread": <thread> }`. Creates an empty thread (titled "new chat" until its first message); "ask about this" sends the post ids with the first message. At most 200 threads (`409 error.chat.too_many`).
+- `GET /chat/threads/<id>` → `200 { "status": "success", "thread": <thread>, "messages": [<message>, ...], "posts": {...} }`, oldest first, all messages (at most 200 per thread).
+- `PATCH /chat/threads/<id>` `{ "title": "..." }` (1..60 code points after trim) → `200 { "status": "success", "thread": <thread> }`.
+- `DELETE /chat/threads/<id>` → `200 { "status": "success" }` (its messages too). Unknown: 404 `error.chat.not_found`.
+- `POST /chat/threads/<id>/messages` `{ "text": "<1..4000 chars>", "post_ids"?: [<at most 20>] }` → `200 text/event-stream`. One reply at a time per thread: while the last assistant message is running, `409 error.chat.busy`. Unknown post ids are dropped silently. 200 messages in the thread: `409 error.chat.full`. Events, each `event: <name>\ndata: <one JSON line>\n\n`:
+  - `user` `{ "message": <message> }`: the saved user message (first event).
+  - `assistant` `{ "message": <message> }`: the assistant message row, `status: "running"`, empty text.
+  - `text` `{ "delta": "..." }`: text to append, in order.
+  - `step` `{ "step": <step> }`: a code step started (`running`) or finished (`done`/`error`); the same `id` again replaces the earlier one.
+  - `posts` `{ "post_ids": [...], "posts": {...} }`: files the model chose to show, appended to the message's `post_ids`, with their shapes.
+  - `title` `{ "thread": <thread> }`: the model renamed the thread (after the first reply only).
+  - `done` `{ "message": <message>, "thread": <thread> }`: the final, saved assistant message. Last event.
+  - `error` `{ "code": "error.chat.model"|"error.chat.interrupted"|"error.api.generic", "message": <message>|null }`: the reply failed; the message is saved with `status: "error"` and whatever text it had. Last event.
+  - `: ping` comment lines every 15 s keep the connection open.
+  If the stream drops, the reply keeps going server-side for as long as the Worker lets it; the app re-reads `GET /chat/threads/<id>` (every 2 s while the last message is `running`, at most 3 minutes).
+- Errors: `400 error.chat.bad_request` (bad JSON, empty or long text, bad ids), `404 error.chat.not_found`, `404 error.chat.off`, `409 error.chat.busy|full|too_many`, `503 error.api.generic`.
+
+### 27.3 The sandbox tools (what the model's code can call, all async, on the global `cobalt`)
+
+- `cobalt.library({ since?, until?, source?, kind?, query?, limit? })` → posts newest first (default 100, at most 1,000). `since`/`until` ISO dates or ms; `source` a host such as `"tiktok.com"`; `kind` `"video"|"image"|"gallery"`; `query` plain substring of title/name/link. Each `{ id, title, saved_at (ISO), source, link, kind, files, duration, public, caption }` (`caption` the roast caption title, or null).
+- `cobalt.search(query, limit?)` → the meaning search (section 21), best first, at most 50, the same records plus `score`. Throws "search is waking up" while the Space sleeps.
+- `cobalt.post(id)` → one record plus `files: [{ id, name, kind, content_type, duration, width, height, bytes, public, url, share_url }]`.
+- `cobalt.look(ids)` → the model sees up to 4 pictures (posters or images) after the code returns. Returns how many were queued.
+- `cobalt.show(ids)` → shows up to 12 files in the reply as thumbnails; returns the ids accepted.
+- `cobalt.links()` → gallery share links `[{ id, url, title, created_at, post_ids }]`; `cobalt.collections()` → `[{ id, name, link_ids }]`.
+- At most 8 code runs per reply, 50 tool calls per run, results over 20,000 chars are cut for the model.
+
+### 27.4 App (apple/CONTRACT.md)
+
+Tabs become save · library · links · chat · settings (`chat` only with `features.chat`). Queue moves to a toolbar button with the in-flight badge on save and library (and keeps its sidebar row on the Mac). The chat tab: a thread list (new, rename, delete with confirm), a thread view streaming the reply, code steps collapsed, shown files as thumbnails that open the post. "ask about this" on a post starts a new thread with that post attached. Deploy: apply 0015, then the API Worker (needs the `LOADER` binding).

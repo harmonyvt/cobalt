@@ -404,6 +404,7 @@ struct HomeScreen: View {
                         .minimumScaleFactor(0.7)
                 }
             }
+            QueueToolbarItem(model: model)
             #else
             ToolbarItemGroup(placement: .primaryAction) {
                 PasteFileButtons(showsFile: model.capabilities.showsFileButton)

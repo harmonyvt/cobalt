@@ -943,10 +943,17 @@ Store distribution.
 
 ## 12. Queue tab (added 2026-10-17)
 
-A fourth tab, **queue**, between library and settings (iPhone tab bar; iPad and Mac sidebar), always visible (it
-also lists this device's own work on plain cobalt). Everything cobalt is doing, in one list. The Save tab's
-`JobTray` stays as the quick glance: its header (the counts) and the pill's "open the queue" select the tab, and so
-does `cobalt-apple://jobs` (the Hark summary; it no longer sets `requestedJobs`).
+**Placement (revised 2026-10-18, "queue as toolbar")**: the Mac keeps **queue** as a sidebar row (between library and
+links, always visible; it also lists this device's own work on plain cobalt). On iPhone and iPad it is **not a tab**
+(the tabs are save, library, links, settings): a trailing toolbar button (`QueueToolbarItem`, `Symbol.queue`, icon only,
+label "open the queue", `.help` "queue") on the save, library and links screens opens it as a large sheet with an x.
+The button carries the work in motion on this device (`badgeCount`) as a count after the icon (a toolbar item clips
+a corner badge); library select mode hides it. One entry point everywhere: `AppModel.showQueue()` selects the tab on the
+Mac and sets `queueShown` (the shell's sheet) elsewhere. The `JobTray` stays as the quick glance: its header and the
+pill's "open the queue" call it, and so does `cobalt-apple://jobs` (the Hark summary; it no longer sets
+`requestedJobs`). A row's "open" closes the sheet (`queueShown = false`) before going where the work lives; any other
+`cobalt-apple://` link closes it too. Anything that still sets `selectedTab = .queue` on iOS (the `-previewTab queue`
+launch argument) is turned into the sheet by the shell.
 
 **Screen** (`Cobalt/Screens/Queue/QueueScreen.swift`, copy `Design/Copy+Queue.swift`, symbols `Design/Symbols+Queue.swift`):
 a header "3 running · 2 waiting · 1 failed" (+ "updated 12:46" / "can't reach the server · showing what it said
@@ -1089,3 +1096,24 @@ extension AppModel { static func previewSearch(_ mode: PreviewSearchMode = .read
 Copy: `Design/Copy+Search.swift`. Previews: `Screens/Library/LibrarySearchPreviews.swift`,
 `Screens/Detail/SearchIndexSection.swift`. Tests: `CobaltKitTests/LibrarySearchTests.swift` (wire, capability, HTTP
 query and errors, debounce and cancel, fallback, waking retry, off, clearing, a post's index state).
+
+## 14. Chat tab (added 2026-10-18; server contract APP-API-CONTRACT 27)
+
+- Tabs read save · library · links · chat · settings (`chat` only with `features.chat`; the Mac sidebar adds the queue row).
+  Symbol `bubble.left.and.text.bubble.right`. The queue toolbar button sits on the chat screens too (iOS).
+- CobaltKit: `Capabilities.chat`; `Models/Chat.swift` (`ChatThread`, `ChatMessage`, `ChatStep`, `ChatThreadDetail`, `ChatEvent`,
+  `ChatError`, `ChatRule`), `API/ChatSSE.swift` (`ChatSSEParser`, pure), the six client calls (`chatThreads`, `createChatThread`,
+  `chatThread`, `renameChatThread`, `deleteChatThread`, `sendChatMessage` returning `AsyncThrowingStream<ChatEvent, Error>`),
+  `Store/ChatStore.swift` (`AppModel.chat`: list, open threads, drafts and attachments, `send`, polling fallback), `ChatMarkdown`
+  (block parser for replies), `AppModel.askAbout(_:)`. Previews: `PreviewScenario.chatEmpty|chatFail|chatReplyFails`; `.happy` has
+  three threads and a canned streamed reply.
+- Thread list: newest first, title, preview, date; "new chat"; swipe or context menu rename and delete (confirm); empty, loading
+  and failed states; pull to refresh (Mac ⌘N new chat, ⌘R refresh).
+- Thread: bottom-anchored list that follows the reply until the owner scrolls up; user bubbles right, replies full width as Markdown;
+  code steps collapsed ("ran code · 0.8 s", "running code…", "code failed"); shown files as a strip of thumbnails (a missing post is a
+  "removed" tile). A tap opens the post: iPhone pushes the detail inside the chat stack; iPad and Mac switch to the library tab and
+  reveal it (`AppModel.revealInLibrary`). A failed reply gets "the reply failed · try again" (re-sends the same text).
+- Composer: attachment chips, 1..4000 characters, send off while empty or a reply is on its way; Mac Return sends (shift-Return is a
+  new line), ⌘Return sends from an iPad keyboard.
+- "ask about this": in the library post menu and the detail's more menu (only with `features.chat` and a post); makes a thread with the
+  post on its draft, opens the chat tab on it with the keyboard up.
