@@ -48,7 +48,7 @@ struct ShareSetCapabilityTests {
         #expect(AppTab.links.isAvailable(with: c) == false)
         c.shareSets = true
         #expect(AppTab.links.isAvailable(with: c))
-        #expect(AppTab.allCases == [.save, .library, .links, .queue, .settings])
+        #expect(AppTab.allCases == [.save, .library, .links, .chat, .queue, .settings])
     }
 }
 

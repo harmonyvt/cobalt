@@ -1096,3 +1096,24 @@ extension AppModel { static func previewSearch(_ mode: PreviewSearchMode = .read
 Copy: `Design/Copy+Search.swift`. Previews: `Screens/Library/LibrarySearchPreviews.swift`,
 `Screens/Detail/SearchIndexSection.swift`. Tests: `CobaltKitTests/LibrarySearchTests.swift` (wire, capability, HTTP
 query and errors, debounce and cancel, fallback, waking retry, off, clearing, a post's index state).
+
+## 14. Chat tab (added 2026-10-18; server contract APP-API-CONTRACT 27)
+
+- Tabs read save · library · links · chat · settings (`chat` only with `features.chat`; the Mac sidebar adds the queue row).
+  Symbol `bubble.left.and.text.bubble.right`. The queue toolbar button sits on the chat screens too (iOS).
+- CobaltKit: `Capabilities.chat`; `Models/Chat.swift` (`ChatThread`, `ChatMessage`, `ChatStep`, `ChatThreadDetail`, `ChatEvent`,
+  `ChatError`, `ChatRule`), `API/ChatSSE.swift` (`ChatSSEParser`, pure), the six client calls (`chatThreads`, `createChatThread`,
+  `chatThread`, `renameChatThread`, `deleteChatThread`, `sendChatMessage` returning `AsyncThrowingStream<ChatEvent, Error>`),
+  `Store/ChatStore.swift` (`AppModel.chat`: list, open threads, drafts and attachments, `send`, polling fallback), `ChatMarkdown`
+  (block parser for replies), `AppModel.askAbout(_:)`. Previews: `PreviewScenario.chatEmpty|chatFail|chatReplyFails`; `.happy` has
+  three threads and a canned streamed reply.
+- Thread list: newest first, title, preview, date; "new chat"; swipe or context menu rename and delete (confirm); empty, loading
+  and failed states; pull to refresh (Mac ⌘N new chat, ⌘R refresh).
+- Thread: bottom-anchored list that follows the reply until the owner scrolls up; user bubbles right, replies full width as Markdown;
+  code steps collapsed ("ran code · 0.8 s", "running code…", "code failed"); shown files as a strip of thumbnails (a missing post is a
+  "removed" tile). A tap opens the post: iPhone pushes the detail inside the chat stack; iPad and Mac switch to the library tab and
+  reveal it (`AppModel.revealInLibrary`). A failed reply gets "the reply failed · try again" (re-sends the same text).
+- Composer: attachment chips, 1..4000 characters, send off while empty or a reply is on its way; Mac Return sends (shift-Return is a
+  new line), ⌘Return sends from an iPad keyboard.
+- "ask about this": in the library post menu and the detail's more menu (only with `features.chat` and a post); makes a thread with the
+  post on its draft, opens the chat tab on it with the keyboard up.

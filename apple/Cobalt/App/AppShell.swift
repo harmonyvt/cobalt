@@ -312,7 +312,13 @@ struct AppShell: View {
                     NavigationStack { LinksScreen(model: model) }
                 }
             }
-            // the queue is not a tab here: it is a sheet opened from the toolbar button on save, library and links
+            // threads with Claude about the library (APP-API-CONTRACT 27)
+            if model.capabilities.chat {
+                Tab(Copy.tab(.chat), systemImage: icon(for: .chat), value: AppTab.chat) {
+                    NavigationStack { ChatScreen(model: model, tier: tier) }
+                }
+            }
+            // the queue is not a tab here: it is a sheet opened from the toolbar button on save, library, links and chat
             // (apple/CONTRACT.md 12; `AppModel.showQueue()`)
             Tab(Copy.tab(.settings), systemImage: icon(for: .settings), value: AppTab.settings) {
                 NavigationStack { SettingsScreen(model: model) }
@@ -345,6 +351,7 @@ struct AppShell: View {
             case .save: HomeScreen(model: model, tier: tier)
             case .library: LibraryScreen(model: model, tier: tier)
             case .links: NavigationStack { LinksScreen(model: model) }
+            case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
             case .queue: NavigationStack { QueueScreen(model: model) }
             case .settings: SettingsScreen(model: model)
             }
@@ -579,6 +586,7 @@ func icon(for tab: AppTab) -> String {
     case .save: return Symbol.save
     case .library: return Symbol.library
     case .links: return Symbol.links
+    case .chat: return Symbol.chat
     case .queue: return Symbol.queue
     case .settings: return Symbol.settings
     }
@@ -607,6 +615,9 @@ private struct QueueShellPreview: View {
 }
 #Preview("shell · links tab") {
     PreviewHost(.happy, tab: .links) { AppShell(model: $0) }
+}
+#Preview("shell · chat tab") {
+    PreviewHost(.happy, tab: .chat) { AppShell(model: $0) }
 }
 #Preview("shell · queue sheet") {
     PreviewHost(.happy, tab: .queue) { AppShell(model: $0) }

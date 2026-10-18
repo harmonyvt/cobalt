@@ -1,0 +1,36 @@
+import SwiftUI
+
+/// SF Symbols for chat (APP-API-CONTRACT section 27): the tab, the composer, a code step. An extension of `Symbol` in its
+/// own file, compiled into the extensions too (`Cobalt/Design`).
+extension Symbol {
+    /// The chat tab and its sidebar row.
+    static let chat = "bubble.left.and.text.bubble.right"
+    /// The empty state.
+    static let chatEmpty = "bubble.left.and.bubble.right"
+    /// "new chat".
+    static let chatNew = "square.and.pencil"
+    /// "ask about this" in a post's menu.
+    static let chatAsk = "bubble.left.and.text.bubble.right"
+    /// A thread's menu.
+    static let chatMenu = "ellipsis.circle"
+    /// Send.
+    static let chatSend = "arrow.up.circle.fill"
+    /// A code step.
+    static let chatCode = "chevron.left.forwardslash.chevron.right"
+    /// A step that failed.
+    static let chatCodeFailed = "exclamationmark.triangle"
+    /// An open step's chevron.
+    static let chatDisclosure = "chevron.right"
+    /// A post the reply showed that is not in the library any more.
+    static let chatRemoved = "photo.badge.exclamationmark"
+    /// A video in a shown post's tile.
+    static let chatPlay = "play.fill"
+    /// Remove an attachment chip.
+    static let chatDetach = "xmark.circle.fill"
+    /// Rename a thread.
+    static let chatRename = "pencil"
+    /// Delete a thread.
+    static let chatDelete = "trash"
+    /// Jump to the newest message.
+    static let chatLatest = "arrow.down.circle.fill"
+}

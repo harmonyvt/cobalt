@@ -111,6 +111,9 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// server sets it exactly with `share_sets`, and so does the app: false whenever `shareSets` is false. False when
     /// absent: no collections in the links tab.
     public var shareCollections: Bool = false
+    /// `features.chat` (APP-API-CONTRACT 27): threads with Claude about the library (`/chat/threads`). True exactly while
+    /// the server has an Anthropic key and the sandbox loader. False when absent: no chat tab.
+    public var chat: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

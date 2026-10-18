@@ -3,15 +3,18 @@ import Observation
 import UserNotifications
 
 /// The tabs, in the order they show. `queue` is everything cobalt is doing (apple/CONTRACT.md section 12).
-/// `links` lists the gallery share links (APP-API-CONTRACT 24) and shows only with `features.share_sets`.
+/// `links` lists the gallery share links (APP-API-CONTRACT 24) and shows only with `features.share_sets`; `chat` holds the
+/// threads with Claude about the library (APP-API-CONTRACT 27) and shows only with `features.chat`.
 public enum AppTab: String, Sendable, CaseIterable {
-    case save, library, links, queue, settings
+    case save, library, links, chat, queue, settings
 
-    /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`.
+    /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`,
+    /// chat needs `features.chat`.
     public func isAvailable(with caps: Capabilities) -> Bool {
         switch self {
         case .library: return caps.library
         case .links: return caps.shareSets
+        case .chat: return caps.chat
         case .save, .queue, .settings: return true
         }
     }
@@ -45,6 +48,10 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// Like `.shareLinksEmpty`, but `GET /share/sets` always fails (`503`), so the links tab shows its failed state.
     /// Making a link works.
     case shareLinksFail
+    /// Chat (APP-API-CONTRACT 27; `PreviewChat.swift`): `.happy` and `.renditions` have `features.chat` with three sample
+    /// threads. `.chatEmpty`: no threads yet. `.chatFail`: `GET /chat/threads` always fails (`503`), so the tab shows its
+    /// failed state. `.chatReplyFails`: the sample threads, but every reply ends in `error.chat.model` after a few words.
+    case chatEmpty, chatFail, chatReplyFails
 }
 
 public struct ServerSummary: Sendable, Equatable {
@@ -64,6 +71,8 @@ public final class AppModel {
     public let library: LibraryModel
     /// The gallery share links (the links tab; the library's select bar makes them). Idle until `refresh()`.
     public let shareSets: ShareSetStore
+    /// The chat threads (the chat tab; APP-API-CONTRACT 27). Idle until `refresh()`.
+    public let chat: ChatStore
     /// The photos album (CONTRACT-SYNC.md): `PhotosSync.preview(_:)` in previews.
     public let photosSync: PhotosSync
     /// The Mac's Finder folder, the store's visible root (CONTRACT-OFFLINE.md section 13, Folder/MacFolder.swift):
@@ -139,6 +148,7 @@ public final class AppModel {
         self.jobs = context.jobs
         self.library = library
         self.shareSets = ShareSetStore(context: context)
+        self.chat = ChatStore(context: context)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
         let jobQueue = JobQueue(
@@ -283,6 +293,7 @@ public final class AppModel {
         if !ctx.isPreview { settings.remember(caps) }
         if selectedTab == .library, !caps.library, caps.kind != .unreachable { selectedTab = .save }
         if selectedTab == .links, !caps.shareSets, caps.kind != .unreachable { selectedTab = .save }
+        if selectedTab == .chat, !caps.chat, caps.kind != .unreachable { selectedTab = .save }
         liveManager?.capabilitiesChanged()
         unifiedQueue.capabilitiesChanged()            // `features.queue` came or went: poll, or stop
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
@@ -316,6 +327,7 @@ public final class AppModel {
         apply(.unknown)
         library.reset()
         shareSets.reset()
+        chat.reset()
     }
 
     // MARK: - Links, handoffs

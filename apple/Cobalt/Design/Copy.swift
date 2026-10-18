@@ -28,6 +28,7 @@ enum Copy {
         case .save: return "save"
         case .library: return "library"
         case .links: return Links.title
+        case .chat: return Chat.title
         case .queue: return "queue"
         case .settings: return "settings"
         }
