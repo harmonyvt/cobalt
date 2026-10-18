@@ -55,21 +55,15 @@ struct LibraryKindChips: View {
 
     var body: some View {
         let counts = counts
-        HStack(spacing: 0) {
-            if let selectChip {
-                selectButton(selectChip)
-                    .padding(.leading, 12)
-                    .padding(.trailing, 4)
-            }
-            chips(counts)
-        }
+        chips(counts)
         .background(.bar)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Library2.kindFilter)
         .haptic(.selection, trigger: model.library.kindFilter)
     }
 
-    /// Pinned, outside the scrolling chips, so it never scrolls away: an outlined `select`, a filled `done`.
+    /// First in the row: an outlined `select`, a filled `done`. Inside the scroll view with the kind chips: pinned beside
+    /// it, outside the scroll view, the button drew but never received the tap on iOS 27.
     private func selectButton(_ chip: SelectChip) -> some View {
         Button(action: chip.toggle) {
             Text(chip.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select)
@@ -90,11 +84,15 @@ struct LibraryKindChips: View {
     private func chips(_ counts: [LibraryKindFilter: Int]?) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                if let selectChip {
+                    selectButton(selectChip)
+                        .padding(.trailing, 4)
+                }
                 ForEach(LibraryKindFilter.allCases, id: \.self) { kind in
                     chip(kind, count: counts.map { $0[kind] ?? 0 })
                 }
             }
-            .padding(.horizontal, selectChip == nil ? 12 : 8)
+            .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
         .scrollBounceBehavior(.basedOnSize)
