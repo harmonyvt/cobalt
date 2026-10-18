@@ -312,11 +312,8 @@ struct AppShell: View {
                     NavigationStack { LinksScreen(model: model) }
                 }
             }
-            // everything cobalt is doing (apple/CONTRACT.md 12); the badge is the work in motion on this device
-            Tab(Copy.tab(.queue), systemImage: icon(for: .queue), value: AppTab.queue) {
-                NavigationStack { QueueScreen(model: model) }
-            }
-            .badge(model.unifiedQueue.badgeCount)
+            // the queue is not a tab here: it is a sheet opened from the toolbar button on save, library and links
+            // (apple/CONTRACT.md 12; `AppModel.showQueue()`)
             Tab(Copy.tab(.settings), systemImage: icon(for: .settings), value: AppTab.settings) {
                 NavigationStack { SettingsScreen(model: model) }
             }
@@ -324,6 +321,13 @@ struct AppShell: View {
         .tabViewStyle(.sidebarAdaptable)
         // always expanded: a collapsed bar hid the other two tabs after any scroll (owner's live run)
         .tabBarMinimizeBehavior(.never)
+        .sheet(isPresented: $model.queueShown) { queueSheet }
+        // Anything that still selects the queue tab (a launch argument, a preview) opens the sheet instead.
+        .onChange(of: model.selectedTab, initial: true) { _, tab in
+            guard tab == .queue else { return }
+            model.selectedTab = .save
+            model.queueShown = true
+        }
         #else
         NavigationSplitView {
             List(selection: sidebarSelection) {
@@ -347,6 +351,19 @@ struct AppShell: View {
         }
         #endif
     }
+
+    #if os(iOS)
+    /// The queue on iPhone and iPad: the whole screen in a large sheet, closed with the x like the other sheets.
+    private var queueSheet: some View {
+        NavigationStack {
+            QueueScreen(model: model)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { CloseButton { model.queueShown = false } } }
+        }
+        .presentationDetents([.large])
+        .cobaltRoot(model: model)
+        .environment(\.shell, actions)
+    }
+    #endif
 
     #if os(macOS)
     private var sidebarSelection: Binding<AppTab?> {
@@ -568,6 +585,20 @@ func icon(for tab: AppTab) -> String {
 }
 
 #if DEBUG
+/// The shell over `AppModel.previewQueue(.busy)`: two links waiting and downloads running, so the toolbar button
+/// carries its badge; `sheet` opens the queue sheet over it (iPhone and iPad; the Mac has the tab).
+private struct QueueShellPreview: View {
+    @State private var model: AppModel
+
+    init(sheet: Bool) {
+        let model = AppModel.previewQueue(.busy)
+        model.queueShown = sheet
+        _model = State(initialValue: model)
+    }
+
+    var body: some View { AppShell(model: model) }
+}
+
 #Preview("shell · compact") {
     PreviewHost(.happy) { AppShell(model: $0) }
 }
@@ -577,8 +608,14 @@ func icon(for tab: AppTab) -> String {
 #Preview("shell · links tab") {
     PreviewHost(.happy, tab: .links) { AppShell(model: $0) }
 }
-#Preview("shell · queue tab") {
+#Preview("shell · queue sheet") {
     PreviewHost(.happy, tab: .queue) { AppShell(model: $0) }
+}
+#Preview("shell · queue badge") {
+    QueueShellPreview(sheet: false)
+}
+#Preview("shell · queue badge, sheet open") {
+    QueueShellPreview(sheet: true)
 }
 #Preview("shell · settings tab") {
     PreviewHost(.happy, tab: .settings) { AppShell(model: $0) }

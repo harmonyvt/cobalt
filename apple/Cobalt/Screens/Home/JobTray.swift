@@ -275,10 +275,10 @@ struct JobTray: View {
         pillOpen = false
     }
 
-    /// The tray is the quick glance; the queue tab is the whole list.
+    /// The tray is the quick glance; the queue is the whole list (a tab on the Mac, a sheet on iPhone and iPad).
     private func openQueue() {
         pillOpen = false
-        model.selectedTab = .queue
+        model.showQueue()
     }
 
     // MARK: the note

@@ -10,6 +10,14 @@ private enum LaunchConfig {
     static func makeModel() -> AppModel {
         #if DEBUG
         let defaults = UserDefaults.standard
+        // `-previewQueue busy|quiet|localOnly`: the app over `AppModel.previewQueue(<state>)` (work in motion, so the
+        // toolbar button carries its badge); `-previewTab queue` then opens the queue sheet. Wins over `-previewScenario`.
+        if let raw = defaults.string(forKey: "previewQueue"),
+           let state: QueuePreviewState = ["busy": .busy, "quiet": .quiet, "localOnly": .localOnly, "off": .off][raw] {
+            let model = AppModel.previewQueue(state)
+            if let tabRaw = defaults.string(forKey: "previewTab"), let tab = AppTab(rawValue: tabRaw) { model.selectedTab = tab }
+            return model
+        }
         if let raw = defaults.string(forKey: "previewScenario"), let scenario = PreviewScenario(rawValue: raw) {
             let model = AppModel.preview(scenario)
             Pasteboard.override = scenario.pasteText

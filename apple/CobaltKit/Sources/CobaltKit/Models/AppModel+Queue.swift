@@ -16,6 +16,7 @@ extension AppModel {
     /// Shows the row's work: a job in focus on the save tab, a finished media's detail, the library, Settings.
     public func open(_ item: QueueItem) {
         guard let destination = item.destination else { return }
+        queueShown = false                              // iPhone and iPad: the queue sheet gives way to where the work lives
         switch destination {
         case .job(let id):
             guard queue.job(id) != nil else { return }

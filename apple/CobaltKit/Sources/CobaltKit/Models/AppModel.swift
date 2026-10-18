@@ -84,6 +84,10 @@ public final class AppModel {
     /// on it by hand becomes the focused job at once.
     public var pipeline: Pipeline { queue.focused?.pipeline ?? queue.idlePipeline }
     public var selectedTab: AppTab = .save
+    /// iPhone and iPad: the queue is a sheet over the shell (opened from a toolbar button), not a tab. Use `showQueue()`
+    /// to open it from anywhere; the shell presents the sheet while this is true. The Mac keeps the queue as a tab and
+    /// never sets this.
+    public var queueShown = false
 
     /// A stored media a run link asks the home screen to open (CONTRACT-SHARE-QUICK.md R3): set by
     /// `openRunLink` when the run it names has settled and its original is in the store; the home screen
@@ -316,17 +320,27 @@ public final class AppModel {
 
     // MARK: - Links, handoffs
 
+    /// Shows the queue: the Mac selects its tab, iPhone and iPad present the queue sheet (apple/CONTRACT.md section 12).
+    public func showQueue() {
+        #if os(macOS)
+        selectedTab = .queue
+        #else
+        queueShown = true
+        #endif
+    }
+
     /// `cobalt-apple://job/<uuid>`, `cobalt-apple://library` ("your webp is ready") and
     /// `cobalt-apple://open`.
     public func open(_ url: URL) {
         guard url.scheme?.lowercased() == "cobalt-apple" else { return }
+        queueShown = false                              // a link to somewhere else leaves the queue sheet behind
         selectedTab = .save
         if url.host(percentEncoded: false)?.lowercased() == "library" {
             if capabilities.library || capabilities.kind == .unreachable { selectedTab = .library }
             return
         }
         if url.host(percentEncoded: false)?.lowercased() == "jobs" {
-            selectedTab = .queue                        // the Hark summary (APP-API-CONTRACT 17.8): the queue tab
+            showQueue()                                 // the Hark summary (APP-API-CONTRACT 17.8): the queue (a tab on the Mac, a sheet elsewhere)
             return
         }
         guard url.host(percentEncoded: false)?.lowercased() == "job",

@@ -943,10 +943,17 @@ Store distribution.
 
 ## 12. Queue tab (added 2026-10-17)
 
-A fourth tab, **queue**, between library and settings (iPhone tab bar; iPad and Mac sidebar), always visible (it
-also lists this device's own work on plain cobalt). Everything cobalt is doing, in one list. The Save tab's
-`JobTray` stays as the quick glance: its header (the counts) and the pill's "open the queue" select the tab, and so
-does `cobalt-apple://jobs` (the Hark summary; it no longer sets `requestedJobs`).
+**Placement (revised 2026-10-18, "queue as toolbar")**: the Mac keeps **queue** as a sidebar row (between library and
+links, always visible; it also lists this device's own work on plain cobalt). On iPhone and iPad it is **not a tab**
+(the tabs are save, library, links, settings): a trailing toolbar button (`QueueToolbarItem`, `Symbol.queue`, icon only,
+label "open the queue", `.help` "queue") on the save, library and links screens opens it as a large sheet with an x.
+The button carries the work in motion on this device (`badgeCount`) as a count after the icon (a toolbar item clips
+a corner badge); library select mode hides it. One entry point everywhere: `AppModel.showQueue()` selects the tab on the
+Mac and sets `queueShown` (the shell's sheet) elsewhere. The `JobTray` stays as the quick glance: its header and the
+pill's "open the queue" call it, and so does `cobalt-apple://jobs` (the Hark summary; it no longer sets
+`requestedJobs`). A row's "open" closes the sheet (`queueShown = false`) before going where the work lives; any other
+`cobalt-apple://` link closes it too. Anything that still sets `selectedTab = .queue` on iOS (the `-previewTab queue`
+launch argument) is turned into the sheet by the shell.
 
 **Screen** (`Cobalt/Screens/Queue/QueueScreen.swift`, copy `Design/Copy+Queue.swift`, symbols `Design/Symbols+Queue.swift`):
 a header "3 running · 2 waiting · 1 failed" (+ "updated 12:46" / "can't reach the server · showing what it said
