@@ -254,6 +254,18 @@ describe("backfill", () => {
         expect(captionRow(`item:${photo.id}`).title).toBe("fine one :3");
     });
 
+    it("of the previous style, captions that say nya are redone too", async () => {
+        captioner = fake({ model: `m+${CAPTION_STYLE}` });
+        await run();
+        db.raw.prepare("UPDATE media_captions SET model = ?, title = 'fine one :3'").run(`m+${CAPTION_STYLE_CUT}`);
+        db.raw.prepare("UPDATE media_captions SET title = 'Nya~ a sleepy cat (=^･ω･^=)' WHERE subject = ?").run(`item:${video.id}`);
+        seen = [];
+        const out = await run({}, 20_000);
+        expect(out.written).toBe(1);
+        expect(captionRow(`item:${video.id}`).model).toBe(`m+${CAPTION_STYLE}`);
+        expect(captionRow(`item:${photo.id}`).title).toBe("fine one :3");
+    });
+
     it("stops at its budget", async () => {
         let t = 0;
         const out = await backfillCaptions({ db, captioner: captioner!, mediaBaseUrl: MEDIA, now: () => (t += 1000), budgetMs: 2500, concurrency: 1 });
