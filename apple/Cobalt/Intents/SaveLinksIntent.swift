@@ -74,8 +74,8 @@ enum CobaltGalleryLayout: String, AppEnum {
 struct SaveLinksIntent: AppIntent, ProgressReportingIntent {
     static let title: LocalizedStringResource = "Save links"
     static let description = IntentDescription(
-        "Hands links to cobalt, which saves them to your library. With no links given it saves the link you copied.",
-        categoryName: "cobalt")
+        "Hands links to capystore, which saves them to your library. With no links given it saves the link you copied.",
+        categoryName: "capystore")
     static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
 
     @Parameter(
@@ -91,7 +91,7 @@ struct SaveLinksIntent: AppIntent, ProgressReportingIntent {
 
     @Parameter(
         title: "Galleries",
-        description: "What to do with a post that holds several photos or videos. Everything is saved to cobalt, not to Photos.",
+        description: "What to do with a post that holds several photos or videos. Everything is saved to capystore, not to Photos.",
         default: .everything)
     var galleries: CobaltGalleries
 
@@ -100,11 +100,11 @@ struct SaveLinksIntent: AppIntent, ProgressReportingIntent {
 
     @Parameter(
         title: "Wait until saved",
-        description: "Returns when cobalt has saved them, with their public links. Save + slideshow webp and Save + gallery image also wait for the file to be made. iOS and macOS 27.",
+        description: "Returns when capystore has saved them, with their public links. Save + slideshow webp and Save + gallery image also wait for the file to be made. iOS and macOS 27.",
         default: false)
     var waitUntilSaved: Bool
 
-    @Parameter(title: "Open cobalt", description: "Brings cobalt forward and shows what is saving.", default: false)
+    @Parameter(title: "Open capystore", description: "Brings capystore forward and shows what is saving.", default: false)
     var openCobalt: Bool
 
     @Dependency var actions: ShortcutActions

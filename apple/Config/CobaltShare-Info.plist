@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>cobalt</string>
+	<string>capystore</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -40,6 +40,6 @@
 		<string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
 	</dict>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>cobalt saves videos you choose to your photos.</string>
+	<string>capystore saves videos you choose to your photos.</string>
 </dict>
 </plist>

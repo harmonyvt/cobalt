@@ -444,11 +444,11 @@ struct InstantShareAppTests {
     @Test func theNotificationsSayWhatTheyShould() {
         let job = UUID()
         let saving = Notifications.instantSavingRequest(job: job, label: "instagram · Dc2QA4ng-US")
-        #expect(saving.content.title == "saving to cobalt" && saving.content.body == "instagram · Dc2QA4ng-US")
+        #expect(saving.content.title == "saving to capystore" && saving.content.body == "instagram · Dc2QA4ng-US")
         #expect(saving.content.interruptionLevel == .passive && saving.content.userInfo["url"] as? String == Notifications.openURL)
         #expect(saving.identifier == "instant-\(job.uuidString.lowercased())" && saving.trigger == nil)
         let failed = Notifications.instantFailedRequest(link: URL(string: "https://www.instagram.com/p/Dc2QA4ng-US/"), status: 401)
-        #expect(failed.content.title == "cobalt couldn't start that save")
+        #expect(failed.content.title == "capystore couldn't start that save")
         #expect(failed.content.body == "instagram · Dc2QA4ng-US — the key was not accepted")
         #expect(Notifications.instantFailedReason(status: nil) == "the server could not be reached")
         #expect(Notifications.instantFailedReason(status: 503) == "the server was not available")

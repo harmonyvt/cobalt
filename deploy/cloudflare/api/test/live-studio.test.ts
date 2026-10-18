@@ -153,7 +153,7 @@ describe("a save and a render, pushed", () => {
         expect(last.token).toBe(UPDATE);
         expect(last.payload.aps.event).toBe("end"); // a terminal state catches up as an end
         expect(last.payload.aps["content-state"]).toMatchObject({ stage: "failed", failure: "fetchFailed", code: "error.api.fetch.empty" });
-        expect(last.payload.aps.alert).toEqual({ title: "cobalt couldn't finish", body: "open cobalt to see what happened." });
+        expect(last.payload.aps.alert).toEqual({ title: "capystore couldn't finish", body: "open capystore to see what happened." });
     });
 
     it("nobody polls: the sweep collects the render, and the pushes still go out, on a 2 s cadence", async () => {

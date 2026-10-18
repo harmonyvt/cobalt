@@ -356,8 +356,8 @@ describe("saved", () => {
         expect(c.init.method).toBe("POST");
         expect((c.init.headers as Record<string, string>)["content-type"]).toBe("application/json");
         expect(c.json).toEqual({
-            title: "cobalt",
-            body: "x · 2105435404002562056 is saved · 9.6 s — open cobalt to make a webp",
+            title: "capystore",
+            body: "x · 2105435404002562056 is saved · 9.6 s — open capystore to make a webp",
             url: `cobalt-apple://session/${sid}`,
         });
         expect(c.init.redirect).toBe("manual");
@@ -365,7 +365,7 @@ describe("saved", () => {
     it("without a label it names the job by service and ref", async () => {
         const w = wire();
         await savedSession(w);
-        expect(w.hark.calls[0]!.json.body).toBe("instagram · Dd7P496wolG is saved · 9.6 s — open cobalt to make a webp");
+        expect(w.hark.calls[0]!.json.body).toBe("instagram · Dd7P496wolG is saved · 9.6 s — open capystore to make a webp");
     });
     it("a client poll and the sweep racing for the same session send one message", async () => {
         const w = wire();
@@ -460,10 +460,10 @@ describe("saved", () => {
         expect(w.kv.m.has(`notify:optin:${sid}`)).toBe(false);
     });
     it("a duration of 5 reads '5 s', a missing one is left out", () => {
-        expect(savedMessage("x", 5).body).toBe("x is saved · 5 s — open cobalt to make a webp");
-        expect(savedMessage("x", null).body).toBe("x is saved — open cobalt to make a webp");
-        expect(savedMessage("x", 0).body).toBe("x is saved — open cobalt to make a webp");
-        expect(savedMessage("x", 12.34).body).toBe("x is saved · 12.3 s — open cobalt to make a webp");
+        expect(savedMessage("x", 5).body).toBe("x is saved · 5 s — open capystore to make a webp");
+        expect(savedMessage("x", null).body).toBe("x is saved — open capystore to make a webp");
+        expect(savedMessage("x", 0).body).toBe("x is saved — open capystore to make a webp");
+        expect(savedMessage("x", 12.34).body).toBe("x is saved · 12.3 s — open capystore to make a webp");
     });
 });
 
@@ -481,7 +481,7 @@ describe("rendered", () => {
         expect(b.body).toMatchObject({ status: "success", url: done.url });
         expect(w.hark.calls).toHaveLength(1);
         expect(w.hark.calls[0]!.json).toEqual({
-            title: "cobalt",
+            title: "capystore",
             body: `webp ready · 480×560 · 2 KB\n${done.url}`,
             url: `cobalt-apple://session/${sid}`,
         });
@@ -550,7 +550,7 @@ describe('"notify": true on POST /studio/<sid>/render (render-only opt-in)', () 
         await w.studio.renderStatus(sid, job, 0);
         expect(w.hark.calls).toHaveLength(1);
         expect(w.hark.calls[0]!.json).toEqual({
-            title: "cobalt couldn't finish",
+            title: "capystore couldn't finish",
             body: "couldn't make the webp — something went wrong on the server",
             url: `cobalt-apple://session/${sid}`,
         });
@@ -597,7 +597,7 @@ describe("failed", () => {
         expect(r.status).toBe("error");
         expect(w.hark.calls).toHaveLength(1);
         expect(w.hark.calls[0]!.json).toEqual({
-            title: "cobalt couldn't finish",
+            title: "capystore couldn't finish",
             body: "couldn't save instagram · Dd7P496wolG — the link could not be fetched",
             url: `cobalt-apple://session/${sid}`,
         });
@@ -803,7 +803,7 @@ describe("retries (5xx, network, timeout) go through the sweep, at most twice; a
     it("a crashed final send (record written, never finished) is closed, not sent a fourth time", async () => {
         const w = wire();
         const sid = await newSession(w);
-        w.kv.m.set(`notify:ev:${sid}:saved`, { sid, title: "cobalt", body: "x", tries: 3, retryAt: null, done: false, expiresAt: w.clock.t + 1e9 });
+        w.kv.m.set(`notify:ev:${sid}:saved`, { sid, title: "capystore", body: "x", tries: 3, retryAt: null, done: false, expiresAt: w.clock.t + 1e9 });
         w.clock.t += 1000;
         const r = await w.notify.retryDue(w.clock.t);
         expect(r).toEqual({ nextInMs: null });
@@ -816,7 +816,7 @@ describe("retries (5xx, network, timeout) go through the sweep, at most twice; a
         for (let i = 0; i < NOTIFY_PASS_MAX + 2; i++) {
             const sid = `${"Q".repeat(21)}${i}`;
             sids.push(sid);
-            w.kv.m.set(`notify:ev:${sid}:saved`, { sid, title: "cobalt", body: "x", tries: 1, retryAt: w.clock.t - 1, done: false, expiresAt: w.clock.t + 1e9 });
+            w.kv.m.set(`notify:ev:${sid}:saved`, { sid, title: "capystore", body: "x", tries: 1, retryAt: w.clock.t - 1, done: false, expiresAt: w.clock.t + 1e9 });
         }
         const r = await w.notify.retryDue(w.clock.t);
         expect(w.hark.calls).toHaveLength(NOTIFY_PASS_MAX);

@@ -145,7 +145,7 @@ describe("the one message", () => {
         expect(L.hark.calls).toEqual([]);
         expect(lineRecord(L).members).toEqual({ [R.sid]: "saved", [a.id]: "saved", [b.id]: "pending" });
         await L.studio.sweep(); // b done
-        expect(L.hark.calls).toEqual([{ title: "cobalt", body: "done · 3 saved", url: JOBS_URL }]);
+        expect(L.hark.calls).toEqual([{ title: "capystore", body: "done · 3 saved", url: JOBS_URL }]);
         expect(L.kv.m.has(`notify:line:${KEY_ID}`)).toBe(false);
         expect([...L.kv.m.keys()].filter((k) => k.startsWith(`notify:ev:line:${KEY_ID}:`))).toHaveLength(1);
         await L.sweeps(3);
@@ -174,7 +174,7 @@ describe("the one message", () => {
         L.helper.fetchError = "error.api.fetch.fail";
         await L.settle(sid);
         expect(L.hark.calls).toEqual([
-            { title: "cobalt couldn't finish", body: "couldn't save x · 2105237035271258436 — the link could not be fetched", url: `cobalt-apple://session/${sid}` },
+            { title: "capystore couldn't finish", body: "couldn't save x · 2105237035271258436 — the link could not be fetched", url: `cobalt-apple://session/${sid}` },
         ]);
     });
     it("one webp: the single-job webp message with its url", async () => {
@@ -215,7 +215,7 @@ describe("the one message", () => {
         expect(L.helper.fetchBodies).toHaveLength(6); // the running save and five queued
         expect(L.hark.calls).toHaveLength(1);
         const m = L.hark.calls[0]!;
-        expect(m.title).toBe("cobalt");
+        expect(m.title).toBe("capystore");
         expect(m.url).toBe(JOBS_URL);
         const done = asBody(await L.studio.renderStatus(S.sid, r.job, 0));
         expect(m.body.split("\n")).toEqual([
@@ -233,7 +233,7 @@ describe("the one message", () => {
             "c:j2": { url: "https://m/2.webp", bytes: 1, width: 1, height: 1 },
         };
         const msg = lineSummaryMessage({ members, webps }, new Map());
-        expect(msg).toMatchObject({ title: "cobalt", body: "done · 1 saved · 2 webps ready", url: JOBS_URL });
+        expect(msg).toMatchObject({ title: "capystore", body: "done · 1 saved · 2 webps ready", url: JOBS_URL });
     });
     it("a failed render in a mixed round reads like the single-job wording, a failed save names its link", () => {
         const members = { a: "failed:error.webp.busy", "b:j1": "failed:error.webp.encode_failed", c: "saved" };
@@ -303,7 +303,7 @@ describe("the one message", () => {
         await L.settle(R.sid);
         expect(L.hark.calls).toEqual([
             {
-                title: "cobalt",
+                title: "capystore",
                 body: "done · 1 saved · 1 couldn't finish\ncouldn't save x · 2105237035271258436 — the server was busy",
                 url: JOBS_URL,
             },
@@ -408,7 +408,7 @@ describe("DELETE /studio/line/notify", () => {
         L.clock.t += NOTIFY_RETRY_DELAYS_MS[0]! + 1;
         await L.notify.retryDue(L.clock.t);
         expect(L.hark.calls).toHaveLength(2);
-        expect(L.hark.calls[1]).toEqual({ title: "cobalt", body: "done · 2 saved", url: JOBS_URL });
+        expect(L.hark.calls[1]).toEqual({ title: "capystore", body: "done · 2 saved", url: JOBS_URL });
     });
     it("works with the bridge off (nothing to remove) and for a key that never put anything", async () => {
         const off = await lineWorld({ hook: null });

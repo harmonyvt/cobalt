@@ -29,6 +29,16 @@ rsync -a \
     "$repo/" "$tmp/"
 cp -R "$here/api/.gitinfo" "$tmp/.git"
 
+# Fork rename: the web app shows "capystore". Patched in the temp copy only, so the
+# upstream web/ files stay untouched and upstream pulls stay clean.
+APP_NAME=${APP_NAME:-capystore}
+for f in "$tmp"/web/i18n/*/general.json; do
+    sed -i.bak -E 's/^( *"cobalt": )"[^"]*"/\1"'"$APP_NAME"'"/' "$f" && rm -f "$f.bak"
+done
+sed -i.bak -E 's/"(name|short_name)": "cobalt"/"\1": "'"$APP_NAME"'"/' "$tmp/web/static/manifest.json"
+sed -i.bak -E 's/(name="(application-name|apple-mobile-web-app-title)" content=)"cobalt"/\1"'"$APP_NAME"'"/' "$tmp/web/src/app.html"
+rm -f "$tmp/web/static/manifest.json.bak" "$tmp/web/src/app.html.bak"
+
 cd "$tmp"
 $PNPM install --frozen-lockfile
 $PNPM --filter @imput/cobalt-web build

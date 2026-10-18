@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
 struct UploadFilesIntent: AppIntent, LongRunningIntent, CancellableIntent {
     static let title: LocalizedStringResource = "Upload files"
     static let description = IntentDescription(
-        "Uploads videos and images to cobalt, which saves them to your library.", categoryName: "cobalt")
+        "Uploads videos and images to capystore, which saves them to your library.", categoryName: "capystore")
     static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
 
     /// What the server's upload route takes (APP-API-CONTRACT 3, `UPLOAD_TYPES`).
@@ -25,7 +25,7 @@ struct UploadFilesIntent: AppIntent, LongRunningIntent, CancellableIntent {
     @Parameter(title: "Visibility", default: .appDefault)
     var visibility: CobaltVisibility
 
-    @Parameter(title: "Wait until saved", description: "Returns when cobalt has saved them, with their public links.", default: false)
+    @Parameter(title: "Wait until saved", description: "Returns when capystore has saved them, with their public links.", default: false)
     var waitUntilSaved: Bool
 
     @Dependency var actions: ShortcutActions

@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
-<title>cobalt library</title>
+<title>capystore library</title>
 <link rel="icon" href="/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -224,7 +224,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
 <body>
 <div class="page">
   <header class="bar">
-    <a class="back" href="/">&larr; cobalt</a>
+    <a class="back" href="/">&larr; capystore</a>
     <b>library</b>
     <span class="right"><a class="nav" href="/logs">logs</a><span class="lock">signed in &middot; only you</span></span>
   </header>
@@ -403,7 +403,7 @@ var MESSAGES = {
   "expired": "your login expired, reload to sign in.",
   "error.library.invalid_url": "that doesn't look like a link. it should start with https://",
   "error.library.bad_request": "that request wasn't valid.",
-  "error.library.upstream": "the server couldn't reach cobalt's api. try again in a moment.",
+  "error.library.upstream": "the server couldn't reach capystore's api. try again in a moment.",
   "error.library.timeout": "this is taking too long. try again.",
   "error.library.unsupported": "that file type isn't supported.",
   "error.library.too_large": "too big: the limit is 100 MB.",
@@ -434,7 +434,7 @@ var MESSAGES = {
 };
 function messageFor(code) {
   if (MESSAGES[code]) return MESSAGES[code];
-  if (code && code.indexOf("error.api.") === 0) return "cobalt couldn't fetch this link. the post may be private, removed, or from a site cobalt can't read.";
+  if (code && code.indexOf("error.api.") === 0) return "capystore couldn't fetch this link. the post may be private, removed, or from a site capystore can't read.";
   if (code && code.indexOf("error.webp.") === 0) return "couldn't make the webp.";
   return "something went wrong.";
 }

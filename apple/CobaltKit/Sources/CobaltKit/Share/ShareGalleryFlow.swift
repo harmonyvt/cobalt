@@ -438,9 +438,9 @@ enum ShareGalleryText {
     ) -> (head: String, body: String) {
         switch request {
         case .single:
-            return ("saving to cobalt", title)
+            return ("saving to capystore", title)
         case .saveNow, .timeout:
-            return ("saving everything to cobalt", "open cobalt to make something from it")
+            return ("saving everything to capystore", "open capystore to make something from it")
         case .saveAll:
             return (saving(summary), title)
         case .slideshowWebp:
@@ -452,9 +452,9 @@ enum ShareGalleryText {
 
     /// "saving 10 photos to cobalt" / "saving 4 items to cobalt".
     static func saving(_ summary: ShareGalleryFlow.Summary?) -> String {
-        guard let summary else { return "saving everything to cobalt" }
+        guard let summary else { return "saving everything to capystore" }
         let n = summary.count
         let noun = summary.photosOnly ? (n == 1 ? "photo" : "photos") : (n == 1 ? "item" : "items")
-        return "saving \(n) \(noun) to cobalt"
+        return "saving \(n) \(noun) to capystore"
     }
 }

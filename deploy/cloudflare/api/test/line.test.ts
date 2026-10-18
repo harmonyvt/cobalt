@@ -334,7 +334,7 @@ describe("share (origin: share) joins the line", () => {
         await L.studio.sweep();
         expect(L.session(share.id)).toMatchObject({ status: "error", error_code: "error.studio.busy" });
         expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]).toMatchObject({ title: "cobalt couldn't finish" });
+        expect(L.hark.calls[0]).toMatchObject({ title: "capystore couldn't finish" });
         expect(L.hark.calls[0]!.body).toContain("the server was busy");
     });
     it("a share with the line full is refused 429 error.studio.line_full and creates nothing", async () => {
@@ -735,7 +735,7 @@ describe("ceilings", () => {
         expect(L.entries()).toEqual([]);
         expect(L.rows("SELECT * FROM media_titles")).toEqual([]);
         expect(L.hark.calls).toEqual([
-            { title: "cobalt couldn't finish", body: expect.stringContaining("the server was busy"), url: `cobalt-apple://session/${a.id}` },
+            { title: "capystore couldn't finish", body: expect.stringContaining("the server was busy"), url: `cobalt-apple://session/${a.id}` },
         ]);
         expect(L.live.events).toContainEqual({ sid: a.id, e: { kind: "failed", code: "error.studio.busy" } });
         // the poll tells the same
@@ -752,7 +752,7 @@ describe("ceilings", () => {
             { status: "error", error_code: "error.webp.busy" },
         ]);
         expect(L.hark.calls).toEqual([
-            { title: "cobalt couldn't finish", body: "couldn't make the webp — the server was busy", url: `cobalt-apple://session/${S.sid}` },
+            { title: "capystore couldn't finish", body: "couldn't make the webp — the server was busy", url: `cobalt-apple://session/${S.sid}` },
         ]);
         expect(L.live.events).toContainEqual({ sid: S.sid, job: r.job, e: { kind: "failed", code: "error.webp.busy" } });
         expect(await L.studio.renderStatus(S.sid, r.job, 0)).toEqual({

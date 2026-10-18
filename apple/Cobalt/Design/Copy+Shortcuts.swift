@@ -10,16 +10,16 @@ extension Copy {
     enum Shortcuts {
         // MARK: errors (15.6)
 
-        static let notSignedIn = "open cobalt and add your server and key first."
-        static let keyRefused = "cobalt's key was refused. check it in cobalt's settings."
-        static let serverUnreachable = "cobalt's server didn't answer."
-        static let oldServer = "this server can't keep a line. open cobalt to save."
+        static let notSignedIn = "open capystore and add your server and key first."
+        static let keyRefused = "capystore's key was refused. check it in capystore's settings."
+        static let serverUnreachable = "capystore's server didn't answer."
+        static let oldServer = "this server can't keep a line. open capystore to save."
         static let noLink = "no link found in that text."                                  // existing copy (`Copy.failure(.noLink)`)
         static let noFile = "no file to upload."
         static let noVideo = "that save has no video to make a webp from."
-        static let saveNotFound = "cobalt couldn't find that save."
+        static let saveNotFound = "capystore couldn't find that save."
 
-        static func lineFull(max: Int) -> String { "cobalt's line is full (\(max)). try again when a few have finished." }
+        static func lineFull(max: Int) -> String { "capystore's line is full (\(max)). try again when a few have finished." }
         static func fileTooLarge(limit: Int64) -> String { Copy.failure(.tooLarge(limit: limit)) }     // "that file is over the 100 MB limit."
 
         /// The words of any `ShortcutError`.
@@ -54,7 +54,7 @@ extension Copy {
 
         /// What the system asks the owner when an action must continue in the foreground: a server with no line (an old
         /// one) holds nothing for cobalt, so this device keeps the line and cobalt has to stay open.
-        static let continueForOldServer = "this server can't keep a line, so cobalt has to stay open to save."
+        static let continueForOldServer = "this server can't keep a line, so capystore has to stay open to save."
 
         static let noSaves = "nothing saved yet."
         static func latest(_ saves: [ShortcutSave]) -> String {

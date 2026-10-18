@@ -55,7 +55,7 @@ enum TrayCopy {
     static func failure(_ failure: PipelineFailure, lineMax: Int = 50) -> String {
         if failure == .lineFull { return Copy.Jobs.lineFull(max: lineMax) }
         if case .server(let code) = failure, code == "error.webp.no_video" {
-            return "there's no video in that post for cobalt to save."
+            return "there's no video in that post for capystore to save."
         }
         return Copy.failure(failure)
     }

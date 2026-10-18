@@ -48,17 +48,19 @@ targets:
     info:
       path: Config/Cobalt-Info.plist
       properties:
-        CFBundleDisplayName: cobalt
+        CFBundleDisplayName: capystore
+        # The Mac menu bar and About panel; PRODUCT_NAME stays `cobalt` (cobalt.app, deploy/apple scripts).
+        CFBundleName: capystore
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleURLTypes:
           - CFBundleURLName: com.capybaraharmony.cobalt
             CFBundleURLSchemes: [cobalt-apple]
         LSApplicationCategoryType: public.app-category.utilities
-        NSPhotoLibraryAddUsageDescription: cobalt saves videos you choose to your photos.
+        NSPhotoLibraryAddUsageDescription: capystore saves videos you choose to your photos.
         # The photos album (CONTRACT-SYNC.md decision 7): putting an asset in an album needs full
         # read-write access. The app target only; the share extension stays add-only.
-        NSPhotoLibraryUsageDescription: cobalt keeps the videos it saves together in a “cobalt” album. it doesn't look through your other photos.
+        NSPhotoLibraryUsageDescription: capystore keeps the videos it saves together in a “cobalt” album. it doesn't look through your other photos.
         # cobalt never needs a selection, so the system's once-per-launch "select more photos" alert is noise.
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
         NSAppTransportSecurity:
@@ -114,10 +116,10 @@ targets:
     info:
       path: Config/CobaltShare-Info.plist
       properties:
-        CFBundleDisplayName: cobalt
+        CFBundleDisplayName: capystore
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        NSPhotoLibraryAddUsageDescription: cobalt saves videos you choose to your photos.
+        NSPhotoLibraryAddUsageDescription: capystore saves videos you choose to your photos.
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
@@ -153,7 +155,7 @@ targets:
     info:
       path: Config/CobaltWidgets-Info.plist
       properties:
-        CFBundleDisplayName: cobalt
+        CFBundleDisplayName: capystore
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UIAppFonts:
@@ -187,7 +189,7 @@ targets:
     info:
       path: Config/CobaltKeyboard-Info.plist
       properties:
-        CFBundleDisplayName: cobalt
+        CFBundleDisplayName: capystore
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         # Apple's Custom Keyboard Extension template, except Allow Full Access is on.

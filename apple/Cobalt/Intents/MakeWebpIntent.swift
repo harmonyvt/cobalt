@@ -30,7 +30,7 @@ struct MakeWebpIntent: AppIntent, LongRunningIntent, CancellableIntent {
     static let title: LocalizedStringResource = "Make webp"
     static let description = IntentDescription(
         "Makes an animated webp from a saved video and returns its link. With no save given it uses your latest save with a video.",
-        categoryName: "cobalt")
+        categoryName: "capystore")
     static var supportedModes: IntentModes { .background }
 
     @Parameter(title: "Save", description: "Empty means your latest save with a video.")
@@ -39,7 +39,7 @@ struct MakeWebpIntent: AppIntent, LongRunningIntent, CancellableIntent {
     @Parameter(title: "Start", description: "Seconds from the start of the video.", default: 0)
     var start: Double
 
-    @Parameter(title: "Length", description: "Seconds. Empty means as long as cobalt allows.")
+    @Parameter(title: "Length", description: "Seconds. Empty means as long as capystore allows.")
     var length: Double?
 
     @Parameter(title: "Size", default: .appDefault)
