@@ -2,6 +2,8 @@
 // listed, renamed, filled and deleted from the app's links tab. Keyed routes only, D1 only. Deleting a
 // collection never revokes its links; a revoked link drops out of every collection.
 
+import { writeCaption, setSubject, type Captioner } from "./roast";
+import { mintSetId, setRoastInput } from "./share-sets";
 import type { StudioReply } from "./studio";
 
 export const COLLECTION_NAME_MAX = 60;
@@ -14,6 +16,12 @@ export type CollectionDeps = {
     db: D1Database;
     now: () => number;
     randomBytes?: (n: number) => Uint8Array;
+    // reroll (section 26.1): fresh captions for the new links, waiting at most captionWaitMs in all
+    mediaBaseUrl?: string;
+    shareBaseUrl?: string;
+    captioner?: Captioner | null;
+    captionWaitMs?: number;
+    setRandomBytes?: (n: number) => Uint8Array;
 };
 
 type Row = { id: string; name: string; created_at: number; updated_at: number };
@@ -185,6 +193,58 @@ export async function deleteCollection(d: CollectionDeps, id: string): Promise<S
         ]);
         return { status: 200, body: { status: "success" } };
     } catch {
+        return err(503, "error.api.generic");
+    }
+}
+
+// POST /share/collections/<id>/reroll: every live link in the collection gets a new URL (a new share set
+// with the same files and no typed title, so its title is a fresh caption), and the old URL is revoked.
+// Every collection holding an old link holds the new one instead, in the same place. Captions for the new
+// links are written now (bounded wait); the 15-minute cron fills any miss.
+export const REROLL_CAPTION_WAIT_MS = 8000;
+
+export async function rerollCollection(d: CollectionDeps, id: string, keyId: string): Promise<StudioReply> {
+    try {
+        const row = await one(d.db, id);
+        if (!row) return err(404, "error.collection.not_found");
+        const [shape] = await shapes(d.db, [row]);
+        const old = shape!.set_ids;
+        if (old.length === 0) return err(409, "error.collection.empty");
+        const marks = old.map((_, i) => `?${i + 1}`).join(", ");
+        const { results: sets } = await d.db
+            .prepare(`SELECT id, items FROM share_sets WHERE id IN (${marks}) AND revoked_at IS NULL`)
+            .bind(...old)
+            .all<{ id: string; items: string }>();
+        const now = d.now();
+        const replaced: Record<string, string> = {};
+        const stmts: D1PreparedStatement[] = [];
+        for (const s of sets) {
+            const fresh = mintSetId(d.setRandomBytes);
+            replaced[s.id] = fresh;
+            stmts.push(
+                d.db.prepare("INSERT INTO share_sets (id, items, title, key_id, created_at) VALUES (?1, ?2, NULL, ?3, ?4)").bind(fresh, s.items, keyId, now),
+                d.db.prepare("UPDATE share_sets SET revoked_at = ?2 WHERE id = ?1 AND revoked_at IS NULL").bind(s.id, now),
+                d.db.prepare("UPDATE share_collection_items SET set_id = ?2 WHERE set_id = ?1").bind(s.id, fresh),
+            );
+        }
+        stmts.push(d.db.prepare("UPDATE share_collections SET updated_at = ?2 WHERE id = ?1").bind(id, now));
+        await d.db.batch(stmts);
+
+        if (d.captioner && d.mediaBaseUrl) {
+            const captioner = d.captioner;
+            const media = d.mediaBaseUrl;
+            const work = Promise.all(
+                Object.values(replaced).map(async (sid) => {
+                    const input = await setRoastInput({ db: d.db, mediaBaseUrl: media }, sid).catch(() => null);
+                    if (input) await writeCaption({ db: d.db, captioner, now: d.now }, setSubject(sid), input);
+                }),
+            );
+            await Promise.race([work, new Promise((r) => setTimeout(r, d.captionWaitMs ?? REROLL_CAPTION_WAIT_MS))]);
+        }
+        const [after] = await shapes(d.db, [(await one(d.db, id))!]);
+        return { status: 200, body: { status: "success", collection: after, replaced } };
+    } catch (e) {
+        console.error("[collections] reroll failed", String(e));
         return err(503, "error.api.generic");
     }
 }

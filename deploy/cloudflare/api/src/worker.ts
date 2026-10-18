@@ -33,7 +33,7 @@ import { sharePage } from "./share";
 import { createShareSet, listShareSets, revokeShareSet } from "./share-sets";
 import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { captionerFrom } from "./roast";
-import { createCollection, deleteCollection, listCollections, updateCollection } from "./share-collections";
+import { createCollection, deleteCollection, listCollections, rerollCollection, updateCollection } from "./share-collections";
 import { chatModelFrom, createThread, deleteThread, getThread, listThreads, renameThread, sendMessage } from "./chat";
 import { ingestTelemetry } from "./telemetry";
 import {
@@ -451,10 +451,17 @@ async function handleInner(
             decision.then === "collections_list" ||
             decision.then === "collections_create" ||
             decision.then === "collections_update" ||
-            decision.then === "collections_delete"
+            decision.then === "collections_delete" ||
+            decision.then === "collections_reroll"
         ) {
             if (!shareHost(env)) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
-            const cd = { db: env.DB, now: edge.now };
+            const cd = {
+                db: env.DB,
+                now: edge.now,
+                mediaBaseUrl: env.MEDIA_BASE_URL,
+                shareBaseUrl: env.SHARE_BASE_URL,
+                captioner: edge.captioner === undefined ? captionerFrom(env) : edge.captioner,
+            };
             const r =
                 decision.then === "collections_list"
                     ? await listCollections(cd)
@@ -462,7 +469,9 @@ async function handleInner(
                       ? await createCollection(cd, request, keyId)
                       : decision.then === "collections_update"
                         ? await updateCollection(cd, request, decision.params!.id)
-                        : await deleteCollection(cd, decision.params!.id);
+                        : decision.then === "collections_delete"
+                          ? await deleteCollection(cd, decision.params!.id)
+                          : await rerollCollection(cd, decision.params!.id, keyId);
             const res = json(r.status, r.body, allowOrigin);
             res.headers.set("cache-control", "no-store");
             return res;

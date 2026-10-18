@@ -89,6 +89,7 @@ export type LookupThen =
     | "collections_create"
     | "collections_update"
     | "collections_delete"
+    | "collections_reroll"
     // chat (APP-API-CONTRACT.md section 27)
     | "chat_list"
     | "chat_create"
@@ -250,7 +251,13 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
             if (req.method === "POST") return lookupThen(req, "collections_create");
             return reject(404);
         }
-        const id = req.pathname.slice("/share/collections/".length);
+        const rest = req.pathname.slice("/share/collections/".length);
+        if (rest.endsWith("/reroll")) {
+            const rid = rest.slice(0, -"/reroll".length);
+            if (!COLLECTION_ID_REGEX.test(rid) || req.method !== "POST") return reject(404);
+            return lookupThen(req, "collections_reroll", { id: rid });
+        }
+        const id = rest;
         if (!COLLECTION_ID_REGEX.test(id)) return reject(404);
         if (req.method === "PATCH") return lookupThen(req, "collections_update", { id });
         if (req.method === "DELETE") return lookupThen(req, "collections_delete", { id });

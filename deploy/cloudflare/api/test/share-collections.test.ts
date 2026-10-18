@@ -189,6 +189,51 @@ describe("collections", () => {
         expect(r.status).toBe(404);
     });
 
+    it("reroll gives every link a new URL with a fresh caption as its title, in every collection", async () => {
+        // a typed title is dropped: the reroll's title is the new caption
+        const titled = (await create({ items: [video.id, photo.id], title: "my pick" })).body.set.id;
+        const one = (await call("POST", "/share/collections", { name: "one", set_ids: [a, titled] })).body.collection.id;
+        await call("POST", "/share/collections", { name: "two", set_ids: [titled, c] });
+        const seen: string[] = [];
+        t += 1000;
+        const res = await handleRequest(
+            new Request(`${API}/share/collections/${one}/reroll`, { method: "POST", headers: AUTH }),
+            env,
+            container,
+            {
+                now: () => t,
+                captioner: {
+                    model: "claude-haiku-5-5",
+                    async caption(input) {
+                        seen.push(input.userTitle ?? "none");
+                        return { title: "fresh (=^･ω･^=)", description: "" };
+                    },
+                },
+            },
+        );
+        expect(res.status).toBe(200);
+        const r = (await res.json()) as any;
+        expect(Object.keys(r.replaced).sort()).toEqual([a, titled].sort());
+        const na = r.replaced[a], nt = r.replaced[titled];
+        expect(na).toMatch(/^[1-9][0-9]{18}$/);
+        expect(r.collection.set_ids).toEqual([na, nt]); // same order as before
+        expect(seen).toEqual(["none", "none"]);
+        // old URLs are gone, new ones live with the fresh caption
+        expect((await get(`${SHARE}g/${a}`)).status).toBe(404);
+        const page = await (await get(`${SHARE}g/${nt}`)).text();
+        expect(meta(page, "og:title")).toBe("fresh (=^･ω･^=)");
+        // the other collection follows the swap; untouched links stay
+        const cols = (await call("GET", "/share/collections")).body.collections;
+        expect(cols.find((x: any) => x.name === "two").set_ids).toEqual([nt, c]);
+        expect((await list()).sets.find((s: any) => s.id === nt).title).toBeNull();
+        expect((await call("POST", "/share/collections/AAAAAAAAAAAAAAAA/reroll")).status).toBe(404);
+        const empty = (await call("POST", "/share/collections", { name: "empty" })).body.collection.id;
+        const e = await call("POST", `/share/collections/${empty}/reroll`);
+        expect(e.status).toBe(409);
+        expect(e.body.error.code).toBe("error.collection.empty");
+        expect((await call("GET", `/share/collections/${one}/reroll`)).status).toBe(404);
+    });
+
     it("ids are 16 letters and digits", () => {
         expect(mintCollectionId()).toMatch(/^[A-Za-z0-9]{16}$/);
     });
