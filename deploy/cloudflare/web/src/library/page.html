@@ -593,7 +593,7 @@ function setLinkButtons(disabled) {
 }
 function showResult(url, text) {
   $("linkResultUrl").textContent = shareUrl(url);
-  $("openLinkResult").href = url;
+  $("openLinkResult").href = shareUrl(url);
   $("linkResult").hidden = false;
   linkStatus("ok", text);
 }
@@ -695,7 +695,7 @@ function fileOptions(f) {
   } else if (f.state === "done") {
     if (f.url) {
       o.push(h("button", { type: "button", "data-fa": "copy", text: "copy link", onclick: function () { copyText(shareUrl(f.url)); } }));
-      o.push(h("a", { class: "btn", "data-fa": "open", href: f.url, target: "_blank", rel: "noopener", text: "open" }));
+      o.push(h("a", { class: "btn", "data-fa": "open", href: shareUrl(f.url), target: "_blank", rel: "noopener", text: "open" }));
     }
     o.push(remove);
   } else if (f.state === "failed") {
@@ -940,7 +940,7 @@ function itemThumb(it) {
   var wrap;
   var linkable = isPub(it) && it.url;
   wrap = linkable
-    ? h("a", { class: "thumb-l", href: it.url, target: "_blank", rel: "noopener", "aria-label": "open " + it.name })
+    ? h("a", { class: "thumb-l", href: shareUrl(it.url), target: "_blank", rel: "noopener", "aria-label": "open " + it.name })
     : h("div", { class: "thumb-l" });
   var ext = extOf(it.name) || (TYPES[it.content_type] || "");
   if (isPub(it) && it.url && isImageType(it.content_type)) {
@@ -1144,7 +1144,7 @@ async function setVisibility(it, makePublic) {
       G.items = G.items.filter(function (i) { return i.id !== it.id; });
     }
     renderGrid(); reloadUsage();
-    if (makePublic && next && next.url) toast("public: link ready", { href: next.url, label: "open" });
+    if (makePublic && next && next.url) toast("public: link ready", { href: shareUrl(next.url), label: "open" });
     else toast(makePublic ? "public" : "private");
   } catch (e) { delete G.busy[it.id]; renderGrid(); toast(describe(e).text); }
 }
@@ -1305,7 +1305,7 @@ function openPost(it) {
     ["file", it.custom_title && it.custom_title !== it.name ? it.name : ""],
     ["from", SOURCES[it.source] || it.source || ""],
     ["link", link],
-    ["public", it.mapOnly ? "" : isPub(it) && it.url ? h("a", { href: it.url, target: "_blank", rel: "noopener", text: it.url }) : (isPub(it) ? "" : "private")],
+    ["public", it.mapOnly ? "" : isPub(it) && it.url ? h("a", { href: shareUrl(it.url), target: "_blank", rel: "noopener", text: shareUrl(it.url) }) : (isPub(it) ? "" : "private")],
     ["size", it.bytes != null ? fmtBytes(it.bytes) + (it.duration ? " · " + fmtSecs(it.duration) : "") : ""],
     ["added", it.created_at ? when(it.created_at) : ""],
     ["match", S.active && typeof it.score === "number" ? "score " + it.score.toFixed(3) + " for \u201c" + S.q + "\u201d" : ""]

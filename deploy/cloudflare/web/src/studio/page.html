@@ -832,7 +832,7 @@ function paintRenders() {
   list.forEach(function (r) {
     var name = shareUrl(r.url).replace(/^https?:\/\//, "");
     var meta = fmt(r.start || 0) + "–" + fmt((r.start || 0) + (r.length || 0)) + " · " + (r.width || "?") + " px" + (r.bytes ? " · " + mb(r.bytes) : "");
-    var a = h("a", { href: r.url, target: "_blank", rel: "noopener noreferrer", text: name });
+    var a = h("a", { href: shareUrl(r.url), target: "_blank", rel: "noopener noreferrer", text: name });
     var code = h("code", null, a);
     var btn = h("button", { type: "button", text: "copy", "aria-label": "copy link to " + name });
     btn.addEventListener("click", function () {
