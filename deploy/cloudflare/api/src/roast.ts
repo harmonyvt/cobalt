@@ -17,9 +17,10 @@ export const ROAST_MODEL_DEFAULT = "claude-haiku-5-5";
 export const ROAST_TITLE_TARGET = 110;
 export const ROAST_TITLE_MAX = 140;
 // Bumped when the voice changes: captions written in an older style are rewritten by the backfill. Captions of
-// CAPTION_STYLE_CUT (the previous style) are rewritten only when they were cut off (they end in "...").
-export const CAPTION_STYLE = "v4-kaomoji-catgirl-short";
-export const CAPTION_STYLE_CUT = "v3-kaomoji-catgirl";
+// CAPTION_STYLE_CUT (the previous style) are rewritten only when they were cut off (they end in "...") or say "nya".
+// v5 (owner, 2026-10-18): "doesn't need to say nya at the start of title and anytime, bit forced".
+export const CAPTION_STYLE = "v5-kaomoji-catgirl-no-nya";
+export const CAPTION_STYLE_CUT = "v4-kaomoji-catgirl-short";
 export const ROAST_DESC_MAX = 280;
 // A failed caption is retried after this long, at most ROAST_MAX_ATTEMPTS times.
 export const ROAST_RETRY_MS = 24 * 60 * 60 * 1000;
@@ -41,7 +42,7 @@ export type Captioner = { model: string; caption(input: RoastInput): Promise<Cap
 
 const SYSTEM = `You write the link preview title for files Harmony shares with friends on Discord: ONE short sentence that sums up all of the content (every file, if there are several): at most 110 characters, kaomoji included. Shorter is better; leave out details rather than run long.
 
-Voice: a cute, funny furry anime cat girl talking to Harmony, warm and playfully teasing, decorated with one or two kaomoji text faces such as (=^･ω･^=), ฅ^•ﻌ•^ฅ, (≧▽≦), >w<, :3 or UwU (vary them; a soft "nya" now and then is fine). Never use emoji pictures. Never introduce yourself, never name yourself or say what you are, never mention being a cat, a bot or an AI: just say the sentence. Keep it wholesome: nothing sexual or suggestive, no jokes about bodies, race, religion or identity, never mean about the people shown.
+Voice: a cute, funny furry anime cat girl talking to Harmony, warm and playfully teasing, decorated with one or two kaomoji text faces such as (=^･ω･^=), ฅ^•ﻌ•^ฅ, (≧▽≦), >w<, :3 or UwU (vary them). Let the cuteness come from the wording and the faces: never write "nya", "nyaa", "meow" or "purr", and don't open with a sound or an interjection; start with what the content is. Never use emoji pictures. Never introduce yourself, never name yourself or say what you are, never mention being a cat, a bot or an AI: just say the sentence. Keep it wholesome: nothing sexual or suggestive, no jokes about bodies, race, religion or identity, never mean about the people shown.
 
 Describe what is actually there (what you can see in the pictures, the titles, where it was saved from); don't invent facts. No hashtags, no links, no quotation marks around the sentence.`;
 
@@ -328,7 +329,7 @@ export async function backfillCaptions(d: BackfillDeps): Promise<BackfillResult>
             .prepare(
                 `SELECT s.id FROM share_sets s LEFT JOIN media_captions c ON c.subject = 'set:' || s.id
                   WHERE s.revoked_at IS NULL
-                    AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2) OR (c.title IS NOT NULL AND c.model IS NOT ?4 AND (c.model IS NOT ?5 OR c.title LIKE '%...%')))
+                    AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2) OR (c.title IS NOT NULL AND c.model IS NOT ?4 AND (c.model IS NOT ?5 OR c.title LIKE '%...%' OR c.title LIKE '%nya%')))
                   ORDER BY s.created_at DESC LIMIT ?3`,
             )
             .bind(ROAST_MAX_ATTEMPTS, due(d.now()), batch, d.captioner.model, cutStyleOf(d.captioner.model))
@@ -343,7 +344,7 @@ export async function backfillCaptions(d: BackfillDeps): Promise<BackfillResult>
                 `SELECT ${cols}, (SELECT t.title FROM media_titles t WHERE t.post_key = ${POST_KEY_SQL}) AS custom_title
                    FROM media_items m LEFT JOIN media_captions c ON c.subject = 'item:' || m.id
                   WHERE m.deleted_at IS NULL AND ${visSql("m.")} = 'public'
-                    AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2) OR (c.title IS NOT NULL AND c.model IS NOT ?4 AND (c.model IS NOT ?5 OR c.title LIKE '%...%')))
+                    AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2) OR (c.title IS NOT NULL AND c.model IS NOT ?4 AND (c.model IS NOT ?5 OR c.title LIKE '%...%' OR c.title LIKE '%nya%')))
                   ORDER BY m.created_at DESC LIMIT ?3`,
             )
             .bind(ROAST_MAX_ATTEMPTS, due(d.now()), batch + tried.size, d.captioner.model, cutStyleOf(d.captioner.model))
