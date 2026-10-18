@@ -4,7 +4,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
 import { hashKey } from "../src/keys";
-import { backfillCaptions, captionerFrom, parseCaption, ROAST_MAX_ATTEMPTS, ROAST_RETRY_MS, type Captioner, type RoastInput } from "../src/roast";
+import { backfillCaptions, CAPTION_STYLE, captionerFrom, parseCaption, ROAST_MAX_ATTEMPTS, ROAST_RETRY_MS, type Captioner, type RoastInput } from "../src/roast";
 import { setRoastInput } from "../src/share-sets";
 import { handleRequest, type WorkerEnv } from "../src/worker";
 import { MemoryMedia, MemoryOriginals } from "./studio-fakes";
@@ -141,17 +141,17 @@ describe("gallery links", () => {
 
         const html = await (await get(`${SHARE}g/${id}`, { headers: DISCORD })).text();
         expect(meta(html, "og:title")).toBe("Harmony saved 2 again 🦫");
-        expect(meta(html, "og:description")).toBe("Peak taste, as usual 🙄 &lt;b&gt;");
+        expect(meta(html, "og:description")).toBeNull(); // the caption is the title only
         const doc = JSON.parse(/<script id="discord:component-embed" type="application\/json">([^<]*)<\/script>/.exec(html)![1]!);
-        expect(doc.component.components[0].content).toBe("**Harmony saved 2 again 🦫**\nPeak taste, as usual 🙄 \\<b\\>");
+        expect(doc.component.components[0].content).toBe("**Harmony saved 2 again 🦫**");
     });
 
-    it("a title Harmony typed wins over the roast; the description still shows", async () => {
+    it("a title Harmony typed wins over the caption, and no caption description shows", async () => {
         const r = await create({ items: [video.id, photo.id], title: "trip" });
         expect(seen[0]!.userTitle).toBe("trip");
         const html = await (await get(`${SHARE}g/${r.body.set.id}`)).text();
         expect(meta(html, "og:title")).toBe("trip");
-        expect(meta(html, "og:description")).toBe("Peak taste, as usual 🙄 &lt;b&gt;");
+        expect(meta(html, "og:description")).toBeNull();
     });
 
     it("a failing or slow model never blocks the link; the failure is recorded for the cron", async () => {
@@ -177,12 +177,12 @@ describe("single-file share pages", () => {
         db.raw.prepare("INSERT INTO media_captions (subject, title, description, model, created_at, attempts) VALUES (?, ?, ?, ?, ?, 1)").run(`item:${video.id}`, "Capy approves 🦫", "Harmony, why. 💀", "m", 1);
         let html = await (await get(`${SHARE}ViDeO00001`)).text();
         expect(meta(html, "og:title")).toBe("Capy approves 🦫");
-        expect(meta(html, "og:description")).toBe("Harmony, why. 💀 · 0:10");
+        expect(meta(html, "og:description")).toBe("0:10");
         db.raw.prepare("UPDATE media_items SET post_key = 'P1' WHERE id = ?").run(video.id);
         db.raw.prepare("INSERT INTO media_titles (post_key, title, key_id, updated_at) VALUES ('P1', 'my clip', 'k', 1)").run();
         html = await (await get(`${SHARE}ViDeO00001`)).text();
         expect(meta(html, "og:title")).toBe("my clip");
-        expect(meta(html, "og:description")).toBe("Harmony, why. 💀 · 0:10");
+        expect(meta(html, "og:description")).toBe("0:10");
     });
 });
 
@@ -231,6 +231,17 @@ describe("backfill", () => {
         expect(captionRow(`item:${odd.id}`)).toMatchObject({ title: null, attempts: ROAST_MAX_ATTEMPTS });
     });
 
+    it("rewrites captions written in an older style, once", async () => {
+        await run();
+        db.raw.prepare("UPDATE media_captions SET model = 'claude-haiku-5-5', title = 'old capybara roast'").run();
+        seen = [];
+        const out = await run({}, 20_000);
+        expect(out.written).toBe(4);
+        expect(captionRow(`item:${video.id}`)).toMatchObject({ model: "fake-haiku" });
+        expect(captionRow(`item:${video.id}`).title).not.toBe("old capybara roast");
+        expect(await run({}, 30_000)).toEqual({ written: 0, failed: 0 });
+    });
+
     it("stops at its budget", async () => {
         let t = 0;
         const out = await backfillCaptions({ db, captioner: captioner!, mediaBaseUrl: MEDIA, now: () => (t += 1000), budgetMs: 2500, concurrency: 1 });
@@ -239,19 +250,22 @@ describe("backfill", () => {
 });
 
 describe("the model reply", () => {
-    it("is clipped and cleaned", () => {
-        const c = parseCaption(JSON.stringify({ title: "x".repeat(300), description: "a\n\nb" }));
-        expect(Array.from(c.title)).toHaveLength(100);
-        expect(c.title.endsWith("…")).toBe(true);
-        expect(c.description).toBe("a b");
-        expect(() => parseCaption('{"title":""}')).toThrow();
+    it("is one sentence as the title, kaomoji kept, emoji removed, no description", () => {
+        const c = parseCaption(JSON.stringify({ summary: "  Harmony saved\n\na cozy café clip 🐱☕️ so cute (=^･ω･^=) ฅ^•ﻌ•^ฅ ♡ >w<  " }));
+        expect(c).toEqual({ title: "Harmony saved a cozy café clip so cute (=^･ω･^=) ฅ^•ﻌ•^ฅ ♡ >w<", description: "" });
+        expect(parseCaption(JSON.stringify({ summary: "flags 🇯🇵 and 👍🏽 and 👨‍👩‍👧 and 1️⃣ gone (≧▽≦)" })).title).toBe("flags and and and 1 gone (≧▽≦)");
+        const long = parseCaption(JSON.stringify({ summary: "x".repeat(300) }));
+        expect(Array.from(long.title)).toHaveLength(160);
+        expect(long.title.endsWith("...")).toBe(true);
+        expect(() => parseCaption('{"summary":"🐱🐱"}')).toThrow();
+        expect(() => parseCaption('{"summary":""}')).toThrow();
         expect(() => parseCaption("not json")).toThrow();
     });
 
-    it("no key means captions are off", () => {
+    it("no key means captions are off; the stored model carries the caption style", () => {
         expect(captionerFrom({})).toBeNull();
         expect(captionerFrom({ ANTHROPIC_API_KEY: "  " })).toBeNull();
-        expect(captionerFrom({ ANTHROPIC_API_KEY: "sk-test" })?.model).toBe("claude-haiku-5-5");
-        expect(captionerFrom({ ANTHROPIC_API_KEY: "sk-test", ROAST_MODEL: "claude-haiku-4-5" })?.model).toBe("claude-haiku-4-5");
+        expect(captionerFrom({ ANTHROPIC_API_KEY: "sk-test" })?.model).toBe(`claude-haiku-5-5+${CAPTION_STYLE}`);
+        expect(captionerFrom({ ANTHROPIC_API_KEY: "sk-test", ROAST_MODEL: "claude-haiku-4-5" })?.model).toBe(`claude-haiku-4-5+${CAPTION_STYLE}`);
     });
 });

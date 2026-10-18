@@ -1,5 +1,8 @@
-// Roast captions (APP-API-CONTRACT.md section 25): Harmony the capybara writes one funny title and
-// description, with emojis, for every public file and gallery link, roasting Harmony for saving it.
+// Captions (APP-API-CONTRACT.md section 25): one sentence summing up every public file and gallery
+// link, in a cute, funny furry anime cat-girl voice with kaomoji, never emoji, never announcing itself.
+// Owner, 2026-10-18: "just make it one sentence summary of all the content ... a cute furry cat girl ...
+// don't announce urself", "furry anime girl ascii emoji cute funny", "the ai summary can just be the
+// title". The sentence is the preview title; the description is left empty and ignored.
 // Written once by Claude Haiku and stored in D1 (media_captions), so a share page never waits on the
 // model: new gallery links get theirs at creation (bounded wait), everything else from the
 // 15-minute cron backfill. Off unless ANTHROPIC_API_KEY is set.
@@ -9,7 +12,9 @@ import { POST_KEY_SQL } from "./app-routes";
 import { ITEM_COLUMNS, effectiveVisibility, visSql, type MediaRow } from "./visibility";
 
 export const ROAST_MODEL_DEFAULT = "claude-haiku-5-5";
-export const ROAST_TITLE_MAX = 100;
+export const ROAST_TITLE_MAX = 160;
+// Bumped when the voice changes: captions written in an older style are rewritten by the backfill.
+export const CAPTION_STYLE = "v3-kaomoji-catgirl";
 export const ROAST_DESC_MAX = 280;
 // A failed caption is retried after this long, at most ROAST_MAX_ATTEMPTS times.
 export const ROAST_RETRY_MS = 24 * 60 * 60 * 1000;
@@ -29,19 +34,18 @@ export type RoastInput = { files: RoastFile[]; userTitle: string | null };
 
 export type Captioner = { model: string; caption(input: RoastInput): Promise<Caption> };
 
-const SYSTEM = `You are Harmony the capybara, the mascot of Harmony's private media server. Harmony (the human) saves videos and pictures from X, TikTok, Instagram and the like, and shares links to them with friends on Discord. For each share you write the link preview: a short title and a one or two sentence description.
+const SYSTEM = `You write the link preview title for files Harmony shares with friends on Discord: ONE sentence that sums up all of the content (every file, if there are several), at most 140 characters.
 
-Your voice: a smug, deadpan capybara who lovingly roasts Harmony for saving this, and explains why "Harmony the capybara" picked it. Funny, specific to what you can see, with a few fitting emojis. Keep it friendly teasing: no slurs, nothing sexual, no jokes about bodies, race, religion or anyone's identity, and never mean to the people shown in the media. Don't invent facts you can't see; play with what is there.
+Voice: a cute, funny furry anime cat girl talking to Harmony, warm and playfully teasing, decorated with one or two kaomoji text faces such as (=^･ω･^=), ฅ^•ﻌ•^ฅ, (≧▽≦), >w<, :3 or UwU (vary them; a soft "nya" now and then is fine). Never use emoji pictures. Never introduce yourself, never name yourself or say what you are, never mention being a cat, a bot or an AI: just say the sentence. Keep it wholesome: nothing sexual or suggestive, no jokes about bodies, race, religion or identity, never mean about the people shown.
 
-Write in English. The title is at most 80 characters, the description at most 220. No hashtags, no links, no quotation marks around the whole thing.`;
+Describe what is actually there (what you can see in the pictures, the titles, where it was saved from); don't invent facts. No hashtags, no links, no quotation marks around the sentence.`;
 
 const SCHEMA = {
     type: "object",
     properties: {
-        title: { type: "string", description: "The preview title, at most 80 characters, with an emoji or two." },
-        description: { type: "string", description: "One or two sentences, at most 220 characters, roasting Harmony." },
+        summary: { type: "string", description: "One sentence, at most 140 characters, with a kaomoji or two and no emoji, summing up all the content." },
     },
-    required: ["title", "description"],
+    required: ["summary"],
     additionalProperties: false,
 };
 
@@ -70,7 +74,7 @@ function describe(input: RoastInput): string {
         lines.push(bits.join(", "));
     });
     if (input.userTitle) lines.push(`Harmony titled the link "${input.userTitle}".`);
-    lines.push("Write the preview title and description.");
+    lines.push("Write the one-sentence summary.");
     return lines.join("\n");
 }
 
@@ -90,7 +94,7 @@ export function captionerFrom(env: { ANTHROPIC_API_KEY?: string; ROAST_BASE_URL?
     const model = env.ROAST_MODEL?.trim() || ROAST_MODEL_DEFAULT;
     const client = new Anthropic({ apiKey, baseURL, maxRetries: 1, timeout: 30_000 });
     return {
-        model,
+        model: `${model}+${CAPTION_STYLE}`,
         async caption(input) {
             const images = input.files
                 .map((f) => f.imageUrl)
@@ -118,13 +122,24 @@ export function captionerFrom(env: { ANTHROPIC_API_KEY?: string; ROAST_BASE_URL?
     };
 }
 
+// No emoji: anything drawn as a colour emoji by default, and the joiners, selectors, skin tones, keycaps and
+// flags that build them, are removed; kaomoji (=^･ω･^=) and text symbols like ♡ stay. Control characters go.
+export const stripEmoji = (t: string): string =>
+    t
+        .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}\uFE0F|[\uFE0E\uFE0F\u200D\u20E3]|[\u{1F3FB}-\u{1F3FF}]|[\u{1F1E6}-\u{1F1FF}]/gu, "")
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\u0000-\u001f\u007f]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
 export function parseCaption(text: string): Caption {
-    const v = JSON.parse(text) as { title?: unknown; description?: unknown };
-    if (typeof v.title !== "string" || typeof v.description !== "string") throw new Error("bad caption");
-    const title = clip(v.title, ROAST_TITLE_MAX);
-    const description = clip(v.description, ROAST_DESC_MAX);
+    const v = JSON.parse(text) as { summary?: unknown; title?: unknown };
+    const raw = typeof v.summary === "string" ? v.summary : typeof v.title === "string" ? v.title : null;
+    if (raw === null) throw new Error("bad caption");
+    const cps = Array.from(stripEmoji(raw));
+    const title = cps.length > ROAST_TITLE_MAX ? `${cps.slice(0, ROAST_TITLE_MAX - 3).join("").trimEnd()}...` : cps.join("");
     if (!title) throw new Error("empty caption");
-    return { title, description };
+    return { title, description: "" };
 }
 
 // ---- storage --------------------------------------------------------------------------------------
@@ -138,7 +153,8 @@ export async function captionOf(db: D1Database, subject: string): Promise<Captio
             .prepare("SELECT title, description FROM media_captions WHERE subject = ?1 AND title IS NOT NULL")
             .bind(subject)
             .first<{ title: string; description: string | null }>();
-        return r ? { title: r.title, description: r.description ?? "" } : null;
+        // the title is the whole caption (owner: "not additional description"); older rows' descriptions are ignored
+        return r ? { title: r.title, description: "" } : null;
     } catch {
         return null; // before migration 0013, or D1 trouble: the page shows what it did before
     }
@@ -247,10 +263,10 @@ export async function backfillCaptions(d: BackfillDeps): Promise<BackfillResult>
             .prepare(
                 `SELECT s.id FROM share_sets s LEFT JOIN media_captions c ON c.subject = 'set:' || s.id
                   WHERE s.revoked_at IS NULL
-                    AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2))
+                    AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2) OR (c.title IS NOT NULL AND c.model IS NOT ?4))
                   ORDER BY s.created_at DESC LIMIT ?3`,
             )
-            .bind(ROAST_MAX_ATTEMPTS, due(d.now()), batch)
+            .bind(ROAST_MAX_ATTEMPTS, due(d.now()), batch, d.captioner.model)
             .all<{ id: string }>();
         await run(results.map((r) => ({ subject: setSubject(r.id), input: () => d.setInput!(r.id) })));
     }
@@ -262,10 +278,10 @@ export async function backfillCaptions(d: BackfillDeps): Promise<BackfillResult>
                 `SELECT ${cols}, (SELECT t.title FROM media_titles t WHERE t.post_key = ${POST_KEY_SQL}) AS custom_title
                    FROM media_items m LEFT JOIN media_captions c ON c.subject = 'item:' || m.id
                   WHERE m.deleted_at IS NULL AND ${visSql("m.")} = 'public'
-                    AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2))
+                    AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2) OR (c.title IS NOT NULL AND c.model IS NOT ?4))
                   ORDER BY m.created_at DESC LIMIT ?3`,
             )
-            .bind(ROAST_MAX_ATTEMPTS, due(d.now()), batch + tried.size)
+            .bind(ROAST_MAX_ATTEMPTS, due(d.now()), batch + tried.size, d.captioner.model)
             .all<MediaRow & { custom_title: string | null }>();
         const fresh = results.filter((r) => !tried.has(itemSubject(r.id)));
         if (fresh.length === 0) break;
