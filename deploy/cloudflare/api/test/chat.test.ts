@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
 import { hashKey } from "../src/keys";
 import { withBatch } from "./d1-batch";
-import { MAX_CODE_RUNS, STALE_MS, trimDangling, type ChatModel, type CodeRunner, type ModelTurn } from "../src/chat";
+import { MAX_CODE_RUNS, STALE_MS, systemPrompt, trimDangling, type ChatModel, type CodeRunner, type ModelTurn } from "../src/chat";
 import { sandboxModule } from "../src/chat-loader-module";
 import { handleRequest, type WorkerEnv } from "../src/worker";
 import { MemoryMedia, MemoryOriginals } from "./studio-fakes";
@@ -233,6 +233,9 @@ describe("chat: a reply", () => {
         expect(done.message).toMatchObject({ role: "assistant", status: "done", text, post_ids: [cat.link] });
         expect(done.thread).toMatchObject({ title: "tiktok cat hunt", message_count: 2 });
         expect(seen[0]!.system).toContain("declare const cobalt");
+        // this test server has no search Space: the model is told to match names and never shown search()
+        expect(seen[0]!.system).toContain("search by meaning is off");
+        expect(seen[0]!.system).not.toContain("search(query: string");
 
         const read = await jsonOf(await send(`/chat/threads/${t.id}`, "GET"));
         expect(read.messages.map((m: any) => [m.role, m.status])).toEqual([["user", "done"], ["assistant", "done"]]);
@@ -377,5 +380,22 @@ describe("chat: the sandbox module", () => {
         expect(await evaluate("return await cobalt.nope()", {})).toEqual({ error: "cobalt.nope does not exist", logs: [] });
         expect(await evaluate("throw new Error('boom')", {})).toEqual({ error: "boom", logs: [] });
         expect(await evaluate("console.log('x')", {})).toEqual({ result: "null", logs: ["x"] });
+    });
+});
+
+describe("the system prompt", () => {
+    it("sends the model to the meaning search first when search is on", () => {
+        const p = systemPrompt(Date.UTC(2026, 9, 18), true);
+        expect(p).toContain("call cobalt.search(query) first");
+        expect(p).toContain("search(query: string, limit?: number)");
+        expect(p).toContain("fall back to library({ query })");
+        expect(p).toContain("Today is 2026-10-18");
+    });
+    it("leaves search out entirely when it is off", () => {
+        const p = systemPrompt(Date.UTC(2026, 9, 18), false);
+        expect(p).toContain("search by meaning is off");
+        expect(p).not.toContain("cobalt.search");
+        expect(p).not.toContain("search(query");
+        expect(p).toContain("library(opts?:");
     });
 });

@@ -7,7 +7,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { assemblePosts, libraryHide, type AppDeps } from "./app-routes";
-import { chatTools, loadPosts, picturesOf, recordsOf, TOOL_TYPES, type ChatCollect, type ChatToolDeps, type ChatTools } from "./chat-tools";
+import { chatTools, loadPosts, picturesOf, recordsOf, toolTypes, type ChatCollect, type ChatToolDeps, type ChatTools } from "./chat-tools";
 import type { EmbedClient } from "./embed";
 import type { CodeRunner } from "./chat-limits";
 import type { ModelFetch } from "./model-fetch";
@@ -311,7 +311,12 @@ export async function deleteThread(d: Pick<ChatDeps, "db">, id: string): Promise
 
 // ---- the model's view ---------------------------------------------------------------------------
 
-export function systemPrompt(now: number): string {
+// How to find things: meaning search first when the Space is configured (owner: "the chat should use the embedding
+// search when available"), plain name matching otherwise.
+const FINDING_WITH_SEARCH = `Finding things: for anything about what files show or are about (a topic, a person, an animal, a game, a mood, "the clip where..."), call cobalt.search(query) first. It ranks the whole library by meaning, from titles and pictures, so it finds things whose names say nothing (most names are just "instagram_<code>"). Write the query as a short description of the content, try a second wording if the first finds nothing good, and check the best hits with look() when it matters. Use library({ query }) only for exact words in a name, link or caption, and library({ since, until, source, kind }) for dates, sites and counts. If search throws because it is waking up, fall back to library({ query }) and tell Harmony the search was still waking up.`;
+const FINDING_WITHOUT_SEARCH = `Finding things: search by meaning is off on this server, so use library({ query }) for words in names, links and captions, library({ since, until, source, kind }) for dates, sites and counts, and look() to check what files actually show.`;
+
+export function systemPrompt(now: number, search = true): string {
     return `You live inside cobalt, Harmony's private media saver. Harmony saves videos and pictures from X, TikTok, Instagram, YouTube and the like into their library, makes gallery share links, and sorts those links into collections. You chat with Harmony about that library: find things, count and summarize, compare, suggest what to share, and tease their taste when asked.
 
 Be helpful first. Your voice is a cute, funny furry anime cat girl: bubbly, a little teasing, the odd "nya~" or purr. Show it through tone only: never introduce yourself, never say what you are, never narrate your character. Decorate with text faces (kaomoji) such as (=^･ω･^=), ฅ^•ﻌ•^ฅ, (≧▽≦), (｡•̀ᴗ-)✧, >w<, :3 or UwU, and never emoji. Keep replies short; use markdown lists only when they help.
@@ -320,8 +325,10 @@ You see the library only through the run_code tool. It runs JavaScript (not Type
 
 To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbnails under your reply, so never paste ids or raw URLs into your text; refer to files by title. To see what a picture or video actually looks like, call cobalt.look(ids) and you get the pictures after the run. Never claim to have seen something you did not look at. Files Harmony attaches to a message are listed with it.
 
+${search ? FINDING_WITH_SEARCH : FINDING_WITHOUT_SEARCH}
+
 The API:
-${TOOL_TYPES}`;
+${toolTypes(search)}`;
 }
 
 const RUN_CODE_TOOL = {
@@ -536,7 +543,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
             { type: "text", text: c.text + attachedNote(records) },
         ];
         const messages = mergeRoles([...prior, { role: "user", content: userContent }]);
-        const system = systemPrompt(now());
+        const system = systemPrompt(now(), d.embed !== null);
         let runs = 0;
         let looked = 0;
         for (let turn = 0; turn <= MAX_CODE_RUNS + 1; turn++) {

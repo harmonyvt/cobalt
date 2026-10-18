@@ -342,3 +342,8 @@ declare const cobalt: {
   links(): Promise<{ id: string; url: string | null; title: string | null; created_at: string; post_ids: string[] }[]>;
   collections(): Promise<{ id: string; name: string; link_ids: string[] }[]>;
 };`;
+
+// The types without `search` while meaning search is off (no Space configured), so the model never reaches for it.
+export const toolTypes = (search: boolean): string =>
+    search ? TOOL_TYPES : TOOL_TYPES.split("\n").filter((l) => !/^\s*(search\(|\/\/ Meaning search)/.test(l)).join("\n");
+
