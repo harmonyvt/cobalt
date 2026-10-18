@@ -309,6 +309,21 @@ function statusJson(d: ShareSetDeps, s: LiveSet) {
     };
 }
 
+// Discord caps the payload at 3,000 bytes, escapes counted at full length; past that the Open Graph tags carry the page.
+export const COMPONENT_EMBED_MAX_BYTES = 3000;
+
+/** The component-embed JSON for a set (one Container: the title, then a Media Gallery of its files), or null when too big. */
+export function componentEmbed(s: LiveSet, pageUrl: string): string | null {
+    const components: unknown[] = [];
+    if (s.set.title) components.push({ type: 10, content: `**[${markdownEscape(s.set.title)}](${pageUrl})**` });
+    components.push({ type: 12, items: s.files.map((f) => ({ media: { url: f.url } })) });
+    // `<`, `>` and `&` escaped so the JSON cannot close the script element
+    const json = JSON.stringify({ component: { type: 17, components } }).replace(/[<>&]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    return new TextEncoder().encode(json).length <= COMPONENT_EMBED_MAX_BYTES ? json : null;
+}
+
+const markdownEscape = (t: string) => t.replace(/[\\*_~`|\[\]()<>#-]/g, (c) => `\\${c}`);
+
 function pageHtml(d: ShareSetDeps, s: LiveSet, discord: boolean): string {
     const e = escapeHtml;
     const share = withSlash(d.shareBaseUrl);
@@ -339,10 +354,12 @@ function pageHtml(d: ShareSetDeps, s: LiveSet, discord: boolean): string {
     for (const p of pictures) meta.push(`<meta property="og:image" content="${e(p)}">`, `<meta name="twitter:image" content="${e(p)}">`);
     meta.push(`<meta name="twitter:card" content="summary_large_image">`);
     if (discord) {
-        meta.push(
-            `<link rel="alternate" type="application/activity+json" href="${e(`${share}users/cobalt/statuses/${s.set.id}`)}">`,
-            `<link rel="alternate" type="application/json+oembed" href="${e(`${share}owoembed?id=${s.set.id}`)}">`,
-        );
+        // Discord's component embed (docs.discord.com/developers/link-previews/component-embeds): a media gallery where
+        // every file shows, videos with play controls. The Mastodon status path (`/api/v1/statuses/<id>`) stays served,
+        // but its activity link is not offered: Discord fetched it and still fell back to the Open Graph thumbnails.
+        const embed = componentEmbed(s, pageUrl);
+        if (embed) meta.push(`<script id="discord:component-embed" type="application/json">${embed}</script>`);
+        meta.push(`<link rel="alternate" type="application/json+oembed" href="${e(`${share}owoembed?id=${s.set.id}`)}">`);
     }
     const body = s.files
         .map((f) =>

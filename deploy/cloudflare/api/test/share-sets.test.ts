@@ -179,10 +179,30 @@ describe("the share host", () => {
         expect(html).not.toContain("activity+json");
         expect(html).not.toContain("<b>trip");
     });
-    it("Discord's crawler also gets the Mastodon and oEmbed links", async () => {
+    it("Discord's crawler gets a component embed with every file in a media gallery, and no Mastodon link", async () => {
         const html = await (await get(`${SHARE}g/${set.id}`, { headers: { "user-agent": "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)" } })).text();
-        expect(html).toContain(`<link rel="alternate" type="application/activity+json" href="${SHARE}users/cobalt/statuses/${set.id}">`);
+        const m = html.match(/<script id="discord:component-embed" type="application\/json">(.*?)<\/script>/);
+        expect(m).not.toBeNull();
+        const raw = m![1];
+        expect(raw).not.toMatch(/[<>&]/);
+        expect(new TextEncoder().encode(raw).length).toBeLessThanOrEqual(3000);
+        expect(html.indexOf("discord:component-embed")).toBeLessThan(html.indexOf("</head>"));
+        const embed = JSON.parse(raw);
+        expect(Object.keys(embed)).toEqual(["component"]);
+        expect(embed.component.type).toBe(17);
+        expect(embed.component.components).toEqual([
+            { type: 10, content: `**[\\<b\\>trip\\</b\\>](${SHARE}g/${set.id})**` },
+            { type: 12, items: [{ media: { url: `${MEDIA}ViDeO00001.mp4` } }, { media: { url: `${MEDIA}WeBpWeBp01.webp` } }, { media: { url: `${MEDIA}PhOtO00001.jpg` } }] },
+        ]);
+        expect(html).not.toContain("activity+json");
         expect(html).toContain(`href="${SHARE}owoembed?id=${set.id}"`);
+    });
+    it("an untitled set's component embed is the gallery alone", async () => {
+        const untitled = (await create({ items: [video.id, photo.id] })).body.set;
+        const html = await (await get(`${SHARE}g/${untitled.id}`, { headers: { "user-agent": "Discordbot/2.0" } })).text();
+        const embed = JSON.parse(html.match(/<script id="discord:component-embed" type="application\/json">(.*?)<\/script>/)![1]);
+        expect(embed.component.components.map((c: any) => c.type)).toEqual([12]);
+        expect(embed.component.components[0].items).toHaveLength(2);
     });
     it("the status lists every file as an attachment, big videos halved", async () => {
         for (const path of [`api/v1/statuses/${set.id}`, `users/cobalt/statuses/${set.id}`]) {
