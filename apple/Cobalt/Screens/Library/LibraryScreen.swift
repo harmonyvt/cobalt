@@ -157,9 +157,11 @@ private struct LibraryContent: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     if model.capabilities.gallery {
-                        LibraryKindChips(model: model, extra: debugExtra) { kind, share in
-                            pickKind(kind, thenShare: share)
-                        }
+                        LibraryKindChips(
+                            model: model, extra: debugExtra,
+                            pickAll: { kind, share in pickKind(kind, thenShare: share) },
+                            selectChip: selectInChips
+                                ? .init(selecting: controller.selecting, toggle: toggleSelecting) : nil)
                     }
                     loadingAllLine
                     LibrarySearchLine(state: library.searchState)
@@ -328,8 +330,7 @@ private struct LibraryContent: View {
                     .help(Copy.Library2.refresh)
                 #endif
                 #if os(iOS)
-                // the iPhone's bar has no room for paste and file beside select (they pushed select into the bar's own
-                // overflow menu): they share one "more" menu there
+                // the iPhone's bar is full: paste and file share one "more" menu there
                 if tier == .compact {
                     LibraryAddMenu(showsFile: model.capabilities.showsFileButton)
                 } else {
@@ -346,19 +347,31 @@ private struct LibraryContent: View {
                     .help(Copy.Library2.toggleDetail)
                 }
             }
-            Button(
-                controller.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select,
-                systemImage: controller.selecting ? Symbol.Gallery.ticked : Symbol.Gallery.selectPhotos
-            ) {
-                withAnimation(Motion.rows) {
-                    if controller.selecting { controller.endSelecting() } else { controller.beginSelecting() }
-                }
+            // the iPhone's select lives in the chip row (here it fell into the bar's overflow menu)
+            if !selectInChips {
+                Button(
+                    controller.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select,
+                    systemImage: controller.selecting ? Symbol.Gallery.ticked : Symbol.Gallery.selectPhotos,
+                    action: toggleSelecting
+                )
+                .help(controller.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select)
             }
-            .help(controller.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select)
-            #if os(iOS)
-            // a word, not a glyph: the way into select mode is the bar's one labelled button
-            .labelStyle(.titleOnly)
-            #endif
+        }
+    }
+
+    /// Select mode's switch sits at the start of the kind chips on the iPhone (a narrow window), where the top bar has
+    /// no room for it; elsewhere, and on a server without the chips, it stays in the bar.
+    private var selectInChips: Bool {
+        #if os(iOS)
+        tier == .compact && model.capabilities.gallery
+        #else
+        false
+        #endif
+    }
+
+    private func toggleSelecting() {
+        withAnimation(Motion.rows) {
+            if controller.selecting { controller.endSelecting() } else { controller.beginSelecting() }
         }
     }
 

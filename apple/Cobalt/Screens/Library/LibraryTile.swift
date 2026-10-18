@@ -205,7 +205,8 @@ struct LibraryTile: View, Equatable {
         if row.kind == .gallery {
             // a gallery: the stack and how many items it holds, however narrow the tile
             GalleryCountBadge(count: row.itemCount, style: .tile)
-        } else if narrow {
+        } else if narrow || (share.isShared && size.width < 150) {
+            // a narrow tile, or one whose top left holds the link badges: the dot, so the two never meet
             kindDot
         } else {
             Text(LibraryRowCopy.type(row))
