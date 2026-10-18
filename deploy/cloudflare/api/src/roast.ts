@@ -9,6 +9,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { POST_KEY_SQL } from "./app-routes";
+import type { ModelFetch } from "./model-fetch";
 import { ITEM_COLUMNS, effectiveVisibility, visSql, type MediaRow } from "./visibility";
 
 export const ROAST_MODEL_DEFAULT = "claude-haiku-5-5";
@@ -91,12 +92,15 @@ const clip = (s: string, max: number): string => {
 
 // The Anthropic API (optionally through Cloudflare AI Gateway: baseURL
 // https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic), or null while no key is set.
-export function captionerFrom(env: { ANTHROPIC_API_KEY?: string; ROAST_BASE_URL?: string; ROAST_MODEL?: string }): Captioner | null {
+export function captionerFrom(
+    env: { ANTHROPIC_API_KEY?: string; ROAST_BASE_URL?: string; ROAST_MODEL?: string },
+    modelFetch?: ModelFetch,
+): Captioner | null {
     const apiKey = env.ANTHROPIC_API_KEY?.trim();
     if (!apiKey) return null;
     const baseURL = env.ROAST_BASE_URL?.trim() || undefined;
     const model = env.ROAST_MODEL?.trim() || ROAST_MODEL_DEFAULT;
-    const client = new Anthropic({ apiKey, baseURL, maxRetries: 1, timeout: 30_000 });
+    const client = new Anthropic({ apiKey, baseURL, maxRetries: 1, timeout: 30_000, ...(modelFetch ? { fetch: modelFetch } : {}) });
     return {
         model: `${model}+${CAPTION_STYLE}`,
         async caption(input) {

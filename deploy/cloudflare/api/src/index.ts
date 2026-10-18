@@ -14,6 +14,8 @@ import { backfillCaptions, captionerFrom } from "./roast";
 import { setRoastInput } from "./share-sets";
 import { embedFrom, handleRequest, type WorkerEnv } from "./worker";
 import { loaderRunner } from "./chat-loader";
+import { relayFetch } from "./model-fetch";
+export { ModelRelay } from "./model-relay";
 
 export interface Env extends WorkerEnv {
     COBALT: DurableObjectNamespace<CobaltContainer>;
@@ -28,6 +30,8 @@ export interface Env extends WorkerEnv {
     // the container env below, so the env fingerprint changes and the running
     // container is restarted onto the new image/helper code on the next request.
     VERSION?: { id: string; tag?: string; timestamp?: string };
+    // The Anthropic relay (src/model-relay.ts): chat and captions call the model through it.
+    MODEL_RELAY?: DurableObjectNamespace;
 }
 
 // cobalt's API port and the webp helper's port (helper/supervisor.js).
@@ -345,6 +349,7 @@ export default {
             // going after the app goes away
             codeRunner: env.LOADER ? loaderRunner(env.LOADER as WorkerLoader) : undefined,
             waitUntil: (p) => ctx.waitUntil(p),
+            modelFetch: env.MODEL_RELAY ? relayFetch(env.MODEL_RELAY as any) : undefined,
         });
     },
     // Daily cron (cloudflare.config.ts triggers): telemetry retention, 30 days (D1 and R2
@@ -359,7 +364,7 @@ export default {
         if (controller.cron === SEARCH_CRON) {
             // Roast captions (section 25): new public files and gallery links, and the backfill. Anthropic
             // and D1 only; up to ROAST_RUN_BUDGET_MS, then the search indexer below.
-            const captioner = captionerFrom(env);
+            const captioner = captionerFrom(env, env.MODEL_RELAY ? relayFetch(env.MODEL_RELAY as any) : undefined);
             if (captioner) {
                 try {
                     const r = await backfillCaptions({

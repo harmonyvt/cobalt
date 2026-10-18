@@ -90,7 +90,9 @@ the files and a real run before anything is called done.
   Workers runtime (copy with a reader/writer loop); AbortSignal timeouts on containerFetch
   are not honoured inside the DO (race your own timeout); work after a DO response does not
   survive (make it poll-driven); a container rollout restarts instances with their old env
-  (CobaltContainer restarts on env/deploy-id fingerprint change). Workers + container logs
+  (CobaltContainer restarts on env/deploy-id fingerprint change). Anthropic answers 403 "Request not allowed"
+  from some Cloudflare locations, so chat and captions call it through the `ModelRelay` Durable Object
+  pinned to `enam` (`api/src/model-fetch.ts`). Workers + container logs
   are on: query with `cf observability telemetry query --body '{...,"parameters":{"datasets":["cloudflare-workers"]}}'`.
 - Use the GLOBAL `cf` for D1 migrations (`npx cf` got 7403 on remote apply).
   - `cf deploy --dry-run` builds everything and uploads nothing.

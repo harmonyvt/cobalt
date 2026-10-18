@@ -39,6 +39,8 @@ export type EdgeDeps = {
     // Chat (section 27): undefined model = from the env (null = off); no runner = off.
     chatModel?: import("./chat").ChatModel | null;
     codeRunner?: import("./chat").CodeRunner;
+    // How Anthropic requests leave (src/model-fetch.ts: the ModelRelay); undefined = the global fetch.
+    modelFetch?: import("./model-fetch").ModelFetch;
     waitUntil?: (p: Promise<unknown>) => void;
 };
 

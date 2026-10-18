@@ -99,7 +99,7 @@ export interface WorkerEnv {
 
 // Chat is on with a model (the Anthropic key) and a code runner (the LOADER binding, index.ts).
 const chatOn = (env: WorkerEnv, edge: EdgeDeps): boolean =>
-    (edge.chatModel === undefined ? chatModelFrom(env) : edge.chatModel) !== null && !!edge.codeRunner;
+    (edge.chatModel === undefined ? chatModelFrom(env, edge.modelFetch) : edge.chatModel) !== null && !!edge.codeRunner;
 
 // The Space client, or null while search is not configured (embed.ts).
 export const embedFrom = (env: WorkerEnv): EmbedClient | null =>
@@ -383,7 +383,7 @@ async function handleInner(
         if (decision.then === "share_sets_create" || decision.then === "share_sets_list" || decision.then === "share_sets_revoke") {
             const shareBaseUrl = shareHost(env) ? env.SHARE_BASE_URL : undefined;
             if (!shareBaseUrl) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
-            const sd = { db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, shareBaseUrl, now: edge.now, captioner: edge.captioner ?? captionerFrom(env) };
+            const sd = { db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, shareBaseUrl, now: edge.now, captioner: edge.captioner ?? captionerFrom(env, edge.modelFetch) };
             const r =
                 decision.then === "share_sets_create"
                     ? await createShareSet(sd, request, keyId)
@@ -403,7 +403,7 @@ async function handleInner(
             decision.then === "chat_delete" ||
             decision.then === "chat_send"
         ) {
-            const model = edge.chatModel === undefined ? chatModelFrom(env) : edge.chatModel;
+            const model = edge.chatModel === undefined ? chatModelFrom(env, edge.modelFetch) : edge.chatModel;
             const runner = edge.codeRunner ?? null;
             const noStore = (r: { status: number; body: unknown }) => {
                 const res = json(r.status, r.body, allowOrigin);
@@ -458,7 +458,7 @@ async function handleInner(
                 now: edge.now,
                 mediaBaseUrl: env.MEDIA_BASE_URL,
                 shareBaseUrl: env.SHARE_BASE_URL,
-                captioner: edge.captioner === undefined ? captionerFrom(env) : edge.captioner,
+                captioner: edge.captioner === undefined ? captionerFrom(env, edge.modelFetch) : edge.captioner,
             };
             const r =
                 decision.then === "collections_list"
