@@ -88,14 +88,7 @@ struct CombineSheet: View {
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .motion(Motion.card, value: phase.isEdit)
-        // the make landing or failing, a tile chosen or ticked, a setting changed: felt as well as seen
-        .haptic(.success, trigger: phase) { if case .done = $0 { return true } else { return false } }
-        .haptic(.error, trigger: phase) { if case .failed = $0 { return true } else { return false } }
-        .haptic(.selection, trigger: combine.selected)
-        .haptic(.selection, trigger: combine.tickedIDs)
-        .haptic(.selection, trigger: combine.output)
-        .haptic(.selection, trigger: combine.frame)
-        .haptic(.selection, trigger: combine.sound)
+        .modifier(CombineHaptics(combine: combine, phase: phase))
         #if DEBUG
         .task { CombineSnapshot.say("sheet appeared"); configure?(combine) }
         #endif
@@ -186,5 +179,26 @@ struct CombineSheet: View {
                 .buttonStyle(.cobaltPrimary())
                 .disabled(!combine.canMake)
         }
+    }
+}
+
+/// The make landing or failing, a tile chosen or ticked, a setting changed: felt as well as seen. Its own modifier so
+/// the sheet's chain stays small enough for the type checker.
+private struct CombineHaptics: ViewModifier {
+    let combine: CombineModel
+    let phase: CombinePhase
+
+    private static func isDone(_ p: CombinePhase) -> Bool { if case .done = p { return true } else { return false } }
+    private static func isFailed(_ p: CombinePhase) -> Bool { if case .failed = p { return true } else { return false } }
+
+    func body(content: Content) -> some View {
+        content
+            .haptic(.success, trigger: phase, when: Self.isDone)
+            .haptic(.error, trigger: phase, when: Self.isFailed)
+            .haptic(.selection, trigger: combine.selected)
+            .haptic(.selection, trigger: combine.tickedIDs)
+            .haptic(.selection, trigger: combine.output)
+            .haptic(.selection, trigger: combine.frame)
+            .haptic(.selection, trigger: combine.sound)
     }
 }

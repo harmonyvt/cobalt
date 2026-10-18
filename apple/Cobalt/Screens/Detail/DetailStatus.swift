@@ -48,16 +48,11 @@ struct DetailStatus: View {
         }
         .motion(Motion.rows, value: phase)
         .motion(Motion.rows, value: controller.flash)
-        // a delete that lands, half lands or fails, and a save to photos: felt as well as seen (Settings › haptics)
-        .hapticChange(.success, trigger: phase) { old, new in old == .deleting && new == .idle }
-        .hapticChange(.error, trigger: phase) { _, new in new == .failed }
-        .hapticChange(.warning, trigger: phase) { _, new in
-            if case .partial = new { return true }
-            return new == .busy
-        }
-        .haptic(.success, rising: controller.photos.values.filter { $0 == .done }.count)
+        .modifier(DetailStatusHaptics(phase: phase, savedCount: savedCount))
         .frame(maxWidth: .infinity)
     }
+
+    private var savedCount: Int { controller.photos.values.filter { $0 == .done }.count }
 
     /// "still making a webp from this": a gallery's own run is saving or making something from the post.
     private var busyLine: String { item.detailShape == .classic ? Copy.Media.deleteBusy : DetailWords.postBusy }
@@ -83,5 +78,31 @@ struct DetailStatus: View {
             }
         }
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// A delete that lands, half lands or fails, and a save to photos: felt as well as seen (Settings › haptics). Its own
+/// modifier so the status view's chain stays small enough for the type checker.
+private struct DetailStatusHaptics: ViewModifier {
+    let phase: DetailController.Phase
+    let savedCount: Int
+
+    private static func landed(_ old: DetailController.Phase, _ new: DetailController.Phase) -> Bool {
+        old == .deleting && new == .idle
+    }
+    private static func failed(_ old: DetailController.Phase, _ new: DetailController.Phase) -> Bool {
+        new == .failed
+    }
+    private static func halfLanded(_ old: DetailController.Phase, _ new: DetailController.Phase) -> Bool {
+        if case .partial = new { return true }
+        return new == .busy
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .hapticChange(.success, trigger: phase, when: Self.landed)
+            .hapticChange(.error, trigger: phase, when: Self.failed)
+            .hapticChange(.warning, trigger: phase, when: Self.halfLanded)
+            .haptic(.success, rising: savedCount)
     }
 }
