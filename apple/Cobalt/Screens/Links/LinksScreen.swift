@@ -1,17 +1,21 @@
 import CobaltKit
 import SwiftUI
 
-// The links tab (APP-API-CONTRACT section 24): every gallery share link the owner made, newest first, each with its
-// files as a strip of thumbnails, its title and date, and copy / share / revoke. Revoke asks first. The list is
+// The links tab (APP-API-CONTRACT section 24): every gallery share link the owner made, newest first, each as a card
+// with its files as a 2x2 cover, its title and date, the collections it is in, and a copy button (share, revoke and
+// collections by swipe or the long press). Revoke asks first. The list is
 // `model.shareSets` (the library's select bar adds to it, a refresh on appear and a pull keep it honest). While the
-// server has `features.share_collections` (section 26) a "collections" section sits at the top of the list: one row per
-// collection (a push to `CollectionScreen`) and a "new collection" row. The row menus gain "add to collection".
+// server has `features.share_collections` (section 26) a "collections" section sits at the top of the list: a grid of
+// folder cards (a push to `CollectionScreen`) and a "new collection" card. The row menus gain "add to collection".
 
 struct LinksScreen: View {
     let model: AppModel
 
     @Environment(\.shell) private var shell
     @State private var controller: LinksController
+    /// The collection a folder card opened (a button, not a `NavigationLink`: several links in one list row all fired
+    /// on a tap).
+    @State private var openedCollection: CollectionRoute?
 
     init(model: AppModel) {
         self.model = model
@@ -50,6 +54,9 @@ struct LinksScreen: View {
             }
             .task { await store.refresh() }
             .navigationDestination(for: CollectionRoute.self) { route in
+                CollectionScreen(model: model, collectionID: route.id)
+            }
+            .navigationDestination(item: $openedCollection) { route in
                 CollectionScreen(model: model, collectionID: route.id)
             }
             .linkPresentations(controller)
@@ -101,15 +108,11 @@ struct LinksScreen: View {
             }
             if controller.collectionsEnabled {
                 Section {
-                    Button { controller.newCollection(including: nil) } label: {
-                        NewCollectionRow()
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-                    ForEach(store.collections) { collection in
-                        CollectionRow(collection: collection, store: store, controller: controller)
-                    }
+                    // the collections as folders, two to a row, then "new collection"
+                    CollectionFolderGrid(store: store, controller: controller) { openedCollection = CollectionRoute(id: $0.id) }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 10, trailing: 16))
                 } header: {
                     SectionLabel(text: Copy.Collections.section)
                 }
@@ -118,6 +121,7 @@ struct LinksScreen: View {
             Section {
                 ForEach(store.sets) { link in
                     LinkItemRow(link: link, collection: nil, controller: controller)
+                        .listRowSeparator(.hidden)
                 }
             } header: {
                 if controller.collectionsEnabled { SectionLabel(text: Copy.Collections.linksHeader) }
@@ -232,9 +236,9 @@ struct CollectionMenu: View {
 
 // MARK: - a row
 
-/// Up to four thumbnails, then the title, the file count and date, the short link, and a note when files went private.
-/// iPhone: copy button at the end (share, revoke and collections by swipe or the long press); Mac: copy, share, a
-/// collections menu and revoke buttons.
+/// A card: the files as a 2x2 cover, then the title, the file count and date, the short link, a note when files went
+/// private and (in the main list) the collections it is in. iPhone: a labelled copy button at the end (share, revoke and
+/// collections by swipe or the long press); Mac: copy, share, a collections menu and revoke buttons.
 struct LinkRow: View {
     let link: ShareSet
     let collection: ShareCollection?
@@ -258,11 +262,20 @@ struct LinkRow: View {
         return host + link.url.path
     }
 
+    /// The collections the link is in, in the main list only ("memes · for discord"); nil when none.
+    private var collectionsLine: String? {
+        guard collection == nil, controller.collectionsEnabled else { return nil }
+        let names = controller.store.collections(containing: link.id).map(\.name)
+        return names.isEmpty ? nil : names.joined(separator: " · ")
+    }
+
+    private var copied: Bool { controller.copiedID == link.id }
+
     var body: some View {
         let when = Format.when(link.createdAt, now: Date())
-        VStack(alignment: .leading, spacing: 10) {
-            LinkStrip(items: link.items)
-            HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .center, spacing: 12) {
+            LinkCover(items: link.items, side: Platform.isMac ? 64 : 60)
+            HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(link.displayTitle)
                         .font(CobaltType.bodySemibold)
@@ -281,6 +294,13 @@ struct LinkRow: View {
                             .font(CobaltType.captionSmall)
                             .foregroundStyle(link.publicItemCount == 0 ? CobaltColor.errorText : CobaltColor.caption)
                     }
+                    if let collectionsLine {
+                        Label(collectionsLine, systemImage: Symbol.collection)
+                            .labelStyle(CollectionLineLabel())
+                            .font(CobaltType.captionSmall)
+                            .foregroundStyle(CobaltColor.collection)
+                            .lineLimit(1)
+                    }
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(Copy.Links.rowA11y(title: link.displayTitle, files: link.items.count, when: when))
@@ -288,7 +308,8 @@ struct LinkRow: View {
                 buttons
             }
         }
-        .padding(.vertical, 4)
+        .padding(10)
+        .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .opacity(busy ? 0.4 : 1)
         .disabled(busy)
         .animation(Motion.fade, value: busy)
@@ -296,9 +317,23 @@ struct LinkRow: View {
 
     @ViewBuilder
     private var buttons: some View {
+        #if os(iOS)
+        // copy is what a link is for: a labelled button on every row, not only in the swipe and the menu
+        Button { controller.copy(link, shell: shell) } label: {
+            Text(copied ? Copy.Media.copied : Copy.Links.copy)
+                .font(CobaltType.buttonSmall.weight(.semibold))
+                .foregroundStyle(copied ? CobaltColor.text : CobaltColor.onText)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 40)
+                .background(copied ? CobaltColor.elevated : CobaltColor.text, in: Capsule())
+                .contentTransition(.opacity)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(copied ? Copy.Media.copied : Copy.Links.copyLink)
+        .animation(Motion.fade, value: copied)
+        #else
         HStack(spacing: 2) {
             Button(Copy.Links.copyLink, systemImage: Symbol.copyLink) { controller.copy(link, shell: shell) }
-            #if os(macOS)
             ShareLink(item: link.url) { Label(Copy.Links.share, systemImage: Symbol.share) }
             if controller.collectionsEnabled {
                 CollectionMenu(link: link, controller: controller)
@@ -312,33 +347,45 @@ struct LinkRow: View {
                 }
             }
             Button(Copy.Links.revoke, systemImage: Symbol.revokeLink, role: .destructive) { controller.revoking = link }
-            #endif
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.borderless)
         .foregroundStyle(CobaltColor.text)
-        #if os(macOS)
         .help(Copy.Links.copyLink)
-        #else
-        .frame(minHeight: Metrics.hit)
         #endif
     }
 }
 
-// MARK: - the strip
+// MARK: - the cover
 
-/// The set's files, up to four, as squares in a row (the server caps a set at four). A file that is private now draws
-/// as a locked tile; a video carries a play glyph.
-struct LinkStrip: View {
+/// A set's files, up to four, as a 2x2 square cover (the library's shelf cards, the links tab's cards and collection
+/// folders). Empty cells are plain tiles, so a 2-file link still reads as a square.
+struct LinkCover: View {
     let items: [ShareSetItem]
-    var side: CGFloat = Platform.isMac ? 64 : 72
+    let side: CGFloat
+    private let gap: CGFloat = 2
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(items.prefix(4)) { item in
-                LinkThumb(item: item, side: side)
+        let cell = (side - gap) / 2
+        let shown = Array(items.prefix(4))
+        VStack(spacing: gap) {
+            ForEach(0..<2, id: \.self) { row in
+                HStack(spacing: gap) {
+                    ForEach(0..<2, id: \.self) { column in
+                        let index = row * 2 + column
+                        if index < shown.count {
+                            LinkThumb(item: shown[index], side: cell, radius: 4)
+                        } else {
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(CobaltColor.elevated)
+                                .frame(width: cell, height: cell)
+                        }
+                    }
+                }
             }
         }
+        .frame(width: side, height: side)
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         .accessibilityHidden(true)
     }
 }
@@ -346,6 +393,7 @@ struct LinkStrip: View {
 struct LinkThumb: View {
     let item: ShareSetItem
     let side: CGFloat
+    var radius: CGFloat = 8
 
     /// The still to draw: the poster or the image itself; a video with no poster draws a frame of the file.
     private var poster: RemotePoster? {
@@ -360,7 +408,7 @@ struct LinkThumb: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous).fill(CobaltColor.elevated)
+            RoundedRectangle(cornerRadius: radius, style: .continuous).fill(CobaltColor.elevated)
             if !item.isPublic {
                 Image(systemName: Symbol.linkFilePrivate)
                     .font(.system(size: side * 0.28))
@@ -381,6 +429,6 @@ struct LinkThumb: View {
             }
         }
         .frame(width: side, height: side)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
     }
 }

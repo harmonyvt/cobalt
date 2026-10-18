@@ -34,6 +34,20 @@ extension Copy {
         /// The navigation subtitle while selecting: nothing ticked yet, or how many are.
         static func selected(_ n: Int) -> String { n == 0 ? "tick posts" : "\(n) selected" }
         static let selectAll = "select all", selectNone = "select none"        // select mode, every post on screen
+
+        // what is already shared: the shelves over the mosaic and the tiles' badges
+        static let recentLinks = "recent links"
+        static let seeAllLinks = "see all"
+        static let collectionsShelf = "collections"
+        static let copyLinkHint = "copies the link"
+        static let openCollectionHint = "opens the collection"
+        /// VoiceOver on a tile that is in links: "in 2 links, 1 collection".
+        static func sharedA11y(_ status: ShareStatus) -> String? {
+            guard status.links > 0 else { return nil }
+            var out = "in \(status.links) \(status.links == 1 ? "link" : "links")"
+            if status.collections > 0 { out += ", \(status.collections) \(status.collections == 1 ? "collection" : "collections")" }
+            return out
+        }
         /// A kind chip's long press: tick everything under it, or tick it and share at once.
         static func selectAllKind(_ kind: LibraryKindFilter) -> String { kind == .all ? selectAll : "select all \(name(kind))" }
         static func shareAllKind(_ kind: LibraryKindFilter) -> String { kind == .all ? "share all" : "share all \(name(kind))" }

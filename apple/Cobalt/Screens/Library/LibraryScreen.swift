@@ -43,6 +43,10 @@ struct LibraryScreen: View {
             #endif
             if model.library.posts.isEmpty { await model.library.refresh() }
         }
+        // the links and collections the tiles badge and the shelves list (the links tab refreshes the same store)
+        .task {
+            if model.capabilities.shareSets { await model.shareSets.refresh() }
+        }
     }
 }
 
@@ -173,6 +177,10 @@ private struct LibraryContent: View {
             .modifier(LibraryInspector(model: model, controller: controller, enabled: tier != .compact))
             .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: tier == .compact))
             .modifier(LibrarySkyMapPresenter(model: model, controller: controller))
+            // a collection chip on the shelves pushes the same screen the links tab does
+            .navigationDestination(for: CollectionRoute.self) { route in
+                CollectionScreen(model: model, collectionID: route.id)
+            }
             .renameAlert(item: $controller.renaming, model: model)
             .modifier(LibraryCombineSheet(model: model, controller: controller))
             .confirmationDialog(
@@ -236,7 +244,9 @@ private struct LibraryContent: View {
         case .rows:
             switch library.viewMode {
             case .mosaic:
-                LibraryMosaic(rows: rows, controller: controller, tier: tier, footer: footer, skeleton: false, zoom: zoomSpace)
+                LibraryMosaic(
+                    rows: rows, controller: controller, tier: tier, footer: footer, skeleton: false, zoom: zoomSpace,
+                    shareIndex: shareIndex, shelves: shelves)
             case .table:
                 if tier == .compact {
                     LibraryList(rows: rows, controller: controller, footer: footer, zoom: zoomSpace)
@@ -249,6 +259,22 @@ private struct LibraryContent: View {
         default:
             LibraryPlaceholder(phase: phase, controller: controller)
         }
+    }
+
+    // MARK: what is already shared
+
+    /// The links and collections the tiles badge (empty while the server makes no share links).
+    private var shareIndex: ShareSetIndex {
+        guard model.capabilities.shareSets else { return .empty }
+        return ShareSetIndex(sets: model.shareSets.sets, collections: model.shareSets.collections)
+    }
+
+    /// The shelves over the mosaic: on the iPhone (a narrow window), while not selecting or searching.
+    private var shelves: LibraryShelves? {
+        guard tier == .compact, !controller.selecting, LibraryShelves.hasContent(model),
+              library.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return LibraryShelves(model: model, controller: controller)
     }
 
     // MARK: toolbar
@@ -301,7 +327,17 @@ private struct LibraryContent: View {
                     .keyboardShortcut("r", modifiers: .command)
                     .help(Copy.Library2.refresh)
                 #endif
+                #if os(iOS)
+                // the iPhone's bar has no room for paste and file beside select (they pushed select into the bar's own
+                // overflow menu): they share one "more" menu there
+                if tier == .compact {
+                    LibraryAddMenu(showsFile: model.capabilities.showsFileButton)
+                } else {
+                    PasteFileButtons(showsFile: model.capabilities.showsFileButton)
+                }
+                #else
                 PasteFileButtons(showsFile: model.capabilities.showsFileButton)
+                #endif
                 if tier != .compact {
                     Button(Copy.Library2.toggleDetail, systemImage: Symbol.Library.inspector) {
                         controller.inspectorOpen.toggle()
@@ -319,6 +355,10 @@ private struct LibraryContent: View {
                 }
             }
             .help(controller.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select)
+            #if os(iOS)
+            // a word, not a glyph: the way into select mode is the bar's one labelled button
+            .labelStyle(.titleOnly)
+            #endif
         }
     }
 
@@ -766,3 +806,26 @@ private struct SharePrepLine: View {
         }
     }
 }
+
+#if os(iOS)
+/// The iPhone library's "more" menu: paste a link, and (where the server takes files) add from photos or files. The same
+/// actions as `PasteFileButtons`, folded into one item so `select` keeps its place in the bar.
+private struct LibraryAddMenu: View {
+    let showsFile: Bool
+    @Environment(\.shell) private var shell
+
+    var body: some View {
+        Menu {
+            Button(Copy.pasteA11y, systemImage: Symbol.paste) { shell.paste() }
+            if showsFile {
+                Button(Copy.sourcePhotos, systemImage: Symbol.sourcePhotos) { shell.choosePhotos() }
+                Button(Copy.sourceFiles, systemImage: Symbol.sourceFiles) { shell.chooseFile() }
+            }
+        } label: {
+            Label(Copy.Media.more, systemImage: Symbol.Library.more).labelStyle(.iconOnly)
+        }
+        .menuIndicator(.hidden)
+        .accessibilityLabel(Copy.Media.more)
+    }
+}
+#endif

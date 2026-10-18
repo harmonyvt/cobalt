@@ -46,8 +46,14 @@ struct LibraryMosaic: View {
     let footer: LibraryFooter
     let skeleton: Bool
     var zoom: Namespace.ID?
+    /// Which posts are already in links and collections (the tiles' badges).
+    var shareIndex: ShareSetIndex = .empty
+    /// The links and collections shelves over the tiles (the iPhone, not selecting or searching).
+    var shelves: LibraryShelves?
 
     @State private var width: CGFloat = 0
+    /// The shelves' height: the tiles start under it (the reveal and the animation budget add it).
+    @State private var headerHeight: Double = 0
     @State private var viewport = ViewportBox()
     @State private var position = ScrollPosition()
     @State private var budget: AnimationBudget
@@ -65,7 +71,7 @@ struct LibraryMosaic: View {
 
     init(
         rows: [LibraryRow], controller: LibraryController, tier: Tier, footer: LibraryFooter, skeleton: Bool,
-        zoom: Namespace.ID? = nil
+        zoom: Namespace.ID? = nil, shareIndex: ShareSetIndex = .empty, shelves: LibraryShelves? = nil
     ) {
         self.rows = rows
         self.controller = controller
@@ -73,6 +79,8 @@ struct LibraryMosaic: View {
         self.footer = footer
         self.skeleton = skeleton
         self.zoom = zoom
+        self.shareIndex = shareIndex
+        self.shelves = shelves
         _budget = State(initialValue: AnimationBudget(limit: tier == .compact ? 4 : 8))
     }
 
@@ -99,6 +107,10 @@ struct LibraryMosaic: View {
         let byColumn = Dictionary(grouping: plan.slots, by: \.column)
         ScrollView {
             VStack(spacing: 0) {
+                if let shelves {
+                    shelves
+                        .onGeometryChange(for: Double.self) { Double($0.size.height) } action: { headerHeight = $0 }
+                }
                 // The columns are an overlay of a spacer that only has the plan's height. A row of fixed-width
                 // columns as the content itself reports its own width as the content's minimum, and that width is
                 // measured from the very column it sizes: on the Mac the split view's detail column read it as its
@@ -167,11 +179,12 @@ struct LibraryMosaic: View {
             let row = rows[slot.index]
             let maxPixel = Self.bucket(max(size.width, size.height) * Double(displayScale))
             LibraryTile(
-                row: row, index: slot.index, size: size, centerY: Self.topInset + slot.y + slot.height / 2,
+                row: row, index: slot.index, size: size, centerY: top + slot.y + slot.height / 2,
                 maxPixel: maxPixel, showsCaption: true, lit: controller.lit == row.id,
                 selected: !controller.compact && controller.selection == row.id,
                 selecting: controller.selecting, ticked: controller.picked.contains(row.id), reload: controller.reload,
-                controller: controller, budget: budget, zoom: zoom, nearEnd: slot.index >= rows.count - 6)
+                share: shareIndex.status(for: row.item), controller: controller, budget: budget, zoom: zoom,
+                nearEnd: slot.index >= rows.count - 6)
             .equatable()
         }
     }
@@ -180,12 +193,15 @@ struct LibraryMosaic: View {
     private func scrollTo(_ id: String) {
         let plan = plan(width: Double(max(width, 1)))
         guard let index = rows.firstIndex(where: { $0.id == id }), let slot = plan.slots.first(where: { $0.index == index }) else { return }
-        let centre = Self.topInset + slot.y + slot.height / 2
+        let centre = top + slot.y + slot.height / 2
         let target = max(0, centre - viewport.height / 2)
         withAnimation(reduceMotion ? nil : Motion.card) { position.scrollTo(y: target) }
         controller.light(id)
         controller.reveal = nil
     }
+
+    /// Where the first tile starts in the scroll content: under the shelves, when they show.
+    private var top: Double { Self.topInset + (shelves == nil ? 0 : headerHeight) }
 
     /// A long side a thumbnail is decoded at: 64 pt steps, 128 at least, 768 at most.
     private static func bucket(_ pixels: Double) -> Int {

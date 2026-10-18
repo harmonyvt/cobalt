@@ -59,6 +59,8 @@ extension Copy {
         // MARK: actions
 
         static let copyLink = "copy link"
+        /// The row's own button (iPhone, iPad): one word, so it fits beside the title.
+        static let copy = "copy"
         static let share = "share"
         static let revoke = "revoke"
         static let revokeTitle = "revoke this link?"
