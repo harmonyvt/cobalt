@@ -33,4 +33,6 @@ extension Symbol {
     static let chatDelete = "trash"
     /// Jump to the newest message.
     static let chatLatest = "arrow.down.circle.fill"
+    /// "open in library" on a collage: runs its search in the library.
+    static let chatCollageLibrary = "square.grid.2x2"
 }

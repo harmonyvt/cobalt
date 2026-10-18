@@ -475,6 +475,7 @@ struct ChatHTTPTests {
         await #expect(throws: PipelineFailure.unsupported) {
             for try await _ in bare.sendChatMessage(threadID: "x", text: "y", postIDs: []) {}
         }
+        await #expect(throws: PipelineFailure.unsupported) { try await bare.chatCollage(threadID: "x", messageID: "1", offset: 0, limit: 30) }
     }
 }
 
@@ -592,7 +593,7 @@ struct ChatStoreTests {
         #expect(app.chat.state == .idle)
         await app.chat.refresh()
         #expect(app.chat.state == .loaded)
-        #expect(app.chat.threads.map(\.id) == [t1, t2, t3])
+        #expect(app.chat.threads.map(\.id) == [t1, t2, t3, PreviewData.collageThreadID])
         #expect(app.chat.threads[0].title == "funny things from yesterday")
     }
 
@@ -611,7 +612,7 @@ struct ChatStoreTests {
         let client = try #require(app.ctx.client as? PreviewClient)
         client.chatState.listFails = true
         await app.chat.refresh()
-        #expect(app.chat.state == .failed(.unavailable) && app.chat.threads.count == 3)
+        #expect(app.chat.state == .failed(.unavailable) && app.chat.threads.count == 4)
     }
 
     @Test func readingAThreadLoadsMessagesAndPosts() async throws {
@@ -750,11 +751,11 @@ struct ChatStoreTests {
         await app.chat.load(t2)
         app.chat.openThreadID = t2
         try await app.chat.delete(t2)
-        #expect(app.chat.threads.map(\.id) == [t1, t3] && app.chat.content(of: t2) == nil && app.chat.openThreadID == nil)
+        #expect(app.chat.threads.map(\.id) == [t1, t3, PreviewData.collageThreadID] && app.chat.content(of: t2) == nil && app.chat.openThreadID == nil)
         // a thread the server no longer has is gone locally too
         try await app.chat.delete(t2)
         await app.chat.refresh()
-        #expect(app.chat.threads.map(\.id) == [t1, t3])
+        #expect(app.chat.threads.map(\.id) == [t1, t3, PreviewData.collageThreadID])
     }
 
     @Test func aServerChangeForgetsEverything() async {
@@ -1044,5 +1045,343 @@ struct ChatMarkdownTests {
 
     @Test func crlfIsFine() {
         #expect(ChatMarkdown.blocks("a\r\n\r\n- b") == [.paragraph("a"), .list([ChatListItem(marker: "•", text: "b")])])
+    }
+}
+
+
+// MARK: - collages (27.5)
+
+private let wireCollage = #"{"title":"every cat","query":"cats","total":95}"#
+
+private func wireCollagePost(_ id: String) -> String {
+    #"{"id":"\#(id)","service":"instagram","title":"cat \#(id)","duration":4,"created_at":1790000000000,"files":[],"kind":"video"}"#
+}
+
+private func wireCollagePage(offset: Int, ids: [String], next: Int?, total: Int = 95) -> String {
+    let posts = ids.map { #""\#($0)":\#(wireCollagePost($0))"# }.joined(separator: ",")
+    let nextJSON = next.map(String.init) ?? "null"
+    return #"{"status":"success","title":"every cat","query":"cats","total":\#(total),"offset":\#(offset),"next":\#(nextJSON),"post_ids":[\#(ids.map { "\"\($0)\"" }.joined(separator: ","))],"posts":{\#(posts)}}"#
+}
+
+struct ChatCollageModelTests {
+    private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+        try CobaltJSON.decoder().decode(type, from: Data(json.utf8))
+    }
+
+    @Test func aMessageWithACollageDecodesIt() throws {
+        let m = try decode(ChatMessage.self, #"{"id":"102","role":"assistant","text":"x","status":"done","collage":\#(wireCollage),"created_at":1}"#)
+        #expect(m.collage == ChatCollage(title: "every cat", query: "cats", total: 95))
+    }
+
+    @Test func aNullOrMissingCollageIsNil() throws {
+        let null = try decode(ChatMessage.self, #"{"id":"1","role":"assistant","text":"x","collage":null,"created_at":1}"#)
+        let absent = try decode(ChatMessage.self, #"{"id":"1","role":"assistant","text":"x","created_at":1}"#)
+        #expect(null.collage == nil && absent.collage == nil)
+    }
+
+    @Test func aCollageWithoutTitleOrQueryKeepsItsSize() throws {
+        let m = try decode(ChatMessage.self, #"{"id":"1","role":"assistant","collage":{"title":null,"query":"  ","total":12},"created_at":1}"#)
+        #expect(m.collage == ChatCollage(title: nil, query: nil, total: 12))
+    }
+
+    @Test func aCollageThatIsNotAnObjectDoesNotDropTheMessage() throws {
+        let m = try decode(ChatMessage.self, #"{"id":"1","role":"assistant","text":"kept","collage":"nope","created_at":1}"#)
+        #expect(m.text == "kept" && m.collage == nil)
+    }
+
+    @Test func aThreadReadCarriesTheCollageOnItsMessage() throws {
+        let json = #"{"thread":\#(wireThread),"messages":[{"id":"102","role":"assistant","text":"x","collage":\#(wireCollage),"created_at":1}]}"#
+        let d = try decode(ChatThreadDetail.self, json)
+        #expect(d.messages.first?.collage?.total == 95)
+    }
+
+    @Test func aPageDecodes() throws {
+        let page = try decode(ChatCollagePage.self, wireCollagePage(offset: 30, ids: ["a", "b", "c"], next: 60))
+        #expect(page.title == "every cat" && page.query == "cats" && page.total == 95 && page.offset == 30 && page.next == 60)
+        #expect(page.postIDs == ["a", "b", "c"] && page.posts.keys.sorted() == ["a", "b", "c"])
+        #expect(page.posts["b"]?.title == "cat b")
+    }
+
+    @Test func theLastPageHasNoNextAndABrokenPostIsDropped() throws {
+        let json = #"{"total":95,"offset":90,"next":null,"post_ids":["a","b"],"posts":{"a":\#(wireCollagePost("a")),"b":{"nope":true}}}"#
+        let page = try decode(ChatCollagePage.self, json)
+        #expect(page.next == nil && page.title == nil && page.query == nil)
+        #expect(page.postIDs == ["a", "b"] && page.posts.keys.sorted() == ["a"])
+    }
+
+    @Test func theSSECollageEventParses() {
+        var parser = ChatSSEParser()
+        let events = parser.feed(Array("event: collage\ndata: {\"collage\":\(wireCollage)}\n\n".utf8))
+        #expect(events == [.collage(ChatCollage(title: "every cat", query: "cats", total: 95))])
+        var bad = ChatSSEParser()
+        #expect(bad.feed(Array("event: collage\ndata: {\"collage\":\"x\"}\n\n".utf8)).isEmpty)
+    }
+
+    @Test func doneCarriesTheCollageOnTheMessage() {
+        var parser = ChatSSEParser()
+        let done = #"{"message":{"id":"102","role":"assistant","text":"x","collage":\#(wireCollage),"created_at":1},"thread":\#(wireThread)}"#
+        let events = parser.feed(Array("event: done\ndata: \(done)\n\n".utf8))
+        guard case .done(let message, _)? = events.first else { Issue.record("\(events)"); return }
+        #expect(message.collage?.total == 95)
+    }
+
+    @Test func theCollageEventSetsItOnTheRunningMessageAndDoneReplacesIt() {
+        let running = ChatMessage(id: "2", role: .assistant, status: .running, createdAt: Date(timeIntervalSince1970: 1))
+        let old = ChatMessage(id: "0", role: .assistant, createdAt: Date(timeIntervalSince1970: 0))
+        var c = ChatThreadContent(thread: ChatThread(id: "t", title: "t", createdAt: Date(), updatedAt: Date()), messages: [old, running])
+        c.apply(.collage(ChatCollage(title: "a", query: nil, total: 5)))
+        #expect(c.messages[1].collage?.total == 5 && c.messages[0].collage == nil)
+        c.apply(.collage(ChatCollage(title: "b", query: "q", total: 7)))
+        #expect(c.messages[1].collage == ChatCollage(title: "b", query: "q", total: 7), "a later call replaces it")
+        var final = running
+        final.status = .done
+        final.collage = ChatCollage(title: "b", query: "q", total: 7)
+        c.apply(.done(final, c.thread))
+        #expect(c.messages[1].status == .done && c.messages[1].collage?.total == 7)
+    }
+}
+
+struct ChatCollageHTTPTests {
+    private func client(_ server: LoopbackServer) -> HTTPCobaltClient {
+        HTTPCobaltClient(baseURL: server.base, apiKey: { chatKey })
+    }
+
+    @Test func aPageIsAKeyedGetWithOffsetAndLimit() async throws {
+        let server = try await LoopbackServer.start { req in
+            req.method == "GET" && req.path == "/chat/threads/Ab12Cd34Ef56Gh78/messages/102/collage"
+                ? .json(wireCollagePage(offset: 30, ids: ["a", "b"], next: 60)) : .init(status: 404)
+        }
+        defer { server.stop() }
+        let page = try await client(server).chatCollage(threadID: "Ab12Cd34Ef56Gh78", messageID: "102", offset: 30, limit: 30)
+        let req = try #require(server.requests.first)
+        #expect(req.headers["authorization"] == "Api-Key \(chatKey)" && req.body.isEmpty)
+        #expect(Set(req.query.split(separator: "&").map(String.init)) == ["offset=30", "limit=30"])
+        #expect(page.next == 60 && page.postIDs == ["a", "b"] && page.total == 95)
+    }
+
+    @Test func theLimitAndOffsetAreHeldToWhatTheServerTakes() async throws {
+        let server = try await LoopbackServer.start { _ in .json(wireCollagePage(offset: 0, ids: [], next: nil)) }
+        defer { server.stop() }
+        let c = client(server)
+        _ = try await c.chatCollage(threadID: "t", messageID: "1", offset: -5, limit: 500)
+        _ = try await c.chatCollage(threadID: "t", messageID: "1", offset: 0, limit: 0)
+        let queries = server.requests.map { Set($0.query.split(separator: "&").map(String.init)) }
+        #expect(queries == [["offset=0", "limit=60"], ["offset=0", "limit=1"]])
+    }
+
+    @Test func idsAreEscapedInThePath() async throws {
+        let server = try await LoopbackServer.start { _ in .json(wireCollagePage(offset: 0, ids: [], next: nil)) }
+        defer { server.stop() }
+        _ = try await client(server).chatCollage(threadID: "a/b", messageID: "1 2", offset: 0, limit: 30)
+        #expect(server.requests.first?.path == "/chat/threads/a%2Fb/messages/1%202/collage")
+    }
+
+    @Test func errorsAreMapped() async throws {
+        let cases: [(String, Int, ChatError)] = [
+            (#"{"status":"error","error":{"code":"error.chat.not_found"}}"#, 404, .notFound),
+            (#"{"status":"error","error":{"code":"error.chat.bad_request"}}"#, 400, .badRequest),
+            (#"{"status":"error","error":{"code":"error.chat.off"}}"#, 404, .off),
+            (#"{"status":"error","error":{"code":"error.api.generic"}}"#, 503, .unavailable),
+        ]
+        for (body, status, expected) in cases {
+            let server = try await LoopbackServer.start { _ in .json(body, status: status) }
+            defer { server.stop() }
+            let c = client(server)
+            await #expect(throws: expected, "\(status)") { try await c.chatCollage(threadID: "t", messageID: "1", offset: 0, limit: 30) }
+        }
+    }
+
+    @Test func aBodyThatIsNotAPageIsInvalid() async throws {
+        let server = try await LoopbackServer.start { _ in .json("[]") }
+        defer { server.stop() }
+        await #expect(throws: CobaltError.invalidResponse(httpStatus: 200)) {
+            try await self.client(server).chatCollage(threadID: "t", messageID: "1", offset: 0, limit: 30)
+        }
+    }
+
+    @Test func theKeyIsRequired() async throws {
+        let server = try await LoopbackServer.start { _ in .json("{}") }
+        defer { server.stop() }
+        let keyless = HTTPCobaltClient(baseURL: server.base, apiKey: { nil })
+        await #expect(throws: CobaltError.noAPIKey) { try await keyless.chatCollage(threadID: "t", messageID: "1", offset: 0, limit: 30) }
+        #expect(server.requests.isEmpty)
+    }
+}
+
+@MainActor
+struct ChatCollageStoreTests {
+    private let thread = PreviewData.collageThreadID
+    private let message = PreviewData.collageMessageID
+
+    private func app(_ scenario: PreviewScenario = .happy) -> AppModel {
+        AppModel.makePreview(scenario, timeScale: 0.01, clock: SystemClock())
+    }
+
+    private func collageCalls(_ app: AppModel) throws -> [String] {
+        try #require(app.ctx.client as? PreviewClient).chatState.calls.filter { $0.hasPrefix("COLLAGE") }
+    }
+
+    @Test func theSampleThreadsMessageHasTheCollage() async throws {
+        let app = app()
+        await app.chat.load(thread)
+        let reply = try #require(app.chat.content(of: thread)?.messages.last)
+        #expect(reply.id == message && reply.collage == PreviewData.collage)
+        #expect(app.chat.content(of: PreviewData.chatThreadIDs[0])?.messages.allSatisfy { $0.collage == nil } != false)
+    }
+
+    @Test func theFirstPageIs30InOrder() async throws {
+        let app = app()
+        await app.chat.load(thread)
+        await app.chat.loadCollage(threadID: thread, messageID: message)
+        let state = try #require(app.chat.collagePages[message])
+        #expect(state.loaded && !state.loading && !state.failed)
+        #expect(state.postIDs.count == 30 && state.postIDs.first == "PrEvIeWcat0000" && state.postIDs.last == "PrEvIeWcat0029")
+        #expect(state.next == 30 && state.hasMore && state.total == 95)
+        #expect(state.loadedPosts.count == 30)
+        #expect(try collageCalls(app) == ["COLLAGE \(thread) \(message) 0 30"])
+    }
+
+    @Test func moreAppendsThePageAndTheLastOneEndsIt() async throws {
+        let app = app()
+        await app.chat.load(thread)
+        await app.chat.loadCollage(threadID: thread, messageID: message)
+        await app.chat.loadMoreCollage(threadID: thread, messageID: message)
+        var state = try #require(app.chat.collagePages[message])
+        #expect(state.next == 60)
+        #expect(state.postIDs.count == 59, "post 41 was deleted since: the page is one short, the total does not change")
+        #expect(!state.postIDs.contains(String(format: "PrEvIeWcat%04d", PreviewData.collageGoneIndex)))
+        #expect(state.nextCount(total: 95) == 30)
+        await app.chat.loadMoreCollage(threadID: thread, messageID: message)
+        state = try #require(app.chat.collagePages[message])
+        #expect(state.next == 90 && state.nextCount(total: 95) == 5)
+        await app.chat.loadMoreCollage(threadID: thread, messageID: message)
+        state = try #require(app.chat.collagePages[message])
+        #expect(state.next == nil && !state.hasMore && state.nextCount(total: 95) == 0)
+        #expect(state.postIDs.count == 94 && Set(state.postIDs).count == 94)
+        #expect(state.postIDs == state.postIDs.sorted(), "in the server's order")
+        // nothing after the end
+        await app.chat.loadMoreCollage(threadID: thread, messageID: message)
+        #expect(try collageCalls(app).count == 4)
+    }
+
+    @Test func aSecondFirstLoadDoesNothing() async throws {
+        let app = app()
+        await app.chat.load(thread)
+        await app.chat.loadCollage(threadID: thread, messageID: message)
+        await app.chat.loadCollage(threadID: thread, messageID: message)
+        #expect(try collageCalls(app).count == 1)
+    }
+
+    @Test func aLoadWhileLoadingIsNotDoubled() async throws {
+        let app = app()
+        await app.chat.load(thread)
+        async let first: Void = app.chat.loadCollage(threadID: thread, messageID: message)
+        while app.chat.collagePages[message]?.loading != true { await Task.yield() }
+        await app.chat.loadMoreCollage(threadID: thread, messageID: message)          // a page is on its way
+        await app.chat.loadCollage(threadID: thread, messageID: message)
+        await first
+        #expect(try collageCalls(app).count == 1)
+        #expect(app.chat.collagePages[message]?.postIDs.count == 30)
+    }
+
+    @Test func moreBeforeAnyPageStartsAtTheTop() async throws {
+        let app = app()
+        await app.chat.load(thread)
+        await app.chat.loadMoreCollage(threadID: thread, messageID: message)
+        #expect(app.chat.collagePages[message] == nil, "nothing was asked for: loadCollage comes first")
+        #expect(try collageCalls(app).isEmpty)
+    }
+
+    @Test func aFailedFirstPageIsRetriedByMore() async throws {
+        let app = app()
+        let client = try #require(app.ctx.client as? PreviewClient)
+        await app.chat.load(thread)
+        client.chatState.collageFails = true
+        await app.chat.loadCollage(threadID: thread, messageID: message)
+        var state = try #require(app.chat.collagePages[message])
+        #expect(state.failed && !state.loading && !state.loaded && state.postIDs.isEmpty && state.next == 0)
+        client.chatState.collageFails = false
+        await app.chat.loadMoreCollage(threadID: thread, messageID: message)
+        state = try #require(app.chat.collagePages[message])
+        #expect(!state.failed && state.loaded && state.postIDs.count == 30 && state.next == 30)
+    }
+
+    @Test func aFailedLaterPageKeepsWhatWasRead() async throws {
+        let app = app()
+        let client = try #require(app.ctx.client as? PreviewClient)
+        await app.chat.load(thread)
+        await app.chat.loadCollage(threadID: thread, messageID: message)
+        client.chatState.collageFails = true
+        await app.chat.loadMoreCollage(threadID: thread, messageID: message)
+        let state = try #require(app.chat.collagePages[message])
+        #expect(state.failed && state.postIDs.count == 30 && state.next == 30)
+    }
+
+    @Test func aMessageWithoutACollageIsNotFound() async throws {
+        let app = app()
+        let t1 = PreviewData.chatThreadIDs[0]
+        await app.chat.load(t1)
+        await app.chat.loadCollage(threadID: t1, messageID: "102")
+        #expect(app.chat.collagePages["102"]?.failed == true)
+        await #expect(throws: ChatError.notFound) { try await app.ctx.client.chatCollage(threadID: t1, messageID: "102", offset: 0, limit: 30) }
+        await #expect(throws: ChatError.notFound) { try await app.ctx.client.chatCollage(threadID: thread, messageID: "nope", offset: 0, limit: 30) }
+        await #expect(throws: ChatError.badRequest) { try await app.ctx.client.chatCollage(threadID: thread, messageID: message, offset: 0, limit: 61) }
+        await #expect(throws: ChatError.badRequest) { try await app.ctx.client.chatCollage(threadID: thread, messageID: message, offset: -1, limit: 30) }
+    }
+
+    @Test func absorbingDedupesIdsAndSkipsPostsWithoutAShape() throws {
+        func post(_ id: String) throws -> LibraryPost {
+            try CobaltJSON.decoder().decode(LibraryPost.self, from: Data(wireCollagePost(id).utf8))
+        }
+        var state = ChatCollageState()
+        state.absorb(ChatCollagePage(
+            total: 9, offset: 0, next: 3, postIDs: ["a", "b", "c"], posts: ["a": try post("a"), "b": try post("b"), "c": try post("c")]),
+            asked: 0)
+        state.absorb(ChatCollagePage(
+            total: 9, offset: 3, next: 6, postIDs: ["c", "d", "ghost", "a"], posts: ["c": try post("c"), "d": try post("d")]),
+            asked: 3)
+        #expect(state.postIDs == ["a", "b", "c", "d"], "c and a were there; ghost has no shape")
+        #expect(state.loadedPosts.map(\.id) == ["a", "b", "c", "d"] && state.next == 6 && state.total == 9)
+    }
+
+    @Test func aNextThatDoesNotMoveForwardEndsTheCollage() {
+        var state = ChatCollageState()
+        state.absorb(ChatCollagePage(total: 10, offset: 4, next: 4), asked: 4)
+        #expect(state.next == nil && state.loaded)
+        state.next = 0
+        state.absorb(ChatCollagePage(total: 10, offset: 0, next: 2), asked: 0)
+        #expect(state.next == 2)
+    }
+
+    @Test func aReplyThatAttachesACollageStreamsItAndStartsItsPagesOver() async throws {
+        let app = app()
+        await app.chat.load(thread)
+        try await app.chat.send(text: "and the dogs", in: thread)
+        let content = try #require(app.chat.content(of: thread))
+        let reply = try #require(content.messages.last)
+        #expect(reply.role == .assistant && reply.status == .done && reply.collage == PreviewData.collage)
+        let read = try await app.ctx.client.chatThread(id: thread)
+        #expect(read.messages.last?.collage == PreviewData.collage, "the server holds it too")
+        await app.chat.loadCollage(threadID: thread, messageID: reply.id)
+        #expect(app.chat.collagePages[reply.id]?.postIDs.count == 30)
+    }
+
+    @Test func otherThreadsRepliesHaveNoCollage() async throws {
+        let app = app()
+        let t1 = PreviewData.chatThreadIDs[0]
+        await app.chat.load(t1)
+        try await app.chat.send(text: "only the videos", in: t1)
+        #expect(app.chat.content(of: t1)?.messages.last?.collage == nil)
+    }
+
+    @Test func openInLibraryPutsTheQueryInTheSearchAndSwitchesTabs() {
+        let app = app()
+        app.library.show = .everything
+        app.selectedTab = .chat
+        app.openInLibrary(search: "  cats ")
+        #expect(app.library.query == "cats" && app.selectedTab == .library)
+        app.selectedTab = .chat
+        app.openInLibrary(search: "   ")
+        #expect(app.selectedTab == .chat && app.library.query == "cats", "blank words do nothing")
     }
 }

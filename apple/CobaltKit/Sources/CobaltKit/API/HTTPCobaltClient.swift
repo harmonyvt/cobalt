@@ -792,6 +792,20 @@ public struct HTTPCobaltClient: CobaltClient {
         }
     }
 
+    /// `GET /chat/threads/<id>/messages/<message id>/collage?offset=&limit=` (keyed, 27.5): a page of the collage a reply
+    /// attached. The limit is held to 1...60 and the offset to 0 or more before it is sent.
+    public func chatCollage(threadID: String, messageID: String, offset: Int, limit: Int) async throws -> ChatCollagePage {
+        let query = [("offset", String(max(0, offset))), ("limit", String(max(1, min(60, limit))))]
+        let path = "/chat/threads/\(Self.encode(threadID))/messages/\(Self.encode(messageID))/collage"
+        let req = try makeRequest("GET", path, query: query, keyed: true, timeout: 30)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw chatError(data, status: http.statusCode) }
+        guard let page = try? CobaltJSON.decoder().decode(ChatCollagePage.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return page
+    }
+
     private func chatThreadAnswer(_ data: Data, _ http: HTTPURLResponse) throws -> ChatThread {
         guard (200..<300).contains(http.statusCode) else { throw chatError(data, status: http.statusCode) }
         struct Wire: Decodable { var thread: ChatThread }

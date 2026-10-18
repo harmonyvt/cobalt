@@ -161,6 +161,9 @@ public protocol CobaltClient: Sendable {
     /// written, event by event (`text/event-stream`). Refusals before the stream (`busy`, `full`, `notFound`, …) finish
     /// the stream with the `ChatError` before any event; a stream that drops later finishes with the transport's error.
     func sendChatMessage(threadID: String, text: String, postIDs: [String]) -> AsyncThrowingStream<ChatEvent, Error>
+    /// `GET /chat/threads/<id>/messages/<message id>/collage?offset=&limit=` (27.5): one page of the collage a reply attached.
+    /// `limit` is 1...60. `ChatError.notFound` when the message has no collage, `.badRequest` for a bad offset or limit.
+    func chatCollage(threadID: String, messageID: String, offset: Int, limit: Int) async throws -> ChatCollagePage
 }
 
 extension CobaltClient {
@@ -247,6 +250,9 @@ extension CobaltClient {
     public func deleteChatThread(id: String) async throws { throw PipelineFailure.unsupported }
     public func sendChatMessage(threadID: String, text: String, postIDs: [String]) -> AsyncThrowingStream<ChatEvent, Error> {
         AsyncThrowingStream { $0.finish(throwing: PipelineFailure.unsupported) }
+    }
+    public func chatCollage(threadID: String, messageID: String, offset: Int, limit: Int) async throws -> ChatCollagePage {
+        throw PipelineFailure.unsupported
     }
     /// Likewise: a client that predates titles says the server cannot do it.
     public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult { throw PipelineFailure.unsupported }

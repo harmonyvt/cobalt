@@ -46,6 +46,7 @@ public struct ChatThreadContent: Sendable, Equatable {
     /// - `text` is appended to the running message, in order;
     /// - `step` replaces the step with the same id, or is appended;
     /// - `posts` appends the ids the message does not show yet, and merges the shapes;
+    /// - `collage` sets the collage of the running message;
     /// - `title` and `done` carry the thread as it is now; `done` replaces the message;
     /// - `error` marks the message failed (with the saved one when the server sent it).
     public mutating func apply(_ event: ChatEvent) {
@@ -73,6 +74,8 @@ public struct ChatThreadContent: Sendable, Equatable {
             edit { message in
                 for id in ids where !message.postIDs.contains(id) { message.postIDs.append(id) }
             }
+        case .collage(let collage):
+            edit { $0.collage = collage }
         case .title(let renamed):
             thread = renamed
         case .done(let message, let current):
@@ -117,6 +120,53 @@ public struct ChatThreadContent: Sendable, Equatable {
         } else {
             messages.append(message)
         }
+    }
+}
+
+/// How far one collage has been read (27.5): the post ids loaded so far in order, their shapes, where the next page
+/// starts, and whether a page is on its way or failed. Held by `ChatStore.collagePages`, per message.
+public struct ChatCollageState: Sendable, Equatable {
+    /// Post ids in the order the server listed them, no duplicates, only posts the server sent a shape for.
+    public var postIDs: [String] = []
+    public var posts: [String: LibraryPost] = [:]
+    /// The offset of the next page; 0 before the first, nil once the last has been read.
+    public var next: Int? = 0
+    /// At least one page has been read.
+    public var loaded = false
+    public var loading = false
+    /// The last request failed (the pages already read stay).
+    public var failed = false
+    /// The collage's size as the last page said it.
+    public var total: Int?
+    /// Which read this state belongs to: an answer for another one (the collage was replaced) is dropped.
+    var token = 0
+
+    public init() {}
+
+    /// Takes a page that was asked for at `offset`: its posts and shapes are added after the ones read, an id already
+    /// there or one with no shape is skipped, and `next` follows the page. A `next` that does not move past `offset` would
+    /// be asked for again forever, so it ends the collage instead.
+    mutating func absorb(_ page: ChatCollagePage, asked offset: Int) {
+        posts.merge(page.posts) { _, new in new }
+        var seen = Set(postIDs)
+        for id in page.postIDs where page.posts[id] != nil && seen.insert(id).inserted { postIDs.append(id) }
+        next = page.next.flatMap { $0 > offset ? $0 : nil }
+        total = page.total
+        loaded = true
+        loading = false
+        failed = false
+    }
+
+    /// The loaded posts, in order.
+    public var loadedPosts: [LibraryPost] { postIDs.compactMap { posts[$0] } }
+
+    /// More pages can be asked for (also the retry after a failure).
+    public var hasMore: Bool { next != nil }
+
+    /// How many posts the next page brings, at most `page`, given the collage's `total`.
+    public func nextCount(total: Int, page: Int = ChatRule.collagePage) -> Int {
+        guard let next else { return 0 }
+        return max(1, min(page, total - next))
     }
 }
 
@@ -177,6 +227,11 @@ public final class ChatStore {
     /// How often a reply that lost its stream is read again, and for how long (27.2: every 2 s, at most 3 minutes).
     public static let pollInterval = 2.0
     public static let pollLimit = Int(180.0 / pollInterval)
+
+    /// The collages read so far, by the message that carries them (27.5).
+    public private(set) var collagePages: [String: ChatCollageState] = [:]
+    public static let collagePageSize = ChatRule.collagePage
+    @ObservationIgnored private var collageTokens = 0
 
     @ObservationIgnored private let ctx: PipelineContext
     /// Bumped by `reset()`: an answer from the old server arriving later is dropped.
@@ -291,6 +346,59 @@ public final class ChatStore {
     /// A reply is on its way: sent from this device (streaming or followed), or the server is still writing the last one.
     public func isBusy(_ id: String) -> Bool {
         sendingIDs.contains(id) || contents[id]?.isReplying == true
+    }
+
+    // MARK: collages
+
+    /// Reads the first page of a message's collage (`GET .../collage?offset=0&limit=30`). Nothing happens when the collage
+    /// has been asked for already (loading, loaded, or failed: `loadMoreCollage` retries).
+    public func loadCollage(threadID: String, messageID: String) async {
+        guard collagePages[messageID] == nil else { return }
+        collageTokens += 1
+        var state = ChatCollageState()
+        state.token = collageTokens
+        collagePages[messageID] = state
+        await fetchCollage(threadID: threadID, messageID: messageID)
+    }
+
+    /// Reads the next page and appends it (also the retry of a page that failed, the first included). Nothing happens
+    /// while a page is on its way or after the last one.
+    public func loadMoreCollage(threadID: String, messageID: String) async {
+        guard let state = collagePages[messageID], !state.loading, state.next != nil else { return }
+        await fetchCollage(threadID: threadID, messageID: messageID)
+    }
+
+    private func fetchCollage(threadID: String, messageID: String) async {
+        guard var state = collagePages[messageID], !state.loading, let offset = state.next else { return }
+        let token = state.token
+        let started = generation
+        state.loading = true
+        state.failed = false
+        collagePages[messageID] = state
+        do {
+            let page = try await ctx.client.chatCollage(
+                threadID: threadID, messageID: messageID, offset: offset, limit: Self.collagePageSize)
+            guard started == generation, collagePages[messageID]?.token == token else { return }
+            var now = collagePages[messageID] ?? state
+            now.absorb(page, asked: offset)
+            collagePages[messageID] = now
+        } catch {
+            guard started == generation, collagePages[messageID]?.token == token else { return }
+            collagePages[messageID]?.loading = false
+            collagePages[messageID]?.failed = true
+        }
+    }
+
+    /// Forgets the collages that are no longer what their message says: the message lost its collage, or the collage
+    /// has a different size (a later call replaced it), so the next read starts from the first page.
+    private func pruneCollagePages(of id: String) {
+        guard let content = contents[id] else { return }
+        for message in content.messages {
+            guard let state = collagePages[message.id] else { continue }
+            if message.collage == nil || (state.total != nil && state.total != message.collage?.total) {
+                collagePages[message.id] = nil
+            }
+        }
     }
 
     // MARK: the draft
@@ -466,7 +574,13 @@ public final class ChatStore {
     private func apply(_ event: ChatEvent, to id: String) {
         contents[id]?.apply(event)
         switch event {
-        case .title(let thread), .done(_, let thread): put(thread)
+        case .collage:
+            // a later collage of the same reply replaces the earlier one: start the pages over
+            if let message = contents[id]?.messages.last(where: { $0.role == .assistant }) { collagePages[message.id] = nil }
+        case .title(let thread): put(thread)
+        case .done(_, let thread):
+            put(thread)
+            pruneCollagePages(of: id)
         default: break
         }
     }
@@ -477,6 +591,7 @@ public final class ChatStore {
         merged.merge(detail.posts) { _, new in new }
         contents[id] = ChatThreadContent(thread: detail.thread, messages: detail.messages, posts: merged)
         put(detail.thread)
+        pruneCollagePages(of: id)
     }
 
     /// A thread as the server just answered it: in the list, ordered by when it changed.
@@ -488,6 +603,7 @@ public final class ChatStore {
 
     private func forget(_ id: String) {
         threads.removeAll { $0.id == id }
+        for message in contents[id]?.messages ?? [] { collagePages[message.id] = nil }
         contents[id] = nil
         drafts[id] = nil
         followers[id]?.cancel()
@@ -509,6 +625,7 @@ public final class ChatStore {
         followers = [:]
         threads = []
         contents = [:]
+        collagePages = [:]
         loadStates = [:]
         sendingIDs = []
         drafts = [:]

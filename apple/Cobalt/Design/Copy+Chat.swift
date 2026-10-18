@@ -100,6 +100,18 @@ extension Copy {
         static let shownA11y = "files from your library"
         static let openPostA11yHint = "opens it in the library"
 
+        // MARK: a collage (27.5)
+
+        static let collageResults = "results"
+        static func collageCount(_ count: Int) -> String { "\(count) \(count == 1 ? "result" : "results")" }
+        static func showMore(_ count: Int) -> String { "show \(count) more" }
+        static let openInLibrary = "open in library"
+        static let collageOpen = "open"
+        static let collageShare = "share"
+        static let collageFailed = "couldn't load these · try again"
+        static func collageA11y(title: String, count: Int) -> String { "\(title), \(collageCount(count))" }
+        static func collageShown(_ shown: Int, of total: Int) -> String { "showing \(shown) of \(total)" }
+
         // MARK: a failed reply
 
         static let replyFailed = "the reply failed · try again"
