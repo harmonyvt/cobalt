@@ -9,7 +9,7 @@ enum KeyboardWords {
     static let chooseFile = "tap a choice to copy the file · hold for the link"
     static let chooseLink = "tap a choice to insert the link · hold to copy the file"
     static let copied = "copied. paste it in."
-    static let noKey = "cobalt can't find your key from here"
+    static let noKey = "capystore can't find your key from here"
     static let noAccess = "allow full access to copy from your library."
     static let noPublicLinks = "no public links: the post is private."
     static let downloading = "downloading…"

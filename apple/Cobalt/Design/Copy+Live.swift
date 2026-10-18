@@ -30,7 +30,7 @@ extension Copy {
         static let ready = "ready to trim"                                                    // new
         /// Plain cobalt, local mode: the clip was saved on this device and there is no link.
         static var savedLocal: String { "saved on this \(Copy.device)" }                       // new
-        static let waitingForCobalt = "waiting for cobalt…"                                   // new
+        static let waitingForCobalt = "waiting for capystore…"                                   // new
         static let open = "open"                                                              // new
         static let copyLink = "copy link"
         static let linkCopied = "link copied"
@@ -85,7 +85,7 @@ extension Copy {
         // settings row (2.8)
         static let row = "live activity"                                                      // new
         static let rowPushed = "on"                                                           // new
-        static let rowLocal = "only while cobalt is open"                                     // new
+        static let rowLocal = "only while capystore is open"                                     // new
         static let rowOff = "off in ios settings"                                             // new
         static let rowFooter = "every save and webp shows in the dynamic island and on the lock screen."   // new
         static func status(_ s: LiveStatus) -> String? {

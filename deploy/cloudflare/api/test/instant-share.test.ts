@@ -129,7 +129,7 @@ describe("POST /studio with notify", () => {
         const sid = asBody(await w.studio.create(KEY_ID, json(shareBody()))).id as string;
         await w.settle(sid);
         expect(w.hark.calls).toHaveLength(1);
-        expect(w.hark.calls[0].title).toBe("cobalt couldn't finish");
+        expect(w.hark.calls[0].title).toBe("capystore couldn't finish");
     });
 
     it("through the Worker: free text with a link keeps `notify` and `origin`", async () => {

@@ -171,9 +171,9 @@ struct WaitingNotice: Equatable, Sendable {
         if uploads > 0, links == 0 { noun = count == 1 ? "upload" : "uploads" }
         else if links > 0, uploads == 0 { noun = count == 1 ? "link" : "links" }
         else { noun = count == 1 ? "job" : "jobs" }
-        return "\(count) \(noun) \(count == 1 ? "is" : "are") waiting for cobalt"
+        return "\(count) \(noun) \(count == 1 ? "is" : "are") waiting for capystore"
     }
-    var body: String { count == 1 ? "open cobalt to finish it." : "open cobalt to finish them." }
+    var body: String { count == 1 ? "open capystore to finish it." : "open capystore to finish them." }
 
     static let identifier = "waiting-for-cobalt"
     /// Opens the tray (`cobalt-apple://jobs`); without one, the save tab.

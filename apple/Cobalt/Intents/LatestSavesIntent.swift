@@ -30,7 +30,7 @@ enum CobaltSaveKind: String, AppEnum {
 /// A locked phone shows nothing: titles and links of private saves need authentication.
 struct LatestSavesIntent: AppIntent {
     static let title: LocalizedStringResource = "Get latest saves"
-    static let description = IntentDescription("Gets the newest saves in your cobalt library.", categoryName: "cobalt")
+    static let description = IntentDescription("Gets the newest saves in your capystore library.", categoryName: "capystore")
     static var supportedModes: IntentModes { .background }
     static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
 

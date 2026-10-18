@@ -439,7 +439,7 @@ describe("the line summary", () => {
         // no "couldn't save" for a post the owner deleted: R alone is announced
         expect(L.hark.calls).toHaveLength(1);
         expect(L.hark.calls[0]).toMatchObject({ url: `cobalt-apple://session/${R.id}` });
-        expect(L.hark.calls[0]!.title).toBe("cobalt");
+        expect(L.hark.calls[0]!.title).toBe("capystore");
         expect(lineRecord(L)).toBeUndefined();
     });
     it("a post deleted while its render waits: no \"couldn't make the webp\"", async () => {

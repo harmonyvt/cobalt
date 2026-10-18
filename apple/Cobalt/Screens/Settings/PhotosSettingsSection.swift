@@ -136,7 +136,7 @@ struct PhotosSettingsSection: View {
     }
 
     /// The album is on by default; photos access is asked for the first time something is about to be added.
-    private static let footerAsk = "videos and webps cobalt keeps go into a \u{201C}cobalt\u{201D} album in photos, once each. cobalt asks for photos access the first time it has something to add."
+    private static let footerAsk = "videos and webps capystore keeps go into a \u{201C}cobalt\u{201D} album in photos, once each. capystore asks for photos access the first time it has something to add."
 
     // MARK: actions
 

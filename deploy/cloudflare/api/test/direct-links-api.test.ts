@@ -146,7 +146,7 @@ describe("a pasted Discord attachment link through POST /studio", () => {
         expect(done).toMatchObject({ status: "error", error: { code: "error.api.link.invalid" } });
         expect(w.items()).toEqual([]);
         expect(hark.calls).toHaveLength(1);
-        expect(hark.calls[0]!.title).toBe("cobalt couldn't finish");
+        expect(hark.calls[0]!.title).toBe("capystore couldn't finish");
         expect(JSON.stringify(hark.calls)).not.toMatch(/hm=|9c1a5e3f/);
     });
 

@@ -134,7 +134,7 @@ const NOT_FOUND = () =>
 const titleOf = (r: Found): string => {
     const t = (r.custom_title ?? "").trim() || (r.name ?? "").trim();
     // a bare file name says nothing: drop its extension
-    return (t.replace(/\.[A-Za-z0-9]{1,8}$/, "") || "cobalt").slice(0, 200);
+    return (t.replace(/\.[A-Za-z0-9]{1,8}$/, "") || "capystore").slice(0, 200);
 };
 
 const fmtDuration = (s: number): string => {
@@ -186,7 +186,7 @@ export async function sharePage(d: ShareDeps, request: Request): Promise<Respons
 
     const e = escapeHtml;
     const meta: string[] = [
-        `<meta property="og:site_name" content="cobalt">`,
+        `<meta property="og:site_name" content="capystore">`,
         `<meta property="og:title" content="${e(title)}">`,
         `<meta property="og:url" content="${e(pageUrl)}">`,
         `<meta name="twitter:title" content="${e(title)}">`,

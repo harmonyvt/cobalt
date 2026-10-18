@@ -376,7 +376,7 @@ describe("push-to-start", () => {
                 "content-state": FETCHING,
                 "stale-date": s0 + 120,
                 "input-push-token": 1,
-                alert: { title: "cobalt", body: "fetching from x" },
+                alert: { title: "capystore", body: "fetching from x" },
             },
         });
         expect(JSON.stringify(p!.payload)).not.toContain("sound");
@@ -392,7 +392,7 @@ describe("push-to-start", () => {
         const w = await world();
         await withStart(w);
         await w.put({ start: true, attributes: { ...ATTRS, input: "file", service: "file", ref: "IMG_0412.mov", origin: "share" }, state: FIX.uploading });
-        expect(w.apple.pushes[0]!.payload.aps.alert).toEqual({ title: "cobalt", body: "uploading IMG_0412.mov" });
+        expect(w.apple.pushes[0]!.payload.aps.alert).toEqual({ title: "capystore", body: "uploading IMG_0412.mov" });
         expect(w.apple.pushes[0]!.payload.aps["content-state"]).toEqual(FIX.uploading);
     });
 
@@ -765,7 +765,7 @@ describe("`end` pushes", () => {
         expect(w.run()!.endedAt).toBe(w.clock.t);
     });
 
-    it("failed: dismissal in 5 minutes, `cobalt couldn't finish`", async () => {
+    it("failed: dismissal in 5 minutes, `capystore couldn't finish`", async () => {
         const w = await world();
         await w.armed();
         w.tick(1000);
@@ -775,7 +775,7 @@ describe("`end` pushes", () => {
         expect(p!.payload.aps).toMatchObject({
             event: "end",
             "dismissal-date": now + 300,
-            alert: { title: "cobalt couldn't finish", body: "open cobalt to see what happened." },
+            alert: { title: "capystore couldn't finish", body: "open capystore to see what happened." },
             "content-state": { stage: "failed", failure: "serverBusy", code: "error.studio.busy" },
         });
         expect(p!.priority).toBe(10);

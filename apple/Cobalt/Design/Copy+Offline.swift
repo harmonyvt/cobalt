@@ -107,7 +107,7 @@ extension Copy.Offline {
         #if os(macOS)
         Copy.Folder.footer
         #else
-        "offline videos stay on this \(Copy.device) until you remove them, here or in files › on my \(Copy.device) › cobalt. the cache makes room by itself."
+        "offline videos stay on this \(Copy.device) until you remove them, here or in files › on my \(Copy.device) › capystore. the cache makes room by itself."
         #endif
     }
 }

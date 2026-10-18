@@ -22,7 +22,7 @@ enum Copy {
 
     // MARK: tabs and shell
 
-    static let appName = "cobalt"
+    static let appName = "capystore"
     static func tab(_ tab: AppTab) -> String {
         switch tab {
         case .save: return "save"
@@ -199,19 +199,19 @@ enum Copy {
     /// A link cobalt cannot read at all (`error.api.link.invalid` / `link.unsupported`): not a private or removed post.
     /// `failure` says both lines in one string, which every surface shows as it is (the tray card, the share sheet, a
     /// Shortcut, the widget).
-    static let linkUnreadable = "cobalt can't read this link."
-    static let linkUnreadableHint = "it isn't a post from a site cobalt knows, or a media file."
+    static let linkUnreadable = "capystore can't read this link."
+    static let linkUnreadableHint = "it isn't a post from a site capystore knows, or a media file."
 
     static func failure(_ failure: PipelineFailure) -> String {
         switch failure {
         case .noLink: return "no link found in that text."
         case .tooLarge(let limit): return "that file is over the \(megabytes(limit)) limit."
-        case .fetchFailed: return "cobalt couldn't fetch this link. the post may be private or removed."
+        case .fetchFailed: return "capystore couldn't fetch this link. the post may be private or removed."
         case .linkUnreadable: return "\(linkUnreadable) \(linkUnreadableHint)"
-        case .unsupported: return "cobalt for apple can't save this kind of post yet."          // new
-        case .serverBusy: return "cobalt is busy with another video. try again in a minute."     // new
+        case .unsupported: return "capystore can't save this kind of post yet."          // new
+        case .serverBusy: return "capystore is busy with another video. try again in a minute."     // new
         case .renderBusy: return "another webp is being made right now."
-        case .renderLost: return "the webp was lost while cobalt was in the background. your trim is kept."
+        case .renderLost: return "the webp was lost while capystore was in the background. your trim is kept."
         case .expired: return "this video's studio has expired."                                  // new
         case .keyMissing: return "add your api key in settings first."                            // new
         case .keyInvalid: return "this key was revoked"
@@ -219,7 +219,7 @@ enum Copy {
         case .server(let code):
             // A failure while making the webp carries CobaltKit's "render." prefix: say it in words,
             // never show the raw code.
-            if code.hasPrefix(PipelineFailure.renderPhasePrefix) { return "cobalt couldn't make the webp. your trim is kept." }
+            if code.hasPrefix(PipelineFailure.renderPhasePrefix) { return "capystore couldn't make the webp. your trim is kept." }
             if code == "error.app.file_unreadable" { return "couldn't read that file. if it's in icloud, check your connection and try again." }
             if let line = appFailure(code) { return line }
             return "something went wrong (\(code))."                                              // new
@@ -232,9 +232,9 @@ enum Copy {
     static func appFailure(_ code: String) -> String? {
         guard code.hasPrefix("error.app.") else { return nil }
         switch code {
-        case "error.app.photos_denied": return "allow cobalt to add to photos in settings, then try again."
-        case "error.app.no_original": return "cobalt couldn't get the original video. try again."
-        case "error.app.job_lost": return "cobalt lost track of that video. save it again."
+        case "error.app.photos_denied": return "allow capystore to add to photos in settings, then try again."
+        case "error.app.no_original": return "capystore couldn't get the original video. try again."
+        case "error.app.job_lost": return "capystore lost track of that video. save it again."
         case "error.app.not_cobalt": return "that server doesn't look like cobalt."
         case "error.app.photos", "error.app.photos_failed": return "couldn't save to photos. try again."
         default: return "something went wrong. try again."                                        // error.app.unknown and the rest
@@ -294,7 +294,7 @@ enum Copy {
     static let postsA11y = "posts"
 
     static func libraryPostTitle(service: String?, ref: String?) -> (String, String?) {
-        (service ?? "cobalt", ref)
+        (service ?? "capystore", ref)
     }
 
     static func fileName(_ file: LibraryFile) -> String {
@@ -389,7 +389,7 @@ enum Copy {
     static var keyNotSaved: String { "couldn't save the key on this \(device). try again." }   // new
     static let notAURL = "that isn't a url."                      // new
     static let checking = "checking…"                             // new
-    static let keyFootnote = "make keys on the web: cobalt → settings → api keys. the app keeps it in the keychain and sends it as \"Authorization: Api-Key …\". revoking it on the web locks this \(device) out at once."
+    static let keyFootnote = "make keys on the web: capystore → settings → api keys. the app keeps it in the keychain and sends it as \"Authorization: Api-Key …\". revoking it on the web locks this \(device) out at once."
     static let webpQuality = "webp quality"
     static var keepVideos: String { "keep videos on this \(device)" }
     static let storedHere = "stored here"
@@ -444,11 +444,11 @@ enum Copy {
 
     // MARK: share sheet
 
-    static let shareSheetA11y = "cobalt"
+    static let shareSheetA11y = "capystore"
     static func overLimit(_ seconds: Double, limit: Double) -> String {
-        "\(Format.seconds(seconds)) is over the \(Int(limit)) s webp limit. it's saved, so cobalt opens right on the trim."
+        "\(Format.seconds(seconds)) is over the \(Int(limit)) s webp limit. it's saved, so capystore opens right on the trim."
     }
-    static let trimInCobalt = "trim in cobalt"
+    static let trimInCobalt = "trim in capystore"
     static let done = "done"
     static let stillMakingInApp = "still making the webp you started in the share sheet…"
     static let makingWebpDots = "making webp…"

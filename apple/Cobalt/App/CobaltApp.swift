@@ -173,7 +173,7 @@ struct CobaltApp: App {
     /// One window, not a `WindowGroup`: a group opens another window for every `cobalt-apple://` link
     /// (each with its own copy of the shell over the same model), and the Mac app has one model.
     private var mainWindow: some Scene {
-        Window("cobalt", id: "main") { windowContent }
+        Window("capystore", id: "main") { windowContent }
             .defaultSize(width: 1280, height: 780)
             .defaultLaunchBehavior(.presented)
             // ⌘V is not a menu command here: the system's Paste reaches the window's paste destination, and a text field

@@ -14,12 +14,12 @@ enum Notifications {
 
         var title: String {
             switch self {
-            case .stillMaking: return "cobalt is still making your webp"
-            case .stillSaving: return "cobalt is still saving your video"
-            case .trimInCobalt: return "your clip is saved · tap to trim in cobalt"
+            case .stillMaking: return "capystore is still making your webp"
+            case .stillSaving: return "capystore is still saving your video"
+            case .trimInCobalt: return "your clip is saved · tap to trim in capystore"
             case .webpReady: return "your webp is ready"
             case .saved: return "your video is saved"
-            case .failed: return "cobalt couldn't finish that · tap to see why"
+            case .failed: return "capystore couldn't finish that · tap to see why"
             }
         }
     }
@@ -86,7 +86,7 @@ enum Notifications {
     /// "saving to cobalt" with the link's label under it: posted by the share extension the moment it has
     /// queued the save. Quiet (passive, no sound): the real news is Hark's "saved". Opens cobalt.
     static func instantSavingRequest(job: UUID, label: String) -> UNNotificationRequest {
-        instantSavingRequest(job: job, title: "saving to cobalt", body: label)
+        instantSavingRequest(job: job, title: "saving to capystore", body: label)
     }
 
     /// The same quiet notification with its own words: a gallery's choice reads `saving 10 photos to cobalt` with
@@ -105,7 +105,7 @@ enum Notifications {
     /// session exists, so the server will not say). Opens cobalt.
     static func instantFailedRequest(link: URL?, status: Int?) -> UNNotificationRequest {
         let content = UNMutableNotificationContent()
-        content.title = "cobalt couldn't start that save"
+        content.title = "capystore couldn't start that save"
         var parts: [String] = []
         if let link, let info = LinkInfo(link) { parts.append("\(info.service) · \(info.ref)") }
         parts.append(instantFailedReason(status: status))
@@ -128,7 +128,7 @@ enum Notifications {
 
     /// Only when the owner already allowed notifications: the extension never prompts.
     static func postInstantSaving(job: UUID, label: String) async {
-        await postInstantSaving(job: job, title: "saving to cobalt", body: label)
+        await postInstantSaving(job: job, title: "saving to capystore", body: label)
     }
 
     static func postInstantSaving(job: UUID, title: String, body: String) async {

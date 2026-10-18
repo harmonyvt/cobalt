@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
-<title>cobalt studio</title>
+<title>capystore studio</title>
 <link rel="icon" href="/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -180,7 +180,7 @@ kbd { font: 500 11px var(--f-mono); padding: 0 5px; border-radius: 4px; box-shad
 <body>
 <div class="page">
   <header class="bar">
-    <span><b>cobalt studio</b> <span class="muted" id="urlbox"></span></span>
+    <span><b>capystore studio</b> <span class="muted" id="urlbox"></span></span>
     <span class="lock">only you</span>
   </header>
   <p id="live" class="sr" role="status" aria-live="polite"></p>
@@ -200,11 +200,11 @@ kbd { font: 500 11px var(--f-mono); padding: 0 5px; border-radius: 4px; box-shad
 
   <section id="vError" class="card state" aria-label="error" hidden>
     <div class="err"><b id="errCode"></b><span id="errText"></span></div>
-    <p class="muted small">share the post to cobalt studio again to start a new one.</p>
+    <p class="muted small">share the post to capystore studio again to start a new one.</p>
   </section>
 
   <section id="vGone" class="card state" aria-label="expired" hidden>
-    <div class="err"><b>studio link not found</b><span>this studio link has expired or doesn't exist. share the post to cobalt studio again.</span></div>
+    <div class="err"><b>studio link not found</b><span>this studio link has expired or doesn't exist. share the post to capystore studio again.</span></div>
     <p class="muted small">webps you already made keep working.</p>
   </section>
 
@@ -390,12 +390,12 @@ function view(name) {
   show("vReady", name === "vReady");
 }
 $("urlbox").textContent = location.host + (SID ? "/studio/" + SID : "");
-document.title = "cobalt studio";
+document.title = "capystore studio";
 
 /* ---------- loading the session ---------- */
 function friendlySaveError(code) {
   if (code === "error.studio.too_large") return "this video is bigger than the 200 MB limit, so it wasn't saved.";
-  if (code && code.indexOf("error.api.") === 0) return "cobalt couldn't fetch this video. the post may be private, removed, or from a site cobalt can't read.";
+  if (code && code.indexOf("error.api.") === 0) return "capystore couldn't fetch this video. the post may be private, removed, or from a site capystore can't read.";
   return "the video couldn't be saved.";
 }
 function netNote(msg) { var n = $("netNote"); n.hidden = !msg; n.textContent = msg || ""; }
@@ -414,13 +414,13 @@ async function loadSession() {
       continue;
     }
     attempt = 0; netNote("");
-    if (res.status === 404 || res.status === 410) { document.title = "cobalt studio: expired"; say("this studio link has expired or doesn't exist."); return view("vGone"); }
+    if (res.status === 404 || res.status === 410) { document.title = "capystore studio: expired"; say("this studio link has expired or doesn't exist."); return view("vGone"); }
     if (res.status !== 200) { return showError(errCode(res), friendlySaveError(errCode(res))); }
     var s = res.body; S.session = s;
     if (s.status === "saving") {
       view("vSaving");
       $("savingLink").textContent = [s.service, s.link].filter(Boolean).join(" · ");
-      if (!tick) { say("saving your video"); document.title = "saving… · cobalt studio"; tick = setInterval(function () { $("savingElapsed").textContent = "(" + fmtElapsed(Date.now() - began) + ")"; }, 1000); }
+      if (!tick) { say("saving your video"); document.title = "saving… · capystore studio"; tick = setInterval(function () { $("savingElapsed").textContent = "(" + fmtElapsed(Date.now() - began) + ")"; }, 1000); }
       var spent = Date.now() - started;
       if (spent < 800) await sleep(1000 - spent);
       continue;
@@ -435,7 +435,7 @@ function showError(code, text) {
   view("vError");
   $("errCode").textContent = code || "error";
   $("errText").textContent = text;
-  document.title = "error · cobalt studio";
+  document.title = "error · capystore studio";
   say(text);
 }
 
@@ -451,7 +451,7 @@ function showReady(s) {
   $("srcTitle").textContent = (s.title ? s.title + " · " : "") + svc + dtxt + dims;
   var now = Date.now();
   $("srcSaved").textContent = (s.created_at ? "saved " + ago(now - s.created_at) + " ago" : "saved") + (s.expires_at ? " · expires in " + ago(s.expires_at - now) : "") + (s.bytes ? " · " + mb(s.bytes) : "");
-  document.title = svc + " · cobalt studio";
+  document.title = svc + " · capystore studio";
   if (s.width && s.height) $("stage").style.setProperty("--ar", (s.width / s.height).toFixed(4));
   setupOptions(s.width);
   S.renders = (s.renders || []).slice();
@@ -718,7 +718,7 @@ function makeError(code, text) {
 }
 function studioGone() {
   S.expiredNow = true;
-  makeError("error.studio.expired", "this studio link has expired. share the post to cobalt studio again. webps you already made keep working.");
+  makeError("error.studio.expired", "this studio link has expired. share the post to capystore studio again. webps you already made keep working.");
 }
 var stopBusy = false;
 $("cancelBusy").addEventListener("click", function () { stopBusy = true; });

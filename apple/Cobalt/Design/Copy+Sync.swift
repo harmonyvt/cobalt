@@ -10,9 +10,9 @@ extension Copy {
         static let autoContinue = "continue in background automatically"
         static let wait = "wait"
         static let fullSheet = "show the full share sheet"
-        static let quickFooter = "sharing a link shows a small card that closes once cobalt has it. turn this on for the full sheet with the trim and the countdown."
+        static let quickFooter = "sharing a link shows a small card that closes once capystore has it. turn this on for the full sheet with the trim and the countdown."
         static func seconds(_ s: Int) -> String { "\(s) s" }
-        static let autoContinueFooter = "after you share a link, the sheet waits this long, then closes and cobalt finishes on its own. tap stay to keep it open."
+        static let autoContinueFooter = "after you share a link, the sheet waits this long, then closes and capystore finishes on its own. tap stay to keep it open."
         // settings · photos
         static let photosGroup = "photos"
         static let albumToggle = "save to a photos album"
@@ -28,13 +28,13 @@ extension Copy {
         static let paused = "paused · keep videos is off"
         static func outOfSpace(_ n: Int) -> String { "photos is full · \(n) waiting" }
         static func gaveUp(_ n: Int) -> String { n == 1 ? "1 couldn't be added" : "\(n) couldn't be added" }
-        static let footerAlbum = "videos cobalt keeps on this iphone go into a \u{201C}cobalt\u{201D} album in photos, once each. deleting one here or in photos never adds it back."
-        static let footerLimited = "with limited access cobalt can add to your library but not make an album. allow full access in settings to use the album."
-        static let footerAddOnly = "cobalt can only add to your library. allow full access in settings to use the album."
-        static let footerDenied = "cobalt can't add to photos. allow access in settings."
-        static let footerNeedsKeep = "turn on keep videos on this iphone first: the album is filled from what cobalt keeps."
+        static let footerAlbum = "videos capystore keeps on this iphone go into a \u{201C}cobalt\u{201D} album in photos, once each. deleting one here or in photos never adds it back."
+        static let footerLimited = "with limited access capystore can add to your library but not make an album. allow full access in settings to use the album."
+        static let footerAddOnly = "capystore can only add to your library. allow full access in settings to use the album."
+        static let footerDenied = "capystore can't add to photos. allow access in settings."
+        static let footerNeedsKeep = "turn on keep videos on this iphone first: the album is filled from what capystore keeps."
         static let webpStill = "photos shows a webp as a still picture; its link still plays."   // gate G-W: PhotoKit classifies a webp as a still (core lane, 2026-10-04)
-        static func backfillTitle(_ n: Int) -> String { n == 1 ? "also add the video already in cobalt?" : "also add the \(n) videos already in cobalt?" }
+        static func backfillTitle(_ n: Int) -> String { n == 1 ? "also add the video already in capystore?" : "also add the \(n) videos already in capystore?" }
         static func backfillAdd(_ n: Int) -> String { "add \(n)" }
         static let backfillSkip = "only new ones"
         // the save-to-photos button

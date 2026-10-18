@@ -58,7 +58,7 @@ enum CobaltMediaKind: String, AppEnum {
 /// One save, handed from action to action (CONTRACT-PARALLEL.md 15.4). `id` is the post key: the session id for a saved
 /// link, the item id for an upload, both equal to `GET /library`'s post `id`.
 struct CobaltSave: AppEntity {
-    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "cobalt save")
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "capystore save")
     static let defaultQuery = CobaltSaveQuery()
 
     var id: String

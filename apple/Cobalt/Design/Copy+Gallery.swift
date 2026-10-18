@@ -38,7 +38,7 @@ extension Copy {
         static let slideshowWebp = "slideshow webp", slideshowMp4 = "slideshow mp4", galleryImage = "gallery image"
         static func afterTheSave(_ i: Int, of n: Int) -> String { "after the save · \(i) of \(n)" }
         /// `place`: "Files › On My iPhone › cobalt › <title>" / "~/Movies/cobalt/<title>".
-        static func savedTo(_ place: String) -> String { "saved to cobalt · \(place)" }
+        static func savedTo(_ place: String) -> String { "saved to capystore · \(place)" }
         static let notInPhotos = "not in Photos: save to photos is in more"
         static func notFetched(_ name: String, kept: Int) -> String { "\(name) couldn't be fetched: the link expired. the other \(kept) are saved." }
         static func tryItemAgain(_ name: String) -> String { "try \(name) again" }
@@ -82,7 +82,7 @@ extension Copy {
         // MARK: share sheet
 
         static func saveAll(_ n: Int) -> String { "save all \(n)" }
-        static let intoCobaltAndFiles = "into cobalt and Files"
+        static let intoCobaltAndFiles = "into capystore and Files"
         static let saveAndWebp = "save + slideshow webp", saveAndImage = "save + gallery image", noBorders = "no borders"
         /// `sec`: "2 s"; `len`: "20 s"; `size`: "1.8 MB".
         static func shareWebpSub(_ sec: String, _ len: String, _ size: String) -> String { "\(sec) a photo · crossfade · about \(len) · about \(size)" }
@@ -91,14 +91,14 @@ extension Copy {
         static func photosAndSkipped(_ p: Int, _ v: Int) -> String {
             "\(p) \(p == 1 ? "photo" : "photos") · \(v) \(v == 1 ? "video" : "videos") skipped"
         }
-        static let saveNow = "save now", checkingLink = "checking the link", sentToCobalt = "sent to cobalt"
+        static let saveNow = "save now", checkingLink = "checking the link", sentToCobalt = "sent to capystore"
         static func wakingServer(_ s: Int) -> String { "waking the server · \(s) s" }
         /// "saving 10 photos to cobalt" / "saving 4 items to cobalt".
         static func savingItems(_ n: Int, photosOnly: Bool) -> String { "saving \(n) \(photosOnly ? (n == 1 ? "photo" : "photos") : (n == 1 ? "item" : "items")) to cobalt" }
         static let andMakingWebp = " · making a slideshow webp", andMakingImage = " · making a gallery image"
-        static let savingEverything = "saving everything to cobalt", makeLater = "open cobalt to make something from it"
+        static let savingEverything = "saving everything to capystore", makeLater = "open capystore to make something from it"
         static let serverNoGallery = "this server can't save photo posts yet"
-        static let serverNoGallerySub = "update the server, or open cobalt to save them to Photos."
+        static let serverNoGallerySub = "update the server, or open capystore to save them to Photos."
         static let serverCantMake = "this server can't make these yet"
 
         // MARK: detail
@@ -121,7 +121,7 @@ extension Copy {
 
         // MARK: repost tools (unchanged from 2026-10-06; wave A7)
 
-        static let crop = "crop", saveCrop = "save crop", keepInCobalt = "keep in cobalt", deleteCrop = "delete this crop"
+        static let crop = "crop", saveCrop = "save crop", keepInCobalt = "keep in capystore", deleteCrop = "delete this crop"
         static let fillCut = "cut to fit", fillBlur = "whole photo, blurred bars", fillBlurShort = "blurred bars"
         static func cropTab(_ aspect: String) -> String { "crop \(aspect)" }
         static let cropFailed = "couldn't upload the crop. the photo is unchanged."

@@ -25,15 +25,15 @@ extension Copy {
         static let moveMessage = "left behind, they stay in the old folder and aren't offline here any more."
         static func moving(done: Int, of total: Int) -> String { "moving… \(done) of \(total)" }
         static let refusedICloud = "pick a folder on this mac or an external disk. icloud drive folders can't hold offline files."
-        static let refusedStore = "that folder holds cobalt's own files. pick another one."
-        static let chooseFailed = "cobalt couldn't use that folder."
+        static let refusedStore = "that folder holds capystore's own files. pick another one."
+        static let chooseFailed = "capystore couldn't use that folder."
 
         // the problem line (only when there is one)
         static let unreachable = "this folder isn't connected. new saves wait on this mac until it's back."
-        static let notAllowed = "cobalt can't write to this folder."
-        static let wrongFolder = "this isn't the folder cobalt was using. choose it again."
+        static let notAllowed = "capystore can't write to this folder."
+        static let wrongFolder = "this isn't the folder capystore was using. choose it again."
         static let diskFull = "the disk is full."
-        static let noTrash = "couldn't move that file to the trash. this disk has none, so cobalt left it where it is."
+        static let noTrash = "couldn't move that file to the trash. this disk has none, so capystore left it where it is."
 
         // the detail's line while the disk is away
         static func notConnected(path: String) -> String { "on \(path), which isn't connected" }
@@ -65,7 +65,7 @@ extension Copy {
             return days == 1 ? "1 day ago" : "\(days) days ago"
         }
 
-        static let footer = "offline files stay in this folder until you remove them, here or in finder. while cobalt is open, saves from your iphone, the share sheet, shortcuts and the web download here too. the cache makes room by itself."
+        static let footer = "offline files stay in this folder until you remove them, here or in finder. while capystore is open, saves from your iphone, the share sheet, shortcuts and the web download here too. the cache makes room by itself."
     }
 }
 

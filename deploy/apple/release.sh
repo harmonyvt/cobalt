@@ -157,7 +157,7 @@ if [ "$REPLACE" -eq 0 ] && [ "$BUILD" -le "$PUBLISHED_MAX" ]; then
     BUILD=$((PUBLISHED_MAX + 1))
     say "build number: $BUILD (newest published is $PUBLISHED_MAX; apple/project.yml says $YML_BUILD)"
 fi
-[ -n "$NOTES" ] || NOTES="cobalt $VERSION ($BUILD)"
+[ -n "$NOTES" ] || NOTES="capystore $VERSION ($BUILD)"
 
 IPA_NAME="cobalt-$VERSION-$BUILD.ipa"
 DERIVED="$APPLE/.build/ipa"
@@ -299,19 +299,19 @@ jq -n \
     --argjson versions "$VERSIONS" \
     --argjson entitlements "$ENTITLEMENTS" --argjson privacy "$PRIVACY" \
     '{
-      name: "cobalt (private)",
+      name: "capystore (private)",
       identifier: "com.capybaraharmony.cobalt.source",
-      subtitle: "cobalt for iPhone, iPad and Mac, private builds",
-      description: "Private builds of the cobalt app. Add this source in Feather to install and update cobalt.",
+      subtitle: "capystore for iPhone, iPad and Mac, private builds",
+      description: "Private builds of the capystore app. Add this source in Feather to install and update capystore.",
       iconURL: $src_icon,
       website: "https://cobalt.capybaraharmony.com",
       tintColor: "2f8af9",
       apps: [{
-        name: "cobalt",
+        name: "capystore",
         bundleIdentifier: $bundle,
         developerName: "capybaraharmony",
         subtitle: "save videos and clips from links",
-        localizedDescription: "cobalt saves videos, audio and clips from links you share. Private build: it talks to your own cobalt server and needs your API key.",
+        localizedDescription: "capystore saves videos, audio and clips from links you share. Private build: it talks to your own server and needs your API key.",
         iconURL: $src_icon,
         tintColor: "2f8af9",
         category: "utilities",

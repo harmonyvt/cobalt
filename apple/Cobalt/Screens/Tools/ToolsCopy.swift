@@ -73,7 +73,7 @@ enum ToolsCopy {
     static let next = "next photo"
     static let making = "making the frame…"
     static func makingN(_ done: Int, of n: Int) -> String { "making \(done) of \(n)…" }
-    static let kept = "kept in cobalt: it is a tab of this media."
+    static let kept = "kept in capystore: it is a tab of this media."
     /// What the repost sheet says after a save: iPhone and iPad put frames in Photos, the Mac in a folder or file.
     static func saved(_ n: Int, skipped: Int) -> String {
         #if os(macOS)
