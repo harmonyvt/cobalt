@@ -90,6 +90,8 @@ struct CollectionRow: View {
             Button(Copy.Collections.copyAll, systemImage: Symbol.collectionCopyAll) { controller.copyAll(collection, shell: shell) }
                 .disabled(controller.store.linksText(in: collection) == nil)
             Button(Copy.Collections.rename, systemImage: Symbol.collectionRename) { controller.sheet = .rename(collection) }
+            Button(Copy.Collections.reroll, systemImage: Symbol.collectionReroll) { controller.rerolling = collection }
+                .disabled(!controller.canReroll(collection))
             Divider()
             Button(Copy.Collections.delete, systemImage: Symbol.collectionDelete, role: .destructive) {
                 controller.deleting = collection

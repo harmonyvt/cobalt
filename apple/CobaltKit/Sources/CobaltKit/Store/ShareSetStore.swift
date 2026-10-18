@@ -149,6 +149,36 @@ public final class ShareSetStore {
         if started == generation { collections.removeAll { $0.id == id } }
     }
 
+    /// Rerolls every live link of a collection (`POST .../reroll`): the collection is replaced by the answer, the old link
+    /// ids are swapped for the new ones in every other loaded collection, and the sets are listed again (so the new URLs
+    /// and thumbnails load) without touching the collections. `.notFound` drops the collection locally and rethrows;
+    /// `.empty` and the rest rethrow with everything as it was. A failed re-listing is not an error: the reroll
+    /// happened, and the next refresh picks the new links up.
+    @discardableResult
+    public func rerollCollection(_ id: String) async throws -> ShareCollectionReroll {
+        let started = generation
+        let client = ctx.client
+        let answer: ShareCollectionReroll
+        do {
+            answer = try await client.rerollShareCollection(id: id)
+        } catch ShareCollectionError.notFound {
+            if started == generation { collections.removeAll { $0.id == id } }
+            throw ShareCollectionError.notFound
+        }
+        guard started == generation else { return answer }
+        for i in collections.indices where collections[i].id != answer.collection.id {
+            collections[i].setIDs = collections[i].setIDs.map { answer.replaced[$0] ?? $0 }
+        }
+        put(answer.collection)
+        // the old links are revoked: out of the list now, so no stale row shows while the new ones load
+        let gone = Set(answer.replaced.keys)
+        sets.removeAll { gone.contains($0.id) }
+        if let listed = try? await client.shareSets(), started == generation {
+            sets = listed.sorted { $0.createdAt > $1.createdAt }
+        }
+        return answer
+    }
+
     private func update(_ id: String, name: String?, add: [String], remove: [String]) async throws -> ShareCollection {
         let started = generation
         do {

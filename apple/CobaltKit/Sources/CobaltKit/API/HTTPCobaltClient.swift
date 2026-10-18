@@ -656,6 +656,17 @@ public struct HTTPCobaltClient: CobaltClient {
         guard (200..<300).contains(http.statusCode) else { throw shareCollectionError(data, status: http.statusCode) }
     }
 
+    /// `POST /share/collections/<id>/reroll` (keyed, no body): `{collection, replaced}`.
+    public func rerollShareCollection(id: String) async throws -> ShareCollectionReroll {
+        let req = try makeRequest("POST", "/share/collections/\(Self.encode(id))/reroll", keyed: true, timeout: 60)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw shareCollectionError(data, status: http.statusCode) }
+        guard let answer = try? CobaltJSON.decoder().decode(ShareCollectionReroll.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return answer
+    }
+
     private func shareCollectionAnswer(_ data: Data, _ http: HTTPURLResponse) throws -> ShareCollection {
         guard (200..<300).contains(http.statusCode) else { throw shareCollectionError(data, status: http.statusCode) }
         struct Wire: Decodable { var collection: ShareCollection }
@@ -680,6 +691,7 @@ public struct HTTPCobaltClient: CobaltClient {
         case "error.collection.link_not_found": return ShareCollectionError.linkNotFound(body?.setIds ?? [])
         case "error.collection.too_many": return ShareCollectionError.tooMany
         case "error.collection.full": return ShareCollectionError.full
+        case "error.collection.empty": return ShareCollectionError.empty
         default:
             if status == 503 { return ShareCollectionError.unavailable }
             return apiError(data, status: status)

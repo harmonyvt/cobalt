@@ -142,6 +142,9 @@ public protocol CobaltClient: Sendable {
     func updateShareCollection(id: String, name: String?, add: [String], remove: [String]) async throws -> ShareCollection
     /// `DELETE /share/collections/<id>`: the folder goes; its links stay live. An unknown id is `.notFound`.
     func deleteShareCollection(id: String) async throws
+    /// `POST /share/collections/<id>/reroll` (no body): every live link of the collection is replaced by a new link with
+    /// the same files and a fresh title; the old ones are revoked. `.notFound`, `.empty` (no live links), `.unavailable`.
+    func rerollShareCollection(id: String) async throws -> ShareCollectionReroll
     // Chat (APP-API-CONTRACT 27; keyed; only when `features.chat`). Defaulted below (`.unsupported`) so older fakes
     // compile. The routes throw `ChatError` for the server's refusals.
     /// `GET /chat/threads`: most recently updated first.
@@ -236,6 +239,7 @@ extension CobaltClient {
     public func createShareCollection(name: String, setIDs: [String]) async throws -> ShareCollection { throw PipelineFailure.unsupported }
     public func updateShareCollection(id: String, name: String?, add: [String], remove: [String]) async throws -> ShareCollection { throw PipelineFailure.unsupported }
     public func deleteShareCollection(id: String) async throws { throw PipelineFailure.unsupported }
+    public func rerollShareCollection(id: String) async throws -> ShareCollectionReroll { throw PipelineFailure.unsupported }
     public func chatThreads() async throws -> [ChatThread] { throw PipelineFailure.unsupported }
     public func createChatThread(title: String?) async throws -> ChatThread { throw PipelineFailure.unsupported }
     public func chatThread(id: String) async throws -> ChatThreadDetail { throw PipelineFailure.unsupported }

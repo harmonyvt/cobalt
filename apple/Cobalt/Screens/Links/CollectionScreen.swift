@@ -3,8 +3,8 @@ import SwiftUI
 
 // A collection's screen (APP-API-CONTRACT section 26): its links as the same rows the links tab has (copy, share,
 // revoke), plus "remove from collection" (swipe on iPhone and iPad, the context menu and a button on the Mac). The
-// toolbar menu renames and deletes it. Deleting asks first ("its links keep working."); removing a link does not (it is
-// reversible). Pushed on a `NavigationStack` on every platform, so the Mac sidebar gets no child rows.
+// toolbar menu renames, rerolls all its links and deletes it. Deleting and rerolling ask first; removing a link does not
+// (it is reversible). Pushed on a `NavigationStack` on every platform, so the Mac sidebar gets no child rows.
 
 struct CollectionScreen: View {
     let model: AppModel
@@ -39,17 +39,27 @@ struct CollectionScreen: View {
         .toolbar {
             if let collection {
                 ToolbarItem(placement: .primaryAction) {
-                    Button(Copy.Collections.copyAll, systemImage: Symbol.collectionCopyAll) {
-                        controller.copyAll(collection, shell: shell)
+                    if controller.rerollingIDs.contains(collection.id) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel(Copy.Collections.rerolling)
+                    } else {
+                        Button(Copy.Collections.copyAll, systemImage: Symbol.collectionCopyAll) {
+                            controller.copyAll(collection, shell: shell)
+                        }
+                        .disabled(controller.store.linksText(in: collection) == nil)
+                        .help(Copy.Collections.copyAll)
                     }
-                    .disabled(controller.store.linksText(in: collection) == nil)
-                    .help(Copy.Collections.copyAll)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button(Copy.Collections.rename, systemImage: Symbol.collectionRename) {
                             controller.sheet = .rename(collection)
                         }
+                        Button(Copy.Collections.reroll, systemImage: Symbol.collectionReroll) {
+                            controller.rerolling = collection
+                        }
+                        .disabled(!controller.canReroll(collection))
                         Divider()
                         Button(Copy.Collections.delete, systemImage: Symbol.collectionDelete, role: .destructive) {
                             controller.deleting = collection
