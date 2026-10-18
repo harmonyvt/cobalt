@@ -10,6 +10,7 @@ import { assemblePosts, libraryHide, type AppDeps } from "./app-routes";
 import { chatTools, loadPosts, picturesOf, recordsOf, TOOL_TYPES, type ChatCollect, type ChatToolDeps, type ChatTools } from "./chat-tools";
 import type { EmbedClient } from "./embed";
 import type { CodeRunner } from "./chat-limits";
+import type { ModelFetch } from "./model-fetch";
 export { CODE_CPU_MS, CODE_TIMEOUT_MS, MAX_TOOL_CALLS, type CodeRun, type CodeRunner } from "./chat-limits";
 import { mintCollectionId } from "./share-collections";
 import type { StudioReply } from "./studio";
@@ -50,12 +51,15 @@ const TITLE_SCHEMA = {
     additionalProperties: false,
 };
 
-export function chatModelFrom(env: { ANTHROPIC_API_KEY?: string; ROAST_BASE_URL?: string; CHAT_MODEL?: string }): ChatModel | null {
+export function chatModelFrom(
+    env: { ANTHROPIC_API_KEY?: string; ROAST_BASE_URL?: string; CHAT_MODEL?: string },
+    modelFetch?: ModelFetch,
+): ChatModel | null {
     const apiKey = env.ANTHROPIC_API_KEY?.trim();
     if (!apiKey) return null;
     const baseURL = env.ROAST_BASE_URL?.trim() || undefined;
     const model = env.CHAT_MODEL?.trim() || CHAT_MODEL_DEFAULT;
-    const client = new Anthropic({ apiKey, baseURL, maxRetries: 1, timeout: 90_000 });
+    const client = new Anthropic({ apiKey, baseURL, maxRetries: 1, timeout: 90_000, ...(modelFetch ? { fetch: modelFetch } : {}) });
     return {
         model,
         async turn({ system, tools, messages, onText }) {

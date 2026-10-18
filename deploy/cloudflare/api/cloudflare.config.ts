@@ -132,12 +132,19 @@ export default defineConfig({
 				worker: "cobalt-api",
 				exportName: "CobaltContainer",
 			}),
+			// Chat and captions call Anthropic through this Durable Object, pinned to North America
+			// (src/model-fetch.ts): from some Cloudflare locations Anthropic answers 403.
+			MODEL_RELAY: bindings.durableObject({
+				worker: "cobalt-api",
+				exportName: "ModelRelay",
+			}),
 		},
 		exports: {
 			CobaltContainer: exports.durableObject({
 				storage: "sqlite",
 				container: cobaltContainer,
 			}),
+			ModelRelay: exports.durableObject({ storage: "sqlite" }),
 		},
 	},
 	containers: [cobaltContainer],
