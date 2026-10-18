@@ -2438,7 +2438,7 @@ Threads with Claude Haiku 5.5 (`claude-haiku-5-5`, `CHAT_MODEL`) about the libra
 ### 27.3 The sandbox tools (what the model's code can call, all async, on the global `cobalt`)
 
 - `cobalt.library({ since?, until?, source?, kind?, query?, limit? })` → posts newest first (default 100, at most 1,000). `since`/`until` ISO dates or ms; `source` a host such as `"tiktok.com"`; `kind` `"video"|"image"|"gallery"`; `query` plain substring of title/name/link. Each `{ id, title, saved_at (ISO), source, link, kind, files, duration, public, caption }` (`caption` the roast caption title, or null).
-- `cobalt.search(query, limit?)` → the meaning search (section 21), best first, at most 50, the same records plus `score`. Throws "search is waking up" while the Space sleeps.
+- `cobalt.search(query, limit?)` → the meaning search (section 21), best first, at most 500 (default 10), the same records plus `score`. Throws "search is waking up" while the Space sleeps.
 - `cobalt.post(id)` → one record plus `files: [{ id, name, kind, content_type, duration, width, height, bytes, public, url, share_url }]`.
 - `cobalt.look(ids)` → the model sees up to 4 pictures (posters or images) after the code returns. Returns how many were queued.
 - `cobalt.show(ids)` → shows up to 12 files in the reply as thumbnails; returns the ids accepted.
@@ -2448,3 +2448,13 @@ Threads with Claude Haiku 5.5 (`claude-haiku-5-5`, `CHAT_MODEL`) about the libra
 ### 27.4 App (apple/CONTRACT.md)
 
 Tabs become save · library · links · chat · settings (`chat` only with `features.chat`). Queue moves to a toolbar button with the in-flight badge on save and library (and keeps its sidebar row on the Mac). The chat tab: a thread list (new, rename, delete with confirm), a thread view streaming the reply, code steps collapsed, shown files as thumbnails that open the post. "ask about this" on a post starts a new thread with that post attached. Deploy: apply 0015, then the API Worker (needs the `LOADER` binding).
+
+
+### 27.5 Collages (addendum, 2026-10-18; owner: "if I search for cats, there could be like 500 items ... a mini masonry like collage of a search that can paginate through. And when you hold press, it shows the preview")
+
+- Sandbox tool `cobalt.collage(ids, { title?, query? })` → attaches ONE big result set to the reply: up to 500 post ids in order (unknown ids dropped), `title` (≤80, e.g. "every cat"), `query` (≤200, the search words, for "open in library"). A later call in the same reply replaces it; returns how many ids were kept. `show()` stays for a few highlights (≤12).
+- `<message>` gains `"collage": null | { "title": string|null, "query": string|null, "total": <n> }` (assistant messages; always null on user messages). D1: `chat_messages.collage` (migration 0016).
+- SSE event `collage` `{ "collage": {title, query, total} }` after the run that set it; `done` carries it on the message too.
+- `GET /chat/threads/<id>/messages/<message id>/collage?offset=<0..>&limit=<1..60, default 30>` (keyed) → `200 { "status": "success", "title", "query", "total": <n>, "offset": <n>, "next": <offset of the next page>|null, "post_ids": [...], "posts": { "<post id>": <GET /library?v=3 post shape> } }`. `post_ids` is the page in order, minus posts deleted since (so a page can be shorter than `limit`; `total` does not change). No collage on that message: 404 `error.chat.not_found`; bad offset/limit: 400 `error.chat.bad_request`.
+- App: under the reply text, a masonry collage (2 columns on iPhone, more on iPad/Mac) of the first page, with the title and "N results", a "more" control that loads the next page, tap opens the post, long-press shows a context-menu preview (poster or image, title) with open/share actions, and "open in library" runs `query` as a library search (shown only when `query` is set).
+- Deploy: apply 0016, then the API Worker.

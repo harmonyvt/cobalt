@@ -244,6 +244,43 @@ describe("chat: a reply", () => {
         expect(read.thread.title).toBe("tiktok cat hunt");
     });
 
+    it("attaches a big result set as a collage and pages it", async () => {
+        const cats = Array.from({ length: 70 }, (_, i) => item({ name: `cat ${i}.mp4`, link: `https://x.com/c/status/${i + 1}`, created_at: 10_000 + i }));
+        item({ name: "dog.mp4", link: "https://x.com/d/status/999", created_at: 20_000 });
+        const t = await newThread();
+        script = [
+            () => code("tu_1", `const p = await cobalt.library({ query: "cat" });\nreturn await cobalt.collage([...p.map((x) => x.id), "nope"], { title: "every cat", query: "cats" });`),
+            (s) => {
+                const last = s.messages[s.messages.length - 1];
+                expect(JSON.parse(last.content[0].content[0].text).result).toBe(70);
+                return say("70 cats nya~");
+            },
+        ];
+        const ev = await events(await send(`/chat/threads/${t.id}/messages`, "POST", { text: "show me all my cats" }));
+        expect(ev.find((e) => e.event === "collage")!.data).toEqual({ collage: { title: "every cat", query: "cats", total: 70 } });
+        const done = ev[ev.length - 1]!.data.message;
+        expect(done.collage).toEqual({ title: "every cat", query: "cats", total: 70 });
+        expect(done.post_ids).toEqual([]);
+
+        const read = await jsonOf(await send(`/chat/threads/${t.id}`, "GET"));
+        expect(read.messages[0].collage).toBeNull();
+        expect(read.messages[1].collage).toMatchObject({ total: 70 });
+
+        const base = `/chat/threads/${t.id}/messages/${done.id}/collage`;
+        const p1 = await jsonOf(await send(base, "GET"));
+        expect(p1).toMatchObject({ status: "success", title: "every cat", query: "cats", total: 70, offset: 0, next: 30 });
+        const newestFirst = [...cats].reverse().map((c) => c.link);
+        expect(p1.post_ids).toEqual(newestFirst.slice(0, 30));
+        expect(Object.keys(p1.posts)).toHaveLength(30);
+        const p3 = await jsonOf(await send(`${base}?offset=60&limit=60`, "GET"));
+        expect(p3).toMatchObject({ offset: 60, next: null });
+        expect(p3.post_ids).toEqual(newestFirst.slice(60));
+
+        expect((await send(`${base}?limit=61`, "GET")).status).toBe(400);
+        expect((await send(`/chat/threads/${t.id}/messages/${read.messages[0].id}/collage`, "GET")).status).toBe(404);
+        expect((await send(base, "POST")).status).toBe(404);
+    });
+
     it("replays the earlier turn, tool calls included, on the next message", async () => {
         item({ name: "a.mp4" });
         const t = await newThread();

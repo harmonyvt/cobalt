@@ -125,6 +125,7 @@ type MessageRow = {
     role: string;
     text: string;
     post_ids: string;
+    collage?: string | null;
     steps: string;
     api: string | null;
     status: string;
@@ -167,6 +168,12 @@ function cleanTitle(v: unknown): string | null {
     return t;
 }
 
+type CollageRow = { title: string | null; query?: string | null; ids: string[] };
+const collageShape = (s: string | null) => {
+    const c = parse<CollageRow | null>(s, null);
+    return c && Array.isArray(c.ids) && c.ids.length > 0 ? { title: c.title ?? null, query: c.query ?? null, total: c.ids.length } : null;
+};
+
 const messageShape = (r: MessageRow, now: number) => {
     const stale = r.status === "running" && now - r.updated_at > STALE_MS;
     return {
@@ -174,6 +181,7 @@ const messageShape = (r: MessageRow, now: number) => {
         role: r.role,
         text: r.text,
         post_ids: parse<string[]>(r.post_ids, []),
+        collage: collageShape(r.collage ?? null),
         steps: parse<Step[]>(r.steps, []),
         status: stale ? "error" : r.status,
         error: stale ? "error.chat.interrupted" : r.error,
@@ -280,6 +288,49 @@ export async function getThread(d: ChatDeps, id: string): Promise<StudioReply> {
     }
 }
 
+// GET /chat/threads/<id>/messages/<mid>/collage?offset=<n>&limit=<1..60> (section 27.5): one page of a
+// message's collage, in order, with the post shapes. Posts deleted since are skipped (total stays).
+export const COLLAGE_PAGE_DEFAULT = 30;
+export const COLLAGE_PAGE_MAX = 60;
+export async function getCollage(d: ChatDeps, id: string, messageId: string, q: URLSearchParams): Promise<StudioReply> {
+    const num = (k: string, def: number) => {
+        const raw = q.get(k);
+        if (raw === null) return def;
+        return /^\d{1,4}$/.test(raw) ? Number(raw) : NaN;
+    };
+    const offset = num("offset", 0);
+    const limit = num("limit", COLLAGE_PAGE_DEFAULT);
+    if (!/^\d{1,12}$/.test(messageId) || !Number.isFinite(offset) || !Number.isFinite(limit) || limit < 1 || limit > COLLAGE_PAGE_MAX) {
+        return err(400, "error.chat.bad_request");
+    }
+    try {
+        const r = await d.db
+            .prepare("SELECT collage FROM chat_messages WHERE id = ?1 AND thread_id = ?2")
+            .bind(Number(messageId), id)
+            .first<{ collage: string | null }>();
+        const c = parse<CollageRow | null>(r?.collage ?? null, null);
+        if (!r || !c || !Array.isArray(c.ids) || c.ids.length === 0) return err(404, "error.chat.not_found");
+        const page = c.ids.slice(offset, offset + limit);
+        const posts = await postsMap(d, page);
+        return {
+            status: 200,
+            body: {
+                status: "success",
+                title: c.title ?? null,
+                query: c.query ?? null,
+                total: c.ids.length,
+                offset,
+                next: offset + limit < c.ids.length ? offset + limit : null,
+                post_ids: page.filter((p) => p in posts),
+                posts,
+            },
+        };
+    } catch (e) {
+        console.error("[chat] collage read failed", String(e));
+        return err(503, "error.api.generic");
+    }
+}
+
 export async function renameThread(d: Pick<ChatDeps, "db" | "now">, request: Request, id: string): Promise<StudioReply> {
     const b = await readBody(request);
     const title = cleanTitle(b?.title);
@@ -323,7 +374,7 @@ Be helpful first. Your voice is a cute, funny furry anime cat girl: bubbly, a li
 
 You see the library only through the run_code tool. It runs JavaScript (not TypeScript) as the body of an async function in a sandbox with no network: call the global \`cobalt\` API, compute what you need, and \`return\` a small result (an array of a few fields beats whole records). console.log works. Do as much as you can in one run: filter, sort and count in code instead of returning everything. Today is ${new Date(now).toISOString().slice(0, 10)}.
 
-To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbnails under your reply, so never paste ids or raw URLs into your text; refer to files by title. To see what a picture or video actually looks like, call cobalt.look(ids) and you get the pictures after the run. Never claim to have seen something you did not look at. Files Harmony attaches to a message are listed with it.
+To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbnails under your reply, so never paste ids or raw URLs into your text; refer to files by title. To see what a picture or video actually looks like, call cobalt.look(ids) and you get the pictures after the run. Never claim to have seen something you did not look at. Files Harmony attaches to a message are listed with it. When the answer is a big set (all the cats, every TikTok from March), put the whole ordered set in cobalt.collage(ids, { title, query }): Harmony pages through it as a collage under your reply, so say how many there are instead of listing them, and keep show() for a few highlights.
 
 ${search ? FINDING_WITH_SEARCH : FINDING_WITHOUT_SEARCH}
 
@@ -518,14 +569,15 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
     let text = "";
     const steps: Step[] = [];
     const api: any[] = [];
-    const collect: ChatCollect = { look: [], show: [] };
+    const collect: ChatCollect = { look: [], show: [], collage: null };
     const toolDeps: ChatToolDeps = { db: d.db, mediaBaseUrl: d.mediaBaseUrl, shareBaseUrl: d.shareBaseUrl, embed: d.embed };
     let lastSave = now();
-    const row = (status: string, error: string | null) => ({ ...c.botRow, text, post_ids: JSON.stringify(collect.show), steps: JSON.stringify(steps), status, error, updated_at: now() });
+    const collageJson = () => (collect.collage ? JSON.stringify(collect.collage) : null);
+    const row = (status: string, error: string | null) => ({ ...c.botRow, text, post_ids: JSON.stringify(collect.show), collage: collageJson(), steps: JSON.stringify(steps), status, error, updated_at: now() });
     const save = async (status: string, error: string | null) => {
         await d.db
-            .prepare("UPDATE chat_messages SET text = ?2, post_ids = ?3, steps = ?4, api = ?5, status = ?6, error = ?7, updated_at = ?8 WHERE id = ?1")
-            .bind(c.botRow.id, text, JSON.stringify(collect.show), JSON.stringify(steps), status === "running" ? null : JSON.stringify(api), status, error, now())
+            .prepare("UPDATE chat_messages SET text = ?2, post_ids = ?3, steps = ?4, api = ?5, status = ?6, error = ?7, updated_at = ?8, collage = ?9 WHERE id = ?1")
+            .bind(c.botRow.id, text, JSON.stringify(collect.show), JSON.stringify(steps), status === "running" ? null : JSON.stringify(api), status, error, now(), collageJson())
             .run();
     };
     const progress = async () => {
@@ -582,6 +634,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 steps.push(step);
                 c.emit("step", { step });
                 const shownBefore = collect.show.length;
+                const collageBefore = collageJson();
                 const t0 = Date.now();
                 const out = await d.runner(u.input.code, chatTools(toolDeps, collect));
                 step.duration_ms = Date.now() - t0;
@@ -595,6 +648,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                     const added = collect.show.slice(shownBefore);
                     c.emit("posts", { post_ids: added, posts: await postsMap(d, added) });
                 }
+                if (collageJson() !== collageBefore) c.emit("collage", { collage: collageShape(collageJson()) });
                 const body = out.error !== undefined
                     ? { error: out.error, logs: step.logs }
                     : { result: full!.length > RESULT_MAX ? `${full!.slice(0, RESULT_MAX)}… (cut: return less)` : out.result ?? null, logs: step.logs };

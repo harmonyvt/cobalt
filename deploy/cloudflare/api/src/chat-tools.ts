@@ -8,7 +8,8 @@ import { effectiveVisibility } from "./visibility";
 
 export const LIBRARY_DEFAULT_LIMIT = 100;
 export const LIBRARY_MAX_LIMIT = 1000;
-export const SEARCH_MAX = 50;
+export const SEARCH_MAX = 500;
+export const COLLAGE_MAX = 500;
 export const LOOK_MAX = 4;
 export const SHOW_MAX = 12;
 
@@ -166,7 +167,8 @@ const idList = (v: unknown): string[] => {
 };
 
 // What one reply's tool calls collected: pictures to look at, files to show.
-export type ChatCollect = { look: string[]; show: string[] };
+// collage: one big result set for the reply (section 27.5); a later call replaces it.
+export type ChatCollect = { look: string[]; show: string[]; collage?: { title: string | null; query: string | null; ids: string[] } | null };
 
 export type ChatTools = Record<string, (...args: any[]) => Promise<unknown>>;
 
@@ -262,6 +264,13 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
             }
             return added;
         },
+        async collage(ids: unknown, opts?: unknown) {
+            const ok = (await known(idList(ids))).slice(0, COLLAGE_MAX);
+            const o = typeof opts === "string" ? { title: opts } : opts && typeof opts === "object" ? (opts as Record<string, unknown>) : {};
+            const line = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max) : "") || null;
+            collect.collage = ok.length > 0 ? { title: line(o.title, 80), query: line(o.query, 200), ids: ok } : null;
+            return ok.length;
+        },
         async links() {
             const { results } = await d.db
                 .prepare("SELECT id, items, title, created_at FROM share_sets WHERE revoked_at IS NULL ORDER BY created_at DESC LIMIT 200")
@@ -330,7 +339,7 @@ export const TOOL_TYPES = `type Post = {
 declare const cobalt: {
   // Posts newest first. since/until: ISO date or ms. source: a host. query: substring of title, names, link, caption.
   library(opts?: { since?: string | number; until?: string | number; source?: string; kind?: "video" | "image" | "gallery"; query?: string; limit?: number /* default 100, max 1000 */ }): Promise<Post[]>;
-  // Meaning search over titles and pictures (best first, max 50). Throws while the search model is waking up.
+  // Meaning search over titles and pictures, best first (default 10, max 500; every post gets a score, so cut where the scores drop). Throws while the search model is waking up.
   search(query: string, limit?: number): Promise<(Post & { score: number })[]>;
   // One post with its files (public url and share_url when public).
   post(id: string): Promise<Post & { files: { id: string; name: string | null; role: string; kind: "video" | "image"; content_type: string | null; duration: number | null; width: number | null; height: number | null; bytes: number | null; public: boolean; url: string | null; share_url: string | null }[] }>;
@@ -338,6 +347,10 @@ declare const cobalt: {
   look(ids: string[]): Promise<number>;
   // Show these posts to Harmony as thumbnails under your reply (max 12 per reply). Returns the ids accepted.
   show(ids: string[]): Promise<string[]>;
+  // A big result set (up to 500 posts, in order) shown as a paged collage under your reply, e.g. every
+  // cat when Harmony asks for cats. title: a short label; query: the search words, so Harmony can open the
+  // same search in the library. One per reply (a later call replaces it). Returns how many were kept.
+  collage(ids: string[], opts?: { title?: string; query?: string }): Promise<number>;
   // Gallery share links and the collections (folders) they are in.
   links(): Promise<{ id: string; url: string | null; title: string | null; created_at: string; post_ids: string[] }[]>;
   collections(): Promise<{ id: string; name: string; link_ids: string[] }[]>;
