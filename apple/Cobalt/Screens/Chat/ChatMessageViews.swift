@@ -250,7 +250,8 @@ struct ChatStepRow: View {
             .frame(minHeight: 28, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .tint(CobaltColor.caption)
+        // the system chevron ignored `.tint` (the app's monochrome accent won), so the style draws its own
+        .disclosureGroupStyle(ChatStepDisclosureStyle())
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
         .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -376,5 +377,32 @@ struct ChatRemovedTile: View {
 private struct ChatTilePress: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.opacity(configuration.isPressed ? 0.8 : 1)
+    }
+}
+
+/// A disclosure row whose chevron is caption grey and turns as it opens; the whole label toggles it.
+private struct ChatStepDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(Motion.card) { configuration.isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    configuration.label
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(CobaltColor.caption)
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if configuration.isExpanded {
+                configuration.content
+                    .transition(.opacity)
+            }
+        }
     }
 }

@@ -305,6 +305,19 @@ struct ShareCollectionStoreTests {
         #expect(app.shareSets.collections(containing: three).map(\.id) == [discord])
     }
 
+    @Test func copyAllJoinsTheLiveLinksOnePerLineInTheCollectionsOrder() async throws {
+        let app = await loaded()
+        let memesCollection = try #require(app.shareSets.collection(memes))
+        let urls = app.shareSets.sets(in: memesCollection).map(\.url.absoluteString)
+        #expect(urls.count == 2)
+        #expect(app.shareSets.linksText(in: memesCollection) == urls.joined(separator: "\n"))
+        #expect(app.shareSets.linksText(in: memesCollection)?.hasPrefix("https://share.capybaraharmony.com/g/") == true)
+        let ghostOnly = ShareCollection(id: "y", name: "y", createdAt: .now, updatedAt: .now, setIDs: ["ghost"])
+        #expect(app.shareSets.linksText(in: ghostOnly) == nil)
+        let empty = ShareCollection(id: "z", name: "z", createdAt: .now, updatedAt: .now, setIDs: [])
+        #expect(app.shareSets.linksText(in: empty) == nil)
+    }
+
     @Test func createInsertsFirstWithItsLinks() async throws {
         let app = await loaded()
         let made = try await app.shareSets.createCollection(name: "work", setIDs: [one, three])

@@ -23,6 +23,7 @@ extension Copy {
         static let emptyBody = "add links from their menu"
         static let menu = "collection"
         static let rename = "rename"
+        static let copyAll = "copy all links"
         static let delete = "delete"
         static let deleteTitle = "delete this collection?"
         static let deleteMessage = "its links keep working."

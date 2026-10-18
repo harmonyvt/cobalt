@@ -53,6 +53,14 @@ final class LinksController {
         copiedToken += 1
     }
 
+    /// Every link in the collection, one per line, on the pasteboard, and `copied` over the shell.
+    func copyAll(_ collection: ShareCollection, shell: ShellActions) {
+        guard let text = store.linksText(in: collection) else { return }
+        Pasteboard.copy(text)
+        shell.showStatus(Copy.Media.copied)
+        copiedToken += 1
+    }
+
     func revoke(_ link: ShareSet, shell: ShellActions) {
         guard !revokingIDs.contains(link.id) else { return }
         revokingIDs.insert(link.id)

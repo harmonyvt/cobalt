@@ -39,6 +39,13 @@ struct CollectionScreen: View {
         .toolbar {
             if let collection {
                 ToolbarItem(placement: .primaryAction) {
+                    Button(Copy.Collections.copyAll, systemImage: Symbol.collectionCopyAll) {
+                        controller.copyAll(collection, shell: shell)
+                    }
+                    .disabled(controller.store.linksText(in: collection) == nil)
+                    .help(Copy.Collections.copyAll)
+                }
+                ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button(Copy.Collections.rename, systemImage: Symbol.collectionRename) {
                             controller.sheet = .rename(collection)

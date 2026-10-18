@@ -91,6 +91,13 @@ public final class ShareSetStore {
         return collection.setIDs.compactMap { byID[$0] }
     }
 
+    /// Every live link of a collection, one URL per line in the collection's order (owner: "a share collection button
+    /// which combines all the gallery links separated by a return"); nil when it has none loaded.
+    public func linksText(in collection: ShareCollection) -> String? {
+        let urls = sets(in: collection).map(\.url.absoluteString)
+        return urls.isEmpty ? nil : urls.joined(separator: "\n")
+    }
+
     /// The collections a link is in.
     public func collections(containing setID: String) -> [ShareCollection] {
         collections.filter { $0.setIDs.contains(setID) }
