@@ -187,6 +187,8 @@ public struct PreviewClient: CobaltClient {
     /// `features.search` (`AppModel.previewSearch(_:)`, `PreviewSearch.swift`); `.off` everywhere else.
     let searchMode: PreviewSearchMode
     let searchState = PreviewSearchState()
+    /// The gallery share links the "server" holds (`PreviewShare.swift`).
+    let shareState = PreviewShareState()
 
     public var baseURL: URL { PreviewData.base }
 
@@ -209,6 +211,12 @@ public struct PreviewClient: CobaltClient {
         self.startedAt = now
         let scale = self.timeScale
         server.seedLine(mode: line, at: now, timeScale: scale)
+        if scenario.hasShareLinks {
+            let empty = scenario == .shareLinksEmpty || scenario == .shareLinksFail
+            shareState.seed(empty ? [] : PreviewData.shareSets(now: now),
+                            collections: empty ? [] : PreviewData.shareCollections(now: now),
+                            listFails: scenario == .shareLinksFail)
+        }
     }
 
     var clip: PreviewData.Clip { PreviewData.clip(for: scenario) }

@@ -19,6 +19,8 @@ public struct Capabilities: Sendable, Codable, Equatable {
         public var lineMax: Int = 50
         /// `limits.line_wait_ms`, in seconds: how long a queued job may wait before the server ends it.
         public var lineWait: TimeInterval = 1_800
+        /// `limits.share_set_max` (APP-API-CONTRACT 24): the most files one share link holds. 4 when absent; never below 2.
+        public var shareSetMax: Int = 4
 
         public static let fork = Limits(
             maxWebpSeconds: 10, minWebpSeconds: 0.5, webpWidths: [320, 480], renderFPS: 15,
@@ -100,6 +102,15 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `<mediaBaseURL><name>.<ext>` has a page at `<shareBaseURL><name>` that unfurls as a playable video or a
     /// full-size image in Discord, iMessage, X and the rest. Nil when absent: links are the files themselves.
     public var shareBaseURL: URL?
+    /// `features.share_sets` (APP-API-CONTRACT 24): `POST/GET/DELETE /share/sets` make, list and revoke gallery links
+    /// (2..`limits.shareSetMax` public files under one `<shareBaseURL>g/<id>`). The server sets it exactly while it has a
+    /// `share_base_url`, and so does the app: false whenever `shareBaseURL` is nil. False when absent: no select mode in
+    /// the library and no links tab.
+    public var shareSets: Bool = false
+    /// `features.share_collections` (APP-API-CONTRACT 26): named folders of gallery links (`/share/collections`). The
+    /// server sets it exactly with `share_sets`, and so does the app: false whenever `shareSets` is false. False when
+    /// absent: no collections in the links tab.
+    public var shareCollections: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

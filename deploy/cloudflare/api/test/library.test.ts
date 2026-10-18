@@ -6,6 +6,7 @@
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 import { MAX_UPLOAD_BYTES } from "../src/app-routes";
+import { SHARE_SET_MAX } from "../src/share-sets";
 import { decide, type GateRequest } from "../src/gate";
 import { KEY_ID_HEADER, PORT_HEADER, SERVICE_HEADER } from "../src/headers";
 import { hashKey } from "../src/keys";
@@ -976,6 +977,10 @@ describe("GET /capabilities", () => {
                 // no embedding Space in this world's env (section 21)
                 search: false,
                 queue: true,
+                // no share host in this world's env (section 24)
+                share_sets: false,
+                share_collections: false,
+                chat: false,
             },
             limits: {
                 max_webp_seconds: 10,
@@ -988,6 +993,7 @@ describe("GET /capabilities", () => {
                 session_ttl_ms: 604800000,
                 line_max: 50,
                 line_wait_ms: 1800000,
+                share_set_max: 4,
             },
             media_base_url: "https://media.capybaraharmony.com/",
             share_base_url: null,
@@ -1012,6 +1018,7 @@ describe("GET /capabilities", () => {
             session_ttl_ms: SESSION_TTL_MS,
             line_max: LINE_MAX,
             line_wait_ms: LINE_WAIT_MS,
+            share_set_max: SHARE_SET_MAX,
         });
     });
     it("a valid key: key valid with its name, and the use is stamped like on any keyed call", async () => {

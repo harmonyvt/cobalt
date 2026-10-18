@@ -109,6 +109,12 @@ enum PreviewData {
         default:
             break
         }
+        if scenario.hasShareLinks && caps.kind == .fork {
+            caps.shareBaseURL = shareBase
+            caps.shareSets = true
+            caps.shareCollections = true
+            caps.limits.shareSetMax = 4
+        }
         if scenario.isGallery {
             caps.gallery = true
             caps.galleryMake = scenario != .galleryNoMake
@@ -167,7 +173,7 @@ enum PreviewData {
     /// media with three webps and a webp-only media, newest first like the index.
     static func seeds(for scenario: PreviewScenario, now: Date) -> [StoredVideo] {
         switch scenario {
-        case .happy, .renditions, .renditionsLegacy:
+        case .happy, .renditions, .renditionsLegacy, .shareLinksEmpty, .shareLinksFail:
             return (orbit(now: now) + renditionSeeds(now: now)).sorted { $0.createdAt > $1.createdAt }
         case .offline:
             return PreviewOffline.seeds(now: now)

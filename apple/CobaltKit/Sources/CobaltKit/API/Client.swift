@@ -122,6 +122,26 @@ public protocol CobaltClient: Sendable {
     func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult
     /// `GET /library/search/post?key=` (keyed; only when `features.search`): how one post sits in the search index.
     func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus
+    // Gallery share links (APP-API-CONTRACT 24; keyed; only when `features.share_sets`). Defaulted below
+    // (`.unsupported`) so older fakes compile.
+    /// `POST /share/sets` `{items, title?}`: one link for 2..`share_set_max` public library files, in the order given
+    /// (nil `title` omits the field). Throws `ShareSetError` for the server's refusals.
+    func createShareSet(items: [String], title: String?) async throws -> ShareSet
+    /// `GET /share/sets`: the live sets, newest first.
+    func shareSets() async throws -> [ShareSet]
+    /// `DELETE /share/sets/<id>`: revokes the link at once. An unknown id is `ShareSetError.notFound`.
+    func revokeShareSet(id: String) async throws
+    // Share link collections (APP-API-CONTRACT 26; keyed; only when `features.share_collections`). Defaulted below
+    // (`.unsupported`) so older fakes compile. All throw `ShareCollectionError` for the server's refusals.
+    /// `GET /share/collections`: the collections, most recently changed first.
+    func shareCollections() async throws -> [ShareCollection]
+    /// `POST /share/collections` `{name, set_ids?}` (empty `setIDs` omits the field).
+    func createShareCollection(name: String, setIDs: [String]) async throws -> ShareCollection
+    /// `PATCH /share/collections/<id>` `{name?, add?, remove?}` (a nil name and empty lists are omitted): the
+    /// collection as it is now.
+    func updateShareCollection(id: String, name: String?, add: [String], remove: [String]) async throws -> ShareCollection
+    /// `DELETE /share/collections/<id>`: the folder goes; its links stay live. An unknown id is `.notFound`.
+    func deleteShareCollection(id: String) async throws
 }
 
 extension CobaltClient {
@@ -193,6 +213,13 @@ extension CobaltClient {
         throw PipelineFailure.unsupported
     }
     public func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus { throw PipelineFailure.unsupported }
+    public func createShareSet(items: [String], title: String?) async throws -> ShareSet { throw PipelineFailure.unsupported }
+    public func shareSets() async throws -> [ShareSet] { throw PipelineFailure.unsupported }
+    public func revokeShareSet(id: String) async throws { throw PipelineFailure.unsupported }
+    public func shareCollections() async throws -> [ShareCollection] { throw PipelineFailure.unsupported }
+    public func createShareCollection(name: String, setIDs: [String]) async throws -> ShareCollection { throw PipelineFailure.unsupported }
+    public func updateShareCollection(id: String, name: String?, add: [String], remove: [String]) async throws -> ShareCollection { throw PipelineFailure.unsupported }
+    public func deleteShareCollection(id: String) async throws { throw PipelineFailure.unsupported }
     /// Likewise: a client that predates titles says the server cannot do it.
     public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult { throw PipelineFailure.unsupported }
 }

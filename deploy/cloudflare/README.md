@@ -929,6 +929,40 @@ are public right now have a page. `SHARE_BASE_URL` in `api/cloudflare.config.ts`
 Worker's `domains`; `GET /capabilities` advertises it as `share_base_url` and the app copies those links instead of the
 file URLs. Check a page with `curl -s https://share.capybaraharmony.com/<name> | grep og:` or paste it in Discord.
 
+## Gallery share links (`APP-API-CONTRACT.md` section 24)
+
+`https://share.capybaraharmony.com/g/<19 digits>` shows 2..4 public files as one embed (`src/share-sets.ts`). The app
+makes them (`POST /share/sets`), lists them (`GET /share/sets`, the links tab) and revokes them
+(`DELETE /share/sets/<id>`). Discord's crawler gets a component embed (a `discord:component-embed` JSON script with
+one Media Gallery, videos playable; https://docs.discord.com/developers/link-previews/component-embeds) and falls back
+to the Open Graph tags. Test a page in https://discord.com/developers/embeds. The Mastodon status routes still answer
+but are no longer linked (Discord showed only thumbnails through them). Apply migration 0012 before deploying.
+
+## Share link collections (`APP-API-CONTRACT.md` section 26)
+
+Named folders of gallery links (`src/share-collections.ts`, D1 `share_collections` and `share_collection_items`,
+migration 0014): `GET|POST /share/collections`, `PATCH|DELETE /share/collections/<id>`, client keys only. Deleting a
+collection keeps its links; revoking a link removes it from every collection.
+
+## Roast captions (`APP-API-CONTRACT.md` section 25)
+
+Claude Haiku 5.5 writes a funny title and description (Harmony the capybara roasting Harmony) for every public file
+and gallery link, once, into D1 `media_captions` (`src/roast.ts`); the share pages and Discord's embed show them. New
+gallery links get theirs at creation, everything else from the 15-minute cron. Turn it on by adding
+`"ANTHROPIC_API_KEY": "sk-ant-..."` to `~/.config/cobalt/secrets.json` (optional `"ROAST_BASE_URL"` for Cloudflare AI
+Gateway), apply migration 0013, then deploy the API. A title set in the app always wins over the roast.
+
+## Chat (`APP-API-CONTRACT.md` section 27)
+
+Threads with Claude Haiku 5.5 about the library (`src/chat.ts`, D1 `chat_threads` and `chat_messages`, migration
+0015), keyed routes under `/chat/threads`, replies streamed as server-sent events. Code mode: the model's only tool is
+`run_code`; its JavaScript runs in a fresh Dynamic Worker from the `LOADER` Worker Loader binding (`src/chat-loader.ts`,
+no network, 30 s, 5 s CPU, 50 tool calls) and reaches the library only through the read-only `cobalt` API in
+`src/chat-tools.ts`. On with `ANTHROPIC_API_KEY` (the same key as the captions) and the binding; `CHAT_MODEL` picks the
+model. Deploy: apply 0015, then the API. Checked against a local workerd: tool calls over RPC, `fetch` refused, syntax
+errors, the call cap and the 30 s timeout. The CPU cap (an endless loop) is enforced only on Cloudflare, not in a local
+workerd.
+
 ## Library search (`APP-API-CONTRACT.md` section 21)
 
 Search runs EmbeddingGemma 2 on a private Hugging Face Space (`capybaraharmony/cobalt-embed`, CPU basic, needs HF PRO); the API Worker drains the index queue every 15

@@ -9,6 +9,7 @@
         "dry-run": "./prepare-git-info.sh && cf deploy --dry-run --secrets-file \"${COBALT_SECRETS_FILE:-$HOME/.config/cobalt/secrets.json}\""
     },
     "dependencies": {
+        "@anthropic-ai/sdk": "^0.135.0",
         "@cloudflare/containers": "^0.3.7"
     },
     "devDependencies": {

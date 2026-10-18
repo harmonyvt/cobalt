@@ -80,6 +80,12 @@ the files and a real run before anything is called done.
 - Rich link pages (`APP-API-CONTRACT.md` section 22): `share.capybaraharmony.com/<name>` (a second domain on the API
   Worker, `src/share.ts`) serves Open Graph pages for public files so links unfurl in Discord, iMessage, X; the app
   copies them when `GET /capabilities` has `share_base_url`.
+- Roast captions (`APP-API-CONTRACT.md` section 25): Claude Haiku 5.5 titles and descriptions for share previews, in
+  D1 `media_captions` (`api/src/roast.ts`), written at gallery-link creation and by the 15-minute cron. Off unless
+  `ANTHROPIC_API_KEY` is in the secrets file.
+- Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
+  (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
+  `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.
 - Runtime lessons (all hit live): `pipeTo()` between streams is not implemented in the
   Workers runtime (copy with a reader/writer loop); AbortSignal timeouts on containerFetch
   are not honoured inside the DO (race your own timeout); work after a DO response does not

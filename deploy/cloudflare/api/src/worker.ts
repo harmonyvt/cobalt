@@ -30,7 +30,11 @@ import { publishStudio, type PublishBucket } from "./publish";
 import { queueSnapshot } from "./queue";
 import { serviceAuthorized } from "./service-auth";
 import { sharePage } from "./share";
+import { createShareSet, listShareSets, revokeShareSet } from "./share-sets";
 import { deleteSwitchedWebp, purgeFrom } from "./visibility";
+import { captionerFrom } from "./roast";
+import { createCollection, deleteCollection, listCollections, rerollCollection, updateCollection } from "./share-collections";
+import { chatModelFrom, createThread, deleteThread, getThread, listThreads, renameThread, sendMessage } from "./chat";
 import { ingestTelemetry } from "./telemetry";
 import {
     linkFrom,
@@ -83,7 +87,19 @@ export interface WorkerEnv {
     // Rich link pages (section 22): https://<share host>/ (a plain var). The Worker answers that host
     // itself, before the gate. Absent or empty: no pages, `share_base_url: null`.
     SHARE_BASE_URL?: string;
+    // Roast captions (section 25): the Anthropic key and optional AI Gateway URL (secrets), the model.
+    ANTHROPIC_API_KEY?: string;
+    ROAST_BASE_URL?: string;
+    ROAST_MODEL?: string;
+    // Chat (section 27): the model (a plain var; the key is ANTHROPIC_API_KEY) and the Worker Loader
+    // binding the model's code runs in. The runner itself comes in through EdgeDeps (index.ts).
+    CHAT_MODEL?: string;
+    LOADER?: unknown;
 }
+
+// Chat is on with a model (the Anthropic key) and a code runner (the LOADER binding, index.ts).
+const chatOn = (env: WorkerEnv, edge: EdgeDeps): boolean =>
+    (edge.chatModel === undefined ? chatModelFrom(env) : edge.chatModel) !== null && !!edge.codeRunner;
 
 // The Space client, or null while search is not configured (embed.ts).
 export const embedFrom = (env: WorkerEnv): EmbedClient | null =>
@@ -142,6 +158,10 @@ export async function handleRequest(
         now: deps.now ?? (() => Date.now()),
         sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
         fixedLength: deps.fixedLength,
+        captioner: deps.captioner,
+        chatModel: deps.chatModel,
+        codeRunner: deps.codeRunner,
+        waitUntil: deps.waitUntil,
     });
     // Every /studio* response, rejections included, carries the studio page's
     // origin (STUDIO-CONTRACT.md); the page is the only intended caller.
@@ -244,6 +264,7 @@ async function handleInner(
             harkConfigured(env),
             ...(await helperHas(container)),
             embedFrom(env) !== null,
+            chatOn(env, edge),
         );
         return new Response(JSON.stringify(r.body), {
             status: r.status,
@@ -354,6 +375,101 @@ async function handleInner(
                     return res.ok ? await res.json() : null;
                 },
             });
+            const res = json(r.status, r.body, allowOrigin);
+            res.headers.set("cache-control", "no-store");
+            return res;
+        }
+        // Gallery share links (section 24): D1 only.
+        if (decision.then === "share_sets_create" || decision.then === "share_sets_list" || decision.then === "share_sets_revoke") {
+            const shareBaseUrl = shareHost(env) ? env.SHARE_BASE_URL : undefined;
+            if (!shareBaseUrl) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
+            const sd = { db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, shareBaseUrl, now: edge.now, captioner: edge.captioner ?? captionerFrom(env) };
+            const r =
+                decision.then === "share_sets_create"
+                    ? await createShareSet(sd, request, keyId)
+                    : decision.then === "share_sets_list"
+                      ? await listShareSets(sd)
+                      : await revokeShareSet(sd, decision.params!.id);
+            const res = json(r.status, r.body, allowOrigin);
+            res.headers.set("cache-control", "no-store");
+            return res;
+        }
+        // Chat (section 27): D1, the model, and the code sandbox.
+        if (
+            decision.then === "chat_list" ||
+            decision.then === "chat_create" ||
+            decision.then === "chat_get" ||
+            decision.then === "chat_rename" ||
+            decision.then === "chat_delete" ||
+            decision.then === "chat_send"
+        ) {
+            const model = edge.chatModel === undefined ? chatModelFrom(env) : edge.chatModel;
+            const runner = edge.codeRunner ?? null;
+            const noStore = (r: { status: number; body: unknown }) => {
+                const res = json(r.status, r.body, allowOrigin);
+                res.headers.set("cache-control", "no-store");
+                return res;
+            };
+            if (!model || !runner) return noStore({ status: 404, body: { status: "error", error: { code: "error.chat.off" } } });
+            const app = appDeps(env, container, edge);
+            const cd = {
+                db: env.DB,
+                app,
+                mediaBaseUrl: env.MEDIA_BASE_URL,
+                shareBaseUrl: shareHost(env) ? env.SHARE_BASE_URL : undefined,
+                embed: embedFrom(env),
+                model,
+                runner,
+                now: edge.now,
+                waitUntil: edge.waitUntil,
+            };
+            const id = decision.params?.id ?? "";
+            if (decision.then === "chat_send") {
+                const r = await sendMessage(cd, request, id);
+                if (r instanceof Response) {
+                    if (allowOrigin) r.headers.set("access-control-allow-origin", allowOrigin);
+                    return r;
+                }
+                return noStore(r);
+            }
+            const r =
+                decision.then === "chat_list"
+                    ? await listThreads(cd)
+                    : decision.then === "chat_create"
+                      ? await createThread(cd, request, keyId)
+                      : decision.then === "chat_get"
+                        ? await getThread(cd, id)
+                        : decision.then === "chat_rename"
+                          ? await renameThread(cd, request, id)
+                          : await deleteThread(cd, id);
+            return noStore(r);
+        }
+        // Share link collections (section 26): D1 only.
+        if (
+            decision.then === "collections_list" ||
+            decision.then === "collections_create" ||
+            decision.then === "collections_update" ||
+            decision.then === "collections_delete" ||
+            decision.then === "collections_reroll"
+        ) {
+            if (!shareHost(env)) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
+            const cd = {
+                db: env.DB,
+                now: edge.now,
+                mediaBaseUrl: env.MEDIA_BASE_URL,
+                shareBaseUrl: env.SHARE_BASE_URL,
+                captioner: edge.captioner === undefined ? captionerFrom(env) : edge.captioner,
+            };
+            const r =
+                decision.then === "collections_list"
+                    ? await listCollections(cd)
+                    : decision.then === "collections_create"
+                      ? await createCollection(cd, request, keyId)
+                      : decision.then === "collections_update"
+                        ? await updateCollection(cd, request, decision.params!.id)
+                        : decision.then === "collections_delete"
+                          ? await deleteCollection(cd, decision.params!.id)
+                          : await rerollCollection(cd, decision.params!.id, keyId);
             const res = json(r.status, r.body, allowOrigin);
             res.headers.set("cache-control", "no-store");
             return res;

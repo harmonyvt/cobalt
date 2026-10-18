@@ -109,6 +109,18 @@ export default defineConfig({
 			EMBED_URL: bindings.text("https://capybaraharmony-cobalt-embed.hf.space"),
 			EMBED_TOKEN: bindings.secret(),
 			EMBED_KEY: bindings.secret(),
+			// Roast captions (APP-API-CONTRACT.md section 25): Claude Haiku writes a funny title and
+			// description for every public file and gallery link. ANTHROPIC_API_KEY is a SECRET from
+			// ~/.config/cobalt/secrets.json; missing or empty turns captions off. ROAST_BASE_URL (optional,
+			// also from the secrets file) routes through Cloudflare AI Gateway:
+			// https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic
+			ANTHROPIC_API_KEY: bindings.secret(),
+			ROAST_BASE_URL: bindings.secret(),
+			ROAST_MODEL: bindings.text("claude-haiku-5-5"),
+			// Chat (APP-API-CONTRACT.md section 27): the model (same key as the captions), and the Worker
+			// Loader the model's code runs in (a fresh Dynamic Worker per run, no network: src/chat-loader.ts).
+			CHAT_MODEL: bindings.text("claude-haiku-5-5"),
+			LOADER: bindings.workerLoader(),
 			// cobalt studio (POST /studio): PRIVATE copies of saved source
 			// videos, originals/<session id>.<ext>. No public domain; only the
 			// Worker reads it (GET /studio/<id>/source). Bucket already exists.
