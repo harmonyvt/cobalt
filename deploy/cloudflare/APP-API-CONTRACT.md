@@ -2396,3 +2396,50 @@ Shape: `{ "id": "<16 letters/digits>", "name": "memes", "created_at": <ms>, "upd
 - `DELETE /share/collections/<id>` → `200 { "status": "success" }`. Deletes the folder only: its links stay live and keep working.
 - Errors: `400 error.collection.bad_request` (bad JSON, name or id list), `404 error.collection.not_found` (unknown collection), `409 error.collection.link_not_found` with `set_ids` (unknown or revoked links in `set_ids`/`add`; nothing changed), `409 error.collection.too_many` (100 collections), `409 error.collection.full` (200 links), `503 error.api.generic`.
 - App: in the Links tab, collections as folders: create (name, optionally with the selected links), rename, delete (confirm: "delete this collection? its links keep working"), add a link to collections from its row, remove it from one. Migration 0014 must be applied before the API deploy that ships these routes.
+
+## 27. Chat (addendum, pinned 2026-10-18; owner: "an ai for creating threads and talking about files", "Haiku, chat (tools look at the data and run its own sandbox and use tools as code in sandbox)")
+
+Threads with Claude Haiku 5.5 (`claude-haiku-5-5`, `CHAT_MODEL`) about the library. The model has one tool, `run_code`: it writes JavaScript that calls the library tools below, and the Worker runs that code in a fresh Cloudflare Dynamic Worker (Worker Loader binding `LOADER`, "code mode"): no network (`globalOutbound: null`), 30 s wall, 5,000 ms CPU, the tools reached only over RPC, read-only except `show`/`look`. D1 tables `chat_threads`, `chat_messages` (migration 0015). Keyed routes only (a service credential gets 404), `cache-control: no-store`. `GET /capabilities`: `features.chat` is true exactly while `ANTHROPIC_API_KEY` is set and the Worker has `LOADER`; otherwise every `/chat` route answers 404 `error.chat.off`.
+
+### 27.1 Shapes
+
+- `<thread>` = `{ "id": "<16 letters/digits>", "title": "cat clips from october", "created_at": <ms>, "updated_at": <ms>, "preview": "<first 120 chars of the last message's text>", "message_count": <n> }`. A new thread is titled from its first message (trimmed, 60 code points); after the first reply the model renames it (at most 60) unless it was renamed by hand.
+- `<message>` = `{ "id": "<number as string>", "role": "user"|"assistant", "text": "<markdown>", "post_ids": [<library post ids>], "steps": [<step>], "status": "done"|"running"|"error", "error": null|"<code>", "created_at": <ms> }`.
+  - `post_ids`: on a user message, the files the user attached ("ask about this", at most 20); on an assistant message, the files the model chose to show (at most 12), in order. Post ids are the `GET /library` post `id`s.
+  - `<step>` = `{ "id": "<tool_use id>", "kind": "code", "status": "running"|"done"|"error", "code": "<the JavaScript, up to 8,000 chars>", "logs": ["..."], "result": "<JSON preview, up to 2,000 chars>"|null, "error": null|"<message>", "duration_ms": <n>|null }`. The app shows steps collapsed ("ran code · 3 tools · 0.8 s"), expandable to code, logs, result.
+  - `status: "running"` means a reply is still being written (or the stream broke: a message still running after 3 minutes is answered as `error: "error.chat.interrupted"`).
+- `posts`: thread reads carry `"posts": { "<post id>": <GET /library?v=3 post shape>, ... }` for every post any message references and that still exists. A deleted post is missing from the map; the app shows a "removed" placeholder.
+
+### 27.2 Routes
+
+- `GET /chat/threads` → `200 { "status": "success", "threads": [<thread>, ...] }`, most recently updated first, at most 200.
+- `POST /chat/threads` `{ "title"?: "..." }` → `201 { "status": "success", "thread": <thread> }`. Creates an empty thread (titled "new chat" until its first message); "ask about this" sends the post ids with the first message. At most 200 threads (`409 error.chat.too_many`).
+- `GET /chat/threads/<id>` → `200 { "status": "success", "thread": <thread>, "messages": [<message>, ...], "posts": {...} }`, oldest first, all messages (at most 200 per thread).
+- `PATCH /chat/threads/<id>` `{ "title": "..." }` (1..60 code points after trim) → `200 { "status": "success", "thread": <thread> }`.
+- `DELETE /chat/threads/<id>` → `200 { "status": "success" }` (its messages too). Unknown: 404 `error.chat.not_found`.
+- `POST /chat/threads/<id>/messages` `{ "text": "<1..4000 chars>", "post_ids"?: [<at most 20>] }` → `200 text/event-stream`. One reply at a time per thread: while the last assistant message is running, `409 error.chat.busy`. Unknown post ids are dropped silently. 200 messages in the thread: `409 error.chat.full`. Events, each `event: <name>\ndata: <one JSON line>\n\n`:
+  - `user` `{ "message": <message> }`: the saved user message (first event).
+  - `assistant` `{ "message": <message> }`: the assistant message row, `status: "running"`, empty text.
+  - `text` `{ "delta": "..." }`: text to append, in order.
+  - `step` `{ "step": <step> }`: a code step started (`running`) or finished (`done`/`error`); the same `id` again replaces the earlier one.
+  - `posts` `{ "post_ids": [...], "posts": {...} }`: files the model chose to show, appended to the message's `post_ids`, with their shapes.
+  - `title` `{ "thread": <thread> }`: the model renamed the thread (after the first reply only).
+  - `done` `{ "message": <message>, "thread": <thread> }`: the final, saved assistant message. Last event.
+  - `error` `{ "code": "error.chat.model"|"error.chat.interrupted"|"error.api.generic", "message": <message>|null }`: the reply failed; the message is saved with `status: "error"` and whatever text it had. Last event.
+  - `: ping` comment lines every 15 s keep the connection open.
+  If the stream drops, the reply keeps going server-side for as long as the Worker lets it; the app re-reads `GET /chat/threads/<id>` (every 2 s while the last message is `running`, at most 3 minutes).
+- Errors: `400 error.chat.bad_request` (bad JSON, empty or long text, bad ids), `404 error.chat.not_found`, `404 error.chat.off`, `409 error.chat.busy|full|too_many`, `503 error.api.generic`.
+
+### 27.3 The sandbox tools (what the model's code can call, all async, on the global `cobalt`)
+
+- `cobalt.library({ since?, until?, source?, kind?, query?, limit? })` → posts newest first (default 100, at most 1,000). `since`/`until` ISO dates or ms; `source` a host such as `"tiktok.com"`; `kind` `"video"|"image"|"gallery"`; `query` plain substring of title/name/link. Each `{ id, title, saved_at (ISO), source, link, kind, files, duration, public, caption }` (`caption` the roast caption title, or null).
+- `cobalt.search(query, limit?)` → the meaning search (section 21), best first, at most 50, the same records plus `score`. Throws "search is waking up" while the Space sleeps.
+- `cobalt.post(id)` → one record plus `files: [{ id, name, kind, content_type, duration, width, height, bytes, public, url, share_url }]`.
+- `cobalt.look(ids)` → the model sees up to 4 pictures (posters or images) after the code returns. Returns how many were queued.
+- `cobalt.show(ids)` → shows up to 12 files in the reply as thumbnails; returns the ids accepted.
+- `cobalt.links()` → gallery share links `[{ id, url, title, created_at, post_ids }]`; `cobalt.collections()` → `[{ id, name, link_ids }]`.
+- At most 8 code runs per reply, 50 tool calls per run, results over 20,000 chars are cut for the model.
+
+### 27.4 App (apple/CONTRACT.md)
+
+Tabs become save · library · links · chat · settings (`chat` only with `features.chat`). Queue moves to a toolbar button with the in-flight badge on save and library (and keeps its sidebar row on the Mac). The chat tab: a thread list (new, rename, delete with confirm), a thread view streaming the reply, code steps collapsed, shown files as thumbnails that open the post. "ask about this" on a post starts a new thread with that post attached. Deploy: apply 0015, then the API Worker (needs the `LOADER` binding).
