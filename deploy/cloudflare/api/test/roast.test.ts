@@ -4,7 +4,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
 import { hashKey } from "../src/keys";
-import { backfillCaptions, CAPTION_STYLE, captionerFrom, parseCaption, ROAST_MAX_ATTEMPTS, ROAST_RETRY_MS, type Captioner, type RoastInput } from "../src/roast";
+import { backfillCaptions, CAPTION_STYLE, CAPTION_STYLE_CUT, captionerFrom, captionWithRetry, fitCaption, parseCaption, ROAST_TITLE_MAX, ROAST_MAX_ATTEMPTS, ROAST_RETRY_MS, type Captioner, type RoastInput } from "../src/roast";
 import { setRoastInput } from "../src/share-sets";
 import { handleRequest, type WorkerEnv } from "../src/worker";
 import { MemoryMedia, MemoryOriginals } from "./studio-fakes";
@@ -242,6 +242,18 @@ describe("backfill", () => {
         expect(await run({}, 30_000)).toEqual({ written: 0, failed: 0 });
     });
 
+    it("of the previous style, only the captions that were cut are redone", async () => {
+        captioner = fake({ model: `m+${CAPTION_STYLE}` });
+        await run();
+        db.raw.prepare("UPDATE media_captions SET model = ?, title = 'fine one :3'").run(`m+${CAPTION_STYLE_CUT}`);
+        db.raw.prepare("UPDATE media_captions SET title = 'cut off, a Tom cat meme about 2026 achie...' WHERE subject = ?").run(`item:${video.id}`);
+        seen = [];
+        const out = await run({}, 20_000);
+        expect(out.written).toBe(1);
+        expect(captionRow(`item:${video.id}`).model).toBe(`m+${CAPTION_STYLE}`);
+        expect(captionRow(`item:${photo.id}`).title).toBe("fine one :3");
+    });
+
     it("stops at its budget", async () => {
         let t = 0;
         const out = await backfillCaptions({ db, captioner: captioner!, mediaBaseUrl: MEDIA, now: () => (t += 1000), budgetMs: 2500, concurrency: 1 });
@@ -255,11 +267,43 @@ describe("the model reply", () => {
         expect(c).toEqual({ title: "Harmony saved a cozy café clip so cute (=^･ω･^=) ฅ^•ﻌ•^ฅ ♡ >w<", description: "" });
         expect(parseCaption(JSON.stringify({ summary: "flags 🇯🇵 and 👍🏽 and 👨‍👩‍👧 and 1️⃣ gone (≧▽≦)" })).title).toBe("flags and and and 1 gone (≧▽≦)");
         const long = parseCaption(JSON.stringify({ summary: "x".repeat(300) }));
-        expect(Array.from(long.title)).toHaveLength(160);
+        expect(Array.from(long.title).length).toBeLessThanOrEqual(ROAST_TITLE_MAX);
         expect(long.title.endsWith("...")).toBe(true);
         expect(() => parseCaption('{"summary":"🐱🐱"}')).toThrow();
         expect(() => parseCaption('{"summary":""}')).toThrow();
         expect(() => parseCaption("not json")).toThrow();
+    });
+
+    it("a long sentence is cut at a word, keeping its closing kaomoji", () => {
+        const words = "nya Harmony these clips are a whole parade of fursuits cats and one very loud streamer".split(" ");
+        const long = [...words, ...words, ...words].join(" ") + " (=^･ω･^=)";
+        const t = fitCaption(long);
+        expect(Array.from(t).length).toBeLessThanOrEqual(ROAST_TITLE_MAX);
+        expect(t.endsWith("... (=^･ω･^=)")).toBe(true);
+        expect(long.startsWith(t.replace("... (=^･ω･^=)", ""))).toBe(true); // cut between words
+        expect(fitCaption("short and sweet >w<")).toBe("short and sweet >w<");
+        expect(fitCaption(`${"word ".repeat(40)}end`).endsWith("word...")).toBe(true);
+    });
+
+    it("asks once more for a shorter sentence before cutting", async () => {
+        const long = `${"so many cute clips ".repeat(10)}nya :3`;
+        const calls: unknown[][] = [];
+        const short = await captionWithRetry(async (m) => {
+            calls.push(m);
+            return JSON.stringify({ summary: calls.length === 1 ? long : "four cute clips for Harmony, nya :3" });
+        }, [{ role: "user", content: "x" }]);
+        expect(calls).toHaveLength(2);
+        expect((calls[1] as any[]).at(-1).content).toContain("at most 110 characters");
+        expect(short.title).toBe("four cute clips for Harmony, nya :3");
+        // still long the second time: the shorter of the two, cut
+        let n = 0;
+        const cut = await captionWithRetry(async () => JSON.stringify({ summary: n++ === 0 ? long : long + " more" }), [{ role: "user", content: "x" }]);
+        expect(Array.from(cut.title).length).toBeLessThanOrEqual(ROAST_TITLE_MAX);
+        expect(cut.title.endsWith("... :3")).toBe(true);
+        // a short first answer needs one call
+        let one = 0;
+        await captionWithRetry(async () => (one++, JSON.stringify({ summary: "tiny :3" })), [{ role: "user", content: "x" }]);
+        expect(one).toBe(1);
     });
 
     it("no key means captions are off; the stored model carries the caption style", () => {

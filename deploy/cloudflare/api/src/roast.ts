@@ -12,9 +12,13 @@ import { POST_KEY_SQL } from "./app-routes";
 import { ITEM_COLUMNS, effectiveVisibility, visSql, type MediaRow } from "./visibility";
 
 export const ROAST_MODEL_DEFAULT = "claude-haiku-5-5";
-export const ROAST_TITLE_MAX = 160;
-// Bumped when the voice changes: captions written in an older style are rewritten by the backfill.
-export const CAPTION_STYLE = "v3-kaomoji-catgirl";
+// The sentence the model is asked for, and the hard cap: a longer one is asked for again once, then cut at a word.
+export const ROAST_TITLE_TARGET = 110;
+export const ROAST_TITLE_MAX = 140;
+// Bumped when the voice changes: captions written in an older style are rewritten by the backfill. Captions of
+// CAPTION_STYLE_CUT (the previous style) are rewritten only when they were cut off (they end in "...").
+export const CAPTION_STYLE = "v4-kaomoji-catgirl-short";
+export const CAPTION_STYLE_CUT = "v3-kaomoji-catgirl";
 export const ROAST_DESC_MAX = 280;
 // A failed caption is retried after this long, at most ROAST_MAX_ATTEMPTS times.
 export const ROAST_RETRY_MS = 24 * 60 * 60 * 1000;
@@ -34,7 +38,7 @@ export type RoastInput = { files: RoastFile[]; userTitle: string | null };
 
 export type Captioner = { model: string; caption(input: RoastInput): Promise<Caption> };
 
-const SYSTEM = `You write the link preview title for files Harmony shares with friends on Discord: ONE sentence that sums up all of the content (every file, if there are several), at most 140 characters.
+const SYSTEM = `You write the link preview title for files Harmony shares with friends on Discord: ONE short sentence that sums up all of the content (every file, if there are several): at most 110 characters, kaomoji included. Shorter is better; leave out details rather than run long.
 
 Voice: a cute, funny furry anime cat girl talking to Harmony, warm and playfully teasing, decorated with one or two kaomoji text faces such as (=^･ω･^=), ฅ^•ﻌ•^ฅ, (≧▽≦), >w<, :3 or UwU (vary them; a soft "nya" now and then is fine). Never use emoji pictures. Never introduce yourself, never name yourself or say what you are, never mention being a cat, a bot or an AI: just say the sentence. Keep it wholesome: nothing sexual or suggestive, no jokes about bodies, race, religion or identity, never mean about the people shown.
 
@@ -43,7 +47,7 @@ Describe what is actually there (what you can see in the pictures, the titles, w
 const SCHEMA = {
     type: "object",
     properties: {
-        summary: { type: "string", description: "One sentence, at most 140 characters, with a kaomoji or two and no emoji, summing up all the content." },
+        summary: { type: "string", description: "One short sentence, at most 110 characters including a kaomoji, no emoji, summing up all the content." },
     },
     required: ["summary"],
     additionalProperties: false,
@@ -100,24 +104,26 @@ export function captionerFrom(env: { ANTHROPIC_API_KEY?: string; ROAST_BASE_URL?
                 .map((f) => f.imageUrl)
                 .filter((u): u is string => !!u && IMAGE_TYPES.test(u))
                 .slice(0, 4);
-            const response = await client.messages.create({
-                model,
-                max_tokens: 2000,
-                system: SYSTEM,
-                output_config: { effort: "low", format: { type: "json_schema", schema: SCHEMA } },
-                messages: [
-                    {
-                        role: "user",
-                        content: [
-                            ...images.map((url) => ({ type: "image" as const, source: { type: "url" as const, url } })),
-                            { type: "text" as const, text: describe(input) },
-                        ],
-                    },
-                ],
-            });
-            if (response.stop_reason === "refusal") throw new Error("refusal");
-            const text = response.content.map((b) => (b.type === "text" ? b.text : "")).join("");
-            return parseCaption(text);
+            const first: ChatTurn[] = [
+                {
+                    role: "user",
+                    content: [
+                        ...images.map((url) => ({ type: "image" as const, source: { type: "url" as const, url } })),
+                        { type: "text" as const, text: describe(input) },
+                    ],
+                },
+            ];
+            return captionWithRetry(async (messages) => {
+                const response = await client.messages.create({
+                    model,
+                    max_tokens: 2000,
+                    system: SYSTEM,
+                    output_config: { effort: "low", format: { type: "json_schema", schema: SCHEMA } },
+                    messages,
+                });
+                if (response.stop_reason === "refusal") throw new Error("refusal");
+                return response.content.map((b) => (b.type === "text" ? b.text : "")).join("");
+            }, first);
         },
     };
 }
@@ -132,14 +138,66 @@ export const stripEmoji = (t: string): string =>
         .replace(/\s+/g, " ")
         .trim();
 
-export function parseCaption(text: string): Caption {
+type ChatTurn = Anthropic.MessageParam;
+
+/** The model's sentence, emoji removed and whitespace collapsed (not cut). */
+export function readSummary(text: string): string {
     const v = JSON.parse(text) as { summary?: unknown; title?: unknown };
     const raw = typeof v.summary === "string" ? v.summary : typeof v.title === "string" ? v.title : null;
     if (raw === null) throw new Error("bad caption");
-    const cps = Array.from(stripEmoji(raw));
-    const title = cps.length > ROAST_TITLE_MAX ? `${cps.slice(0, ROAST_TITLE_MAX - 3).join("").trimEnd()}...` : cps.join("");
-    if (!title) throw new Error("empty caption");
-    return { title, description: "" };
+    const s = stripEmoji(raw);
+    if (!s) throw new Error("empty caption");
+    return s;
+}
+
+// A trailing kaomoji or text face: the last word when it has no letters (=^･ω･^=), (≧▽≦), ♡, or is a known face.
+const FACE = /^(?:[^\p{L}\p{N}]*[^\p{L}\p{N}\s.,!?]+[^\p{L}\p{N}]*|.*[()^ω･•ﻌ≧≦▽ฅ♡<>].*|[:;x]3|uwu|owo|nya~?)$/iu;
+
+/** Last resort for a sentence over ROAST_TITLE_MAX: cut at a word boundary with "...", keeping a closing kaomoji. */
+export function fitCaption(s: string, max = ROAST_TITLE_MAX): string {
+    const cps = Array.from(s);
+    if (cps.length <= max) return s;
+    const words = s.split(" ");
+    const last = words[words.length - 1] ?? "";
+    const face = words.length > 1 && FACE.test(last) && Array.from(last).length <= 16 ? last : "";
+    const body = face ? words.slice(0, -1) : words;
+    const room = max - 3 - (face ? Array.from(face).length + 1 : 0);
+    let out = "";
+    for (const w of body) {
+        const next = out ? `${out} ${w}` : w;
+        if (Array.from(next).length > room) break;
+        out = next;
+    }
+    if (!out) out = Array.from(body.join(" ")).slice(0, room).join("");
+    out = out.replace(/[\s,;:.!?-]+$/u, "");
+    return face ? `${out}... ${face}` : `${out}...`;
+}
+
+/** Ask, and once more when the sentence runs over ROAST_TITLE_MAX; cut only if the second answer is long too. */
+export async function captionWithRetry(call: (messages: ChatTurn[]) => Promise<string>, first: ChatTurn[]): Promise<Caption> {
+    const text = await call(first);
+    let s = readSummary(text);
+    if (Array.from(s).length > ROAST_TITLE_MAX) {
+        try {
+            const again = await call([
+                ...first,
+                { role: "assistant", content: text },
+                {
+                    role: "user",
+                    content: `That is ${Array.from(s).length} characters. Write it again as one sentence of at most ${ROAST_TITLE_TARGET} characters, kaomoji included, keeping the same voice.`,
+                },
+            ]);
+            const t = readSummary(again);
+            if (Array.from(t).length < Array.from(s).length) s = t;
+        } catch {
+            // keep the first answer and cut it below
+        }
+    }
+    return { title: fitCaption(s), description: "" };
+}
+
+export function parseCaption(text: string): Caption {
+    return { title: fitCaption(readSummary(text)), description: "" };
 }
 
 // ---- storage --------------------------------------------------------------------------------------
@@ -224,6 +282,9 @@ export type BackfillDeps = {
     setInput?: (id: string) => Promise<RoastInput | null>;
 };
 
+// The stored model of the previous style for this captioner ("<model>+v3-…"): its captions are redone only when cut.
+const cutStyleOf = (model: string) => (model.endsWith(`+${CAPTION_STYLE}`) ? `${model.slice(0, -CAPTION_STYLE.length)}${CAPTION_STYLE_CUT}` : model);
+
 export type BackfillResult = { written: number; failed: number };
 
 // Public files and live gallery links without a caption (or with a failed one due for a retry),
@@ -263,10 +324,10 @@ export async function backfillCaptions(d: BackfillDeps): Promise<BackfillResult>
             .prepare(
                 `SELECT s.id FROM share_sets s LEFT JOIN media_captions c ON c.subject = 'set:' || s.id
                   WHERE s.revoked_at IS NULL
-                    AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2) OR (c.title IS NOT NULL AND c.model IS NOT ?4))
+                    AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2) OR (c.title IS NOT NULL AND c.model IS NOT ?4 AND (c.model IS NOT ?5 OR c.title LIKE '%...%')))
                   ORDER BY s.created_at DESC LIMIT ?3`,
             )
-            .bind(ROAST_MAX_ATTEMPTS, due(d.now()), batch, d.captioner.model)
+            .bind(ROAST_MAX_ATTEMPTS, due(d.now()), batch, d.captioner.model, cutStyleOf(d.captioner.model))
             .all<{ id: string }>();
         await run(results.map((r) => ({ subject: setSubject(r.id), input: () => d.setInput!(r.id) })));
     }
@@ -278,10 +339,10 @@ export async function backfillCaptions(d: BackfillDeps): Promise<BackfillResult>
                 `SELECT ${cols}, (SELECT t.title FROM media_titles t WHERE t.post_key = ${POST_KEY_SQL}) AS custom_title
                    FROM media_items m LEFT JOIN media_captions c ON c.subject = 'item:' || m.id
                   WHERE m.deleted_at IS NULL AND ${visSql("m.")} = 'public'
-                    AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2) OR (c.title IS NOT NULL AND c.model IS NOT ?4))
+                    AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2) OR (c.title IS NOT NULL AND c.model IS NOT ?4 AND (c.model IS NOT ?5 OR c.title LIKE '%...%')))
                   ORDER BY m.created_at DESC LIMIT ?3`,
             )
-            .bind(ROAST_MAX_ATTEMPTS, due(d.now()), batch + tried.size, d.captioner.model)
+            .bind(ROAST_MAX_ATTEMPTS, due(d.now()), batch + tried.size, d.captioner.model, cutStyleOf(d.captioner.model))
             .all<MediaRow & { custom_title: string | null }>();
         const fresh = results.filter((r) => !tried.has(itemSubject(r.id)));
         if (fresh.length === 0) break;
