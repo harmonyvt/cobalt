@@ -560,6 +560,23 @@ public struct HTTPCobaltClient: CobaltClient {
         return try await sendJSON(LibrarySearchStatus.self, req)
     }
 
+    /// `GET /library/map` (keyed): the embedded posts with their vectors, newest first. Errors as the keyed calls throw
+    /// them (`503 error.api.generic` is `CobaltError.api(code:httpStatus:)`); a body that is not the map is
+    /// `CobaltError.invalidResponse`. Posts with no readable vector are dropped, not an error.
+    public func libraryMap() async throws -> LibraryMap {
+        let req = try makeRequest("GET", "/library/map", keyed: true, timeout: 30)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw apiError(data, status: http.statusCode) }
+        do {
+            return try LibraryMap.decode(data)
+        } catch {
+            if let env = try? JSONDecoder().decode(ErrorEnvelope.self, from: data), let code = env.error?.code {
+                throw CobaltError.api(code: code, httpStatus: http.statusCode)
+            }
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+    }
+
     // MARK: - Gallery share links (APP-API-CONTRACT 24; `features.share_sets`; keyed)
 
     /// `POST /share/sets` `{items, title?}` (keyed): one link for 2..`share_set_max` public files, in the order given.
@@ -790,6 +807,20 @@ public struct HTTPCobaltClient: CobaltClient {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    /// `GET /chat/threads/<id>/messages/<message id>/collage?offset=&limit=` (keyed, 27.5): a page of the collage a reply
+    /// attached. The limit is held to 1...60 and the offset to 0 or more before it is sent.
+    public func chatCollage(threadID: String, messageID: String, offset: Int, limit: Int) async throws -> ChatCollagePage {
+        let query = [("offset", String(max(0, offset))), ("limit", String(max(1, min(60, limit))))]
+        let path = "/chat/threads/\(Self.encode(threadID))/messages/\(Self.encode(messageID))/collage"
+        let req = try makeRequest("GET", path, query: query, keyed: true, timeout: 30)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw chatError(data, status: http.statusCode) }
+        guard let page = try? CobaltJSON.decoder().decode(ChatCollagePage.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return page
     }
 
     private func chatThreadAnswer(_ data: Data, _ http: HTTPURLResponse) throws -> ChatThread {

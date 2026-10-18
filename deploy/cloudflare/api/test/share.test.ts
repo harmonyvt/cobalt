@@ -116,6 +116,28 @@ describe("a public video", () => {
         expect(containerCalls).toEqual([]);
     });
 
+    it("writes the caption on the first view, then reuses it", async () => {
+        const asked: unknown[] = [];
+        const captioner = { model: "test", caption: async (input: unknown) => (asked.push(input), { title: "a sleepy cat nya~ (=^･ω･^=)", description: "" }) };
+        const view = async () => meta(await (await handleRequest(new Request(`${SHARE}AbCdEfGh12`), env, container, { now: () => 5_000, captioner } as any)).text(), "og:title");
+        expect(await view()).toBe("a sleepy cat nya~ (=^･ω･^=)");
+        expect(await view()).toBe("a sleepy cat nya~ (=^･ω･^=)");
+        expect(asked).toHaveLength(1);
+        expect(asked[0]).toMatchObject({ files: [{ kind: "video", imageUrl: `${MEDIA}PoStEr0001.jpg` }], userTitle: null });
+    });
+
+    it("answers without a caption when it fails, and does not retry it on every view", async () => {
+        let calls = 0;
+        const later: Promise<unknown>[] = [];
+        const slow = { model: "test", caption: () => (calls++, new Promise<never>((_, rej) => setTimeout(() => rej(new Error("boom")), 50))) };
+        const deps = { now: () => 5_000, captioner: slow, waitUntil: (p: Promise<unknown>) => later.push(p) } as any;
+        const first = await handleRequest(new Request(`${SHARE}AbCdEfGh12`), env, container, deps);
+        expect(meta(await first.text(), "og:title")).toBe("x_2105237035271258436");
+        await Promise.all(later);
+        await handleRequest(new Request(`${SHARE}AbCdEfGh12`), env, container, deps);
+        expect(calls).toBe(1);
+    });
+
     it("uses the post's custom title", async () => {
         db.raw.prepare("INSERT INTO media_titles (post_key, title, key_id, updated_at) VALUES (?, ?, ?, ?)").run("SessionOne", "my clip", "k", 1);
         const html = await (await get(`${SHARE}AbCdEfGh12`)).text();

@@ -40,6 +40,21 @@ struct ShareLinkTests {
         #expect(c.shareLink(for: url) == url)
     }
 
+    @Test func shortcutSavesHandOutShareLinksNotFiles() throws {
+        let c = try caps(#","share_base_url":"https://share.capybaraharmony.com/""#)
+        let media = { (n: String) in URL(string: "https://media.capybaraharmony.com/\(n)")! }
+        let save = ShortcutSave(
+            id: "p", title: "t", link: nil, service: nil, state: .saved, publicLink: media("ViDeO00001.mp4"),
+            webpLinks: [media("WeBpWeBp01.webp")], created: .now, itemLinks: [media("PhOtO00001.jpg")],
+            madeLinks: [media("MaDeMaDe01.webp"), URL(string: "https://elsewhere.example/x.mp4")!])
+        let shared = save.sharing(c)
+        #expect(shared.publicLink == URL(string: "https://share.capybaraharmony.com/ViDeO00001"))
+        #expect(shared.webpLinks == [URL(string: "https://share.capybaraharmony.com/WeBpWeBp01")!])
+        #expect(shared.itemLinks == [URL(string: "https://share.capybaraharmony.com/PhOtO00001")!])
+        #expect(shared.madeLinks == [URL(string: "https://share.capybaraharmony.com/MaDeMaDe01")!, URL(string: "https://elsewhere.example/x.mp4")!])
+        #expect(save.sharing(try caps("")) == save)   // no share pages: the files themselves
+    }
+
     @Test func withoutTheCapabilityTheFileItselfIsCopied() throws {
         let c = try caps("")
         let file = try #require(URL(string: "https://media.capybaraharmony.com/AbCdEfGh12.mp4"))

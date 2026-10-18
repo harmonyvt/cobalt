@@ -98,6 +98,7 @@ export type LookupThen =
     | "chat_rename"
     | "chat_delete"
     | "chat_send"
+    | "chat_collage"
     | "live_start_token"
     | "live_run"
     | "live_state"
@@ -275,7 +276,12 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         }
         const rest = req.pathname.slice("/chat/threads/".length);
         const [id, sub, ...more] = rest.split("/");
-        if (!COLLECTION_ID_REGEX.test(id ?? "") || more.length > 0) return reject(404);
+        if (!COLLECTION_ID_REGEX.test(id ?? "")) return reject(404);
+        // GET /chat/threads/<id>/messages/<mid>/collage (section 27.5)
+        if (sub === "messages" && more.length === 2 && more[1] === "collage" && /^\d{1,12}$/.test(more[0]!)) {
+            return req.method === "GET" ? lookupThen(req, "chat_collage", { id: id!, message: more[0]! }) : reject(404);
+        }
+        if (more.length > 0) return reject(404);
         if (sub === "messages") return req.method === "POST" ? lookupThen(req, "chat_send", { id: id! }) : reject(404);
         if (sub !== undefined) return reject(404);
         if (req.method === "GET") return lookupThen(req, "chat_get", { id: id! });

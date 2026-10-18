@@ -7,7 +7,7 @@
 // container is never involved. Free of Cloudflare imports so it runs under plain node in the tests.
 
 import { POST_KEY_SQL } from "./app-routes";
-import { captionOf, itemSubject } from "./roast";
+import { captionOf, fileOf, itemSubject, writeCaption, type Caption, type Captioner } from "./roast";
 import { shareSetRoute } from "./share-sets";
 import { ITEM_COLUMNS, effectiveVisibility, extOf, type MediaRow } from "./visibility";
 
@@ -17,7 +17,37 @@ export type ShareDeps = {
     mediaBaseUrl: string;
     // https://<share host>/ (with or without the slash)
     shareBaseUrl: string;
+    // Roast captions (section 25): a public file seen for the first time gets its title written right
+    // then, so the first unfurl already has it. Absent: the page uses what the cron wrote.
+    captioner?: Captioner | null;
+    waitUntil?: (p: Promise<unknown>) => void;
+    captionWaitMs?: number;
 };
+
+// How long the first page view waits for its caption before answering without it (Discord gives up
+// on slow pages after about 10 s); the caption still finishes and is used from the next view on.
+export const FIRST_CAPTION_WAIT_MS = 6000;
+
+// The caption of a public file, written now when it has never been tried (the cron retries failures).
+async function captionNow(d: ShareDeps, row: Found, fileUrl: string): Promise<Caption | null> {
+    const have = await captionOf(d.db, itemSubject(row.id));
+    if (have || !d.captioner) return have;
+    try {
+        const tried = await d.db.prepare("SELECT 1 AS x FROM media_captions WHERE subject = ?1").bind(itemSubject(row.id)).first();
+        if (tried) return null;
+    } catch {
+        return null;
+    }
+    const job = writeCaption({ db: d.db, captioner: d.captioner, now: () => Date.now() }, itemSubject(row.id), { files: [fileOf(row, fileUrl)], userTitle: null });
+    d.waitUntil?.(job);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<null>((r) => (timer = setTimeout(() => r(null), d.captionWaitMs ?? FIRST_CAPTION_WAIT_MS)));
+    try {
+        return await Promise.race([job, late]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 // The last path segment: the public object's name with or without its extension.
 const SHARE_PATH = /^\/([A-Za-z0-9]{6,40})(?:\.([A-Za-z0-9]{1,8}))?\/?$/;
@@ -147,8 +177,9 @@ export async function sharePage(d: ShareDeps, request: Request): Promise<Respons
     // a poster only from the public media domain (the column is written by this server, but be strict)
     const poster = row.poster && row.poster.startsWith(media) ? row.poster : null;
     // a title Harmony set wins; then the roast caption (section 25); then the file name
-    const caption = await captionOf(d.db, itemSubject(row.id));
-    const title = (row.custom_title ?? "").trim() ? titleOf(row) : (caption?.title ?? titleOf(row));
+    const custom = (row.custom_title ?? "").trim() !== "";
+    const caption = custom ? null : await captionNow(d, row, fileUrl);
+    const title = custom ? titleOf(row) : (caption?.title ?? titleOf(row));
     const w = row.width && row.width > 0 ? Math.round(row.width) : null;
     const h = row.height && row.height > 0 ? Math.round(row.height) : null;
     const desc = [caption?.description ?? "", isVideo && row.duration ? fmtDuration(row.duration) : ""].filter(Boolean).join(" · ");

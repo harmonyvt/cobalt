@@ -34,7 +34,7 @@ import { createShareSet, listShareSets, revokeShareSet } from "./share-sets";
 import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { captionerFrom } from "./roast";
 import { createCollection, deleteCollection, listCollections, rerollCollection, updateCollection } from "./share-collections";
-import { chatModelFrom, createThread, deleteThread, getThread, listThreads, renameThread, sendMessage } from "./chat";
+import { chatModelFrom, createThread, deleteThread, getCollage, getThread, listThreads, renameThread, sendMessage } from "./chat";
 import { ingestTelemetry } from "./telemetry";
 import {
     linkFrom,
@@ -152,7 +152,16 @@ export async function handleRequest(
     // The share host serves the public link pages and nothing else: no key, no container, no CORS.
     const share = shareHost(env);
     if (share && new URL(incoming.url).hostname === share) {
-        return sharePage({ db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, shareBaseUrl: env.SHARE_BASE_URL! }, incoming);
+        return sharePage(
+            {
+                db: env.DB,
+                mediaBaseUrl: env.MEDIA_BASE_URL,
+                shareBaseUrl: env.SHARE_BASE_URL!,
+                captioner: deps.captioner === undefined ? captionerFrom(env, deps.modelFetch) : deps.captioner,
+                waitUntil: deps.waitUntil,
+            },
+            incoming,
+        );
     }
     const res = await handleInner(incoming, env, container, {
         now: deps.now ?? (() => Date.now()),
@@ -401,7 +410,8 @@ async function handleInner(
             decision.then === "chat_get" ||
             decision.then === "chat_rename" ||
             decision.then === "chat_delete" ||
-            decision.then === "chat_send"
+            decision.then === "chat_send" ||
+            decision.then === "chat_collage"
         ) {
             const model = edge.chatModel === undefined ? chatModelFrom(env, edge.modelFetch) : edge.chatModel;
             const runner = edge.codeRunner ?? null;
@@ -435,6 +445,8 @@ async function handleInner(
             const r =
                 decision.then === "chat_list"
                     ? await listThreads(cd)
+                    : decision.then === "chat_collage"
+                      ? await getCollage(cd, id, decision.params?.message ?? "", url.searchParams)
                     : decision.then === "chat_create"
                       ? await createThread(cd, request, keyId)
                       : decision.then === "chat_get"

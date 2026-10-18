@@ -203,7 +203,8 @@ public struct PreviewClient: CobaltClient {
         line: LinePreviewMode = .off, queue: QueuePreviewState = .off, search: PreviewSearchMode = .off
     ) {
         self.scenario = scenario
-        self.searchMode = search
+        // the sky map's scenario is a server whose search has embedded every post
+        self.searchMode = search == .off && scenario == .skyMap ? .ready : search
         self.timeScale = max(0.01, timeScale)
         self.clock = clock
         self.visibility = visibility
