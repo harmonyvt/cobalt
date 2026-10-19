@@ -968,7 +968,7 @@ workerd.
 
 A 1080p stream canvas that OBS loads as a Browser Source, a public viewer store, and Twitch channel-point redemptions
 (summon, chaos, shuffle, pin) that act on the canvas. In code, routes and tables it is **stage** (`src/stage.ts`,
-`src/stage-twitch.ts`, `src/stage-room.ts`, `src/stage-pages.ts`; D1 `stage_*`, migration 0018); only the host
+`src/stage-twitch.ts`, `src/stage-room.ts`, `src/stage-pages.ts`; D1 `stage_*`, migration 0019); only the host
 `studio.capybaraharmony.com` and the app's tab say "studio" (the save/trim `/studio/<sid>` stays as it was).
 
 - **Host.** `studio.capybaraharmony.com` is a second custom domain on the API Worker (`domains` in
@@ -1001,7 +1001,7 @@ A 1080p stream canvas that OBS loads as a Browser Source, a public viewer store,
    The client secret also encrypts the stored Twitch tokens (AES-GCM, key from HKDF-SHA-256 of the secret): if you ever
    regenerate it, connect Twitch again in the app (status "reconnect"). `TWITCH_EVENTSUB_SECRET` signs the webhooks; change it
    and disconnect/connect Twitch so the subscription is made with the new one.
-3. **Apply migration 0018** (additive; before deploying the API; the command at the top of this file):
+3. **Apply migration 0019** (additive; before deploying the API; the command at the top of this file):
 
        cd deploy/cloudflare/web && cf d1 migrations apply 42f18bb0-837a-47f7-b1e2-606eb705ab6c --dir ../d1/migrations
 

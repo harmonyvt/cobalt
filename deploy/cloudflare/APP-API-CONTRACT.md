@@ -2503,9 +2503,9 @@ the store has a lock that turns the whole store off, sign-in included.
 - New Durable Object class `StageRoom` (binding `STAGE_ROOM`, sqlite storage, one instance `idFromName("main")`):
   holds the canvas WebSockets (hibernation API) and fans out events (29.6). Imported only by `index.ts`, like
   `ModelRelay`.
-- D1 migration `0018_stage.sql` (owner applies it before the API deploy): tables in 29.2. Additive only.
+- D1 migration `0019_stage.sql` (owner applies it before the API deploy): tables in 29.2. Additive only.
 
-### 29.2 D1 (migration 0018)
+### 29.2 D1 (migration 0019)
 
 - `stage_settings`: exactly one row, `id = 'main'`, created on first read with the defaults below. Columns:
   `on_air` (0/1, default 0), `pool_kind` (`'library'|'collection'|'group'|'search'`, default `'library'`),
@@ -2776,6 +2776,6 @@ then empty). `<reward>` = `{ "action", "title", "cost", "cooldown_seconds", "ena
   sign-in are gone until you open it").
 - Wide windows (Mac, iPad landscape): two columns like the Mac board (controls left, Twitch/rewards/feed/links in a
   360 pt column). Compact: one column like the iPhone board, with a rewards · feed · links segmented control.
-- Deploy: apply 0018, add the three Twitch secrets to the secrets file, deploy the API Worker (new domain and DO).
+- Deploy: apply 0019, add the three Twitch secrets to the secrets file, deploy the API Worker (new domain and DO).
   Twitch app (owner, once, dev.twitch.tv): OAuth redirect URLs `https://studio.capybaraharmony.com/twitch/callback`
   and `https://studio.capybaraharmony.com/store`, category "Broadcaster Suite", client type confidential.

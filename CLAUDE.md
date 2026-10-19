@@ -88,7 +88,7 @@ the files and a real run before anything is called done.
 - Stage (`APP-API-CONTRACT.md` section 29; "studio" in the app's copy, since studio already means the save/trim
   session in code): an OBS canvas at `studio.capybaraharmony.com/live/<token>`, a viewer store at `/store` (locked by
   default), Twitch channel-point rewards via EventSub (`api/src/stage*.ts`, `StageRoom` DO, D1 `stage_*`, migration
-  0018). Twitch is off unless `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_EVENTSUB_SECRET` are in the secrets file.
+  0019). Twitch is off unless `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_EVENTSUB_SECRET` are in the secrets file.
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.
