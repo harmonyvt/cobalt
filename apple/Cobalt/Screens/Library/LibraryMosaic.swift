@@ -106,8 +106,7 @@ struct LibraryMosaic: View {
         let plan = plan(width: Double(max(width, 1)))
         let byColumn = Dictionary(grouping: plan.slots, by: \.column)
         // the picks' numbers, the same as the select pill's thumbnails
-        let numbers = controller.selecting
-            ? Dictionary(uniqueKeysWithValues: controller.pickedRows(rows).enumerated().map { ($1.id, $0 + 1) }) : [:]
+        let numbers = LibraryPickNumbers.of(rows, controller: controller)
         ScrollView {
             VStack(spacing: 0) {
                 if let shelves {

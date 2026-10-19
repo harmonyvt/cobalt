@@ -284,9 +284,9 @@ private struct LibraryContent: View {
                     shareIndex: shareIndex, shelves: shelves)
             case .table:
                 if tier == .compact {
-                    LibraryList(rows: rows, controller: controller, footer: footer, zoom: zoomSpace)
+                    LibraryList(rows: rows, controller: controller, footer: footer, zoom: zoomSpace, shareIndex: shareIndex)
                 } else {
-                    LibraryTable(rows: rows, controller: controller, footer: footer)
+                    LibraryTable(rows: rows, controller: controller, footer: footer, shareIndex: shareIndex)
                 }
             }
         case .loading where library.viewMode == .mosaic:
