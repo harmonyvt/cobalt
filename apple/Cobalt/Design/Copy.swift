@@ -128,7 +128,10 @@ enum Copy {
 
     static let scaleStart = "0 s"
     static let scaleUnknown = "…"
-    static let trimOverLimit = "webps stop at 10 s, so the first 10 s are picked. drag to choose."
+    /// "webps stop at 30 s, so the first 30 s are picked. drag to choose." The limit is the server's.
+    static func trimOverLimit(_ limit: Double) -> String {
+        "webps stop at \(Int(limit)) s, so the first \(Int(limit)) s are picked. drag to choose."
+    }
     static let wholeClipFits = "the whole clip fits in a webp."
     static let makeWebp = "make webp"
     static let savePhotos = "save to photos"
@@ -183,7 +186,7 @@ enum Copy {
 
     static func trimNote(duration: Double?, limit: Double) -> String {
         if let duration, duration <= limit { return wholeClipFits }
-        return trimOverLimit
+        return trimOverLimit(limit)
     }
 
     // MARK: failures

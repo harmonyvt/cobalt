@@ -18,8 +18,9 @@ boards came from the owner's live library and is reused below.
   orbit stops under Reduce Motion and Low Power Mode. Below it two white circles: **paste**
   and **file**. **No text field anywhere.** The owner never types links.
 - Every input runs **one pipeline**: fetch|upload → save → read → webp, on a 4-step rail. The
-  tapped circle opens into the work card. Clips over 10 s are not an error: the trim bracket
-  starts on the first 10 s and rubber-bands with a haptic tick past 10 s. "save to photos" and
+  tapped circle opens into the work card. Clips over the server's webp limit (30 s; 10 s until
+  2026-10-19) are not an error: the trim bracket starts on the first 30 s and rubber-bands with a
+  haptic tick past it. "save to photos" and
   "host original" sit beside "make webp". Multi-item posts show a picker sheet.
 - Library: one card per post, pills for what exists, one card open at a time, per-file
   actions, delete only `.webp` files (`DELETE /media/<name>`), hosted mp4 says "delete on web".
@@ -743,7 +744,7 @@ here; the owner may change them). Device word: "iphone" / "ipad" / "mac" by plat
 | `.uploading` | capsule + 3 pt bar | "uploading", "1.2 MB / 18.2 MB" |
 | `.saving` | capsule | "saving privately", "4.3 MB"; degraded (bytes nil): "saving", seconds; plain cobalt: **new** "saving to this iphone" |
 | `.reading` | work card 432 pt: title + length rolling, tc line "720×1280 · 4.3 MB", strip of frames developing, scale "0 s … …" | "reading the video", "4 / 9"; sub "frames appear as the video is read." |
-| `.ready` | bracket on the strip, tc "00:00.0 → 00:10.0 of 00:14.8", scale "0 s · 7.4 s · 14.8 s" | > 10 s: "webps stop at 10 s, so the first 10 s are picked. drag to choose."; else "the whole clip fits in a webp."; "make webp"; "save to photos" → "saved to photos"; "host original" → "link copied" |
+| `.ready` | bracket on the strip, tc "00:00.0 → 00:10.0 of 00:14.8", scale "0 s · 7.4 s · 14.8 s" | > 30 s: "webps stop at 30 s, so the first 30 s are picked. drag to choose." (the server's limit); else "the whole clip fits in a webp."; "make webp"; "save to photos" → "saved to photos"; "host original" → "link copied" |
 | `.rendering(.decoding)` | lit frames inside the bracket | "decoding frames", "42 / 150"; "every frame in the bracket lights up once decoded." |
 | `.rendering(.packing)` | bracket breathes | "packing webp", "3.1 s"; "no count for this part, so it just breathes." |
 | `.rendering(.working)` | bracket breathes | **new** "making webp", seconds; "no count from this server, so it just breathes." |
@@ -810,7 +811,7 @@ KB · <url>", "copy link" → "copied", "done". Close mid-render → notificatio
 making your webp"** (tap opens the app). The app on that job: "still making the webp you
 started in the share sheet…" + "making webp…" (disabled), then "finished while the sheet was
 closed. 841 KB, link ready." + "copy link"; a handed-off long clip opens on the trim with "webps
-stop at 10 s, so the first 10 s are picked. drag to choose." + "make webp".
+stop at 30 s, so the first 30 s are picked. drag to choose." + "make webp".
 
 ## 6. Motion
 

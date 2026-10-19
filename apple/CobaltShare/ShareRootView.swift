@@ -14,7 +14,7 @@ extension EnvironmentValues {
 }
 
 /// The compact share sheet (`Share.dc.html`): the same progress card as the app, over
-/// whatever app you were in. Clips up to 10 s finish here; longer ones hand off to cobalt on the
+/// whatever app you were in. Clips within the webp limit finish here; longer ones hand off to cobalt on the
 /// trim; closing mid-render keeps the render going and the app picks it up.
 ///
 /// Layout: the content hugs its top (title, source chip, one card) and the card is as tall as what it
