@@ -2471,3 +2471,264 @@ Shape: `{ "id": "<16 letters/digits>", "name": "weekend", "created_at": <ms>, "u
 - Errors: `400 error.group.bad_request` (bad JSON, name or id list), `404 error.group.not_found` (unknown group), `409 error.group.collection_not_found` with `collection_ids` (unknown collections in `collection_ids`/`add`; nothing changed), `409 error.group.too_many` (100 groups), `409 error.group.full` (100 collections), `503 error.api.generic`.
 - No reroll and no server-side copy text: the app builds "copy all links" itself (CobaltKit `ShareSetStore.linksText(in: CollectionGroup)`): every live link URL of the group's collections, one per line, in the group's order then each collection's order, a link held by two of its collections once.
 - App: sets are shown only when `features.share_groups` is true: create (name, optionally with collections), rename, delete (confirm: "delete this set? its collections keep their links"), add a collection to sets, remove it from one. Migration 0017 must be applied before the API deploy that ships these routes.
+
+## 29. Stage: the stream canvas, the viewer store and Twitch channel points (addendum, pinned 2026-10-19; owner: "a presentation mode where I can randomly cycle through my media content ... all over the canvas which will be 1080p", "a studio part of the software both macos and ios where I can also have twitch viewers submit points", "a toggle for the store which just locks it entirely not even able to login")
+
+Approved mockup: https://claude.ai/artifact/ANXn8CohVKhHrGWuuW1Tsd (boards: stream canvas, Mac studio, iPhone studio, store).
+Owner decisions (2026-10-19 thread): the canvas is a web page at a URL with a secret token that OBS loads as a
+Browser Source, and the token can be rotated; tiles land at random spots and sizes and overlap, with a "how crazy"
+slider from 5 to 100 tiles on screen; the pool is a collection, a set, a search or the whole library; one spotlight
+tile at a time is big and has sound; viewers spend real Twitch channel points on summon, chaos, shuffle and pin, with
+no approval step; viewer-submitted links are out; viewers can sign in with Twitch on the store page, client side only;
+the store has a lock that turns the whole store off, sign-in included.
+
+**Naming.** "studio" already means the save/trim session everywhere in this codebase (`/studio/<sid>`,
+`STUDIO-CONTRACT.md`, `studio.ts`). This feature is **stage** in code, routes, D1 tables and Swift types
+(`stage.ts`, `/stage`, `stage_*`, `Stage*`). Only user-facing copy says "studio": the app tab, and the host
+`studio.capybaraharmony.com`.
+
+### 29.1 Hosts, config, capability
+
+- New Worker domain `studio.capybaraharmony.com` on the API Worker (`cloudflare.config.ts` `domains`), plain var
+  `STAGE_BASE_URL = "https://studio.capybaraharmony.com/"`. Like the share host, the Worker answers that host itself,
+  before the gate, never wakes the container, sends no CORS, and serves only the paths in 29.4 (anything else 404).
+- Secrets (all from `~/.config/cobalt/secrets.json`; `cf deploy` refuses while a declared one is missing, so the
+  owner adds them first, empty is fine): `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_EVENTSUB_SECRET`
+  (10..100 ASCII chars, made by the owner, e.g. `openssl rand -hex 32`).
+- `GET /capabilities`: `features.stage` is true exactly while `STAGE_BASE_URL` is an https URL (canvas and store work
+  without Twitch). `features.stage_twitch` is true exactly with `stage` and all three Twitch secrets non-empty.
+  With `stage` false every `/stage*` route answers 404 `error.stage.off` and the stage host answers 404 to everything.
+- New Durable Object class `StageRoom` (binding `STAGE_ROOM`, sqlite storage, one instance `idFromName("main")`):
+  holds the canvas WebSockets (hibernation API) and fans out events (29.6). Imported only by `index.ts`, like
+  `ModelRelay`.
+- D1 migration `0018_stage.sql` (owner applies it before the API deploy): tables in 29.2. Additive only.
+
+### 29.2 D1 (migration 0018)
+
+- `stage_settings`: exactly one row, `id = 'main'`, created on first read with the defaults below. Columns:
+  `on_air` (0/1, default 0), `pool_kind` (`'library'|'collection'|'group'|'search'`, default `'library'`),
+  `pool_ref` (collection or group id, or the search words; NULL for library), `pool_ids` (JSON array of
+  `media_items` ids: the resolved pool, see 29.3), `pool_at` (ms), `density` (5..100, default 30), `tile_seconds`
+  (3..30, default 10), `tile_scale` (0.5..1.6, default 1.0), `spotlight_auto` (0/1, default 1),
+  `spotlight_seconds` (10..120, default 20), `sound` (0/1, default 1), `video_max` (0..24, default 12),
+  `store_open` (0/1, default 0: the store starts locked), `store_hint` (0/1, default 1), `live_token` (32 random
+  base62 chars, made on first read), `oauth_state`, `oauth_state_at`, `updated_at`.
+- `stage_twitch`: at most one row, `id = 'main'`: `broadcaster_id`, `login`, `display_name`, `access_token`,
+  `refresh_token` (both AES-GCM encrypted, key = HKDF-SHA-256 of `TWITCH_CLIENT_SECRET` with info
+  `"stage-twitch-tokens"`, stored `base64(iv).base64(ciphertext)`), `expires_at` (ms), `scopes`, `eventsub_id`,
+  `connected_at`, `last_event_at`.
+- `stage_rewards`: one row per action (`summon`, `chaos`, `shuffle`, `pin`): `action` PK, `twitch_reward_id`,
+  `title`, `prompt`, `cost`, `cooldown_seconds`, `enabled` (0/1), `updated_at`. Seeded on first read with:
+  summon 500 / 30 s / on, chaos 2000 / 300 s / on, shuffle 1000 / 120 s / on, pin 300 / 60 s / off.
+  Titles: `summon`, `chaos`, `shuffle`, `pin` prefixed with `capystore ` on Twitch only if the bare word is taken
+  (Twitch reward titles are unique per channel). Summon's prompt: `"a code from the store, or a few words"`.
+- `stage_redemptions`: `id` (the Twitch redemption id, or `owner:<16 base62>` for the owner's own actions) PK,
+  `action`, `user_id`, `user_login`, `user_name`, `input` (≤200), `item_id` (NULL unless a summon resolved),
+  `status` (`'done'|'refunded'|'failed'`), `reason` (NULL or `'off_air'|'no_match'|'disabled'|'error'`),
+  `created_at`. Index `(created_at DESC)` and `(user_id, created_at DESC)`. Rows older than 30 days are deleted by
+  the daily cron.
+- `stage_codes`: `code` PK (3 chars from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, upper case), `item_id` UNIQUE,
+  `created_at`. A pool item gets a code the first time the pool is resolved with it in; codes never change and are
+  matched case-insensitively. When 3-char codes run low (more than half used) new ones are 4 chars.
+
+### 29.3 The pool
+
+The pool is a list of **public** library files (images, GIFs, videos, WebPs): a file is in it only while it is
+public (section 16: a file the library reports with `public: true` and a public `url`); private files never reach
+the canvas, the store or a summon. Deleted files drop out. Resolution:
+
+- `library`: the newest 2,000 public files.
+- `collection` (`pool_ref` = a share collection id, section 26): every file of every live gallery link in it, in
+  the collection's order.
+- `group` (`pool_ref` = a collection group id, section 28): every file of every collection in it.
+- `search` (`pool_ref` = the words): the meaning search (section 21) over posts, best first, at most 200 posts,
+  then their public files. Search off or asleep: `PATCH /stage` answers 503 `error.stage.search_unavailable` and
+  nothing changes.
+
+The pool is resolved when `PATCH /stage` changes `pool_kind`/`pool_ref`, and again when it is older than 10 minutes
+at the next canvas or store read (so new saves join), at most 2,000 ids, stored in `pool_ids`. An empty pool is
+allowed (the canvas shows nothing; the store says so).
+
+Item shape (canvas and app): `{ "id": "<media_items id>", "code": "K7Q", "title": "<post title, else caption
+(section 25), else file name>", "kind": "image"|"video", "url": "<public url>", "poster_url": "<url>"|null,
+"width": <n>|null, "height": <n>|null, "duration": <s>|null }` (GIF and WebP are `image`). Store items leave out
+`url` and `duration` and carry `thumb_url` (the poster for a video, else the file itself).
+
+### 29.4 The stage host (`studio.capybaraharmony.com`, public, no key)
+
+- `GET /live/<token>` → `200 text/html`, the canvas page (29.5). `?preview=1` is the app's preview: always muted,
+  no store hint. Wrong token: plain `404`. `cache-control: no-store`, `x-robots-tag: noindex`.
+- `GET /live/<token>/state` → `200 { "status": "success", "stage": <canvas settings>, "pool": [<item>, ...],
+  "spotlight": <spotlight>|null }`. `<canvas settings>` = `{ on_air, density, tile_seconds, tile_scale,
+  spotlight_auto, spotlight_seconds, sound, video_max, store_hint, store_url }` (`store_url` null while the store is
+  locked, so the hint hides). `<spotlight>` = `{ "item": <item>, "by": "<display name>"|null, "action": "summon"|
+  "owner", "pinned_until": <ms>|null, "at": <ms> }`: the last summon or owner pick, if newer than
+  `spotlight_seconds` or pinned. Wrong token: 404 `error.stage.not_found`.
+- `GET /live/<token>/ws` → WebSocket upgrade, handed to `StageRoom`. Wrong token: 404. Events in 29.6.
+- `GET /store` → `200 text/html`, the store page (29.7). **Locked** (`store_open = 0`): `404 text/html`, a tiny page
+  that says only "nothing here." with no script, no sign-in and no Twitch client id in it, and every
+  `/store/api/*` route answers 404 `error.stage.store_locked`. Locking closes the store for everyone at once: no
+  cached HTML (`cache-control: no-store`).
+- `GET /store/api/pool?q=<0..60 chars>&offset=<n>&limit=<1..60, default 40>` → `200 { "status": "success",
+  "on_air": bool, "pool_name": "<collection or set name, the search words, or 'everything'>", "total": <n>,
+  "offset": <n>, "next": <n>|null, "items": [<store item>, ...] }`. `q` filters by a case-insensitive substring of
+  the title, or an exact code.
+- `GET /store/api/rewards` → `200 { "status": "success", "channel": "<twitch login>"|null, "rewards": [{ "action",
+  "title", "cost", "cooldown_seconds", "prompt" }] }` (enabled rewards only; `channel` null and no rewards while
+  Twitch is not connected).
+- `GET /store/api/me` with `Authorization: Bearer <viewer's Twitch user token>` → the Worker checks the token with
+  `GET https://id.twitch.tv/oauth2/validate` (it must belong to `TWITCH_CLIENT_ID`), stores nothing about the viewer
+  beyond what redemptions already hold, and answers `200 { "status": "success", "user": { "id", "login" },
+  "summons": [{ "item": <store item>|null, "input", "status", "reason", "created_at" }] }` (that user's last 10
+  summons). Bad or expired token: 401 `error.stage.twitch_auth`. Twitch not configured: 404 `error.stage.off`.
+- `GET /twitch/callback?code=&state=` → the broadcaster OAuth return (29.8). Answers a small html page ("twitch is
+  connected. you can close this.") that also redirects to `cobalt-apple://stage?twitch=connected` (or
+  `?twitch=failed&reason=<code>`).
+- `POST /twitch/eventsub` → the EventSub webhook (29.9).
+
+### 29.5 The canvas page
+
+Self-contained HTML (no external script; IBM Plex Mono from Google Fonts is the only external request), black
+background, 1920×1080 logical canvas scaled to the window (`transform: scale`), meant for an OBS Browser Source at
+1920×1080. It loads `state`, then keeps a WebSocket open (reconnect with backoff 1 s → 30 s; on reconnect it
+reloads `state`; a 404 on `state` means the token was rotated: it clears the canvas and stops).
+
+- Off air: an empty canvas (OBS shows nothing over the scene). On air: the scatter.
+- Scatter: up to `density` tiles at once, each a random pool item at a random spot and size (area ≈
+  1920×1080×1.8 / density × `tile_scale`², ±25%, height at most 900, may hang 8% off an edge), newest on top, a
+  pop-in animation; one tile is replaced every `tile_seconds × 1000 / density` ms (at least 80 ms), oldest first.
+  At most `video_max` tiles play video (muted, looped, `playsinline`); other video tiles show `poster_url`.
+- Spotlight: one big tile (≈560×640 area, at most 700 tall and 900 wide) with a 5 px `#2f8af9` border and a black
+  caption bar ("summoned by @name" or "spotlight · picked at random", then the title, "pinned" in amber while
+  pinned). It is the only tile with sound (when `sound` is on and not `preview`). With `spotlight_auto` a new random
+  pick every `spotlight_seconds` unless a summon or owner pick is newer or it is pinned. Videos play to their end
+  at least once before an auto replacement.
+- Toast (bottom left, 5 s): "@name spent 500 on summon" and a second line (`"<words>" → <title>`, "100 things on
+  screen for 30 seconds", "wiped the canvas and refilled it", "the spotlight stays up for 2 more minutes").
+- Chaos: density 100 until `until`, with an amber pill at the top "chaos mode · <s>s · thanks @name".
+- Store hint (bottom right) while `store_hint` and `store_url`: "spend points: studio.capybaraharmony.com/store".
+- Copy is lowercase like the app.
+
+### 29.6 Canvas events (WebSocket, JSON text frames, server → page only)
+
+`{ "type": "settings", "stage": <canvas settings> }` (any `PATCH /stage`), `{ "type": "pool" }` (the pool changed:
+reload `state`), `{ "type": "summon", "spotlight": <spotlight>, "toast": <toast> }`, `{ "type": "chaos", "until":
+<ms>, "toast": <toast> }`, `{ "type": "shuffle", "toast": <toast>|null }`, `{ "type": "pin", "pinned_until": <ms>,
+"toast": <toast>|null }`, `{ "type": "unpin" }`, `{ "type": "skip" }` (drop the spotlight now and pick again),
+`{ "type": "rotated" }` (sent right before the room closes every socket after a token rotation). `<toast>` =
+`{ "by": "<display name>", "action": "summon"|"chaos"|"shuffle"|"pin", "cost": <n>, "detail": "<second line>" }`.
+The page ignores unknown types. The room keeps the last spotlight and chaos `until` in its storage so a page that
+connects mid-chaos catches up from `state`.
+
+### 29.7 The store page
+
+Self-contained HTML in the mockup's look (black, IBM Plex Mono, lowercase): header ("capystore studio", "live now"
+while on air), "spend channel points to put stuff on stream.", the three steps, the enabled rewards, "tonight's
+pool" with the pool name, a search box, a masonry of store items (code badge, title, "summon" button), footer
+("only what's in tonight's pool shows here. signing in just tells this page who you are; it never touches your
+points. points are spent on twitch."). Works at phone width.
+
+- "summon" copies the code to the clipboard and shows a bottom bar: "copied K7Q", "now redeem summon in twitch chat
+  and paste it.", an "open chat" link to `https://www.twitch.tv/popout/<channel>/chat?popout=` (hidden while
+  `channel` is null).
+- Sign-in with Twitch (only when `stage_twitch`): the implicit grant, entirely in the browser:
+  `https://id.twitch.tv/oauth2/authorize?response_type=token&client_id=<id>&redirect_uri=<STAGE_BASE_URL>store&scope=&state=<random, kept in sessionStorage>`.
+  The page reads `access_token` from the fragment, checks `state`, removes the fragment from the address bar,
+  keeps the token in `sessionStorage`, and calls `/store/api/me` for the name and "your summons". "sign out"
+  forgets it (and calls `https://id.twitch.tv/oauth2/revoke`). No cookie, nothing stored server side.
+- Infinite scroll with `next`. Empty pool: "nothing in the pool right now."
+
+### 29.8 Connecting Twitch (owner, keyed)
+
+- `POST /stage/twitch/connect` (keyed) → `200 { "status": "success", "authorize_url": "https://id.twitch.tv/oauth2/authorize?response_type=code&client_id=…&redirect_uri=<STAGE_BASE_URL>twitch/callback&scope=channel%3Amanage%3Aredemptions&state=<32 base62>&force_verify=true" }`.
+  The state is stored with its time (valid 10 minutes, single use). The app opens it in an
+  `ASWebAuthenticationSession` with callback scheme `cobalt-apple`.
+- `GET /twitch/callback`: checks `state`, exchanges the code (`POST https://id.twitch.tv/oauth2/token`), reads the
+  user (`GET https://api.twitch.tv/helix/users`), stores `stage_twitch`, then (each step logged, failures leave the
+  connection stored and are retried by the next `GET /stage`): creates or updates the four rewards
+  (`POST|PATCH /helix/channel_points/custom_rewards`, `is_user_input_required` only for summon,
+  `should_redemptions_skip_request_queue: false`, global cooldown from the row) and creates the EventSub webhook
+  subscription `channel.channel_points_custom_reward_redemption.add` v1 for the broadcaster with an app access
+  token (client credentials), callback `<STAGE_BASE_URL>twitch/eventsub`, secret `TWITCH_EVENTSUB_SECRET`.
+  Channel points need an Affiliate or Partner channel: Twitch's 403 on reward creation is reported as
+  `twitch.status: "not_affiliate"`.
+- Access tokens are refreshed with the refresh token when they expire within 5 minutes or a Helix call answers
+  401; a failed refresh sets `twitch.status: "reconnect"`.
+- `DELETE /stage/twitch` (keyed) → deletes the EventSub subscription and the four rewards on Twitch (best effort),
+  then the row. `200 { "status": "success", "stage": <stage> }`.
+
+### 29.9 Redemptions (EventSub webhook)
+
+- Verify every request: `Twitch-Eventsub-Message-Signature` = `sha256=` + hex HMAC-SHA-256(`TWITCH_EVENTSUB_SECRET`,
+  message id + timestamp + raw body), compared in constant time; timestamp within 10 minutes; a message id seen in
+  the last 10 minutes is answered 204 and ignored (duplicates). Bad signature: 403.
+- `webhook_callback_verification` → `200 text/plain` with the challenge. `revocation` → clear `eventsub_id`, log.
+- `notification` for a reward in `stage_rewards` (else 204 and ignore): answer 204 at once and finish in
+  `waitUntil` (Twitch wants a reply within a few seconds):
+  - Off air, or the action disabled in `stage_rewards`: refund (`status: CANCELED`), row `refunded` with
+    `off_air`/`disabled`.
+  - `summon`: `user_input` trimmed; a 3-4 char code in the pool → that item; else the meaning search over the pool
+    (best pool post, then its first public file), else a title substring match; nothing → refund, `no_match`, and
+    a toast "@name: nothing matched "<words>", points refunded". Found → spotlight event, `FULFILLED`.
+  - `chaos`: `until = now + 30 s` (another chaos extends it to at most 60 s from now). `shuffle`: event.
+    `pin`: `pinned_until = now + 120 s` on the current spotlight.
+  - Every fulfilled or refunded redemption is a `stage_redemptions` row and a `PATCH /helix/channel_points/
+    custom_rewards/redemptions` with `FULFILLED`/`CANCELED`. A Helix failure leaves the redemption in Twitch's queue
+    (the owner can refund there) and the row `failed`.
+
+### 29.10 Owner routes (keyed; a service credential gets 404; `cache-control: no-store`)
+
+`<stage>` = `{ "on_air", "pool": { "kind", "ref": <id or words>|null, "name": "<collection/set name, the words, or
+'whole library'>"|null, "count": <n>, "missing": bool }, "density", "tile_seconds", "tile_scale",
+"spotlight_auto", "spotlight_seconds", "sound", "video_max", "store_open", "store_hint", "live_url":
+"<STAGE_BASE_URL>live/<token>", "store_url": "<STAGE_BASE_URL>store", "twitch": null | { "login", "display_name",
+"connected_at", "status": "ok"|"reconnect"|"not_affiliate"|"setting_up", "last_event_at": <ms>|null },
+"spotlight": <spotlight>|null, "updated_at" }` (`pool.missing`: the collection or set was deleted; the pool is
+then empty). `<reward>` = `{ "action", "title", "cost", "cooldown_seconds", "enabled", "synced": bool }`
+(`synced`: Twitch has the current values). `<redemption>` = `{ "id", "action", "user_name", "input", "item":
+<item>|null, "status", "reason", "created_at" }`.
+
+- `GET /stage` → `200 { "status": "success", "stage": <stage>, "rewards": [<reward> ×4] }`.
+- `PATCH /stage` `{ any of on_air, pool: { kind, ref }, density, tile_seconds, tile_scale, spotlight_auto,
+  spotlight_seconds, sound, video_max, store_open, store_hint }` → `200 { "status": "success", "stage" }`, then a
+  `settings` event (and `pool` when the pool changed). Out-of-range numbers are clamped; a bad kind, an unknown
+  collection/group or empty words: 400 `error.stage.bad_request`. Locking the store (`store_open: false`) takes
+  effect on the next request to the store host.
+- `POST /stage/rotate` → a new `live_token`; the room sends `rotated` and closes every socket. `200 { "status":
+  "success", "stage" }`.
+- `POST /stage/action` `{ "type": "skip"|"pin"|"unpin"|"shuffle"|"chaos"|"spotlight", "item_id"?: "<pool item
+  id>" }` (`spotlight` needs `item_id` in the pool: the owner's own pick) → the matching event, a
+  `stage_redemptions` row with `id owner:…`, `user_name` "you", `200 { "status": "success", "stage" }`. Off air:
+  409 `error.stage.off_air`. Unknown item: 404 `error.stage.not_found`.
+- `GET /stage/pool?offset=&limit=<1..100, default 60>` → `200 { "status": "success", "total", "offset", "next",
+  "items": [<item>] }` (the app's "pick for the spotlight" sheet).
+- `GET /stage/redemptions?limit=<1..100, default 30>&before=<ms>` → `200 { "status": "success", "redemptions":
+  [<redemption>] }`, newest first.
+- `PATCH /stage/rewards/<action>` `{ "cost"?: 1..1000000, "cooldown_seconds"?: 0..604800, "enabled"?: bool }` →
+  saves, then updates the Twitch reward (when connected); `200 { "status": "success", "reward": <reward> }`, with
+  `synced: false` when Twitch refused (the next `GET /stage` retries).
+- `POST /stage/twitch/connect`, `DELETE /stage/twitch`: 29.8. Without `stage_twitch`: 404 `error.stage.twitch_off`.
+- Errors: `400 error.stage.bad_request`, `404 error.stage.off|not_found|twitch_off`, `409 error.stage.off_air`,
+  `503 error.stage.search_unavailable|error.api.generic`.
+
+### 29.11 App (apple/)
+
+- `Capabilities.stage`, `Capabilities.stageTwitch` from `features.stage`, `features.stage_twitch`.
+- New tab `AppTab.stage`, label "studio", after chat (save · library · links · chat · studio · settings), shown only
+  with `stage`. On the Mac it is a sidebar row like the others.
+- The studio screen follows the mockup: header (title "studio", on air / off air pill, "copy obs link", "go live" /
+  "stop"); the preview (a non-interactive web view of `live_url?preview=1`, 16:9, "preview · what obs sees"); the
+  spotlight bar (current spotlight, sound toggle, pin, skip, "pick" which opens the pool sheet); pool picker
+  (collection · set · search · whole library, using the links tab's collections and sets, the search words in a
+  field, "private items never show"); "how crazy" slider (5..100, "N on screen") and "tile life" slider (3..30 s),
+  sent after the drag settles (debounced 300 ms); Twitch card (connect / reconnect / disconnect, status line,
+  "channel points need an affiliate channel" when `not_affiliate`); rewards rows (cost, cooldown, on/off); the
+  redemptions feed (polled every 4 s while the screen is visible); links (OBS link masked to its last 4
+  characters, copy, rotate with confirm "rotate the obs link? the old one stops working right away"; store link,
+  copy, and the **store lock**: a switch "store open" that is off by default, footnote "locked: the store and its
+  sign-in are gone until you open it").
+- Wide windows (Mac, iPad landscape): two columns like the Mac board (controls left, Twitch/rewards/feed/links in a
+  360 pt column). Compact: one column like the iPhone board, with a rewards · feed · links segmented control.
+- Deploy: apply 0018, add the three Twitch secrets to the secrets file, deploy the API Worker (new domain and DO).
+  Twitch app (owner, once, dev.twitch.tv): OAuth redirect URLs `https://studio.capybaraharmony.com/twitch/callback`
+  and `https://studio.capybaraharmony.com/store`, category "Broadcaster Suite", client type confidential.
