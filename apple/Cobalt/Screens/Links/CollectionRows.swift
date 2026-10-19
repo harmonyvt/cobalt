@@ -138,6 +138,7 @@ struct CollectionSetChips: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     chip(title: Copy.Sets.chip(Copy.Sets.all, count: store.collections.count), symbol: nil, on: controller.selectedSet == nil) {
@@ -149,6 +150,7 @@ struct CollectionSetChips: View {
                             controller.selectedSetID = controller.selectedSetID == set.id ? nil : set.id
                         }
                         .contextMenu { items(set) }
+                        .id(set.id)
                     }
                     Button { controller.naming = .create(including: nil) } label: {
                         Label(Copy.Sets.new, systemImage: Symbol.collectionSetNew)
@@ -164,6 +166,11 @@ struct CollectionSetChips: View {
                 .padding(.vertical, 2)
             }
             .scrollClipDisabled()
+            .onChange(of: controller.selectedSetID) { _, id in
+                guard let id else { return }
+                withAnimation(Motion.rows) { proxy.scrollTo(id, anchor: .center) }
+            }
+            }
             if let set = controller.selectedSet {
                 HStack(spacing: 8) {
                     Text(Copy.Sets.collectionCount(store.collections(in: set).count))

@@ -38,6 +38,7 @@ struct LibraryShareChips: View {
 
     var body: some View {
         let counts = counts
+        ScrollViewReader { proxy in
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 chip(.notShared, title: Copy.Library2.notShared, count: counts.notShared, symbol: nil, tint: nil)
@@ -59,6 +60,12 @@ struct LibraryShareChips: View {
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 6)
+        }
+        // the chip that is on stays in view (one at the end of the row was cut off)
+        .onChange(of: filter) { _, now in
+            guard now != .all else { return }
+            withAnimation(Motion.rows) { proxy.scrollTo(now, anchor: .center) }
+        }
         }
         .background(.bar)
         .accessibilityElement(children: .contain)
@@ -119,6 +126,7 @@ struct LibraryShareChips: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .id(value)
         .accessibilityLabel(title)
         .accessibilityValue("\(count)")
         .accessibilityAddTraits(selected ? .isSelected : [])
