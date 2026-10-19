@@ -1,7 +1,7 @@
 import CobaltKit
 import SwiftUI
 
-// The spotlight bar (APP-API-CONTRACT 29.11): the file in the spotlight and who put it there, then sound, pin, skip and pick
+// The spotlight bar (APP-API-CONTRACT 30.11): the file in the spotlight and who put it there, then sound, pin, skip and pick
 // (which opens the pool sheet, `StagePickSheet`), and a menu with the two canvas actions (shuffle, chaos). Pin, skip, pick and
 // the canvas actions need the stage on air (the server answers `409 off_air` otherwise), so they are dimmed off air.
 

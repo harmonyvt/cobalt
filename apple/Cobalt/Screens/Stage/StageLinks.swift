@@ -1,7 +1,7 @@
 import CobaltKit
 import SwiftUI
 
-// The links (APP-API-CONTRACT 29.4, 29.11): the OBS browser source link, masked to its last 4 characters (copy puts the whole
+// The links (APP-API-CONTRACT 30.4, 30.11): the OBS browser source link, masked to its last 4 characters (copy puts the whole
 // link on the pasteboard; rotate makes a new one and the old one stops working at once, after a confirm), and the store for
 // viewers with its lock. The store is locked unless the owner opens it: a locked store and its sign-in are gone for everyone.
 

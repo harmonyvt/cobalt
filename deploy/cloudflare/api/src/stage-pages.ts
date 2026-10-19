@@ -1,5 +1,5 @@
-// The two public pages of stage (APP-API-CONTRACT.md section 29): the 1080p stream canvas that OBS loads as a
-// Browser Source (29.5), and the viewer store (29.7), plus the tiny page the store becomes while it is locked.
+// The two public pages of stage (APP-API-CONTRACT.md section 30): the 1080p stream canvas that OBS loads as a
+// Browser Source (30.5), and the viewer store (30.7), plus the tiny page the store becomes while it is locked.
 // Pure strings, no I/O. Each page is self-contained (inline CSS and JS); the only external requests are the
 // IBM Plex Mono stylesheet and font files. Only `stageBaseUrl` and the Twitch client id are ever interpolated,
 // both HTML-escaped into data attributes; titles and names come from JSON at runtime and go in with textContent.
@@ -17,7 +17,7 @@ const esc = (s: string): string =>
 const withSlash = (u: string): string => (u.endsWith("/") ? u : u + "/");
 
 // ---------------------------------------------------------------------------------------------------------------
-// The canvas (29.5, 29.6)
+// The canvas (30.5, 30.6)
 // ---------------------------------------------------------------------------------------------------------------
 
 const LIVE_CSS = String.raw`
@@ -716,7 +716,7 @@ export function livePage(o: { stageBaseUrl: string; preview: boolean }): string 
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The store (29.7)
+// The store (30.7)
 // ---------------------------------------------------------------------------------------------------------------
 
 const STORE_CSS = String.raw`
@@ -1097,7 +1097,7 @@ const STORE_JS = String.raw`
 })();
 `;
 
-// Sign in with Twitch (29.7): the implicit grant, entirely in the browser. Present only when a client id is set.
+// Sign in with Twitch (30.7): the implicit grant, entirely in the browser. Present only when a client id is set.
 const STORE_TWITCH_JS = String.raw`
   var CLIENT = body.getAttribute('data-twitch-client') || '';
   var BASE = body.getAttribute('data-stage-base') || (location.origin + '/');
@@ -1241,7 +1241,7 @@ export function storePage(o: { stageBaseUrl: string; twitchClientId: string | nu
     );
 }
 
-// The store while it is locked (29.4): says nothing else, runs nothing, carries no client id.
+// The store while it is locked (30.4): says nothing else, runs nothing, carries no client id.
 export function storeLockedPage(): string {
     return (
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">' +

@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 
-// Stage in previews (APP-API-CONTRACT 29): a server with `features.stage` and `stage_twitch`, a connected stage on air with
+// Stage in previews (APP-API-CONTRACT 30): a server with `features.stage` and `stage_twitch`, a connected stage on air with
 // a spotlight, four rewards and a few redemptions, and 72 public files in the pool. Writes behave like the real routes:
 // numbers are clamped, a pool must name a collection or set the preview links server has (or words), `409 off_air` while off
 // air, an item must be in the pool, and a reward patch updates the reward. `PreviewScenario.stageNotConnected` is the stage
@@ -28,7 +28,7 @@ extension PreviewData {
 
     static let stageStoreURL = stageHost.appendingPathComponent("store")
 
-    /// Codes are 3 characters from this alphabet (29.2).
+    /// Codes are 3 characters from this alphabet (30.2).
     private static let stageCodeAlphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
 
     /// The 72 public files of the preview pool: 12 titles over and over, the first twelve with the codes the boards use.
@@ -68,7 +68,7 @@ extension PreviewData {
         }
     }
 
-    /// The four rewards (29.2): summon 500 / 30 s on, chaos 2,000 / 300 s on, shuffle 1,000 / 120 s on, pin 300 / 60 s off.
+    /// The four rewards (30.2): summon 500 / 30 s on, chaos 2,000 / 300 s on, shuffle 1,000 / 120 s on, pin 300 / 60 s off.
     static func stageRewards(synced: Bool) -> [StageReward] {
         [
             StageReward(action: .summon, cost: 500, cooldownSeconds: 30, enabled: true, synced: synced),

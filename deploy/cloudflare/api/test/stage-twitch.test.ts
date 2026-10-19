@@ -1,4 +1,4 @@
-// Stage (APP-API-CONTRACT.md section 29.8, 29.9): the Twitch client, the EventSub signature and the token
+// Stage (APP-API-CONTRACT.md section 30.8, 30.9): the Twitch client, the EventSub signature and the token
 // encryption, with fakes for the network.
 import { describe, expect, it } from "vitest";
 import {
@@ -169,7 +169,7 @@ describe("the client", () => {
     });
 });
 
-describe("EventSub signature (29.9)", () => {
+describe("EventSub signature (30.9)", () => {
     const body = '{"a":1}';
     it("accepts sha256= + hex HMAC of id + timestamp + body", async () => {
         const sig = await signEventSub("secret-secret-1", "id1", "2026-10-19T10:00:00Z", body);
@@ -190,7 +190,7 @@ describe("EventSub signature (29.9)", () => {
     });
 });
 
-describe("token encryption (29.2)", () => {
+describe("token encryption (30.2)", () => {
     it("round-trips as base64(iv).base64(ciphertext)", async () => {
         const stored = await encryptToken("client-secret", "access-token-value");
         expect(stored).toMatch(/^[A-Za-z0-9+/]{16}={0,2}\.[A-Za-z0-9+/]+={0,2}$/);

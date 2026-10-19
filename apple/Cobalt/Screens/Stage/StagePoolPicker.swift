@@ -1,7 +1,7 @@
 import CobaltKit
 import SwiftUI
 
-// The pool picker (APP-API-CONTRACT 29.11): what the canvas and the store draw from. A segmented control (collection · set ·
+// The pool picker (APP-API-CONTRACT 30.11): what the canvas and the store draw from. A segmented control (collection · set ·
 // search · whole library), then what the chosen kind needs: a menu of the links tab's collections or sets, the search words in
 // a field, or nothing for the whole library. Choosing is a write; the row under the control always says what the stage draws
 // from now and how many files that is. Private items never show, whatever the pool.

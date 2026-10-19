@@ -149,7 +149,8 @@ describe("collection groups", () => {
         expect(l.cache).toBe("no-store");
         expect(l.body.groups.map((g: any) => g.name)).toEqual(["later", "weekend"]);
         expect((await call("GET", "/share/groups", undefined, {})).status).toBe(401);
-        expect(containerCalls).toEqual([]);
+        // only the moving-preview kick of the links made above (section 29), never a container call for these routes
+        expect(containerCalls.filter((p) => p !== "/loops/kick")).toEqual([]);
     });
 
     it("reject a bad name, a malformed or unknown collection", async () => {

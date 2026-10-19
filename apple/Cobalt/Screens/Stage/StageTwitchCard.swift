@@ -2,7 +2,7 @@ import AuthenticationServices
 import CobaltKit
 import SwiftUI
 
-// The Twitch card (APP-API-CONTRACT 29.8, 29.11): connect, reconnect and disconnect, and a status line for what Twitch says.
+// The Twitch card (APP-API-CONTRACT 30.8, 30.11): connect, reconnect and disconnect, and a status line for what Twitch says.
 // Connecting opens the server's authorize page in a web authentication session whose callback is `cobalt-apple://stage`;
 // viewers never need the app. Without Twitch the rest of the studio still works (the canvas and the store are the owner's).
 

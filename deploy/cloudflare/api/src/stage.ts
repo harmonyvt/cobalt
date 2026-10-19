@@ -1,8 +1,8 @@
-// Stage (APP-API-CONTRACT.md section 29): a 1080p canvas OBS loads as a Browser Source that scatters the
+// Stage (APP-API-CONTRACT.md section 30): a 1080p canvas OBS loads as a Browser Source that scatters the
 // owner's public library files, a public viewer store, and Twitch channel-point redemptions that act on
 // the canvas. This file is the D1 + route logic: settings, the pool, codes, the keyed owner routes
-// (29.10), the stage host's pages and APIs (29.4), the Twitch connection (29.8) and the EventSub
-// webhook (29.9). The Twitch client is stage-twitch.ts, the canvas WebSockets are the StageRoom Durable
+// (30.10), the stage host's pages and APIs (30.4), the Twitch connection (30.8) and the EventSub
+// webhook (30.9). The Twitch client is stage-twitch.ts, the canvas WebSockets are the StageRoom Durable
 // Object (stage-room.ts), the HTML is stage-pages.ts. Free of Cloudflare imports so it runs under plain
 // node in the tests (real SQL on node:sqlite, fake Twitch, fake room).
 //
@@ -30,7 +30,7 @@ import {
     type TwitchFetch,
 } from "./stage-twitch";
 
-// ---- constants (29.2, 29.3, 29.9) ---------------------------------------------------------------------
+// ---- constants (30.2, 30.3, 30.9) ---------------------------------------------------------------------
 
 export const STAGE_ACTIONS = ["summon", "chaos", "shuffle", "pin"] as const;
 export type StageAction = (typeof STAGE_ACTIONS)[number];
@@ -85,12 +85,12 @@ export type CanvasEvent =
     | { type: "unpin" }
     | { type: "skip" }
     | { type: "rotated" }
-    // not in 29.6: a refunded summon's toast (29.9 asks for one but defines no event for it)
+    // not in 30.6: a refunded summon's toast (30.9 asks for one but defines no event for it)
     | { type: "toast"; toast: Toast & { refunded: true } };
 
 export type Toast = { by: string; action: StageAction; cost: number; detail: string };
 
-// What the room keeps between events (29.6: "the last spotlight and chaos until").
+// What the room keeps between events (30.6: "the last spotlight and chaos until").
 // `pinned_at` is when the pin event arrived: a pin only holds the spotlight that was still up then.
 export type RoomState = { spotlight: Spotlight | null; pinned_until: number; pinned_at: number; chaos_until: number; chaos_by: string | null };
 export const emptyRoom = (): RoomState => ({ spotlight: null, pinned_until: 0, pinned_at: 0, chaos_until: 0, chaos_by: null });
@@ -267,7 +267,7 @@ async function readBody(request: Request): Promise<Record<string, unknown> | nul
     }
 }
 
-// ---- settings (29.2) -------------------------------------------------------------------------------------------
+// ---- settings (30.2) -------------------------------------------------------------------------------------------
 
 type PoolKind = "library" | "collection" | "group" | "search";
 const POOL_KINDS: PoolKind[] = ["library", "collection", "group", "search"];
@@ -373,7 +373,7 @@ export function canvasSettings(d: Pick<StageDeps, "stageBaseUrl">, s: SettingsRo
     };
 }
 
-// ---- items (29.3) -----------------------------------------------------------------------------------------------
+// ---- items (30.3) -----------------------------------------------------------------------------------------------
 
 export type Item = {
     id: string;
@@ -492,7 +492,7 @@ export async function canvasItems(d: StageDeps, ids: string[]): Promise<Item[]> 
     }));
 }
 
-// ---- codes (29.2 stage_codes) ----------------------------------------------------------------------------------
+// ---- codes (30.2 stage_codes) ----------------------------------------------------------------------------------
 
 // A code for every id that has none: 3 chars from the alphabet, 4 once more than half of the 3-char
 // space is used. Codes never change. Returns code by item id for all `ids`.
@@ -528,7 +528,7 @@ export async function ensureCodes(d: StageDeps, ids: string[]): Promise<Map<stri
     return out;
 }
 
-// ---- the pool (29.3) ----------------------------------------------------------------------------------------------
+// ---- the pool (30.3) ----------------------------------------------------------------------------------------------
 
 type PoolSpec = { kind: PoolKind; ref: string | null };
 type Resolved = { ids: string[] } | { unavailable: true };
@@ -673,7 +673,7 @@ export async function freshSettings(d: StageDeps): Promise<SettingsRow> {
     return readSettings(d);
 }
 
-// ---- twitch rows and tokens (29.2, 29.8) ----------------------------------------------------------------------------
+// ---- twitch rows and tokens (30.2, 30.8) ----------------------------------------------------------------------------
 
 type TwitchRow = {
     broadcaster_id: string;
@@ -758,7 +758,7 @@ async function asBroadcaster<T>(d: StageDeps, tw: TwitchClient, call: (token: st
     }
 }
 
-// ---- twitch setup: rewards and the EventSub subscription (29.8) ------------------------------------------------------
+// ---- twitch setup: rewards and the EventSub subscription (30.8) ------------------------------------------------------
 
 const rewardBody = (r: RewardRow): RewardBody => ({
     cost: r.cost,
@@ -828,7 +828,7 @@ async function manageableRewards(d: StageDeps, tw: TwitchClient): Promise<{ mine
 }
 
 // Creates or updates the four rewards and the EventSub subscription; each step is logged and a failure
-// leaves the connection stored for the next GET /stage to retry (29.8). Never throws.
+// leaves the connection stored for the next GET /stage to retry (30.8). Never throws.
 export async function syncTwitch(d: StageDeps): Promise<void> {
     const tw = clientOf(d);
     if (!tw) return;
@@ -891,7 +891,7 @@ function needsSync(d: StageDeps, row: TwitchRow | null, rewards: RewardRow[]): b
     return row.status === "setting_up" || row.status === "not_affiliate" || !row.eventsub_id || rewards.some((r) => !r.synced || !r.twitch_reward_id);
 }
 
-// ---- the owner's stage shape (29.10) ----------------------------------------------------------------------------------------
+// ---- the owner's stage shape (30.10) ----------------------------------------------------------------------------------------
 
 const rewardShape = (r: RewardRow, connected: boolean) => ({
     action: r.action,
@@ -965,7 +965,7 @@ async function poolItems(d: StageDeps, s: SettingsRow): Promise<Item[]> {
     return meta.missing ? [] : canvasItems(d, parseIds(s.pool_ids));
 }
 
-// ---- owner routes (29.10) ---------------------------------------------------------------------------------------------------
+// ---- owner routes (30.10) ---------------------------------------------------------------------------------------------------
 
 export type StageOp = "get" | "patch" | "rotate" | "action" | "pool" | "redemptions" | "reward" | "twitch_connect" | "twitch_delete";
 
@@ -1083,7 +1083,7 @@ async function ownerPatch(d: StageDeps, request: Request): Promise<StudioReply> 
 async function ownerRotate(d: StageDeps): Promise<StudioReply> {
     await readSettings(d);
     await writeSettings(d, { live_token: randomBase62(32, rbytes(d)) });
-    // the old token's sockets are told, then closed (29.6)
+    // the old token's sockets are told, then closed (30.6)
     await broadcast(d, { type: "rotated" });
     const s = await readSettings(d);
     return ok({ stage: await stageShape(d, s, await readTwitch(d), await roomState(d)) });
@@ -1091,7 +1091,7 @@ async function ownerRotate(d: StageDeps): Promise<StudioReply> {
 
 const ACTION_TYPES = ["skip", "pin", "unpin", "shuffle", "chaos", "spotlight"] as const;
 
-// chaos lasts 30 s; another one extends it to at most 60 s from now (29.9)
+// chaos lasts 30 s; another one extends it to at most 60 s from now (30.9)
 export function nextChaosUntil(now: number, current: number): number {
     return current > now ? Math.min(current + CHAOS_MS, now + CHAOS_MAX_MS) : now + CHAOS_MS;
 }
@@ -1248,7 +1248,7 @@ async function ownerTwitchDelete(d: StageDeps): Promise<StudioReply> {
     const tw = await readTwitch(d);
     const left = tw ? await disconnect(d, tw) : false;
     const s = await readSettings(d);
-    // rewards_left_on_twitch: the tokens could not delete them, so they are still on the channel (29.8)
+    // rewards_left_on_twitch: the tokens could not delete them, so they are still on the channel (30.8)
     return ok({ stage: await stageShape(d, s, null, await roomState(d)), ...(left ? { rewards_left_on_twitch: true } : {}) });
 }
 
@@ -1298,7 +1298,7 @@ async function disconnect(d: StageDeps, tw: TwitchRow): Promise<boolean> {
     return left;
 }
 
-// ---- the stage host (29.4) -------------------------------------------------------------------------------------------------------
+// ---- the stage host (30.4) -------------------------------------------------------------------------------------------------------
 
 const HTML_HEADERS = { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex", "referrer-policy": "no-referrer" };
 
@@ -1366,7 +1366,7 @@ async function liveState(d: StageDeps): Promise<StudioReply> {
         stage: canvasSettings(d, s),
         pool: await poolItems(d, s),
         spotlight: await liveSpotlight(d, room, s.spotlight_seconds),
-        // not in 29.4: a page that connects mid-chaos catches up from here (29.6)
+        // not in 30.4: a page that connects mid-chaos catches up from here (30.6)
         chaos_until: room.chaos_until > now ? room.chaos_until : null,
         chaos_by: room.chaos_until > now ? room.chaos_by : null,
         now,
@@ -1439,7 +1439,7 @@ async function storeMe(d: StageDeps, request: Request): Promise<StudioReply> {
     });
 }
 
-// ---- Twitch OAuth return (29.8) ----------------------------------------------------------------------------------------------------
+// ---- Twitch OAuth return (30.8) ----------------------------------------------------------------------------------------------------
 
 function callbackPage(ok: boolean, reason?: string): Response {
     const target = ok ? "cobalt-apple://stage?twitch=connected" : `cobalt-apple://stage?twitch=failed&reason=${encodeURIComponent(reason ?? "error")}`;
@@ -1511,7 +1511,7 @@ async function twitchCallback(d: StageDeps, url: URL): Promise<Response> {
     return callbackPage(true);
 }
 
-// ---- EventSub webhook (29.9) ----------------------------------------------------------------------------------------------------------
+// ---- EventSub webhook (30.9) ----------------------------------------------------------------------------------------------------------
 
 type RedemptionEvent = {
     id: string;
@@ -1573,7 +1573,7 @@ async function eventSub(d: StageDeps, request: Request): Promise<Response> {
     return new Response(null, { status: 204 });
 }
 
-// ---- redemptions (29.9) ------------------------------------------------------------------------------------------------------------------
+// ---- redemptions (30.9) ------------------------------------------------------------------------------------------------------------------
 
 const wordsOf = (s: string) => s.replace(/\s+/g, " ").trim();
 

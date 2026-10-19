@@ -1,4 +1,4 @@
-// The StageRoom Durable Object (APP-API-CONTRACT.md section 29.1, 29.6): holds the canvas WebSockets
+// The StageRoom Durable Object (APP-API-CONTRACT.md section 30.1, 30.6): holds the canvas WebSockets
 // (hibernation API, so an idle room costs nothing) and fans the events out. One instance,
 // idFromName("main"). It also keeps the last spotlight and the chaos `until` so a page that connects
 // mid-chaos catches up from the Worker's `state` answer. Reached only through the STAGE_ROOM binding by
@@ -45,7 +45,7 @@ export class StageRoom extends DurableObject {
                 }
             }
             if (event.type === "rotated") {
-                // the old token's pages are done (29.6): every socket is closed after the event
+                // the old token's pages are done (30.6): every socket is closed after the event
                 for (const ws of this.ctx.getWebSockets()) {
                     try {
                         ws.close(1000, "rotated");

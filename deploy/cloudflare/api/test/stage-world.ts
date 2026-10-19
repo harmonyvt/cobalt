@@ -1,4 +1,4 @@
-// Shared fixtures for the stage tests (APP-API-CONTRACT.md section 29): the Worker with real SQL on
+// Shared fixtures for the stage tests (APP-API-CONTRACT.md section 30): the Worker with real SQL on
 // node:sqlite, a fake StageRoom that records what was broadcast, a fake Twitch (OAuth, Helix, EventSub) and a
 // fake meaning-search Space. No network anywhere.
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";

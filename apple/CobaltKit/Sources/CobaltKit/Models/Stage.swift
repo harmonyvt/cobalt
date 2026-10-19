@@ -1,7 +1,7 @@
 import Foundation
 
-// Stage (APP-API-CONTRACT section 29; `features.stage`): the stream canvas OBS loads, the viewer store and Twitch channel
-// points, driven from the studio tab. The wire shapes of the owner routes (29.10), the patch the app sends, the errors the
+// Stage (APP-API-CONTRACT section 30; `features.stage`): the stream canvas OBS loads, the viewer store and Twitch channel
+// points, driven from the studio tab. The wire shapes of the owner routes (30.10), the patch the app sends, the errors the
 // routes answer, and the rules the app and the server share (ranges, clamps, the masked link). "stage" is the code's word
 // (`/studio` already means the save session); only the app's copy says "studio". The store that drives these is `StageStore`.
 
@@ -77,7 +77,7 @@ public enum StageRule {
 
 // MARK: - an item
 
-/// One pool item (29.3): a public file of the library. The canvas shape carries `url` and `duration`; a store item leaves
+/// One pool item (30.3): a public file of the library. The canvas shape carries `url` and `duration`; a store item leaves
 /// them out and carries `thumbURL`.
 public struct StageItem: Sendable, Equatable, Identifiable {
     public enum Kind: String, Sendable, Equatable {
@@ -140,7 +140,7 @@ extension StageItem: Decodable {
 
 // MARK: - the spotlight
 
-/// The one big tile on the canvas (29.3): the last summon or owner pick, while newer than `spotlight_seconds` or pinned.
+/// The one big tile on the canvas (30.3): the last summon or owner pick, while newer than `spotlight_seconds` or pinned.
 public struct StageSpotlight: Sendable, Equatable {
     public enum Source: String, Sendable, Equatable {
         case summon, owner
@@ -182,7 +182,7 @@ extension StageSpotlight: Decodable {
 
 // MARK: - the pool
 
-/// What the canvas and the store draw from (29.3), as the owner routes report it.
+/// What the canvas and the store draw from (30.3), as the owner routes report it.
 public struct StagePool: Sendable, Equatable {
     public enum Kind: String, Sendable, Equatable, CaseIterable {
         case library, collection, group, search
@@ -281,7 +281,7 @@ public struct StagePoolPage: Sendable, Equatable, Decodable {
 
 // MARK: - Twitch
 
-/// The Twitch connection (29.8) as the stage reports it; nil on the stage while nothing is connected.
+/// The Twitch connection (30.8) as the stage reports it; nil on the stage while nothing is connected.
 public struct StageTwitch: Sendable, Equatable {
     public enum Status: String, Sendable, Equatable {
         /// Rewards and the redemptions webhook are in place.
@@ -325,14 +325,14 @@ extension StageTwitch: Decodable {
     }
 }
 
-/// The four rewards viewers spend channel points on (29.2). Also the `action` of a reward.
+/// The four rewards viewers spend channel points on (30.2). Also the `action` of a reward.
 public enum StageRewardKind: String, Sendable, Equatable, CaseIterable, Identifiable {
     case summon, chaos, shuffle, pin
 
     public var id: String { rawValue }
 }
 
-/// One reward (`<reward>` in 29.10).
+/// One reward (`<reward>` in 30.10).
 public struct StageReward: Sendable, Equatable, Identifiable {
     public var action: StageRewardKind
     /// The title on Twitch (a bare word, or "capystore " + the word when Twitch had it taken).
@@ -374,7 +374,7 @@ extension StageReward: Decodable {
     }
 }
 
-/// One line of the redemptions feed (`<redemption>` in 29.10): a viewer's summon, chaos, shuffle or pin, or the owner's own
+/// One line of the redemptions feed (`<redemption>` in 30.10): a viewer's summon, chaos, shuffle or pin, or the owner's own
 /// action (id `owner:…`, name "you").
 public struct StageRedemption: Sendable, Equatable, Identifiable {
     public enum Status: String, Sendable, Equatable {
@@ -386,7 +386,7 @@ public struct StageRedemption: Sendable, Equatable, Identifiable {
         case noMatch = "no_match"
         case disabled
         case error
-        /// chaos or shuffle with an empty pool, or pin with nothing in the spotlight (29.9).
+        /// chaos or shuffle with an empty pool, or pin with nothing in the spotlight (30.9).
         case noEffect = "no_effect"
     }
 
@@ -442,7 +442,7 @@ extension StageRedemption: Decodable {
 
 // MARK: - the stage
 
-/// The stage (`<stage>` in 29.10): the settings, the pool, the OBS and store links, Twitch and the spotlight.
+/// The stage (`<stage>` in 30.10): the settings, the pool, the OBS and store links, Twitch and the spotlight.
 public struct StageSettings: Sendable, Equatable {
     public var onAir: Bool
     public var pool: StagePool
@@ -709,7 +709,7 @@ public enum StageAction: Sendable, Equatable {
     }
 }
 
-/// Where the Twitch sign-in came back to: `cobalt-apple://stage?twitch=connected` or `?twitch=failed&reason=<code>` (29.4).
+/// Where the Twitch sign-in came back to: `cobalt-apple://stage?twitch=connected` or `?twitch=failed&reason=<code>` (30.4).
 /// The authentication session hands the app this URL; the same link also reaches the app if the session was closed.
 public enum StageTwitchReturn: Sendable, Equatable {
     case connected

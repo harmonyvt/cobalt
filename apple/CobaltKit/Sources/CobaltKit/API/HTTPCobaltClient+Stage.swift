@@ -1,6 +1,6 @@
 import Foundation
 
-// Stage, the studio tab (APP-API-CONTRACT 29.10; `features.stage`; keyed). Its own file so `HTTPCobaltClient.swift` only
+// Stage, the studio tab (APP-API-CONTRACT 30.10; `features.stage`; keyed). Its own file so `HTTPCobaltClient.swift` only
 // grows the capability flags. Every route is keyed, answers `cache-control: no-store`, and refuses with `StageError`.
 
 extension HTTPCobaltClient {

@@ -96,7 +96,7 @@ export type LookupThen =
     | "groups_create"
     | "groups_update"
     | "groups_delete"
-    // stage (APP-API-CONTRACT.md section 29.10)
+    // stage (APP-API-CONTRACT.md section 30.10)
     | "stage_get"
     | "stage_patch"
     | "stage_rotate"
@@ -296,7 +296,7 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         return reject(404);
     }
 
-    // Stage (APP-API-CONTRACT.md section 29.10): keyed only; the library-service credential gets 404.
+    // Stage (APP-API-CONTRACT.md section 30.10): keyed only; the library-service credential gets 404.
     if (req.pathname === "/stage" || req.pathname.startsWith("/stage/")) return decideStage(req);
 
     // Chat (APP-API-CONTRACT.md section 27): keyed only.

@@ -1,7 +1,7 @@
 import CobaltKit
 import SwiftUI
 
-// The studio tab (APP-API-CONTRACT section 29.11): a remote for the stream canvas OBS loads. Header (on air / off air, copy
+// The studio tab (APP-API-CONTRACT section 30.11): a remote for the stream canvas OBS loads. Header (on air / off air, copy
 // obs link, go live / stop), the preview, the spotlight bar, the pool, the sliders, then Twitch, the four rewards, the
 // redemptions feed and the links with the store lock. Wide windows (the Mac, an iPad on its side) are two columns like the Mac
 // board: the controls left, a 360 pt column right. Compact is one column like the iPhone board, with a rewards · feed · links

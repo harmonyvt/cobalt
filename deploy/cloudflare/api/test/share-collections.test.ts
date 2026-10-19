@@ -138,7 +138,8 @@ describe("collections", () => {
         const l = await call("GET", "/share/collections");
         expect(l.body.collections.map((x: any) => x.name)).toEqual(["later", "memes"]);
         expect((await call("GET", "/share/collections", undefined, {})).status).toBe(401);
-        expect(containerCalls).toEqual([]);
+        // only the moving-preview kick of the links made above (section 29), never a container call for these routes
+        expect(containerCalls.filter((p) => p !== "/loops/kick")).toEqual([]);
     });
 
     it("reject a bad name, a malformed or unknown link", async () => {

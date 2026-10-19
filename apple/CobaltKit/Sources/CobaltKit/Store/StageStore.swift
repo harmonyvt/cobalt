@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// Stage, the studio tab (APP-API-CONTRACT 29): the stream canvas OBS loads, the spotlight, the pool, Twitch and its four
+/// Stage, the studio tab (APP-API-CONTRACT 30): the stream canvas OBS loads, the spotlight, the pool, Twitch and its four
 /// rewards, the redemptions feed. One `GET /stage` loads the stage and the rewards; every change after that is a write that
 /// answers the stage as it is now.
 ///

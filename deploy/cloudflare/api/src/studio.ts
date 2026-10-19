@@ -41,6 +41,7 @@ import {
 } from "./line";
 import { NOTIFY_MAX_BODY_BYTES, isEmptyLineBody, parseOptIn, type LineOutcome, type MakeWhat, type NotifyHooks, type NotifyRenderEvent } from "./notify";
 import { MAX_POSTER_BYTES, PosterService, POSTER_BATCH, type MediaStore } from "./poster";
+import { LOOP_KICK_MAX, LoopService, type ReadBucket } from "./loops";
 import { publishStudio } from "./publish";
 import { ITEM_COLUMNS, getRow, makePublic, publishOriginal, purgeUrls, sessionItem, effectiveVisibility, type MediaRow, type PurgeFn } from "./visibility";
 
@@ -787,6 +788,9 @@ export type StudioDeps = {
     // public_state 'failed'; no poster jobs are queued).
     media?: MediaStore;
     mediaBaseUrl?: string;
+    // Reads a public file back (the real R2 bucket): a gallery link's moving preview of a video whose
+    // only copy is public (section 29). Absent = such a video gets no preview.
+    mediaRead?: ReadBucket;
     // Edge-cache purge (section 16); absent = not configured
     purge?: PurgeFn;
     // How long a save, upload or render waits for a poster being made (POSTER_IDLE_WAIT_MS).
@@ -956,6 +960,9 @@ export class StudioService {
     // poster sweeps running (counted around PosterService.sweep, which runs a job to its end; a count,
     // not a flag, so a later pass ending never clears an earlier poster that is still running)
     private posterRuns = 0;
+    // moving-preview sweeps running (section 29), counted like posterRuns
+    private loopRuns = 0;
+    private loops?: LoopService;
 
     // Server-made posters (section 13); undefined when no public bucket is wired.
     private posters?: PosterService;
@@ -981,6 +988,21 @@ export class StudioService {
                 helperBusy: async () => (await this.held({ ignorePoster: true })) !== null || (await this.line.size()) > 0,
                 scheduleSweep: () => this.scheduleSweep(),
                 renew: d.renew,
+            });
+            const media = d.media;
+            this.loops = new LoopService({
+                db: d.db,
+                storage: d.storage,
+                originals: d.originals,
+                mediaRead: d.mediaRead,
+                mediaDelete: (key) => media.delete(key),
+                mediaBaseUrl: d.mediaBaseUrl,
+                webp: d.webp,
+                now: d.now,
+                randomBytes: d.randomBytes,
+                // like a poster: never cuts what waits (its own in-flight count excluded)
+                helperBusy: async () => (await this.held({ ignoreLoop: true })) !== null || (await this.line.size()) > 0,
+                scheduleSweep: () => this.scheduleSweep(),
             });
         }
     }
@@ -1191,7 +1213,7 @@ export class StudioService {
     // SWEEP_RENDER_MS with no result yet (durable, unlike the in-memory `encodes`, which is still
     // consulted); a poster in flight; a render entry of the line whose upload is under way.
     // null = the helper is free.
-    private async held(opts: { ignorePoster?: boolean } = {}): Promise<Held | null> {
+    private async held(opts: { ignorePoster?: boolean; ignoreLoop?: boolean } = {}): Promise<Held | null> {
         const now = this.d.now();
         for (const key of (await this.d.storage.list<unknown>({ prefix: "save:" })).keys()) {
             return { kind: "save", sid: key.slice("save:".length) };
@@ -1200,6 +1222,7 @@ export class StudioService {
             if (!rec || now - rec.createdAt >= jobWindowMs(rec)) continue;
             const id = key.slice("job:".length);
             if (await this.d.storage.get(`result:${id}`)) continue;
+            if (rec.keyId.startsWith("loop:")) return { kind: "poster", job: id }; // a gallery link's preview (section 29): background work
             return rec.keyId.startsWith("studio:")
                 ? { kind: "render", sid: rec.keyId.slice("studio:".length), job: id }
                 : { kind: "webp", job: id, owner: rec.keyId };
@@ -1209,6 +1232,9 @@ export class StudioService {
             return { kind: "render", job };
         }
         if (!opts.ignorePoster && this.posterRuns > 0) return { kind: "poster" };
+        // a gallery link's moving preview being started (its upload into the helper; once the helper took
+        // it, its `job:` record above holds the helper). Reported like a poster: background work.
+        if (!opts.ignoreLoop && this.loopRuns > 0) return { kind: "poster" };
         for (const { entry } of await this.line.list()) {
             if (await this.uploading(entry, now)) {
                 return { kind: "render", sid: entry.sid, job: entry.job ?? undefined, owner: entry.keyId };
@@ -3095,6 +3121,20 @@ export class StudioService {
         return all;
     }
 
+    // POST /loops/kick (section 29): queues the moving previews still missing for live gallery links.
+    // Records only; the sweep makes them. `clean` (the daily cron) also deletes previews of videos that
+    // were deleted or made private.
+    async kickLoops(limit?: number, clean = false): Promise<StudioReply> {
+        if (!this.loops) return studioErr(503, "error.api.generic");
+        try {
+            const r = await this.loops.kick(limit ?? LOOP_KICK_MAX, { clean });
+            return { status: 200, body: { status: "success", ...r } };
+        } catch (e) {
+            console.error("[studio] preview kick failed", String(e));
+            return studioErr(503, "error.api.generic");
+        }
+    }
+
     // POST /posters/kick (the Worker's call: the library read, the cron, the backfill route):
     // queues the posters still missing. Never wakes the container (the sweep does the work).
     async kickPosters(limit?: number): Promise<StudioReply> {
@@ -4547,6 +4587,22 @@ export class StudioService {
                 pending++;
             }
         }
+
+        // gallery links' moving previews (section 29): one at a time, only while nothing else needs the helper
+        if (this.loops) {
+            try {
+                this.loopRuns++;
+                const run = this.loops.sweep();
+                const done = () => {
+                    this.loopRuns--;
+                };
+                void run.then(done, done);
+                pending += await raceCeiling(run, itemMs, "sweep of previews");
+            } catch (e) {
+                console.error("[studio] sweep: preview failed", String(e));
+                pending++;
+            }
+        }
         return { pending };
     }
 
@@ -4570,6 +4626,7 @@ export const isStudioRoute = (pathname: string) =>
     pathname.startsWith("/studio/") ||
     pathname === "/library/adopt" ||
     pathname === "/posters/kick" ||
+    pathname === "/loops/kick" ||
     pathname === "/helper/caps";
 
 const toResponse = (r: StudioReply) =>
@@ -4654,6 +4711,15 @@ export async function handleStudioRoute(
         const raw = url.searchParams.get("limit");
         const limit = raw !== null && /^\d{1,4}$/.test(raw) ? Number(raw) : undefined;
         return toResponse(await service.kickPosters(limit));
+    }
+
+    // POST /loops/kick?limit=N[&clean=1]: the Worker's own call after a gallery link with a video is made,
+    // and the daily cron's (with clean). Internal like the posters path.
+    if (request.method === "POST" && p === "/loops/kick") {
+        if (!request.headers.get(KEY_ID_HEADER)) return new Response(null, { status: 403 });
+        const raw = url.searchParams.get("limit");
+        const limit = raw !== null && /^\d{1,4}$/.test(raw) ? Number(raw) : undefined;
+        return toResponse(await service.kickLoops(limit, url.searchParams.get("clean") === "1"));
     }
 
     // POST /library/adopt: the web Worker's service call. The Worker only

@@ -964,7 +964,7 @@ model. Deploy: apply 0015, then the API. Checked against a local workerd: tool c
 errors, the call cap and the 30 s timeout. The CPU cap (an endless loop) is enforced only on Cloudflare, not in a local
 workerd.
 
-## Stage (`APP-API-CONTRACT.md` section 29)
+## Stage (`APP-API-CONTRACT.md` section 30)
 
 A 1080p stream canvas that OBS loads as a Browser Source, a public viewer store, and Twitch channel-point redemptions
 (summon, chaos, shuffle, pin) that act on the canvas. In code, routes and tables it is **stage** (`src/stage.ts`,

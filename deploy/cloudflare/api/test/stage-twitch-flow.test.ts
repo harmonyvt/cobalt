@@ -1,4 +1,4 @@
-// Stage (APP-API-CONTRACT.md section 29.8-29.10): connecting Twitch, keeping the rewards and the EventSub
+// Stage (APP-API-CONTRACT.md section 30.8-29.10): connecting Twitch, keeping the rewards and the EventSub
 // subscription in step, the webhook, and what each redemption does. Fake Twitch, fake room, real SQL.
 import { describe, expect, it } from "vitest";
 import { syncGuard } from "../src/stage";
@@ -22,7 +22,7 @@ async function live(opts: Parameters<typeof world>[0] = {}) {
 const itemCode = (w: World, id: string) => w.one("SELECT code FROM stage_codes WHERE item_id = ?", id).code as string;
 const lastRow = (w: World) => w.one("SELECT * FROM stage_redemptions ORDER BY rowid DESC LIMIT 1");
 
-describe("connecting (29.8)", () => {
+describe("connecting (30.8)", () => {
     it("POST /stage/twitch/connect returns the authorize URL and keeps its state for 10 minutes", async () => {
         const w = await world();
         const r = await w.owner("POST", "/stage/twitch/connect");
@@ -241,7 +241,7 @@ describe("connecting (29.8)", () => {
     });
 });
 
-describe("tokens (29.8)", () => {
+describe("tokens (30.8)", () => {
     it("are refreshed when they expire within 5 minutes, and the new ones are stored encrypted", async () => {
         const { w, files } = await live();
         w.tick(14400 * 1000 - 4 * 60_000);
@@ -294,7 +294,7 @@ describe("tokens (29.8)", () => {
     });
 });
 
-describe("disconnecting (29.8)", () => {
+describe("disconnecting (30.8)", () => {
     it("DELETE /stage/twitch removes the subscription, the rewards and the row", async () => {
         const { w } = await live();
         const r = await w.owner("DELETE", "/stage/twitch");
@@ -351,7 +351,7 @@ describe("disconnecting (29.8)", () => {
     });
 });
 
-describe("PATCH /stage/rewards/<action> (29.10)", () => {
+describe("PATCH /stage/rewards/<action> (30.10)", () => {
     it("validates", async () => {
         const w = await world();
         for (const body of [{}, { cost: 0 }, { cost: 1_000_001 }, { cost: 1.5 }, { cost: "5" }, { cooldown_seconds: -1 }, { cooldown_seconds: 604_801 }, { enabled: "yes" }]) {
@@ -410,7 +410,7 @@ describe("PATCH /stage/rewards/<action> (29.10)", () => {
     });
 });
 
-describe("the EventSub webhook (29.9)", () => {
+describe("the EventSub webhook (30.9)", () => {
     it("answers the verification challenge as text/plain", async () => {
         const w = await world();
         const r = await w.deliver("webhook_callback_verification", { challenge: "pogchamp-kappa-360noscope-vohiyo", subscription: {} });
@@ -503,7 +503,7 @@ describe("the EventSub webhook (29.9)", () => {
     });
 });
 
-describe("summon (29.9)", () => {
+describe("summon (30.9)", () => {
     it("by code, in any case: the spotlight, a toast, FULFILLED, and a done row", async () => {
         const { w, files } = await live();
         const code = itemCode(w, files[1]!.id);
@@ -599,7 +599,7 @@ describe("summon (29.9)", () => {
     });
 });
 
-describe("refunds (29.9)", () => {
+describe("refunds (30.9)", () => {
     it("off air: every action is refunded with off_air, nothing is pushed", async () => {
         const { w, files } = await live();
         await w.owner("PATCH", "/stage", { on_air: false });
@@ -632,7 +632,7 @@ describe("refunds (29.9)", () => {
     });
 });
 
-describe("chaos, shuffle and pin (29.9)", () => {
+describe("chaos, shuffle and pin (30.9)", () => {
     it("chaos lasts 30 s; another extends it to at most 60 s from now", async () => {
         const { w } = await live();
         await w.redeem("chaos", "", { user: "Ann", cost: 2000 });
@@ -671,7 +671,7 @@ describe("chaos, shuffle and pin (29.9)", () => {
     });
 });
 
-describe("reward edits adopt what is on the channel (29.8, 29.10)", () => {
+describe("reward edits adopt what is on the channel (30.8, 30.10)", () => {
     it("PATCH /stage/rewards/<action> on a row that lost its id adopts the reward, not a second 'capystore' one", async () => {
         const { w } = await live();
         const id = w.rewardId("chaos");
@@ -700,7 +700,7 @@ describe("reward edits adopt what is on the channel (29.8, 29.10)", () => {
     });
 });
 
-describe("one setup at a time, but never stuck (29.8)", () => {
+describe("one setup at a time, but never stuck (30.8)", () => {
     it("a running setup blocks the next GET /stage's for a minute, then the guard lets go", async () => {
         const w = await world();
         w.twitch.failSubscriptions = true;
@@ -722,7 +722,7 @@ describe("one setup at a time, but never stuck (29.8)", () => {
     });
 });
 
-describe("a redemption with nothing to act on is refunded (29.9)", () => {
+describe("a redemption with nothing to act on is refunded (30.9)", () => {
     it("chaos and shuffle with an empty pool: CANCELED, no_effect, a refunded toast, nothing on the canvas", async () => {
         const w = await world();
         await w.goLive();
@@ -777,7 +777,7 @@ describe("a redemption with nothing to act on is refunded (29.9)", () => {
     });
 });
 
-describe("a redemption always ends (29.9)", () => {
+describe("a redemption always ends (30.9)", () => {
     it("a search that does not answer is given up on after the search budget, the summon falls back to the title", async () => {
         const { w } = await live({ search: true, limits: { searchMs: 40 } });
         w.space.hang = true;
@@ -820,7 +820,7 @@ describe("a redemption always ends (29.9)", () => {
     });
 });
 
-describe("a stale search pool never holds a request up (29.3)", () => {
+describe("a stale search pool never holds a request up (30.3)", () => {
     async function searchPool() {
         const { w, files } = await live({ search: true, limits: { searchMs: 40, ownerSearchMs: 40 } });
         w.space.axes = { cats: 0 };

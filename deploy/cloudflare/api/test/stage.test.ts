@@ -1,4 +1,4 @@
-// Stage (APP-API-CONTRACT.md section 29): settings, the pool, codes, the store and its lock, the canvas token,
+// Stage (APP-API-CONTRACT.md section 30): settings, the pool, codes, the store and its lock, the canvas token,
 // owner actions and capabilities. The Worker and the real SQL run together; the room and the Space are fakes.
 import { describe, expect, it, vi } from "vitest";
 import { AUTH, API, CLIENT, MEDIA, STAGE, T0, world, type World } from "./stage-world";
@@ -15,7 +15,7 @@ const SET3 = "1000000000000000003";
 const ids = (items: { id: string }[]) => items.map((i) => i.id);
 const poolOf = async (w: World) => (await w.siteJson(`/live/${await w.token()}/state`)).body.pool as any[];
 
-describe("capabilities (29.1)", () => {
+describe("capabilities (30.1)", () => {
     const features = async (w: World) => ((await (await w.api("/capabilities")).json()) as any).features;
 
     it("stage is true exactly while STAGE_BASE_URL is an https URL, and stage_twitch needs all three secrets", async () => {
@@ -64,7 +64,7 @@ describe("capabilities (29.1)", () => {
     });
 });
 
-describe("the gate (29.10)", () => {
+describe("the gate (30.10)", () => {
     const req = (method: string, pathname: string, over: Record<string, unknown> = {}) =>
         decide({ method, pathname, searchParams: new URLSearchParams(), origin: null, authorization: `Api-Key ${CLIENT}`, ...over }, { corsUrl: "https://cobalt.capybaraharmony.com", now: T0 });
 
@@ -97,7 +97,7 @@ describe("the gate (29.10)", () => {
     });
 });
 
-describe("settings (29.2, 29.10)", () => {
+describe("settings (30.2, 30.10)", () => {
     it("are created on first read with the documented defaults, a 32-char token and four seeded rewards", async () => {
         const w = await world();
         const { body, status } = await w.owner("GET", "/stage");
@@ -192,7 +192,7 @@ describe("settings (29.2, 29.10)", () => {
     });
 });
 
-describe("the pool (29.3)", () => {
+describe("the pool (30.3)", () => {
     it("library: the public files, newest first; private, deleted and unplayable files never", async () => {
         const w = await world();
         const a = w.file();
@@ -361,7 +361,7 @@ describe("the pool (29.3)", () => {
     });
 });
 
-describe("codes (29.2)", () => {
+describe("codes (30.2)", () => {
     it("every pool item gets a unique 3-char code from the alphabet, kept forever, matched case-insensitively", async () => {
         const w = await world();
         const files = Array.from({ length: 40 }, () => w.file());
@@ -417,7 +417,7 @@ describe("codes (29.2)", () => {
     });
 });
 
-describe("the canvas token and pages (29.4)", () => {
+describe("the canvas token and pages (30.4)", () => {
     it("a wrong token is a plain 404 everywhere", async () => {
         const w = await world();
         await w.token();
@@ -521,7 +521,7 @@ describe("the canvas token and pages (29.4)", () => {
     });
 });
 
-describe("the room's spotlight is checked against the library (29.4, 29.10)", () => {
+describe("the room's spotlight is checked against the library (30.4, 30.10)", () => {
     it("a spotlight whose file went private or was deleted is dropped from /state and GET /stage", async () => {
         const w = await world();
         const a = w.file({ name: "red cat.webp" });
@@ -558,7 +558,7 @@ describe("the room's spotlight is checked against the library (29.4, 29.10)", ()
     });
 });
 
-describe("logs keep the canvas token out (29.4)", () => {
+describe("logs keep the canvas token out (30.4)", () => {
     it("a failing /live/<token>/state logs the path with the token replaced", async () => {
         const w = await world();
         const t = await w.token();
@@ -582,7 +582,7 @@ describe("logs keep the canvas token out (29.4)", () => {
     });
 });
 
-describe("the store and its lock (29.4)", () => {
+describe("the store and its lock (30.4)", () => {
     it("locked (the default): /store is a 404 page that says only 'nothing here.', and every /store/api route is 404 store_locked", async () => {
         const w = await world();
         w.file();
@@ -727,7 +727,7 @@ describe("the store and its lock (29.4)", () => {
     });
 });
 
-describe("owner actions (29.10)", () => {
+describe("owner actions (30.10)", () => {
     it("off air: 409 error.stage.off_air and nothing is sent", async () => {
         const w = await world();
         for (const type of ["skip", "pin", "unpin", "shuffle", "chaos"]) {
@@ -878,7 +878,7 @@ describe("room state rules", () => {
     });
 });
 
-describe("retention (29.2)", () => {
+describe("retention (30.2)", () => {
     it("the daily cron deletes redemptions older than 30 days", async () => {
         const w = await world();
         await w.owner("GET", "/stage");

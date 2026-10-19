@@ -318,7 +318,7 @@ struct AppShell: View {
                     NavigationStack { ChatScreen(model: model, tier: tier) }
                 }
             }
-            // the stream canvas, its store and Twitch channel points (APP-API-CONTRACT 29); "studio" on screen
+            // the stream canvas, its store and Twitch channel points (APP-API-CONTRACT 30); "studio" on screen
             if model.capabilities.stage {
                 Tab(Copy.tab(.stage), systemImage: icon(for: .stage), value: AppTab.stage) {
                     NavigationStack { StageScreen(model: model, tier: tier) }

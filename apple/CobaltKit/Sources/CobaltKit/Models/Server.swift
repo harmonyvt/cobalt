@@ -118,10 +118,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `features.chat` (APP-API-CONTRACT 27): threads with Claude about the library (`/chat/threads`). True exactly while
     /// the server has an Anthropic key and the sandbox loader. False when absent: no chat tab.
     public var chat: Bool = false
-    /// `features.stage` (APP-API-CONTRACT 29): the stream canvas and the viewer store (`/stage`). True exactly while the
+    /// `features.stage` (APP-API-CONTRACT 30): the stream canvas and the viewer store (`/stage`). True exactly while the
     /// server has its stage host. False when absent: no studio tab.
     public var stage: Bool = false
-    /// `features.stage_twitch` (29.1): Twitch channel points (connect, rewards, redemptions). The server sets it exactly
+    /// `features.stage_twitch` (30.1): Twitch channel points (connect, rewards, redemptions). The server sets it exactly
     /// with `stage` and its three Twitch secrets, and so does the app: false whenever `stage` is false. False when
     /// absent: the studio tab then has no Twitch card.
     public var stageTwitch: Bool = false

@@ -1,7 +1,7 @@
 import CobaltKit
 import Foundation
 
-/// Copy for the studio tab (APP-API-CONTRACT section 29; all new, lowercase): the header, the preview, the spotlight bar and
+/// Copy for the studio tab (APP-API-CONTRACT section 30; all new, lowercase): the header, the preview, the spotlight bar and
 /// its pool sheet, the pool picker, the sliders, Twitch, the rewards, the redemptions feed and the links with the store lock.
 /// The code says "stage"; only the words on screen say "studio". Plain values only (counts, dates, CobaltKit types), since
 /// `Cobalt/Design` is compiled into the extensions too.

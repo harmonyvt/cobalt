@@ -1,7 +1,7 @@
 import CobaltKit
 import SwiftUI
 
-// The redemptions feed (APP-API-CONTRACT 29.9, 29.11): what viewers spent their channel points on, newest first, and the
+// The redemptions feed (APP-API-CONTRACT 30.9, 30.11): what viewers spent their channel points on, newest first, and the
 // owner's own actions ("you"). Read every 4 s while the screen is visible (`StageStore.startPolling`); a refunded or failed
 // one says why.
 

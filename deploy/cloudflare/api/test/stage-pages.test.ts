@@ -1,4 +1,4 @@
-// src/stage-pages.ts (APP-API-CONTRACT.md 29.4, 29.5, 29.7): the three pages are strings, so these tests check
+// src/stage-pages.ts (APP-API-CONTRACT.md 30.4, 30.5, 30.7): the three pages are strings, so these tests check
 // the hooks the contract names, that interpolated values are escaped, that the locked page is inert, and that every
 // inline script parses. Behaviour in a real browser was checked by hand against a fake server.
 import vm, { Script } from "node:vm";
@@ -37,7 +37,7 @@ describe("livePage", () => {
         expect(js).toContain("Math.min(wsBackoff * 2, 30000)");
     });
 
-    it("handles every event of 29.6 and ignores the rest", () => {
+    it("handles every event of 30.6 and ignores the rest", () => {
         const js = scripts(html)[0]!;
         for (const t of ["settings", "pool", "summon", "chaos", "shuffle", "pin", "unpin", "skip", "rotated"]) {
             expect(js).toContain(`case '${t}':`);
@@ -301,7 +301,7 @@ function runCanvas() {
     return { sockets, advance, fetches };
 }
 
-describe("livePage heartbeat (29.5)", () => {
+describe("livePage heartbeat (30.5)", () => {
     it("pings every 30 s on an open socket and stays on it while the room answers pong", () => {
         const c = runCanvas();
         expect(c.sockets).toHaveLength(1);

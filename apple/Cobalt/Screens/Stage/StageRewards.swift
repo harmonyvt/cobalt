@@ -1,7 +1,7 @@
 import CobaltKit
 import SwiftUI
 
-// The four rewards (APP-API-CONTRACT 29.2, 29.11): summon, chaos, shuffle and pin as real Twitch channel point rewards. A row
+// The four rewards (APP-API-CONTRACT 30.2, 30.11): summon, chaos, shuffle and pin as real Twitch channel point rewards. A row
 // says what it costs and its cooldown, and has an on / off switch; a tap on the row opens the editor for cost and cooldown.
 // A change goes to Twitch too, so a cost changed here is changed on Twitch.
 

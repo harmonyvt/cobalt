@@ -5,7 +5,7 @@ import UserNotifications
 /// The tabs, in the order they show. `queue` is everything cobalt is doing (apple/CONTRACT.md section 12).
 /// `links` lists the gallery share links (APP-API-CONTRACT 24) and shows only with `features.share_sets`; `chat` holds the
 /// threads with Claude about the library (APP-API-CONTRACT 27) and shows only with `features.chat`; `stage` is the "studio"
-/// tab, the stream canvas and the viewer store (APP-API-CONTRACT 29), after chat, and shows only with `features.stage`.
+/// tab, the stream canvas and the viewer store (APP-API-CONTRACT 30), after chat, and shows only with `features.stage`.
 public enum AppTab: String, Sendable, CaseIterable {
     case save, library, links, chat, stage, queue, settings
 
@@ -58,7 +58,7 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// `GET /library/map` hands over about 150 mock posts in eight clusters (cats, minecraft, anime, cooking, coffee, the
     /// harbour, guitar, skate). `.happy` and `.renditions` serve the same map but do not advertise `features.search`.
     case skyMap
-    /// Stage, the studio tab (APP-API-CONTRACT 29; `PreviewStage.swift`): `.happy` and `.renditions` have `features.stage`
+    /// Stage, the studio tab (APP-API-CONTRACT 30; `PreviewStage.swift`): `.happy` and `.renditions` have `features.stage`
     /// and `stage_twitch` with a connected, on-air stage (a spotlight, four rewards, a few redemptions). `.stageNotConnected`:
     /// off air, Twitch not connected yet (connecting works). `.stageFail`: `GET /stage` always fails (`503`), so the tab shows
     /// its failed state.
@@ -84,7 +84,7 @@ public final class AppModel {
     public let shareSets: ShareSetStore
     /// The chat threads (the chat tab; APP-API-CONTRACT 27). Idle until `refresh()`.
     public let chat: ChatStore
-    /// Stage, the studio tab (APP-API-CONTRACT 29). Idle until `load()`.
+    /// Stage, the studio tab (APP-API-CONTRACT 30). Idle until `load()`.
     public let stage: StageStore
     /// The library as a sky map (APP-API-CONTRACT 21, `GET /library/map`). Idle until `load()`.
     public let skyMap: SkyMapModel
@@ -372,7 +372,7 @@ public final class AppModel {
             return
         }
         if url.host(percentEncoded: false)?.lowercased() == "stage" {
-            // the Twitch sign-in's return (APP-API-CONTRACT 29.4): `cobalt-apple://stage?twitch=connected|failed`. The studio tab
+            // the Twitch sign-in's return (APP-API-CONTRACT 30.4): `cobalt-apple://stage?twitch=connected|failed`. The studio tab
             // reads the stage again either way, so the card shows what Twitch did.
             if capabilities.stage || capabilities.kind == .unreachable { selectedTab = .stage }
             if capabilities.stage { Task { await self.stage.load() } }

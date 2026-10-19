@@ -37,7 +37,7 @@ export default defineConfig({
 		previewUrls: false,
 		// share.: the rich link pages of public files (src/share.ts, APP-API-CONTRACT.md section 22).
 		// The Worker answers that host itself and never wakes the container for it.
-		// studio.: the stage's canvas, store and Twitch webhooks (src/stage.ts, APP-API-CONTRACT.md section 29), also
+		// studio.: the stage's canvas, store and Twitch webhooks (src/stage.ts, APP-API-CONTRACT.md section 30), also
 		// answered by the Worker itself before the gate. (The host says "studio" for the app's tab; the code says stage.)
 		domains: ["api.capybaraharmony.com", "share.capybaraharmony.com", "studio.capybaraharmony.com"],
 		// Daily 03:23 UTC: delete telemetry rows and crash objects older than 30
@@ -123,7 +123,7 @@ export default defineConfig({
 			// Loader the model's code runs in (a fresh Dynamic Worker per run, no network: src/chat-loader.ts).
 			CHAT_MODEL: bindings.text("claude-haiku-5-5"),
 			LOADER: bindings.workerLoader(),
-			// Stage (APP-API-CONTRACT.md section 29): https://<stage host>/ , one of `domains` above; empty turns the stage
+			// Stage (APP-API-CONTRACT.md section 30): https://<stage host>/ , one of `domains` above; empty turns the stage
 			// off (every /stage* route is a 404, `features.stage` false). The three Twitch values are SECRETS from
 			// ~/.config/cobalt/secrets.json (`cf deploy` refuses while a declared one is missing; empty is fine and
 			// leaves canvas and store working without Twitch): the app's client id and secret from dev.twitch.tv, and a

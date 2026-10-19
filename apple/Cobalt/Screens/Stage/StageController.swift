@@ -3,7 +3,7 @@ import CobaltKit
 import Observation
 import SwiftUI
 
-// What the studio screen's parts share (APP-API-CONTRACT section 29.11): the buttons that call the store and say what came of
+// What the studio screen's parts share (APP-API-CONTRACT section 30.11): the buttons that call the store and say what came of
 // it, the confirms (rotate, disconnect), the pick sheet and the reward editor. One controller per screen; the parts are small
 // views that read the store (`model.stage`) and send taps here. `.stagePresentations(_:)` draws the confirms and sheets.
 

@@ -178,7 +178,7 @@ public protocol CobaltClient: Sendable {
     /// `GET /chat/threads/<id>/messages/<message id>/collage?offset=&limit=` (27.5): one page of the collage a reply attached.
     /// `limit` is 1...60. `ChatError.notFound` when the message has no collage, `.badRequest` for a bad offset or limit.
     func chatCollage(threadID: String, messageID: String, offset: Int, limit: Int) async throws -> ChatCollagePage
-    // Stage, the studio tab (APP-API-CONTRACT 29.10; keyed; only when `features.stage`). Defaulted below
+    // Stage, the studio tab (APP-API-CONTRACT 30.10; keyed; only when `features.stage`). Defaulted below
     // (`.unsupported`) so older fakes compile. The routes throw `StageError` for the server's refusals.
     /// `GET /stage`: the stage and its four rewards. Also retries what Twitch refused earlier.
     func stage() async throws -> StageSnapshot

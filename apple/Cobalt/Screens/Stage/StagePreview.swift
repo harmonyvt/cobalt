@@ -2,7 +2,7 @@ import CobaltKit
 import SwiftUI
 import WebKit
 
-// The preview (APP-API-CONTRACT 29.11): a non-interactive web view of `live_url?preview=1` (always muted, no store hint),
+// The preview (APP-API-CONTRACT 30.11): a non-interactive web view of `live_url?preview=1` (always muted, no store hint),
 // 16:9, with "preview · what obs sees" under it. Off air the canvas is empty and see-through, so the card says so instead of
 // loading it. The page is the server's; the app only shows it.
 

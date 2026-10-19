@@ -2355,17 +2355,17 @@ the run fields and the cron drains without a record.
 
 ## 24. Gallery share links (addendum, built 2026-10-17; owner: "select and then hit a button to create a shareable link with gallery in the rich ... the button can not work if I exceed the limit", "a separate tab for all created gallery links and I can revoke anytime")
 
-A share set is 2..4 public files under one link, `https://share.capybaraharmony.com/g/<id>`. In Discord it shows as one embed with the files in a grid (videos play); other apps show the first file. `<id>` is 19 random digits (Discord's post renderer expects numeric status ids; ~63 bits, unguessable). D1 table `share_sets` (migration `0012_share_sets.sql`).
+A share set is 2..10 public files under one link (2..4 until section 29), `https://share.capybaraharmony.com/g/<id>`. In Discord it shows as one embed with the files in a grid (videos play); other apps show the first file. `<id>` is 19 random digits (Discord's post renderer expects numeric status ids; ~63 bits, unguessable). D1 table `share_sets` (migration `0012_share_sets.sql`).
 
 ### 24.1 Routes (keyed `Authorization: Api-Key`; the library service and other methods 404)
 
-- `POST /share/sets` body `{ "items": ["<library file id>", ...], "title"?: "<1..80 chars>" }` → 201 `{ "status": "success", "set": <set> }`. `items` is 2..4 distinct ids (`share_set_max`), in the order shown. Each must be a live file that is public now (the same rows the library calls `visibility: "public"` with a `url`). Errors: 400 `error.share.bad_request` (not 2..4, duplicates, bad shape, title too long); 409 `error.share.not_public` with `"items": [<ids that are missing or private>]`; 503 `error.api.generic`.
+- `POST /share/sets` body `{ "items": ["<library file id>", ...], "title"?: "<1..80 chars>" }` → 201 `{ "status": "success", "set": <set> }`. `items` is 2..10 distinct ids (`share_set_max`), in the order shown. Each must be a live file that is public now (the same rows the library calls `visibility: "public"` with a `url`). Errors: 400 `error.share.bad_request` (not 2..10, duplicates, bad shape, title too long); 409 `error.share.not_public` with `"items": [<ids that are missing or private>]`; 503 `error.api.generic`.
 - `GET /share/sets` → 200 `{ "status": "success", "sets": [<set>, ...] }`, live sets only, newest first, at most 200.
 - `DELETE /share/sets/<id>` → 200 `{ "status": "success" }` (revoked: the link is a 404 at once; repeat is 200). Unknown id 404 `error.share.not_found`.
 
 `<set>` = `{ "id", "url": "<share_base_url>g/<id>", "title": string|null, "created_at": <ms>, "items": [ { "id", "url": <public file URL, or null when it is no longer public>, "content_type", "poster_url", "width", "height", "duration" } ] }`. A set whose files all went private or were deleted stays listed (its page is a 404) until revoked.
 
-`GET /capabilities`: `features.share_sets` is true exactly while `share_base_url` is non-null; `limits.share_set_max` is 4.
+`GET /capabilities`: `features.share_sets` is true exactly while `share_base_url` is non-null; `limits.share_set_max` is 10 (4 before section 29; the app reads it, so no app change was needed).
 
 ### 24.2 The page (`share.` host, no key)
 
@@ -2472,7 +2472,18 @@ Shape: `{ "id": "<16 letters/digits>", "name": "weekend", "created_at": <ms>, "u
 - No reroll and no server-side copy text: the app builds "copy all links" itself (CobaltKit `ShareSetStore.linksText(in: CollectionGroup)`): every live link URL of the group's collections, one per line, in the group's order then each collection's order, a link held by two of its collections once.
 - App: sets are shown only when `features.share_groups` is true: create (name, optionally with collections), rename, delete (confirm: "delete this set? its collections keep their links"), add a collection to sets, remove it from one. Migration 0017 must be applied before the API deploy that ships these routes.
 
-## 29. Stage: the stream canvas, the viewer store and Twitch channel points (addendum, pinned 2026-10-19; owner: "a presentation mode where I can randomly cycle through my media content ... all over the canvas which will be 1080p", "a studio part of the software both macos and ios where I can also have twitch viewers submit points", "a toggle for the store which just locks it entirely not even able to login")
+## 29. Gallery links that move: 10 files and moving previews (addendum, built 2026-10-19; owner: "can we do D with autoplay?", D = a 10-file gallery)
+
+Discord's media gallery shows up to 10 files, and it plays animated images (GIF, WebP) by itself while a video always waits for a tap. So a gallery link now holds up to 10 files, and each public video in a live link gets a moving preview: a short, silent animated WebP that Discord's gallery shows in its place.
+
+- **Limit**: `SHARE_SET_MAX` 10, `limits.share_set_max` 10. Ten media URLs are about 700 bytes, well inside the 3,000-byte component embed limit; over it the description is dropped, then the button, then the component embed (Open Graph alone).
+- **The preview**: the video's first 4 s (its whole length when shorter; none under 0.5 s), 480 px wide (320 when the video is narrower), 12 fps, quality `low`. Made by the helper's ordinary webp job (`POST /jobs/upload`, owner label `loop:<item id>`) from the stored file (the private original, or the public copy when that is the only one), so the line sees it as a running job, the job sweep collects it into the PUBLIC bucket as `<10 base62>.webp`, and no library row is written. One at a time, only while nothing else needs the helper, like posters. D1 `media_loops` (migration 0018): `item_id`, `url`, `r2_key`, `bytes`, `tried_at`, `made_at`. A file the helper refuses, or a third failure, waits a day.
+- **Queued**: `POST /share/sets` with a video asks the Durable Object (`POST /loops/kick`, internal) to queue the link's videos, through `waitUntil`; the daily cron kicks again (`?limit=50&clean=1`) for anything missed and deletes the previews of videos that were deleted or made private (object and row).
+- **The page** (`GET /g/<id>`, Discord's crawler only): in the component embed's Media Gallery a video with a preview is that WebP; when any is, the container ends with an Action Row holding one link Button (style 5) `watch with sound` to the page itself, where the videos play with controls. Open Graph is unchanged (the first video stays `og:video`), so every other app is as before. Without the table (0018 not applied) the page is exactly what it was.
+- **Not changed**: the app (it follows `limits.share_set_max`), the helper and the container image, the Mastodon status and oEmbed routes.
+- Deploy: apply 0018, then the API Worker. Check one link in Discord: the gallery should move without a tap.
+
+## 30. Stage: the stream canvas, the viewer store and Twitch channel points (addendum, pinned 2026-10-19; owner: "a presentation mode where I can randomly cycle through my media content ... all over the canvas which will be 1080p", "a studio part of the software both macos and ios where I can also have twitch viewers submit points", "a toggle for the store which just locks it entirely not even able to login")
 
 Approved mockup: https://claude.ai/artifact/ANXn8CohVKhHrGWuuW1Tsd (boards: stream canvas, Mac studio, iPhone studio, store).
 Owner decisions (2026-10-19 thread): the canvas is a web page at a URL with a secret token that OBS loads as a
@@ -2487,11 +2498,11 @@ the store has a lock that turns the whole store off, sign-in included.
 (`stage.ts`, `/stage`, `stage_*`, `Stage*`). Only user-facing copy says "studio": the app tab, and the host
 `studio.capybaraharmony.com`.
 
-### 29.1 Hosts, config, capability
+### 30.1 Hosts, config, capability
 
 - New Worker domain `studio.capybaraharmony.com` on the API Worker (`cloudflare.config.ts` `domains`), plain var
   `STAGE_BASE_URL = "https://studio.capybaraharmony.com/"`. Like the share host, the Worker answers that host itself,
-  before the gate, never wakes the container, sends no CORS, and serves only the paths in 29.4 (anything else 404).
+  before the gate, never wakes the container, sends no CORS, and serves only the paths in 30.4 (anything else 404).
 - Secrets (all from `~/.config/cobalt/secrets.json`; `cf deploy` refuses while a declared one is missing, so the
   owner adds them first, empty is fine): `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_EVENTSUB_SECRET`
   (10..100 ASCII chars, made by the owner, e.g. `openssl rand -hex 32`).
@@ -2501,16 +2512,16 @@ the store has a lock that turns the whole store off, sign-in included.
   Any request to a `studio.*` host that is not the configured stage host (stage off, or another name) is a plain 404
   before the gate: it never reaches the API's routes.
 - New Durable Object class `StageRoom` (binding `STAGE_ROOM`, sqlite storage, one instance `idFromName("main")`):
-  holds the canvas WebSockets (hibernation API) and fans out events (29.6). Imported only by `index.ts`, like
+  holds the canvas WebSockets (hibernation API) and fans out events (30.6). Imported only by `index.ts`, like
   `ModelRelay`.
-- D1 migration `0019_stage.sql` (owner applies it before the API deploy): tables in 29.2. Additive only.
+- D1 migration `0019_stage.sql` (owner applies it before the API deploy): tables in 30.2. Additive only.
 
-### 29.2 D1 (migration 0019)
+### 30.2 D1 (migration 0019)
 
 - `stage_settings`: exactly one row, `id = 'main'`, created on first read with the defaults below. Columns:
   `on_air` (0/1, default 0), `pool_kind` (`'library'|'collection'|'group'|'search'`, default `'library'`),
   `pool_ref` (collection or group id, or the search words; NULL for library), `pool_ids` (JSON array of
-  `media_items` ids: the resolved pool, see 29.3), `pool_at` (ms), `density` (5..100, default 30), `tile_seconds`
+  `media_items` ids: the resolved pool, see 30.3), `pool_at` (ms), `density` (5..100, default 30), `tile_seconds`
   (3..30, default 10), `tile_scale` (0.5..1.6, default 1.0), `spotlight_auto` (0/1, default 1),
   `spotlight_seconds` (10..120, default 20), `sound` (0/1, default 1), `video_max` (0..24, default 12),
   `store_open` (0/1, default 0: the store starts locked), `store_hint` (0/1, default 1), `live_token` (32 random
@@ -2536,7 +2547,7 @@ the store has a lock that turns the whole store off, sign-in included.
   `created_at`. A pool item gets a code the first time the pool is resolved with it in; codes never change and are
   matched case-insensitively. When 3-char codes run low (more than half used) new ones are 4 chars.
 
-### 29.3 The pool
+### 30.3 The pool
 
 The pool is a list of **public** library files (images, GIFs, videos, WebPs): a file is in it only while it is
 public (section 16: a file the library reports with `public: true` and a public `url`); private files never reach
@@ -2560,9 +2571,9 @@ Item shape (canvas and app): `{ "id": "<media_items id>", "code": "K7Q", "title"
 "width": <n>|null, "height": <n>|null, "duration": <s>|null }` (GIF and WebP are `image`). Store items leave out
 `url` and `duration` and carry `thumb_url` (the poster for a video, else the file itself).
 
-### 29.4 The stage host (`studio.capybaraharmony.com`, public, no key)
+### 30.4 The stage host (`studio.capybaraharmony.com`, public, no key)
 
-- `GET /live/<token>` → `200 text/html`, the canvas page (29.5). `?preview=1` is the app's preview: always muted,
+- `GET /live/<token>` → `200 text/html`, the canvas page (30.5). `?preview=1` is the app's preview: always muted,
   no store hint. Wrong token: plain `404`. `cache-control: no-store`, `x-robots-tag: noindex`.
 - `GET /live/<token>/state` → `200 { "status": "success", "stage": <canvas settings>, "pool": [<item>, ...],
   "spotlight": <spotlight>|null }`. `<canvas settings>` = `{ on_air, density, tile_seconds, tile_scale,
@@ -2571,8 +2582,8 @@ Item shape (canvas and app): `{ "id": "<media_items id>", "code": "K7Q", "title"
   "owner", "pinned_until": <ms>|null, "at": <ms> }`: the last summon or owner pick, if newer than
   `spotlight_seconds` or pinned. Also `chaos_until` (ms) and `chaos_by` (both null outside chaos) and `now` (the
   server clock) so a page that connects mid-chaos catches up. Wrong token: 404 `error.stage.not_found`.
-- `GET /live/<token>/ws` → WebSocket upgrade, handed to `StageRoom`. Wrong token: 404. Events in 29.6.
-- `GET /store` → `200 text/html`, the store page (29.7). **Locked** (`store_open = 0`): `404 text/html`, a tiny page
+- `GET /live/<token>/ws` → WebSocket upgrade, handed to `StageRoom`. Wrong token: 404. Events in 30.6.
+- `GET /store` → `200 text/html`, the store page (30.7). **Locked** (`store_open = 0`): `404 text/html`, a tiny page
   that says only "nothing here." with no script, no sign-in and no Twitch client id in it, and every
   `/store/api/*` route answers 404 `error.stage.store_locked`. Locking closes the store for everyone at once: no
   cached HTML (`cache-control: no-store`).
@@ -2588,12 +2599,12 @@ Item shape (canvas and app): `{ "id": "<media_items id>", "code": "K7Q", "title"
   beyond what redemptions already hold, and answers `200 { "status": "success", "user": { "id", "login" },
   "summons": [{ "item": <store item>|null, "input", "status", "reason", "created_at" }] }` (that user's last 10
   summons). Bad or expired token: 401 `error.stage.twitch_auth`. Twitch not configured: 404 `error.stage.off`.
-- `GET /twitch/callback?code=&state=` → the broadcaster OAuth return (29.8). Answers a small html page ("twitch is
+- `GET /twitch/callback?code=&state=` → the broadcaster OAuth return (30.8). Answers a small html page ("twitch is
   connected. you can close this.") that also redirects to `cobalt-apple://stage?twitch=connected` (or
   `?twitch=failed&reason=<code>`).
-- `POST /twitch/eventsub` → the EventSub webhook (29.9).
+- `POST /twitch/eventsub` → the EventSub webhook (30.9).
 
-### 29.5 The canvas page
+### 30.5 The canvas page
 
 Self-contained HTML (no external script; IBM Plex Mono from Google Fonts is the only external request), black
 background, 1920×1080 logical canvas scaled to the window (`transform: scale`), meant for an OBS Browser Source at
@@ -2619,7 +2630,7 @@ connection a NAT or a sleeping machine killed never fires `close`, which is why.
 - Store hint (bottom right) while `store_hint` and `store_url`: "spend points: studio.capybaraharmony.com/store".
 - Copy is lowercase like the app.
 
-### 29.6 Canvas events (WebSocket, JSON text frames, server → page only)
+### 30.6 Canvas events (WebSocket, JSON text frames, server → page only)
 
 `{ "type": "settings", "stage": <canvas settings> }` (any `PATCH /stage`), `{ "type": "pool" }` (the pool changed:
 reload `state`), `{ "type": "summon", "spotlight": <spotlight>, "toast": <toast> }`, `{ "type": "chaos", "until":
@@ -2627,7 +2638,7 @@ reload `state`), `{ "type": "summon", "spotlight": <spotlight>, "toast": <toast>
 "toast": <toast>|null }`, `{ "type": "unpin" }`, `{ "type": "skip" }` (drop the spotlight now and pick again),
 `{ "type": "rotated" }` (sent right before the room closes every socket after a token rotation),
 `{ "type": "toast", "toast": <toast> }` (a refunded summon: `cost: 0`, `refunded: true`, detail
-`nothing matched "<words>", points refunded`, and the same shape for the other refunds in 29.9 with `action` the
+`nothing matched "<words>", points refunded`, and the same shape for the other refunds in 30.9 with `action` the
 redeemed one; the canvas is otherwise unchanged). Owner actions send `toast: null`.
 A new summon replaces the spotlight and clears any pin. A chaos during a chaos extends `until` by 30 s, to at most
 60 s from now. `<toast>` =
@@ -2639,7 +2650,7 @@ random spotlights without telling the room, so a pin never brings an older summo
 then show no spotlight until the next summon. A room spotlight is checked against the library on every `state` and
 `GET /stage`: a file made private or deleted since is dropped.
 
-### 29.7 The store page
+### 30.7 The store page
 
 Self-contained HTML in the mockup's look (black, IBM Plex Mono, lowercase): header ("capystore studio", "live now"
 while on air), "spend channel points to put stuff on stream.", the three steps, the enabled rewards, "tonight's
@@ -2657,7 +2668,7 @@ points. points are spent on twitch."). Works at phone width.
   forgets it (and calls `https://id.twitch.tv/oauth2/revoke`). No cookie, nothing stored server side.
 - Infinite scroll with `next`. Empty pool: "nothing in the pool right now."
 
-### 29.8 Connecting Twitch (owner, keyed)
+### 30.8 Connecting Twitch (owner, keyed)
 
 - `POST /stage/twitch/connect` (keyed) → `200 { "status": "success", "authorize_url": "https://id.twitch.tv/oauth2/authorize?response_type=code&client_id=…&redirect_uri=<STAGE_BASE_URL>twitch/callback&scope=channel%3Amanage%3Aredemptions&state=<32 base62>&force_verify=true" }`.
   The state is stored with its time (valid 10 minutes, single use). The app opens it in an
@@ -2687,7 +2698,7 @@ points. points are spent on twitch."). Works at phone width.
   Twitch call has a 10 s limit, one setup runs at a time (a setup that never came back stops blocking after 60 s), and
   the app access token is kept between requests until it nearly expires (dropped on a 401).
 
-### 29.9 Redemptions (EventSub webhook)
+### 30.9 Redemptions (EventSub webhook)
 
 - Verify every request: `Twitch-Eventsub-Message-Signature` = `sha256=` + hex HMAC-SHA-256(`TWITCH_EVENTSUB_SECRET`,
   message id + timestamp + raw body), compared in constant time; timestamp within 10 minutes; a message id seen in
@@ -2707,7 +2718,7 @@ points. points are spent on twitch."). Works at phone width.
     (best pool post, then its first public file), else a title substring match; nothing → refund, `no_match`, and
     a toast "@name: nothing matched "<words>", points refunded". Found → spotlight event, `FULFILLED`.
   - `chaos`: `until = now + 30 s` (another chaos extends it to at most 60 s from now). `shuffle`: event.
-    `pin`: `pinned_until = now + 120 s` on the current spotlight (see 29.6 for which one it can hold).
+    `pin`: `pinned_until = now + 120 s` on the current spotlight (see 30.6 for which one it can hold).
   - Nothing to act on: `chaos` or `shuffle` with an empty pool, and `pin` with `spotlight_auto` off and no current
     spotlight (no summon or owner pick newer than `spotlight_seconds`, none pinned), are refunded (`CANCELED`) with
     reason `no_effect` and a refunded toast ("the pool is empty, points refunded", "no spotlight to keep, points
@@ -2718,7 +2729,7 @@ points. points are spent on twitch."). Works at phone width.
     custom_rewards/redemptions` with `FULFILLED`/`CANCELED`. A Helix failure leaves the redemption in Twitch's queue
     (the owner can refund there) and the row `failed`.
 
-### 29.10 Owner routes (keyed; a service credential gets 404; `cache-control: no-store`)
+### 30.10 Owner routes (keyed; a service credential gets 404; `cache-control: no-store`)
 
 `<stage>` = `{ "on_air", "pool": { "kind", "ref": <id or words>|null, "name": "<collection/set name, the words, or
 'whole library'>"|null, "count": <n>, "missing": bool }, "density", "tile_seconds", "tile_scale",
@@ -2731,7 +2742,7 @@ then empty). `<reward>` = `{ "action", "title", "cost", "cooldown_seconds", "ena
 <item>|null, "status", "reason", "created_at" }`.
 
 - `GET /stage` → `200 { "status": "success", "stage": <stage>, "rewards": [<reward> ×4] }`. `GET /live/<token>/state`,
-  `GET /store/api/pool` and this route never wait on a search pool's refresh (29.3): they answer from the stored
+  `GET /store/api/pool` and this route never wait on a search pool's refresh (30.3): they answer from the stored
   ids and one refresh runs after the response (its search limited to 5 s; a failed one is tried again later).
   `PATCH /stage` with a search pool waits for its search (15 s, then 503 `error.stage.search_unavailable`).
 - `PATCH /stage` `{ any of on_air, pool: { kind, ref }, density, tile_seconds, tile_scale, spotlight_auto,
@@ -2754,11 +2765,11 @@ then empty). `<reward>` = `{ "action", "title", "cost", "cooldown_seconds", "ena
   saves (out-of-range values are 400 `error.stage.bad_request`, not clamped), then updates the Twitch reward (when
   connected); `200 { "status": "success", "reward": <reward> }`, with
   `synced: false` when Twitch refused (the next `GET /stage` retries).
-- `POST /stage/twitch/connect`, `DELETE /stage/twitch`: 29.8. Without `stage_twitch`: 404 `error.stage.twitch_off`.
+- `POST /stage/twitch/connect`, `DELETE /stage/twitch`: 30.8. Without `stage_twitch`: 404 `error.stage.twitch_off`.
 - Errors: `400 error.stage.bad_request`, `404 error.stage.off|not_found|twitch_off`, `409 error.stage.off_air`,
   `503 error.stage.search_unavailable|error.api.generic`.
 
-### 29.11 App (apple/)
+### 30.11 App (apple/)
 
 - `Capabilities.stage`, `Capabilities.stageTwitch` from `features.stage`, `features.stage_twitch`.
 - New tab `AppTab.stage`, label "studio", after chat (save · library · links · chat · studio · settings), shown only

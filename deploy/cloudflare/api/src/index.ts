@@ -34,7 +34,7 @@ export interface Env extends WorkerEnv {
     VERSION?: { id: string; tag?: string; timestamp?: string };
     // The Anthropic relay (src/model-relay.ts): chat and captions call the model through it.
     MODEL_RELAY?: DurableObjectNamespace;
-    // The stage's canvas room (src/stage-room.ts, APP-API-CONTRACT.md section 29): one instance, "main".
+    // The stage's canvas room (src/stage-room.ts, APP-API-CONTRACT.md section 30): one instance, "main".
     STAGE_ROOM?: DurableObjectNamespace;
 }
 
@@ -219,6 +219,8 @@ export class CobaltContainer extends Container<Env> {
             // server-made posters and `public: true` hosting (APP-API-CONTRACT.md section 13)
             media: env.MEDIA,
             mediaBaseUrl: env.MEDIA_BASE_URL,
+            // a gallery link's moving previews read a public-only video back (section 29)
+            mediaRead: env.MEDIA,
             // edge-cache purge for `public: true` hosting (section 16)
             purge: purgeFrom(env),
         });
@@ -355,7 +357,7 @@ export default {
             codeRunner: env.LOADER ? loaderRunner(env.LOADER as WorkerLoader) : undefined,
             waitUntil: (p) => ctx.waitUntil(p),
             modelFetch: env.MODEL_RELAY ? relayFetch(env.MODEL_RELAY as any) : undefined,
-            // stage (section 29): the canvas WebSockets and the events pushed to them
+            // stage (section 30): the canvas WebSockets and the events pushed to them
             stageRoom: env.STAGE_ROOM ? roomPort(env.STAGE_ROOM as any) : undefined,
         });
     },
@@ -410,7 +412,7 @@ export default {
                 (e) => console.error("[telemetry] retention failed", e instanceof Error ? e.name : "error"),
             ),
         );
-        // stage redemptions older than 30 days, and spent EventSub message ids (section 29.2)
+        // stage redemptions older than 30 days, and spent EventSub message ids (section 30.2)
         ctx.waitUntil(
             stageRetention(env.DB, Date.now()).then(
                 (r) => console.log("[stage] retention", JSON.stringify(r)),
@@ -428,6 +430,21 @@ export default {
                 .then(
                     async (res) => console.log("[posters] daily kick", res.status, await res.text().catch(() => "")),
                     (e) => console.error("[posters] daily kick failed", e instanceof Error ? e.name : "error"),
+                ),
+        );
+        // Gallery links' moving previews (APP-API-CONTRACT.md section 29): the backfill of anything a
+        // link's own kick missed, and the removal of previews whose video was deleted or made private.
+        ctx.waitUntil(
+            getContainer(env.COBALT, "main")
+                .fetch(
+                    new Request("https://do.internal/loops/kick?limit=50&clean=1", {
+                        method: "POST",
+                        headers: { [KEY_ID_HEADER]: "cron:loops" },
+                    }),
+                )
+                .then(
+                    async (res) => console.log("[loops] daily kick", res.status, await res.text().catch(() => "")),
+                    (e) => console.error("[loops] daily kick failed", e instanceof Error ? e.name : "error"),
                 ),
         );
     },

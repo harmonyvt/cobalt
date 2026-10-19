@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import CobaltKit
 
-// Stage, the studio tab (APP-API-CONTRACT 29): the capability, the wire shapes of the owner routes (29.10), the patch and its
+// Stage, the studio tab (APP-API-CONTRACT 30): the capability, the wire shapes of the owner routes (30.10), the patch and its
 // clamps, the nine routes and their refusals, the preview server, and the store: load, switches, the debounced sliders (last
 // write wins), rewards, rotate, Twitch connect and disconnect, and the feed polled every 4 s only while it is asked to.
 

@@ -1,4 +1,4 @@
-// Stage (APP-API-CONTRACT.md section 29.8, 29.9): the Twitch side. OAuth for the broadcaster, the
+// Stage (APP-API-CONTRACT.md section 30.8, 30.9): the Twitch side. OAuth for the broadcaster, the
 // Helix calls for channel point rewards and their redemptions, the EventSub webhook subscription, the
 // webhook's HMAC check, and the encryption of the stored tokens. `fetch` and `now` are injected so the
 // tests run with fakes and no network. Free of Cloudflare imports (WebCrypto and fetch only).
@@ -268,7 +268,7 @@ export function twitchClient(
     };
 }
 
-// ---- EventSub webhook signature (29.9) ------------------------------------------------------------
+// ---- EventSub webhook signature (30.9) ------------------------------------------------------------
 
 const enc = new TextEncoder();
 
@@ -303,7 +303,7 @@ export async function signEventSub(secret: string, messageId: string, timestamp:
     return `sha256=${bytesToHex(new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(messageId + timestamp + rawBody))))}`;
 }
 
-// ---- stored tokens (29.2): AES-GCM, key = HKDF-SHA-256 of the client secret ----------------------------
+// ---- stored tokens (30.2): AES-GCM, key = HKDF-SHA-256 of the client secret ----------------------------
 
 const b64 = (b: Uint8Array): string => {
     let s = "";

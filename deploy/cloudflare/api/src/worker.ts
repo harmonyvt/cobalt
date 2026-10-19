@@ -107,7 +107,7 @@ export interface WorkerEnv {
     // binding the model's code runs in. The runner itself comes in through EdgeDeps (index.ts).
     CHAT_MODEL?: string;
     LOADER?: unknown;
-    // Stage (section 29): https://<stage host>/ (a plain var; the Worker answers that host itself, before the gate) and
+    // Stage (section 30): https://<stage host>/ (a plain var; the Worker answers that host itself, before the gate) and
     // the three Twitch secrets. Absent or not https: no stage. Missing secrets: canvas and store only.
     STAGE_BASE_URL?: string;
     TWITCH_CLIENT_ID?: string;
@@ -203,7 +203,7 @@ export async function handleRequest(
             incoming,
         );
     }
-    // The stage host serves the canvas, the store and the Twitch webhooks (section 29.4): no key, no container, no CORS.
+    // The stage host serves the canvas, the store and the Twitch webhooks (section 30.4): no key, no container, no CORS.
     // Its own gate is the canvas token, the store lock and the EventSub signature.
     const stageNow = deps.now ?? (() => Date.now());
     const stage = stageDepsFrom(env, { now: stageNow, waitUntil: deps.waitUntil }, deps);
@@ -448,7 +448,29 @@ async function handleInner(
         if (decision.then === "share_sets_create" || decision.then === "share_sets_list" || decision.then === "share_sets_revoke") {
             const shareBaseUrl = shareHost(env) ? env.SHARE_BASE_URL : undefined;
             if (!shareBaseUrl) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
-            const sd = { db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, shareBaseUrl, now: edge.now, captioner: edge.captioner ?? captionerFrom(env, edge.modelFetch) };
+            const sd = {
+                db: env.DB,
+                mediaBaseUrl: env.MEDIA_BASE_URL,
+                shareBaseUrl,
+                now: edge.now,
+                captioner: edge.captioner ?? captionerFrom(env, edge.modelFetch),
+                // a new link's videos get moving previews (section 29): the Durable Object only writes records
+                kickLoops: async () => {
+                    const p = container
+                        .fetch(
+                            new Request("https://do.internal/loops/kick", {
+                                method: "POST",
+                                headers: { [KEY_ID_HEADER]: "worker:loops" },
+                            }),
+                        )
+                        .then(
+                            (res) => void res.body?.cancel().catch(() => {}),
+                            (e) => console.error("[loops] kick failed", e instanceof Error ? e.name : "error"),
+                        );
+                    if (edge.waitUntil) edge.waitUntil(p);
+                    else await p;
+                },
+            };
             const r =
                 decision.then === "share_sets_create"
                     ? await createShareSet(sd, request, keyId)
@@ -563,7 +585,7 @@ async function handleInner(
             res.headers.set("cache-control", "no-store");
             return res;
         }
-        // Stage owner routes (section 29.10): D1, the StageRoom Durable Object and Twitch; never the container.
+        // Stage owner routes (section 30.10): D1, the StageRoom Durable Object and Twitch; never the container.
         if (decision.then?.startsWith("stage_")) {
             const sd = stageDepsFrom(env, edge, stageEdge);
             const reply = sd

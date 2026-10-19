@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// SF Symbols for the studio tab (APP-API-CONTRACT section 29): the tab, the spotlight bar, the pool, Twitch, the rewards, the
+/// SF Symbols for the studio tab (APP-API-CONTRACT section 30): the tab, the spotlight bar, the pool, Twitch, the rewards, the
 /// links. An extension of `Symbol` in its own file, compiled into the extensions too (`Cobalt/Design`). Every name exists since
 /// SF Symbols 4, so it resolves on iOS 26 and macOS 26.
 extension Symbol {
