@@ -20,6 +20,8 @@ struct LibraryTable: View {
     let rows: [LibraryRow]
     @Bindable var controller: LibraryController
     let footer: LibraryFooter
+    /// What is already shared, for the badges after the title.
+    var shareIndex: ShareSetIndex = .empty
 
     @State private var width: CGFloat = 1000
     @State private var removing: MediaItem?
@@ -77,14 +79,19 @@ struct LibraryTable: View {
     // MARK: table
 
     var body: some View {
+        // the picks' numbers, the same as the select pill's thumbnails
+        let numbers = LibraryPickNumbers.of(rows, controller: controller)
         Table(rows, selection: $controller.selection, sortOrder: sortOrder) {
             TableColumn(Copy.Library2.colTitle, value: \.title) { row in
                 HStack(spacing: 8) {
                     if controller.selecting, row.shareable {
                         // A click that only moves the inspector selection does not run `primaryAction`, so the tick
                         // itself toggles. It is not its own VoiceOver control; the cell carries `.isSelected`.
-                        Button { controller.togglePick(row) } label: {
-                            LibraryPickMark(ticked: controller.picked.contains(row.id))
+                        Button {
+                            if controller.takeSwallowedTap() { return }
+                            controller.togglePick(row)
+                        } label: {
+                            LibraryPickMark(ticked: controller.picked.contains(row.id), number: numbers[row.id])
                                 .frame(width: 28, height: 28)
                                 .contentShape(Rectangle())
                         }
@@ -93,7 +100,13 @@ struct LibraryTable: View {
                     }
                     LibraryThumb(row: row, side: 24, reload: controller.reload)
                     LibraryTitleText(row: row, size: 11.5, weight: .medium)
+                    let share = shareIndex.status(for: row.item)
+                    if share.isShared { SharedTileBadges(share: share) }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                // hold a row while selecting to see its media, as on a tile
+                .peekOnHold(row, controller: controller, enabled: controller.selecting)
                 .onAppear { if lastIDs.contains(row.id) { controller.loadMoreIfNeeded() } }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
@@ -188,6 +201,10 @@ struct LibraryListRow: View {
     let reload: Int
     var selecting = false
     var ticked = false
+    /// The order it was picked in (the select pill's thumbnails carry the same number).
+    var number: Int? = nil
+    /// How many links (and collections) already hold the post.
+    var share = ShareStatus()
     @Environment(\.dynamicTypeSize) private var typeSize
 
     private var stacked: Bool { typeSize.isAccessibilitySize }
@@ -202,7 +219,10 @@ struct LibraryListRow: View {
                         VStack(alignment: .leading, spacing: 3) {
                             LibraryTitleText(row: row, size: 13).lineLimit(nil)
                             Text(meta).font(CobaltType.captionSmall).foregroundStyle(.secondary)
-                            LibraryRowBadges(row: row, model: model)
+                            HStack(spacing: 6) {
+                                LibraryRowBadges(row: row, model: model)
+                                if share.isShared { SharedTileBadges(share: share) }
+                            }
                         }
                     }
                 } else {
@@ -212,6 +232,7 @@ struct LibraryListRow: View {
                             HStack(spacing: 6) {
                                 LibraryTitleText(row: row)
                                 Spacer(minLength: 4)
+                                if share.isShared { SharedTileBadges(share: share) }
                                 LibraryRowBadges(row: row, model: model)
                             }
                             Text(meta)
@@ -224,7 +245,7 @@ struct LibraryListRow: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if selecting, row.shareable { LibraryPickMark(ticked: ticked) }
+            if selecting, row.shareable { LibraryPickMark(ticked: ticked, number: number) }
         }
         .opacity(selecting ? (row.shareable ? (ticked ? 1 : 0.7) : 0.35) : 1)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -242,24 +263,34 @@ struct LibraryList: View {
     let controller: LibraryController
     let footer: LibraryFooter
     var zoom: Namespace.ID?
+    var shareIndex: ShareSetIndex = .empty
     @State private var removing: MediaItem?
 
     private var lastIDs: Set<String> { Set(rows.suffix(6).map(\.id)) }
 
     var body: some View {
+        let numbers = LibraryPickNumbers.of(rows, controller: controller)
         ScrollViewReader { proxy in
             List {
                 Section {
                     ForEach(rows) { row in
                         let selecting = controller.selecting
                         Button {
-                            if selecting { controller.togglePick(row) } else { controller.open(row) }
+                            if selecting {
+                                // the touch that ended a hold-to-peek is not a tick
+                                if controller.takeSwallowedTap() { return }
+                                withAnimation(Motion.rows) { controller.togglePick(row) }
+                            } else {
+                                controller.open(row)
+                            }
                         } label: {
                             LibraryListRow(
                                 row: row, model: controller.model, reload: controller.reload,
-                                selecting: selecting, ticked: controller.picked.contains(row.id))
+                                selecting: selecting, ticked: controller.picked.contains(row.id),
+                                number: numbers[row.id], share: shareIndex.status(for: row.item))
                         }
                         .buttonStyle(.plain)
+                        .peekOnHold(row, controller: controller, enabled: selecting)
                         .zoomSource(id: row.id, in: zoom)
                         .modifier(LibraryRowMenu(row: row, controller: controller, enabled: !selecting, removing: $removing))
                         .listRowBackground(controller.lit == row.id ? CobaltColor.focus.opacity(0.14) : nil)
@@ -287,5 +318,14 @@ struct LibraryList: View {
                 }
             }
         }
+    }
+}
+
+/// The picks' numbers in tap order, for the rows on screen (the select pill numbers its thumbnails the same way).
+enum LibraryPickNumbers {
+    @MainActor
+    static func of(_ rows: [LibraryRow], controller: LibraryController) -> [String: Int] {
+        guard controller.selecting else { return [:] }
+        return Dictionary(uniqueKeysWithValues: controller.pickedRows(rows).enumerated().map { ($1.id, $0 + 1) })
     }
 }
