@@ -656,6 +656,10 @@ const LIVE_JS = String.raw`
       case 'skip':
         if (cfg.on_air) { if (cfg.spotlight_auto) pickAutoSpot(); else clearSpot(); }
         break;
+      case 'toast':
+        // a refunded summon (nothing matched): just the toast, the canvas is unchanged
+        showToast(ev.toast);
+        break;
       case 'rotated':
         stop();
         break;

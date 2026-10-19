@@ -2527,6 +2527,9 @@ the store has a lock that turns the whole store off, sign-in included.
   `status` (`'done'|'refunded'|'failed'`), `reason` (NULL or `'off_air'|'no_match'|'disabled'|'error'`),
   `created_at`. Index `(created_at DESC)` and `(user_id, created_at DESC)`. Rows older than 30 days are deleted by
   the daily cron.
+- Built additions (all additive): `stage_twitch.status`/`status_at` (where `reconnect`/`not_affiliate` live),
+  `stage_rewards.synced`, and `stage_seen` (EventSub message ids for the 10-minute dedupe); redemption ids are
+  unique, so a redelivered redemption never runs twice.
 - `stage_codes`: `code` PK (3 chars from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, upper case), `item_id` UNIQUE,
   `created_at`. A pool item gets a code the first time the pool is resolved with it in; codes never change and are
   matched case-insensitively. When 3-char codes run low (more than half used) new ones are 4 chars.
@@ -2542,7 +2545,8 @@ the canvas, the store or a summon. Deleted files drop out. Resolution:
   the collection's order.
 - `group` (`pool_ref` = a collection group id, section 28): every file of every collection in it.
 - `search` (`pool_ref` = the words): the meaning search (section 21) over posts, best first, at most 200 posts,
-  then their public files. Search off or asleep: `PATCH /stage` answers 503 `error.stage.search_unavailable` and
+  then their public files; posts scoring under `SEARCH_MIN_SCORE` (0.2, `stage.ts`, to tune against the real
+  Space) are left out, and a summon by words below it falls through to the title match. Search off or asleep: `PATCH /stage` answers 503 `error.stage.search_unavailable` and
   nothing changes.
 
 The pool is resolved when `PATCH /stage` changes `pool_kind`/`pool_ref`, and again when it is older than 10 minutes
@@ -2563,7 +2567,8 @@ Item shape (canvas and app): `{ "id": "<media_items id>", "code": "K7Q", "title"
   spotlight_auto, spotlight_seconds, sound, video_max, store_hint, store_url }` (`store_url` null while the store is
   locked, so the hint hides). `<spotlight>` = `{ "item": <item>, "by": "<display name>"|null, "action": "summon"|
   "owner", "pinned_until": <ms>|null, "at": <ms> }`: the last summon or owner pick, if newer than
-  `spotlight_seconds` or pinned. Wrong token: 404 `error.stage.not_found`.
+  `spotlight_seconds` or pinned. Also `chaos_until` (ms) and `chaos_by` (both null outside chaos) and `now` (the
+  server clock) so a page that connects mid-chaos catches up. Wrong token: 404 `error.stage.not_found`.
 - `GET /live/<token>/ws` → WebSocket upgrade, handed to `StageRoom`. Wrong token: 404. Events in 29.6.
 - `GET /store` → `200 text/html`, the store page (29.7). **Locked** (`store_open = 0`): `404 text/html`, a tiny page
   that says only "nothing here." with no script, no sign-in and no Twitch client id in it, and every
@@ -2615,7 +2620,11 @@ reloads `state`; a 404 on `state` means the token was rotated: it clears the can
 reload `state`), `{ "type": "summon", "spotlight": <spotlight>, "toast": <toast> }`, `{ "type": "chaos", "until":
 <ms>, "toast": <toast> }`, `{ "type": "shuffle", "toast": <toast>|null }`, `{ "type": "pin", "pinned_until": <ms>,
 "toast": <toast>|null }`, `{ "type": "unpin" }`, `{ "type": "skip" }` (drop the spotlight now and pick again),
-`{ "type": "rotated" }` (sent right before the room closes every socket after a token rotation). `<toast>` =
+`{ "type": "rotated" }` (sent right before the room closes every socket after a token rotation),
+`{ "type": "toast", "toast": <toast> }` (a refunded summon: `cost: 0`, `refunded: true`, detail
+`nothing matched "<words>", points refunded`; the canvas is otherwise unchanged). Owner actions send `toast: null`.
+A new summon replaces the spotlight and clears any pin. A chaos during a chaos extends `until` by 30 s, to at most
+60 s from now. `<toast>` =
 `{ "by": "<display name>", "action": "summon"|"chaos"|"shuffle"|"pin", "cost": <n>, "detail": "<second line>" }`.
 The page ignores unknown types. The room keeps the last spotlight and chaos `until` in its storage so a page that
 connects mid-chaos catches up from `state`.
@@ -2698,14 +2707,16 @@ then empty). `<reward>` = `{ "action", "title", "cost", "cooldown_seconds", "ena
   "success", "stage" }`.
 - `POST /stage/action` `{ "type": "skip"|"pin"|"unpin"|"shuffle"|"chaos"|"spotlight", "item_id"?: "<pool item
   id>" }` (`spotlight` needs `item_id` in the pool: the owner's own pick) → the matching event, a
-  `stage_redemptions` row with `id owner:…`, `user_name` "you", `200 { "status": "success", "stage" }`. Off air:
+  `stage_redemptions` row with `id owner:…`, `user_name` "you" and `action` the type (so owner rows also use
+  `skip`, `unpin`, `spotlight`); an owner pick's spotlight has `by: null`, `action: "owner"`, `200 { "status": "success", "stage" }`. Off air:
   409 `error.stage.off_air`. Unknown item: 404 `error.stage.not_found`.
 - `GET /stage/pool?offset=&limit=<1..100, default 60>` → `200 { "status": "success", "total", "offset", "next",
   "items": [<item>] }` (the app's "pick for the spotlight" sheet).
 - `GET /stage/redemptions?limit=<1..100, default 30>&before=<ms>` → `200 { "status": "success", "redemptions":
   [<redemption>] }`, newest first.
 - `PATCH /stage/rewards/<action>` `{ "cost"?: 1..1000000, "cooldown_seconds"?: 0..604800, "enabled"?: bool }` →
-  saves, then updates the Twitch reward (when connected); `200 { "status": "success", "reward": <reward> }`, with
+  saves (out-of-range values are 400 `error.stage.bad_request`, not clamped), then updates the Twitch reward (when
+  connected); `200 { "status": "success", "reward": <reward> }`, with
   `synced: false` when Twitch refused (the next `GET /stage` retries).
 - `POST /stage/twitch/connect`, `DELETE /stage/twitch`: 29.8. Without `stage_twitch`: 404 `error.stage.twitch_off`.
 - Errors: `400 error.stage.bad_request`, `404 error.stage.off|not_found|twitch_off`, `409 error.stage.off_air`,

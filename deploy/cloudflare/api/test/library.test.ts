@@ -982,6 +982,9 @@ describe("GET /capabilities", () => {
                 share_collections: false,
                 share_groups: false,
                 chat: false,
+                // no STAGE_BASE_URL in this world's env (section 29)
+                stage: false,
+                stage_twitch: false,
             },
             limits: {
                 max_webp_seconds: 30,

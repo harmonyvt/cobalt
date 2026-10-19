@@ -30,6 +30,17 @@ import { publishStudio, type PublishBucket } from "./publish";
 import { queueSnapshot } from "./queue";
 import { serviceAuthorized } from "./service-auth";
 import { sharePage } from "./share";
+import {
+    noRoom,
+    stageBaseFrom,
+    stageKeyed,
+    stageSite,
+    twitchConfigFrom,
+    type RoomPort,
+    type StageDeps,
+    type StageOp,
+} from "./stage";
+import type { TwitchFetch } from "./stage-twitch";
 import { createShareSet, listShareSets, revokeShareSet } from "./share-sets";
 import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { captionerFrom } from "./roast";
@@ -96,6 +107,33 @@ export interface WorkerEnv {
     // binding the model's code runs in. The runner itself comes in through EdgeDeps (index.ts).
     CHAT_MODEL?: string;
     LOADER?: unknown;
+    // Stage (section 29): https://<stage host>/ (a plain var; the Worker answers that host itself, before the gate) and
+    // the three Twitch secrets. Absent or not https: no stage. Missing secrets: canvas and store only.
+    STAGE_BASE_URL?: string;
+    TWITCH_CLIENT_ID?: string;
+    TWITCH_CLIENT_SECRET?: string;
+    TWITCH_EVENTSUB_SECRET?: string;
+}
+
+// What the stage needs that is not in the env: the StageRoom Durable Object (index.ts passes the real one) and
+// the fetch the Twitch client uses (tests pass a fake).
+export type StageEdge = { stageRoom?: RoomPort; twitchFetch?: TwitchFetch; stageEmbed?: EmbedClient | null };
+
+// The stage's deps, or null while STAGE_BASE_URL is not an https URL (every /stage* route is then 404).
+function stageDepsFrom(env: WorkerEnv, edge: Pick<EdgeDeps, "now" | "waitUntil">, se: StageEdge): StageDeps | null {
+    const stageBaseUrl = stageBaseFrom(env);
+    if (!stageBaseUrl) return null;
+    return {
+        db: env.DB,
+        mediaBaseUrl: env.MEDIA_BASE_URL,
+        stageBaseUrl,
+        twitch: twitchConfigFrom(env),
+        twitchFetch: se.twitchFetch,
+        embed: se.stageEmbed === undefined ? embedFrom(env) : se.stageEmbed,
+        room: se.stageRoom ?? noRoom,
+        now: edge.now,
+        waitUntil: edge.waitUntil,
+    };
 }
 
 // Chat is on with a model (the Anthropic key) and a code runner (the LOADER binding, index.ts).
@@ -148,7 +186,7 @@ export async function handleRequest(
     incoming: Request,
     env: WorkerEnv,
     container: ContainerStub,
-    deps: Partial<EdgeDeps> = {},
+    deps: Partial<EdgeDeps> & StageEdge = {},
 ): Promise<Response> {
     // The share host serves the public link pages and nothing else: no key, no container, no CORS.
     const share = shareHost(env);
@@ -164,6 +202,11 @@ export async function handleRequest(
             incoming,
         );
     }
+    // The stage host serves the canvas, the store and the Twitch webhooks (section 29.4): no key, no container, no CORS.
+    // Its own gate is the canvas token, the store lock and the EventSub signature.
+    const stageNow = deps.now ?? (() => Date.now());
+    const stage = stageDepsFrom(env, { now: stageNow, waitUntil: deps.waitUntil }, deps);
+    if (stage && new URL(incoming.url).hostname === new URL(stage.stageBaseUrl).hostname) return stageSite(stage, incoming);
     const res = await handleInner(incoming, env, container, {
         now: deps.now ?? (() => Date.now()),
         sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
@@ -174,7 +217,7 @@ export async function handleRequest(
         waitUntil: deps.waitUntil,
         // the Anthropic relay (src/model-fetch.ts): without it, chat and captions call from the local colo
         modelFetch: deps.modelFetch,
-    });
+    }, deps);
     // Every /studio* response, rejections included, carries the studio page's
     // origin (STUDIO-CONTRACT.md); the page is the only intended caller.
     return isStudioPath(new URL(incoming.url).pathname)
@@ -187,6 +230,7 @@ async function handleInner(
     env: WorkerEnv,
     container: ContainerStub,
     edge: EdgeDeps,
+    stageEdge: StageEdge = {},
 ): Promise<Response> {
     // Misconfiguration must not wake (and crash-loop) the container: the
     // API refuses to load a key file that has a non-UUID key.
@@ -277,6 +321,8 @@ async function handleInner(
             ...(await helperHas(container)),
             embedFrom(env) !== null,
             chatOn(env, edge),
+            stageBaseFrom(env) !== null,
+            twitchConfigFrom(env) !== null,
         );
         return new Response(JSON.stringify(r.body), {
             status: r.status,
@@ -507,6 +553,16 @@ async function handleInner(
                         ? await updateGroup(gd, request, decision.params!.id)
                         : await deleteGroup(gd, decision.params!.id);
             const res = json(r.status, r.body, allowOrigin);
+            res.headers.set("cache-control", "no-store");
+            return res;
+        }
+        // Stage owner routes (section 29.10): D1, the StageRoom Durable Object and Twitch; never the container.
+        if (decision.then?.startsWith("stage_")) {
+            const sd = stageDepsFrom(env, edge, stageEdge);
+            const reply = sd
+                ? await stageKeyed(sd, decision.then.slice("stage_".length) as StageOp, request, decision.params ?? {}, url.searchParams)
+                : { status: 404, body: { status: "error", error: { code: "error.stage.off" } } };
+            const res = json(reply.status, reply.body, allowOrigin);
             res.headers.set("cache-control", "no-store");
             return res;
         }

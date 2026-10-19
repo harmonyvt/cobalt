@@ -689,7 +689,7 @@ describe("capability and deploy config", () => {
             { type: "scheduled", schedule: "*/15 * * * *" },
         ]);
         expect(worker.env.ORIGINALS).toMatchObject({ type: "r2", name: "cobalt-originals" });
-        expect(worker.domains).toEqual(["api.capybaraharmony.com", "share.capybaraharmony.com"]);
+        expect(worker.domains).toEqual(["api.capybaraharmony.com", "share.capybaraharmony.com", "studio.capybaraharmony.com"]);
     });
     it("the Worker entry exports a scheduled handler that runs the retention", () => {
         const src = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");

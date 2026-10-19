@@ -178,6 +178,9 @@ export async function capabilities(
     search = false,
     // the Anthropic key and the code sandbox are there: /chat (section 27)
     chat = false,
+    // STAGE_BASE_URL is an https URL: /stage and the stage host (section 29); the Twitch part needs all three secrets
+    stage = false,
+    stageTwitch = false,
 ): Promise<StudioReply> {
     const state = await resolveKeyState(d.db, auth, key, d.now());
     const version: unknown = apiVersion;
@@ -247,6 +250,11 @@ export async function capabilities(
                 // /chat/threads: threads with Claude about the library, code mode in a sandbox (APP-API-CONTRACT.md
                 // section 27): with the Anthropic key and the Worker Loader binding
                 chat: chat === true,
+                // /stage*, the stage host's canvas and store (APP-API-CONTRACT.md section 29): exactly while
+                // STAGE_BASE_URL is an https URL; canvas and store work without Twitch
+                stage: stage === true,
+                // Twitch channel point rewards on the stage: with `stage` and all three TWITCH_* secrets
+                stage_twitch: stage === true && stageTwitch === true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,

@@ -15,7 +15,9 @@ import { setRoastInput } from "./share-sets";
 import { embedFrom, handleRequest, type WorkerEnv } from "./worker";
 import { loaderRunner } from "./chat-loader";
 import { relayFetch } from "./model-fetch";
+import { roomPort, stageRetention } from "./stage";
 export { ModelRelay } from "./model-relay";
+export { StageRoom } from "./stage-room";
 
 export interface Env extends WorkerEnv {
     COBALT: DurableObjectNamespace<CobaltContainer>;
@@ -32,6 +34,8 @@ export interface Env extends WorkerEnv {
     VERSION?: { id: string; tag?: string; timestamp?: string };
     // The Anthropic relay (src/model-relay.ts): chat and captions call the model through it.
     MODEL_RELAY?: DurableObjectNamespace;
+    // The stage's canvas room (src/stage-room.ts, APP-API-CONTRACT.md section 29): one instance, "main".
+    STAGE_ROOM?: DurableObjectNamespace;
 }
 
 // cobalt's API port and the webp helper's port (helper/supervisor.js).
@@ -351,6 +355,8 @@ export default {
             codeRunner: env.LOADER ? loaderRunner(env.LOADER as WorkerLoader) : undefined,
             waitUntil: (p) => ctx.waitUntil(p),
             modelFetch: env.MODEL_RELAY ? relayFetch(env.MODEL_RELAY as any) : undefined,
+            // stage (section 29): the canvas WebSockets and the events pushed to them
+            stageRoom: env.STAGE_ROOM ? roomPort(env.STAGE_ROOM as any) : undefined,
         });
     },
     // Daily cron (cloudflare.config.ts triggers): telemetry retention, 30 days (D1 and R2
@@ -402,6 +408,13 @@ export default {
             runTelemetryRetention({ db: env.DB, originals: env.ORIGINALS, now: () => Date.now() }).then(
                 (r) => console.log("[telemetry] retention", JSON.stringify(r)),
                 (e) => console.error("[telemetry] retention failed", e instanceof Error ? e.name : "error"),
+            ),
+        );
+        // stage redemptions older than 30 days, and spent EventSub message ids (section 29.2)
+        ctx.waitUntil(
+            stageRetention(env.DB, Date.now()).then(
+                (r) => console.log("[stage] retention", JSON.stringify(r)),
+                (e) => console.error("[stage] retention failed", e instanceof Error ? e.name : "error"),
             ),
         );
         ctx.waitUntil(
