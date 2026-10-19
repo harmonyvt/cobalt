@@ -216,6 +216,9 @@ describe("a poster can not be deleted by hand, and nothing on a lifetime path or
                 "library.ts:media.delete(", // releasePoster
                 "poster.ts:media.delete(", // an orphan guard / a failed put of a poster
                 "studio.ts:originals.delete(", // a save marked lost meanwhile
+                // section 29: the deleter handed to the moving previews (loops.ts), only ever with a media_loops
+                // r2_key (a .webp the preview job made, never a poster or a mirror)
+                "studio.ts:media.delete(",
                 "telemetry.ts:originals.delete(", // crash payloads
                 // section 16: a toggle off deletes the public mirror (never a poster: the names differ in
                 // extension and the keys come from the row's own public_key), a failed or wrong-length

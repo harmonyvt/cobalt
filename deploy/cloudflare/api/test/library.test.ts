@@ -994,7 +994,7 @@ describe("GET /capabilities", () => {
                 session_ttl_ms: 604800000,
                 line_max: 50,
                 line_wait_ms: 1800000,
-                share_set_max: 4,
+                share_set_max: 10,
             },
             media_base_url: "https://media.capybaraharmony.com/",
             share_base_url: null,

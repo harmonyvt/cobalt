@@ -96,17 +96,20 @@ const create = async (body: unknown) => {
 };
 const list = async () => (await (await get(`${API}/share/sets`, { headers: AUTH })).json()) as any;
 
-let video: any, webp: any, photo: any, privateOne: any, fifth: any;
+let video: any, webp: any, photo: any, privateOne: any, fifth: any, more: any[];
 beforeEach(() => {
     video = row({ visibility: "public", public_key: "ViDeO00001.mp4", poster: `${MEDIA}PoStEr0001.jpg`, width: 3840, height: 2160 });
     webp = row({ kind: "public", source: "webp", bucket: "media", r2_key: "WeBpWeBp01.webp", content_type: "image/webp", width: 480, height: 270 });
     photo = row({ visibility: "public", public_key: "PhOtO00001.jpg", content_type: "image/jpeg", width: 1080, height: 1350, duration: null });
     privateOne = row({ r2_key: "originals/private.mp4" });
     fifth = row({ kind: "public", source: "webp", bucket: "media", r2_key: "WeBpWeBp02.webp", content_type: "image/webp" });
+    more = Array.from({ length: 7 }, (_, i) =>
+        row({ kind: "public", source: "webp", bucket: "media", r2_key: `MoReWeBp0${i}.webp`, content_type: "image/webp" }),
+    );
 });
 
 describe("POST /share/sets", () => {
-    it("makes a set of 2..4 public files and answers its link", async () => {
+    it("makes a set of 2..10 public files and answers its link", async () => {
         const r = await create({ items: [video.id, webp.id, photo.id], title: "  trip  " });
         expect(r.status).toBe(201);
         const set = r.body.set;
@@ -115,12 +118,19 @@ describe("POST /share/sets", () => {
         expect(set.title).toBe("trip");
         expect(set.items.map((i: any) => i.url)).toEqual([`${MEDIA}ViDeO00001.mp4`, `${MEDIA}WeBpWeBp01.webp`, `${MEDIA}PhOtO00001.jpg`]);
         expect(set.items[0].poster_url).toBe(`${MEDIA}PoStEr0001.jpg`);
+        // the video's moving preview is queued (section 29): the Durable Object only writes a record
+        expect(containerCalls).toEqual(["/loops/kick"]);
+    });
+    it("ten files make one link; a link without a video queues no preview", async () => {
+        const r = await create({ items: [webp.id, photo.id, fifth.id, ...more.map((m) => m.id)] });
+        expect(r.status).toBe(201);
+        expect(r.body.set.items).toHaveLength(10);
         expect(containerCalls).toEqual([]);
     });
-    it("refuses fewer than 2, more than 4, duplicates, bad ids and long titles", async () => {
+    it("refuses fewer than 2, more than 10, duplicates, bad ids and long titles", async () => {
         for (const b of [
             { items: [video.id] },
-            { items: [video.id, webp.id, photo.id, fifth.id, "x".repeat(16)] },
+            { items: [video.id, webp.id, photo.id, fifth.id, ...more.map((m) => m.id)] },
             { items: [video.id, video.id] },
             { items: [video.id, "nope"] },
             { items: "x" },
@@ -196,6 +206,48 @@ describe("the share host", () => {
         // Open Graph stays as the fallback
         expect(meta(html, "og:video")).toBe(`${MEDIA}ViDeO00001.mp4`);
     });
+    it("a video with a moving preview shows it in Discord's gallery, with a link button for sound", async () => {
+        db.raw.prepare("INSERT INTO media_loops (item_id, url, r2_key, bytes, made_at) VALUES (?, ?, ?, 900, 1)").run(video.id, `${MEDIA}LoOpLoOp01.webp`, "LoOpLoOp01.webp");
+        const html = await (await get(`${SHARE}g/${set.id}`, { headers: { "user-agent": "Discordbot/2.0" } })).text();
+        const doc = JSON.parse(/<script id="discord:component-embed" type="application\/json">([^<]*)<\/script>/.exec(html)![1]);
+        expect(doc.component.components[1].items.map((i: any) => i.media.url)).toEqual([
+            `${MEDIA}LoOpLoOp01.webp`,
+            `${MEDIA}WeBpWeBp01.webp`,
+            `${MEDIA}PhOtO00001.jpg`,
+        ]);
+        expect(doc.component.components[2]).toEqual({
+            type: 1,
+            components: [{ type: 2, style: 5, url: `${SHARE}g/${set.id}`, label: "watch with sound" }],
+        });
+        // Open Graph (every other app) keeps the real video
+        expect(meta(html, "og:video")).toBe(`${MEDIA}ViDeO00001.mp4`);
+        // without the table (migration 0018 not applied yet) the page is what it was
+        db.raw.exec("DROP TABLE media_loops");
+        const plain = await (await get(`${SHARE}g/${set.id}`, { headers: { "user-agent": "Discordbot/2.0" } })).text();
+        const doc2 = JSON.parse(/<script id="discord:component-embed" type="application\/json">([^<]*)<\/script>/.exec(plain)![1]);
+        expect(doc2.component.components[1].items[0].media.url).toBe(`${MEDIA}ViDeO00001.mp4`);
+        expect(doc2.component.components).toHaveLength(2);
+    });
+    it("ten files stay under Discord's 3,000 bytes; a long description goes first", async () => {
+        const ten = (await create({ items: [video.id, webp.id, photo.id, fifth.id, ...more.slice(0, 6).map((m) => m.id)], title: "t".repeat(80) })).body.set;
+        db.raw.prepare("INSERT INTO media_loops (item_id, url, r2_key, made_at) VALUES (?, ?, ?, 1)").run(video.id, `${MEDIA}LoOpLoOp01.webp`, "LoOpLoOp01.webp");
+        const embedOf = async () => {
+            const html = await (await get(`${SHARE}g/${ten.id}`, { headers: { "user-agent": "Discordbot/2.0" } })).text();
+            const m = /<script id="discord:component-embed" type="application\/json">([^<]*)<\/script>/.exec(html);
+            return m ? m[1] : null;
+        };
+        const a = await embedOf();
+        expect(new TextEncoder().encode(a!).byteLength).toBeLessThanOrEqual(3000);
+        expect(JSON.parse(a!).component.components[1].items).toHaveLength(10);
+        // a caption long enough to break the limit is dropped, the gallery and button stay
+        db.raw
+            .prepare("INSERT INTO media_captions (subject, title, description, model, created_at, attempts) VALUES (?, ?, ?, 'm', 1, 1)")
+            .run(`set:${ten.id}`, "t", "<".repeat(280));
+        const b = await embedOf();
+        expect(b).not.toBeNull();
+        expect(new TextEncoder().encode(b!).byteLength).toBeLessThanOrEqual(3000);
+        expect(JSON.parse(b!).component.components).toHaveLength(3);
+    });
     it("the status lists every file as an attachment, big videos halved", async () => {
         for (const path of [`api/v1/statuses/${set.id}`, `users/cobalt/statuses/${set.id}`]) {
             const res = await get(`${SHARE}${path}`);
@@ -225,7 +277,7 @@ describe("the share host", () => {
     it("capabilities advertise share_sets and the limit", async () => {
         const c = (await (await get(`${API}/capabilities`)).json()) as any;
         expect(c.features.share_sets).toBe(true);
-        expect(c.limits.share_set_max).toBe(4);
+        expect(c.limits.share_set_max).toBe(10);
         const off = (await (await get(`${API}/capabilities`, {}, { ...env, SHARE_BASE_URL: "" })).json()) as any;
         expect(off.features.share_sets).toBe(false);
     });

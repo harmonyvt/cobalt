@@ -554,8 +554,10 @@ export class WebpService {
         await this.d.storage.put(`result:${id}`, result);
         this.progress.delete(id);
         // Library bookkeeping. A studio render (owner label "studio:<sid>") is
-        // recorded by the studio when the render is collected, with its session.
-        if (!job.keyId.startsWith("studio:")) {
+        // recorded by the studio when the render is collected, with its session;
+        // a gallery link's moving preview ("loop:<item id>", loops.ts) is not a
+        // library file at all (D1 media_loops).
+        if (!job.keyId.startsWith("studio:") && !job.keyId.startsWith("loop:")) {
             await insertMediaItem(this.d.db, {
                 kind: "public",
                 source: "webp",

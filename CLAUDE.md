@@ -85,6 +85,9 @@ the files and a real run before anything is called done.
   `ANTHROPIC_API_KEY` is in the secrets file.
 - Sets (`APP-API-CONTRACT.md` section 28): named groups of share link collections, `CollectionGroup` in code (a
   `ShareSet` is already a link), D1 `collection_groups`/`collection_group_items` (migration 0017), `/share/groups`.
+- Moving gallery links (`APP-API-CONTRACT.md` section 29): gallery links hold up to 10 files; each public video gets
+  a 4 s silent animated WebP preview (helper webp job, owner `loop:<item id>`, D1 `media_loops`, migration 0018,
+  `api/src/loops.ts`) that Discord's media gallery plays without a tap.
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.

@@ -288,7 +288,7 @@ describe("the app's library routes (keyed)", () => {
         for (const method of ["GET", "HEAD", "PUT", "DELETE", "PATCH"]) {
             expect(g(method, "/library/posters/backfill")).toMatchObject({ action: "reject", status: 404 });
         }
-        for (const path of ["/library/posters", "/library/posters/", "/library/posters/backfill/", "/library/posters/backfill/x", "/posters/kick", "/library/posters/other"]) {
+        for (const path of ["/library/posters", "/library/posters/", "/library/posters/backfill/", "/library/posters/backfill/x", "/posters/kick", "/loops/kick", "/library/posters/other"]) {
             expect(g("POST", path)).toMatchObject({ action: "reject", status: 404 });
         }
         expect(g("POST", "/library/posters/backfill", {})).toMatchObject({ action: "reject", status: 401, errorCode: "error.api.auth.key.missing" });

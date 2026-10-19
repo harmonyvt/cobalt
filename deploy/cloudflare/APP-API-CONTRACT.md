@@ -2355,17 +2355,17 @@ the run fields and the cron drains without a record.
 
 ## 24. Gallery share links (addendum, built 2026-10-17; owner: "select and then hit a button to create a shareable link with gallery in the rich ... the button can not work if I exceed the limit", "a separate tab for all created gallery links and I can revoke anytime")
 
-A share set is 2..4 public files under one link, `https://share.capybaraharmony.com/g/<id>`. In Discord it shows as one embed with the files in a grid (videos play); other apps show the first file. `<id>` is 19 random digits (Discord's post renderer expects numeric status ids; ~63 bits, unguessable). D1 table `share_sets` (migration `0012_share_sets.sql`).
+A share set is 2..10 public files under one link (2..4 until section 29), `https://share.capybaraharmony.com/g/<id>`. In Discord it shows as one embed with the files in a grid (videos play); other apps show the first file. `<id>` is 19 random digits (Discord's post renderer expects numeric status ids; ~63 bits, unguessable). D1 table `share_sets` (migration `0012_share_sets.sql`).
 
 ### 24.1 Routes (keyed `Authorization: Api-Key`; the library service and other methods 404)
 
-- `POST /share/sets` body `{ "items": ["<library file id>", ...], "title"?: "<1..80 chars>" }` → 201 `{ "status": "success", "set": <set> }`. `items` is 2..4 distinct ids (`share_set_max`), in the order shown. Each must be a live file that is public now (the same rows the library calls `visibility: "public"` with a `url`). Errors: 400 `error.share.bad_request` (not 2..4, duplicates, bad shape, title too long); 409 `error.share.not_public` with `"items": [<ids that are missing or private>]`; 503 `error.api.generic`.
+- `POST /share/sets` body `{ "items": ["<library file id>", ...], "title"?: "<1..80 chars>" }` → 201 `{ "status": "success", "set": <set> }`. `items` is 2..10 distinct ids (`share_set_max`), in the order shown. Each must be a live file that is public now (the same rows the library calls `visibility: "public"` with a `url`). Errors: 400 `error.share.bad_request` (not 2..10, duplicates, bad shape, title too long); 409 `error.share.not_public` with `"items": [<ids that are missing or private>]`; 503 `error.api.generic`.
 - `GET /share/sets` → 200 `{ "status": "success", "sets": [<set>, ...] }`, live sets only, newest first, at most 200.
 - `DELETE /share/sets/<id>` → 200 `{ "status": "success" }` (revoked: the link is a 404 at once; repeat is 200). Unknown id 404 `error.share.not_found`.
 
 `<set>` = `{ "id", "url": "<share_base_url>g/<id>", "title": string|null, "created_at": <ms>, "items": [ { "id", "url": <public file URL, or null when it is no longer public>, "content_type", "poster_url", "width", "height", "duration" } ] }`. A set whose files all went private or were deleted stays listed (its page is a 404) until revoked.
 
-`GET /capabilities`: `features.share_sets` is true exactly while `share_base_url` is non-null; `limits.share_set_max` is 4.
+`GET /capabilities`: `features.share_sets` is true exactly while `share_base_url` is non-null; `limits.share_set_max` is 10 (4 before section 29; the app reads it, so no app change was needed).
 
 ### 24.2 The page (`share.` host, no key)
 
@@ -2471,3 +2471,14 @@ Shape: `{ "id": "<16 letters/digits>", "name": "weekend", "created_at": <ms>, "u
 - Errors: `400 error.group.bad_request` (bad JSON, name or id list), `404 error.group.not_found` (unknown group), `409 error.group.collection_not_found` with `collection_ids` (unknown collections in `collection_ids`/`add`; nothing changed), `409 error.group.too_many` (100 groups), `409 error.group.full` (100 collections), `503 error.api.generic`.
 - No reroll and no server-side copy text: the app builds "copy all links" itself (CobaltKit `ShareSetStore.linksText(in: CollectionGroup)`): every live link URL of the group's collections, one per line, in the group's order then each collection's order, a link held by two of its collections once.
 - App: sets are shown only when `features.share_groups` is true: create (name, optionally with collections), rename, delete (confirm: "delete this set? its collections keep their links"), add a collection to sets, remove it from one. Migration 0017 must be applied before the API deploy that ships these routes.
+
+## 29. Gallery links that move: 10 files and moving previews (addendum, built 2026-10-19; owner: "can we do D with autoplay?", D = a 10-file gallery)
+
+Discord's media gallery shows up to 10 files, and it plays animated images (GIF, WebP) by itself while a video always waits for a tap. So a gallery link now holds up to 10 files, and each public video in a live link gets a moving preview: a short, silent animated WebP that Discord's gallery shows in its place.
+
+- **Limit**: `SHARE_SET_MAX` 10, `limits.share_set_max` 10. Ten media URLs are about 700 bytes, well inside the 3,000-byte component embed limit; over it the description is dropped, then the button, then the component embed (Open Graph alone).
+- **The preview**: the video's first 4 s (its whole length when shorter; none under 0.5 s), 480 px wide (320 when the video is narrower), 12 fps, quality `low`. Made by the helper's ordinary webp job (`POST /jobs/upload`, owner label `loop:<item id>`) from the stored file (the private original, or the public copy when that is the only one), so the line sees it as a running job, the job sweep collects it into the PUBLIC bucket as `<10 base62>.webp`, and no library row is written. One at a time, only while nothing else needs the helper, like posters. D1 `media_loops` (migration 0018): `item_id`, `url`, `r2_key`, `bytes`, `tried_at`, `made_at`. A file the helper refuses, or a third failure, waits a day.
+- **Queued**: `POST /share/sets` with a video asks the Durable Object (`POST /loops/kick`, internal) to queue the link's videos, through `waitUntil`; the daily cron kicks again (`?limit=50&clean=1`) for anything missed and deletes the previews of videos that were deleted or made private (object and row).
+- **The page** (`GET /g/<id>`, Discord's crawler only): in the component embed's Media Gallery a video with a preview is that WebP; when any is, the container ends with an Action Row holding one link Button (style 5) `watch with sound` to the page itself, where the videos play with controls. Open Graph is unchanged (the first video stays `og:video`), so every other app is as before. Without the table (0018 not applied) the page is exactly what it was.
+- **Not changed**: the app (it follows `limits.share_set_max`), the helper and the container image, the Mastodon status and oEmbed routes.
+- Deploy: apply 0018, then the API Worker. Check one link in Discord: the gallery should move without a tap.
