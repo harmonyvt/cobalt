@@ -7,6 +7,7 @@ import SwiftUI
 // load. Compact (iPhone), regular and wide (iPad on its side, the Mac). The OBS preview is a live web view, so it stays blank
 // in a canvas without network.
 
+@MainActor
 private func stageScreen(_ model: AppModel, _ tier: Tier) -> some View {
     NavigationStack { StageScreen(model: model, tier: tier) }
 }
