@@ -9,6 +9,13 @@ struct PeekOnHold: ViewModifier {
     let controller: LibraryController
     var enabled = true
 
+    #if os(iOS)
+    func body(content: Content) -> some View {
+        content.gesture(HoldRecognizer(enabled: enabled) { holding in
+            if holding { controller.setPeek(row) } else if controller.peek?.id == row.id { controller.setPeek(nil) }
+        })
+    }
+    #else
     @GestureState private var holding = false
 
     func body(content: Content) -> some View {
@@ -24,7 +31,53 @@ struct PeekOnHold: ViewModifier {
                 if now { controller.setPeek(row) } else if controller.peek?.id == row.id { controller.setPeek(nil) }
             }
     }
+    #endif
 }
+
+#if os(iOS)
+/// The hold on iOS, as a UIKit long press. The SwiftUI long press sequenced into a zero-distance drag (still used on
+/// the Mac) claims the touch on iOS 18 and later, so with one on every tile the library could not scroll while
+/// selecting. A UILongPressGestureRecognizer fails as soon as the finger moves, which leaves the scroll to the scroll
+/// view, and once the hold has begun the scroll waits until the finger lifts.
+private struct HoldRecognizer: UIGestureRecognizerRepresentable {
+    let enabled: Bool
+    let changed: (Bool) -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
+        let hold = UILongPressGestureRecognizer()
+        hold.minimumPressDuration = 0.3
+        hold.allowableMovement = 10
+        // the tile's own tap still sees the touch; the controller swallows the one that ends a peek
+        hold.cancelsTouchesInView = false
+        hold.delegate = context.coordinator
+        hold.isEnabled = enabled
+        return hold
+    }
+
+    func updateUIGestureRecognizer(_ hold: UILongPressGestureRecognizer, context: Context) {
+        if hold.isEnabled != enabled { hold.isEnabled = enabled }
+    }
+
+    func handleUIGestureRecognizerAction(_ hold: UILongPressGestureRecognizer, context: Context) {
+        switch hold.state {
+        case .began: changed(true)
+        case .ended, .cancelled, .failed: changed(false)
+        default: break
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        /// Alongside the tile's tap and the context menu, never alongside a scroll: a held peek does not also scroll.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            !(other.view is UIScrollView)
+        }
+    }
+}
+#endif
 
 extension View {
     func peekOnHold(_ row: LibraryRow, controller: LibraryController, enabled: Bool = true) -> some View {
