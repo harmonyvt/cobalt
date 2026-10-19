@@ -246,7 +246,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
           <input id="link" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="paste a link (x, tiktok, bluesky…)" aria-label="link">
         </form>
         <div class="actions" id="actions">
-          <button class="act" type="button" data-act="webp"><b>make webp</b><span>the whole clip, up to 10 s &rarr; public link</span></button>
+          <button class="act" type="button" data-act="webp"><b>make webp</b><span>the whole clip, up to 30 s &rarr; public link</span></button>
           <button class="act" type="button" data-act="studio"><b>open in studio</b><span>pick the part you want, then make a webp</span></button>
           <button class="act" type="button" data-act="host"><b>host as-is</b><span>the original file (mp4/gif/image) &rarr; public link</span></button>
           <button class="act" type="button" data-act="keep"><b>keep a private copy</b><span>saved to your library, no public link</span></button>
@@ -320,7 +320,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
 <script>
 /* ---------- constants ---------- */
 var MAX_BYTES = 100000000;          // contract: bytes <= 100_000_000
-var LIMIT_S = 10;                   // webp length limit (WEBP_MAX_SECONDS)
+var LIMIT_S = 30;                   // webp length limit (WEBP_MAX_SECONDS)
 var FREE_BYTES = 10e9;              // the 10 GB meter
 var PAGE_SIZE = 48;
 var DEFAULT_API = "https://api.capybaraharmony.com";
@@ -425,7 +425,7 @@ var MESSAGES = {
   "error.studio.not_video": "only videos and gifs can be opened in studio.",
   "error.studio.not_ready": "that studio isn't ready yet.",
   "error.studio.storage": "couldn't copy the file to public storage. try again.",
-  "error.webp.too_long": "this clip is over 10 s. use \"open in studio\" to pick a part.",
+  "error.webp.too_long": "this clip is over 30 s. use \"open in studio\" to pick a part.",
   "error.webp.busy": "another webp is being made right now. try again in a moment.",
   "error.webp.invalid_params": "that clip can't be made into a webp.",
   "error.search.off": "search isn't set up on the server.",
@@ -717,8 +717,8 @@ function fileMeta(f) {
   else if (f.state === "done") { line = f.note; cls = "ok"; }
   else if (f.state === "ready") {
     if (f.error) { line = f.error; cls = "bad"; }
-    else if (f.long) line = fmtSecs(f.long) + ": over the 10 s limit, trim it in studio";
-    else if (f.dur > LIMIT_S) line = fmtSecs(f.dur) + ": over the 10 s limit, trim it in studio";
+    else if (f.long) line = fmtSecs(f.long) + ": over the 30 s limit, trim it in studio";
+    else if (f.dur > LIMIT_S) line = fmtSecs(f.dur) + ": over the 30 s limit, trim it in studio";
     else if (f.ext === "heic") line = "uploaded · heic photo: can be hosted, not converted yet";
     else if (f.ext === "webp") line = "uploaded · webp: can be hosted as-is";
     else line = "uploaded" + (f.dur ? " · " + fmtSecs(f.dur) : "") + " · ready";

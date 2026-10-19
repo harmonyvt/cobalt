@@ -72,7 +72,7 @@ Response `200`:
     "finishes_unpolled": true
   },
   "limits": {
-    "max_webp_seconds": 10,
+    "max_webp_seconds": 30,
     "min_webp_seconds": 0.5,
     "webp_widths": [320, 480],
     "webp_qualities": ["low", "med", "high"],
@@ -461,7 +461,7 @@ polls too (`SAVING_STUCK_MS` 10 min, then `error.studio.save_lost`).
   5 s. `sweep()` lives in `studio.ts` (pure, testable with the fakes) and does one
   non-waiting pass:
   1. every `job:<id>` record in DO storage without a `result:<id>`, created within
-     `SWEEP_RENDER_MS` (6 min: the helper's 240 s budget plus upload time): owner
+     `SWEEP_RENDER_MS` (12 min: the helper's 120 s download and 480 s encode budgets plus upload time): owner
      `studio:<sid>` → `this.renderStatus(sid, id, 0)` (records D1 `studio_renders`, the
      `media_items` `studio` row and the R2 upload exactly as a client poll would); any other
      owner → `this.d.webp.status(owner, id, 0)` (records the `webp` row);

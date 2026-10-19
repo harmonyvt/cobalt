@@ -246,7 +246,7 @@ kbd { font: 500 11px var(--f-mono); padding: 0 5px; border-radius: 4px; box-shad
         </div>
         <div class="readout">
           <span>in <b id="rIn">00:00.00</b></span><span>out <b id="rOut">00:00.00</b></span><span>length <b id="rLen">0.00 s</b></span>
-          <span class="pill ok" id="rPill">fits the 10 s limit</span>
+          <span class="pill ok" id="rPill">fits the 30 s limit</span>
         </div>
         <div class="keys" id="keys"><kbd>space</kbd> play/pause · <kbd>I</kbd> in · <kbd>O</kbd> out · <kbd>←</kbd>/<kbd>→</kbd> one frame · <kbd>shift</kbd>+arrow one second · drag the timeline to scrub</div>
       </div>
@@ -293,7 +293,7 @@ kbd { font: 500 11px var(--f-mono); padding: 0 5px; border-radius: 4px; box-shad
 "use strict";
 
 /* ---------- constants ---------- */
-var LIMIT = 10;            // server limit (WEBP_MAX_SECONDS)
+var LIMIT = 30;            // server limit (WEBP_MAX_SECONDS)
 var MIN_LEN = 0.5;         // server minimum
 var FPS = 30;              // assumed frame rate
 var THUMBS = 12;
@@ -508,7 +508,7 @@ function paint() {
   $("rIn").textContent = fmt(S.inn); $("rOut").textContent = fmt(S.out); $("rLen").textContent = c.len.toFixed(2) + " s";
   var pill = $("rPill");
   pill.className = "pill " + (c.ok ? "ok" : "bad");
-  pill.textContent = c.ok ? "fits the 10 s limit" : c.kind === "over" ? c.over.toFixed(2) + " s over the 10 s limit" : c.kind === "short" ? "under the 0.5 s minimum" : "outside the video";
+  pill.textContent = c.ok ? "fits the 30 s limit" : c.kind === "over" ? c.over.toFixed(2) + " s over the 30 s limit" : c.kind === "short" ? "under the 0.5 s minimum" : "outside the video";
   if (c.kind !== S.kind) { S.kind = c.kind; say(pill.textContent); }
   paintOptions();
   paintAria();
@@ -705,7 +705,7 @@ $("notifyBtn").addEventListener("click", function () {
 
 /* ---------- rendering ---------- */
 var RENDER_ERR = {
-  "error.webp.too_long": "the selection is longer than 10 seconds. drag a handle in.",
+  "error.webp.too_long": "the selection is longer than 30 seconds. drag a handle in.",
   "error.webp.invalid_params": "those settings weren't accepted. check the in and out points and try again.",
   "error.webp.busy": "another webp is being made right now.",
   "error.studio.not_ready": "the video isn't saved yet. give it a moment and try again."

@@ -12,7 +12,7 @@ something here is impossible, stop and report instead of improvising.
    cobalt and stores it privately in R2 bucket `cobalt-originals`.
 3. The studio page (`https://cobalt.capybaraharmony.com/studio/<id>`, behind
    Cloudflare Access like the rest of that host) polls the session, streams the
-   stored video, lets the owner pick up to 10 s, renders animated WebPs from the
+   stored video, lets the owner pick up to 30 s, renders animated WebPs from the
    stored copy (never re-fetching the source), and shows the public link.
 
 ## Identifiers and limits
@@ -22,7 +22,7 @@ something here is impossible, stop and report instead of improvising.
 - Session lifetime: 7 days from creation (`expires_at`). Expired -> 410.
 - Stored source: R2 `cobalt-originals`, key `originals/<session id>.<ext>`
   (mp4 normally). Kept after expiry (the gallery will use it). Max 200 MB.
-- Render: length 0.5-10 s (the server limit is WEBP_MAX_SECONDS = 10), start >= 0,
+- Render: length 0.5-30 s (the server limit is WEBP_MAX_SECONDS = 30; 10 until 2026-10-19), start >= 0,
   start + length <= duration + 0.05. width 320 | 480 (default 480, never above the
   source width). quality low | med | high (default med). One encode at a time.
 
