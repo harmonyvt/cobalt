@@ -218,6 +218,7 @@ public struct PreviewClient: CobaltClient {
             let empty = scenario == .shareLinksEmpty || scenario == .shareLinksFail
             shareState.seed(empty ? [] : PreviewData.shareSets(now: now),
                             collections: empty ? [] : PreviewData.shareCollections(now: now),
+                            groups: empty ? [] : PreviewData.collectionGroups(now: now),
                             listFails: scenario == .shareLinksFail)
         }
         if scenario.hasChat {

@@ -91,6 +91,11 @@ export type LookupThen =
     | "collections_update"
     | "collections_delete"
     | "collections_reroll"
+    // collection sets (APP-API-CONTRACT.md section 28)
+    | "groups_list"
+    | "groups_create"
+    | "groups_update"
+    | "groups_delete"
     // chat (APP-API-CONTRACT.md section 27)
     | "chat_list"
     | "chat_create"
@@ -263,6 +268,21 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         if (!COLLECTION_ID_REGEX.test(id)) return reject(404);
         if (req.method === "PATCH") return lookupThen(req, "collections_update", { id });
         if (req.method === "DELETE") return lookupThen(req, "collections_delete", { id });
+        return reject(404);
+    }
+
+    // Collection sets (APP-API-CONTRACT.md section 28): keyed only.
+    if (req.pathname === "/share/groups" || req.pathname.startsWith("/share/groups/")) {
+        if (req.service) return reject(404);
+        if (req.pathname === "/share/groups") {
+            if (req.method === "GET") return lookupThen(req, "groups_list");
+            if (req.method === "POST") return lookupThen(req, "groups_create");
+            return reject(404);
+        }
+        const id = req.pathname.slice("/share/groups/".length);
+        if (!COLLECTION_ID_REGEX.test(id)) return reject(404);
+        if (req.method === "PATCH") return lookupThen(req, "groups_update", { id });
+        if (req.method === "DELETE") return lookupThen(req, "groups_delete", { id });
         return reject(404);
     }
 

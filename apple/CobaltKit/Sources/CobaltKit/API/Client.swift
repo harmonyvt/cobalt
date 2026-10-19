@@ -148,6 +148,17 @@ public protocol CobaltClient: Sendable {
     /// `POST /share/collections/<id>/reroll` (no body): every live link of the collection is replaced by a new link with
     /// the same files and a fresh title; the old ones are revoked. `.notFound`, `.empty` (no live links), `.unavailable`.
     func rerollShareCollection(id: String) async throws -> ShareCollectionReroll
+    // Collection sets (APP-API-CONTRACT 28; keyed; only when `features.share_groups`). Defaulted below (`.unsupported`)
+    // so older fakes compile. All throw `CollectionGroupError` for the server's refusals.
+    /// `GET /share/groups`: the groups, most recently changed first.
+    func collectionGroups() async throws -> [CollectionGroup]
+    /// `POST /share/groups` `{name, collection_ids?}` (empty `collectionIDs` omits the field).
+    func createCollectionGroup(name: String, collectionIDs: [String]) async throws -> CollectionGroup
+    /// `PATCH /share/groups/<id>` `{name?, add?, remove?}` (a nil name and empty lists are omitted): the group as it is
+    /// now.
+    func updateCollectionGroup(id: String, name: String?, add: [String], remove: [String]) async throws -> CollectionGroup
+    /// `DELETE /share/groups/<id>`: the group goes; its collections stay. An unknown id is `.notFound`.
+    func deleteCollectionGroup(id: String) async throws
     // Chat (APP-API-CONTRACT 27; keyed; only when `features.chat`). Defaulted below (`.unsupported`) so older fakes
     // compile. The routes throw `ChatError` for the server's refusals.
     /// `GET /chat/threads`: most recently updated first.
@@ -247,6 +258,10 @@ extension CobaltClient {
     public func updateShareCollection(id: String, name: String?, add: [String], remove: [String]) async throws -> ShareCollection { throw PipelineFailure.unsupported }
     public func deleteShareCollection(id: String) async throws { throw PipelineFailure.unsupported }
     public func rerollShareCollection(id: String) async throws -> ShareCollectionReroll { throw PipelineFailure.unsupported }
+    public func collectionGroups() async throws -> [CollectionGroup] { throw PipelineFailure.unsupported }
+    public func createCollectionGroup(name: String, collectionIDs: [String]) async throws -> CollectionGroup { throw PipelineFailure.unsupported }
+    public func updateCollectionGroup(id: String, name: String?, add: [String], remove: [String]) async throws -> CollectionGroup { throw PipelineFailure.unsupported }
+    public func deleteCollectionGroup(id: String) async throws { throw PipelineFailure.unsupported }
     public func chatThreads() async throws -> [ChatThread] { throw PipelineFailure.unsupported }
     public func createChatThread(title: String?) async throws -> ChatThread { throw PipelineFailure.unsupported }
     public func chatThread(id: String) async throws -> ChatThreadDetail { throw PipelineFailure.unsupported }

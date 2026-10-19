@@ -34,6 +34,7 @@ import { createShareSet, listShareSets, revokeShareSet } from "./share-sets";
 import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { captionerFrom } from "./roast";
 import { createCollection, deleteCollection, listCollections, rerollCollection, updateCollection } from "./share-collections";
+import { createGroup, deleteGroup, listGroups, updateGroup } from "./collection-groups";
 import { chatModelFrom, createThread, deleteThread, getCollage, getThread, listThreads, renameThread, sendMessage } from "./chat";
 import { ingestTelemetry } from "./telemetry";
 import {
@@ -484,6 +485,27 @@ async function handleInner(
                         : decision.then === "collections_delete"
                           ? await deleteCollection(cd, decision.params!.id)
                           : await rerollCollection(cd, decision.params!.id, keyId);
+            const res = json(r.status, r.body, allowOrigin);
+            res.headers.set("cache-control", "no-store");
+            return res;
+        }
+        // Collection sets (section 28): D1 only.
+        if (
+            decision.then === "groups_list" ||
+            decision.then === "groups_create" ||
+            decision.then === "groups_update" ||
+            decision.then === "groups_delete"
+        ) {
+            if (!shareHost(env)) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
+            const gd = { db: env.DB, now: edge.now };
+            const r =
+                decision.then === "groups_list"
+                    ? await listGroups(gd)
+                    : decision.then === "groups_create"
+                      ? await createGroup(gd, request, keyId)
+                      : decision.then === "groups_update"
+                        ? await updateGroup(gd, request, decision.params!.id)
+                        : await deleteGroup(gd, decision.params!.id);
             const res = json(r.status, r.body, allowOrigin);
             res.headers.set("cache-control", "no-store");
             return res;

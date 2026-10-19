@@ -980,6 +980,7 @@ describe("GET /capabilities", () => {
                 // no share host in this world's env (section 24)
                 share_sets: false,
                 share_collections: false,
+                share_groups: false,
                 chat: false,
             },
             limits: {

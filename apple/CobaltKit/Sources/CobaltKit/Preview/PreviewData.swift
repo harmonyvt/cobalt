@@ -113,6 +113,7 @@ enum PreviewData {
             caps.shareBaseURL = shareBase
             caps.shareSets = true
             caps.shareCollections = true
+            caps.shareGroups = true
             caps.limits.shareSetMax = 4
         }
         if scenario.hasChat && caps.kind == .fork {

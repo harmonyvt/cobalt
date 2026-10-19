@@ -191,6 +191,12 @@ export async function deleteCollection(d: CollectionDeps, id: string): Promise<S
             d.db.prepare("DELETE FROM share_collection_items WHERE collection_id = ?1").bind(id),
             d.db.prepare("DELETE FROM share_collections WHERE id = ?1").bind(id),
         ]);
+        // it leaves every collection set (section 28); best effort, the group listing joins on share_collections
+        await d.db
+            .prepare("DELETE FROM collection_group_items WHERE collection_id = ?1")
+            .bind(id)
+            .run()
+            .catch(() => undefined);
         return { status: 200, body: { status: "success" } };
     } catch {
         return err(503, "error.api.generic");
