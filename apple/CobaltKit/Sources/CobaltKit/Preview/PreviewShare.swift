@@ -13,7 +13,7 @@ extension PreviewScenario {
     /// The preview server has `features.share_sets`.
     var hasShareLinks: Bool {
         switch self {
-        case .happy, .renditions, .shareLinksEmpty, .shareLinksFail: return true
+        case .happy, .renditions, .shareLinksEmpty, .shareLinksFail, .stageNotConnected, .stageFail: return true
         default: return false
         }
     }

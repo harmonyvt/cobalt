@@ -27,7 +27,7 @@ public struct HTTPCobaltClient: CobaltClient {
 
     // MARK: - Request plumbing
 
-    private func makeRequest(
+    func makeRequest(
         _ method: String, _ path: String, query: [(String, String)] = [],
         keyed: Bool, optionalKey: Bool = false, timeout: TimeInterval = 30
     ) throws -> URLRequest {
@@ -56,13 +56,13 @@ public struct HTTPCobaltClient: CobaltClient {
         return req
     }
 
-    private static func encode(_ s: String) -> String {
+    static func encode(_ s: String) -> String {
         var allowed = CharacterSet.urlQueryAllowed
         allowed.remove(charactersIn: "&+=#?/")
         return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
     }
 
-    private func send(_ req: URLRequest, body: Data? = nil) async throws -> (Data, HTTPURLResponse) {
+    func send(_ req: URLRequest, body: Data? = nil) async throws -> (Data, HTTPURLResponse) {
         var req = req
         if let body {
             req.httpBody = body
@@ -77,7 +77,7 @@ public struct HTTPCobaltClient: CobaltClient {
         }
     }
 
-    private func apiError(_ data: Data, status: Int) -> CobaltError {
+    func apiError(_ data: Data, status: Int) -> CobaltError {
         if let env = try? JSONDecoder().decode(ErrorEnvelope.self, from: data), let code = env.error?.code {
             return .api(code: code, httpStatus: status)
         }
@@ -99,7 +99,7 @@ public struct HTTPCobaltClient: CobaltClient {
         }
     }
 
-    private static func jsonBody(_ object: [String: Any]) -> Data? {
+    static func jsonBody(_ object: [String: Any]) -> Data? {
         try? JSONSerialization.data(withJSONObject: object)
     }
 
@@ -195,6 +195,8 @@ public struct HTTPCobaltClient: CobaltClient {
                 var shareCollections: Bool?
                 var shareGroups: Bool?
                 var chat: Bool?
+                var stage: Bool?
+                var stageTwitch: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -263,6 +265,8 @@ public struct HTTPCobaltClient: CobaltClient {
         caps.shareCollections = (f?.shareCollections ?? false) && caps.shareSets
         caps.shareGroups = (f?.shareGroups ?? false) && caps.shareCollections
         caps.chat = f?.chat ?? false
+        caps.stage = f?.stage ?? false
+        caps.stageTwitch = (f?.stageTwitch ?? false) && caps.stage
         return caps
     }
 

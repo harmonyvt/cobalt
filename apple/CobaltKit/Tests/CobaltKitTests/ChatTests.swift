@@ -60,7 +60,7 @@ struct ChatCapabilityTests {
         #expect(!AppTab.chat.isAvailable(with: c))
         c.chat = true
         #expect(AppTab.chat.isAvailable(with: c))
-        #expect(AppTab.allCases == [.save, .library, .links, .chat, .queue, .settings])
+        #expect(AppTab.allCases == [.save, .library, .links, .chat, .stage, .queue, .settings])
     }
 }
 

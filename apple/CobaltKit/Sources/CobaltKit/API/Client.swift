@@ -178,6 +178,29 @@ public protocol CobaltClient: Sendable {
     /// `GET /chat/threads/<id>/messages/<message id>/collage?offset=&limit=` (27.5): one page of the collage a reply attached.
     /// `limit` is 1...60. `ChatError.notFound` when the message has no collage, `.badRequest` for a bad offset or limit.
     func chatCollage(threadID: String, messageID: String, offset: Int, limit: Int) async throws -> ChatCollagePage
+    // Stage, the studio tab (APP-API-CONTRACT 29.10; keyed; only when `features.stage`). Defaulted below
+    // (`.unsupported`) so older fakes compile. The routes throw `StageError` for the server's refusals.
+    /// `GET /stage`: the stage and its four rewards. Also retries what Twitch refused earlier.
+    func stage() async throws -> StageSnapshot
+    /// `PATCH /stage` with the patch's fields (numbers clamped): the stage as it is now.
+    func updateStage(_ patch: StagePatch) async throws -> StageSettings
+    /// `POST /stage/rotate`: a new OBS token (the old link stops working at once); the stage as it is now.
+    func rotateStage() async throws -> StageSettings
+    /// `POST /stage/action`: `409 error.stage.off_air` while the stage is off air, `404 error.stage.not_found` for an item
+    /// that is not in the pool. The stage as it is now.
+    func stageAction(_ action: StageAction) async throws -> StageSettings
+    /// `GET /stage/pool?offset=&limit=` (1...100): the spotlight picker's page of the resolved pool.
+    func stagePool(offset: Int, limit: Int) async throws -> StagePoolPage
+    /// `GET /stage/redemptions?limit=&before=` (1...100): newest first; `before` pages back.
+    func stageRedemptions(limit: Int, before: Date?) async throws -> [StageRedemption]
+    /// `PATCH /stage/rewards/<action>` `{cost?, cooldown_seconds?, enabled?}` (nil fields are left out): the reward as it is
+    /// now (`synced` false when Twitch refused).
+    func updateStageReward(_ kind: StageRewardKind, cost: Int?, cooldownSeconds: Int?, enabled: Bool?) async throws -> StageReward
+    /// `POST /stage/twitch/connect`: the Twitch authorize URL for an `ASWebAuthenticationSession` with callback scheme
+    /// `cobalt-apple`. `404 error.stage.twitch_off` without `features.stage_twitch`.
+    func connectStageTwitch() async throws -> URL
+    /// `DELETE /stage/twitch`: the EventSub subscription, the rewards on Twitch and the connection go; the stage as it is now.
+    func disconnectStageTwitch() async throws -> StageSettings
 }
 
 extension CobaltClient {
@@ -273,6 +296,17 @@ extension CobaltClient {
     public func chatCollage(threadID: String, messageID: String, offset: Int, limit: Int) async throws -> ChatCollagePage {
         throw PipelineFailure.unsupported
     }
+    public func stage() async throws -> StageSnapshot { throw PipelineFailure.unsupported }
+    public func updateStage(_ patch: StagePatch) async throws -> StageSettings { throw PipelineFailure.unsupported }
+    public func rotateStage() async throws -> StageSettings { throw PipelineFailure.unsupported }
+    public func stageAction(_ action: StageAction) async throws -> StageSettings { throw PipelineFailure.unsupported }
+    public func stagePool(offset: Int, limit: Int) async throws -> StagePoolPage { throw PipelineFailure.unsupported }
+    public func stageRedemptions(limit: Int, before: Date?) async throws -> [StageRedemption] { throw PipelineFailure.unsupported }
+    public func updateStageReward(_ kind: StageRewardKind, cost: Int?, cooldownSeconds: Int?, enabled: Bool?) async throws -> StageReward {
+        throw PipelineFailure.unsupported
+    }
+    public func connectStageTwitch() async throws -> URL { throw PipelineFailure.unsupported }
+    public func disconnectStageTwitch() async throws -> StageSettings { throw PipelineFailure.unsupported }
     /// Likewise: a client that predates titles says the server cannot do it.
     public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult { throw PipelineFailure.unsupported }
 }
