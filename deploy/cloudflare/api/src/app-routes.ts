@@ -241,6 +241,9 @@ export async function capabilities(
                 // GET|POST /share/collections, PATCH|DELETE /share/collections/<id>: named folders of gallery
                 // links (APP-API-CONTRACT.md section 26), with the share host
                 share_collections: !!d.shareBaseUrl,
+                // GET|POST /share/groups, PATCH|DELETE /share/groups/<id>: named groups of collections, "sets" in the
+                // app (APP-API-CONTRACT.md section 28), with the share host
+                share_groups: !!d.shareBaseUrl,
                 // /chat/threads: threads with Claude about the library, code mode in a sandbox (APP-API-CONTRACT.md
                 // section 27): with the Anthropic key and the Worker Loader binding
                 chat: chat === true,

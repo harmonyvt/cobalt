@@ -83,6 +83,8 @@ the files and a real run before anything is called done.
 - Roast captions (`APP-API-CONTRACT.md` section 25): Claude Haiku 5.5 titles and descriptions for share previews, in
   D1 `media_captions` (`api/src/roast.ts`), written at gallery-link creation and by the 15-minute cron. Off unless
   `ANTHROPIC_API_KEY` is in the secrets file.
+- Sets (`APP-API-CONTRACT.md` section 28): named groups of share link collections, `CollectionGroup` in code (a
+  `ShareSet` is already a link), D1 `collection_groups`/`collection_group_items` (migration 0017), `/share/groups`.
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.

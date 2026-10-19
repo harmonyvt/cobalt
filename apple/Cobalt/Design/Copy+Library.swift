@@ -35,6 +35,29 @@ extension Copy {
         static func selected(_ n: Int) -> String { n == 0 ? "tick posts" : "\(n) selected" }
         static let selectAll = "select all", selectNone = "select none"        // select mode, every post on screen
 
+        // the select pill (bottom of the library): its picks as thumbnails, then make link, collection, share
+        static func pickedCount(_ n: Int) -> String { n == 0 ? "tap posts to pick" : "\(n) picked" }
+        static let stopSelecting = "stop selecting"
+        static let all = "all", noneShort = "none"                             // the pill's select all / none
+        static let collection = "collection"                                   // the pill's button: file the link
+        static let newCollection = "new collection…"
+        static let newCollectionTitle = "new collection"
+        static let collectionNamePrompt = "name"
+        static let create = "create"
+        static func filedIn(_ name: String) -> String { "link copied · in \(name)" }
+        static func inCollection(_ name: String, already: Int, of total: Int) -> String {
+            already == 0 ? name : "\(name) · \(already) of \(total) already in it"
+        }
+        static let holdToPeek = "hold to see it"                               // a11y hint on a pick
+        static let unpickHint = "takes it out of the picks"
+        static let peekA11y = "preview"
+
+        // the share chips under the kind chips: filter by what is already shared
+        static let shareFilter = "shared"                                      // a11y name of the row
+        static let notShared = "not shared"
+        static let sharedChip = "shared"
+        static func shareChip(_ title: String, count: Int) -> String { "\(title) \(count)" }
+
         // what is already shared: the shelves over the mosaic and the tiles' badges
         static let recentLinks = "recent links"
         static let seeAllLinks = "see all"

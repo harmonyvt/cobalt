@@ -76,7 +76,26 @@ private struct LibraryContent: View {
 
     private var library: LibraryModel { model.library }
 
+    /// The posts on screen: the library's rows (kind, search, show and sort applied), then the share chips' filter.
     private var rows: [LibraryRow] {
+        let filter = shareFilter
+        guard filter != .all else { return unfilteredRows }
+        let index = shareIndex
+        var setCollections: Set<String> = []
+        if case .set(let id) = filter { setCollections = Set(model.shareSets.group(id)?.collectionIDs ?? []) }
+        return unfilteredRows.filter { filter.admits($0, index: index, setCollections: setCollections) }
+    }
+
+    /// The share chips' filter, back to `all` when its collection is gone.
+    private var shareFilter: LibraryShareFilter {
+        guard model.capabilities.shareSets else { return .all }
+        if case .collection(let id) = controller.shareFilter, model.shareSets.collection(id) == nil { return .all }
+        if case .set(let id) = controller.shareFilter, model.shareSets.group(id) == nil { return .all }
+        return controller.shareFilter
+    }
+
+    /// Before the share chips: what their counts are of.
+    private var unfilteredRows: [LibraryRow] {
         #if DEBUG
         if LibraryDebug.state != nil { return [] }
         if !debugRows.isEmpty {
@@ -138,7 +157,7 @@ private struct LibraryContent: View {
         let rows = self.rows
         let phase = phase(rows)
         // Ticks a search, a filter or a delete took off screen are neither counted nor shared.
-        let pickedCount = controller.selecting ? rows.reduce(0) { $0 + ($1.shareable && controller.picked.contains($1.id) ? 1 : 0) } : 0
+        let pickedCount = controller.selecting ? controller.pickedRows(rows).count : 0
         content(rows: rows, phase: phase)
             .navigationTitle(Copy.library)
             #if os(iOS)
@@ -153,29 +172,43 @@ private struct LibraryContent: View {
             .searchable(
                 text: $library.query, placement: searchPlacement,
                 prompt: model.capabilities.search ? Copy.Search.prompt : Copy.Library2.searchPrompt)
-            .toolbar { toolbar(pickedCount: pickedCount) }
+            .toolbar { toolbar }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     if model.capabilities.gallery {
                         LibraryKindChips(
                             model: model, extra: debugExtra,
-                            pickAll: { kind, share in pickKind(kind, thenShare: share) },
-                            selectChip: selectInChips
-                                ? .init(selecting: controller.selecting, toggle: toggleSelecting) : nil)
+                            pickAll: { kind, share in pickKind(kind, thenShare: share) })
+                    }
+                    if model.capabilities.shareSets, !model.shareSets.sets.isEmpty {
+                        LibraryShareChips(
+                            model: model, rows: unfilteredRows, index: shareIndex, filter: $controller.shareFilter)
                     }
                     loadingAllLine
                     LibrarySearchLine(state: library.searchState)
                 }
                 .motion(Motion.rows, value: library.searchState)
             }
-            // select mode on a server that makes gallery share links: the `make share link` bar (above the tab bar)
+            // select, by the thumb: the `select` pill, which grows into the panel with the picks and their actions
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if controller.selecting, model.capabilities.shareSets {
-                    LibraryShareBar(
-                        verdict: controller.shareLinkVerdict(rows), count: pickedCount, making: controller.makingShareLink
-                    ) { Task { await makeShareLink() } }
+                if !rows.isEmpty {
+                    LibrarySelectPill(
+                        model: model, controller: controller, rows: rows, toggle: toggleSelecting,
+                        makeLink: { Task { await makeShareLink() } },
+                        file: { target in Task { await makeShareLink(into: target) } },
+                        share: { Task { await sharePicked() } })
                 }
             }
+            .motion(Motion.rows, value: controller.selecting)
+            // hold a tile or a pick to see its media; lifting the finger closes it
+            .overlay {
+                if let row = controller.peek {
+                    LibraryPeek(row: row)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                }
+            }
+            .motion(Motion.card, value: controller.peek?.id)
+            .haptic(.impact(weight: .light), trigger: controller.peek?.id, enabled: haptics) { $0 != nil }
             .modifier(LibraryInspector(model: model, controller: controller, enabled: tier != .compact))
             .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: tier == .compact))
             .modifier(LibrarySkyMapPresenter(model: model, controller: controller))
@@ -271,9 +304,9 @@ private struct LibraryContent: View {
         return ShareSetIndex(sets: model.shareSets.sets, collections: model.shareSets.collections)
     }
 
-    /// The shelves over the mosaic: on the iPhone (a narrow window), while not selecting or searching.
+    /// The shelves over the mosaic: while not selecting or searching (iPhone, iPad and Mac alike).
     private var shelves: LibraryShelves? {
-        guard tier == .compact, !controller.selecting, LibraryShelves.hasContent(model),
+        guard !controller.selecting, LibraryShelves.hasContent(model),
               library.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         return LibraryShelves(model: model, controller: controller)
@@ -282,7 +315,7 @@ private struct LibraryContent: View {
     // MARK: toolbar
 
     @ToolbarContentBuilder
-    private func toolbar(pickedCount: Int) -> some ToolbarContent {
+    private var toolbar: some ToolbarContent {
         #if os(iOS)
         // Two plain buttons in one group, drawn as one glass capsule like the trailing group. A segmented `Picker` in a
         // toolbar item got a second glass capsule behind it on iOS 26 (the bar's and the control's own).
@@ -304,81 +337,37 @@ private struct LibraryContent: View {
         if !controller.selecting { QueueToolbarItem(model: model) }
         #endif
         ToolbarItemGroup(placement: .primaryAction) {
-            // Select mode keeps the view switcher and replaces the rest of this capsule.
-            if controller.selecting {
-                // every post the chip, the search and the show filter leave on screen, in one tap
-                // an icon, so the bar keeps room for the title and the count
-                Button(
-                    allPicked ? Copy.Library2.selectNone : Copy.Library2.selectAll,
-                    systemImage: allPicked ? Symbol.Library.selectNone : Symbol.Library.selectAll
-                ) {
-                    controller.toggleAll(rows)
-                }
-                .labelStyle(.iconOnly)
-                .help(allPicked ? Copy.Library2.selectNone : Copy.Library2.selectAll)
-                .disabled(!rows.contains(where: \.shareable))
-                // always there (disabled until something is ticked): appearing on the first tick moved the icons under
-                // the finger, and a second tap meant for select-none landed on share
-                Button(Copy.Library2.share, systemImage: Symbol.Library.share) { Task { await sharePicked() } }
-                    .disabled(controller.preparingShare || pickedCount == 0)
-                    .help(Copy.Library2.share)
+            // select lives in the pill at the bottom (`LibrarySelectPill`), not here
+            LibrarySortMenu(library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery)
+            #if os(macOS)
+            Button(Copy.Library2.refresh, systemImage: Symbol.Library.refresh) { Task { await controller.refresh() } }
+                .keyboardShortcut("r", modifiers: .command)
+                .help(Copy.Library2.refresh)
+            #endif
+            #if os(iOS)
+            // the iPhone's bar is full: paste and file share one "more" menu there
+            if tier == .compact {
+                LibraryAddMenu(showsFile: model.capabilities.showsFileButton)
             } else {
-                LibrarySortMenu(library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery)
-                #if os(macOS)
-                Button(Copy.Library2.refresh, systemImage: Symbol.Library.refresh) { Task { await controller.refresh() } }
-                    .keyboardShortcut("r", modifiers: .command)
-                    .help(Copy.Library2.refresh)
-                #endif
-                #if os(iOS)
-                // the iPhone's bar is full: paste and file share one "more" menu there
-                if tier == .compact {
-                    LibraryAddMenu(showsFile: model.capabilities.showsFileButton)
-                } else {
-                    PasteFileButtons(showsFile: model.capabilities.showsFileButton)
-                }
-                #else
                 PasteFileButtons(showsFile: model.capabilities.showsFileButton)
-                #endif
-                if tier != .compact {
-                    Button(Copy.Library2.toggleDetail, systemImage: Symbol.Library.inspector) {
-                        controller.inspectorOpen.toggle()
-                    }
-                    .keyboardShortcut("i", modifiers: [.command, .option])
-                    .help(Copy.Library2.toggleDetail)
-                }
             }
-            // the iPhone's select lives in the chip row (here it fell into the bar's overflow menu)
-            if !selectInChips {
-                Button(
-                    controller.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select,
-                    systemImage: controller.selecting ? Symbol.Gallery.ticked : Symbol.Gallery.selectPhotos,
-                    action: toggleSelecting
-                )
-                .help(controller.selecting ? Copy.Library2.doneSelecting : Copy.Library2.select)
+            #else
+            PasteFileButtons(showsFile: model.capabilities.showsFileButton)
+            #endif
+            if tier != .compact {
+                Button(Copy.Library2.toggleDetail, systemImage: Symbol.Library.inspector) {
+                    controller.inspectorOpen.toggle()
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .help(Copy.Library2.toggleDetail)
             }
         }
-    }
-
-    /// Select mode's switch sits at the start of the kind chips on the iPhone (a narrow window), where the top bar has
-    /// no room for it; elsewhere, and on a server without the chips, it stays in the bar.
-    private var selectInChips: Bool {
-        #if os(iOS)
-        tier == .compact && model.capabilities.gallery
-        #else
-        false
-        #endif
     }
 
     private func toggleSelecting() {
         withAnimation(Motion.rows) {
             if controller.selecting { controller.endSelecting() } else { controller.beginSelecting() }
         }
-    }
-
-    /// Every post on screen is ticked (the select-all button then clears them).
-    private var allPicked: Bool {
-        let rows = self.rows.filter(\.shareable)
-        return !rows.isEmpty && rows.allSatisfy { controller.picked.contains($0.id) }
     }
 
     /// Copies each ticked face that is on screen, then presents the sheet and leaves select mode (as saving a
@@ -395,6 +384,13 @@ private struct LibraryContent: View {
     /// runs does nothing.
     private func makeShareLink() async {
         if await controller.makeShareLink(rows) {
+            withAnimation(Motion.rows) { controller.endSelecting() }
+        }
+    }
+
+    /// The pill's `collection`: the same link, filed in a collection (an existing one or a new one).
+    private func makeShareLink(into target: LibraryController.CollectionTarget) async {
+        if await controller.makeShareLink(rows, into: target) {
             withAnimation(Motion.rows) { controller.endSelecting() }
         }
     }
@@ -822,7 +818,7 @@ private struct SharePrepLine: View {
 
 #if os(iOS)
 /// The iPhone library's "more" menu: paste a link, and (where the server takes files) add from photos or files. The same
-/// actions as `PasteFileButtons`, folded into one item so `select` keeps its place in the bar.
+/// actions as `PasteFileButtons`, folded into one item so the bar fits.
 private struct LibraryAddMenu: View {
     let showsFile: Bool
     @Environment(\.shell) private var shell

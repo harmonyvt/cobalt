@@ -361,8 +361,25 @@ struct LibraryRowBadges: View {
 struct LibraryPickMark: View {
     let ticked: Bool
     var onPhoto = false
+    /// The order it was picked in (the select pill's thumbnails carry the same number). Nil draws a plain tick.
+    var number: Int? = nil
 
     var body: some View {
+        if ticked, let number {
+            Text("\(number)")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(CobaltColor.onText)
+                .frame(minWidth: 20, minHeight: 20)
+                .padding(.horizontal, number > 9 ? 3 : 0)
+                .background(CobaltColor.text, in: Capsule())
+                .overlay(Capsule().strokeBorder(CobaltColor.onText.opacity(0.8), lineWidth: 1.5))
+                .accessibilityHidden(true)
+        } else {
+            mark
+        }
+    }
+
+    private var mark: some View {
         Image(systemName: ticked ? Symbol.Gallery.ticked : Symbol.Gallery.unticked)
             .font(.system(size: 17, weight: .semibold))
             .symbolRenderingMode(.palette)

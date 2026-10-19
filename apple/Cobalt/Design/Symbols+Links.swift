@@ -38,3 +38,12 @@ extension Symbol {
     /// A link not picked.
     static let linkNotPicked = "circle"
 }
+
+// MARK: sets (APP-API-CONTRACT section 28): groups of collections
+
+extension Symbol {
+    /// A set: its chip in the links tab and in the library's share chips.
+    static let collectionSet = "square.stack.3d.up"
+    /// "new set".
+    static let collectionSetNew = "plus"
+}

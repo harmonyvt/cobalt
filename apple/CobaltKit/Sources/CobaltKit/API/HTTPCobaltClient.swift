@@ -193,6 +193,7 @@ public struct HTTPCobaltClient: CobaltClient {
                 var search: Bool?
                 var shareSets: Bool?
                 var shareCollections: Bool?
+                var shareGroups: Bool?
                 var chat: Bool?
             }
             struct Limits: Decodable {
@@ -260,6 +261,7 @@ public struct HTTPCobaltClient: CobaltClient {
         caps.shareBaseURL = w.shareBaseUrl.flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
         caps.shareSets = (f?.shareSets ?? false) && caps.shareBaseURL != nil
         caps.shareCollections = (f?.shareCollections ?? false) && caps.shareSets
+        caps.shareGroups = (f?.shareGroups ?? false) && caps.shareCollections
         caps.chat = f?.chat ?? false
         return caps
     }
@@ -711,6 +713,77 @@ public struct HTTPCobaltClient: CobaltClient {
         case "error.collection.empty": return ShareCollectionError.empty
         default:
             if status == 503 { return ShareCollectionError.unavailable }
+            return apiError(data, status: status)
+        }
+    }
+
+    // MARK: - Collection sets (APP-API-CONTRACT 28; `features.share_groups`; keyed)
+
+    /// `GET /share/groups` (keyed): the groups, most recently changed first.
+    public func collectionGroups() async throws -> [CollectionGroup] {
+        let req = try makeRequest("GET", "/share/groups", keyed: true, timeout: 20)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw collectionGroupError(data, status: http.statusCode) }
+        struct Wire: Decodable { var groups: [Lossy<CollectionGroup>] }
+        guard let wire = try? CobaltJSON.decoder().decode(Wire.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return wire.groups.compactMap(\.value)
+    }
+
+    /// `POST /share/groups` `{name, collection_ids?}` (keyed): `collection_ids` is left out when empty.
+    public func createCollectionGroup(name: String, collectionIDs: [String]) async throws -> CollectionGroup {
+        let req = try makeRequest("POST", "/share/groups", keyed: true, timeout: 30)
+        var body: [String: Any] = ["name": name]
+        if !collectionIDs.isEmpty { body["collection_ids"] = collectionIDs }
+        let (data, http) = try await send(req, body: Self.jsonBody(body))
+        return try collectionGroupAnswer(data, http)
+    }
+
+    /// `PATCH /share/groups/<id>` `{name?, add?, remove?}` (keyed): only what is given is sent.
+    public func updateCollectionGroup(id: String, name: String?, add: [String], remove: [String]) async throws -> CollectionGroup {
+        let req = try makeRequest("PATCH", "/share/groups/\(Self.encode(id))", keyed: true, timeout: 30)
+        var body: [String: Any] = [:]
+        if let name { body["name"] = name }
+        if !add.isEmpty { body["add"] = add }
+        if !remove.isEmpty { body["remove"] = remove }
+        let (data, http) = try await send(req, body: Self.jsonBody(body))
+        return try collectionGroupAnswer(data, http)
+    }
+
+    /// `DELETE /share/groups/<id>` (keyed): the group only; its collections and links stay.
+    public func deleteCollectionGroup(id: String) async throws {
+        let req = try makeRequest("DELETE", "/share/groups/\(Self.encode(id))", keyed: true, timeout: 20)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw collectionGroupError(data, status: http.statusCode) }
+    }
+
+    private func collectionGroupAnswer(_ data: Data, _ http: HTTPURLResponse) throws -> CollectionGroup {
+        guard (200..<300).contains(http.statusCode) else { throw collectionGroupError(data, status: http.statusCode) }
+        struct Wire: Decodable { var group: CollectionGroup }
+        guard let wire = try? CobaltJSON.decoder().decode(Wire.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return wire.group
+    }
+
+    /// The group routes' refusals as `CollectionGroupError`; any other code stays the generic `CobaltError.api`.
+    /// (`404 error.share.off` is the generic one: the share host is not set up.)
+    private func collectionGroupError(_ data: Data, status: Int) -> Error {
+        struct Body: Decodable {
+            struct Err: Decodable { var code: String? }
+            var error: Err?
+            var collectionIds: [String]?
+        }
+        let body = try? CobaltJSON.decoder().decode(Body.self, from: data)
+        switch body?.error?.code {
+        case "error.group.bad_request": return CollectionGroupError.badRequest
+        case "error.group.not_found": return CollectionGroupError.notFound
+        case "error.group.collection_not_found": return CollectionGroupError.collectionNotFound(body?.collectionIds ?? [])
+        case "error.group.too_many": return CollectionGroupError.tooMany
+        case "error.group.full": return CollectionGroupError.full
+        default:
+            if status == 503 { return CollectionGroupError.unavailable }
             return apiError(data, status: status)
         }
     }

@@ -7,6 +7,7 @@ import SwiftUI
 // `model.shareSets` (the library's select bar adds to it, a refresh on appear and a pull keep it honest). While the
 // server has `features.share_collections` (section 26) a "collections" section sits at the top of the list: a grid of
 // folder cards (a push to `CollectionScreen`) and a "new collection" card. The row menus gain "add to collection".
+// With `features.share_groups` (section 28) chips over the folders pick a set (a group of collections).
 
 struct LinksScreen: View {
     let model: AppModel
@@ -108,6 +109,13 @@ struct LinksScreen: View {
             }
             if controller.collectionsEnabled {
                 Section {
+                    // the sets over the folders: a chip on shows only that set's collections
+                    if controller.setsEnabled {
+                        CollectionSetChips(store: store, controller: controller)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 4, trailing: 16))
+                    }
                     // the collections as folders, two to a row, then "new collection"
                     CollectionFolderGrid(store: store, controller: controller) { openedCollection = CollectionRoute(id: $0.id) }
                         .listRowBackground(Color.clear)

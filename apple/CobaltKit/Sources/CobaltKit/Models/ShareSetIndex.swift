@@ -53,16 +53,31 @@ public struct ShareSetIndex: Sendable, Equatable {
     /// The links holding any file of the post (one link holding two of its files counts once) and the collections
     /// holding any of those links.
     public func status(for item: MediaItem) -> ShareStatus {
-        guard !setsByFile.isEmpty else { return .none }
+        let sets = setIDs(for: item)
+        guard !sets.isEmpty else { return .none }
+        return ShareStatus(links: sets.count, collections: collectionIDs(forSets: sets).count)
+    }
+
+    /// The ids of the live links that hold any file of the post.
+    public func setIDs(for item: MediaItem) -> Set<String> {
+        guard !setsByFile.isEmpty else { return [] }
         var sets = Set<String>()
         for id in Self.fileIDs(of: item) {
             if let found = setsByFile[id] { sets.formUnion(found) }
         }
-        guard !sets.isEmpty else { return .none }
+        return sets
+    }
+
+    /// The ids of the collections holding a link that holds any file of the post (the library's collection filter).
+    public func collectionIDs(for item: MediaItem) -> Set<String> {
+        collectionIDs(forSets: setIDs(for: item))
+    }
+
+    private func collectionIDs(forSets sets: Set<String>) -> Set<String> {
         var collections = Set<String>()
         for id in sets {
             if let found = collectionsBySet[id] { collections.formUnion(found) }
         }
-        return ShareStatus(links: sets.count, collections: collections.count)
+        return collections
     }
 }

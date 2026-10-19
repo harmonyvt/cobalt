@@ -5,7 +5,9 @@ import Synchronization
 // three sample links, and the real rule (2..4 distinct files, all public now). `PreviewScenario.shareLinksEmpty` has no
 // links yet; `.shareLinksFail` cannot list them. `.happy` and `.renditions` have the three samples. The same server
 // answers `/share/collections` (APP-API-CONTRACT 26): two sample collections over the three links, the real name rule,
-// the 100/200 caps, and a revoked link dropping out of every collection.
+// the 100/200 caps, and a revoked link dropping out of every collection. And `/share/groups` (APP-API-CONTRACT 28): two
+// sample groups ("sets") over the two collections, the same name rule, the 100/100 caps, and a deleted collection
+// dropping out of every group.
 
 extension PreviewScenario {
     /// The preview server has `features.share_sets`.
@@ -34,6 +36,20 @@ extension PreviewData {
             ShareCollection(
                 id: "PrEvIeWcoll00002", name: "for discord", createdAt: now.addingTimeInterval(-2 * 86_400),
                 updatedAt: now.addingTimeInterval(-5 * 3_600), setIDs: ["9000000000000000003"]),
+        ]
+    }
+
+    /// The two sample collection groups ("sets"), most recently changed first (`now` is when the preview server started):
+    /// - `PrEvIeWgrup00001` "weekend" (30 minutes ago): both collections, "memes" first.
+    /// - `PrEvIeWgrup00002` "work" (1 day ago): "for discord".
+    static func collectionGroups(now: Date) -> [CollectionGroup] {
+        [
+            CollectionGroup(
+                id: "PrEvIeWgrup00001", name: "weekend", createdAt: now.addingTimeInterval(-86_400),
+                updatedAt: now.addingTimeInterval(-30 * 60), collectionIDs: ["PrEvIeWcoll00001", "PrEvIeWcoll00002"]),
+            CollectionGroup(
+                id: "PrEvIeWgrup00002", name: "work", createdAt: now.addingTimeInterval(-2 * 86_400),
+                updatedAt: now.addingTimeInterval(-86_400), collectionIDs: ["PrEvIeWcoll00002"]),
         ]
     }
 
@@ -77,8 +93,10 @@ final class PreviewShareState: Sendable {
     private struct State {
         var sets: [ShareSet] = []
         var collections: [ShareCollection] = []
+        var groups: [CollectionGroup] = []
         var counter = 0
         var collectionCounter = 0
+        var groupCounter = 0
         var calls: [String] = []
         var listFails = false
     }
@@ -90,8 +108,10 @@ final class PreviewShareState: Sendable {
 
     var collections: [ShareCollection] { state.withLock { $0.collections } }
 
-    func seed(_ sets: [ShareSet], collections: [ShareCollection] = [], listFails: Bool) {
-        state.withLock { $0.sets = sets; $0.collections = collections; $0.listFails = listFails }
+    var groups: [CollectionGroup] { state.withLock { $0.groups } }
+
+    func seed(_ sets: [ShareSet], collections: [ShareCollection] = [], groups: [CollectionGroup] = [], listFails: Bool) {
+        state.withLock { $0.sets = sets; $0.collections = collections; $0.groups = groups; $0.listFails = listFails }
     }
 
     /// Tests: `GET /share/sets` answers 503 while this is true.
@@ -198,10 +218,63 @@ final class PreviewShareState: Sendable {
         }
     }
 
+    /// Deletes a collection: it goes from the list and from every group.
     func removeCollection(_ id: String) -> Bool {
         state.withLock { s in
             guard s.collections.contains(where: { $0.id == id }) else { return false }
             s.collections.removeAll { $0.id == id }
+            for i in s.groups.indices { s.groups[i].collectionIDs.removeAll { $0 == id } }
+            return true
+        }
+    }
+
+    // MARK: collection groups
+
+    func listGroups() -> [CollectionGroup]? {
+        state.withLock { $0.listFails ? nil : $0.groups.sorted { $0.updatedAt > $1.updatedAt } }
+    }
+
+    /// `POST`: `tooMany` at 100, `collectionNotFound` for ids that are not collections (nothing changes), else the new one.
+    func addGroup(name: String, collectionIDs: [String], at now: Date) throws -> CollectionGroup {
+        try state.withLock { s in
+            let unknown = collectionIDs.filter { id in !s.collections.contains { $0.id == id } }
+            guard unknown.isEmpty else { throw CollectionGroupError.collectionNotFound(unknown) }
+            guard s.groups.count < CollectionGroupRule.groupLimit else { throw CollectionGroupError.tooMany }
+            var seen = Set<String>()
+            let ids = collectionIDs.filter { seen.insert($0).inserted }
+            guard ids.count <= CollectionGroupRule.collectionLimit else { throw CollectionGroupError.badRequest }
+            s.groupCounter += 1
+            let id = "PrEvIeWnewg" + String(format: "%05d", s.groupCounter)
+            let made = CollectionGroup(id: id, name: name, createdAt: now, updatedAt: now, collectionIDs: ids)
+            s.groups.insert(made, at: 0)
+            return made
+        }
+    }
+
+    /// `PATCH`: rename, add (most recently added first; one already there stays where it is), remove. `notFound` for an
+    /// unknown group, `collectionNotFound` for ids that are not collections, `full` past 100 collections.
+    func changeGroup(_ id: String, name: String?, add: [String], remove: [String], at now: Date) throws -> CollectionGroup {
+        try state.withLock { s in
+            guard let index = s.groups.firstIndex(where: { $0.id == id }) else { throw CollectionGroupError.notFound }
+            let unknown = add.filter { id in !s.collections.contains { $0.id == id } }
+            guard unknown.isEmpty else { throw CollectionGroupError.collectionNotFound(unknown) }
+            var group = s.groups[index]
+            if let name { group.name = name }
+            group.collectionIDs.removeAll { remove.contains($0) }
+            var fresh: [String] = []
+            for id in add where !group.collectionIDs.contains(id) && !fresh.contains(id) { fresh.append(id) }
+            guard group.collectionIDs.count + fresh.count <= CollectionGroupRule.collectionLimit else { throw CollectionGroupError.full }
+            group.collectionIDs = fresh.reversed() + group.collectionIDs
+            group.updatedAt = now
+            s.groups[index] = group
+            return group
+        }
+    }
+
+    func removeGroup(_ id: String) -> Bool {
+        state.withLock { s in
+            guard s.groups.contains(where: { $0.id == id }) else { return false }
+            s.groups.removeAll { $0.id == id }
             return true
         }
     }
@@ -303,5 +376,48 @@ extension PreviewClient {
         try await clock.sleep(seconds: 0.6 * timeScale)
         guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
         return try shareState.reroll(id, at: clock.now())
+    }
+
+    // MARK: collection groups (APP-API-CONTRACT 28)
+
+    /// `GET /share/groups`: most recently changed first; `.shareLinksFail` answers `503`.
+    public func collectionGroups() async throws -> [CollectionGroup] {
+        shareState.record("GET groups")
+        try await clock.sleep(seconds: 0.3 * timeScale)
+        guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
+        guard let list = shareState.listGroups() else { throw CollectionGroupError.unavailable }
+        return list
+    }
+
+    /// `POST /share/groups`: `badRequest` unless the name cleans to 1..60 code points; `collectionNotFound(ids)`,
+    /// `tooMany` as the server does.
+    public func createCollectionGroup(name: String, collectionIDs: [String]) async throws -> CollectionGroup {
+        shareState.record("POST groups " + collectionIDs.joined(separator: ","))
+        try await clock.sleep(seconds: 0.4 * timeScale)
+        guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
+        guard let cleaned = CollectionGroupRule.cleanName(name) else { throw CollectionGroupError.badRequest }
+        return try shareState.addGroup(name: cleaned, collectionIDs: collectionIDs, at: clock.now())
+    }
+
+    /// `PATCH /share/groups/<id>`: `badRequest` for nothing to change or a bad name; the rest as the server.
+    public func updateCollectionGroup(id: String, name: String?, add: [String], remove: [String]) async throws -> CollectionGroup {
+        shareState.record("PATCH groups " + id)
+        try await clock.sleep(seconds: 0.3 * timeScale)
+        guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
+        var cleaned: String?
+        if let name {
+            guard let c = CollectionGroupRule.cleanName(name) else { throw CollectionGroupError.badRequest }
+            cleaned = c
+        }
+        guard cleaned != nil || !add.isEmpty || !remove.isEmpty else { throw CollectionGroupError.badRequest }
+        return try shareState.changeGroup(id, name: cleaned, add: add, remove: remove, at: clock.now())
+    }
+
+    /// `DELETE /share/groups/<id>`: the group goes, its collections stay; an unknown id is `.notFound`.
+    public func deleteCollectionGroup(id: String) async throws {
+        shareState.record("DELETE groups " + id)
+        try await clock.sleep(seconds: 0.3 * timeScale)
+        guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
+        guard shareState.removeGroup(id) else { throw CollectionGroupError.notFound }
     }
 }

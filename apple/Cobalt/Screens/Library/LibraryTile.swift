@@ -13,8 +13,8 @@ private struct TilePress: ButtonStyle {
 /// or in its place the blue link badge when the post is already in a share link,
 /// the length bottom left on a video face tall enough to hold it) and a one-line title on a soft dark scrim.
 /// A webp face moves while the budget lets it. A tile whose picture failed keeps its frame, badges and caption
-/// with a glyph, and still opens. Tap opens, unless the library is selecting: then it ticks this post and the
-/// context menu is not offered.
+/// with a glyph, and still opens. Tap opens, unless the library is selecting: then it ticks this post, a hold shows
+/// its media full size (`LibraryPeek`), and the context menu is not offered.
 ///
 /// `Equatable` on what it draws, so a new page of tiles (or a refresh that changed nothing) re-evaluates none of
 /// the tiles already there.
@@ -31,6 +31,8 @@ struct LibraryTile: View, Equatable {
     /// Select mode. Passed in (not read off the controller while drawing) so `.equatable()` redraws the tick.
     let selecting: Bool
     let ticked: Bool
+    /// Its place in the picks (1 is the first tapped), drawn on the tick.
+    var pickNumber: Int? = nil
     let reload: Int
     /// The links and collections the post is already in (the blue link badge and the amber folder dot).
     let share: ShareStatus
@@ -48,7 +50,7 @@ struct LibraryTile: View, Equatable {
     nonisolated static func == (a: LibraryTile, b: LibraryTile) -> Bool {
         a.row == b.row && a.index == b.index && a.size == b.size && a.centerY == b.centerY && a.maxPixel == b.maxPixel
             && a.showsCaption == b.showsCaption && a.lit == b.lit && a.selected == b.selected
-            && a.selecting == b.selecting && a.ticked == b.ticked && a.reload == b.reload
+            && a.selecting == b.selecting && a.ticked == b.ticked && a.pickNumber == b.pickNumber && a.reload == b.reload
             && a.share == b.share && a.nearEnd == b.nearEnd
     }
 
@@ -75,9 +77,27 @@ struct LibraryTile: View, Equatable {
 
     var body: some View {
         Button {
-            if selecting { controller.togglePick(row) } else { controller.open(row) }
+            if selecting {
+                // the touch that ended a hold-to-peek is not a tick
+                if controller.takeSwallowedTap() { return }
+                withAnimation(Motion.rows) { controller.togglePick(row) }
+            } else {
+                #if os(macOS)
+                // ⌘-click starts picking with this post, as in Finder
+                if NSEvent.modifierFlags.contains(.command), row.shareable {
+                    withAnimation(Motion.rows) {
+                        controller.beginSelecting()
+                        controller.togglePick(row)
+                    }
+                    return
+                }
+                #endif
+                controller.open(row)
+            }
         } label: { tile }
             .buttonStyle(TilePress())
+            // while selecting, a hold shows the media full size (out of select mode the hold is the context menu)
+            .peekOnHold(row, controller: controller, enabled: selecting)
             // a gallery cannot be ticked (galleries are not shared): dimmer, and no tick
             .opacity(selecting ? (row.shareable ? (ticked ? 1 : 0.7) : 0.35) : 1)
             .frame(width: size.width, height: size.height)
@@ -152,7 +172,7 @@ struct LibraryTile: View, Equatable {
             // what is being ticked (a video, a photo, a webp) stays clear. A gallery gets no tick.
             if selecting {
                 if row.shareable {
-                    LibraryPickMark(ticked: ticked, onPhoto: true)
+                    LibraryPickMark(ticked: ticked, onPhoto: true, number: pickNumber)
                         .padding(5)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 }

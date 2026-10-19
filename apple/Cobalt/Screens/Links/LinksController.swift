@@ -53,6 +53,99 @@ final class LinksController {
     /// Collections are offered only while the server has them.
     var collectionsEnabled: Bool { model.capabilities.shareCollections }
 
+    // MARK: sets (section 28): groups of collections
+
+    /// Sets are offered only while the server has them.
+    var setsEnabled: Bool { model.capabilities.shareGroups }
+    /// The set chip that is on in the collections section: only its collections show. Nil shows every collection.
+    var selectedSetID: String?
+    /// The name alert for a new set (with the collection it was made from, if any) or a rename.
+    var naming: SetNaming?
+    /// The set the owner chose `delete set` for: the confirm is open on it.
+    var deletingSet: CollectionGroup?
+
+    enum SetNaming: Identifiable, Equatable {
+        case create(including: String?)
+        case rename(CollectionGroup)
+        var id: String {
+            switch self {
+            case .create(let c): return "create-\(c ?? "")"
+            case .rename(let g): return "rename-\(g.id)"
+            }
+        }
+    }
+
+    /// The set the chips have on, while it still exists.
+    var selectedSet: CollectionGroup? { selectedSetID.flatMap { store.group($0) } }
+
+    /// The collections the section shows: every one, or the selected set's.
+    var shownCollections: [ShareCollection] {
+        guard setsEnabled, let set = selectedSet else { return store.collections }
+        return store.collections(in: set)
+    }
+
+    func copyAll(_ set: CollectionGroup, shell: ShellActions) {
+        guard let text = store.linksText(in: set) else { return }
+        Pasteboard.copy(text)
+        shell.showStatus(Copy.Media.copied)
+        copiedToken += 1
+    }
+
+    /// The name alert's `create` / `save`.
+    func finishNaming(_ request: SetNaming, name: String, shell: ShellActions) {
+        guard let clean = CollectionGroupRule.cleanName(name) else { return }
+        Task {
+            do {
+                switch request {
+                case .create(let collectionID):
+                    let set = try await store.createGroup(name: clean, collectionIDs: collectionID.map { [$0] } ?? [])
+                    selectedSetID = set.id
+                    shell.showStatus(Copy.Sets.created)
+                case .rename(let set):
+                    try await store.renameGroup(set.id, to: clean)
+                    shell.showStatus(Copy.Sets.renamed)
+                }
+                doneToken += 1
+            } catch {
+                shell.showStatus(Copy.Sets.message(for: error))
+                failedToken += 1
+            }
+        }
+    }
+
+    /// A collection's `sets` menu: in the set → take it out, not in it → put it in.
+    func toggle(_ collection: ShareCollection, in set: CollectionGroup, shell: ShellActions) {
+        Task {
+            do {
+                if set.contains(collection.id) {
+                    try await store.removeCollection(collection.id, from: set.id)
+                    shell.showStatus(Copy.Sets.removed)
+                } else {
+                    try await store.addCollection(collection.id, to: set.id)
+                    shell.showStatus(Copy.Sets.added)
+                }
+                doneToken += 1
+            } catch {
+                shell.showStatus(Copy.Sets.message(for: error))
+                failedToken += 1
+            }
+        }
+    }
+
+    func delete(_ set: CollectionGroup, shell: ShellActions) {
+        Task {
+            do {
+                try await store.deleteGroup(set.id)
+                if selectedSetID == set.id { selectedSetID = nil }
+                shell.showStatus(Copy.Sets.deleted)
+                doneToken += 1
+            } catch {
+                shell.showStatus(Copy.Sets.message(for: error))
+                failedToken += 1
+            }
+        }
+    }
+
     // MARK: links
 
     /// The usual copy: the link on the pasteboard and `copied` over the shell.
@@ -176,9 +269,32 @@ private struct LinkPresentations: ViewModifier {
 
     @Environment(\.shell) private var shell
     @Environment(\.hapticsEnabled) private var haptics
+    /// The set name being typed in the name alert.
+    @State private var setName = ""
 
     func body(content: Content) -> some View {
         content
+            .alert(
+                namingTitle, isPresented: namingPresented, presenting: controller.naming
+            ) { request in
+                TextField(Copy.Sets.namePlaceholder, text: $setName)
+                Button(isRename(request) ? Copy.Sets.save : Copy.Sets.create) {
+                    controller.finishNaming(request, name: setName, shell: shell)
+                }
+                Button(Copy.cancel, role: .cancel) {}
+            }
+            .onChange(of: controller.naming) { _, request in
+                if case .rename(let set) = request { setName = set.name } else if request != nil { setName = "" }
+            }
+            .confirmationDialog(
+                controller.deletingSet.map { Copy.Sets.deleteTitle($0.name) } ?? "", isPresented: deletingSetPresented,
+                titleVisibility: .visible, presenting: controller.deletingSet
+            ) { set in
+                Button(Copy.Sets.delete, role: .destructive) { controller.delete(set, shell: shell) }
+                Button(Copy.Collections.keep, role: .cancel) {}
+            } message: { _ in
+                Text(Copy.Sets.deleteMessage)
+            }
             .confirmationDialog(
                 Copy.Links.revokeTitle, isPresented: revokingPresented, titleVisibility: .visible,
                 presenting: controller.revoking
@@ -224,6 +340,24 @@ private struct LinkPresentations: ViewModifier {
 
     private var deletingPresented: Binding<Bool> {
         Binding(get: { controller.deleting != nil }, set: { if !$0 { controller.deleting = nil } })
+    }
+
+    private var deletingSetPresented: Binding<Bool> {
+        Binding(get: { controller.deletingSet != nil }, set: { if !$0 { controller.deletingSet = nil } })
+    }
+
+    private var namingPresented: Binding<Bool> {
+        Binding(get: { controller.naming != nil }, set: { if !$0 { controller.naming = nil } })
+    }
+
+    private var namingTitle: String {
+        if case .rename = controller.naming { return Copy.Sets.renameTitle }
+        return Copy.Sets.newTitle
+    }
+
+    private func isRename(_ request: LinksController.SetNaming) -> Bool {
+        if case .rename = request { return true }
+        return false
     }
 }
 

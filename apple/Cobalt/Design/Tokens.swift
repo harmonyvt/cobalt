@@ -93,6 +93,9 @@ enum CobaltColor {
     static let collection = Color(light: 0x8a5a00, dark: 0xf0b44c)
     static let collectionBack = Color(light: 0xfbefd6, dark: 0x2a2418)
     static let collectionOnTile = Color(hex: 0xf0b44c)
+    /// A set (a group of collections): its chips and its bar.
+    static let collectionSet = Color(light: 0x5b3fb0, dark: 0xb69cff)
+    static let collectionSetBack = Color(light: 0xeee7fb, dark: 0x231d36)
 }
 
 enum Metrics {
