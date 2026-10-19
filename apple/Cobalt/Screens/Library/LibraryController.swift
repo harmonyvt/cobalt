@@ -82,10 +82,18 @@ final class LibraryController {
     /// The post "open in library" lit, for 1.6 s.
     var lit: String?
     var reveal: LibraryReveal?
-    /// The trailing checkbox: taps tick posts instead of opening them.
+    /// Select mode (the `select` pill): taps tick posts instead of opening them.
     var selecting = false
     /// Ticked posts (`LibraryRow.id`). Kept across a re-enter; `endSelecting` clears it.
-    var picked: Set<String> = []
+    private(set) var picked: Set<String> = []
+    /// The same posts in the order they were ticked: the pill's row of thumbnails and the link's order.
+    private(set) var pickOrder: [String] = []
+    /// The share chips: every post, not shared, shared, or one collection's.
+    var shareFilter: LibraryShareFilter = .all
+    /// The post a hold is showing full size (media only), while the finger stays down.
+    var peek: LibraryRow?
+    /// A hold just showed a peek: the tap the same touch ends with must not tick or untick.
+    @ObservationIgnored var peekSwallowsTap = false
     /// A share of the ticked posts is copying files. A second tap while this is set does nothing.
     var preparingShare = false
     /// A share link is being made (`make share link`). A second tap while this is set does nothing.
@@ -183,26 +191,68 @@ final class LibraryController {
 
     func endSelecting() {
         selecting = false
-        picked = []
+        setPicks([])
+        peek = nil
+    }
+
+    private func setPicks(_ ids: [String]) {
+        pickOrder = ids
+        picked = Set(ids)
     }
 
     /// Ticks or unticks one post. A gallery cannot be ticked: galleries are not shared.
     func togglePick(_ row: LibraryRow) {
         guard row.shareable else { return }
-        if picked.contains(row.id) { picked.remove(row.id) } else { picked.insert(row.id) }
+        if picked.contains(row.id) { unpick(row.id) } else { setPicks(pickOrder + [row.id]) }
+    }
+
+    /// Unticks one post (the pill's thumbnail).
+    func unpick(_ id: String) {
+        setPicks(pickOrder.filter { $0 != id })
     }
 
     /// Ticks every post on screen that can be shared (the kind chip, the search and the show filter decide which), or
     /// clears them all when every one is already ticked.
     func toggleAll(_ rows: [LibraryRow]) {
-        let ids = Set(rows.filter(\.shareable).map(\.id))
-        if ids.isSubset(of: picked) { picked.subtract(ids) } else { picked.formUnion(ids) }
+        let ids = rows.filter(\.shareable).map(\.id)
+        if Set(ids).isSubset(of: picked) {
+            let gone = Set(ids)
+            setPicks(pickOrder.filter { !gone.contains($0) })
+        } else {
+            setPicks(pickOrder + ids.filter { !picked.contains($0) })
+        }
     }
 
     /// Select mode with exactly these posts ticked: a kind chip's `select all` / `share all`.
     func pickOnly(_ rows: [LibraryRow]) {
         selecting = true
-        picked = Set(rows.filter(\.shareable).map(\.id))
+        setPicks(rows.filter(\.shareable).map(\.id))
+    }
+
+    /// The ticked posts that are on screen, in the order they were ticked (the pill's thumbnails).
+    func pickedRows(_ rows: [LibraryRow]) -> [LibraryRow] {
+        let byID = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return pickOrder.compactMap { byID[$0] }.filter(\.shareable)
+    }
+
+    /// A hold on a tile or a thumbnail: shows (`row`) or hides (nil) the media-only peek.
+    func setPeek(_ row: LibraryRow?) {
+        if row != nil { peekSwallowsTap = true }
+        peek = row
+        if row == nil {
+            // the touch that ends the hold may or may not also end as a tap: forget the swallow shortly after
+            Task {
+                try? await Task.sleep(for: .milliseconds(350))
+                if peek == nil { peekSwallowsTap = false }
+            }
+        }
+    }
+
+    /// The tap that ends a hold: true once, then taps count again.
+    func takeSwallowedTap() -> Bool {
+        guard peekSwallowsTap else { return false }
+        peekSwallowsTap = false
+        return true
     }
 
     /// Local files for the ticked posts, in `rows` order. One file per picked row: that row's face only
@@ -259,7 +309,7 @@ final class LibraryController {
     /// The picked posts that are on screen (`rows` order) with the public library file that stands for each, nil when
     /// the post has no public file. What the select bar's verdict and the button both read, so they cannot disagree.
     func shareLinkPicks(_ rows: [LibraryRow]) -> [(row: LibraryRow, fileID: String?)] {
-        rows.filter { $0.shareable && picked.contains($0.id) }.map { ($0, ShareSetRule.fileID(for: $0.item)) }
+        pickedRows(rows).map { ($0, ShareSetRule.fileID(for: $0.item)) }
     }
 
     func shareLinkVerdict(_ rows: [LibraryRow]) -> ShareSetVerdict {
@@ -270,6 +320,21 @@ final class LibraryController {
     /// Makes one link for the picked posts and copies it. True when it was made (the caller leaves select mode).
     /// A second call while one runs does nothing. `.notPublic` says so; any other failure is the generic one.
     func makeShareLink(_ rows: [LibraryRow]) async -> Bool {
+        await makeLink(rows, filing: nil)
+    }
+
+    /// The pill's `collection`: makes one link for the picks, copies it, and files it in the collection (an existing
+    /// one by id, or a new one by name). True when the link was made, even if filing it failed (that is said).
+    func makeShareLink(_ rows: [LibraryRow], into target: CollectionTarget) async -> Bool {
+        await makeLink(rows, filing: target)
+    }
+
+    enum CollectionTarget: Equatable {
+        case existing(id: String, name: String)
+        case new(name: String)
+    }
+
+    private func makeLink(_ rows: [LibraryRow], filing target: CollectionTarget?) async -> Bool {
         guard !makingShareLink, shareLinkVerdict(rows) == .ready else { return false }
         let ids = shareLinkPicks(rows).compactMap(\.fileID)
         makingShareLink = true
@@ -277,7 +342,26 @@ final class LibraryController {
         do {
             let set = try await model.shareSets.create(items: ids, title: nil)
             Pasteboard.copy(set.url.absoluteString)
-            showStatus(Copy.Media.copied)
+            if let target {
+                do {
+                    let name: String
+                    switch target {
+                    case .existing(let id, let n):
+                        _ = try await model.shareSets.addLink(set.id, to: id)
+                        name = n
+                    case .new(let n):
+                        name = try await model.shareSets.createCollection(name: n, setIDs: [set.id]).name
+                    }
+                    showStatus(Copy.Library2.filedIn(name))
+                } catch {
+                    // the link exists and is copied; only the filing failed
+                    showStatus(Copy.Collections.message(for: error))
+                    warnTick += 1
+                    return true
+                }
+            } else {
+                showStatus(Copy.Media.copied)
+            }
             shareLinksMade += 1
             return true
         } catch ShareSetError.notPublic {

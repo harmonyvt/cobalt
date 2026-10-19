@@ -105,6 +105,9 @@ struct LibraryMosaic: View {
     var body: some View {
         let plan = plan(width: Double(max(width, 1)))
         let byColumn = Dictionary(grouping: plan.slots, by: \.column)
+        // the picks' numbers, the same as the select pill's thumbnails
+        let numbers = controller.selecting
+            ? Dictionary(uniqueKeysWithValues: controller.pickedRows(rows).enumerated().map { ($1.id, $0 + 1) }) : [:]
         ScrollView {
             VStack(spacing: 0) {
                 if let shelves {
@@ -123,7 +126,7 @@ struct LibraryMosaic: View {
                             ForEach(0..<plan.columns, id: \.self) { column in
                                 LazyVStack(spacing: Self.gap) {
                                     ForEach(tiles(byColumn[column] ?? [])) { tile in
-                                        tileView(tile.slot, plan: plan)
+                                        tileView(tile.slot, plan: plan, numbers: numbers)
                                     }
                                 }
                                 .frame(width: plan.columnWidth)
@@ -171,7 +174,7 @@ struct LibraryMosaic: View {
     }
 
     @ViewBuilder
-    private func tileView(_ slot: MasonryPlan.Slot, plan: MasonryPlan) -> some View {
+    private func tileView(_ slot: MasonryPlan.Slot, plan: MasonryPlan, numbers: [String: Int]) -> some View {
         let size = CGSize(width: plan.columnWidth, height: slot.height)
         if skeleton {
             LibraryGhostTile(size: size, index: slot.index)
@@ -182,7 +185,9 @@ struct LibraryMosaic: View {
                 row: row, index: slot.index, size: size, centerY: top + slot.y + slot.height / 2,
                 maxPixel: maxPixel, showsCaption: true, lit: controller.lit == row.id,
                 selected: !controller.compact && controller.selection == row.id,
-                selecting: controller.selecting, ticked: controller.picked.contains(row.id), reload: controller.reload,
+                selecting: controller.selecting, ticked: controller.picked.contains(row.id),
+                pickNumber: numbers[row.id],
+                reload: controller.reload,
                 share: shareIndex.status(for: row.item), controller: controller, budget: budget, zoom: zoom,
                 nearEnd: slot.index >= rows.count - 6)
             .equatable()
