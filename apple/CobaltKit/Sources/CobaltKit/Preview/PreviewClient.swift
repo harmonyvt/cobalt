@@ -191,6 +191,8 @@ public struct PreviewClient: CobaltClient {
     let shareState = PreviewShareState()
     /// The chat threads the "server" holds (`PreviewChat.swift`).
     let chatState = PreviewChatState()
+    /// The stage the "server" holds (`PreviewStage.swift`).
+    let stageState = PreviewStageState()
 
     public var baseURL: URL { PreviewData.base }
 
@@ -220,6 +222,9 @@ public struct PreviewClient: CobaltClient {
                             collections: empty ? [] : PreviewData.shareCollections(now: now),
                             groups: empty ? [] : PreviewData.collectionGroups(now: now),
                             listFails: scenario == .shareLinksFail)
+        }
+        if scenario.hasStage {
+            stageState.seed(scenario, now: now)
         }
         if scenario.hasChat {
             let seed = PreviewData.chatSeed(now: now)

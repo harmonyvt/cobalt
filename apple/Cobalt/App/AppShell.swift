@@ -318,6 +318,12 @@ struct AppShell: View {
                     NavigationStack { ChatScreen(model: model, tier: tier) }
                 }
             }
+            // the stream canvas, its store and Twitch channel points (APP-API-CONTRACT 30); "studio" on screen
+            if model.capabilities.stage {
+                Tab(Copy.tab(.stage), systemImage: icon(for: .stage), value: AppTab.stage) {
+                    NavigationStack { StageScreen(model: model, tier: tier) }
+                }
+            }
             // the queue is not a tab here: it is a sheet opened from the toolbar button on save, library, links and chat
             // (apple/CONTRACT.md 12; `AppModel.showQueue()`)
             Tab(Copy.tab(.settings), systemImage: icon(for: .settings), value: AppTab.settings) {
@@ -352,6 +358,7 @@ struct AppShell: View {
             case .library: LibraryScreen(model: model, tier: tier)
             case .links: NavigationStack { LinksScreen(model: model) }
             case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
+            case .stage: NavigationStack { StageScreen(model: model, tier: tier) }
             case .queue: NavigationStack { QueueScreen(model: model) }
             case .settings: SettingsScreen(model: model)
             }
@@ -587,6 +594,7 @@ func icon(for tab: AppTab) -> String {
     case .library: return Symbol.library
     case .links: return Symbol.links
     case .chat: return Symbol.chat
+    case .stage: return Symbol.stage
     case .queue: return Symbol.queue
     case .settings: return Symbol.settings
     }
@@ -618,6 +626,9 @@ private struct QueueShellPreview: View {
 }
 #Preview("shell · chat tab") {
     PreviewHost(.happy, tab: .chat) { AppShell(model: $0) }
+}
+#Preview("shell · studio tab") {
+    PreviewHost(.happy, tab: .stage) { AppShell(model: $0) }
 }
 #Preview("shell · queue sheet") {
     PreviewHost(.happy, tab: .queue) { AppShell(model: $0) }

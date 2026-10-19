@@ -96,6 +96,16 @@ export type LookupThen =
     | "groups_create"
     | "groups_update"
     | "groups_delete"
+    // stage (APP-API-CONTRACT.md section 30.10)
+    | "stage_get"
+    | "stage_patch"
+    | "stage_rotate"
+    | "stage_action"
+    | "stage_pool"
+    | "stage_redemptions"
+    | "stage_reward"
+    | "stage_twitch_connect"
+    | "stage_twitch_delete"
     // chat (APP-API-CONTRACT.md section 27)
     | "chat_list"
     | "chat_create"
@@ -286,6 +296,9 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         return reject(404);
     }
 
+    // Stage (APP-API-CONTRACT.md section 30.10): keyed only; the library-service credential gets 404.
+    if (req.pathname === "/stage" || req.pathname.startsWith("/stage/")) return decideStage(req);
+
     // Chat (APP-API-CONTRACT.md section 27): keyed only.
     if (req.pathname === "/chat/threads" || req.pathname.startsWith("/chat/threads/")) {
         if (req.service) return reject(404);
@@ -427,6 +440,32 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     }
 
     return reject(404);
+}
+
+// /stage, /stage/rotate, /stage/action, /stage/pool, /stage/redemptions, /stage/rewards/<action>,
+// /stage/twitch and /stage/twitch/connect. Anything else (or the service credential) is a 404.
+export const STAGE_ACTION_REGEX = /^(summon|chaos|shuffle|pin)$/;
+function decideStage(req: GateRequest): GateDecision {
+    if (req.service) return reject(404);
+    const m = req.method;
+    const p = req.pathname;
+    let then: LookupThen | null = null;
+    let params: Record<string, string> | undefined;
+    if (p === "/stage") then = m === "GET" ? "stage_get" : m === "PATCH" ? "stage_patch" : null;
+    else if (p === "/stage/rotate") then = m === "POST" ? "stage_rotate" : null;
+    else if (p === "/stage/action") then = m === "POST" ? "stage_action" : null;
+    else if (p === "/stage/pool") then = m === "GET" ? "stage_pool" : null;
+    else if (p === "/stage/redemptions") then = m === "GET" ? "stage_redemptions" : null;
+    else if (p === "/stage/twitch") then = m === "DELETE" ? "stage_twitch_delete" : null;
+    else if (p === "/stage/twitch/connect") then = m === "POST" ? "stage_twitch_connect" : null;
+    else if (p.startsWith("/stage/rewards/")) {
+        const action = p.slice("/stage/rewards/".length);
+        if (STAGE_ACTION_REGEX.test(action) && m === "PATCH") {
+            then = "stage_reward";
+            params = { action };
+        }
+    }
+    return then === null ? reject(404) : lookupThen(req, then, params);
 }
 
 // PUT|DELETE /live/start-token, PUT|DELETE /live/runs/<run>, POST

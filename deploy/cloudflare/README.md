@@ -964,6 +964,85 @@ model. Deploy: apply 0015, then the API. Checked against a local workerd: tool c
 errors, the call cap and the 30 s timeout. The CPU cap (an endless loop) is enforced only on Cloudflare, not in a local
 workerd.
 
+## Stage (`APP-API-CONTRACT.md` section 30)
+
+A 1080p stream canvas that OBS loads as a Browser Source, a public viewer store, and Twitch channel-point redemptions
+(summon, chaos, shuffle, pin) that act on the canvas. In code, routes and tables it is **stage** (`src/stage.ts`,
+`src/stage-twitch.ts`, `src/stage-room.ts`, `src/stage-pages.ts`; D1 `stage_*`, migration 0019); only the host
+`studio.capybaraharmony.com` and the app's tab say "studio" (the save/trim `/studio/<sid>` stays as it was).
+
+- **Host.** `studio.capybaraharmony.com` is a second custom domain on the API Worker (`domains` in
+  `api/cloudflare.config.ts`, `STAGE_BASE_URL`). Like the share host the Worker answers it itself, before the gate: no key,
+  no container, no CORS, nothing outside `/live/<token>[/state|/ws]`, `/store`, `/store/api/*`, `/twitch/callback` and
+  `/twitch/eventsub`. The canvas is locked by its secret token (rotate it in the app), the store by the "store open" switch
+  (off by default: locked means `/store` and every `/store/api/*` answer 404 and the page, its sign-in and the Twitch
+  client id are not served), the webhook by the EventSub signature. The owner's controls are the keyed `/stage*` routes.
+- **Canvas.** `StageRoom` Durable Object (`STAGE_ROOM`, one instance, WebSocket hibernation) fans events out to the open
+  canvases and keeps the last spotlight and the chaos end, so a reload catches up from `GET /live/<token>/state`.
+- **Pool.** The whole library (newest 2,000 public files), a collection, a set of collections, or a meaning search
+  (needs library search, section 21). Public files only, checked again on every read: a file made private or deleted
+  leaves the canvas, the store and summons at once. Resolved when the pool changes and again when it is 10 minutes old.
+  Each pool item has a short code (3 characters, 4 once more than half of the 3-character codes are used), kept forever.
+
+### Owner steps (once)
+
+1. **Register the Twitch application** at <https://dev.twitch.tv/console/apps> ("Register Your Application"):
+   name e.g. `capystore`; OAuth Redirect URLs (both): `https://studio.capybaraharmony.com/twitch/callback` and
+   `https://studio.capybaraharmony.com/store`; Category: Broadcaster Suite; Client Type: Confidential. Open "Manage",
+   copy the **Client ID** and press "New Secret" for the **Client Secret**. Channel points need an **Affiliate or Partner**
+   channel; on any other channel the app reports "channel points need an affiliate channel" and the canvas and store still work.
+2. **Add the three secrets** to `~/.config/cobalt/secrets.json` (`cf deploy` refuses while a declared secret is missing;
+   empty values are fine and leave the canvas and store working without Twitch):
+
+       "TWITCH_CLIENT_ID": "<client id>",
+       "TWITCH_CLIENT_SECRET": "<client secret>",
+       "TWITCH_EVENTSUB_SECRET": "<10 to 100 ASCII characters; make one: openssl rand -hex 32>"
+
+   The client secret also encrypts the stored Twitch tokens (AES-GCM, key from HKDF-SHA-256 of the secret): if you ever
+   regenerate it, connect Twitch again in the app (status "reconnect"). `TWITCH_EVENTSUB_SECRET` signs the webhooks; change it
+   and disconnect/connect Twitch so the subscription is made with the new one.
+3. **Apply migration 0019** (additive; before deploying the API; the command at the top of this file):
+
+       cd deploy/cloudflare/web && cf d1 migrations apply 42f18bb0-837a-47f7-b1e2-606eb705ab6c --dir ../d1/migrations
+
+4. **Deploy the API Worker**: `deploy/cobalt-deploy api` (adds the `studio.` domain, the `STAGE_ROOM` binding and the
+   `StageRoom` class). `GET /capabilities` then has `features.stage` (always, with the domain var) and `features.stage_twitch`
+   (with all three secrets).
+5. **Connect Twitch** from the app's studio tab ("connect": a web sign-in for the channel owner, scope
+   `channel:manage:redemptions`). The callback stores the channel, makes the four rewards (`summon`, `chaos`, `shuffle`,
+   `pin`; a title Twitch already has becomes `capystore <word>`) and the webhook subscription. A step that fails is retried
+   by the next `GET /stage` (the app polls it); the status line says `setting up`, `ok`, `reconnect` or `not affiliate`.
+
+### Testing with OBS
+
+1. App: studio tab, copy the OBS link (`https://studio.capybaraharmony.com/live/<token>`), press "go live". Nothing shows
+   while off air by design (an empty canvas over the scene).
+2. OBS: Sources -> + -> Browser. URL: the link. Width 1920, Height 1080, FPS 30 (60 is smoother). Leave the custom CSS empty
+   (the page's background is transparent off air and black on air with tiles). Tick "Control audio via OBS" to put the
+   spotlight's sound in the mixer; untick "Shutdown source when not visible" so a scene change does not drop the socket (it
+   reconnects with backoff anyway). Right-click the source -> Refresh after rotating the link.
+3. Check without Twitch: in the app press "pick" on a pool item (the spotlight with its caption), the pin / skip buttons,
+   change "how crazy" and watch the tile count follow. `curl -H "Authorization: Api-Key <key>" -X POST -d '{"type":"chaos"}'
+   -H 'content-type: application/json' https://api.capybaraharmony.com/stage/action` does the same by hand.
+4. Check the store: switch "store open" on, open `https://studio.capybaraharmony.com/store` in a private window, copy a code
+   with "summon", then switch it off and reload: the page is gone ("nothing here.").
+5. Check redemptions: the broadcaster can redeem their own channel's rewards. Redeem `summon` with a code (or a few words);
+   the spotlight changes within a second or two and the redemption shows in the app's feed. Redeem it while off air: it is
+   refunded (Twitch marks it canceled and gives the points back).
+
+### Behaviour worth knowing
+
+- Redemptions have no approval step: a valid one is `FULFILLED` right away; off air, a disabled action, or a summon that
+  matches nothing is `CANCELED` (points refunded). A Helix failure leaves the redemption in Twitch's queue (refund it there)
+  and the row `failed`. The webhook answers 204 at once and finishes in `waitUntil`; Twitch redeliveries are ignored by message
+  id for 10 minutes (D1 `stage_seen`) and by redemption id forever (30 days of rows).
+- Summon order: a 3 or 4 character code in the pool, else the meaning search over the pool (a score under 0.2, `SEARCH_MIN_SCORE`
+  in `src/stage.ts`, is "no match"; tune it against the real Space), else a title substring.
+- The store sign-in is client side only (the implicit grant, token in `sessionStorage`); the Worker only validates the token
+  with Twitch when the page asks for "your summons", and keeps nothing about the viewer beyond the redemption rows.
+- The daily cron deletes redemptions older than 30 days.
+- Logs: `[stage]` lines in Workers Logs (`cf observability telemetry query ... "datasets":["cloudflare-workers"]`).
+
 ## Library search (`APP-API-CONTRACT.md` section 21)
 
 Search runs EmbeddingGemma 2 on a private Hugging Face Space (`capybaraharmony/cobalt-embed`, CPU basic, needs HF PRO); the API Worker drains the index queue every 15

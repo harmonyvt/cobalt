@@ -4,17 +4,19 @@ import UserNotifications
 
 /// The tabs, in the order they show. `queue` is everything cobalt is doing (apple/CONTRACT.md section 12).
 /// `links` lists the gallery share links (APP-API-CONTRACT 24) and shows only with `features.share_sets`; `chat` holds the
-/// threads with Claude about the library (APP-API-CONTRACT 27) and shows only with `features.chat`.
+/// threads with Claude about the library (APP-API-CONTRACT 27) and shows only with `features.chat`; `stage` is the "studio"
+/// tab, the stream canvas and the viewer store (APP-API-CONTRACT 30), after chat, and shows only with `features.stage`.
 public enum AppTab: String, Sendable, CaseIterable {
-    case save, library, links, chat, queue, settings
+    case save, library, links, chat, stage, queue, settings
 
     /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`,
-    /// chat needs `features.chat`.
+    /// chat needs `features.chat`, the studio needs `features.stage`.
     public func isAvailable(with caps: Capabilities) -> Bool {
         switch self {
         case .library: return caps.library
         case .links: return caps.shareSets
         case .chat: return caps.chat
+        case .stage: return caps.stage
         case .save, .queue, .settings: return true
         }
     }
@@ -56,6 +58,11 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// `GET /library/map` hands over about 150 mock posts in eight clusters (cats, minecraft, anime, cooking, coffee, the
     /// harbour, guitar, skate). `.happy` and `.renditions` serve the same map but do not advertise `features.search`.
     case skyMap
+    /// Stage, the studio tab (APP-API-CONTRACT 30; `PreviewStage.swift`): `.happy` and `.renditions` have `features.stage`
+    /// and `stage_twitch` with a connected, on-air stage (a spotlight, four rewards, a few redemptions). `.stageNotConnected`:
+    /// off air, Twitch not connected yet (connecting works). `.stageFail`: `GET /stage` always fails (`503`), so the tab shows
+    /// its failed state.
+    case stageNotConnected, stageFail
 }
 
 public struct ServerSummary: Sendable, Equatable {
@@ -77,6 +84,8 @@ public final class AppModel {
     public let shareSets: ShareSetStore
     /// The chat threads (the chat tab; APP-API-CONTRACT 27). Idle until `refresh()`.
     public let chat: ChatStore
+    /// Stage, the studio tab (APP-API-CONTRACT 30). Idle until `load()`.
+    public let stage: StageStore
     /// The library as a sky map (APP-API-CONTRACT 21, `GET /library/map`). Idle until `load()`.
     public let skyMap: SkyMapModel
     /// The photos album (CONTRACT-SYNC.md): `PhotosSync.preview(_:)` in previews.
@@ -155,6 +164,7 @@ public final class AppModel {
         self.library = library
         self.shareSets = ShareSetStore(context: context)
         self.chat = ChatStore(context: context)
+        self.stage = StageStore(context: context)
         self.skyMap = SkyMapModel(context: context)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
@@ -301,6 +311,7 @@ public final class AppModel {
         if selectedTab == .library, !caps.library, caps.kind != .unreachable { selectedTab = .save }
         if selectedTab == .links, !caps.shareSets, caps.kind != .unreachable { selectedTab = .save }
         if selectedTab == .chat, !caps.chat, caps.kind != .unreachable { selectedTab = .save }
+        if selectedTab == .stage, !caps.stage, caps.kind != .unreachable { selectedTab = .save }
         liveManager?.capabilitiesChanged()
         unifiedQueue.capabilitiesChanged()            // `features.queue` came or went: poll, or stop
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
@@ -335,6 +346,7 @@ public final class AppModel {
         library.reset()
         shareSets.reset()
         chat.reset()
+        stage.reset()
         skyMap.reset()
     }
 
@@ -349,14 +361,21 @@ public final class AppModel {
         #endif
     }
 
-    /// `cobalt-apple://job/<uuid>`, `cobalt-apple://library` ("your webp is ready") and
-    /// `cobalt-apple://open`.
+    /// `cobalt-apple://job/<uuid>`, `cobalt-apple://library` ("your webp is ready"), `cobalt-apple://stage` (the Twitch
+    /// sign-in's return) and `cobalt-apple://open`.
     public func open(_ url: URL) {
         guard url.scheme?.lowercased() == "cobalt-apple" else { return }
         queueShown = false                              // a link to somewhere else leaves the queue sheet behind
         selectedTab = .save
         if url.host(percentEncoded: false)?.lowercased() == "library" {
             if capabilities.library || capabilities.kind == .unreachable { selectedTab = .library }
+            return
+        }
+        if url.host(percentEncoded: false)?.lowercased() == "stage" {
+            // the Twitch sign-in's return (APP-API-CONTRACT 30.4): `cobalt-apple://stage?twitch=connected|failed`. The studio tab
+            // reads the stage again either way, so the card shows what Twitch did.
+            if capabilities.stage || capabilities.kind == .unreachable { selectedTab = .stage }
+            if capabilities.stage { Task { await self.stage.load() } }
             return
         }
         if url.host(percentEncoded: false)?.lowercased() == "jobs" {
