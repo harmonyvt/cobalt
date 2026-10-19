@@ -395,7 +395,29 @@ async function handleInner(
         if (decision.then === "share_sets_create" || decision.then === "share_sets_list" || decision.then === "share_sets_revoke") {
             const shareBaseUrl = shareHost(env) ? env.SHARE_BASE_URL : undefined;
             if (!shareBaseUrl) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
-            const sd = { db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, shareBaseUrl, now: edge.now, captioner: edge.captioner ?? captionerFrom(env, edge.modelFetch) };
+            const sd = {
+                db: env.DB,
+                mediaBaseUrl: env.MEDIA_BASE_URL,
+                shareBaseUrl,
+                now: edge.now,
+                captioner: edge.captioner ?? captionerFrom(env, edge.modelFetch),
+                // a new link's videos get moving previews (section 29): the Durable Object only writes records
+                kickLoops: async () => {
+                    const p = container
+                        .fetch(
+                            new Request("https://do.internal/loops/kick", {
+                                method: "POST",
+                                headers: { [KEY_ID_HEADER]: "worker:loops" },
+                            }),
+                        )
+                        .then(
+                            (res) => void res.body?.cancel().catch(() => {}),
+                            (e) => console.error("[loops] kick failed", e instanceof Error ? e.name : "error"),
+                        );
+                    if (edge.waitUntil) edge.waitUntil(p);
+                    else await p;
+                },
+            };
             const r =
                 decision.then === "share_sets_create"
                     ? await createShareSet(sd, request, keyId)

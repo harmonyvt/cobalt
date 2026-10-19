@@ -215,6 +215,8 @@ export class CobaltContainer extends Container<Env> {
             // server-made posters and `public: true` hosting (APP-API-CONTRACT.md section 13)
             media: env.MEDIA,
             mediaBaseUrl: env.MEDIA_BASE_URL,
+            // a gallery link's moving previews read a public-only video back (section 29)
+            mediaRead: env.MEDIA,
             // edge-cache purge for `public: true` hosting (section 16)
             purge: purgeFrom(env),
         });
@@ -415,6 +417,21 @@ export default {
                 .then(
                     async (res) => console.log("[posters] daily kick", res.status, await res.text().catch(() => "")),
                     (e) => console.error("[posters] daily kick failed", e instanceof Error ? e.name : "error"),
+                ),
+        );
+        // Gallery links' moving previews (APP-API-CONTRACT.md section 29): the backfill of anything a
+        // link's own kick missed, and the removal of previews whose video was deleted or made private.
+        ctx.waitUntil(
+            getContainer(env.COBALT, "main")
+                .fetch(
+                    new Request("https://do.internal/loops/kick?limit=50&clean=1", {
+                        method: "POST",
+                        headers: { [KEY_ID_HEADER]: "cron:loops" },
+                    }),
+                )
+                .then(
+                    async (res) => console.log("[loops] daily kick", res.status, await res.text().catch(() => "")),
+                    (e) => console.error("[loops] daily kick failed", e instanceof Error ? e.name : "error"),
                 ),
         );
     },

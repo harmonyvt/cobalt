@@ -1,4 +1,4 @@
-// Gallery share links (APP-API-CONTRACT.md section 24): 2..4 public files under one link,
+// Gallery share links (APP-API-CONTRACT.md section 24): 2..10 public files under one link,
 // https://share.../g/<id>. The keyed routes (create, list, revoke) and the share host's pages for a set:
 // the Open Graph page, and the Mastodon-shaped status Discord reads to draw every file as attachments.
 // D1 only, the container is never involved. Free of Cloudflare imports so it runs under plain node.
@@ -6,9 +6,13 @@
 import { captionOf, fileOf, setSubject, writeCaption, type Caption, type Captioner, type RoastInput } from "./roast";
 import { ITEM_COLUMNS, effectiveVisibility, type MediaRow } from "./visibility";
 import { escapeHtml } from "./share";
+import { loopUrls } from "./loops";
 import type { StudioReply } from "./studio";
 
-export const SHARE_SET_MAX = 4;
+// 10 is the most a Discord media gallery shows (section 29; it was 4, the Open Graph image grid's limit).
+export const SHARE_SET_MAX = 10;
+// Discord's limit on a component embed payload (https://docs.discord.com/developers/link-previews/component-embeds).
+export const COMPONENT_EMBED_MAX_BYTES = 3000;
 export const SHARE_SET_MIN = 2;
 export const SHARE_TITLE_MAX = 80;
 export const SHARE_LIST_MAX = 200;
@@ -23,6 +27,9 @@ export type ShareSetDeps = {
     // roast captions (section 25): written at creation, waiting at most captionWaitMs (the cron fills misses)
     captioner?: Captioner | null;
     captionWaitMs?: number;
+    // Queues the moving previews of a new link's videos in the Durable Object (section 29). Never awaited
+    // for long: the Worker hands it to waitUntil.
+    kickLoops?: () => Promise<void>;
 };
 
 export const CAPTION_WAIT_MS = 6000;
@@ -169,6 +176,9 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
                 new Promise((r) => setTimeout(r, wait)),
             ]);
         }
+        if (d.kickLoops && shaped.some((i) => (i.content_type ?? "").startsWith("video/"))) {
+            await d.kickLoops().catch(() => {});
+        }
         return { status: 201, body: { status: "success", set: setShape(d, row, shaped) } };
     } catch {
         return err(503, "error.api.generic");
@@ -211,7 +221,8 @@ export async function revokeShareSet(d: ShareSetDeps, id: string): Promise<Studi
 
 // ---- the share host --------------------------------------------------------------------------------
 
-type LiveSet = { set: SetRow; files: (SetItem & { url: string })[]; caption?: Caption | null };
+// `loop_url`: a video's moving preview (section 29), when it has one
+type LiveSet = { set: SetRow; files: (SetItem & { url: string; loop_url?: string | null })[]; caption?: Caption | null };
 
 async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl">, id: string): Promise<LiveSet | null> {
     if (!SET_ID_REGEX.test(id)) return null;
@@ -222,7 +233,16 @@ async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl">, id: string)
     if (!set) return null;
     const ids = parseItems(set.items);
     const files = itemsOf(ids, await rowsById(d.db, ids), d.mediaBaseUrl).filter((i): i is SetItem & { url: string } => i.url !== null);
-    return files.length > 0 ? { set, files, caption: await captionOf(d.db, setSubject(set.id)) } : null;
+    if (files.length === 0) return null;
+    const loops = await loopUrls(
+        d.db,
+        files.filter((f) => kindOf(f.content_type) === "video").map((f) => f.id),
+    );
+    return {
+        set,
+        files: files.map((f) => ({ ...f, loop_url: loops.get(f.id) ?? null })),
+        caption: await captionOf(d.db, setSubject(set.id)),
+    };
 }
 
 // The roast model input for a live gallery link, or null when none of its files is public any more.
@@ -346,18 +366,39 @@ function statusJson(d: ShareSetDeps, s: LiveSet) {
 }
 
 // https://docs.discord.com/developers/link-previews/component-embeds: one Container (17) holding a Text
-// Display (10) and a Media Gallery (12); at most 3,000 bytes. `<` is escaped so the JSON cannot end the script.
-export function componentEmbed(s: LiveSet): string {
-    const json = JSON.stringify({
-        component: {
-            type: 17,
-            components: [
-                { type: 10, content: [`**${mdEscape(titleText(s))}**`, descText(s) ? mdEscape(descText(s)) : ""].filter(Boolean).join("\n") },
-                { type: 12, items: s.files.map((f) => ({ media: { url: f.url } })) },
-            ],
-        },
-    });
-    return json.replace(/</g, "\\u003c");
+// Display (10) and a Media Gallery (12) of every file. A video with a moving preview (section 29) is shown
+// as that animated WebP, which Discord plays by itself, and the link then ends with an Action Row (1)
+// holding one link Button (2, style 5) to the page, where the videos play with sound. At most 3,000
+// bytes: over it the description goes, then the button; still over, null (Open Graph alone). `<` is
+// escaped so the JSON cannot end the script.
+export function componentEmbed(s: LiveSet, pageUrl: string): string | null {
+    const looped = s.files.some((f) => kindOf(f.content_type) === "video" && f.loop_url);
+    const build = (withDesc: boolean, withButton: boolean) =>
+        JSON.stringify({
+            component: {
+                type: 17,
+                components: [
+                    {
+                        type: 10,
+                        content: [`**${mdEscape(titleText(s))}**`, withDesc && descText(s) ? mdEscape(descText(s)) : ""].filter(Boolean).join("\n"),
+                    },
+                    {
+                        type: 12,
+                        items: s.files.map((f) => ({ media: { url: kindOf(f.content_type) === "video" && f.loop_url ? f.loop_url : f.url } })),
+                    },
+                    ...(withButton ? [{ type: 1, components: [{ type: 2, style: 5, url: pageUrl, label: "watch with sound" }] }] : []),
+                ],
+            },
+        }).replace(/</g, "\\u003c");
+    for (const [desc, button] of [
+        [true, looped],
+        [false, looped],
+        [false, false],
+    ] as const) {
+        const json = build(desc, button);
+        if (new TextEncoder().encode(json).byteLength <= COMPONENT_EMBED_MAX_BYTES) return json;
+    }
+    return null;
 }
 
 function pageHtml(d: ShareSetDeps, s: LiveSet, discord: boolean): string {
@@ -392,7 +433,8 @@ function pageHtml(d: ShareSetDeps, s: LiveSet, discord: boolean): string {
     meta.push(`<meta name="twitter:card" content="summary_large_image">`);
     // Discord's component embed: every file in one Media Gallery, videos playable, animated images moving.
     // Open Graph above stays as the fallback. The Mastodon status routes remain but are no longer linked.
-    if (discord) meta.push(`<script id="discord:component-embed" type="application/json">${componentEmbed(s)}</script>`);
+    const embed = discord ? componentEmbed(s, pageUrl) : null;
+    if (embed) meta.push(`<script id="discord:component-embed" type="application/json">${embed}</script>`);
     const body = s.files
         .map((f) =>
             kindOf(f.content_type) === "video"
