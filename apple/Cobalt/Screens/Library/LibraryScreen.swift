@@ -81,13 +81,16 @@ private struct LibraryContent: View {
         let filter = shareFilter
         guard filter != .all else { return unfilteredRows }
         let index = shareIndex
-        return unfilteredRows.filter { filter.admits($0, index: index) }
+        var setCollections: Set<String> = []
+        if case .set(let id) = filter { setCollections = Set(model.shareSets.group(id)?.collectionIDs ?? []) }
+        return unfilteredRows.filter { filter.admits($0, index: index, setCollections: setCollections) }
     }
 
     /// The share chips' filter, back to `all` when its collection is gone.
     private var shareFilter: LibraryShareFilter {
         guard model.capabilities.shareSets else { return .all }
         if case .collection(let id) = controller.shareFilter, model.shareSets.collection(id) == nil { return .all }
+        if case .set(let id) = controller.shareFilter, model.shareSets.group(id) == nil { return .all }
         return controller.shareFilter
     }
 

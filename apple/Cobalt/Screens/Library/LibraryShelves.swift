@@ -129,7 +129,8 @@ struct CollectionChip: View {
             Text(name)
                 .font(CobaltType.bodyMedium)
                 .lineLimit(1)
-            Text("\(links)")
+            // "2 links", so it does not read as the share chips' post counts
+            Text(Copy.Collections.linkCount(links))
                 .font(CobaltType.captionSmall)
                 .opacity(0.7)
         }
