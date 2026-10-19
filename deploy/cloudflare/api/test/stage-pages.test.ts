@@ -72,8 +72,9 @@ describe("livePage", () => {
         const p = livePage({ stageBaseUrl: BASE, preview: true });
         expect(p).toContain('data-preview="1"');
         const js = scripts(p)[0]!;
-        expect(js).toContain("!!cfg.sound && !PREVIEW");
-        expect(js).toContain("!PREVIEW");
+        expect(js).toContain("!!cfg.sound && !SILENT");
+        expect(js).toContain("var SILENT = PREVIEW || AMBIENT");
+        expect(js).toContain("!SILENT && cfg.on_air");
     });
 
     it("escapes the base url and uses no top-level await", () => {

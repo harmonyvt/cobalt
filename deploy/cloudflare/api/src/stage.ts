@@ -284,6 +284,8 @@ type SettingsRow = {
     spotlight_auto: number;
     spotlight_seconds: number;
     sound: number;
+    sound_all: number;
+    play_through: number;
     video_max: number;
     store_open: number;
     store_hint: number;
@@ -323,6 +325,8 @@ const SETTING_COLUMNS = new Set([
     "spotlight_auto",
     "spotlight_seconds",
     "sound",
+    "sound_all",
+    "play_through",
     "video_max",
     "store_open",
     "store_hint",
@@ -349,6 +353,8 @@ export type CanvasSettings = {
     spotlight_auto: boolean;
     spotlight_seconds: number;
     sound: boolean;
+    sound_all: boolean;
+    play_through: boolean;
     video_max: number;
     store_hint: boolean;
     store_url: string | null;
@@ -366,6 +372,8 @@ export function canvasSettings(d: Pick<StageDeps, "stageBaseUrl">, s: SettingsRo
         spotlight_auto: s.spotlight_auto === 1,
         spotlight_seconds: s.spotlight_seconds,
         sound: s.sound === 1,
+        sound_all: s.sound_all === 1,
+        play_through: s.play_through === 1,
         video_max: s.video_max,
         store_hint: s.store_hint === 1,
         // null while the store is locked, so the hint hides
@@ -920,6 +928,8 @@ async function stageShape(d: StageDeps, s: SettingsRow, tw: TwitchRow | null, ro
         spotlight_auto: s.spotlight_auto === 1,
         spotlight_seconds: s.spotlight_seconds,
         sound: s.sound === 1,
+        sound_all: s.sound_all === 1,
+        play_through: s.play_through === 1,
         video_max: s.video_max,
         store_open: s.store_open === 1,
         store_hint: s.store_hint === 1,
@@ -1013,12 +1023,12 @@ async function ownerGet(d: StageDeps): Promise<StudioReply> {
 type Num = { key: string; lo: number; hi: number; int: boolean };
 const NUMBERS: Num[] = [
     { key: "density", lo: 5, hi: 100, int: true },
-    { key: "tile_seconds", lo: 3, hi: 30, int: true },
+    { key: "tile_seconds", lo: 3, hi: 120, int: true },
     { key: "tile_scale", lo: 0.5, hi: 1.6, int: false },
     { key: "spotlight_seconds", lo: 10, hi: 120, int: true },
     { key: "video_max", lo: 0, hi: 24, int: true },
 ];
-const BOOLS = ["on_air", "spotlight_auto", "sound", "store_open", "store_hint"] as const;
+const BOOLS = ["on_air", "spotlight_auto", "sound", "sound_all", "play_through", "store_open", "store_hint"] as const;
 
 async function ownerPatch(d: StageDeps, request: Request): Promise<StudioReply> {
     const bad = () => err(400, "error.stage.bad_request");

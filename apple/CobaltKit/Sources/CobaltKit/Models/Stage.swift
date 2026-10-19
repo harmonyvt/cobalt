@@ -10,8 +10,8 @@ import Foundation
 public enum StageRule {
     /// "how crazy": tiles on screen at once.
     public static let densityRange = 5...100
-    /// "tile life": seconds a tile stays.
-    public static let tileSecondsRange = 3...30
+    /// "tile life": seconds a tile stays (a video may stay longer while "play videos through" is on).
+    public static let tileSecondsRange = 3...120
     public static let tileScaleRange: ClosedRange<Double> = 0.5...1.6
     public static let spotlightSecondsRange = 10...120
     /// Tiles that may play video at once.
@@ -448,13 +448,18 @@ public struct StageSettings: Sendable, Equatable {
     public var pool: StagePool
     /// "how crazy": tiles on screen, 5...100.
     public var density: Int
-    /// "tile life": seconds, 3...30.
+    /// "tile life": seconds, 3...120.
     public var tileSeconds: Int
     public var tileScale: Double
     public var spotlightAuto: Bool
     public var spotlightSeconds: Int
-    /// The spotlight tile plays its sound on stream.
+    /// The spotlight tile plays its sound on stream. The master switch: off mutes every tile, `soundAll` included.
     public var sound: Bool
+    /// "unmute all videos": every playing video tile has sound (while `sound` is on), not only the spotlight.
+    public var soundAll: Bool
+    /// "play videos through": a playing video tile stays until it has played to its end once, even past its tile life
+    /// (the canvas caps it at 3 minutes).
+    public var playThrough: Bool
     public var videoMax: Int
     /// The store is open to viewers. Off (locked) by default: the store and its sign-in are gone until the owner opens it.
     public var storeOpen: Bool
@@ -468,9 +473,9 @@ public struct StageSettings: Sendable, Equatable {
 
     public init(
         onAir: Bool = false, pool: StagePool = StagePool(), density: Int = 30, tileSeconds: Int = 10, tileScale: Double = 1,
-        spotlightAuto: Bool = true, spotlightSeconds: Int = 20, sound: Bool = true, videoMax: Int = 12, storeOpen: Bool = false,
-        storeHint: Bool = true, liveURL: URL, storeURL: URL, twitch: StageTwitch? = nil, spotlight: StageSpotlight? = nil,
-        updatedAt: Date? = nil
+        spotlightAuto: Bool = true, spotlightSeconds: Int = 20, sound: Bool = true, soundAll: Bool = false,
+        playThrough: Bool = false, videoMax: Int = 12, storeOpen: Bool = false, storeHint: Bool = true, liveURL: URL,
+        storeURL: URL, twitch: StageTwitch? = nil, spotlight: StageSpotlight? = nil, updatedAt: Date? = nil
     ) {
         self.onAir = onAir
         self.pool = pool
@@ -480,6 +485,8 @@ public struct StageSettings: Sendable, Equatable {
         self.spotlightAuto = spotlightAuto
         self.spotlightSeconds = spotlightSeconds
         self.sound = sound
+        self.soundAll = soundAll
+        self.playThrough = playThrough
         self.videoMax = videoMax
         self.storeOpen = storeOpen
         self.storeHint = storeHint
@@ -491,11 +498,18 @@ public struct StageSettings: Sendable, Equatable {
     }
 
     /// The canvas inside the app: the page with `?preview=1` (always muted, no store hint).
-    public var previewURL: URL {
+    public var previewURL: URL { canvasURL(mode: "preview") }
+
+    /// The canvas as a wallpaper or screensaver: the page with `?ambient=1` (always silent, always playing even off air, no
+    /// toasts, hints or captions, no letterbox bars).
+    public var ambientURL: URL { canvasURL(mode: "ambient") }
+
+    /// The live link with exactly one of the canvas modes (`preview`, `ambient`) set to 1.
+    private func canvasURL(mode: String) -> URL {
         guard var parts = URLComponents(url: liveURL, resolvingAgainstBaseURL: false) else { return liveURL }
         var items = parts.queryItems ?? []
-        items.removeAll { $0.name == "preview" }
-        items.append(URLQueryItem(name: "preview", value: "1"))
+        items.removeAll { $0.name == "preview" || $0.name == "ambient" }
+        items.append(URLQueryItem(name: mode, value: "1"))
         parts.queryItems = items
         return parts.url ?? liveURL
     }
@@ -518,6 +532,8 @@ public struct StageSettings: Sendable, Equatable {
         if let v = p.spotlightAuto { out.spotlightAuto = v }
         if let v = p.spotlightSeconds { out.spotlightSeconds = v }
         if let v = p.sound { out.sound = v }
+        if let v = p.soundAll { out.soundAll = v }
+        if let v = p.playThrough { out.playThrough = v }
         if let v = p.videoMax { out.videoMax = v }
         if let v = p.storeOpen { out.storeOpen = v }
         if let v = p.storeHint { out.storeHint = v }
@@ -527,8 +543,8 @@ public struct StageSettings: Sendable, Equatable {
 
 extension StageSettings: Decodable {
     enum CodingKeys: String, CodingKey {
-        case onAir, pool, density, tileSeconds, tileScale, spotlightAuto, spotlightSeconds, sound, videoMax
-        case storeOpen, storeHint, twitch, spotlight, updatedAt
+        case onAir, pool, density, tileSeconds, tileScale, spotlightAuto, spotlightSeconds, sound, soundAll, playThrough
+        case videoMax, storeOpen, storeHint, twitch, spotlight, updatedAt
         case liveURL = "liveUrl"              // `live_url` after convertFromSnakeCase
         case storeURL = "storeUrl"            // `store_url`
     }
@@ -544,6 +560,8 @@ extension StageSettings: Decodable {
         spotlightSeconds = StageRule.clamp(
             (try? c.decodeIfPresent(Int.self, forKey: .spotlightSeconds)) ?? 20, to: StageRule.spotlightSecondsRange)
         sound = (try? c.decodeIfPresent(Bool.self, forKey: .sound)) ?? true
+        soundAll = (try? c.decodeIfPresent(Bool.self, forKey: .soundAll)) ?? false
+        playThrough = (try? c.decodeIfPresent(Bool.self, forKey: .playThrough)) ?? false
         videoMax = StageRule.clamp((try? c.decodeIfPresent(Int.self, forKey: .videoMax)) ?? 12, to: StageRule.videoMaxRange)
         storeOpen = (try? c.decodeIfPresent(Bool.self, forKey: .storeOpen)) ?? false      // locked unless the server says open
         storeHint = (try? c.decodeIfPresent(Bool.self, forKey: .storeHint)) ?? true
@@ -586,14 +604,16 @@ public struct StagePatch: Sendable, Equatable {
     public var spotlightAuto: Bool?
     public var spotlightSeconds: Int?
     public var sound: Bool?
+    public var soundAll: Bool?
+    public var playThrough: Bool?
     public var videoMax: Int?
     public var storeOpen: Bool?
     public var storeHint: Bool?
 
     public init(
         onAir: Bool? = nil, pool: StagePoolChoice? = nil, density: Int? = nil, tileSeconds: Int? = nil, tileScale: Double? = nil,
-        spotlightAuto: Bool? = nil, spotlightSeconds: Int? = nil, sound: Bool? = nil, videoMax: Int? = nil,
-        storeOpen: Bool? = nil, storeHint: Bool? = nil
+        spotlightAuto: Bool? = nil, spotlightSeconds: Int? = nil, sound: Bool? = nil, soundAll: Bool? = nil,
+        playThrough: Bool? = nil, videoMax: Int? = nil, storeOpen: Bool? = nil, storeHint: Bool? = nil
     ) {
         self.onAir = onAir
         self.pool = pool
@@ -603,6 +623,8 @@ public struct StagePatch: Sendable, Equatable {
         self.spotlightAuto = spotlightAuto
         self.spotlightSeconds = spotlightSeconds
         self.sound = sound
+        self.soundAll = soundAll
+        self.playThrough = playThrough
         self.videoMax = videoMax
         self.storeOpen = storeOpen
         self.storeHint = storeHint
@@ -632,6 +654,8 @@ public struct StagePatch: Sendable, Equatable {
         if spotlightAuto != nil { out.spotlightAuto = settings.spotlightAuto }
         if spotlightSeconds != nil { out.spotlightSeconds = settings.spotlightSeconds }
         if sound != nil { out.sound = settings.sound }
+        if soundAll != nil { out.soundAll = settings.soundAll }
+        if playThrough != nil { out.playThrough = settings.playThrough }
         if videoMax != nil { out.videoMax = settings.videoMax }
         if storeOpen != nil { out.storeOpen = settings.storeOpen }
         if storeHint != nil { out.storeHint = settings.storeHint }
@@ -649,6 +673,8 @@ public struct StagePatch: Sendable, Equatable {
         if let v = later.spotlightAuto { out.spotlightAuto = v }
         if let v = later.spotlightSeconds { out.spotlightSeconds = v }
         if let v = later.sound { out.sound = v }
+        if let v = later.soundAll { out.soundAll = v }
+        if let v = later.playThrough { out.playThrough = v }
         if let v = later.videoMax { out.videoMax = v }
         if let v = later.storeOpen { out.storeOpen = v }
         if let v = later.storeHint { out.storeHint = v }
@@ -671,6 +697,8 @@ public struct StagePatch: Sendable, Equatable {
         if let v = p.spotlightAuto { out["spotlight_auto"] = v }
         if let v = p.spotlightSeconds { out["spotlight_seconds"] = v }
         if let v = p.sound { out["sound"] = v }
+        if let v = p.soundAll { out["sound_all"] = v }
+        if let v = p.playThrough { out["play_through"] = v }
         if let v = p.videoMax { out["video_max"] = v }
         if let v = p.storeOpen { out["store_open"] = v }
         if let v = p.storeHint { out["store_hint"] = v }

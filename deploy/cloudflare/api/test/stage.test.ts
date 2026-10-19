@@ -112,6 +112,8 @@ describe("settings (30.2, 30.10)", () => {
             spotlight_auto: true,
             spotlight_seconds: 20,
             sound: true,
+            sound_all: false,
+            play_through: false,
             video_max: 12,
             store_open: false,
             store_hint: true,
@@ -142,10 +144,27 @@ describe("settings (30.2, 30.10)", () => {
         expect(r.status).toBe(200);
         expect(r.body.stage).toMatchObject({ density: 100, tile_seconds: 3, tile_scale: 1.6, spotlight_seconds: 10, video_max: 24, sound: false, store_hint: false });
         const lo = await w.owner("PATCH", "/stage", { density: -4, tile_seconds: 500, tile_scale: 0.01, spotlight_seconds: 9999, video_max: -3 });
-        expect(lo.body.stage).toMatchObject({ density: 5, tile_seconds: 30, tile_scale: 0.5, spotlight_seconds: 120, video_max: 0 });
+        expect(lo.body.stage).toMatchObject({ density: 5, tile_seconds: 120, tile_scale: 0.5, spotlight_seconds: 120, video_max: 0 });
         const mid = await w.owner("PATCH", "/stage", { density: 42.4, tile_scale: 1.2345, on_air: true, spotlight_auto: false });
         expect(mid.body.stage).toMatchObject({ density: 42, tile_scale: 1.23, on_air: true, spotlight_auto: false });
         expect(w.stageRow()).toMatchObject({ density: 42, on_air: 1, spotlight_auto: 0 });
+    });
+
+    it("PATCH takes the two video switches (sound_all, play_through) and the canvas sees them", async () => {
+        const w = await world();
+        const r = await w.owner("PATCH", "/stage", { sound_all: true, play_through: true });
+        expect(r.status).toBe(200);
+        expect(r.body.stage).toMatchObject({ sound_all: true, play_through: true });
+        expect(w.stageRow()).toMatchObject({ sound_all: 1, play_through: 1 });
+        const t = await w.token();
+        const st = await w.siteJson(`/live/${t}/state`);
+        expect(st.body.stage).toMatchObject({ sound_all: true, play_through: true });
+        const off = await w.owner("PATCH", "/stage", { sound_all: false });
+        expect(off.body.stage).toMatchObject({ sound_all: false, play_through: true });
+        // not booleans: refused, nothing changes
+        const bad = await w.owner("PATCH", "/stage", { play_through: "yes" });
+        expect(bad.status).toBe(400);
+        expect(w.stageRow()).toMatchObject({ sound_all: 0, play_through: 1 });
     });
 
     it("refuses what is not a number, a boolean or a pool", async () => {
@@ -457,7 +476,7 @@ describe("the canvas token and pages (30.4)", () => {
         expect(locked.status).toBe(200);
         expect(locked.body).toMatchObject({
             status: "success",
-            stage: { on_air: false, density: 30, tile_seconds: 10, tile_scale: 1, spotlight_auto: true, spotlight_seconds: 20, sound: true, video_max: 12, store_hint: true, store_url: null },
+            stage: { on_air: false, density: 30, tile_seconds: 10, tile_scale: 1, spotlight_auto: true, spotlight_seconds: 20, sound: true, sound_all: false, play_through: false, video_max: 12, store_hint: true, store_url: null },
             spotlight: null,
         });
         expect(ids(locked.body.pool)).toEqual([a.id]);

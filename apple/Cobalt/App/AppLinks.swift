@@ -168,6 +168,13 @@ extension CobaltAppDelegate: NSApplicationDelegate {
         UNUserNotificationCenter.current().delegate = self
     }
 
+    /// Closing the main window quits the app (one `Window` scene), except while the studio wallpaper is on: the
+    /// wallpaper lives in this process, so the app stays (reopen the window from the Dock).
+    @MainActor
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        !StageWallpaper.shared.isOn
+    }
+
     /// Quitting with work on the server: the shell's hook sends the line's one summary opt-in first (bounded to about a
     /// second), so the process does not exit under the request. Nothing to say: it quits at once.
     @MainActor

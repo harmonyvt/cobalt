@@ -110,6 +110,10 @@ extension Copy {
         static func eachSeconds(_ seconds: Int) -> String { "\(seconds) s each" }
         static let flicker = "flicker"
         static let linger = "linger"
+        static let playThrough = "play videos through"
+        static let playThroughNote = "a video stays until it has played once, even past its tile life"
+        static let soundAll = "unmute all videos"
+        static let soundAllNote = "every playing video has sound on stream, not only the spotlight"
         static let moreOptions = "more"
         static let tileSize = "tile size"
         static func sizeValue(_ scale: Double) -> String { String(format: "×%.1f", scale) }
@@ -287,6 +291,12 @@ extension Copy {
         static let storeLockedNote = "locked: the store and its sign-in are gone until you open it"
         static let storeOpenNote = "open: viewers can sign in with twitch and browse the store"
         static let copyStoreLink = "copy store link"
+
+        // MARK: the wallpaper (macOS)
+
+        static let wallpaper = "wallpaper on this mac"
+        static let wallpaperNote = "the canvas behind your desktop icons on every display, silent. it keeps going while the stream is off."
+        static let wallpaperMenu = "studio wallpaper"
 
         // MARK: refusals
 

@@ -30,6 +30,7 @@ body[data-preview="1"] #stage.off{background:#000}
 .tile{position:absolute;display:none;background:#0b0b0b;box-shadow:0 8px 30px rgba(0,0,0,.55)}
 .tile img,.tile video{display:block;width:100%;height:100%;object-fit:cover}
 .tile.pop{animation:pop .55s cubic-bezier(.2,.9,.3,1.15) both}
+.tile.out{opacity:0;transition:opacity .45s ease-out}
 @keyframes pop{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:scale(1)}}
 #spot{position:absolute;display:none;z-index:100000;box-shadow:0 30px 90px rgba(0,0,0,.8)}
 #spot.spotin{animation:spot .7s cubic-bezier(.2,.9,.3,1.1) both}
@@ -55,6 +56,7 @@ body[data-preview="1"] #stage.off{background:#000}
 #tl2{font-size:18px;color:#c4c4c4;word-break:break-word}
 #hint{position:absolute;right:40px;bottom:40px;z-index:100001;background:rgba(0,0,0,.82);border-radius:12px;padding:12px 18px;font-size:18px;color:#e1e1e1;display:none}
 #hint b{color:#fff;font-weight:600}
+body[data-ambient="1"] #toast,body[data-ambient="1"] #hint,body[data-ambient="1"] #chaosrow,body[data-ambient="1"] #spcap{display:none!important}
 `;
 
 const LIVE_BODY = String.raw`
@@ -86,6 +88,11 @@ const LIVE_JS = String.raw`
   var body = document.body;
   var PREVIEW = body.getAttribute('data-preview') === '1' || /[?&]preview=1(&|$)/.test(location.search);
   var CLEAR_BG = /[?&]bg=(clear|transparent)(&|$)/.test(location.search);
+  // ambient: the wallpaper and screensaver mode. Silent, always playing (on air or not), only the tiles and the
+  // spotlight: no toast, store hint, chaos pill or spotlight caption.
+  var AMBIENT = /[?&]ambient=1(&|$)/.test(location.search);
+  var SILENT = PREVIEW || AMBIENT;
+  // 1080 logical px tall; as wide as the window's shape (1920 at 16:9, what OBS uses), so no window is letterboxed
   var W = 1920, H = 1080, MAX_SLOTS = 100, MAX_POOL = 2000;
   var BASE = location.pathname.replace(/\/+$/, '');
 
@@ -95,16 +102,18 @@ const LIVE_JS = String.raw`
   var chaosRow = $('chaosrow'), chaosText = $('chaostext');
   var toastEl = $('toast'), tl1 = $('tl1'), tl2 = $('tl2'), hintEl = $('hint');
   if (CLEAR_BG) stage.className += ' clear';
+  if (AMBIENT) body.setAttribute('data-ambient', '1');
 
   var DEFAULTS = {
     on_air: false, density: 30, tile_seconds: 10, tile_scale: 1, spotlight_auto: true,
-    spotlight_seconds: 20, sound: true, video_max: 12, store_hint: true, store_url: null
+    spotlight_seconds: 20, sound: true, sound_all: false, play_through: false, video_max: 12, store_hint: true, store_url: null
   };
   var cfg = merge(DEFAULTS, {});
   var pool = [];
   var slots = [];
   var zc = 1;
   var spot = null;          // the spotlight on screen
+  var spotRect = null;      // where it is, so new tiles do not land under it
   var chaosUntil = 0, chaosBy = '';
   var clockOffset = 0;      // server time minus this clock, only used when they disagree by seconds
   var stopped = false;
@@ -123,7 +132,10 @@ const LIVE_JS = String.raw`
   function num(v, d) { return typeof v === 'number' && isFinite(v) ? v : d; }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function fit() {
-    var s = Math.min(window.innerWidth / W, window.innerHeight / H);
+    var iw = window.innerWidth, ih = window.innerHeight;
+    if (iw > 0 && ih > 0) W = clamp(Math.round(H * iw / ih), 960, 5760);
+    stage.style.width = W + 'px';
+    var s = Math.min(iw / W, ih / H);
     if (!(s > 0)) s = 1;
     stage.style.transform = 'scale(' + s + ')';
     stage.style.left = Math.round((window.innerWidth - W * s) / 2) + 'px';
@@ -159,8 +171,21 @@ const LIVE_JS = String.raw`
     return chaosUntil > now() ? MAX_SLOTS : clamp(Math.round(num(cfg.density, 30)), 5, MAX_SLOTS);
   }
 
-  // ---- the scatter: a fixed pool of slots, reused -------------------------------------------------------------
-  function makeSlot() {
+  // ---- the scatter ---------------------------------------------------------------------------------------------
+  // A fixed set of slots. Filling a slot builds a fresh tile and keeps the old one up until the new picture or video
+  // is ready, so a change never flashes black. New tiles go where the canvas is emptiest (best of a few random
+  // spots, scored on a coarse coverage grid), so the scatter covers the screen instead of piling up.
+  var GX = 32, GY = 18, SPOTS = 16, HOLD_MAX = 180000, START_GRACE = 15000, READY_WAIT = 8000;
+  function makeSlot() { return { cur: null, next: null, born: 0, fails: 0 }; }
+  function slotAt(i) {
+    while (slots.length <= i) slots.push(makeSlot());
+    return slots[i];
+  }
+  function busy(s) { return !!(s.cur || s.next); }
+  function slotItem(s) { return s.next ? s.next.item : s.cur ? s.cur.item : null; }
+  function tileLife() { return Math.max(3000, num(cfg.tile_seconds, 10) * 1000); }
+  function tileSound() { return audible() && !!cfg.sound_all; }
+  function makeView(it) {
     var el = document.createElement('div');
     el.className = 'tile';
     var img = document.createElement('img');
@@ -174,39 +199,110 @@ const LIVE_JS = String.raw`
     img.style.display = 'none';
     el.appendChild(img);
     el.appendChild(vid);
+    el.style.visibility = 'hidden';
     tilesEl.appendChild(el);
-    var s = { el: el, img: img, vid: vid, item: null, active: false, playing: false, born: 0, area: 0, f: 1, fx: 0, fy: 0, fails: 0 };
-    img.onerror = function () { slotFailed(s); };
-    vid.onerror = function () { slotFailed(s); };
-    return s;
+    return { el: el, img: img, vid: vid, item: it, playing: false, ready: false, started: false, ended: false, shownAt: 0, x: 0, y: 0, w: 0, h: 0 };
   }
-  function slotAt(i) {
-    while (slots.length <= i) slots.push(makeSlot());
-    return slots[i];
+  function discard(v) {
+    if (!v) return;
+    dropVideo(v.vid);
+    v.img.removeAttribute('src');
+    if (v.el.parentNode) v.el.parentNode.removeChild(v.el);
   }
-  function playingCount() {
+  // the old tile fades out over the one that replaced it, then goes
+  function retire(v) {
+    if (!v) return;
+    try { v.vid.pause(); } catch (e) {}
+    v.el.classList.add('out');
+    setTimeout(function () { discard(v); }, 500);
+  }
+  function playingCount(except) {
     var n = 0;
-    for (var i = 0; i < slots.length; i++) if (slots[i].active && slots[i].playing) n++;
+    for (var i = 0; i < slots.length; i++) {
+      var s = slots[i];
+      if (s.cur && s.cur.playing && s !== except) n++;
+      if (s.next && s.next.playing) n++;
+    }
     return n;
   }
-  function layout(s) {
-    var it = s.item;
-    var a = aspect(it);
-    var w = Math.sqrt(s.area * a) * s.f;
+  function views() {
+    var out = [];
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].cur) out.push(slots[i].cur);
+      if (slots[i].next) out.push(slots[i].next);
+    }
+    return out;
+  }
+  // how many tiles (and the spotlight, which hides what is under it) cover each cell, leaving out one slot
+  function coverage(except) {
+    var g = [], i, n = GX * GY;
+    for (i = 0; i < n; i++) g.push(0);
+    var add = function (x, y, w, h, wt) {
+      var cw = W / GX, ch = H / GY;
+      var c0 = Math.max(0, Math.ceil(x / cw - 0.5)), c1 = Math.min(GX - 1, Math.floor((x + w) / cw - 0.5));
+      var r0 = Math.max(0, Math.ceil(y / ch - 0.5)), r1 = Math.min(GY - 1, Math.floor((y + h) / ch - 0.5));
+      for (var r = r0; r <= r1; r++) for (var c = c0; c <= c1; c++) g[r * GX + c] += wt;
+    };
+    for (i = 0; i < slots.length; i++) {
+      var s = slots[i];
+      if (s === except) continue;
+      if (s.cur) add(s.cur.x, s.cur.y, s.cur.w, s.cur.h, 1);
+      if (s.next) add(s.next.x, s.next.y, s.next.w, s.next.h, 1);
+    }
+    if (spot && spotRect) add(spotRect.x, spotRect.y, spotRect.w, spotRect.h, 2);
+    return g;
+  }
+  function score(g, x, y, w, h) {
+    var cw = W / GX, ch = H / GY, sc = 0;
+    var c0 = Math.max(0, Math.ceil(x / cw - 0.5)), c1 = Math.min(GX - 1, Math.floor((x + w) / cw - 0.5));
+    var r0 = Math.max(0, Math.ceil(y / ch - 0.5)), r1 = Math.min(GY - 1, Math.floor((y + h) / ch - 0.5));
+    for (var r = r0; r <= r1; r++) for (var c = c0; c <= c1; c++) {
+      var k = g[r * GX + c];
+      sc += k === 0 ? 1 : k === 1 ? 0.12 : 0;
+    }
+    return sc;
+  }
+  // a spot for a w×h tile that may hang 8% off an edge: the emptiest of a few candidates, half of them random and
+  // half centred on a cell nothing covers yet
+  function placeView(v, except) {
+    var g = coverage(except), best = null, bestScore = -1, holes = [], i;
+    for (i = 0; i < g.length; i++) if (g[i] === 0) holes.push(i);
+    var x0 = -0.08 * v.w, x1 = W - 0.92 * v.w, y0 = -0.08 * v.h, y1 = H - 0.92 * v.h;
+    for (i = 0; i < SPOTS; i++) {
+      var x, y;
+      if (holes.length && i % 2 === 1) {
+        var cell = holes[Math.floor(Math.random() * holes.length)];
+        x = ((cell % GX) + 0.5) * (W / GX) - v.w * rand(0.25, 0.75);
+        y = (Math.floor(cell / GX) + 0.5) * (H / GY) - v.h * rand(0.25, 0.75);
+        x = clamp(x, x0, Math.max(x0, x1));
+        y = clamp(y, y0, Math.max(y0, y1));
+      } else {
+        x = x0 + Math.random() * Math.max(0, x1 - x0);
+        y = y0 + Math.random() * Math.max(0, y1 - y0);
+      }
+      var sc = score(g, x, y, v.w, v.h) + Math.random() * 0.01;
+      if (sc > bestScore) { bestScore = sc; best = { x: x, y: y }; }
+    }
+    v.x = best.x; v.y = best.y;
+  }
+  function sizeView(v, area, f) {
+    var a = aspect(v.item);
+    var w = Math.sqrt(area * a) * f;
     var h = w / a;
     if (h > 900) { h = 900; w = h * a; }
-    var x = -0.08 * w + s.fx * (W - 0.84 * w);
-    var y = -0.08 * h + s.fy * (H - 0.84 * h);
-    var st = s.el.style;
-    st.left = Math.round(x) + 'px'; st.top = Math.round(y) + 'px';
-    st.width = Math.round(w) + 'px'; st.height = Math.round(h) + 'px';
+    if (w > W * 0.9) { w = W * 0.9; h = w / a; }
+    v.w = w; v.h = h;
+  }
+  function drawView(v) {
+    var st = v.el.style;
+    st.left = Math.round(v.x) + 'px'; st.top = Math.round(v.y) + 'px';
+    st.width = Math.round(v.w) + 'px'; st.height = Math.round(v.h) + 'px';
   }
   function pickItem(avoidSpot) {
     if (!pool.length) return null;
-    var onScreen = {}, i;
-    for (i = 0; i < slots.length; i++) if (slots[i].active && slots[i].item) onScreen[slots[i].item.id] = 1;
+    var onScreen = {}, i, it = null, si;
+    for (i = 0; i < slots.length; i++) { si = slotItem(slots[i]); if (si) onScreen[si.id] = 1; }
     if (avoidSpot && spot) onScreen[spot.item.id] = 1;
-    var it = null;
     for (i = 0; i < 8; i++) {
       it = pool[Math.floor(Math.random() * pool.length)];
       if (!onScreen[it.id]) return it;
@@ -214,85 +310,124 @@ const LIVE_JS = String.raw`
     return it;
   }
   function hideSlot(s) {
-    dropVideo(s.vid);
-    s.playing = false;
-    s.active = false;
-    s.item = null;
-    s.el.style.display = 'none';
-    s.el.classList.remove('pop');
-    s.img.removeAttribute('src');
+    discard(s.next);
+    s.next = null;
+    if (s.cur) { var v = s.cur; s.cur = null; discard(v); }
   }
   function fillSlot(s, delay) {
     var it = pickItem(true);
     if (!it) { hideSlot(s); return; }
-    dropVideo(s.vid);
-    s.item = it;
-    s.active = true;
-    s.playing = false;
+    if (s.next) { discard(s.next); s.next = null; }
+    var v = makeView(it);
+    s.next = v;
     s.born = now();
-    s.fails = 0;
     var d = effDensity();
     var scale = clamp(num(cfg.tile_scale, 1), 0.5, 1.6);
-    s.area = Math.min(900 * 700, Math.max(90 * 90, (W * H * 1.8 / d) * scale * scale));
-    s.f = rand(0.75, 1.3);
-    s.fx = Math.random(); s.fy = Math.random();
+    var area = Math.min(900 * 700, Math.max(90 * 90, (W * H * 1.8 / d) * scale * scale));
+    var f = rand(0.75, 1.3);
+    sizeView(v, area, f);
+    placeView(v, s);
     zc += 1;
     if (zc > 90000) renumber();
-    s.el.style.zIndex = String(zc);
-    s.el.style.display = 'block';
-    layout(s);
-    var needDims = !(num(it.width, 0) > 0 && num(it.height, 0) > 0);
+    v.el.style.zIndex = String(zc);
+    v.el.style.display = 'block';
+    drawView(v);
+    var waitT = 0;
+    var ready = function () {
+      if (s.next !== v || v.ready) return;
+      clearTimeout(waitT);
+      v.ready = true;
+      var old = s.cur;
+      s.cur = v; s.next = null;
+      s.fails = 0;
+      v.shownAt = now();
+      v.el.style.visibility = '';
+      restartAnim(v.el, 'pop', delay || 0);
+      retire(old);
+    };
+    var failed = function () { viewFailed(s, v); };
+    // a file that is slow to arrive is shown anyway rather than holding the old tile forever
+    waitT = setTimeout(ready, READY_WAIT);
+    var refit = function (nw, nh) {
+      if (!(nw > 0 && nh > 0) || num(v.item.width, 0) > 0) return;
+      var cx = v.x + v.w / 2, cy = v.y + v.h / 2;
+      v.item = merge(v.item, { width: nw, height: nh });
+      sizeView(v, area, f);
+      v.x = cx - v.w / 2; v.y = cy - v.h / 2;
+      drawView(v);
+    };
     if (it.kind === 'video') {
-      s.img.style.display = 'none';
-      s.vid.style.display = 'block';
-      if (playingCount() < clamp(num(cfg.video_max, 12), 0, 24)) {
-        s.playing = true;
-        s.vid.preload = 'auto';
-        if (it.poster_url) s.vid.poster = it.poster_url;
-        s.vid.src = it.url;
-        playVideo(s.vid);
+      if (playingCount(s) < clamp(num(cfg.video_max, 12), 0, 24)) {
+        v.playing = true;
+        v.vid.style.display = 'block';
+        v.vid.preload = 'auto';
+        v.vid.loop = !cfg.play_through;
+        if (it.poster_url) v.vid.poster = it.poster_url;
+        v.vid.onloadeddata = ready;
+        v.vid.onplaying = function () { v.started = true; ready(); };
+        v.vid.onerror = failed;
+        v.vid.onloadedmetadata = function () { refit(v.vid.videoWidth, v.vid.videoHeight); };
+        v.vid.onended = function () { viewEnded(s, v); };
+        v.vid.muted = !tileSound();
+        v.vid.src = it.url;
+        playVideo(v.vid, function () {
+          // sound needs a page the browser lets play it (OBS does): else muted rather than not at all
+          if (v.vid.muted) return;
+          v.vid.muted = true;
+          playVideo(v.vid);
+        });
       } else if (it.poster_url) {
-        s.vid.style.display = 'none';
-        s.img.style.display = 'block';
-        s.img.src = it.poster_url;
+        v.img.style.display = 'block';
+        v.img.onload = ready;
+        v.img.onerror = failed;
+        v.img.src = it.poster_url;
       } else {
-        s.vid.preload = 'metadata';
-        s.vid.src = it.url;
+        v.vid.style.display = 'block';
+        v.vid.preload = 'metadata';
+        v.vid.onloadeddata = ready;
+        v.vid.onerror = failed;
+        v.vid.onloadedmetadata = function () { refit(v.vid.videoWidth, v.vid.videoHeight); ready(); };
+        v.vid.src = it.url;
       }
-      if (needDims) s.vid.onloadedmetadata = function () {
-        if (s.item === it && s.vid.videoWidth > 0) { it = withDims(s, s.vid.videoWidth, s.vid.videoHeight); }
-      };
     } else {
-      s.vid.style.display = 'none';
-      s.img.style.display = 'block';
-      s.img.src = it.url;
-      if (needDims) s.img.onload = function () {
-        if (s.item === it && s.img.naturalWidth > 0) { it = withDims(s, s.img.naturalWidth, s.img.naturalHeight); }
-      };
+      v.img.style.display = 'block';
+      v.img.onload = function () { refit(v.img.naturalWidth, v.img.naturalHeight); ready(); };
+      v.img.onerror = failed;
+      v.img.src = it.url;
     }
-    restartAnim(s.el, 'pop', delay || 0);
   }
-  function withDims(s, w, h) {
-    var copy = merge(s.item, { width: w, height: h });
-    s.item = copy;
-    layout(s);
-    return copy;
-  }
-  function slotFailed(s) {
-    if (!s.active || !s.item) return;
-    var it = s.item;
-    if (s.fails >= 3) { s.el.style.visibility = 'hidden'; return; }
+  function viewFailed(s, v) {
+    if (s.next !== v && s.cur !== v) return;
+    if (s.next === v) s.next = null;
+    if (s.cur === v) s.cur = null;
+    discard(v);
+    if (s.fails >= 3) return;
     s.fails += 1;
-    var tries = s.fails;
     setTimeout(function () {
-      if (stopped || !s.active || !s.item || s.item.id !== it.id) return;
-      s.el.style.visibility = '';
-      fillSlot(s, 0);
-      s.fails = tries;
+      if (stopped || !cfg.on_air || busy(s)) return;
+      if (slots.indexOf(s) < effDensity()) fillSlot(s, 0);
     }, 1000);
   }
+  // a video tile that played to its end: with play_through, one past its tile life goes now; else it plays again
+  function viewEnded(s, v) {
+    if (s.cur !== v) return;
+    v.ended = true;
+    if (cfg.play_through && now() - v.shownAt >= tileLife() && !s.next && cfg.on_air && pool.length) {
+      fillSlot(s, 0);
+      return;
+    }
+    try { v.vid.currentTime = 0; } catch (e) {}
+    playVideo(v.vid, function () {});
+  }
+  // play_through keeps a playing video up until it has ended once (at most 3 minutes; one that never starts lets go
+  // after 15 s)
+  function holds(v, t) {
+    if (!cfg.play_through || !v.playing || v.ended) return false;
+    if (t - v.shownAt >= HOLD_MAX) return false;
+    return v.started || v.vid.currentTime > 0 || t - v.shownAt < START_GRACE;
+  }
   function renumber() {
-    var act = slots.filter(function (s) { return s.active; });
+    var act = views();
     act.sort(function (a, b) { return (parseInt(a.el.style.zIndex, 10) || 0) - (parseInt(b.el.style.zIndex, 10) || 0); });
     for (var i = 0; i < act.length; i++) act[i].el.style.zIndex = String(i + 1);
     zc = act.length + 1;
@@ -303,39 +438,57 @@ const LIVE_JS = String.raw`
     if (cfg.on_air && pool.length) {
       for (i = 0; i < d; i++) {
         s = slotAt(i);
-        if (!s.active) { fillSlot(s, stagger ? Math.min(2400, n * 35) : 0); n += 1; }
+        if (!busy(s)) { fillSlot(s, stagger ? Math.min(2400, n * 35) : 0); n += 1; }
       }
     }
-    for (i = (cfg.on_air && pool.length ? d : 0); i < slots.length; i++) if (slots[i].active) hideSlot(slots[i]);
+    for (i = (cfg.on_air && pool.length ? d : 0); i < slots.length; i++) if (busy(slots[i])) hideSlot(slots[i]);
   }
   function enforceVideoMax() {
-    var max = clamp(num(cfg.video_max, 12), 0, 24), over = playingCount() - max;
+    var max = clamp(num(cfg.video_max, 12), 0, 24), over = playingCount(null) - max;
     if (over <= 0) return;
-    var vids = slots.filter(function (s) { return s.active && s.playing; });
+    var vids = slots.filter(function (s) { return s.cur && s.cur.playing && !s.next; });
     vids.sort(function (a, b) { return a.born - b.born; });
     for (var i = 0; i < over && i < vids.length; i++) fillSlot(vids[i], 0);
   }
+  // the switches that change tiles already up: sound for every video, and whether a video loops or ends
+  function applyTileVideo() {
+    var vs = views(), loud = tileSound();
+    for (var i = 0; i < vs.length; i++) {
+      var v = vs[i];
+      if (!v.playing) continue;
+      v.vid.loop = !cfg.play_through;
+      if (v.vid.muted === !loud) continue;
+      v.vid.muted = !loud;
+      if (loud) (function (vv) {
+        playVideo(vv.vid, function () { vv.vid.muted = true; playVideo(vv.vid); });
+      })(v);
+    }
+  }
+  // one tile changes per beat: the oldest that has lived its tile life and is not holding a video that is still
+  // playing through
   function tick() {
     if (!cfg.on_air || !pool.length) return;
-    var d = effDensity(), oldest = null, i, s;
-    for (i = 0; i < d && i < slots.length; i++) {
-      s = slots[i];
-      if (!s.active) { oldest = s; break; }
-      if (!oldest || s.born < oldest.born) oldest = s;
+    var d = effDensity(), t = now(), life = tileLife(), pick = null, i, s;
+    for (i = 0; i < d; i++) {
+      s = slotAt(i);
+      if (!busy(s)) { pick = s; break; }
+      if (s.next) continue;
+      if (t - s.born < life) continue;
+      if (holds(s.cur, t)) continue;
+      if (!pick || s.born < pick.born) pick = s;
     }
-    if (!oldest) oldest = slotAt(0);
-    fillSlot(oldest, 0);
+    if (pick) fillSlot(pick, 0);
   }
   function schedule() {
     clearTimeout(tickT);
     if (stopped) return;
-    var ms = Math.max(80, num(cfg.tile_seconds, 10) * 1000 / effDensity());
+    var ms = Math.max(80, tileLife() / effDensity());
     tickT = setTimeout(function () { tick(); schedule(); }, ms);
   }
   function shuffle() {
     var d = effDensity(), n = 0;
     for (var i = 0; i < slots.length; i++) {
-      if (!slots[i].active) continue;
+      if (!busy(slots[i])) continue;
       if (i >= d) { hideSlot(slots[i]); continue; }
       fillSlot(slots[i], Math.min(1200, n * 25));
       n += 1;
@@ -344,9 +497,14 @@ const LIVE_JS = String.raw`
   }
 
   // ---- the spotlight -------------------------------------------------------------------------------------------
-  function audible() { return !!cfg.sound && !PREVIEW; }
+  function audible() { return !!cfg.sound && !SILENT; }
+  function norm(c) {
+    if (AMBIENT) c.on_air = true;
+    return c;
+  }
   function clearSpot() {
     spot = null;
+    spotRect = null;
     dropVideo(spVid);
     spImg.removeAttribute('src');
     spotEl.style.display = 'none';
@@ -368,6 +526,7 @@ const LIVE_JS = String.raw`
     };
     clearSpot();
     spot = me;
+    spotRect = { x: x, y: y, w: w, h: h + (AMBIENT ? 0 : 90) };
     spotEl.style.left = Math.round(x) + 'px';
     spotEl.style.top = Math.round(y) + 'px';
     spotEl.style.width = Math.round(w) + 'px';
@@ -407,6 +566,7 @@ const LIVE_JS = String.raw`
         var na = nw / nh, ww = Math.sqrt(560 * 640 * na), hh = ww / na;
         if (hh > 700) { hh = 700; ww = hh * na; }
         if (ww > 900) { ww = 900; hh = ww / na; }
+        spotRect = { x: x, y: y, w: ww, h: hh + (AMBIENT ? 0 : 90) };
         spotEl.style.width = Math.round(ww) + 'px';
         spMedia.style.width = Math.round(ww) + 'px';
         spMedia.style.height = Math.round(hh) + 'px';
@@ -447,7 +607,7 @@ const LIVE_JS = String.raw`
 
   // ---- toast, chaos pill, store hint ---------------------------------------------------------------------------
   function showToast(t) {
-    if (!t || typeof t !== 'object' || !cfg.on_air) return;
+    if (!t || typeof t !== 'object' || !cfg.on_air || AMBIENT) return;
     var by = typeof t.by === 'string' ? t.by : '';
     var action = typeof t.action === 'string' ? t.action : '';
     var cost = num(t.cost, 0);
@@ -489,7 +649,7 @@ const LIVE_JS = String.raw`
   }
   function applyHint() {
     var url = typeof cfg.store_url === 'string' ? cfg.store_url : '';
-    if (cfg.store_hint && url && !PREVIEW && cfg.on_air) {
+    if (cfg.store_hint && url && !SILENT && cfg.on_air) {
       hintEl.textContent = 'spend points: ';
       var b = document.createElement('b');
       b.textContent = url.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
@@ -505,7 +665,7 @@ const LIVE_JS = String.raw`
     var onAir = !!cfg.on_air;
     stage.className = (onAir ? '' : 'off') + (CLEAR_BG ? ' clear' : '');
     if (!onAir) {
-      for (var i = 0; i < slots.length; i++) if (slots[i].active) hideSlot(slots[i]);
+      for (var i = 0; i < slots.length; i++) if (busy(slots[i])) hideSlot(slots[i]);
       clearSpot();
       toastEl.style.display = 'none';
       chaosRow.style.display = 'none';
@@ -518,6 +678,7 @@ const LIVE_JS = String.raw`
     wasOnAir = true;
     syncSlots(starting);
     if (prev && prev.video_max !== cfg.video_max) enforceVideoMax();
+    if (prev && (prev.sound !== cfg.sound || prev.sound_all !== cfg.sound_all || prev.play_through !== cfg.play_through)) applyTileVideo();
     if (prev && prev.sound !== cfg.sound && spot && spot.isVideo) {
       spVid.muted = !audible();
       if (spVid.paused) playVideo(spVid);
@@ -533,7 +694,7 @@ const LIVE_JS = String.raw`
   function applyState(st) {
     var prev = cfg;
     var stg = st && st.stage && typeof st.stage === 'object' ? st.stage : {};
-    cfg = merge(DEFAULTS, stg);
+    cfg = norm(merge(DEFAULTS, stg));
     var list = st && Array.isArray(st.pool) ? st.pool : [];
     var next = [];
     for (var i = 0; i < list.length && next.length < MAX_POOL; i++) if (validItem(list[i])) next.push(list[i]);
@@ -557,7 +718,7 @@ const LIVE_JS = String.raw`
     cfg = merge(DEFAULTS, {});
     pool = [];
     clearTimeout(tickT); clearTimeout(stateRetryT); clearTimeout(wsT); clearTimeout(toastT); clearInterval(pingT); clearTimeout(pongT);
-    for (var i = 0; i < slots.length; i++) if (slots[i].active) hideSlot(slots[i]);
+    for (var i = 0; i < slots.length; i++) if (busy(slots[i])) hideSlot(slots[i]);
     clearSpot();
     chaosUntil = 0;
     toastEl.style.display = 'none';
@@ -649,7 +810,7 @@ const LIVE_JS = String.raw`
       case 'settings':
         if (ev.stage && typeof ev.stage === 'object') {
           var prev = cfg;
-          cfg = merge(cfg, ev.stage);
+          cfg = norm(merge(cfg, ev.stage));
           applyCfg(prev);
         }
         break;
