@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
     TwitchError,
+    clearAppTokens,
     decryptToken,
     encryptToken,
     signEventSub,
@@ -56,6 +57,7 @@ describe("the client", () => {
     });
 
     it("caches the app token until it nearly expires", async () => {
+        clearAppTokens();
         const t = new FakeTwitch();
         let now = 1_000;
         const c = twitchClient(cfg, t.fetch, () => now);
@@ -65,6 +67,41 @@ describe("the client", () => {
         now += 5_000_000 * 1000;
         await c.appToken();
         expect(t.calls.filter((x) => x.body?.grant_type === "client_credentials")).toHaveLength(2);
+    });
+
+    it("keeps the app token across clients (every request builds a new one), and drops it when Helix says 401", async () => {
+        clearAppTokens();
+        const t = new FakeTwitch();
+        const grants = () => t.calls.filter((x) => x.body?.grant_type === "client_credentials").length;
+        expect(await twitchClient(cfg, t.fetch).appToken()).toBe("app-token");
+        expect(await twitchClient(cfg, t.fetch).appToken()).toBe("app-token");
+        expect(await twitchClient(cfg, t.fetch).appToken()).toBe("app-token");
+        expect(grants()).toBe(1);
+        // another app's token is not this app's
+        await twitchClient({ ...cfg, clientId: "other" }, t.fetch).appToken();
+        expect(grants()).toBe(2);
+        // Twitch no longer accepts it: the next call asks for a new one
+        t.validAccess.delete("app-token");
+        const c = twitchClient(cfg, async (u, i) => {
+            const res = await t.fetch(u, i);
+            return u.includes("/helix/") ? new Response("{}", { status: 401 }) : res;
+        });
+        await expect(c.deleteSubscription("app-token", "x")).rejects.toMatchObject({ status: 401 });
+        await twitchClient(cfg, t.fetch).appToken();
+        expect(grants()).toBe(3);
+    });
+
+    it("gives up on a call that never answers, as a TwitchError with status 0", async () => {
+        const never = (_u: string, init?: RequestInit) =>
+            new Promise<Response>((_res, rej) => init?.signal?.addEventListener("abort", () => rej(new DOMException("aborted", "AbortError"))));
+        const hung = twitchClient(cfg, never, () => Date.now(), 20);
+        const started = Date.now();
+        await expect(hung.user("tok")).rejects.toMatchObject({ name: "TwitchError", status: 0, detail: "timeout" });
+        await expect(hung.refresh("rt")).rejects.toMatchObject({ status: 0, detail: "timeout" });
+        expect(Date.now() - started).toBeLessThan(2000);
+        // a fetch that ignores the abort signal is raced all the same
+        const deaf = twitchClient(cfg, () => new Promise<Response>(() => {}), () => Date.now(), 20);
+        await expect(deaf.validate("tok")).rejects.toMatchObject({ status: 0, detail: "timeout" });
     });
 
     it("validates with 'OAuth <token>'", async () => {

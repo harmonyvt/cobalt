@@ -386,6 +386,8 @@ public struct StageRedemption: Sendable, Equatable, Identifiable {
         case noMatch = "no_match"
         case disabled
         case error
+        /// chaos or shuffle with an empty pool, or pin with nothing in the spotlight (29.9).
+        case noEffect = "no_effect"
     }
 
     public var id: String

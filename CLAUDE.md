@@ -85,6 +85,10 @@ the files and a real run before anything is called done.
   `ANTHROPIC_API_KEY` is in the secrets file.
 - Sets (`APP-API-CONTRACT.md` section 28): named groups of share link collections, `CollectionGroup` in code (a
   `ShareSet` is already a link), D1 `collection_groups`/`collection_group_items` (migration 0017), `/share/groups`.
+- Stage (`APP-API-CONTRACT.md` section 29; "studio" in the app's copy, since studio already means the save/trim
+  session in code): an OBS canvas at `studio.capybaraharmony.com/live/<token>`, a viewer store at `/store` (locked by
+  default), Twitch channel-point rewards via EventSub (`api/src/stage*.ts`, `StageRoom` DO, D1 `stage_*`, migration
+  0018). Twitch is off unless `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_EVENTSUB_SECRET` are in the secrets file.
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.

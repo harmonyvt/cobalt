@@ -85,13 +85,38 @@ async function failure(res: Response): Promise<TwitchError> {
     return new TwitchError(res.status, detail);
 }
 
-export function twitchClient(cfg: TwitchConfig, fetchFn: TwitchFetch, now: () => number = () => Date.now()): TwitchClient {
-    // Never lets a network error escape untyped: the caller sees status 0.
+export const TWITCH_CALL_MS = 10_000;
+
+// The app access token (client credentials) is good for weeks, so it is kept across calls and requests for
+// as long as this isolate lives, per client id. A 401 on it drops it.
+const appTokens = new Map<string, { token: string; exp: number }>();
+export const clearAppTokens = (): void => appTokens.clear();
+
+export function twitchClient(
+    cfg: TwitchConfig,
+    fetchFn: TwitchFetch,
+    now: () => number = () => Date.now(),
+    timeoutMs: number = TWITCH_CALL_MS,
+): TwitchClient {
+    // Never lets a network error escape untyped: the caller sees status 0. Every call is raced against a
+    // timeout of our own (a hung Twitch call must not eat the Worker's waitUntil budget).
     const send = async (url: string, init: RequestInit): Promise<Response> => {
+        const ctrl = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+                // reject first: aborting makes the fetch fail at once, and that must not be what the caller sees
+                reject(new TwitchError(0, "timeout"));
+                ctrl.abort();
+            }, timeoutMs);
+        });
         try {
-            return await fetchFn(url, init);
+            return await Promise.race([fetchFn(url, { ...init, signal: ctrl.signal }), timeout]);
         } catch (e) {
+            if (e instanceof TwitchError) throw e;
             throw new TwitchError(0, e instanceof Error ? e.name : "network");
+        } finally {
+            clearTimeout(timer);
         }
     };
     const tokenCall = async (body: Record<string, string>): Promise<TokenSet> => {
@@ -120,11 +145,13 @@ export function twitchClient(cfg: TwitchConfig, fetchFn: TwitchFetch, now: () =>
             },
             body: body === undefined ? undefined : JSON.stringify(body),
         });
-        if (!res.ok) throw await failure(res);
+        if (!res.ok) {
+            const cached = appTokens.get(cfg.clientId);
+            if (res.status === 401 && cached && cached.token === token) appTokens.delete(cfg.clientId);
+            throw await failure(res);
+        }
         return res;
     };
-    // The app access token (client credentials) is good for weeks; keep it for this isolate's life.
-    let app: { token: string; exp: number } | null = null;
     return {
         authorizeUrl(redirectUri, state) {
             const q = new URLSearchParams({
@@ -140,9 +167,10 @@ export function twitchClient(cfg: TwitchConfig, fetchFn: TwitchFetch, now: () =>
         exchangeCode: (code, redirectUri) => tokenCall({ code, grant_type: "authorization_code", redirect_uri: redirectUri }),
         refresh: (refreshToken) => tokenCall({ grant_type: "refresh_token", refresh_token: refreshToken }),
         async appToken() {
-            if (app && app.exp - 60_000 > now()) return app.token;
+            const cached = appTokens.get(cfg.clientId);
+            if (cached && cached.exp - 60_000 > now()) return cached.token;
             const t = await tokenCall({ grant_type: "client_credentials" });
-            app = { token: t.access_token, exp: now() + t.expires_in * 1000 };
+            appTokens.set(cfg.clientId, { token: t.access_token, exp: now() + t.expires_in * 1000 });
             return t.access_token;
         },
         async validate(userToken) {

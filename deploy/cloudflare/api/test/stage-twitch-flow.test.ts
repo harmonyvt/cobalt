@@ -1,6 +1,7 @@
 // Stage (APP-API-CONTRACT.md section 29.8-29.10): connecting Twitch, keeping the rewards and the EventSub
 // subscription in step, the webhook, and what each redemption does. Fake Twitch, fake room, real SQL.
 import { describe, expect, it } from "vitest";
+import { syncGuard } from "../src/stage";
 import { encryptToken } from "../src/stage-twitch";
 import { T0, STAGE, TWITCH_SECRET, world, type World } from "./stage-world";
 
@@ -111,12 +112,13 @@ describe("connecting (29.8)", () => {
             const r = await w.site(`/twitch/callback?${q}`);
             expect(r.status, q).toBe(400);
             expect(await r.text()).toContain("twitch=failed&reason=");
-            // any attempt spends the state
-            await w.owner("POST", "/stage/twitch/connect");
+            // a wrong state spends nothing: the owner's connect that is under way still has its state. The right
+            // state with no code (the owner said no on Twitch) is the owner's own answer, and spends it.
+            expect(w.stageRow().oauth_state).toBe(q.endsWith(`state=${state}`) && !q.includes("code") ? null : state);
         }
         expect(w.twitch.called("POST", "/oauth2/token")).toHaveLength(0);
 
-        // expired
+        // expired (and the refusal of an expired state leaves it alone too, it is replaced by the next connect)
         const c2 = await w.owner("POST", "/stage/twitch/connect");
         const s2 = new URL(c2.body.authorize_url).searchParams.get("state")!;
         w.tick(10 * 60_000 + 1);
@@ -135,6 +137,21 @@ describe("connecting (29.8)", () => {
         expect(w.twitch.called("POST", "/oauth2/token").filter((t) => t.body.grant_type === "authorization_code")).toHaveLength(1);
         // and a callback nobody asked for
         expect((await w.site("/twitch/callback?code=good-code&state=whatever")).status).toBe(400);
+    });
+
+    it("a stranger's callback cannot break the owner's connect, and two at once exchange the code once", async () => {
+        const w = await world();
+        const c = await w.owner("POST", "/stage/twitch/connect");
+        const state = new URL(c.body.authorize_url).searchParams.get("state")!;
+        // somebody guesses: the in-flight state survives
+        for (const q of ["code=x&state=nope", "code=x", "code=x&state="]) expect((await w.site(`/twitch/callback?${q}`)).status).toBe(400);
+        expect(w.stageRow().oauth_state).toBe(state);
+        // the owner's own return, twice at the same time: one wins
+        const [a, b] = await Promise.all([w.site(`/twitch/callback?code=good-code&state=${state}`), w.site(`/twitch/callback?code=good-code&state=${state}`)]);
+        await w.settle();
+        expect([a.status, b.status].sort()).toEqual([200, 400]);
+        expect(w.twitch.called("POST", "/oauth2/token").filter((t) => t.body.grant_type === "authorization_code")).toHaveLength(1);
+        expect(w.stageRow()).toMatchObject({ oauth_state: null, oauth_state_at: null });
     });
 
     it("a refusal on Twitch's side comes back as failed with a reason", async () => {
@@ -283,6 +300,7 @@ describe("disconnecting (29.8)", () => {
         const r = await w.owner("DELETE", "/stage/twitch");
         expect(r.status).toBe(200);
         expect(r.body.stage.twitch).toBeNull();
+        expect(r.body).not.toHaveProperty("rewards_left_on_twitch");
         expect(w.twitch.subs).toEqual([]);
         expect(w.twitch.rewards.size).toBe(0);
         expect(w.one("SELECT * FROM stage_twitch")).toBeUndefined();
@@ -292,13 +310,44 @@ describe("disconnecting (29.8)", () => {
         expect((await w.siteJson("/store/api/rewards")).body.channel).toBeNull();
     });
 
-    it("is best effort: Twitch refusing does not keep the row", async () => {
-        const { w } = await live();
+    it("is best effort: Twitch refusing does not keep the row, but the rewards it could not delete keep their ids", async () => {
+        const { w, files } = await live();
+        const ids = [...w.twitch.rewards.keys()].sort();
         w.twitch.refreshFails = true;
         w.db.raw.prepare("UPDATE stage_twitch SET expires_at = 0").run();
         const r = await w.owner("DELETE", "/stage/twitch");
         expect(r.status).toBe(200);
+        expect(r.body.stage.twitch).toBeNull();
+        expect(r.body.rewards_left_on_twitch).toBe(true);
         expect(w.one("SELECT * FROM stage_twitch")).toBeUndefined();
+        // still on the channel, and still known by id (not synced: nothing is connected to them)
+        expect([...w.twitch.rewards.keys()].sort()).toEqual(ids);
+        expect(w.q("SELECT twitch_reward_id, synced FROM stage_rewards").map((x) => [x.twitch_reward_id, x.synced]).sort()).toEqual(ids.map((id) => [id, 0]));
+        // a redemption of one of them is ignored: no stream effect, no Helix call, no row
+        const calls = w.twitch.calls.length;
+        w.room.events.length = 0;
+        expect((await w.redeem("summon", itemCode(w, files[0]!.id))).status).toBe(204);
+        expect(w.room.events).toEqual([]);
+        expect(w.twitch.calls.length).toBe(calls);
+        expect(w.q("SELECT * FROM stage_redemptions")).toEqual([]);
+        // connecting again adopts them: no duplicates, and the connection is whole
+        w.twitch.refreshFails = false;
+        await w.connectTwitch();
+        expect([...w.twitch.rewards.keys()].sort()).toEqual(ids);
+        expect(w.q("SELECT twitch_reward_id FROM stage_rewards").map((x) => x.twitch_reward_id).sort()).toEqual(ids);
+        expect((await w.owner("GET", "/stage")).body.stage.twitch.status).toBe("ok");
+        // and then disconnecting cleans them up for good
+        const done = await w.owner("DELETE", "/stage/twitch");
+        expect(done.body).not.toHaveProperty("rewards_left_on_twitch");
+        expect(w.twitch.rewards.size).toBe(0);
+    });
+
+    it("a reward already gone from Twitch counts as deleted", async () => {
+        const { w } = await live();
+        w.twitch.rewards.delete(w.rewardId("chaos"));
+        const r = await w.owner("DELETE", "/stage/twitch");
+        expect(r.body).not.toHaveProperty("rewards_left_on_twitch");
+        expect(w.q("SELECT twitch_reward_id FROM stage_rewards").every((x) => x.twitch_reward_id === null)).toBe(true);
     });
 });
 
@@ -619,5 +668,204 @@ describe("chaos, shuffle and pin (29.9)", () => {
         // the owner can unpin
         await w.owner("POST", "/stage/action", { type: "unpin" });
         expect((await w.siteJson(`/live/${t}/state`)).body.spotlight).toBeNull();
+    });
+});
+
+describe("reward edits adopt what is on the channel (29.8, 29.10)", () => {
+    it("PATCH /stage/rewards/<action> on a row that lost its id adopts the reward, not a second 'capystore' one", async () => {
+        const { w } = await live();
+        const id = w.rewardId("chaos");
+        w.db.raw.prepare("UPDATE stage_rewards SET twitch_reward_id = NULL, synced = 0 WHERE action = 'chaos'").run();
+        const r = await w.owner("PATCH", "/stage/rewards/chaos", { cost: 2500 });
+        expect(r.body.reward).toMatchObject({ action: "chaos", cost: 2500, synced: true, title: "chaos" });
+        expect(w.twitch.rewards.size).toBe(4);
+        expect(w.rewardId("chaos")).toBe(id);
+        expect(w.twitch.rewards.get(id)!.cost).toBe(2500);
+    });
+
+    it("when the channel's rewards cannot be listed nothing is created blind; the next GET /stage finishes it", async () => {
+        const w = await world();
+        w.twitch.failList = true;
+        await w.connectTwitch();
+        expect(w.twitch.rewards.size).toBe(0);
+        expect((await w.owner("GET", "/stage")).body.stage.twitch.status).toBe("setting_up");
+        const r = await w.owner("PATCH", "/stage/rewards/summon", { cost: 600 });
+        expect(r.body.reward.synced).toBe(false);
+        expect(w.twitch.rewards.size).toBe(0);
+        w.twitch.failList = false;
+        await w.owner("GET", "/stage");
+        await w.settle();
+        expect(w.twitch.rewards.size).toBe(4);
+        expect((await w.owner("GET", "/stage")).body.stage.twitch.status).toBe("ok");
+    });
+});
+
+describe("one setup at a time, but never stuck (29.8)", () => {
+    it("a running setup blocks the next GET /stage's for a minute, then the guard lets go", async () => {
+        const w = await world();
+        w.twitch.failSubscriptions = true;
+        await w.connectTwitch();
+        expect(w.one("SELECT eventsub_id FROM stage_twitch").eventsub_id).toBeNull();
+        w.twitch.failSubscriptions = false;
+        // a sync that started 30 s ago and never came back
+        w.tick(30_000);
+        syncGuard.since = w.now() - 30_000;
+        await w.owner("GET", "/stage");
+        await w.settle();
+        expect(w.twitch.subs).toHaveLength(0);
+        w.tick(30_000);
+        await w.owner("GET", "/stage");
+        await w.settle();
+        expect(w.twitch.subs).toHaveLength(1);
+        // and it is released afterwards
+        expect(syncGuard.since).toBe(0);
+    });
+});
+
+describe("a redemption with nothing to act on is refunded (29.9)", () => {
+    it("chaos and shuffle with an empty pool: CANCELED, no_effect, a refunded toast, nothing on the canvas", async () => {
+        const w = await world();
+        await w.goLive();
+        await w.connectTwitch();
+        w.room.events.length = 0;
+        for (const a of ["chaos", "shuffle"]) {
+            await w.redeem(a, "", { user: "Ann", cost: 2000 });
+            expect(lastRow(w)).toMatchObject({ action: a, status: "refunded", reason: "no_effect" });
+            expect(w.twitch.redemptions.at(-1)!.status).toBe("CANCELED");
+        }
+        expect(w.room.types()).toEqual(["toast", "toast"]);
+        expect(w.room.last("toast")).toMatchObject({ toast: { by: "Ann", action: "shuffle", cost: 0, refunded: true } });
+        // a pool of private files is empty too; with one public file it works
+        w.file({ private: true });
+        w.tick(11 * 60_000);
+        await w.redeem("chaos");
+        expect(lastRow(w)).toMatchObject({ status: "refunded", reason: "no_effect" });
+        w.file();
+        w.tick(11 * 60_000);
+        await w.redeem("chaos");
+        expect(lastRow(w)).toMatchObject({ status: "done", reason: null });
+        expect(w.twitch.redemptions.at(-1)!.status).toBe("FULFILLED");
+    });
+
+    it("pin with random spotlights off and none up: refunded; with a summon up it holds it", async () => {
+        const { w, files } = await live();
+        await w.owner("PATCH", "/stage/rewards/pin", { enabled: true });
+        await w.owner("PATCH", "/stage", { spotlight_auto: false });
+        w.room.events.length = 0;
+        await w.redeem("pin", "", { cost: 300 });
+        expect(lastRow(w)).toMatchObject({ action: "pin", status: "refunded", reason: "no_effect" });
+        expect(w.room.types()).toEqual(["toast"]);
+        expect(w.twitch.redemptions.at(-1)!.status).toBe("CANCELED");
+        // a summon that has run out its seconds is no spotlight either
+        await w.redeem("summon", itemCode(w, files[0]!.id));
+        w.tick(30_000);
+        await w.redeem("pin");
+        expect(lastRow(w)).toMatchObject({ action: "pin", status: "refunded", reason: "no_effect" });
+        // a fresh one is held
+        await w.redeem("summon", itemCode(w, files[1]!.id));
+        w.tick(5_000);
+        await w.redeem("pin");
+        expect(lastRow(w)).toMatchObject({ action: "pin", status: "done" });
+        expect(w.room.types().at(-1)).toBe("pin");
+    });
+
+    it("pin with random spotlights on always goes through (the canvas pins its own)", async () => {
+        const { w } = await live();
+        await w.owner("PATCH", "/stage/rewards/pin", { enabled: true });
+        await w.redeem("pin");
+        expect(lastRow(w)).toMatchObject({ action: "pin", status: "done" });
+    });
+});
+
+describe("a redemption always ends (29.9)", () => {
+    it("a search that does not answer is given up on after the search budget, the summon falls back to the title", async () => {
+        const { w } = await live({ search: true, limits: { searchMs: 40 } });
+        w.space.hang = true;
+        const started = Date.now();
+        await w.redeem("summon", "blue dog");
+        expect(Date.now() - started).toBeLessThan(2000);
+        expect(lastRow(w)).toMatchObject({ status: "done", input: "blue dog" });
+        expect(w.room.last("summon")!.spotlight.item.title).toBe("blue dog");
+        // the Space was told to give up at the same time
+        expect(Math.max(...w.space.timeouts)).toBeLessThanOrEqual(40);
+    });
+
+    it("past the redemption budget the points go back (CANCELED, refunded, error) and nothing is shown afterwards", async () => {
+        const { w } = await live({ search: true, limits: { searchMs: 5_000, redeemMs: 40 } });
+        let release!: () => void;
+        w.space.gate = new Promise<void>((r) => (release = r));
+        await w.redeem("summon", "blue dog");
+        expect(lastRow(w)).toMatchObject({ status: "refunded", reason: "error", item_id: null });
+        expect(w.twitch.redemptions.at(-1)!.status).toBe("CANCELED");
+        // the Space comes back after the viewer was refunded: the summon must not appear on stream now
+        release();
+        await new Promise((r) => setTimeout(r, 30));
+        expect(w.room.types()).toEqual([]);
+        expect(w.q("SELECT * FROM stage_redemptions")).toHaveLength(1);
+    });
+
+    it("an error while deciding is a refund too (not a failure), and a failed refund stays failed", async () => {
+        const { w, files } = await live();
+        const prepare = w.db.prepare.bind(w.db);
+        (w.db as any).prepare = (sql: string) => {
+            if (sql.includes("FROM stage_codes WHERE code")) throw new Error("boom");
+            return prepare(sql);
+        };
+        await w.redeem("summon", itemCode(w, files[0]!.id));
+        expect(lastRow(w)).toMatchObject({ status: "refunded", reason: "error" });
+        expect(w.twitch.redemptions.at(-1)!.status).toBe("CANCELED");
+        w.twitch.failRedemptions = true;
+        await w.redeem("summon", itemCode(w, files[0]!.id));
+        expect(lastRow(w)).toMatchObject({ status: "failed", reason: "error" });
+    });
+});
+
+describe("a stale search pool never holds a request up (29.3)", () => {
+    async function searchPool() {
+        const { w, files } = await live({ search: true, limits: { searchMs: 40, ownerSearchMs: 40 } });
+        w.space.axes = { cats: 0 };
+        w.embedding(files[0]!.id, 0);
+        const r = await w.owner("PATCH", "/stage", { pool: { kind: "search", ref: "cats" } });
+        expect(r.status).toBe(200);
+        expect(r.body.stage.pool.count).toBe(1);
+        return { w, files };
+    }
+
+    it("/live/<token>/state and /store/api/pool answer from the stored ids; one refresh runs after, and a failed one waits", async () => {
+        const { w, files } = await searchPool();
+        await w.owner("PATCH", "/stage", { store_open: true });
+        const t = await w.token();
+        w.tick(11 * 60_000);
+        w.space.hang = true;
+        const calls = w.space.timeouts.length;
+        const started = Date.now();
+        const state = await w.siteJson(`/live/${t}/state`);
+        const pool = await w.siteJson("/store/api/pool");
+        expect(Date.now() - started).toBeLessThan(30);
+        expect(state.body.pool.map((i: any) => i.id)).toEqual([files[0]!.id]);
+        expect(pool.body.items.map((i: any) => i.id)).toEqual([files[0]!.id]);
+        // the second reader found the refresh already claimed
+        expect(w.space.timeouts.length).toBe(calls + 1);
+        await w.settle();
+        // the Space did not answer: the old ids stay and the next try is a minute away
+        expect(JSON.parse(w.stageRow().pool_ids)).toEqual([files[0]!.id]);
+        expect(w.stageRow().pool_at).toBe(w.now() - 10 * 60_000 + 60_000);
+        // the Space back: after that minute the refresh lands
+        w.space.hang = false;
+        w.file({ name: "cats again.webp" });
+        w.tick(61_000);
+        await w.siteJson(`/live/${t}/state`);
+        await w.settle();
+        expect(w.stageRow().pool_at).toBe(w.now());
+    });
+
+    it("a redemption uses the stored ids and does not wait for the refresh either", async () => {
+        const { w, files } = await searchPool();
+        w.tick(11 * 60_000);
+        w.space.hang = true;
+        const started = Date.now();
+        await w.redeem("summon", itemCode(w, files[0]!.id));
+        expect(lastRow(w)).toMatchObject({ status: "done", item_id: files[0]!.id });
+        expect(Date.now() - started).toBeLessThan(2000);
     });
 });

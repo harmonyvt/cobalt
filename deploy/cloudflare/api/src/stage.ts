@@ -10,7 +10,7 @@
 // tables; only the host (studio.capybaraharmony.com) and the app's tab say "studio".
 
 import { POST_KEY_SQL } from "./app-routes";
-import { searchPosts, type EmbedClient } from "./embed";
+import { searchPosts, type EmbedClient, type SearchOutcome } from "./embed";
 import { randomBase62 } from "./ids";
 import { publicUrlOf } from "./share-sets";
 import type { StudioReply } from "./studio";
@@ -54,6 +54,15 @@ export const STORE_QUERY_MAX = 60;
 // substring step.
 export const SEARCH_MIN_SCORE = 0.2;
 export const TWITCH_RETRY_MS = 10 * 60 * 1000;
+// A redemption's work runs in waitUntil (30 s in all): the search behind a summon gets 5 s, the whole decision
+// 20 s (then the points are refunded), settling it on Twitch what is left. The owner's own pool change waits
+// for a person, so its search gets longer.
+export const STAGE_SEARCH_MS = 5_000;
+export const OWNER_SEARCH_MS = 15_000;
+export const REDEEM_MS = 20_000;
+export const SETTLE_MS = 8_000;
+// a Twitch sync that never came back (a hung call) stops blocking the next one after this long
+export const SYNC_GUARD_MS = 60_000;
 // cap on an EventSub body (a notification is ~1 KB)
 const WEBHOOK_BODY_MAX = 64 * 1024;
 
@@ -82,32 +91,35 @@ export type CanvasEvent =
 export type Toast = { by: string; action: StageAction; cost: number; detail: string };
 
 // What the room keeps between events (29.6: "the last spotlight and chaos until").
-export type RoomState = { spotlight: Spotlight | null; pinned_until: number; chaos_until: number; chaos_by: string | null };
-export const emptyRoom = (): RoomState => ({ spotlight: null, pinned_until: 0, chaos_until: 0, chaos_by: null });
+// `pinned_at` is when the pin event arrived: a pin only holds the spotlight that was still up then.
+export type RoomState = { spotlight: Spotlight | null; pinned_until: number; pinned_at: number; chaos_until: number; chaos_by: string | null };
+export const emptyRoom = (): RoomState => ({ spotlight: null, pinned_until: 0, pinned_at: 0, chaos_until: 0, chaos_by: null });
 
-export function reduceRoom(s: RoomState, e: CanvasEvent): RoomState {
+export function reduceRoom(s: RoomState, e: CanvasEvent, now: number): RoomState {
     switch (e.type) {
         case "summon":
             // a new pick replaces whatever was up, pinned or not
-            return { ...s, spotlight: e.spotlight, pinned_until: 0 };
+            return { ...s, spotlight: e.spotlight, pinned_until: 0, pinned_at: 0 };
         case "chaos":
             return { ...s, chaos_until: e.until, chaos_by: e.toast?.by ?? null };
         case "pin":
-            return { ...s, pinned_until: e.pinned_until };
+            return { ...s, pinned_until: e.pinned_until, pinned_at: now };
         case "unpin":
-            return { ...s, pinned_until: 0 };
+            return { ...s, pinned_until: 0, pinned_at: 0 };
         case "skip":
-            return { ...s, spotlight: null, pinned_until: 0 };
+            return { ...s, spotlight: null, pinned_until: 0, pinned_at: 0 };
         default:
             return s;
     }
 }
 
-// The spotlight a new canvas should draw: newer than `seconds`, or pinned.
+// The spotlight a new canvas should draw: newer than `seconds`, or pinned. A pin holds only the spotlight that
+// was still up when the pin arrived; an older one it cannot bring back (the canvas pinned its own random
+// spotlight then, which the room never saw).
 export function spotlightView(s: RoomState, now: number, seconds: number): Spotlight | null {
     const sp = s.spotlight;
     if (!sp) return null;
-    const pinned = s.pinned_until > now;
+    const pinned = s.pinned_until > now && sp.at + seconds * 1000 > s.pinned_at;
     if (!pinned && sp.at + seconds * 1000 <= now) return null;
     return { ...sp, pinned_until: pinned ? s.pinned_until : null };
 }
@@ -165,6 +177,8 @@ export type StageDeps = {
     now: () => number;
     waitUntil?: (p: Promise<unknown>) => void;
     randomBytes?: (n: number) => Uint8Array;
+    // the wall-clock budgets above, overridable (tests)
+    limits?: { searchMs?: number; ownerSearchMs?: number; redeemMs?: number; settleMs?: number };
 };
 
 // ---- config from the environment ------------------------------------------------------------------------
@@ -215,6 +229,31 @@ export function sameSecret(a: string, b: string): boolean {
     let diff = 0;
     for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
     return diff === 0;
+}
+
+// `p`, or `onTimeout()` once `ms` have passed. AbortSignals are not honoured everywhere inside a Durable Object
+// or after a response, so the wait itself is what is bounded; `p` is left to finish (or fail) on its own.
+function withTimeout<T>(p: Promise<T>, ms: number, onTimeout: () => T): Promise<T> {
+    p.catch(() => undefined);
+    return new Promise<T>((resolve, reject) => {
+        const t = setTimeout(() => {
+            try {
+                resolve(onTimeout());
+            } catch (e) {
+                reject(e);
+            }
+        }, ms);
+        p.then(
+            (v) => {
+                clearTimeout(t);
+                resolve(v);
+            },
+            (e) => {
+                clearTimeout(t);
+                reject(e);
+            },
+        );
+    });
 }
 
 const rbytes = (d: Pick<StageDeps, "randomBytes">) => d.randomBytes ?? ((n: number) => crypto.getRandomValues(new Uint8Array(n)));
@@ -505,7 +544,18 @@ const idsOfSets = (rows: { items: string }[]): string[] =>
         }
     });
 
-export async function resolvePool(d: StageDeps, spec: PoolSpec): Promise<Resolved> {
+// The meaning search with a short wall-clock cap on the Space (a cold one takes a minute to wake) and on the
+// wait for it: a pool or a summon must never be held up for the 25 s a normal search may take.
+function stageSearch(d: StageDeps, words: string, limit: number, ms: number): Promise<SearchOutcome> {
+    const client: EmbedClient | null = d.embed ? { embed: (kind, inputs, t) => d.embed!.embed(kind, inputs, Math.min(t, ms)) } : null;
+    return withTimeout(searchPosts({ db: d.db, client, mediaBaseUrl: d.mediaBaseUrl }, words, limit), ms, (): SearchOutcome => ({
+        ok: false,
+        status: 503,
+        code: "error.search.waking",
+    }));
+}
+
+export async function resolvePool(d: StageDeps, spec: PoolSpec, searchMs: number = d.limits?.searchMs ?? STAGE_SEARCH_MS): Promise<Resolved> {
     if (spec.kind === "library") {
         const { results } = await d.db
             .prepare(
@@ -544,7 +594,7 @@ export async function resolvePool(d: StageDeps, spec: PoolSpec): Promise<Resolve
         return { ids: (await publicFiles(d, cap(idsOfSets(results)))).map((f) => f.row.id) };
     }
     // search: the meaning search over posts (section 21), best first, then each post's public files
-    const found = await searchPosts({ db: d.db, client: d.embed, mediaBaseUrl: d.mediaBaseUrl }, spec.ref ?? "", SEARCH_POOL_POSTS);
+    const found = await stageSearch(d, spec.ref ?? "", SEARCH_POOL_POSTS, searchMs);
     if (!found.ok) return { unavailable: true };
     const hits = found.hits.filter((h) => h.score >= SEARCH_MIN_SCORE);
     if (hits.length === 0) return { ids: [] };
@@ -585,11 +635,9 @@ const parseIds = (raw: string): string[] => {
     }
 };
 
-// Resolves the pool again when it is older than 10 minutes (so new saves join) and stores it. A search
-// pool that cannot be resolved right now (search off or asleep) keeps its old ids and is tried again in a minute.
-export async function freshSettings(d: StageDeps): Promise<SettingsRow> {
-    const s = await readSettings(d);
-    if (d.now() - s.pool_at <= POOL_TTL_MS) return s;
+// The pool again, stored. A search pool that cannot be resolved right now (search off, asleep or slow) keeps
+// its old ids and is tried again in a minute.
+async function refreshPool(d: StageDeps, s: SettingsRow): Promise<SettingsRow> {
     try {
         const r = await resolvePool(d, { kind: s.pool_kind, ref: s.pool_ref });
         if ("unavailable" in r) {
@@ -603,6 +651,26 @@ export async function freshSettings(d: StageDeps): Promise<SettingsRow> {
         log("pool refresh failed", e);
         return s;
     }
+}
+
+// The settings with the pool resolved again when it is older than 10 minutes (so new saves join). Library,
+// collection and group pools are D1 only and refreshed right here. A search pool waits on the Space, so the
+// caller gets the stored ids at once and one refresh runs after the response; the claim below (bumping pool_at)
+// keeps concurrent readers from each starting one, and a failed refresh is tried again in 30 s.
+export async function freshSettings(d: StageDeps): Promise<SettingsRow> {
+    const s = await readSettings(d);
+    if (d.now() - s.pool_at <= POOL_TTL_MS) return s;
+    if (s.pool_kind !== "search") return refreshPool(d, s);
+    const claimed = await d.db
+        .prepare("UPDATE stage_settings SET pool_at = ?1 WHERE id = 'main' AND pool_at = ?2")
+        .bind(d.now() - POOL_TTL_MS + 30_000, s.pool_at)
+        .run();
+    if (Number(claimed.meta?.changes ?? 0) !== 1) return s;
+    const work = background(d, refreshPool(d, s));
+    // no waitUntil to hand it to: wait for it (its search is capped)
+    if (!work) return s;
+    await work;
+    return readSettings(d);
 }
 
 // ---- twitch rows and tokens (29.2, 29.8) ----------------------------------------------------------------------------
@@ -741,33 +809,49 @@ async function syncReward(d: StageDeps, tw: TwitchClient, r: RewardRow, mine: Ma
     }
 }
 
-let syncing = false;
+// When the last sync started (0 = none running). A timestamp, not a flag: a sync whose Twitch call never
+// came back must not block every later one, so after SYNC_GUARD_MS the next one goes ahead.
+export const syncGuard = { since: 0 };
+
+// The rewards this app already made on the channel (a reconnect, a half-finished setup, a row that lost its id),
+// by title, so they are adopted and not duplicated. `forbidden`: not an Affiliate channel. `failed`: the list
+// could not be read now, so nothing may be created blind (it could duplicate a reward that is there).
+async function manageableRewards(d: StageDeps, tw: TwitchClient): Promise<{ mine: Map<string, string>; forbidden: boolean; failed: boolean }> {
+    try {
+        const list = await asBroadcaster(d, tw, (t, b) => tw.listManageableRewards(t, b));
+        return { mine: new Map(list.map((x) => [x.title, x.id])), forbidden: false, failed: false };
+    } catch (e) {
+        if (e instanceof TwitchError && e.status === 403) return { mine: new Map(), forbidden: true, failed: false };
+        log("listing rewards failed", e);
+        return { mine: new Map(), forbidden: false, failed: true };
+    }
+}
 
 // Creates or updates the four rewards and the EventSub subscription; each step is logged and a failure
 // leaves the connection stored for the next GET /stage to retry (29.8). Never throws.
 export async function syncTwitch(d: StageDeps): Promise<void> {
     const tw = clientOf(d);
-    if (!tw || syncing) return;
-    syncing = true;
+    if (!tw) return;
+    const started = d.now();
+    if (syncGuard.since !== 0 && started - syncGuard.since < SYNC_GUARD_MS) return;
+    syncGuard.since = started;
     try {
         let row = await readTwitch(d);
         if (!row) return;
         let forbidden = false;
         const rewards = await readRewards(d);
-        // rewards this app already made on the channel (a reconnect, a half-finished setup): adopted, not duplicated
         let mine = new Map<string, string>();
+        let listFailed = false;
         if (rewards.some((r) => !r.twitch_reward_id)) {
-            try {
-                const list = await asBroadcaster(d, tw, (t, b) => tw.listManageableRewards(t, b));
-                mine = new Map(list.map((x) => [x.title, x.id]));
-            } catch (e) {
-                if (e instanceof TwitchError && e.status === 403) forbidden = true;
-                else log("listing rewards failed", e);
-            }
+            const m = await manageableRewards(d, tw);
+            mine = m.mine;
+            forbidden = m.forbidden;
+            listFailed = m.failed;
         }
         for (const r of rewards) {
             if (forbidden) break;
             if (r.synced === 1 && r.twitch_reward_id) continue;
+            if (listFailed && !r.twitch_reward_id) continue;
             try {
                 await syncReward(d, tw, r, mine);
             } catch (e) {
@@ -796,7 +880,7 @@ export async function syncTwitch(d: StageDeps): Promise<void> {
     } catch (e) {
         log("twitch sync failed", e);
     } finally {
-        syncing = false;
+        syncGuard.since = 0;
     }
 }
 
@@ -844,9 +928,18 @@ async function stageShape(d: StageDeps, s: SettingsRow, tw: TwitchRow | null, ro
         twitch: tw
             ? { login: tw.login, display_name: tw.display_name, connected_at: tw.connected_at, status: tw.status, last_event_at: tw.last_event_at }
             : null,
-        spotlight: spotlightView(room, d.now(), s.spotlight_seconds),
+        spotlight: await liveSpotlight(d, room, s.spotlight_seconds),
         updated_at: s.updated_at,
     };
+}
+
+// The room's spotlight as a canvas should draw it now, checked against the library: a file made private or
+// deleted since it was summoned is dropped (and a renamed one shows its new title).
+async function liveSpotlight(d: StageDeps, room: RoomState, seconds: number): Promise<Spotlight | null> {
+    const sp = spotlightView(room, d.now(), seconds);
+    if (!sp) return null;
+    const [item] = await canvasItems(d, [sp.item.id]);
+    return item ? { ...sp, item } : null;
 }
 
 async function roomState(d: StageDeps): Promise<RoomState> {
@@ -969,8 +1062,8 @@ async function ownerPatch(d: StageDeps, request: Request): Promise<StudioReply> 
     let resolved: string[] | null = null;
     if (spec) {
         if (spec.kind === "search" && !d.embed) return err(503, "error.stage.search_unavailable");
-        const r = await resolvePool(d, spec);
-        // search off or asleep: nothing changes
+        const r = await resolvePool(d, spec, d.limits?.ownerSearchMs ?? OWNER_SEARCH_MS);
+        // search off, asleep or slow: nothing changes
         if ("unavailable" in r) return err(503, "error.stage.search_unavailable");
         resolved = r.ids;
         await ensureCodes(d, resolved);
@@ -1130,7 +1223,10 @@ async function ownerReward(d: StageDeps, request: Request, action: string): Prom
         // the next GET /stage retries what Twitch refuses (synced stays false)
         const row = (await readRewards(d)).find((r) => r.action === action)!;
         try {
-            await syncReward(d, tc, row, new Map());
+            // a row without an id may have a reward on the channel already (a half-finished setup): adopt it
+            const found = row.twitch_reward_id ? { mine: new Map<string, string>(), forbidden: false, failed: false } : await manageableRewards(d, tc);
+            if (found.forbidden) await setStatus(d, "not_affiliate").catch(() => undefined);
+            else if (!found.failed) await syncReward(d, tc, row, found.mine);
         } catch (e) {
             if (e instanceof TwitchError && e.status === 403) await setStatus(d, "not_affiliate").catch(() => undefined);
             log(`reward ${action} not synced`, e);
@@ -1150,14 +1246,20 @@ async function ownerTwitchConnect(d: StageDeps): Promise<StudioReply> {
 
 async function ownerTwitchDelete(d: StageDeps): Promise<StudioReply> {
     const tw = await readTwitch(d);
-    if (tw) await disconnect(d, tw);
+    const left = tw ? await disconnect(d, tw) : false;
     const s = await readSettings(d);
-    return ok({ stage: await stageShape(d, s, null, await roomState(d)) });
+    // rewards_left_on_twitch: the tokens could not delete them, so they are still on the channel (29.8)
+    return ok({ stage: await stageShape(d, s, null, await roomState(d)), ...(left ? { rewards_left_on_twitch: true } : {}) });
 }
 
-// Best effort on Twitch (the subscription, the four rewards, the tokens), then the row and the reward ids are gone.
-async function disconnect(d: StageDeps, tw: TwitchRow): Promise<void> {
+// Best effort on Twitch (the subscription, the four rewards, the tokens), then the row is gone. A reward that
+// could not be deleted (tokens that no longer refresh, Twitch down) keeps its id, so a later connect adopts it
+// and the next reward change cleans it up; its redemptions are ignored meanwhile (no connection row). Returns
+// whether any reward is still on Twitch.
+async function disconnect(d: StageDeps, tw: TwitchRow): Promise<boolean> {
     const tc = clientOf(d);
+    const gone: StageAction[] = [];
+    let left = false;
     if (tc) {
         if (tw.eventsub_id) {
             try {
@@ -1170,8 +1272,14 @@ async function disconnect(d: StageDeps, tw: TwitchRow): Promise<void> {
             if (!r.twitch_reward_id) continue;
             try {
                 await asBroadcaster(d, tc, (t, b) => tc.deleteReward(t, b, r.twitch_reward_id!));
+                gone.push(r.action);
             } catch (e) {
-                log(`deleting reward ${r.action} failed`, e);
+                // already deleted by hand counts as gone
+                if (e instanceof TwitchError && e.status === 404) gone.push(r.action);
+                else {
+                    left = true;
+                    log(`deleting reward ${r.action} failed`, e);
+                }
             }
         }
         try {
@@ -1180,10 +1288,14 @@ async function disconnect(d: StageDeps, tw: TwitchRow): Promise<void> {
             /* the tokens are dropped below either way */
         }
     }
+    // no client (Twitch secrets removed): nothing can be deleted, the ids stay
+    if (!tc) left = (await readRewards(d)).some((r) => !!r.twitch_reward_id);
     await d.db.batch([
         d.db.prepare("DELETE FROM stage_twitch WHERE id = 'main'"),
-        d.db.prepare("UPDATE stage_rewards SET twitch_reward_id = NULL, title = action, synced = 0"),
+        d.db.prepare("UPDATE stage_rewards SET twitch_reward_id = NULL, title = action, synced = 0 WHERE action IN (SELECT value FROM json_each(?1))").bind(JSON.stringify(gone)),
+        d.db.prepare("UPDATE stage_rewards SET synced = 0 WHERE twitch_reward_id IS NOT NULL"),
     ]);
+    return left;
 }
 
 // ---- the stage host (29.4) -------------------------------------------------------------------------------------------------------
@@ -1240,7 +1352,8 @@ export async function stageSite(d: StageDeps, request: Request): Promise<Respons
         if (path === "/twitch/callback") return await twitchCallback(d, url);
         return notFound();
     } catch (e) {
-        log(`${request.method} ${path} failed`, e);
+        // the canvas token is in the path and is a secret: never in a log line
+        log(`${request.method} ${path.replace(/^\/live\/[^/]*/, "/live/<token>")} failed`, e);
         return new Response("try again\n", { status: 503, headers: { "content-type": "text/plain", "retry-after": "5", "cache-control": "no-store" } });
     }
 }
@@ -1252,7 +1365,7 @@ async function liveState(d: StageDeps): Promise<StudioReply> {
     return ok({
         stage: canvasSettings(d, s),
         pool: await poolItems(d, s),
-        spotlight: spotlightView(room, now, s.spotlight_seconds),
+        spotlight: await liveSpotlight(d, room, s.spotlight_seconds),
         // not in 29.4: a page that connects mid-chaos catches up from here (29.6)
         chaos_until: room.chaos_until > now ? room.chaos_until : null,
         chaos_by: room.chaos_until > now ? room.chaos_by : null,
@@ -1343,12 +1456,18 @@ function callbackPage(ok: boolean, reason?: string): Response {
 async function twitchCallback(d: StageDeps, url: URL): Promise<Response> {
     const tc = clientOf(d);
     if (!tc || !d.twitch) return callbackPage(false, "off");
-    const s = await readSettings(d);
+    await readSettings(d);
     const state = url.searchParams.get("state") ?? "";
-    const valid = !!s.oauth_state && !!state && sameSecret(state, s.oauth_state) && d.now() - (s.oauth_state_at ?? 0) <= OAUTH_STATE_TTL_MS;
-    // single use: gone whatever happens next
-    if (s.oauth_state) await writeSettings(d, { oauth_state: null, oauth_state_at: null });
-    if (!valid) return callbackPage(false, "state");
+    // Single use, claimed in one statement: only the request that carries the live state spends it, once. A
+    // wrong or expired state touches nothing, so a stranger's request cannot break the owner's connect that is
+    // under way.
+    const claimed = state
+        ? await d.db
+              .prepare("UPDATE stage_settings SET oauth_state = NULL, oauth_state_at = NULL WHERE id = 'main' AND oauth_state = ?1 AND oauth_state_at >= ?2")
+              .bind(state, d.now() - OAUTH_STATE_TTL_MS)
+              .run()
+        : null;
+    if (Number(claimed?.meta?.changes ?? 0) !== 1) return callbackPage(false, "state");
     const code = url.searchParams.get("code");
     if (url.searchParams.has("error") || !code) return callbackPage(false, "denied");
     try {
@@ -1359,7 +1478,11 @@ async function twitchCallback(d: StageDeps, url: URL): Promise<Response> {
         const secret = d.twitch.clientSecret;
         const now = d.now();
         // another channel than before: the old channel's subscription and rewards are not ours to keep
-        if (before && before.broadcaster_id !== user.id) await disconnect(d, before).catch((e) => log("dropping the old channel failed", e));
+        if (before && before.broadcaster_id !== user.id) {
+            await disconnect(d, before).catch((e) => log("dropping the old channel failed", e));
+            // reward ids that could not be deleted belong to the old channel: nothing here may adopt them
+            await d.db.prepare("UPDATE stage_rewards SET twitch_reward_id = NULL, title = action, synced = 0").run();
+        }
         await d.db
             .prepare(
                 `INSERT INTO stage_twitch (id, broadcaster_id, login, display_name, access_token, refresh_token, expires_at, scopes, eventsub_id, connected_at, last_event_at, status, status_at)
@@ -1442,6 +1565,8 @@ async function eventSub(d: StageDeps, request: Request): Promise<Response> {
     const reward = await d.db.prepare("SELECT * FROM stage_rewards WHERE twitch_reward_id = ?1").bind(body.event.reward.id).first<RewardRow>();
     // some other reward on the channel
     if (!reward) return new Response(null, { status: 204 });
+    // disconnected, with a reward Twitch would not delete: nothing here can act on or settle it
+    if (!(await readTwitch(d))) return new Response(null, { status: 204 });
     // Twitch wants an answer within a few seconds: 204 now, the rest after
     const work = background(d, redeem(d, body.event, reward));
     if (work) await work;
@@ -1468,7 +1593,7 @@ export async function findSummon(d: StageDeps, s: SettingsRow, input: string): P
     }
 
     if (d.embed) {
-        const found = await searchPosts({ db: d.db, client: d.embed, mediaBaseUrl: d.mediaBaseUrl }, words, SEARCH_POOL_POSTS);
+        const found = await stageSearch(d, words, SEARCH_POOL_POSTS, d.limits?.searchMs ?? STAGE_SEARCH_MS);
         if (found.ok && found.hits.length > 0) {
             const { results } = await d.db
                 .prepare(
@@ -1494,6 +1619,8 @@ export async function findSummon(d: StageDeps, s: SettingsRow, input: string): P
     return pool.find((i) => i.title.toLowerCase().includes(needle)) ?? null;
 }
 
+type Verdict = { status: "done" | "refunded"; reason: string | null; itemId: string | null };
+
 async function redeem(d: StageDeps, ev: RedemptionEvent, reward: RewardRow): Promise<void> {
     const tc = clientOf(d);
     const known = await d.db.prepare("SELECT 1 AS x FROM stage_redemptions WHERE id = ?1").bind(ev.id).first();
@@ -1504,64 +1631,85 @@ async function redeem(d: StageDeps, ev: RedemptionEvent, reward: RewardRow): Pro
     const cost = typeof ev.reward.cost === "number" ? ev.reward.cost : reward.cost;
     await d.db.prepare("UPDATE stage_twitch SET last_event_at = ?1 WHERE id = 'main'").bind(now).run().catch(() => undefined);
 
-    let status: "done" | "refunded" | "failed" = "done";
-    let reason: string | null = null;
-    let itemId: string | null = null;
-    try {
+    // What the redemption does. Past its budget (the waitUntil that carries it lasts 30 s in all) nothing more is
+    // broadcast and the viewer gets the points back, so it never ends without FULFILLED or CANCELED.
+    let late = false;
+    const send = async (e: CanvasEvent) => {
+        if (!late) await broadcast(d, e);
+    };
+    const refund = async (reason: string, action: StageAction, detail: string): Promise<Verdict> => {
+        await send({ type: "toast", toast: { by, action, cost: 0, detail, refunded: true } });
+        return { status: "refunded", reason, itemId: null };
+    };
+    const act = async (): Promise<Verdict> => {
+        // A search pool is served as stored (its refresh waits on the Space and runs after, see freshSettings); the
+        // other pools are D1 only and cheap to bring up to date.
         const s = await freshSettings(d);
-        if (s.on_air !== 1) {
-            status = "refunded";
-            reason = "off_air";
-        } else if (reward.enabled !== 1) {
-            status = "refunded";
-            reason = "disabled";
-        } else if (reward.action === "summon") {
+        if (s.on_air !== 1) return { status: "refunded", reason: "off_air", itemId: null };
+        if (reward.enabled !== 1) return { status: "refunded", reason: "disabled", itemId: null };
+        if (reward.action === "summon") {
             const item = await findSummon(d, s, input);
-            if (!item) {
-                status = "refunded";
-                reason = "no_match";
-                await broadcast(d, {
-                    type: "toast",
-                    toast: { by, action: "summon", cost: 0, detail: `nothing matched "${input}", points refunded`, refunded: true },
-                });
-            } else {
-                itemId = item.id;
-                await broadcast(d, {
-                    type: "summon",
-                    spotlight: { item, by, action: "summon", pinned_until: null, at: now },
-                    toast: { by, action: "summon", cost, detail: `"${input}" → ${item.title}` },
-                });
-            }
-        } else if (reward.action === "chaos") {
-            const until = nextChaosUntil(now, (await roomState(d)).chaos_until);
-            const secs = Math.round((until - now) / 1000);
-            await broadcast(d, { type: "chaos", until, toast: { by, action: "chaos", cost, detail: `100 things on screen for ${secs} seconds` } });
-        } else if (reward.action === "shuffle") {
-            await broadcast(d, { type: "shuffle", toast: { by, action: "shuffle", cost, detail: "wiped the canvas and refilled it" } });
-        } else {
-            await broadcast(d, {
-                type: "pin",
-                pinned_until: now + PIN_MS,
-                toast: { by, action: "pin", cost, detail: "the spotlight stays up for 2 more minutes" },
+            if (!item) return await refund("no_match", "summon", `nothing matched "${input}", points refunded`);
+            await send({
+                type: "summon",
+                spotlight: { item, by, action: "summon", pinned_until: null, at: now },
+                toast: { by, action: "summon", cost, detail: `"${input}" → ${item.title}` },
             });
+            return { status: "done", reason: null, itemId: item.id };
         }
+        if (reward.action === "chaos" || reward.action === "shuffle") {
+            // nothing to scatter or refill: the points go back
+            if ((await poolItems(d, s)).length === 0) return await refund("no_effect", reward.action, "the pool is empty, points refunded");
+            if (reward.action === "shuffle") {
+                await send({ type: "shuffle", toast: { by, action: "shuffle", cost, detail: "wiped the canvas and refilled it" } });
+            } else {
+                const until = nextChaosUntil(now, (await roomState(d)).chaos_until);
+                const secs = Math.round((until - now) / 1000);
+                await send({ type: "chaos", until, toast: { by, action: "chaos", cost, detail: `100 things on screen for ${secs} seconds` } });
+            }
+            return { status: "done", reason: null, itemId: null };
+        }
+        // pin: with random spotlights off there is only a summon (or the owner's pick) to hold, and none is up
+        if (s.spotlight_auto !== 1 && !(await liveSpotlight(d, await roomState(d), s.spotlight_seconds))) {
+            return await refund("no_effect", "pin", "no spotlight to keep, points refunded");
+        }
+        await send({ type: "pin", pinned_until: now + PIN_MS, toast: { by, action: "pin", cost, detail: "the spotlight stays up for 2 more minutes" } });
+        return { status: "done", reason: null, itemId: null };
+    };
+
+    let v: Verdict;
+    try {
+        v = await withTimeout(act(), d.limits?.redeemMs ?? REDEEM_MS, () => {
+            late = true;
+            log("redemption ran out of time");
+            return { status: "refunded", reason: "error", itemId: null } as Verdict;
+        });
     } catch (e) {
+        late = true;
         log("redemption failed", e);
-        status = "failed";
-        reason = "error";
+        v = { status: "refunded", reason: "error", itemId: null };
     }
 
     // fulfil or refund on Twitch; a Helix failure leaves it in Twitch's queue (the owner can refund there)
     let settled = false;
     if (tc) {
         try {
-            await asBroadcaster(d, tc, (t, b) => tc.setRedemption(t, b, reward.twitch_reward_id!, ev.id, status === "done" ? "FULFILLED" : "CANCELED"));
+            await withTimeout(
+                asBroadcaster(d, tc, (t, b) => tc.setRedemption(t, b, reward.twitch_reward_id!, ev.id, v.status === "done" ? "FULFILLED" : "CANCELED")),
+                d.limits?.settleMs ?? SETTLE_MS,
+                () => {
+                    throw new Error("settling timed out");
+                },
+            );
             settled = true;
         } catch (e) {
             log("settling the redemption failed", e);
         }
     }
+    let status: "done" | "refunded" | "failed" = v.status;
+    let reason = v.reason;
     if (!settled) {
+        // still waiting in Twitch's queue
         status = "failed";
         reason = "error";
     }
@@ -1569,7 +1717,7 @@ async function redeem(d: StageDeps, ev: RedemptionEvent, reward: RewardRow): Pro
         .prepare(
             "INSERT OR IGNORE INTO stage_redemptions (id, action, user_id, user_login, user_name, input, item_id, status, reason, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )
-        .bind(ev.id, reward.action, ev.user_id ?? "", ev.user_login ?? "", by, input, itemId, status, reason, now)
+        .bind(ev.id, reward.action, ev.user_id ?? "", ev.user_login ?? "", by, input, v.itemId, status, reason, now)
         .run();
 }
 

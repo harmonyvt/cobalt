@@ -109,7 +109,7 @@ const LIVE_JS = String.raw`
   var clockOffset = 0;      // server time minus this clock, only used when they disagree by seconds
   var stopped = false;
   var tickT = 0, toastT = 0;
-  var ws = null, wsBackoff = 1000, stateBackoff = 1000, stateBusy = false, stateAgain = false, stateRetryT = 0, wsT = 0;
+  var ws = null, wsBackoff = 1000, stateBackoff = 1000, stateBusy = false, stateAgain = false, stateRetryT = 0, wsT = 0, pingT = 0, pongT = 0;
   var wasOnAir = false;
 
   function merge(a, b) {
@@ -556,7 +556,7 @@ const LIVE_JS = String.raw`
     stopped = true;
     cfg = merge(DEFAULTS, {});
     pool = [];
-    clearTimeout(tickT); clearTimeout(stateRetryT); clearTimeout(wsT); clearTimeout(toastT);
+    clearTimeout(tickT); clearTimeout(stateRetryT); clearTimeout(wsT); clearTimeout(toastT); clearInterval(pingT); clearTimeout(pongT);
     for (var i = 0; i < slots.length; i++) if (slots[i].active) hideSlot(slots[i]);
     clearSpot();
     chaosUntil = 0;
@@ -605,14 +605,37 @@ const LIVE_JS = String.raw`
     var sock;
     try { sock = new WebSocket(url); } catch (e) { retryWs(); return; }
     ws = sock;
-    sock.onopen = function () { wsBackoff = 1000; loadState(); };
+    sock.onopen = function () { wsBackoff = 1000; beat(sock); loadState(); };
     sock.onmessage = function (m) {
+      // anything from the room proves the socket is alive, the answer to our ping included
+      clearTimeout(pongT);
+      if (m.data === 'pong') return;
       var ev;
       try { ev = JSON.parse(m.data); } catch (e) { return; }
       if (ev && typeof ev === 'object') onEvent(ev);
     };
-    sock.onclose = function () { if (ws === sock) { ws = null; retryWs(); } };
+    sock.onclose = function () { if (ws === sock) { ws = null; clearInterval(pingT); clearTimeout(pongT); retryWs(); } };
     sock.onerror = function () {};
+  }
+  // Heartbeat: the room answers "ping" with "pong" without waking up. A connection a NAT or a laptop lid killed
+  // never fires onclose, so with no sign of life 10 s after a ping the socket is dropped and made again (the
+  // reconnect loads the state, which catches up whatever was missed).
+  function beat(sock) {
+    clearInterval(pingT); clearTimeout(pongT);
+    pingT = setInterval(function () {
+      if (ws !== sock || sock.readyState !== 1) return;
+      try { sock.send('ping'); } catch (e) {}
+      clearTimeout(pongT);
+      pongT = setTimeout(function () { dead(sock); }, 10000);
+    }, 30000);
+  }
+  function dead(sock) {
+    if (ws !== sock) return;
+    clearInterval(pingT); clearTimeout(pongT);
+    sock.onopen = null; sock.onmessage = null; sock.onclose = null; sock.onerror = function () {};
+    try { sock.close(); } catch (e) {}
+    ws = null;
+    retryWs();
   }
   function retryWs() {
     if (stopped) return;
@@ -1156,7 +1179,7 @@ const STORE_TWITCH_JS = String.raw`
       return { text: fresh ? 'on stream now' : 'played ' + ago(Number(s.created_at || 0)), ok: fresh };
     }
     if (s.status === 'refunded') {
-      var why = { off_air: 'stream was off air', no_match: 'nothing matched', disabled: 'summon was off' }[s.reason] || '';
+      var why = { off_air: 'stream was off air', no_match: 'nothing matched', no_effect: 'nothing to act on', disabled: 'summon was off' }[s.reason] || '';
       return { text: 'refunded' + (why ? ' · ' + why : ''), ok: false };
     }
     return { text: "didn't go through", ok: false };

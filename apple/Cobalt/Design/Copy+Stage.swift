@@ -231,6 +231,7 @@ extension Copy {
             case .noMatch: return "no match"
             case .disabled: return "that reward was off"
             case .error: return "something went wrong"
+            case .noEffect: return "nothing to do"
             case nil: return "didn't work"
             }
         }

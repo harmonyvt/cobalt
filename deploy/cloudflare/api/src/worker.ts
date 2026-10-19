@@ -117,7 +117,7 @@ export interface WorkerEnv {
 
 // What the stage needs that is not in the env: the StageRoom Durable Object (index.ts passes the real one) and
 // the fetch the Twitch client uses (tests pass a fake).
-export type StageEdge = { stageRoom?: RoomPort; twitchFetch?: TwitchFetch; stageEmbed?: EmbedClient | null };
+export type StageEdge = { stageRoom?: RoomPort; twitchFetch?: TwitchFetch; stageEmbed?: EmbedClient | null; stageLimits?: StageDeps["limits"] };
 
 // The stage's deps, or null while STAGE_BASE_URL is not an https URL (every /stage* route is then 404).
 function stageDepsFrom(env: WorkerEnv, edge: Pick<EdgeDeps, "now" | "waitUntil">, se: StageEdge): StageDeps | null {
@@ -133,6 +133,7 @@ function stageDepsFrom(env: WorkerEnv, edge: Pick<EdgeDeps, "now" | "waitUntil">
         room: se.stageRoom ?? noRoom,
         now: edge.now,
         waitUntil: edge.waitUntil,
+        limits: se.stageLimits,
     };
 }
 
@@ -206,7 +207,13 @@ export async function handleRequest(
     // Its own gate is the canvas token, the store lock and the EventSub signature.
     const stageNow = deps.now ?? (() => Date.now());
     const stage = stageDepsFrom(env, { now: stageNow, waitUntil: deps.waitUntil }, deps);
-    if (stage && new URL(incoming.url).hostname === new URL(stage.stageBaseUrl).hostname) return stageSite(stage, incoming);
+    const host = new URL(incoming.url).hostname;
+    if (stage && host === new URL(stage.stageBaseUrl).hostname) return stageSite(stage, incoming);
+    // The studio host is routed to this Worker whether or not the stage is on: with it off (or on another host) it
+    // must not fall through to the API's gate and routes.
+    if (host.startsWith("studio.")) {
+        return new Response("not found\n", { status: 404, headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+    }
     const res = await handleInner(incoming, env, container, {
         now: deps.now ?? (() => Date.now()),
         sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),

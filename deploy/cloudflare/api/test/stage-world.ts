@@ -6,8 +6,8 @@ import { hashKey } from "../src/keys";
 import { withBatch } from "./d1-batch";
 import { EMBED_DIMS, EMBED_MODEL, encodeVector, type EmbedClient, type EmbedInput } from "../src/embed";
 import { handleRequest, type WorkerEnv } from "../src/worker";
-import { emptyRoom, reduceRoom, type CanvasEvent, type RoomPort, type RoomState } from "../src/stage";
-import { signEventSub } from "../src/stage-twitch";
+import { emptyRoom, reduceRoom, syncGuard, type CanvasEvent, type RoomPort, type RoomState, type StageDeps } from "../src/stage";
+import { clearAppTokens, signEventSub } from "../src/stage-twitch";
 import { MemoryMedia, MemoryOriginals } from "./studio-fakes";
 
 export const T0 = 1_760_000_000_000;
@@ -31,10 +31,12 @@ export class FakeRoom implements RoomPort {
     state_: RoomState = emptyRoom();
     connects: Request[] = [];
     broken = false;
+    // the room's clock (world() points it at the test clock)
+    clock: () => number = () => Date.now();
     async send(e: CanvasEvent) {
         if (this.broken) throw new Error("room is down");
         this.events.push(e);
-        this.state_ = reduceRoom(this.state_, e);
+        this.state_ = reduceRoom(this.state_, e, this.clock());
     }
     async state() {
         if (this.broken) throw new Error("room is down");
@@ -63,8 +65,16 @@ const axis = (i: number) => {
 export class FakeSpace implements EmbedClient {
     axes: Record<string, number> = {};
     down = false;
+    // never answers (a Space that is loading its model)
+    hang = false;
+    // answers only once this settles (a slow Space that comes back after the caller gave up)
+    gate: Promise<void> | null = null;
     queries: string[] = [];
-    async embed(_kind: "document" | "query", inputs: EmbedInput[]) {
+    timeouts: number[] = [];
+    async embed(_kind: "document" | "query", inputs: EmbedInput[], timeoutMs?: number) {
+        if (timeoutMs !== undefined) this.timeouts.push(timeoutMs);
+        if (this.hang) await new Promise<never>(() => {});
+        if (this.gate) await this.gate;
         if (this.down) {
             const { EmbedError } = await import("../src/embed");
             throw new EmbedError("unavailable", 503);
@@ -97,6 +107,8 @@ export class FakeTwitch {
     failRedemptions = false;
     failSubscriptions = false;
     failRewardUpdates = false;
+    // listing the channel's rewards fails
+    failList = false;
     redemptionGate: Promise<void> | null = null;
     unauthorizedOnce = 0;
     code = "good-code";
@@ -152,6 +164,7 @@ export class FakeTwitch {
         if (path === "/helix/channel_points/custom_rewards") {
             if (this.forbidRewards) return this.json(403, { message: "The broadcaster must have partner or affiliate status" });
             const id = url.searchParams.get("id");
+            if (method === "GET" && this.failList) return this.json(500, { message: "twitch is having a moment" });
             if (method === "GET") return this.json(200, { data: [...this.rewards.values()].map((r) => ({ id: r.id, title: r.title })) });
             if (method === "POST") {
                 if (this.takenTitles.has(body.title) || [...this.rewards.values()].some((r) => r.title === body.title)) {
@@ -222,14 +235,18 @@ export class FakeTwitch {
 
 // ---- the world ---------------------------------------------------------------------------------------------------------
 
-export type WorldOpts = { stage?: boolean; twitch?: boolean; search?: boolean; env?: Partial<WorkerEnv> };
+export type WorldOpts = { stage?: boolean; twitch?: boolean; search?: boolean; env?: Partial<WorkerEnv>; limits?: StageDeps["limits"] };
 
 export async function world(opts: WorldOpts = {}) {
     KEY_HASH ||= await hashKey(CLIENT);
     const db: FakeD1 = withBatch(createFakeD1());
     db.raw.prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)").run("key-1", "test", KEY_HASH, "0b5f2c3e", 1);
     let now = T0;
+    // module-level state shared by every world in a test file
+    clearAppTokens();
+    syncGuard.since = 0;
     const room = new FakeRoom();
+    room.clock = () => now;
     const twitch = new FakeTwitch();
     const space = new FakeSpace();
     const pending: Promise<unknown>[] = [];
@@ -257,6 +274,7 @@ export async function world(opts: WorldOpts = {}) {
         stageRoom: room,
         twitchFetch: twitch.fetch,
         stageEmbed: opts.search ? space : null,
+        stageLimits: opts.limits,
     });
     const handle = (req: Request, e: WorkerEnv = env) => handleRequest(req, e, container, deps());
     // the stage host (public)

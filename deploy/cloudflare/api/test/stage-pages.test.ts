@@ -1,7 +1,7 @@
 // src/stage-pages.ts (APP-API-CONTRACT.md 29.4, 29.5, 29.7): the three pages are strings, so these tests check
 // the hooks the contract names, that interpolated values are escaped, that the locked page is inert, and that every
 // inline script parses. Behaviour in a real browser was checked by hand against a fake server.
-import { Script } from "node:vm";
+import vm, { Script } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { livePage, storeLockedPage, storePage } from "../src/stage-pages";
 
@@ -153,6 +153,11 @@ describe("storePage", () => {
         expect(html).toContain(`data-stage-base="${BASE}"`);
     });
 
+    it("words every refund reason the redeem route writes", () => {
+        const js = scripts(html)[0]!;
+        for (const reason of ["off_air", "no_match", "no_effect", "disabled"]) expect(js).toContain(`${reason}: '`);
+    });
+
     it("has no sign-in at all without a client id", () => {
         for (const none of [null, "", "   "]) {
             const h = storePage({ stageBaseUrl: BASE, twitchClientId: none });
@@ -207,5 +212,153 @@ describe("storeLockedPage", () => {
     it("carries no client id, sign-in, or request to anywhere", () => {
         expect(html).not.toMatch(/twitch|client|sign in|https?:\/\//i);
         expect(html).not.toContain("<link");
+    });
+});
+
+// ---- the canvas page's heartbeat, run for real in a vm with a fake socket and a fake clock ----------------------------
+
+type Timer = { id: number; at: number; fn: () => void; every: number | null };
+
+function runCanvas() {
+    let clock = 0;
+    let nextId = 1;
+    let timers: Timer[] = [];
+    const sockets: FakeSocket[] = [];
+    const fetches: string[] = [];
+
+    class FakeSocket {
+        static OPEN = 1;
+        readyState = 0;
+        sent: string[] = [];
+        closed = false;
+        onopen: null | (() => void) = null;
+        onmessage: null | ((m: { data: string }) => void) = null;
+        onclose: null | (() => void) = null;
+        onerror: null | (() => void) = null;
+        constructor(readonly url: string) {
+            sockets.push(this);
+        }
+        send(s: string) {
+            this.sent.push(s);
+        }
+        close() {
+            this.closed = true;
+        }
+        open() {
+            this.readyState = 1;
+            this.onopen?.();
+        }
+    }
+
+    // a stand-in for every DOM object the page touches: any property is another stand-in, any call returns one
+    const any: any = new Proxy(function () {}, {
+        get: (_t, k) => (k === Symbol.toPrimitive ? () => 0 : k === "length" ? 0 : any),
+        set: () => true,
+        apply: () => any,
+        construct: () => any,
+    });
+    const doc = { body: { getAttribute: () => null }, getElementById: () => any, createElement: () => any };
+    const sandbox: Record<string, unknown> = {
+        document: doc,
+        location: { pathname: "/live/tok", search: "", protocol: "https:", host: "studio.capybaraharmony.com" },
+        window: { addEventListener() {}, innerWidth: 1920, innerHeight: 1080 },
+        WebSocket: FakeSocket,
+        // a state request that never finishes is enough here: the page only needs to have asked
+        fetch: (u: string) => {
+            fetches.push(u);
+            return new Promise(() => {});
+        },
+        setTimeout: (fn: () => void, ms = 0) => {
+            const t = { id: nextId++, at: clock + ms, fn, every: null };
+            timers.push(t);
+            return t.id;
+        },
+        setInterval: (fn: () => void, ms = 0) => {
+            const t = { id: nextId++, at: clock + ms, fn, every: ms };
+            timers.push(t);
+            return t.id;
+        },
+        clearTimeout: (id: number) => void (timers = timers.filter((t) => t.id !== id)),
+        clearInterval: (id: number) => void (timers = timers.filter((t) => t.id !== id)),
+        requestAnimationFrame: () => 0,
+        Date: { now: () => clock, parse: Date.parse },
+        console,
+    };
+    const js = scripts(livePage({ stageBaseUrl: BASE, preview: false }))[0]!;
+    vm.runInNewContext(js, sandbox);
+    const advance = (ms: number) => {
+        const end = clock + ms;
+        for (;;) {
+            const due = timers.filter((t) => t.at <= end).sort((a, b) => a.at - b.at || a.id - b.id)[0];
+            if (!due) break;
+            clock = due.at;
+            if (due.every !== null) due.at += Math.max(due.every, 1);
+            else timers = timers.filter((t) => t !== due);
+            due.fn();
+        }
+        clock = end;
+    };
+    return { sockets, advance, fetches };
+}
+
+describe("livePage heartbeat (29.5)", () => {
+    it("pings every 30 s on an open socket and stays on it while the room answers pong", () => {
+        const c = runCanvas();
+        expect(c.sockets).toHaveLength(1);
+        c.sockets[0]!.open();
+        c.advance(29_999);
+        expect(c.sockets[0]!.sent).toEqual([]);
+        c.advance(1);
+        for (let i = 1; i <= 4; i++) {
+            expect(c.sockets[0]!.sent).toEqual(Array(i).fill("ping"));
+            c.advance(2000);
+            c.sockets[0]!.onmessage!({ data: "pong" });
+            c.advance(28_000);
+        }
+        expect(c.sockets).toHaveLength(1);
+        expect(c.sockets[0]!.closed).toBe(false);
+    });
+
+    it("with no pong within 10 s the socket is dropped and a new one made (the usual backoff)", () => {
+        const c = runCanvas();
+        c.sockets[0]!.open();
+        c.advance(30_000);
+        expect(c.sockets[0]!.sent).toEqual(["ping"]);
+        c.advance(9_999);
+        expect(c.sockets).toHaveLength(1);
+        expect(c.sockets[0]!.closed).toBe(false);
+        c.advance(1);
+        expect(c.sockets[0]!.closed).toBe(true);
+        expect(c.sockets).toHaveLength(1);
+        c.advance(1000);
+        expect(c.sockets).toHaveLength(2);
+        expect(c.sockets[1]!.url).toBe("wss://studio.capybaraharmony.com/live/tok/ws");
+        // the dropped socket's late close does not make a third, and the new one pings in its turn
+        c.sockets[0]!.onclose?.();
+        c.advance(5000);
+        expect(c.sockets).toHaveLength(2);
+        c.sockets[1]!.open();
+        c.advance(30_000);
+        expect(c.sockets[1]!.sent).toEqual(["ping"]);
+    });
+
+    it("any frame is a sign of life, and a close by the other side leaves no old heartbeat behind", () => {
+        const c = runCanvas();
+        c.sockets[0]!.open();
+        c.advance(30_000);
+        expect(c.sockets[0]!.sent).toEqual(["ping"]);
+        // an event instead of the pong, 5 s later
+        c.advance(5_000);
+        c.sockets[0]!.onmessage!({ data: JSON.stringify({ type: "pool" }) });
+        c.advance(20_000);
+        expect(c.sockets[0]!.closed).toBe(false);
+        // closed by the other side: reconnects by the old path
+        c.sockets[0]!.onclose!();
+        c.advance(1000);
+        expect(c.sockets).toHaveLength(2);
+        // the first socket got no more pings, and was not closed by a stale pong timer
+        c.advance(120_000);
+        expect(c.sockets[0]!.sent).toEqual(["ping"]);
+        expect(c.sockets[0]!.closed).toBe(false);
     });
 });

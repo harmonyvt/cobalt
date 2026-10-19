@@ -35,7 +35,7 @@ export class StageRoom extends DurableObject {
         }
         if (pathname === "/event" && request.method === "POST") {
             const event = (await request.json()) as CanvasEvent;
-            await this.ctx.storage.put(KEY, reduceRoom(await this.load(), event));
+            await this.ctx.storage.put(KEY, reduceRoom(await this.load(), event, Date.now()));
             const text = JSON.stringify(event);
             for (const ws of this.ctx.getWebSockets()) {
                 try {

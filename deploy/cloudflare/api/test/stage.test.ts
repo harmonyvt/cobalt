@@ -1,6 +1,6 @@
 // Stage (APP-API-CONTRACT.md section 29): settings, the pool, codes, the store and its lock, the canvas token,
 // owner actions and capabilities. The Worker and the real SQL run together; the room and the Space are fakes.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AUTH, API, CLIENT, MEDIA, STAGE, T0, world, type World } from "./stage-world";
 import { emptyRoom, nextChaosUntil, reduceRoom, roomPort, sameSecret, spotlightView, stageBaseFrom, stageRetention } from "../src/stage";
 import { decide } from "../src/gate";
@@ -40,6 +40,27 @@ describe("capabilities (29.1)", () => {
         // the host is not routed at all: the gate 404s it
         const host = await w.handle(new Request(`${STAGE}store`));
         expect(host.status).toBe(404);
+    });
+
+    it("the studio host never falls through to the API: with stage off, or on another host, every path there is 404", async () => {
+        const hostsOf = async (w: World, base: string) => {
+            const out: Record<string, number> = {};
+            for (const path of ["/capabilities", "/", "/stage", "/library", "/live/abc", "/health"]) {
+                for (const method of ["GET", "POST"]) out[`${method} ${path}`] = (await w.handle(new Request(`${base}${path}`, { method, headers: AUTH }))).status;
+            }
+            return out;
+        };
+        for (const w of [await world({ stage: false }), await world({ env: { STAGE_BASE_URL: "" } })]) {
+            // the API host still answers, so the 404s below are the host's, not a broken world
+            expect((await w.api("/capabilities")).status).toBe(200);
+            const seen = await hostsOf(w, "https://studio.capybaraharmony.com");
+            expect(Object.values(seen).every((st) => st === 404), JSON.stringify(seen)).toBe(true);
+        }
+        // stage on at one host: a second studio.* name is not it either
+        const on = await world();
+        expect((await on.handle(new Request("https://studio.example.com/capabilities", { headers: AUTH }))).status).toBe(404);
+        expect((await on.handle(new Request("https://studio.capybaraharmony.com/store"))).status).toBe(404);
+        expect((await on.api("/capabilities")).status).toBe(200);
     });
 });
 
@@ -486,12 +507,78 @@ describe("the canvas token and pages (29.4)", () => {
         s = (await w.siteJson(`/live/${t}/state`)).body;
         expect(s.spotlight).toBeNull();
         expect(s.chaos_until).toBe(T0 + 30_000);
+        // a pin does not bring back a spotlight that had already run out (the canvas pins its own random one)
         await w.room.send({ type: "pin", pinned_until: w.now() + 120_000, toast: null });
         s = (await w.siteJson(`/live/${t}/state`)).body;
-        expect(s.spotlight).toMatchObject({ pinned_until: w.now() + 120_000 });
+        expect(s.spotlight).toBeNull();
+        await w.room.send({ type: "summon", spotlight: { item, by: "Bo", action: "summon", pinned_until: null, at: w.now() }, toast: null });
+        await w.room.send({ type: "pin", pinned_until: w.now() + 120_000, toast: null });
         w.tick(40_000);
         s = (await w.siteJson(`/live/${t}/state`)).body;
+        expect(s.spotlight).toMatchObject({ by: "Bo", pinned_until: w.now() - 40_000 + 120_000 });
+        s = (await w.siteJson(`/live/${t}/state`)).body;
         expect(s.chaos_until).toBeNull();
+    });
+});
+
+describe("the room's spotlight is checked against the library (29.4, 29.10)", () => {
+    it("a spotlight whose file went private or was deleted is dropped from /state and GET /stage", async () => {
+        const w = await world();
+        const a = w.file({ name: "red cat.webp" });
+        const b = w.file({ name: "blue dog.webp" });
+        const t = await w.token();
+        await w.goLive();
+        const [item] = await poolOf(w);
+        await w.room.send({ type: "summon", spotlight: { item, by: "Ann", action: "summon", pinned_until: null, at: w.now() }, toast: null });
+        expect((await w.siteJson(`/live/${t}/state`)).body.spotlight.item.id).toBe(item.id);
+        expect((await w.owner("GET", "/stage")).body.stage.spotlight.item.id).toBe(item.id);
+        // private now
+        w.db.raw.prepare("UPDATE media_items SET visibility = 'private', kind = 'private', bucket = 'originals', url = NULL WHERE id = ?").run(item.id);
+        expect((await w.siteJson(`/live/${t}/state`)).body.spotlight).toBeNull();
+        expect((await w.owner("GET", "/stage")).body.stage.spotlight).toBeNull();
+        // deleted, and pinned: still gone
+        const other = item.id === a.id ? b : a;
+        await w.room.send({ type: "summon", spotlight: { item: { ...item, id: other.id }, by: "Bo", action: "summon", pinned_until: null, at: w.now() }, toast: null });
+        await w.room.send({ type: "pin", pinned_until: w.now() + 120_000, toast: null });
+        expect((await w.siteJson(`/live/${t}/state`)).body.spotlight).toMatchObject({ by: "Bo", pinned_until: expect.any(Number) });
+        w.db.raw.prepare("UPDATE media_items SET deleted_at = ? WHERE id = ?").run(T0, other.id);
+        expect((await w.siteJson(`/live/${t}/state`)).body.spotlight).toBeNull();
+        expect((await w.owner("GET", "/stage")).body.stage.spotlight).toBeNull();
+    });
+
+    it("what the canvas gets is the file as it is now (a renamed post shows its new title)", async () => {
+        const w = await world();
+        w.file({ name: "red cat.webp", post_key: "p1" });
+        const t = await w.token();
+        await w.goLive();
+        const [item] = await poolOf(w);
+        await w.room.send({ type: "summon", spotlight: { item, by: "Ann", action: "summon", pinned_until: null, at: w.now() }, toast: null });
+        w.title("p1", "renamed");
+        expect((await w.siteJson(`/live/${t}/state`)).body.spotlight.item.title).toBe("renamed");
+    });
+});
+
+describe("logs keep the canvas token out (29.4)", () => {
+    it("a failing /live/<token>/state logs the path with the token replaced", async () => {
+        const w = await world();
+        const t = await w.token();
+        const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        try {
+            const prepare = w.db.prepare.bind(w.db);
+            let reads = 0;
+            // the token check (the first settings read) passes, the state read after it fails
+            (w.db as any).prepare = (sql: string) => {
+                if (sql.includes("FROM stage_settings") && ++reads > 1) throw new Error("D1_ERROR: simulated outage");
+                return prepare(sql);
+            };
+            const res = await w.site(`/live/${t}/state`);
+            expect(res.status).toBe(503);
+            const lines = spy.mock.calls.map((c) => c.map(String).join(" "));
+            expect(lines.some((l) => l.includes("/live/<token>/state"))).toBe(true);
+            expect(lines.join("\n")).not.toContain(t);
+        } finally {
+            spy.mockRestore();
+        }
     });
 });
 
@@ -753,24 +840,41 @@ describe("room state rules", () => {
     const spot = (at: number) => ({ item, by: "x", action: "summon" as const, pinned_until: null, at });
 
     it("a summon replaces the spotlight and clears a pin; skip drops it", () => {
-        let s = reduceRoom(emptyRoom(), { type: "summon", spotlight: spot(100), toast: null });
-        s = reduceRoom(s, { type: "pin", pinned_until: 5000, toast: null });
+        let s = reduceRoom(emptyRoom(), { type: "summon", spotlight: spot(100), toast: null }, 100);
+        s = reduceRoom(s, { type: "pin", pinned_until: 5000, toast: null }, 150);
         expect(spotlightView(s, 200, 20)!.pinned_until).toBe(5000);
-        s = reduceRoom(s, { type: "summon", spotlight: spot(300), toast: null });
+        s = reduceRoom(s, { type: "summon", spotlight: spot(300), toast: null }, 300);
         expect(spotlightView(s, 400, 20)!.pinned_until).toBeNull();
-        s = reduceRoom(s, { type: "skip" });
+        s = reduceRoom(s, { type: "skip" }, 400);
         expect(spotlightView(s, 400, 20)).toBeNull();
     });
 
     it("spotlightView: fresh within spotlight_seconds, forever while pinned", () => {
-        let s = reduceRoom(emptyRoom(), { type: "summon", spotlight: spot(1000), toast: null });
+        let s = reduceRoom(emptyRoom(), { type: "summon", spotlight: spot(1000), toast: null }, 1000);
         expect(spotlightView(s, 1000 + 19_999, 20)).not.toBeNull();
         expect(spotlightView(s, 1000 + 20_000, 20)).toBeNull();
-        s = reduceRoom(s, { type: "pin", pinned_until: 90_000, toast: null });
+        s = reduceRoom(s, { type: "pin", pinned_until: 90_000, toast: null }, 1500);
         expect(spotlightView(s, 80_000, 20)!.pinned_until).toBe(90_000);
         expect(spotlightView(s, 90_000, 20)).toBeNull();
-        s = reduceRoom(s, { type: "unpin" });
+        s = reduceRoom(s, { type: "unpin" }, 2000);
         expect(spotlightView(s, 1500, 20)!.pinned_until).toBeNull();
+    });
+
+    it("a pin cannot bring back a spotlight that was already gone when it arrived", () => {
+        // summon X at t0; ten minutes later the canvas shows a random spotlight Y (the room never hears of it) and
+        // the viewer pins: the room has only X, which expired long before the pin
+        const t0 = 1_000_000;
+        let s = reduceRoom(emptyRoom(), { type: "summon", spotlight: spot(t0), toast: null }, t0);
+        const pinAt = t0 + 10 * 60_000;
+        s = reduceRoom(s, { type: "pin", pinned_until: pinAt + 120_000, toast: null }, pinAt);
+        expect(spotlightView(s, pinAt + 1000, 20)).toBeNull();
+        // while X was still up, the same pin does hold it
+        let held = reduceRoom(emptyRoom(), { type: "summon", spotlight: spot(t0), toast: null }, t0);
+        held = reduceRoom(held, { type: "pin", pinned_until: t0 + 5000 + 120_000, toast: null }, t0 + 5000);
+        expect(spotlightView(held, t0 + 60_000, 20)!.pinned_until).toBe(t0 + 125_000);
+        // and a state stored before pinned_at existed (0) keeps the old behaviour
+        const legacy = { ...held, pinned_at: 0 };
+        expect(spotlightView(legacy, t0 + 60_000, 20)!.pinned_until).toBe(t0 + 125_000);
     });
 });
 

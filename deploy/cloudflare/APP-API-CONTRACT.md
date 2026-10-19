@@ -2498,6 +2498,8 @@ the store has a lock that turns the whole store off, sign-in included.
 - `GET /capabilities`: `features.stage` is true exactly while `STAGE_BASE_URL` is an https URL (canvas and store work
   without Twitch). `features.stage_twitch` is true exactly with `stage` and all three Twitch secrets non-empty.
   With `stage` false every `/stage*` route answers 404 `error.stage.off` and the stage host answers 404 to everything.
+  Any request to a `studio.*` host that is not the configured stage host (stage off, or another name) is a plain 404
+  before the gate: it never reaches the API's routes.
 - New Durable Object class `StageRoom` (binding `STAGE_ROOM`, sqlite storage, one instance `idFromName("main")`):
   holds the canvas WebSockets (hibernation API) and fans out events (29.6). Imported only by `index.ts`, like
   `ModelRelay`.
@@ -2524,7 +2526,7 @@ the store has a lock that turns the whole store off, sign-in included.
   (Twitch reward titles are unique per channel). Summon's prompt: `"a code from the store, or a few words"`.
 - `stage_redemptions`: `id` (the Twitch redemption id, or `owner:<16 base62>` for the owner's own actions) PK,
   `action`, `user_id`, `user_login`, `user_name`, `input` (≤200), `item_id` (NULL unless a summon resolved),
-  `status` (`'done'|'refunded'|'failed'`), `reason` (NULL or `'off_air'|'no_match'|'disabled'|'error'`),
+  `status` (`'done'|'refunded'|'failed'`), `reason` (NULL or `'off_air'|'no_match'|'no_effect'|'disabled'|'error'`),
   `created_at`. Index `(created_at DESC)` and `(user_id, created_at DESC)`. Rows older than 30 days are deleted by
   the daily cron.
 - Built additions (all additive): `stage_twitch.status`/`status_at` (where `reconnect`/`not_affiliate` live),
@@ -2596,7 +2598,10 @@ Item shape (canvas and app): `{ "id": "<media_items id>", "code": "K7Q", "title"
 Self-contained HTML (no external script; IBM Plex Mono from Google Fonts is the only external request), black
 background, 1920×1080 logical canvas scaled to the window (`transform: scale`), meant for an OBS Browser Source at
 1920×1080. It loads `state`, then keeps a WebSocket open (reconnect with backoff 1 s → 30 s; on reconnect it
-reloads `state`; a 404 on `state` means the token was rotated: it clears the canvas and stops).
+reloads `state`; a 404 on `state` means the token was rotated: it clears the canvas and stops). Heartbeat: the page
+sends the text frame `ping` every 30 s and the room answers `pong` (without waking the Durable Object); if no frame
+at all (a `pong` or an event) arrives within 10 s of a ping, the page drops the socket and reconnects as above. A
+connection a NAT or a sleeping machine killed never fires `close`, which is why.
 
 - Off air: an empty canvas (OBS shows nothing over the scene). On air: the scatter.
 - Scatter: up to `density` tiles at once, each a random pool item at a random spot and size (area ≈
@@ -2622,12 +2627,17 @@ reload `state`), `{ "type": "summon", "spotlight": <spotlight>, "toast": <toast>
 "toast": <toast>|null }`, `{ "type": "unpin" }`, `{ "type": "skip" }` (drop the spotlight now and pick again),
 `{ "type": "rotated" }` (sent right before the room closes every socket after a token rotation),
 `{ "type": "toast", "toast": <toast> }` (a refunded summon: `cost: 0`, `refunded: true`, detail
-`nothing matched "<words>", points refunded`; the canvas is otherwise unchanged). Owner actions send `toast: null`.
+`nothing matched "<words>", points refunded`, and the same shape for the other refunds in 29.9 with `action` the
+redeemed one; the canvas is otherwise unchanged). Owner actions send `toast: null`.
 A new summon replaces the spotlight and clears any pin. A chaos during a chaos extends `until` by 30 s, to at most
 60 s from now. `<toast>` =
 `{ "by": "<display name>", "action": "summon"|"chaos"|"shuffle"|"pin", "cost": <n>, "detail": "<second line>" }`.
-The page ignores unknown types. The room keeps the last spotlight and chaos `until` in its storage so a page that
-connects mid-chaos catches up from `state`.
+The page ignores unknown types. The room keeps the last spotlight, the pin (`pinned_until`, and `pinned_at`: when the
+pin event arrived) and chaos `until` in its storage so a page that connects mid-chaos catches up from `state`. A pin
+holds only the spotlight that was still up (newer than `spotlight_seconds`) when it arrived: the canvas pins its own
+random spotlights without telling the room, so a pin never brings an older summon back; `state` and `GET /stage`
+then show no spotlight until the next summon. A room spotlight is checked against the library on every `state` and
+`GET /stage`: a file made private or deleted since is dropped.
 
 ### 29.7 The store page
 
@@ -2664,7 +2674,18 @@ points. points are spent on twitch."). Works at phone width.
 - Access tokens are refreshed with the refresh token when they expire within 5 minutes or a Helix call answers
   401; a failed refresh sets `twitch.status: "reconnect"`.
 - `DELETE /stage/twitch` (keyed) → deletes the EventSub subscription and the four rewards on Twitch (best effort),
-  then the row. `200 { "status": "success", "stage": <stage> }`.
+  then the row. `200 { "status": "success", "stage": <stage> }`. When a reward could not be deleted (the tokens no
+  longer refresh, Twitch is down) the response also has `"rewards_left_on_twitch": true` (absent otherwise): those
+  rewards are still on the channel, their ids are kept, and their redemptions are ignored (there is no connection to
+  act on them) until the owner connects again, which adopts them (and a later `DELETE` removes them) or deletes them
+  by hand on Twitch. A reward already gone from Twitch counts as deleted.
+- Rewards are adopted, never duplicated: a reward row without an id (a reconnect, a half-finished setup, a
+  `PATCH /stage/rewards/<action>` on a row that lost its id) first lists the channel's manageable rewards and takes the
+  one titled like the action (or `capystore <action>`); if the list cannot be read nothing is created blind and the
+  next `GET /stage` finishes it. The callback's `state` is spent in one statement and only by the request that
+  carries the live one: a wrong, missing or expired `state` is refused and leaves the owner's connect untouched. Every
+  Twitch call has a 10 s limit, one setup runs at a time (a setup that never came back stops blocking after 60 s), and
+  the app access token is kept between requests until it nearly expires (dropped on a 401).
 
 ### 29.9 Redemptions (EventSub webhook)
 
@@ -2676,11 +2697,23 @@ points. points are spent on twitch."). Works at phone width.
   `waitUntil` (Twitch wants a reply within a few seconds):
   - Off air, or the action disabled in `stage_rewards`: refund (`status: CANCELED`), row `refunded` with
     `off_air`/`disabled`.
+  - The redemption works from the stored pool (a search pool's refresh waits on the Space, so it runs after the
+    response and the stored ids are used meanwhile; library, collection and group pools are brought up to date as
+    usual). The summon's search gets 5 s; the whole decision gets 20 s and then the points are refunded (`CANCELED`,
+    row `refunded`, reason `error`) and nothing more is shown on stream; settling on Twitch gets what is left of the
+    30 s `waitUntil`. A decision that throws is that refund too; only a Helix failure while settling makes a row
+    `failed`.
   - `summon`: `user_input` trimmed; a 3-4 char code in the pool → that item; else the meaning search over the pool
     (best pool post, then its first public file), else a title substring match; nothing → refund, `no_match`, and
     a toast "@name: nothing matched "<words>", points refunded". Found → spotlight event, `FULFILLED`.
   - `chaos`: `until = now + 30 s` (another chaos extends it to at most 60 s from now). `shuffle`: event.
-    `pin`: `pinned_until = now + 120 s` on the current spotlight.
+    `pin`: `pinned_until = now + 120 s` on the current spotlight (see 29.6 for which one it can hold).
+  - Nothing to act on: `chaos` or `shuffle` with an empty pool, and `pin` with `spotlight_auto` off and no current
+    spotlight (no summon or owner pick newer than `spotlight_seconds`, none pinned), are refunded (`CANCELED`) with
+    reason `no_effect` and a refunded toast ("the pool is empty, points refunded", "no spotlight to keep, points
+    refunded"). A pin with `spotlight_auto` on always goes through: the canvas pins its own random pick.
+  - A notification while no Twitch connection is stored (after a `DELETE /stage/twitch` that left rewards behind) is
+    answered 204 and ignored.
   - Every fulfilled or refunded redemption is a `stage_redemptions` row and a `PATCH /helix/channel_points/
     custom_rewards/redemptions` with `FULFILLED`/`CANCELED`. A Helix failure leaves the redemption in Twitch's queue
     (the owner can refund there) and the row `failed`.
@@ -2697,7 +2730,10 @@ then empty). `<reward>` = `{ "action", "title", "cost", "cooldown_seconds", "ena
 (`synced`: Twitch has the current values). `<redemption>` = `{ "id", "action", "user_name", "input", "item":
 <item>|null, "status", "reason", "created_at" }`.
 
-- `GET /stage` → `200 { "status": "success", "stage": <stage>, "rewards": [<reward> ×4] }`.
+- `GET /stage` → `200 { "status": "success", "stage": <stage>, "rewards": [<reward> ×4] }`. `GET /live/<token>/state`,
+  `GET /store/api/pool` and this route never wait on a search pool's refresh (29.3): they answer from the stored
+  ids and one refresh runs after the response (its search limited to 5 s; a failed one is tried again later).
+  `PATCH /stage` with a search pool waits for its search (15 s, then 503 `error.stage.search_unavailable`).
 - `PATCH /stage` `{ any of on_air, pool: { kind, ref }, density, tile_seconds, tile_scale, spotlight_auto,
   spotlight_seconds, sound, video_max, store_open, store_hint }` → `200 { "status": "success", "stage" }`, then a
   `settings` event (and `pool` when the pool changed). Out-of-range numbers are clamped; a bad kind, an unknown
