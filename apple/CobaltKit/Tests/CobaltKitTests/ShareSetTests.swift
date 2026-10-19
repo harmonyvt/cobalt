@@ -527,6 +527,15 @@ struct ShareSetIndexTests {
         #expect(index.status(for: try item(post)) == ShareStatus(links: 2, collections: 2))
     }
 
+    @Test func theCollectionFilterSeesEveryCollectionThroughEveryLink() throws {
+        let index = ShareSetIndex(
+            sets: [set("a", ["webp", "x"]), set("b", ["orig", "y"]), set("c", ["z"])],
+            collections: [collection("memes", ["a"]), collection("cats", ["b", "c"]), collection("old", ["revoked"])])
+        #expect(index.setIDs(for: try item(post)) == ["a", "b"])
+        #expect(index.collectionIDs(for: try item(post)) == ["memes", "cats"])
+        #expect(ShareSetIndex.empty.collectionIDs(for: try item(post)).isEmpty)
+    }
+
     @Test func theFileIDsAreEveryRenditionsFileAndHostedLink() throws {
         let hosted = lpost([lf("host", .public, .host, url: pubMP4), lf("orig", .private, .saved)])
         #expect(ShareSetIndex.fileIDs(of: try item(hosted)) == ["host", "orig"])

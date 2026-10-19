@@ -82,6 +82,16 @@ struct LibraryTile: View, Equatable {
                 if controller.takeSwallowedTap() { return }
                 withAnimation(Motion.rows) { controller.togglePick(row) }
             } else {
+                #if os(macOS)
+                // ⌘-click starts picking with this post, as in Finder
+                if NSEvent.modifierFlags.contains(.command), row.shareable {
+                    withAnimation(Motion.rows) {
+                        controller.beginSelecting()
+                        controller.togglePick(row)
+                    }
+                    return
+                }
+                #endif
                 controller.open(row)
             }
         } label: { tile }
