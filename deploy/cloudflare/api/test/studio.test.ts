@@ -241,7 +241,7 @@ describe("POST /studio (create)", () => {
         expect((await s.studio.render(SID, body({ start: 0, length: 2 }))).status).toBe(202);
         expect((await create(s)).status).toBe(429);
         // ...but not forever: a client that never polled does not block saves
-        s.clock.t += 6 * 60_000;
+        s.clock.t += 12 * 60_000;
         expect((await create(s)).status).toBe(201);
     });
 });
@@ -632,13 +632,14 @@ describe("validateRender", () => {
         expect(ok({ start: "1.5", length: "3", width: "320", quality: "high" })).toMatchObject({ start: 1.5, length: 3, width: 320, quality: "high", effectiveWidth: 320 });
         expect(ok({ start: 0, length: 0.5, width: null, quality: "" })).toMatchObject({ width: 480, quality: "med" });
     });
-    it("length: 0.5 to 10 seconds; over is too_long, under or junk is invalid_params", () => {
+    it("length: 0.5 to 30 seconds; over is too_long, under or junk is invalid_params", () => {
         expect(code({ start: 0, length: 0.5 })).toBe("ok");
         expect(code({ start: 0, length: 0.49 })).toBe("error.webp.invalid_params");
         expect(code({ start: 0, length: 0 })).toBe("error.webp.invalid_params");
         expect(code({ start: 0, length: -1 })).toBe("error.webp.invalid_params");
         expect(code({ start: 0, length: 10 }, { duration: 60, width: 480 })).toBe("ok");
-        expect(code({ start: 0, length: 10.01 }, { duration: 60, width: 480 })).toBe("error.webp.too_long");
+        expect(code({ start: 0, length: 30 }, { duration: 60, width: 480 })).toBe("ok");
+        expect(code({ start: 0, length: 30.01 }, { duration: 60, width: 480 })).toBe("error.webp.too_long");
         expect(code({ start: 0, length: 300 })).toBe("error.webp.too_long");
         expect(code({ start: 0, length: "abc" })).toBe("error.webp.invalid_params");
         expect(code({ start: 0, length: Infinity })).toBe("error.webp.invalid_params");
@@ -747,10 +748,10 @@ describe("POST /studio/<sid>/render", () => {
         expect(s.helper.calls).toEqual([]);
         expect(s.db.raw.prepare("SELECT count(*) AS n FROM studio_renders").get()).toEqual({ n: 0 });
     });
-    it("400 error.webp.too_long over 10 s", async () => {
+    it("400 error.webp.too_long over 30 s", async () => {
         const s = setup();
         s.seed({ duration: 60 });
-        expect(await s.studio.render(SID, body({ start: 0, length: 12 }))).toEqual({
+        expect(await s.studio.render(SID, body({ start: 0, length: 32 }))).toEqual({
             status: 400,
             body: { status: "error", error: { code: "error.webp.too_long" } },
         });

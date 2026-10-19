@@ -297,7 +297,7 @@ describe("5. a retry that waits in the line leaves the session ready until it st
         await L.studio.retryItems(KEY_ID, sid, json({ items: [1], queue: true }));
         L.db.raw.prepare("UPDATE studio_sessions SET expires_at = ? WHERE id = ?").run(L.clock.t - 1, sid); // the post was deleted
         L.helper.jobPolls = 0;
-        L.clock.t += 7 * 60_000; // (the render of a deleted post is nobody's to collect: it ages out of "held")
+        L.clock.t += 13 * 60_000; // (the render of a deleted post is nobody's to collect: it ages out of "held")
         await L.sweeps(4);
         expect(L.session(sid).status).toBe("ready"); // never marked saving
         expect(L.entries()).toEqual([]);

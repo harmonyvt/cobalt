@@ -302,8 +302,9 @@ report 60.03), then encode in two steps. (1) the image's ffmpeg-static decodes t
 
 - Source download at most 300 MB, output at most 25 MB (`WEBP_MAX_BYTES`), clip at most 60 s (`WEBP_MAX_SECONDS`), at
   most 640 px wide and 25 fps, ffmpeg plus img2webp killed after 240 s in total (`WEBP_FFMPEG_TIMEOUT_MS`). These are container env vars read
-  by the helper; the deploy does not set them, so the defaults apply (add them to `envVars` in `src/index.ts` to
-  change them, which restarts the container once). Measured locally with the img2webp pipeline (`--cpus 0.25`, linux/amd64 image
+  by the helper (`envVars` in `src/index.ts`; changing them restarts the container once). The deploy sets
+  `WEBP_MAX_SECONDS=30` (the owner's limit, 2026-10-19; it was 10) and `WEBP_FFMPEG_TIMEOUT_MS=480000`, since a 30 s clip
+  is about 160 s of encode on the basic instance at the measured rate below. Measured locally with the img2webp pipeline (`--cpus 0.25`, linux/amd64 image
   emulated on an arm64 Mac, so real Cloudflare timings will differ; single runs): the owner's 9.6 s 480x560 clip end to end
   (resolve, download, probe, frames, encode) took 71 s and produced 1.27 MB; the 6 s 480x480 sample took 20 s and 214 KB.
   Native arm64 encode of the 9.6 s clip alone was 3.9 s at full CPU. The earlier libwebp_anim figures (6 s clip in 7 s,
@@ -319,7 +320,7 @@ report 60.03), then encode in two steps. (1) the image's ffmpeg-static decodes t
 - The result is collected when someone polls, and (since the job sweep, see "App routes") also by the Durable Object
   itself every 5 s while a job is pending, so a client that goes away no longer loses the job to `sleepAfter` (now 45 s).
   The sweep is verified by fakes only until deployed; until you have seen it work live, treat "poll until `success` or
-  `error`" as the safe habit. Download (up to 120 s) plus encode (up to 240 s) fits the sweep's 6-minute budget; a job
+  `error`" as the safe habit. Download (up to 120 s) plus encode (up to 480 s as deployed) fits the sweep's 12-minute budget; a job
   older than that, or one whose container died, ends as `error.webp.job_lost`.
 - Media is PUBLIC by name (see accepted trade-offs). To delete: `DELETE /media/<name>.webp` with any client key, or
   remove the object in the R2 dashboard. There is no automatic expiry; add an R2 lifecycle rule on `cobalt-media` for one.
@@ -376,7 +377,7 @@ no http(s) link is `400 error.studio.no_link` before the container is involved. 
 
 ### Limits
 
-- Render: length 0.5 to 10 s (over is `error.webp.too_long`, under or junk `error.webp.invalid_params`), `start >= 0`,
+- Render: length 0.5 to 30 s (over is `error.webp.too_long`, under or junk `error.webp.invalid_params`), `start >= 0`,
   `start + length <= duration + 0.05` (checked only when the duration is known), `width` 320 or 480 (default 480),
   `quality` low, med or high (default med), 15 fps. The stored and reported `width` is `min(requested, source width)`; the
   helper is asked for the requested width and its `scale='min(W,iw)'` never upscales. `start` and `length` are required.

@@ -91,7 +91,7 @@ JSON responses, `cache-control: no-store`.
 - `POST /api/library/items/<id>/studio` → API POST /library/adopt → `{ "status": "success", "studio", "url" }`.
   "convert to webp" in the UI = this, then poll the studio until ready, then (if duration
   <= 10) POST https://api.capybaraharmony.com/studio/<sid>/render `{start:0,length:duration}`
-  (public route) and poll it; if > 10 s the UI offers "trim in studio" instead.
+  (public route) and poll it; if > 30 s the UI offers "trim in studio" instead.
 - `DELETE /api/library/items/<id>` → delete the R2 object, set deleted_at → 200 `{status:"success"}`.
   Deleting a private original also expires (expires_at = now) studios whose session's
   r2_key matches it.
@@ -100,7 +100,7 @@ Errors: `{ "status": "error", "error": { "code" } }`; auth 401 `unauthorized`, o
 
 ## Conversion rules (UI and server agree)
 - convert to webp: gif, mp4, mov only (webp uploads: host only — ffmpeg here can't decode
-  animated WebP; heic: host only). Length <= 10 s → whole clip; longer → studio trim.
+  animated WebP; heic: host only). Length <= 30 s → whole clip; longer → studio trim.
 - host as-is: every allowed type.
 
 ## Addendum v2: one file, public or private (2026-10-05)

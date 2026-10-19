@@ -990,7 +990,7 @@ describe("validation of queue, title and priority", () => {
         await running(L);
         const ok = await L.render(S.sid, { queue: true, priority: null });
         expect(ok.status).toBe(202);
-        const bad = await L.render(S.sid, { queue: true, length: 11 });
+        const bad = await L.render(S.sid, { queue: true, length: 31 });
         expect(bad).toEqual({ status: 400, body: { status: "error", error: { code: "error.webp.too_long" } } });
         const crop = await L.render(S.sid, { queue: true, crop: { x: 0, y: 0, w: 0.001, h: 0.001 } });
         expect(crop.status).toBe(400);

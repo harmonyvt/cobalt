@@ -203,12 +203,15 @@ struct TrimStrip: View {
                 .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: 10, topTrailingRadius: 10))
                 .offset(x: x1)
                 .allowsHitTesting(false)
+            // The hit shape and the drag sit inside the offset so they move with the bracket. (They used to sit
+            // outside it, where they stayed on the bracket's first place at 0 s: once the bracket had moved,
+            // grabbing it did nothing.)
             BracketBody(over: over, breathing: isPacking)
                 .frame(width: bracketWidth, height: height + 8)
-                .offset(x: x0, y: -4)
-                .spanMatch(spanNamespace)
                 .contentShape(Rectangle())
                 .gesture(drag(.span, width: w), isEnabled: canDrag)
+                .offset(x: x0, y: -4)
+                .spanMatch(spanNamespace)
                 .accessibilityHidden(true)
             if isReady { playhead(from: x0, to: x1, width: w) }
             if canDrag || interactive {
@@ -315,7 +318,7 @@ struct TrimStrip: View {
     }
 
     #if DEBUG
-    /// `-previewTrimDrag YES` (simulator evidence only): drags the out handle from the clip's 10 s to 4 s over
+    /// `-previewTrimDrag YES` (simulator evidence only): drags the out handle in by 6 s over
     /// 3 s, holds, then the in handle from 0 to 3 s over 3 s, through the same two functions the gesture
     /// calls (a real finger cannot be slowed down through the automation tools).
     private func debugScriptedDrag(width w: CGFloat) async {

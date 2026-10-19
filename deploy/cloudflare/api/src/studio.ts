@@ -88,21 +88,21 @@ export const MAX_SOURCE_WAIT_SECONDS = 90;
 export const POLL_INTERVAL_MS = 1000;
 // A save lock held longer than this is assumed abandoned (see advancingSince).
 export const LOCK_STALE_MS = 60_000;
-// An encode the DO started is assumed to be over after this (helper budget 240 s).
-export const ENCODE_ASSUMED_MS = 5 * 60 * 1000;
+// An encode the DO started is assumed to be over after this (helper budget 480 s).
+export const ENCODE_ASSUMED_MS = 10 * 60 * 1000;
 
 export const MIN_RENDER_SECONDS = 0.5;
-export const MAX_RENDER_SECONDS = 10;
+export const MAX_RENDER_SECONDS = 30;
 export const DURATION_SLACK = 0.05;
 export const RENDER_FPS = 15;
 export const RENDER_WIDTHS = [320, 480] as const;
 export const RENDER_QUALITIES = ["low", "med", "high"] as const;
 
 // The job sweep (StudioService.sweep): a render job is collected by the sweep for
-// this long after it was accepted (the helper's 240 s budget plus the upload
-// into R2); a save is advanced by it while its current helper fetch is younger
-// than SAVE_BUDGET_MS plus this slack.
-export const SWEEP_RENDER_MS = 6 * 60 * 1000;
+// this long after it was accepted (the helper's 120 s download and 480 s encode
+// budgets plus the upload into R2); a save is advanced by it while its current
+// helper fetch is younger than SAVE_BUDGET_MS plus this slack.
+export const SWEEP_RENDER_MS = 12 * 60 * 1000;
 // A slideshow job (section 18.5) has the helper's 10 minute budget: it is collected by the sweep for this long.
 export const SWEEP_SLIDESHOW_MS = 12 * 60 * 1000;
 const jobWindowMs = (rec: { slideshow?: unknown; gallery?: unknown }) => (rec.slideshow || rec.gallery ? SWEEP_SLIDESHOW_MS : SWEEP_RENDER_MS);

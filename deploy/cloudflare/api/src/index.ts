@@ -73,11 +73,12 @@ export class CobaltContainer extends Container<Env> {
             // The webp helper (port 9100) only answers requests that carry this.
             COBALT_INTERNAL_KEY: env.COBALT_API_KEY,
             // Longest clip turned into a WebP (error.webp.too_long beyond it).
-            // 10 s per the owner (2026-09-30: "webp animate are short anyway");
-            // the clean img2webp encoder took
-            // 51 s for a 9.6 s clip on the basic instance, so 10 s stays well inside
-            // the 240 s encode budget without a bigger instance.
-            WEBP_MAX_SECONDS: "10",
+            // 30 s per the owner (2026-10-19; it was 10 s). The clean img2webp
+            // encoder took 51 s for a 9.6 s clip on the basic instance, so a
+            // 30 s clip is about 160 s: the encode budget doubles from 240 s to
+            // 480 s for headroom (= MAX_RENDER_SECONDS in studio.ts).
+            WEBP_MAX_SECONDS: "30",
+            WEBP_FFMPEG_TIMEOUT_MS: "480000",
         };
 
         const webpDeps: WebpDeps = {

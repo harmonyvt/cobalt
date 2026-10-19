@@ -19,7 +19,7 @@ export const LINE_WAIT_MS = 30 * 60 * 1000;
 // never waited keeps BUSY_WAIT_MS).
 export const LINE_BUSY_WAIT_MS = 10 * 60 * 1000;
 // A render entry whose upload into the helper began this long ago and has no live call behind it
-// (the Durable Object was evicted mid-upload) is started again. = SWEEP_RENDER_MS (studio.ts).
+// (the Durable Object was evicted mid-upload) is started again. Only the upload counts, not the encode.
 export const LINE_START_STALE_MS = 6 * 60 * 1000;
 
 const PREFIX = "line:";

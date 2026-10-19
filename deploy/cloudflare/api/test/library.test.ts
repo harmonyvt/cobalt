@@ -984,7 +984,7 @@ describe("GET /capabilities", () => {
                 chat: false,
             },
             limits: {
-                max_webp_seconds: 10,
+                max_webp_seconds: 30,
                 min_webp_seconds: 0.5,
                 webp_widths: [320, 480],
                 webp_qualities: ["low", "med", "high"],
