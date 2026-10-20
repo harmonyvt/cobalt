@@ -214,8 +214,34 @@ struct EditorOpenTests {
         var caps = rig.h.app.capabilities
         caps.editor = false
         rig.h.app.apply(caps)
+        for _ in 0..<500 where rig.store.session != nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(rig.store.session == nil && rig.store.projects.isEmpty && rig.store.listState == .idle)
         #expect(!rig.store.isAvailable)
+    }
+
+    @Test func losingTheCapabilityWithUnsavedEditsSavesThemFirst() async throws {
+        let rig = StoreRig()
+        try await rig.store.open(PreviewEditorIDs.beach)
+        let session = try #require(rig.store.session)
+        session.setVolume(0.5, clip: session.timeline.main[0].id)
+        var caps = rig.h.app.capabilities
+        caps.editor = false
+        rig.h.app.apply(caps)
+        for _ in 0..<500 where rig.store.session != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(rig.store.session == nil)
+        #expect(rig.client.editorState.timeline(of: PreviewEditorIDs.beach)?.main[0].volume == 0.5)
+    }
+
+    @Test func renamingFromTheListWhileOpenKeepsTheNextSaveFromConflicting() async throws {
+        let rig = StoreRig()
+        defer { rig.finish() }
+        try await rig.store.open(PreviewEditorIDs.beach)
+        let session = try #require(rig.store.session)
+        try await rig.store.rename(PreviewEditorIDs.beach, to: "renamed")
+        #expect(session.project.revision == 5 && session.project.title == "renamed")
+        session.setVolume(0.5, clip: session.timeline.main[0].id)
+        #expect(await session.settle())
+        #expect(session.saveState == .saved && session.project.revision == 6)
     }
 
     @Test func thePreviewHelperOpensAProjectDirectly() async throws {

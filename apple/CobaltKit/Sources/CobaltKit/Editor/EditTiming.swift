@@ -48,7 +48,9 @@ public struct EditTiming: Sendable, Equatable {
     public var overlay: [Clip]
 
     /// Timing of a timeline. The timeline is rounded first (31.2), as the server's parser leaves it.
-    public init(_ timeline: EditTimeline) {
+    /// `sourceDurations` (library file id -> seconds, as probed): a main clip's `out` is clamped to its file's length, as the
+    /// renderer does (31.2 allows `out` 0.05 s past it), so later clips start where the render starts them.
+    public init(_ timeline: EditTimeline, sourceDurations: [String: Double] = [:]) {
         let t = EditJSON.rounded(timeline)
         let fps = max(1, t.canvas.fps)
         self.fps = fps
@@ -56,7 +58,9 @@ public struct EditTiming: Sendable, Equatable {
         var start = 0
         var main: [Clip] = []
         for clip in t.main {
-            let span = clip.out - clip.`in`
+            var out = clip.out
+            if let limit = sourceDurations[clip.item], limit > clip.`in`, out > limit { out = limit }
+            let span = out - clip.`in`
             let speed = clip.speed > 0 ? clip.speed : 1
             let frames = max(1, EditMath.roundHalfUp(span / speed * Double(fps)))
             let effective = span * Double(fps) / Double(frames)

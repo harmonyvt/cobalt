@@ -69,6 +69,7 @@ public final class EditSession {
     @ObservationIgnored private var retryTask: Task<Void, Never>?
     @ObservationIgnored private var retryStep = 0
     @ObservationIgnored private var flushing = false
+    @ObservationIgnored private var flushTask: Task<Void, Never>?
     @ObservationIgnored private var flushAgain = false
     @ObservationIgnored private var conflict: EditProject?
     @ObservationIgnored private(set) var saveCalls = 0
@@ -101,7 +102,7 @@ public final class EditSession {
         self.project = project
         self.timeline = rounded
         self.sources = sources
-        self.timing = EditTiming(rounded)
+        self.timing = EditTiming(rounded, sourceDurations: Self.durations(of: sources))
         self.problems = EditValidation.check(rounded, sources: sources)
         self.ctx = context
         self.cache = cache
@@ -492,7 +493,7 @@ public final class EditSession {
     }
 
     private func afterChange() {
-        timing = EditTiming(timeline)
+        timing = EditTiming(timeline, sourceDurations: Self.durations(of: sources))
         problems = EditValidation.check(timeline, sources: sources)
         switch selection {
         case .none: break
@@ -502,6 +503,15 @@ public final class EditSession {
         if playhead > max(0, timing.frames - 1) { playhead = max(0, timing.frames - 1) }
         markChanged()
         scheduleRebuild()
+    }
+
+    /// The probed length of every video file, for the end-of-source clamp the renderer applies.
+    static func durations(of sources: [String: EditSource]) -> [String: Double] {
+        var out: [String: Double] = [:]
+        for (id, source) in sources where source.kind == .video && source.available {
+            if let d = source.duration, d > 0 { out[id] = d }
+        }
+        return out
     }
 
     static func minFrames(fps: Int) -> Int { max(1, Int((Self.minSeconds * Double(fps) - 1e-9).rounded(.up))) }
@@ -597,10 +607,27 @@ public final class EditSession {
     func flush() async {
         guard dirty, !isClosed else { return }
         if case .conflict = saveState { return }
-        if flushing {
+        if let running = flushTask {
+            // a PUT is out: it sends this change too (flushAgain), and the caller waits for all of it
             flushAgain = true
+            await Self.wait(for: running)
             return
         }
+        let task = Task { @MainActor in await self.performFlush() }
+        flushTask = task
+        await Self.wait(for: task)
+        if flushTask == task { flushTask = nil }
+    }
+
+    /// Waits for `task`; a cancelled waiter cancels it (the close that gave up).
+    private static func wait(for task: Task<Void, Never>) async {
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+    }
+
+    private func performFlush() async {
+        defer { flushTask = nil }
+        guard dirty, !isClosed else { return }
+        if case .conflict = saveState { return }
         if let blocking = problems.first(where: Self.blocksSave) {
             saveState = .failed(.invalid(blocking))              // the server would refuse it; the next change that clears it saves
             return
@@ -727,7 +754,7 @@ public final class EditSession {
             timeline = normalized(theirTimeline)
             lastKey = nil
             dirty = false
-            timing = EditTiming(timeline)
+            timing = EditTiming(timeline, sourceDurations: Self.durations(of: sources))
             problems = EditValidation.check(timeline, sources: sources)
             saveState = .saved
             onProject(p)
@@ -769,8 +796,9 @@ public final class EditSession {
     }
 
     /// The server renamed the project (the list's rename while the editor is open).
-    func adoptTitle(_ title: String) {
+    func adoptTitle(_ title: String, revision: Int) {
         project.title = title
+        project.revision = max(project.revision, revision)
         pendingTitle = nil
     }
 

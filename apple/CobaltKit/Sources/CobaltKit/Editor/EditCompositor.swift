@@ -62,9 +62,13 @@ public final class EditCompositor: NSObject, AVVideoCompositing, @unchecked Send
                 main = self.lastFrames[mainTrack]
             }
             var overlayVideo: CIImage?
-            if let j = instruction.overlayIndex, case .video(let trackID, _) = plan.overlay[j].source,
-               let buffer = request.sourceFrame(byTrackID: trackID) {
-                overlayVideo = CIImage(cvPixelBuffer: buffer, options: opts)
+            if let j = instruction.overlayIndex, case .video(let trackID, _) = plan.overlay[j].source {
+                if let buffer = request.sourceFrame(byTrackID: trackID) {
+                    overlayVideo = CIImage(cvPixelBuffer: buffer, options: opts)
+                    self.lastFrames[trackID] = overlayVideo
+                } else {
+                    overlayVideo = self.lastFrames[trackID]       // an overlay file that ends early holds its last frame
+                }
             }
             let image = EditFrameComposer.compose(plan: plan, frame: k, main: main, overlayVideo: overlayVideo)
             let canvas = plan.timeline.canvas
@@ -88,7 +92,7 @@ enum EditFrameComposer {
 
         if let (index, _) = plan.timing.clip(atFrame: k), let main, index < plan.timeline.main.count, index < plan.main.count {
             let clip = plan.timeline.main[index]
-            let oriented = orient(main, plan.main[index].orientation)
+            let oriented = squarePixels(orient(main, plan.main[index].orientation), display: plan.main[index].display)
             if let drawn = drawMain(oriented, clip: clip, canvas: canvas) { out = drawn.composited(over: out) }
         }
 
@@ -98,7 +102,7 @@ enum EditFrameComposer {
             var source: CIImage?
             switch plan.overlay[j].source {
             case .video(_, let orientation):
-                source = overlayVideo.map { orient($0, orientation) }
+                source = overlayVideo.map { squarePixels(orient($0, orientation), display: plan.overlay[j].display) }
             case .gif(let frames, let delays):
                 let seconds = Double(k - t.start) / Double(plan.timing.fps)
                 if let image = gifFrame(frames, delays, at: seconds) { source = ciImage(image) }
@@ -116,6 +120,16 @@ enum EditFrameComposer {
     static func orient(_ image: CIImage, _ orientation: CGImagePropertyOrientation) -> CIImage {
         let o = orientation == .up ? image : image.oriented(orientation)
         return o.transformed(by: CGAffineTransform(translationX: -o.extent.origin.x, y: -o.extent.origin.y))
+    }
+
+    /// A picture whose pixels are not square (anamorphic): widened to the square-pixel display size the server probed (31.6), keeping
+    /// its height. A frame whose shape already matches is returned as it is.
+    static func squarePixels(_ image: CIImage, display: PixelSize) -> CIImage {
+        let w = image.extent.width, h = image.extent.height
+        guard display.w > 0, display.h > 0, w > 0, h > 0 else { return image }
+        let wanted = Double(display.w) / Double(display.h), have = Double(w / h)
+        guard abs(wanted / have - 1) > 0.01 else { return image }
+        return scale(image, to: PixelSize(w: max(2, Int((Double(h) * wanted).rounded())), h: Int(h.rounded())))
     }
 
     static func ciImage(_ image: CGImage) -> CIImage {

@@ -656,6 +656,16 @@ struct EditSessionRenderTests {
         #expect(first.id == second.id)
     }
 
+    @Test func renderWaitsForASaveThatIsAlreadyOut() async throws {
+        let rig = try await Rig()
+        defer { rig.finish() }
+        rig.session.setVolume(0.5, clip: rig.clip(PreviewEditorIDs.pier).id)
+        async let flushing: Void = rig.session.flush()
+        let r = try await rig.session.render()
+        await flushing
+        #expect(r.revision == rig.session.project.revision && rig.session.saveState == .saved)
+    }
+
     @Test func aConflictingSaveStopsTheRender() async throws {
         let rig = try await Rig(.editorConflict)
         defer { rig.finish() }

@@ -148,6 +148,15 @@ struct EditTimingTests {
         #expect(abs(odd.speed - 3.333 * 30 / 67) < 1e-12)
     }
 
+    @Test func aClipPastTheEndOfItsFileIsClampedToIt() {
+        var t = beach()
+        t.main[0].out = 12.05                                   // pier lasts 12 s
+        let plain = EditTiming(t)
+        let clamped = EditTiming(t, sourceDurations: [PreviewEditorIDs.pier: 12])
+        #expect(plain.main[0].frames == 362 || plain.main[0].frames == 361)
+        #expect(clamped.main[0].frames == 360 && clamped.main[1].start == 360)
+    }
+
     @Test func theOverlayStartsAtItsRoundedFrame() {
         let timing = EditTiming(beach())
         #expect(timing.overlay.count == 1)

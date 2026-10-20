@@ -53,7 +53,15 @@ public enum EditComposition {
     /// the kind of file the track needs), `EditError.other("empty")` for a timeline with no main clip.
     public static func build(_ t: EditTimeline, assets: [String: EditSourceAsset]) async throws -> EditPlayable {
         let t = EditJSON.rounded(t)
-        let timing = EditTiming(t)
+        // a clip's `out` is clamped to its file's length, as the renderer does
+        var durations: [String: Double] = [:]
+        for clip in t.main {
+            if durations[clip.item] == nil, case .video(let asset, _, _)? = assets[clip.item],
+               let d = try? await asset.load(.duration).seconds, d.isFinite, d > 0 {
+                durations[clip.item] = d
+            }
+        }
+        let timing = EditTiming(t, sourceDurations: durations)
         guard !t.main.isEmpty, timing.frames > 0 else { throw EditError.other("empty") }
         let fps = Int32(timing.fps)
 
@@ -85,7 +93,8 @@ public enum EditComposition {
             let at = CMTime(value: Int64(timingClip.start), timescale: fps)
             let target = CMTime(value: Int64(timingClip.frames), timescale: fps)
             try insertScaled(
-                into: videoTrack, from: sourceVideo, sourceRange: videoRange, in: clip.`in`, out: clip.out, at: at, target: target)
+                into: videoTrack, from: sourceVideo, sourceRange: videoRange, in: clip.`in`,
+                out: min(clip.out, durations[clip.item] ?? clip.out), at: at, target: target)
             if hasAudio, let sourceAudio = try await asset.loadTracks(withMediaType: .audio).first {
                 let audioRange = try await sourceAudio.load(.timeRange)
                 if mainAudio == nil {
@@ -93,8 +102,8 @@ public enum EditComposition {
                 }
                 if let audioTrack = mainAudio {
                     try insertScaled(
-                        into: audioTrack, from: sourceAudio, sourceRange: audioRange, in: clip.`in`, out: clip.out, at: at,
-                        target: target)
+                        into: audioTrack, from: sourceAudio, sourceRange: audioRange, in: clip.`in`,
+                        out: min(clip.out, durations[clip.item] ?? clip.out), at: at, target: target)
                 }
             }
             mainVolumes.append((at, clip.muted ? 0 : Float(clip.volume)))

@@ -172,6 +172,14 @@ struct EditFrameComposerTests {
         #expect(at(after, 800, 200).b < 15)
     }
 
+    @Test func anamorphicPixelsAreWidenedToTheSquarePixelDisplay() {
+        let narrow = CIImage(color: CIColor(red: 1, green: 0, blue: 0)).cropped(to: CGRect(x: 0, y: 0, width: 960, height: 1080))
+        let fixed = EditFrameComposer.squarePixels(narrow, display: PixelSize(w: 1920, h: 1080))
+        #expect(Int(fixed.extent.width) == 1920 && Int(fixed.extent.height) == 1080)
+        let same = EditFrameComposer.squarePixels(narrow, display: PixelSize(w: 960, h: 1080))
+        #expect(same.extent == narrow.extent)
+    }
+
     @Test func aGifLoopsForAsLongAsTheOverlayLasts() {
         let a = CGImageSource_solid(width: 4, height: 4), b = CGImageSource_solid(width: 5, height: 5)
         #expect(EditFrameComposer.gifFrame([a, b], [0.1, 0.1], at: 0.05)?.width == 4)

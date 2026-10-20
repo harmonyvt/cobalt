@@ -230,7 +230,7 @@ public final class EditorStore {
         do { updated = try await client.renameEditProject(id: projectID, title: String(clean.unicodeScalars.prefix(Self.maxTitleCodePoints))) }
         catch { throw EditError.from(error) }
         upsert(updated)
-        if let s = session, s.project.id == projectID { s.adoptTitle(updated.title) }
+        if let s = session, s.project.id == projectID { s.adoptTitle(updated.title, revision: updated.revision) }
     }
 
     public func delete(_ projectID: String) async throws(EditError) {
@@ -276,14 +276,19 @@ public final class EditorStore {
     /// The capabilities changed (`AppModel.apply`): the editor went away, or came.
     func capabilitiesChanged() {
         if !isAvailable {
-            if let s = session {
-                s.tearDown()
-                session = nil
-            }
             generation += 1
             projects = []
             renders = []
             listState = .idle
+            guard let s = session else { return }
+            // never lose edits: flush the autosave, then close; a failed flush leaves the editor open
+            Task { @MainActor [weak self] in
+                let saved = await s.settle()
+                guard let self, self.session === s, !self.isAvailable else { return }
+                if saved {
+                    self.finishClose(s)
+                }
+            }
         }
     }
 
