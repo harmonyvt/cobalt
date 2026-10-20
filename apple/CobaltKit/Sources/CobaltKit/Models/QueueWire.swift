@@ -63,9 +63,15 @@ public struct QueueSnapshot: Sendable, Equatable {
     public var line: ServerLineSnapshot?
     public var search: Search?
     public var posters: Posters?
+    /// The editor's renders (`features.editor`, APP-API-CONTRACT 31.13): the running ones, then those that ended in the last
+    /// 30 minutes, newest first. Nil when the server has none to say (an older server, a failed read, or `null`).
+    public var edits: [EditRender]?
 
-    public init(now: Date? = nil, line: ServerLineSnapshot? = nil, search: Search? = nil, posters: Posters? = nil) {
-        self.now = now; self.line = line; self.search = search; self.posters = posters
+    public init(
+        now: Date? = nil, line: ServerLineSnapshot? = nil, search: Search? = nil, posters: Posters? = nil,
+        edits: [EditRender]? = nil
+    ) {
+        self.now = now; self.line = line; self.search = search; self.posters = posters; self.edits = edits
     }
 
     /// Something on the server is moving right now (a job running or waiting in the line, an index pass running):
@@ -73,12 +79,13 @@ public struct QueueSnapshot: Sendable, Equatable {
     public var isActive: Bool {
         if let line, line.running != nil || !line.entries.isEmpty { return true }
         if search?.running == true { return true }
+        if edits?.contains(where: \.isActive) == true { return true }
         return false
     }
 }
 
 extension QueueSnapshot: Decodable {
-    private enum CodingKeys: String, CodingKey { case now, line, search, posters }
+    private enum CodingKeys: String, CodingKey { case now, line, search, posters, edits }
 
     private struct WireSearch: Decodable {
         struct WireNext: Decodable { var postKey: String?; var title: String? }
@@ -113,5 +120,6 @@ extension QueueSnapshot: Decodable {
             search = nil
         }
         posters = ((try? c.decodeIfPresent(WirePosters.self, forKey: .posters)) ?? nil).map { Posters(pending: max(0, $0.pending ?? 0)) }
+        edits = ((try? c.decodeIfPresent([Lossy<EditRender>].self, forKey: .edits)) ?? nil).map { $0.compactMap(\.value) }
     }
 }

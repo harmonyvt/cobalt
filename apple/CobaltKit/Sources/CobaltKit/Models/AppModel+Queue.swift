@@ -8,6 +8,14 @@ extension AppModel {
     public func perform(_ action: QueueAction, on item: QueueItem) async {
         if action == .open {
             open(item)
+        } else if let render = item.editRender, action == .cancel {
+            // an editor render: the editor's own cancel (`DELETE /edits/renders/<id>`), then the snapshot is read again
+            try? await editor.cancel(render: render.id)
+            await unifiedQueue.refresh()
+        } else if let render = item.editRender, action == .retry {
+            // "try again": the project opens with the render confirm up
+            queueShown = false
+            await openEdit(render.projectID, confirmRender: true)
         } else {
             await unifiedQueue.perform(action, on: item)
         }
@@ -29,6 +37,16 @@ extension AppModel {
             selectedTab = capabilities.library ? .library : .save
         case .settings:
             selectedTab = .settings
+        case .edit(let projectID):
+            Task { await openEdit(projectID, confirmRender: false) }
         }
+    }
+
+    /// Opens a project in the editor (the presenters show it while `editor.session` is set); `confirmRender` raises the render
+    /// confirmation once it is open.
+    func openEdit(_ projectID: String, confirmRender: Bool) async {
+        guard editor.isAvailable else { return }
+        do { try await editor.open(projectID) } catch { return }
+        if confirmRender { editor.session?.renderConfirmRequested = true }
     }
 }

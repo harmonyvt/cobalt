@@ -193,6 +193,8 @@ public struct PreviewClient: CobaltClient {
     let chatState = PreviewChatState()
     /// The stage the "server" holds (`PreviewStage.swift`).
     let stageState = PreviewStageState()
+    /// The editor's projects and renders the "server" holds (`Editor/PreviewEditor.swift`).
+    let editorState = PreviewEditorState()
 
     public var baseURL: URL { PreviewData.base }
 
@@ -225,6 +227,9 @@ public struct PreviewClient: CobaltClient {
         }
         if scenario.hasStage {
             stageState.seed(scenario, now: now)
+        }
+        if scenario.hasEditor {
+            editorState.seed(scenario, now: now, timeScale: scale)
         }
         if scenario.hasChat {
             let seed = PreviewData.chatSeed(now: now)
@@ -669,6 +674,10 @@ public struct PreviewClient: CobaltClient {
             if let t = titles[post.id] { p.customTitle = t.isEmpty ? nil : t }
             return p
         }.filter { !$0.files.isEmpty }
+        // what the editor rendered so far is a private post of its own
+        if scenario.hasEditor {
+            page.posts = editorState.libraryPosts(now: clock.now(), timeScale: timeScale, scenario: scenario) + page.posts
+        }
         return page
     }
 

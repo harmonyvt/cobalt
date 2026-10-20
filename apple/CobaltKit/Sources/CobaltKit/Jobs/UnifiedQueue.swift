@@ -55,6 +55,8 @@ public enum QueueDestination: Sendable, Equatable {
     case media(String)
     case library
     case settings
+    /// The video editor with this project open (`AppModel.open(_:)` opens it; a finished render opens its video instead).
+    case edit(projectID: String)
 }
 
 /// What the server runs or holds for someone else (a share sheet, another device), or for this key when this app does
@@ -126,6 +128,8 @@ public struct QueueItem: Identifiable {
         case posters(pending: Int)
         /// A finished job that has left the app's queue.
         case finished(FinishedWork)
+        /// One render of the video editor (CONTRACT-EDITOR 6): the server's copy merged with this device's, the freshest.
+        case edit(EditRender)
     }
 
     /// Stable across refreshes: "job:<uuid>", "server:…", "download:<key>", "photos", "indexing", "posters",
@@ -154,8 +158,17 @@ public struct QueueItem: Identifiable {
         case .finished(let work): return work.mediaID.map(QueueDestination.media) ?? .library
         case .indexing, .posters: return .library
         case .photos: return .settings
+        case .edit(let render):
+            if render.status == .done, let item = render.itemID { return .media("post:\(item)") }
+            return .edit(projectID: render.projectID)
         case .server, .download: return nil
         }
+    }
+
+    /// The editor render behind the row, if it is one.
+    public var editRender: EditRender? {
+        if case .edit(let render) = kind { return render }
+        return nil
     }
 }
 
@@ -198,6 +211,10 @@ public final class UnifiedQueue {
     public private(set) var serverProblem = false
     /// Finished jobs that left the app's queue, newest first.
     public internal(set) var finishedHistory: [FinishedWork] = []
+    /// Renders of the editor the owner hid with "dismiss" (this device only).
+    public private(set) var dismissedEdits: Set<String> = []
+    /// The editor's renders on this device (`EditorStore.renders`), wired by `AppModel`; nil in a queue with no editor.
+    @ObservationIgnored var editRenders: (@MainActor () -> [EditRender])?
     /// The queue tab is on screen (`setVisible`).
     public private(set) var isVisible = false
     /// The app is in front (`setForeground`).
@@ -227,7 +244,13 @@ public final class UnifiedQueue {
     public var items: [QueueItem] {
         Self.build(
             jobs: jobs.jobs, snapshot: ctx.capabilities.queue ? snapshot : nil,
-            downloads: offline.rows, photos: photos.status, finished: finishedHistory, now: ctx.clock.now())
+            downloads: offline.rows, photos: photos.status, finished: finishedHistory, now: ctx.clock.now(),
+            edits: mergedEdits, dismissedEdits: dismissedEdits)
+    }
+
+    /// The server's renders (`GET /queue`) and this device's, one per render id, the freshest copy of each.
+    var mergedEdits: [EditRender] {
+        Self.mergeEdits(server: ctx.capabilities.queue ? (snapshot?.edits ?? []) : [], local: ctx.capabilities.editor ? (editRenders?() ?? []) : [])
     }
 
     /// The rows of each section that has any, in the tab's order.
@@ -245,6 +268,7 @@ public final class UnifiedQueue {
     /// snapshot is only fresh while the tab is on screen, and the index's backlog is not something to badge.
     public var badgeCount: Int {
         jobs.live.count + offline.rows.filter { !$0.isFailed }.count
+            + mergedEdits.filter { $0.isActive && !dismissedEdits.contains($0.id) }.count
     }
 
     /// Nothing to show at all: the empty state.
@@ -283,6 +307,7 @@ public final class UnifiedQueue {
         serverProblem = false
         failures = 0
         finishedHistory = []
+        dismissedEdits = []
         reschedule()
     }
 
@@ -380,6 +405,8 @@ public final class UnifiedQueue {
             offline.retry(key: row.id)
         case (.finished(let work), .dismiss):
             finishedHistory.removeAll { $0.id == work.id }
+        case (.edit(let render), .dismiss):
+            dismissedEdits.insert(render.id)
         default:
             break
         }
@@ -406,7 +433,8 @@ public final class UnifiedQueue {
     /// first; finished newest first; failed jobs, then failed downloads.
     static func build(
         jobs: [Job], snapshot: QueueSnapshot?, downloads: [OfflineDownloadRow],
-        photos: PhotosSync.Status, finished: [FinishedWork], now: Date
+        photos: PhotosSync.Status, finished: [FinishedWork], now: Date, edits: [EditRender] = [],
+        dismissedEdits: Set<String> = []
     ) -> [QueueItem] {
         var now_: [QueueItem] = []
         var waiting: [(item: QueueItem, place: Int, order: Int)] = []
@@ -495,6 +523,29 @@ public final class UnifiedQueue {
             finishedRows.append((QueueItem(id: "finished:\(work.id.uuidString)", section: .finished, kind: .finished(work), actions: [.open, .dismiss]), work.finishedAt))
         }
 
+        // (f) the video editor's renders: queued wait, running work is now, ended ones linger for 30 minutes (cancelled: hidden)
+        for (i, r) in edits.enumerated() where !dismissedEdits.contains(r.id) {
+            let id = "edit:\(r.id)"
+            switch r.status {
+            case .queued:
+                let actions: [QueueAction] = r.cancelRequested ? [.open] : [.cancel, .open]
+                waiting.append((QueueItem(id: id, section: .waiting, kind: .edit(r), actions: actions), (r.queueAhead ?? 0) + 1, jobs.count + 1_000 + i))
+            case .preparing, .rendering, .finishing:
+                let actions: [QueueAction] = r.cancelRequested ? [.open] : [.cancel, .open]
+                now_.append(QueueItem(id: id, section: .now, kind: .edit(r), actions: actions))
+            case .done:
+                if now.timeIntervalSince(r.lastMoment) < finishedLinger {
+                    finishedRows.append((QueueItem(id: id, section: .finished, kind: .edit(r), actions: [.open, .dismiss]), r.lastMoment))
+                }
+            case .error:
+                if now.timeIntervalSince(r.lastMoment) < finishedLinger {
+                    failed.append(QueueItem(id: id, section: .failed, kind: .edit(r), actions: [.retry, .open, .dismiss]))
+                }
+            case .cancelled:
+                break
+            }
+        }
+
         let waitingSorted = waiting.sorted { ($0.place, $0.order) < ($1.place, $1.order) }.map { $0.item }
         let finishedSorted = finishedRows.sorted { $0.at > $1.at }.prefix(finishedLimit).map { $0.item }
         var rows: [QueueItem] = now_
@@ -505,6 +556,17 @@ public final class UnifiedQueue {
         rows.append(contentsOf: finishedSorted)
         rows.append(contentsOf: failed)
         return rows
+    }
+
+    /// One render per id from the server's list and this device's: the fresher copy wins, this device's on a tie; newest first.
+    static func mergeEdits(server: [EditRender], local: [EditRender]) -> [EditRender] {
+        var byID: [String: EditRender] = [:]
+        for r in server { byID[r.id] = r }
+        for r in local {
+            if let theirs = byID[r.id], !r.isFresher(than: theirs) { continue }
+            byID[r.id] = r
+        }
+        return byID.values.sorted { $0.createdAt != $1.createdAt ? $0.createdAt > $1.createdAt : $0.id < $1.id }
     }
 
     /// A failed job: "try again" when the input was fine and the run was not; "open" when the focus has more to offer

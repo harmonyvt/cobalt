@@ -197,6 +197,7 @@ public struct HTTPCobaltClient: CobaltClient {
                 var chat: Bool?
                 var stage: Bool?
                 var stageTwitch: Bool?
+                var editor: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -204,6 +205,7 @@ public struct HTTPCobaltClient: CobaltClient {
                 var sessionTtlMs: Double?
                 var lineMax: Int?; var lineWaitMs: Double?
                 var shareSetMax: Int?
+                var editMaxSeconds: Double?; var editMaxClips: Int?; var editMaxProjects: Int?
             }
             var server: String?
             var cobalt: Cobalt?
@@ -229,6 +231,9 @@ public struct HTTPCobaltClient: CobaltClient {
             limits.lineMax = l.lineMax ?? limits.lineMax
             if let wait = l.lineWaitMs { limits.lineWait = wait / 1000 }
             limits.shareSetMax = max(ShareSetRule.minimum, l.shareSetMax ?? limits.shareSetMax)
+            limits.editMaxSeconds = l.editMaxSeconds ?? limits.editMaxSeconds
+            limits.editMaxClips = l.editMaxClips ?? limits.editMaxClips
+            limits.editMaxProjects = l.editMaxProjects ?? limits.editMaxProjects
         }
         let f = w.features
         var caps = Capabilities(
@@ -267,6 +272,7 @@ public struct HTTPCobaltClient: CobaltClient {
         caps.chat = f?.chat ?? false
         caps.stage = f?.stage ?? false
         caps.stageTwitch = (f?.stageTwitch ?? false) && caps.stage
+        caps.editor = f?.editor ?? false
         return caps
     }
 

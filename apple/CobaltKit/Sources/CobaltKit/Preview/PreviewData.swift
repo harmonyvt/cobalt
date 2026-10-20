@@ -123,6 +123,9 @@ enum PreviewData {
             caps.stage = true
             caps.stageTwitch = true
         }
+        if scenario.hasEditor && caps.kind == .fork {
+            caps.editor = true
+        }
         if scenario == .skyMap && caps.kind == .fork {
             caps.search = true
         }
