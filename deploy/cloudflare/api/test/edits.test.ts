@@ -686,6 +686,33 @@ describe("GET /capabilities", () => {
     });
 });
 
+describe("editTablesPresent: only a missing table means false", () => {
+    const flaky = (db: any, fail: () => boolean) =>
+        new Proxy(db, {
+            get(t, k) {
+                if (k === "prepare")
+                    return (sql: string) => {
+                        if (fail()) throw new Error("D1_ERROR: Network connection lost");
+                        return t.prepare(sql);
+                    };
+                return t[k];
+            },
+        });
+
+    it("a D1 blip is not cached and does not turn the flag off once it is known", async () => {
+        const w = world();
+        let down = true;
+        const db = flaky(w.db, () => down);
+        // a blip on the first ask: false for this call, remembered nowhere
+        expect(await editTablesPresent(db, 1_000)).toBe(false);
+        down = false;
+        expect(await editTablesPresent(db, 1_001)).toBe(true);
+        // known present, then a blip: still true
+        down = true;
+        expect(await editTablesPresent(db, 2_000)).toBe(true);
+    });
+});
+
 describe("GET /queue: edits", () => {
     const fill = (id: string, status: string, created: number, finished: number | null = null) =>
         w.db.raw

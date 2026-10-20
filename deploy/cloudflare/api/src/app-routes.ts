@@ -593,7 +593,13 @@ function sortV3(fs: FileRow[]): FileRow[] {
 // The post's lead file: its lead item (first video, else the first item), else its one original.
 function leadOf(fs: FileRow[]): FileRow | undefined {
     const items = fs.filter((f) => f.role === "item").sort((a, b) => (a.item_index ?? 0) - (b.item_index ?? 0));
-    return items.find((f) => (f.content_type ?? "").startsWith("video/")) ?? items[0] ?? fs.find((f) => f.bucket === "originals" && isOriginalSource(f.source));
+    return items.find((f) => (f.content_type ?? "").startsWith("video/")) ?? items[0] ?? fs.find((f) => f.bucket === "originals" && isOriginalSource(f.source)) ?? editRenderLead(fs);
+}
+
+// An editor render (31.10) is source 'studio', no role, no post key: a video post whose file is the originals mp4. A studio
+// webp is image/webp in the media bucket and a slideshow has a role, so neither matches.
+function editRenderLead(fs: FileRow[]): FileRow | undefined {
+    return fs.find((f) => f.bucket === "originals" && f.source === "studio" && !f.role && (f.content_type ?? "").startsWith("video/"));
 }
 
 const placeholders = (n: number, from = 1) => Array.from({ length: n }, (_, i) => `?${i + from}`).join(", ");

@@ -17,6 +17,7 @@ import { loaderRunner } from "./chat-loader";
 import { relayFetch } from "./model-fetch";
 import { roomPort, stageRetention } from "./stage";
 import { editsRecover, kickRenderers, type RendererNamespace } from "./edits";
+import { notifyEndedRow } from "./edit-render-core";
 export { ModelRelay } from "./model-relay";
 export { EditRenderer } from "./edit-renderer";
 export { StageRoom } from "./stage-room";
@@ -385,6 +386,7 @@ export default {
                         db: env.DB,
                         now: () => Date.now(),
                         kick: kickRenderers(env.EDIT_RENDERER as unknown as RendererNamespace),
+                        onLost: (rid) => notifyEndedRow({ db: env.DB, hark: harkConfigFrom(env), now: () => Date.now() }, rid),
                     });
                     if (r.requeued || r.lost || r.cancelled || r.queued) console.log("[edits] recover", JSON.stringify(r));
                 } catch (e) {

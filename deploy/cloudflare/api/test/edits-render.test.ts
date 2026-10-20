@@ -174,8 +174,20 @@ describe("a render from claim to done", () => {
             made_spec: { kind: "edit", project: "ProjectAAAAAAAAA", render: id, revision: 3 },
             visibility: "private",
         });
-        // (the post's `kind` is not asserted: GET /library names a post a "video" by its lead original, and this file is a
-        // `studio` row without a role; see the lane 3 report on 31.10)
+        // 31.10: a video post (the lead is the originals mp4 with no role), one item
+        expect(post).toMatchObject({ kind: "video", item_count: 1 });
+    });
+
+    it("an existing studio webp (image/webp in the media bucket) is still a webp post", async () => {
+        cw.db.raw
+            .prepare(
+                "INSERT INTO media_items (id, kind, source, bucket, r2_key, name, content_type, bytes, key_id, created_at, visibility) VALUES ('StudioWebp00001x','public','studio','media','StudioWebp.webp','a.webp','image/webp',5,?,1000,'public')",
+            )
+            .run(KEY_ID);
+        const res = await cw.call("/library?v=3", { headers: { authorization: "Api-Key 0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11" } });
+        const body: any = await res.json();
+        const post = body.posts.find((p: any) => p.id === "StudioWebp00001x");
+        expect(post).toMatchObject({ kind: "webp", item_count: 0 });
     });
 
     it("two renders queued: the first's cleanup claims the second in the same tick; oldest first", async () => {
@@ -320,10 +332,40 @@ describe("the claim", () => {
         await core.tick();
         // re-queued, and being the only one queued it is claimed again by the same tick
         expect(cw.row(a)).toMatchObject({ status: "preparing", instance: "r0", attempts: 2 });
-        const b = cw.queueRender({ status: "finishing", instance: "r1", attempts: 2 });
+        const b = cw.queueRender({ status: "finishing", instance: "r1", attempts: 2, notify: 1, title: "Gone" });
         const other = cw.makeCore("r1");
         await other.tick();
         expect(cw.row(b)).toMatchObject({ status: "error", error_code: "error.edit.lost" });
+        // 31.11: it ended in error, so it is announced once
+        expect(cw.harkCalls.map((c) => c.body.body)).toEqual(["couldn't render Gone — the server restarted"]);
+        expect(cw.row(b).notified_at).not.toBeNull();
+    });
+
+    it("the cron's error.edit.lost notifies too (once), and not a render that did not ask", async () => {
+        const asked = cw.queueRender({ status: "rendering", instance: "r0", attempts: 2, notify: 1, title: "Cron lost", updated_at: 1 });
+        const quiet = cw.queueRender({ status: "rendering", instance: "r1", attempts: 2, notify: 0, updated_at: 1 });
+        cw.clock.t += 11 * 60_000;
+        const { notifyEndedRow } = await import("../src/edit-render-core");
+        const onLost = (rid: string) =>
+            notifyEndedRow(
+                {
+                    db: cw.db,
+                    hark: HARK,
+                    now: cw.clock.now,
+                    harkFetch: async (url, init) => {
+                        cw.harkCalls.push({ url, body: JSON.parse(String(init.body)) });
+                        return new Response(null, { status: 200 });
+                    },
+                },
+                rid,
+            );
+        const r = await editsRecover({ db: cw.db, now: cw.clock.now, kick: async () => {}, onLost });
+        expect(r.lost).toBe(2);
+        expect(cw.row(asked)).toMatchObject({ status: "error", error_code: "error.edit.lost" });
+        expect(cw.row(quiet).status).toBe("error");
+        expect(cw.harkCalls.map((c) => c.body.body)).toEqual(["couldn't render Cron lost — the server restarted"]);
+        await onLost(asked);
+        expect(cw.harkCalls).toHaveLength(1);
     });
 });
 
@@ -484,6 +526,37 @@ describe("a container that loses the render (31.9)", () => {
         // one result only
         expect(items()).toHaveLength(1);
         expect(cw.originals.objects.has(`edits/${id}.mp4`)).toBe(true);
+    });
+
+    it("the restart frees the container's copy of the render first (DELETE before the second round of inputs)", async () => {
+        const id = cw.queueRender();
+        let polls = 0;
+        const base = cw.container.onCall;
+        cw.container.onCall = async (m, p) => {
+            await base?.(m, p);
+            if (m === "GET" && /^\/renders\/[A-Za-z0-9]{20}$/.test(p) && ++polls === 2) cw.container.reboot();
+        };
+        await cw.run(cw.makeCore("r0"));
+        expect(cw.row(id).status).toBe("done");
+        const calls = cw.container.calls;
+        const del = calls.indexOf("DELETE /renders/<rid>");
+        const secondPut = calls.indexOf("PUT /renders/<rid>/inputs/0", calls.indexOf("PUT /renders/<rid>/inputs/0") + 1);
+        expect(del).toBeGreaterThan(-1);
+        expect(del).toBeLessThan(secondPut);
+    });
+
+    it("a container stuck busy with our own rid is freed by the restart so the one retry can succeed", async () => {
+        const id = cw.queueRender();
+        let busy = true;
+        cw.container.inputStatus = (n) => (busy && n === 0 ? 409 : 204);
+        const base = cw.container.onCall;
+        cw.container.onCall = async (m, p) => {
+            await base?.(m, p);
+            if (m === "DELETE") busy = false;
+        };
+        await cw.run(cw.makeCore("r0"));
+        expect(cw.row(id)).toMatchObject({ status: "done" });
+        expect(cw.container.calls.filter((c) => c.startsWith("DELETE")).length).toBeGreaterThanOrEqual(1);
     });
 
     it("a 404 at collect and at poster is the same loss", async () => {
@@ -911,6 +984,68 @@ describe("ending a render deletes what it wrote, and cleanup", () => {
         expect(record(core)).toBeUndefined();
         expect(core.pending).toBeNull();
         void id;
+    });
+});
+
+describe("R2 leftovers", () => {
+    const putPoster = async (name: string) => {
+        await cw.media.put(name, new Blob([new Uint8Array([1, 2, 3])]).stream() as any, { httpMetadata: { contentType: "image/jpeg" } } as any);
+    };
+    const advance = async (core: ReturnType<CoreWorld["makeCore"]>, n: number) => {
+        await core.kick();
+        for (let i = 0; i < n; i++) {
+            const d = core.pending ?? 0;
+            core.pending = null;
+            cw.clock.t += d * 1000;
+            await core.tick();
+        }
+    };
+
+    it("abandon deletes the unrecorded poster even when the row was re-queued (the name is unique to the attempt)", async () => {
+        const id = cw.queueRender();
+        const core = cw.makeCore("r0");
+        await advance(core, 3);
+        const rec = record(core)!;
+        expect(rec.rid).toBe(id);
+        rec.posterName = "OrphanPost1.jpg";
+        core.storage.m.set(RENDER_KEY, rec);
+        await putPoster("OrphanPost1.jpg");
+        cw.clock.t += 11 * 60_000;
+        await editsRecover({ db: cw.db, now: cw.clock.now, kick: async () => {} });
+        expect(cw.row(id).status).toBe("queued");
+        await core.tick();
+        expect(cw.media.objects.has("OrphanPost1.jpg")).toBe(false);
+    });
+
+    it("end deletes edits/<rid>.mp4 whether or not the flag was set (a tick that died inside the put)", async () => {
+        const id = cw.queueRender();
+        const core = cw.makeCore("r0");
+        await advance(core, 3);
+        const rec = record(core)!;
+        expect(rec.mp4).toBeFalsy();
+        await cw.originals.put(`edits/${id}.mp4`, new Blob([new Uint8Array([9])]).stream() as any, { httpMetadata: { contentType: "video/mp4" } } as any);
+        cw.db.raw.prepare("UPDATE edit_renders SET cancel_requested = 1 WHERE id = ?").run(id);
+        await cw.run(core);
+        expect(cw.row(id).status).toBe("cancelled");
+        expect(cw.originals.objects.has(`edits/${id}.mp4`)).toBe(false);
+    });
+
+    it("the give-up path (D1 down) leaves neither the mp4 nor the poster behind", async () => {
+        const id = cw.queueRender();
+        const core = cw.makeCore("r0");
+        await advance(core, 3);
+        const rec = record(core)!;
+        rec.posterName = "OrphanPost2.jpg";
+        core.storage.m.set(RENDER_KEY, rec);
+        await putPoster("OrphanPost2.jpg");
+        await cw.originals.put(`edits/${id}.mp4`, new Blob([new Uint8Array([9])]).stream() as any, { httpMetadata: { contentType: "video/mp4" } } as any);
+        cw.db.breakIt();
+        const noise = vi.spyOn(console, "error").mockImplementation(() => {});
+        await cw.run(core, 50);
+        noise.mockRestore();
+        expect(record(core)).toBeUndefined();
+        expect(cw.media.objects.has("OrphanPost2.jpg")).toBe(false);
+        expect(cw.originals.objects.has(`edits/${id}.mp4`)).toBe(false);
     });
 });
 

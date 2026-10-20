@@ -708,7 +708,7 @@ async function baseReport(db: D1Database) {
         originals: await count(db, "deleted_at IS NULL AND bucket = 'originals' AND source IN ('saved', 'upload')"),
         hosts_live: await count(db, "deleted_at IS NULL AND bucket = 'media' AND source = 'host'"),
         // (a slideshow row is source 'studio' too, section 18.5, but it has a role: it is not a webp)
-        webps: await count(db, "deleted_at IS NULL AND role IS NULL AND source IN ('webp', 'studio')"),
+        webps: await count(db, "deleted_at IS NULL AND role IS NULL AND source IN ('webp', 'studio') AND COALESCE(content_type, '') NOT LIKE 'video/%'"),
     };
 }
 
@@ -839,7 +839,7 @@ async function undoMerge(d: VisDeps, o: MigrateOptions): Promise<StudioReply> {
               ORDER BY o.created_at, o.id`,
         )
         .all<MediaRow>();
-    const webpsSwitched = await count(db, "deleted_at IS NULL AND bucket = 'originals' AND role IS NULL AND source IN ('webp', 'studio')");
+    const webpsSwitched = await count(db, "deleted_at IS NULL AND bucket = 'originals' AND role IS NULL AND source IN ('webp', 'studio') AND COALESCE(content_type, '') NOT LIKE 'video/%'");
 
     const todo = [
         ...tombs.map((t) => ({ kind: "tombstone" as const, id: t.tomb, orig: t.orig })),

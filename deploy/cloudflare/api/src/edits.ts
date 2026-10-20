@@ -154,7 +154,9 @@ export async function editTablesPresent(db: D1Database, now: number = Date.now()
         await db.prepare("SELECT 1 FROM edit_projects LIMIT 0").all();
         await db.prepare("SELECT 1 FROM edit_renders LIMIT 0").all();
         present = true;
-    } catch {
+    } catch (e) {
+        // Only a missing table means "not applied". Any other D1 error is a blip: answer false for this call, remember nothing.
+        if (!/no such table/i.test(e instanceof Error ? e.message : String(e))) return known?.ok ?? false;
         present = false;
     }
     probed.set(db, { ok: present, at: now });
@@ -787,7 +789,13 @@ export async function queueEdits(db: D1Database, now: number): Promise<RenderSha
 
 // ---- the cron's recovery (31.9) --------------------------------------------------------------------------------------
 
-export type RecoverDeps = { db: D1Database; now: () => number; kick: () => Promise<void> };
+export type RecoverDeps = {
+    db: D1Database;
+    now: () => number;
+    kick: () => Promise<void>;
+    // called with the id of each render this run ended `error.edit.lost` (index.ts wires the Hark message, 31.11)
+    onLost?: (rid: string) => Promise<void>;
+};
 
 // A claimed render nobody has written to for 10 minutes lost its renderer (a deploy, an eviction): back into the line
 // (`attempts < 2`), else it ends `error.edit.lost`; a cancel already asked ends it cancelled. Then both instances are
@@ -837,7 +845,10 @@ export async function editsRecover(d: RecoverDeps): Promise<{ requeued: number; 
                         .run()
                 ).meta?.changes ?? 0,
             );
-            if (changed > 0) lost++;
+            if (changed > 0) {
+                lost++;
+                if (d.onLost) await d.onLost(r.id).catch(() => {});
+            }
         }
     }
     const q = await d.db.prepare("SELECT COUNT(*) AS n FROM edit_renders WHERE status = 'queued' AND cancel_requested = 0").first<{ n: number }>();

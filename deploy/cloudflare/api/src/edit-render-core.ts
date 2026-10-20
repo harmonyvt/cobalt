@@ -146,6 +146,41 @@ export function editFailedMessage(title: string, code: string): { title: string;
     return { title: "capystore", body: clip(`couldn't render ${title} — ${plainReason(code)}`, HARK_MAX_BODY), url: JOBS_URL };
 }
 
+// Sends the failure message of an errored render that asked for one and has not had it (`notified_at` is the marker),
+// once, 3 s cap, no retries. For the paths with no step record: the cron's `lost` and a restarted instance's own `lost`.
+export async function notifyEndedRow(
+    d: { db: D1Database; hark: string | null | undefined; harkFetch?: (url: string, init: RequestInit) => Promise<Response>; now: () => number },
+    rid: string,
+): Promise<void> {
+    if (!d.hark) return;
+    const row = await d.db
+        .prepare("SELECT title, status, error_code, notify, notified_at FROM edit_renders WHERE id = ?1")
+        .bind(rid)
+        .first<{ title: string; status: string; error_code: string | null; notify: number; notified_at: number | null }>();
+    if (!row || row.status !== "error" || row.notify !== 1 || row.notified_at !== null) return;
+    const msg = editFailedMessage(row.title, row.error_code ?? "error.edit.lost");
+    const ac = new AbortController();
+    try {
+        const res = await raceCeiling(
+            (d.harkFetch ?? ((u, i) => fetch(u, i)))(d.hark, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(msg),
+                redirect: "manual",
+                signal: ac.signal,
+            }),
+            HARK_MS,
+            "hark",
+        );
+        await res.body?.cancel().catch(() => {});
+        if (res.status >= 200 && res.status < 300) {
+            await d.db.prepare("UPDATE edit_renders SET notified_at = ?1 WHERE id = ?2 AND notified_at IS NULL").bind(d.now(), rid).run();
+        }
+    } catch {
+        ac.abort();
+    }
+}
+
 // ---- dependencies -----------------------------------------------------------------------------------------------------
 
 export type EditCoreDeps = {
@@ -276,11 +311,13 @@ export class EditRenderCore {
                     return await this.end(rec, "error", "error.edit.render_failed");
                 } catch (e) {
                     console.error("[edit-render] could not end the render", String(e));
+                    await this.deleteLeftovers(rec).catch(() => {});
                     await this.d.storage.delete(RENDER_KEY);
                     return null;
                 }
             }
             // notify / cleanup keep failing: give them up and release the instance
+            await this.deleteLeftovers(rec).catch(() => {});
             await this.d.storage.delete(RENDER_KEY);
             return STEP_NOW_S;
         } catch {
@@ -327,6 +364,15 @@ export class EditRenderCore {
     private async abandon(rec: StepRecord, row: ClaimRow | null): Promise<Outcome> {
         this.log(`abandoning ${rec.rid}: ${row ? `${row.status}/${row.instance ?? "-"}` : "row gone"}`);
         if (!row || row.status === "error" || row.status === "cancelled") await this.deleteLeftovers(rec);
+        else if (rec.posterName) {
+            // the poster's name is unique to this attempt: safe to delete whatever happened to the row
+            try {
+                await this.d.media.delete(rec.posterName);
+                rec.posterName = undefined;
+            } catch (e) {
+                console.error("[edit-render] deleting the unrecorded poster failed", String(e));
+            }
+        }
         rec.ended = undefined;
         rec.step = "cleanup";
         rec.tries = 0;
@@ -374,12 +420,13 @@ export class EditRenderCore {
                     .bind(now, r.id, this.d.instance)
                     .run();
             } else {
-                await this.d.db
+                const res = await this.d.db
                     .prepare(
                         "UPDATE edit_renders SET status = 'error', error_code = 'error.edit.lost', finished_at = ?1, updated_at = ?1 WHERE id = ?2 AND instance = ?3 AND status IN ('preparing', 'rendering', 'finishing')",
                     )
                     .bind(now, r.id, this.d.instance)
                     .run();
+                if (Number(res.meta?.changes ?? 0) > 0) await this.notifyEnded(r.id).catch(() => {});
             }
         }
     }
@@ -477,6 +524,16 @@ export class EditRenderCore {
         this.log(`${rec.rid} lost its container work: ${why}${rec.retried ? " (second time)" : ""}`);
         if (rec.retried) return await this.end(rec, "error", "error.edit.lost");
         rec.retried = true;
+        // The container may still hold this render id (a busy 409 for our own rid): free it, or the retry from input 0 meets
+        // the same answer. Best effort, capped; a dead or absent container has nothing to free.
+        if (rec.container && this.d.isRunning()) {
+            try {
+                const res = await this.call(rec, `/renders/${rec.rid}`, { method: "DELETE" }, CALL_MS, "edit delete");
+                await res.body?.cancel().catch(() => {});
+            } catch (e) {
+                this.log(`${rec.rid} freeing the container's copy failed: ${String(e)}`);
+            }
+        }
         rec.step = "inputs";
         rec.n = 0;
         rec.tries = 0;
@@ -901,13 +958,12 @@ export class EditRenderCore {
     // ---- ending a render (any code) ---------------------------------------------------------------------------------------
 
     private async deleteLeftovers(rec: StepRecord): Promise<void> {
-        if (rec.mp4) {
-            try {
-                await this.d.originals.delete(this.mp4Key(rec.rid));
-                rec.mp4 = false;
-            } catch (e) {
-                console.error("[edit-render] deleting the half-made video failed", String(e));
-            }
+        // unconditional (R2 delete is idempotent): a tick that died inside the put never set the flag
+        try {
+            await this.d.originals.delete(this.mp4Key(rec.rid));
+            rec.mp4 = false;
+        } catch (e) {
+            console.error("[edit-render] deleting the half-made video failed", String(e));
         }
         if (rec.posterName) {
             try {
@@ -972,6 +1028,12 @@ export class EditRenderCore {
             return await toCleanup();
         }
         return STEP_NEXT_S;
+    }
+
+    // A render that ended with no step record to carry it (lost on a restart): one best-effort message, same marker.
+    private async notifyEnded(rid: string): Promise<void> {
+        if (!this.d.hark) return;
+        await notifyEndedRow({ db: this.d.db, hark: this.d.hark, harkFetch: this.d.harkFetch, now: this.d.now }, rid);
     }
 
     private async postHark(msg: { title: string; body: string; url: string }): Promise<"ok" | "retry" | "rejected"> {
