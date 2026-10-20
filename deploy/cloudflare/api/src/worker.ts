@@ -99,6 +99,9 @@ export interface WorkerEnv {
     // Rich link pages (section 22): https://<share host>/ (a plain var). The Worker answers that host
     // itself, before the gate. Absent or empty: no pages, `share_base_url: null`.
     SHARE_BASE_URL?: string;
+    // Gallery links' moving previews (section 29.1): "1" shows each video in Discord's gallery as a 4 s
+    // silent WebP that plays by itself; anything else (the default) shows the real video.
+    GALLERY_LOOPS?: string;
     // Roast captions (section 25): the Anthropic key and optional AI Gateway URL (secrets), the model.
     ANTHROPIC_API_KEY?: string;
     ROAST_BASE_URL?: string;
@@ -199,6 +202,7 @@ export async function handleRequest(
                 shareBaseUrl: env.SHARE_BASE_URL!,
                 captioner: deps.captioner === undefined ? captionerFrom(env, deps.modelFetch) : deps.captioner,
                 waitUntil: deps.waitUntil,
+                loops: env.GALLERY_LOOPS === "1",
             },
             incoming,
         );
@@ -455,7 +459,7 @@ async function handleInner(
                 now: edge.now,
                 captioner: edge.captioner ?? captionerFrom(env, edge.modelFetch),
                 // a new link's videos get moving previews (section 29): the Durable Object only writes records
-                kickLoops: async () => {
+                kickLoops: env.GALLERY_LOOPS !== "1" ? undefined : async () => {
                     const p = container
                         .fetch(
                             new Request("https://do.internal/loops/kick", {

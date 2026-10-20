@@ -22,6 +22,8 @@ export type ShareDeps = {
     captioner?: Captioner | null;
     waitUntil?: (p: Promise<unknown>) => void;
     captionWaitMs?: number;
+    // gallery links' moving previews in Discord (section 29.1); absent = on
+    loops?: boolean;
 };
 
 // How long the first page view waits for its caption before answering without it (Discord gives up
