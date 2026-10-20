@@ -1054,8 +1054,9 @@ indexing 3 posts` (`index.pending` > 0), `search is waking up…`, `couldn't sea
 `Motion.rows` (a crossfade under Reduce Motion). While the server is still looking and nothing matches by name, the
 content shows the loading state instead of `nothing matches`.
 
-**Errors.** `503 error.search.waking` → `.waking`, then **one** retry after **20 s** (typing in between drops it; a
-second waking answer stays `.waking`). `503 error.search.off` → `.off`, and no more server searches until
+**Errors.** `503 error.search.waking` → `.waking`, then a retry every **15 s**, up to **8** retries (typing in between
+drops them; the line stays `search is waking up…` through them). A waking answer after the last retry → `.failed`, so
+the name matches stand instead of a spinner that never ends. `503 error.search.off` → `.off`, and no more server searches until
 `LibraryModel.reset()` (a server or key change). Anything else → `.failed`.
 
 **Detail.** With `features.search` and a library post, the detail ends with a read-only **search index** section

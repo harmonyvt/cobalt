@@ -348,6 +348,8 @@ export class CobaltContainer extends Container<Env> {
 const SEARCH_CRON = "*/15 * * * *";
 // The roast backfill's share of each 15-minute run (the search indexer gets the rest).
 const ROAST_RUN_BUDGET_MS = 90_000;
+// The cron's wake-up GET to the search Space (a boot takes about 20 s).
+const SPACE_WAKE_MS = 60_000;
 
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -391,6 +393,10 @@ export default {
             }
             const client = embedFrom(env);
             if (!client) return;
+            // Keep the Space awake: a free Space sleeps after 48 h without traffic, a sleeping one answers the
+            // indexer's POSTs at once without waking, and a search would then wait while it boots. A GET every
+            // run is traffic (and wakes it if it slept anyway). Under a second when it is up.
+            if (client.wake && !(await client.wake(SPACE_WAKE_MS))) console.log("[search] space did not answer its wake-up");
             try {
                 const r = await drainIndexer({
                     db: env.DB,

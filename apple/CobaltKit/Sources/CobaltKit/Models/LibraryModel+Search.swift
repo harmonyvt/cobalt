@@ -3,14 +3,17 @@ import Foundation
 // The library's server search (APP-API-CONTRACT 21; apple/CONTRACT.md 13). With `features.search`, a query of two or
 // more letters waits out a typing pause (`searchDebounce`), then asks `GET /library/search`; a new keystroke cancels
 // whatever is in flight. The local name filter (`AppModel.libraryRows`) answers at once and stays the answer while the
-// server thinks, and whenever it cannot (search off, failed, offline). `503 error.search.waking` is retried once after
-// `wakingRetry`.
+// server thinks, and whenever it cannot (search off, failed, offline). `503 error.search.waking` is retried every
+// `wakingRetry` seconds, up to `wakingRetries` times (a Space waking from sleep takes a few minutes to load the model);
+// after that the search is `.failed` and the name matches stay, rather than a spinner that never ends.
 
 extension LibraryModel {
     /// The typing pause before a query goes to the server.
     static let searchDebounce: Double = 0.35
-    /// The wait before the one retry of a search the sleeping Space refused (`error.search.waking`).
-    static let wakingRetry: Double = 20
+    /// The wait between retries of a search the sleeping Space refused (`error.search.waking`).
+    static let wakingRetry: Double = 15
+    /// Retries of a waking search before giving up on it (with the server's own 25 s wait each, about 2 to 5 minutes).
+    static let wakingRetries = 8
     /// Posts asked for (the server's maximum).
     static let searchLimit = 50
 
@@ -50,13 +53,14 @@ extension LibraryModel {
         searchTask = Task { [weak self] in
             do { try await clock.sleep(seconds: Self.searchDebounce) } catch { return }
             guard !Task.isCancelled else { return }
-            await self?.runSearch(q, retriesWaking: true)
+            await self?.runSearch(q, wakingRetriesLeft: Self.wakingRetries)
         }
     }
 
     /// Asks the server for `q`; an answer for words that are no longer in the field is thrown away.
-    func runSearch(_ q: String, retriesWaking: Bool) async {
-        searchState = .searching
+    func runSearch(_ q: String, wakingRetriesLeft: Int) async {
+        // a retry keeps saying the Space is waking up, not "searching…" for each try
+        if searchState != .waking { searchState = .searching }
         do {
             let result = try await ctx.librarySearch(query: q, limit: Self.searchLimit)
             guard !Task.isCancelled, q == trimmedQuery else { return }
@@ -71,11 +75,14 @@ extension LibraryModel {
             searchScores = [:]
             switch Self.searchErrorCode(error) {
             case "error.search.waking":
+                guard wakingRetriesLeft > 0 else {
+                    searchState = .failed
+                    return
+                }
                 searchState = .waking
-                guard retriesWaking else { return }
                 do { try await ctx.clock.sleep(seconds: Self.wakingRetry) } catch { return }
                 guard !Task.isCancelled, q == trimmedQuery else { return }
-                await runSearch(q, retriesWaking: false)
+                await runSearch(q, wakingRetriesLeft: wakingRetriesLeft - 1)
             case "error.search.off":
                 searchOffByServer = true
                 searchState = .off
