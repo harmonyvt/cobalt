@@ -17,6 +17,8 @@ struct EditorPlayerView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PlayerLayerView {
         let view = PlayerLayerView()
+        // the composition is local: start at once instead of waiting for a playability estimate that may never come
+        player.automaticallyWaitsToMinimizeStalling = false
         view.playerLayer.player = player
         view.playerLayer.videoGravity = .resizeAspect
         view.backgroundColor = .black
@@ -38,6 +40,7 @@ struct EditorPlayerView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PlayerLayerView {
         let view = PlayerLayerView()
+        player.automaticallyWaitsToMinimizeStalling = false
         view.playerLayer.player = player
         return view
     }

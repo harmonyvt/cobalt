@@ -23,7 +23,7 @@ struct EditorPresenter: ViewModifier {
         content
             .modifier(EditorCover(model: model, showing: showing))
             #if os(macOS)
-            .onChange(of: showing) { _, on in
+            .onChange(of: showing, initial: true) { _, on in
                 if on { openWindow(id: EditorWindowID.editor) } else { dismissWindow(id: EditorWindowID.editor) }
             }
             #endif
@@ -58,9 +58,13 @@ struct EditorPresenter: ViewModifier {
     /// `-previewEditor beach|cats|<project id>`: opens that project once the list is in.
     private func openPreviewProject() async {
         guard let raw = UserDefaults.standard.string(forKey: "previewEditor"), !raw.isEmpty else { return }
-        for _ in 0..<20 where !model.editor.isAvailable { try? await Task.sleep(for: .milliseconds(250)) }
+        for _ in 0..<120 where !model.editor.isAvailable { try? await Task.sleep(for: .milliseconds(500)) }
         guard model.editor.isAvailable else { return }
-        await model.editor.refresh()
+        for _ in 0..<20 {
+            await model.editor.refresh()
+            if !model.editor.projects.isEmpty { break }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
         let word = raw == "cats" ? "cat" : (raw == "beach" ? "beach" : "")
         let project = model.editor.projects.first { $0.id == raw }
             ?? model.editor.projects.first { !word.isEmpty && $0.title.contains(word) }

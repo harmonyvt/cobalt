@@ -53,7 +53,16 @@ struct EditorRoot: View {
         #if os(macOS)
         .background(EditorWindowGuard(
             onCloseButton: { host.requestClose(model) },
-            onClosed: { if model.editor.session != nil { Task { _ = await model.editor.close(); model.editor.closeAnyway() } } }))
+            onClosed: {
+                // the window went some way other than the red button (Window > Close, quit): flush and close the session;
+                // if that cannot be done (unsaved or conflicted edits) keep it and bring the window back
+                guard model.editor.session != nil else { return }
+                Task {
+                    if await model.editor.close() { return }
+                    EditorLauncher.shared.firstToast = Copy.Editor.closeUnsavedTitle
+                    openWindow(id: EditorWindowID.editor)
+                }
+            }))
         .navigationTitle(session.project.title)
         #endif
     }
