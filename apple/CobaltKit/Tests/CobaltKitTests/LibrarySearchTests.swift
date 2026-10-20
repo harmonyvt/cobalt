@@ -274,25 +274,29 @@ struct LibrarySearchModelTests {
         #expect(rig.calls == ["kitchen", "dog"])
     }
 
-    @Test func wakingRetriesOnceAfterTwentySeconds() async {
+    @Test func wakingRetriesAfterFifteenSeconds() async {
         let rig = SearchRig(.waking)
         rig.library.query = "boats"
         await rig.run(for: 1)
         #expect(rig.calls == ["boats"] && rig.library.searchState == .waking)
-        await rig.run(for: 15)
-        #expect(rig.calls.count == 1)                                   // not before 20 s
+        await rig.run(for: 10)
+        #expect(rig.calls.count == 1)                                   // not before 15 s
+        #expect(rig.library.searchState == .waking)
         await rig.run(for: 10)
         #expect(rig.calls == ["boats", "boats"])
         #expect(rig.library.searchResults?.first?.id == harbourPost)
         if case .results = rig.library.searchState {} else { Issue.record("expected results, got \(rig.library.searchState)") }
     }
 
-    @Test func wakingRetriesOnlyOnce() async {
+    @Test func wakingKeepsRetryingThenGivesUp() async {
         let rig = SearchRig(.stillWaking)
         rig.library.query = "boats"
-        await rig.run(for: 120)
-        #expect(rig.calls == ["boats", "boats"])
-        #expect(rig.library.searchState == .waking && rig.library.searchResults == nil)
+        await rig.run(for: 60)
+        #expect(rig.library.searchState == .waking)                     // still trying, not stuck after one retry
+        #expect(rig.calls.count > 2)
+        await rig.run(for: 600)
+        #expect(rig.calls.count == 1 + LibraryModel.wakingRetries)
+        #expect(rig.library.searchState == .failed && rig.library.searchResults == nil)   // no endless spinner
         #expect(rig.app.libraryRows.map(\.id) == rig.localIDs("boats"))
     }
 

@@ -52,7 +52,8 @@ public enum LibrarySearchState: Sendable, Equatable {
     case searching
     /// The server answered: `count` posts, and `pending` posts it could only find by name so far.
     case results(count: Int, pending: Int)
-    /// `503 error.search.waking`: the Space is asleep or booting. One retry follows (`LibraryModel.wakingRetry`).
+    /// `503 error.search.waking`: the Space is asleep or booting. Retries follow every `LibraryModel.wakingRetry` s, up to
+    /// `LibraryModel.wakingRetries`; still waking after them → `.failed`.
     case waking
     /// `503 error.search.off`: the server has no Space configured. Name matches only until the server changes.
     case off

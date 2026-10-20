@@ -475,6 +475,52 @@ describe("Space client", () => {
         expect(await run(async () => Promise.reject(new TypeError("network")))).toBe("unavailable:null");
         expect(await run(() => new Promise<Response>(() => {}), 20)).toBe("unavailable:null");
     });
+
+    it("wakes a sleeping Space with a GET and tries once more in the same call", async () => {
+        const seen: string[] = [];
+        let asleep = true;
+        const c = spaceClient({ url: SPACE, token: "hf_tok" }, (async (url: string, init: RequestInit) => {
+            seen.push(`${init.method} ${url}`);
+            if (init.method === "GET") {
+                expect((init.headers as Record<string, string>).authorization).toBe("Bearer hf_tok");
+                asleep = false;
+                return ok({ status: "ok", model: EMBED_MODEL, ready: false });
+            }
+            // a sleeping Space answers a POST at once (the Hugging Face proxy's page) and does not wake
+            if (asleep) return new Response("<html>sleeping</html>", { status: 503 });
+            return ok({ model: EMBED_MODEL, dims: EMBED_DIMS, vectors: [vec()], images: [false] });
+        }) as unknown as typeof fetch)!;
+        const r = await c.embed("query", [{ title: null, text: "capybara", image_url: null }], 5000);
+        expect(r.vectors).toHaveLength(1);
+        expect(seen).toEqual([`POST ${SPACE}/embed`, `GET ${SPACE}/`, `POST ${SPACE}/embed`]);
+    });
+
+    it("does not wake on a configuration problem, and gives up when the wake fails", async () => {
+        const run = async (post: number, get: () => Promise<Response>) => {
+            const seen: string[] = [];
+            const c = spaceClient({ url: SPACE, token: "hf" }, (async (_url: string, init: RequestInit) => {
+                seen.push(init.method as string);
+                return init.method === "GET" ? get() : ok({}, post);
+            }) as unknown as typeof fetch)!;
+            const out = await c.embed("query", [{ title: null, text: "q", image_url: null }], 2000).then(
+                () => "ok",
+                (e) => (e instanceof EmbedError ? `${e.kind}:${e.status}` : "other"),
+            );
+            return `${out} ${seen.join(",")}`;
+        };
+        expect(await run(401, async () => ok({ status: "ok" }))).toBe("unavailable:401 POST");
+        expect(await run(404, async () => ok({ status: "ok" }))).toBe("unavailable:404 POST");
+        expect(await run(503, async () => ok({}, 503))).toBe("unavailable:503 POST,GET");
+        expect(await run(503, async () => new Response("<html>building</html>"))).toBe("unavailable:503 POST,GET");
+        expect(await run(503, () => Promise.reject(new TypeError("network")))).toBe("unavailable:503 POST,GET");
+    });
+
+    it("wake() reports whether the Space answered its health check", async () => {
+        const make = (res: () => Promise<Response>) => spaceClient({ url: `${SPACE}/`, token: "hf" }, (async () => res()) as unknown as typeof fetch)!;
+        expect(await make(async () => ok({ status: "ok", ready: true })).wake!(1000)).toBe(true);
+        expect(await make(async () => ok({}, 503)).wake!(1000)).toBe(false);
+        expect(await make(() => new Promise<Response>(() => {})).wake!(20)).toBe(false);
+    });
 });
 
 // ---- the gate, the Worker and capabilities ------------------------------------------------------

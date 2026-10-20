@@ -1157,9 +1157,11 @@ function privateToStudio(it) {
 
 /* ---------- search (APP-API-CONTRACT.md section 21, relayed by /api/library/search) ---------- */
 var SEARCH_LIMIT = 50;
-var WAKE_RETRY_MS = 20000;
+// A Space waking from sleep takes a few minutes to load the model: retry every WAKE_RETRY_MS, WAKE_RETRIES times.
+var WAKE_RETRY_MS = 15000;
+var WAKE_RETRIES = 8;
 // q: the query shown; active: the grid shows results; done: an answer arrived for q.
-var S = { q: "", active: false, done: false, items: [], seq: 0, timer: 0, retryTimer: 0, retried: false };
+var S = { q: "", active: false, done: false, items: [], seq: 0, timer: 0, retryTimer: 0, wakeTries: 0 };
 function searchStatus(kind, text, code, spinning) {
   var el = $("searchStatus");
   el.className = "status" + (kind ? " " + kind : "");
@@ -1171,7 +1173,7 @@ function searchStatus(kind, text, code, spinning) {
 }
 function clearSearch(keepFocus) {
   clearTimeout(S.timer); clearTimeout(S.retryTimer);
-  S.seq++; S.q = ""; S.active = false; S.done = false; S.items = []; S.retried = false;
+  S.seq++; S.q = ""; S.active = false; S.done = false; S.items = []; S.wakeTries = 0;
   $("q").value = ""; $("qClear").hidden = true;
   searchStatus("", "");
   G.confirm = null;
@@ -1182,12 +1184,13 @@ async function runSearch(isRetry) {
   clearTimeout(S.timer); clearTimeout(S.retryTimer);
   var q = $("q").value.trim().replace(/\s+/g, " ");
   if (!q) { clearSearch(true); return; }
-  if (!isRetry) S.retried = false;
+  if (!isRetry) S.wakeTries = 0;
   var seq = ++S.seq;
   if (q !== S.q) { S.done = false; S.items = []; }
   S.q = q; S.active = true; G.confirm = null;
   renderGrid();
-  searchStatus("", isRetry ? "trying again…" : "searching…", "", true);
+  if (isRetry) searchStatus("warn", "search is waking up…", "", true);
+  else searchStatus("", "searching…", "", true);
   var r;
   try { r = await lib("/api/library/search?q=" + encodeURIComponent(q) + "&limit=" + SEARCH_LIMIT, {}, 45000); }
   catch (e) {
@@ -1210,9 +1213,9 @@ async function runSearch(isRetry) {
   var code = errCode(r) || "error.library.upstream";
   S.done = false; renderGrid();   // the status line says why; no "nothing matches" under it
   if (code === "error.search.waking") {
-    if (!S.retried) {
-      S.retried = true;
-      searchStatus("warn", "search is waking up, trying again in " + Math.round(WAKE_RETRY_MS / 1000) + " s…", "", true);
+    if (S.wakeTries < WAKE_RETRIES) {
+      S.wakeTries++;
+      searchStatus("warn", "search is waking up…", "", true);
       S.retryTimer = setTimeout(function () { if (seq === S.seq) runSearch(true); }, WAKE_RETRY_MS);
     } else searchStatus("warn", messageFor(code));
     return;

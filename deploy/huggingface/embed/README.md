@@ -52,4 +52,7 @@ anything else, or a failed fetch, embeds the text alone and reports `false` in `
 
 `GET /` → `{ "status": "ok", "model", "ready" }` (`ready` turns true once the model is loaded).
 
-A CPU basic Space sleeps after a stretch without traffic; the first call after that waits while it boots.
+A CPU basic Space sleeps after 48 h without traffic. A sleeping Space answers a `POST /embed` at once
+without waking up; a `GET /` wakes it (about 20 s to boot, then about 12 s to load the model). The API
+Worker's 15-minute cron sends `GET /` every run so it never sleeps, and a call that finds it asleep
+wakes it with a `GET /` and tries again.

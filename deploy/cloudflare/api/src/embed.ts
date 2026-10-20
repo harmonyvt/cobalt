@@ -50,6 +50,9 @@ export class EmbedError extends Error {
 
 export type EmbedClient = {
     embed(kind: "document" | "query", inputs: EmbedInput[], timeoutMs: number): Promise<EmbedResult>;
+    // GET / on the Space. A sleeping Space answers a POST at once without waking up; a GET wakes it (it
+    // answers once booted, about 20 s). True when it answered its health JSON. Absent on test fakes.
+    wake?(timeoutMs: number): Promise<boolean>;
 };
 
 export type EmbedConfig = { url?: string; token?: string; key?: string };
@@ -58,61 +61,104 @@ export type EmbedConfig = { url?: string; token?: string; key?: string };
 export const embedConfigured = (c: EmbedConfig): boolean =>
     typeof c.url === "string" && /^https:\/\/[^/\s]+/.test(c.url) && typeof c.token === "string" && c.token.length > 0;
 
+// Below this much time left, a failed call is not worth a wake and a second try.
+const WAKE_MIN_MS = 1_000;
+
+// Runs `run` with an abort signal, rejecting with EmbedError("unavailable") after `timeoutMs` (our own
+// timer: an AbortSignal timeout is not always honoured in the Workers runtime).
+async function withDeadline<T>(timeoutMs: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const ctrl = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+            ctrl.abort();
+            reject(new EmbedError("unavailable", null));
+        }, timeoutMs);
+    });
+    try {
+        return await Promise.race([run(ctrl.signal), timeout]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 // The HTTP client for the Space (README there has the contract). `fetchFn` is injectable for tests.
+// A call the Space could not answer (asleep, booting, 5xx) wakes it with a GET and tries once more,
+// inside the same `timeoutMs`.
 export function spaceClient(c: EmbedConfig, fetchFn: typeof fetch = fetch): EmbedClient | null {
     if (!embedConfigured(c)) return null;
-    const endpoint = `${c.url!.replace(/\/+$/, "")}/embed`;
-    return {
-        async embed(kind, inputs, timeoutMs) {
-            const headers: Record<string, string> = {
-                "content-type": "application/json",
-                authorization: `Bearer ${c.token}`,
-            };
+    const base = c.url!.replace(/\/+$/, "");
+    const endpoint = `${base}/embed`;
+    const auth = `Bearer ${c.token}`;
+
+    const post = (kind: "document" | "query", inputs: EmbedInput[], timeoutMs: number): Promise<EmbedResult> =>
+        withDeadline(timeoutMs, async (signal) => {
+            const headers: Record<string, string> = { "content-type": "application/json", authorization: auth };
             if (c.key) headers["x-embed-key"] = c.key;
-            const ctrl = new AbortController();
-            let timer: ReturnType<typeof setTimeout> | undefined;
-            const timeout = new Promise<never>((_, reject) => {
-                timer = setTimeout(() => {
-                    ctrl.abort();
-                    reject(new EmbedError("unavailable", null));
-                }, timeoutMs);
-            });
+            let res: Response;
             try {
-                const call = (async () => {
-                    let res: Response;
-                    try {
-                        res = await fetchFn(endpoint, {
-                            method: "POST",
-                            headers,
-                            body: JSON.stringify({ kind, dims: EMBED_DIMS, inputs }),
-                            signal: ctrl.signal,
-                        });
-                    } catch {
-                        throw new EmbedError("unavailable", null);
-                    }
-                    if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
-                        // 401/403/404 from the Hugging Face proxy is a configuration problem, not this
-                        // input's fault: never held against a post.
-                        if (res.status === 401 || res.status === 403 || res.status === 404) {
-                            throw new EmbedError("unavailable", res.status);
-                        }
-                        throw new EmbedError("rejected", res.status);
-                    }
-                    if (!res.ok) throw new EmbedError("unavailable", res.status);
-                    let body: unknown;
-                    try {
-                        body = await res.json();
-                    } catch {
-                        // a booting Space answers with its HTML page
-                        throw new EmbedError("unavailable", res.status);
-                    }
-                    const parsed = parseResult(body, inputs.length);
-                    if (!parsed) throw new EmbedError("unavailable", res.status);
-                    return parsed;
-                })();
-                return await Promise.race([call, timeout]);
-            } finally {
-                clearTimeout(timer);
+                res = await fetchFn(endpoint, {
+                    method: "POST",
+                    headers,
+                    body: JSON.stringify({ kind, dims: EMBED_DIMS, inputs }),
+                    signal,
+                });
+            } catch {
+                throw new EmbedError("unavailable", null);
+            }
+            if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+                // 401/403/404 from the Hugging Face proxy is a configuration problem, not this
+                // input's fault: never held against a post.
+                if (res.status === 401 || res.status === 403 || res.status === 404) {
+                    throw new EmbedError("unavailable", res.status);
+                }
+                throw new EmbedError("rejected", res.status);
+            }
+            if (!res.ok) throw new EmbedError("unavailable", res.status);
+            let body: unknown;
+            try {
+                body = await res.json();
+            } catch {
+                // a booting Space answers with its HTML page
+                throw new EmbedError("unavailable", res.status);
+            }
+            const parsed = parseResult(body, inputs.length);
+            if (!parsed) throw new EmbedError("unavailable", res.status);
+            return parsed;
+        });
+
+    const wake = async (timeoutMs: number): Promise<boolean> => {
+        try {
+            return await withDeadline(timeoutMs, async (signal) => {
+                const res = await fetchFn(`${base}/`, { method: "GET", headers: { authorization: auth }, signal });
+                if (!res.ok) return false;
+                const body = (await res.json().catch(() => null)) as { status?: unknown } | null;
+                return body?.status === "ok";
+            });
+        } catch {
+            return false;
+        }
+    };
+
+    return {
+        wake,
+        async embed(kind, inputs, timeoutMs) {
+            const deadline = Date.now() + timeoutMs;
+            try {
+                return await post(kind, inputs, timeoutMs);
+            } catch (e) {
+                const left = () => deadline - Date.now();
+                const configProblem = e instanceof EmbedError && (e.status === 401 || e.status === 403 || e.status === 404);
+                if (!(e instanceof EmbedError) || e.kind !== "unavailable" || configProblem || left() < WAKE_MIN_MS) {
+                    if (e instanceof EmbedError && e.kind === "unavailable") console.log("[search] space unavailable", e.status);
+                    throw e;
+                }
+                const awake = await wake(left());
+                if (!awake || left() < WAKE_MIN_MS) {
+                    console.log("[search] space unavailable", e.status, awake ? "awake, out of time" : "did not wake");
+                    throw e;
+                }
+                return await post(kind, inputs, left());
             }
         },
     };
