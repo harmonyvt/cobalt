@@ -70,6 +70,9 @@ test("sniffKind reads the bytes, never a name", () => {
     assert.equal(sniffKind(b("\0\0\0\x18ftypisom\0\0\0\0")), "mp4");
     assert.equal(sniffKind(b("\0\0\0\x14ftypqt  \0\0\0\0")), "mp4");
     assert.equal(sniffKind(b("\0\0\0\x14ftypM4V \0\0\0\0")), "mp4");
+    assert.equal(sniffKind(b("\0\0\0\x08wide\0\0\0\x10mdat")), "mp4", "old QuickTime");
+    assert.equal(sniffKind(b("\0\0\0\x08free\0\0\0\x10moov")), "mp4");
+    assert.equal(sniffKind(b("\0\0\0\x10moov\0\0\0\0\0\0\0\0")), "mp4");
     assert.equal(sniffKind(b("\0\0\0\x18ftypheic\0\0\0\0")), null, "a HEIC still");
     assert.equal(sniffKind(b("\0\0\0\x18ftypM4A \0\0\0\0")), null, "audio only");
     assert.equal(sniffKind(Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0, 0, 0, 0, 0])), null, "webm / matroska");

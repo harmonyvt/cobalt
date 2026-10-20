@@ -396,3 +396,22 @@ test("everything at once: seek, speed, crop, fit, rotation, square pixels, HLG, 
     const a = audioFacts(out);
     assert.ok(Math.abs(a.samples - c.timing.frames * 800) <= 2048);
 });
+
+test("a QuickTime file with no ftyp (it opens with a wide atom) is accepted and renders", { skip }, async () => {
+    // fragmented, so chunk offsets are relative to each moof: dropping ftyp and putting a wide atom first stays valid
+    const frag = path.join(work, "frag.mov");
+    ff(["-i", media.files.idx, "-t", "2", "-c", "copy", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mov", frag]);
+    const b = readFileSync(frag);
+    assert.equal(b.toString("latin1", 4, 8), "ftyp");
+    const old = Buffer.concat([Buffer.from([0, 0, 0, 8]), Buffer.from("wide", "latin1"), b.subarray(b.readUInt32BE(0))]);
+    const file = path.join(work, "old.mov");
+    writeFileSync(file, old);
+    const r = await probeSource({ ffmpeg: FFMPEG, file, kind: "video", item: ID.plain, bytes: old.length });
+    assert.ok(r.ok, JSON.stringify(r));
+    assert.deepEqual([r.source.width, r.source.height], [320, 180]);
+    const keep = src[ID.plain];
+    src[ID.plain] = r.source;
+    const { out } = render(edit([mc({ item: ID.plain, in: 0, out: 1.5 })]), "oldmov");
+    src[ID.plain] = keep;
+    assert.equal(videoFacts(out).frames, 45);
+});

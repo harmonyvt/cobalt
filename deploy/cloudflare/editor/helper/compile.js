@@ -47,8 +47,12 @@ export function atempoChain(s) {
     return out;
 }
 
+// HDR -> SDR BT.709 (31.5 step 2). HLG (iPhone's default, Dolby Vision 8.4 included): zimg renders it for a 100-nit display
+// (npl=100), which keeps scene brightness the way AVFoundation's SDR conversion does; nothing is left above 1.0 to
+// compress, so `tonemap=clip` (hable halved the brightness: mean luma 65 vs 125 for the signal as shown). PQ has real
+// headroom above 100 nits: `mobius` (linear up to a knee, smooth roll-off) keeps mid-tones where hable darkens them.
 const HDR_CHAIN = (/** @type {string} */ tr) =>
-    `zscale=tin=${tr}:pin=bt2020:min=bt2020nc:rin=tv:t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv`;
+    `zscale=tin=${tr}:pin=bt2020:min=bt2020nc:rin=tv:t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=${tr === "arib-std-b67" ? "clip" : "mobius:param=0.3:desat=0"},zscale=t=bt709:m=bt709:r=tv`;
 
 /** The video path of a decoded source up to colour (31.5 steps 1-2). @param {import("./probe.js").Source} s @returns {string[]} */
 function decodeSteps(s) {
@@ -156,10 +160,13 @@ export function compile(t, sources, opts) {
         const inT = o.in - inp.seek, outT = o.out - inp.seek;
 
         const v = [...decodeSteps(s)];
-        if (s.kind === "gif") v.push("loop=loop=-1:size=32767", `trim=duration=${dec(len, 6)}`, "setpts=PTS-STARTPTS");
+        const place = `scale=${box.w}:${box.h}:flags=bicubic:out_color_matrix=bt709:out_range=tv`;
+        // a GIF is scaled to its placed size BEFORE it is looped: `loop` keeps every frame in memory, and a 1080p GIF of a
+        // thousand frames would be gigabytes at source size
+        if (s.kind === "gif") v.push(place, "format=yuva420p", "loop=loop=-1:size=32767", `trim=duration=${dec(len, 6)}`, "setpts=PTS-STARTPTS");
         else if (s.kind === "video") v.push(`trim=end=${dec(outT, 6)}`, `setpts=PTS-${dec(inT, 6)}/TB`);
         v.push(`fps=${F}:round=up:start_time=0`, `tpad=stop_mode=clone:stop_duration=${dec(om.frames / F + 1)}`, `trim=end_frame=${om.frames}`);
-        v.push(`scale=${box.w}:${box.h}:flags=bicubic:out_color_matrix=bt709:out_range=tv`, "format=yuva420p");
+        if (s.kind !== "gif") v.push(place, "format=yuva420p");
         if (o.opacity < 1) v.push(`colorchannelmixer=aa=${dec(o.opacity, 2)}`);
         v.push(`setpts=PTS-STARTPTS+${om.start}/(${F}*TB)`);
         chains.push(`[${n}:v:0]${v.join(",")}[ov${j}]`);

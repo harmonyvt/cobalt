@@ -151,10 +151,10 @@ test("HDR, square-pixel, mono, photo orientation and GIF sources take their spec
     };
     const c = build(t, extra);
     const f = c.filter;
-    assert.match(f, /\[2:v:0\]zscale=tin=arib-std-b67:pin=bt2020:min=bt2020nc:rin=tv:t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,trim=/);
+    assert.match(f, /\[2:v:0\]zscale=tin=arib-std-b67:pin=bt2020:min=bt2020nc:rin=tv:t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=clip,zscale=t=bt709:m=bt709:r=tv,trim=/);
     assert.match(f, /\[1:a:0\].*pan=stereo\|c0=c0\|c1=c0,aresample=48000/);
     assert.doesNotMatch(f.split(";").find((x) => x.startsWith("[0:a:0]")) ?? "", /pan=/);
-    assert.match(f, /\[3:v:0\]loop=loop=-1:size=32767,trim=duration=1,setpts=PTS-STARTPTS,fps=30/);
+    assert.match(f, /\[3:v:0\]scale=378:378:[^,]*,format=yuva420p,loop=loop=-1:size=32767,trim=duration=1,setpts=PTS-STARTPTS,fps=30/);
     assert.match(f, /\[4:v:0\]transpose=1,fps=30/);
     assert.ok(c.inputArgs.join(" ").includes("-noautorotate -loop 1 -framerate 30 -t 2 -i /in/F"));
     // square pixels first, when the source needs it
@@ -214,4 +214,20 @@ test("the compiler is pure: the same input gives the same argv, and nothing is m
     assert.equal(JSON.stringify(t), before);
     assert.equal(JSON.stringify(s), sb);
     assert.ok(compile(t, new Map(Object.entries(s)), { output: "a" }).ok, "a Map of sources works too");
+});
+
+test("a GIF is scaled to its placed size before it is looped (loop holds every frame), and is not scaled twice", () => {
+    const G = "GGGGGGGGGGGGGGGG";
+    const t = edit([mc({ out: 10 })], [oc({ item: G, at: 1, out: 2, frame: { x: 0.1, y: 0.1, w: 0.2 } })]);
+    const f = build(t, { [G]: V(G, 1920, 1080, { kind: "gif", contentType: "image/gif", duration: null, hasAudio: false, channels: null }) }).filter;
+    const chain = f.split(";").find((x) => x.endsWith("[ov0]"));
+    assert.ok(chain.indexOf("scale=") < chain.indexOf("loop="), chain);
+    assert.equal(chain.match(/scale=/g).length, 1);
+    assert.match(chain, /scale=216:122:/);
+});
+
+test("PQ is tone-mapped with mobius, HLG is rendered for a 100 nit display and clipped", () => {
+    const P = "PPPPPPPPPPPPPPPP";
+    const f = build(edit([mc({ item: P, out: 2 })]), { [P]: V(P, 1920, 1080, { hdr: true, transfer: "smpte2084" }) }).filter;
+    assert.match(f, /zscale=tin=smpte2084.*tonemap=mobius:param=0\.3:desat=0,zscale=t=bt709/);
 });

@@ -3354,3 +3354,7 @@ Found by lane 2 while rendering real clips; the app preview (CobaltKit) mirrors 
 8. **Container `start` (31.9):** probe and `checkSources` failures answer `400 {status:"error", error:{code}, path, items?}` (the Worker
    maps them to 31.12's codes); a refused start stays `error` until DELETE and the DO never retries it. `GET /file` or `/poster`
    before done: `409 error.edit.not_ready`. Tests live in `editor/helper/test/` (the fixture paths 31.2/31.4/31.6 pin).
+9. **HDR tone-map (31.5 step 2, after review):** HLG (the iPhone default, Dolby Vision 8.4 included):
+   `zscale=…t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=clip,zscale=t=bt709:m=bt709:r=tv` (the BT.2100 reference
+   rendering for a 100-nit display, keeping scene brightness; `hable` halved it). PQ: the same with `tonemap=mobius:param=0.3:desat=0`.
+   GIF overlays are scaled to their placed size before `loop`; `.mov` files may start with a `wide`/`mdat`/`moov`/`free`/`skip`/`pnot` atom.

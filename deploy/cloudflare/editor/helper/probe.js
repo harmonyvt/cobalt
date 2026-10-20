@@ -14,6 +14,11 @@ export function sniffKind(head) {
     if (n >= 6 && (ascii(0, 6) === "GIF87a" || ascii(0, 6) === "GIF89a")) return "gif";
     if (n >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return "jpeg";
     if (n >= 8 && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((v, i) => head[i] === v)) return "png";
+    // QuickTime files from older apps have no ftyp: they open with wide / mdat / moov / free / skip / pnot
+    if (n >= 8 && ascii(4, 8) !== "ftyp" && /^(wide|mdat|moov|free|skip|pnot)$/.test(ascii(4, 8))) {
+        const size = Buffer.from(head.buffer, head.byteOffset, head.length).readUInt32BE(0);
+        if (size === 0 || size === 1 || size >= 8) return "mp4";
+    }
     if (n >= 12 && ascii(4, 8) === "ftyp") {
         const brand = ascii(8, 12);
         // stills (heic, avif) and audio-only (M4A) brands are not video
