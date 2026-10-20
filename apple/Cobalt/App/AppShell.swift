@@ -85,6 +85,7 @@ struct AppShell: View {
     var body: some View {
         navigation
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            .modifier(EditorPresenter(model: model))
             .cobaltRoot(model: model)
             .environment(\.shell, actions)
             .environment(\.photoImport, photoImport)
