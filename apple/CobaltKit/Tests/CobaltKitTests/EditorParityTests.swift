@@ -12,7 +12,8 @@ private func fixture(_ name: String) throws -> Data {
 
 struct EditParityTests {
     private struct TimingCase: Decodable {
-        struct Clip: Decodable { var id: String; var start: Int; var frames: Int; var speed: Double; var samples: Int }
+        // 31.3: overlay entries carry no speed (an overlay plays at 1×).
+        struct Clip: Decodable { var id: String; var start: Int; var frames: Int; var speed: Double?; var samples: Int }
         struct Expect: Decodable { var fps: Int; var frames: Int; var seconds: Double; var main: [Clip]; var overlay: [Clip] }
         var name: String
         var timeline: EditTimeline
@@ -28,7 +29,7 @@ struct EditParityTests {
             #expect(abs(t.seconds - c.expect.seconds) < 1e-9, "\(c.name)")
             for (mine, theirs) in Array(zip(t.main, c.expect.main)) + Array(zip(t.overlay, c.expect.overlay)) {
                 #expect(mine.id == theirs.id && mine.start == theirs.start && mine.frames == theirs.frames, "\(c.name)")
-                #expect(mine.samples == theirs.samples && abs(mine.speed - theirs.speed) < 1e-9, "\(c.name)")
+                #expect(mine.samples == theirs.samples && abs(mine.speed - (theirs.speed ?? 1)) < 1e-9, "\(c.name)")
             }
             #expect(t.main.count == c.expect.main.count && t.overlay.count == c.expect.overlay.count, "\(c.name)")
         }
@@ -39,8 +40,11 @@ struct EditParityTests {
     private struct Pt: Decodable { var x: Int; var y: Int }
     private struct MainCase: Decodable {
         struct Expect: Decodable { var crop: Rect; var place: Pt; var scaled: Px }
+        // The fixture's crop is the pixel math's input (`x, y, w, h`); its aspect is `cropName` ("none" = no crop).
+        struct Crop: Decodable { var x: Double; var y: Double; var w: Double; var h: Double }
         var display: Px
-        var crop: EditCrop?
+        var crop: Crop?
+        var cropName: String
         var fit: EditFit
         var canvas: Px
         var expect: Expect
@@ -58,7 +62,10 @@ struct EditParityTests {
         #expect(g.main.count > 100 && g.overlay.count > 50)
         for c in g.main {
             let canvas = EditCanvas(w: c.canvas.w, h: c.canvas.h, fps: 30)
-            let r = try #require(EditGeometry.main(display: PixelSize(w: c.display.w, h: c.display.h), crop: c.crop, fit: c.fit, canvas: canvas))
+            let crop = try c.crop.map { k in
+                EditCrop(aspect: try #require(EditCrop.Aspect(rawValue: c.cropName)), x: k.x, y: k.y, w: k.w, h: k.h)
+            }
+            let r = try #require(EditGeometry.main(display: PixelSize(w: c.display.w, h: c.display.h), crop: crop, fit: c.fit, canvas: canvas))
             #expect(r.crop == PixelRect(x: c.expect.crop.x, y: c.expect.crop.y, w: c.expect.crop.w, h: c.expect.crop.h))
             #expect(r.place == PixelPoint(x: c.expect.place.x, y: c.expect.place.y))
             #expect(r.scaled == PixelSize(w: c.expect.scaled.w, h: c.expect.scaled.h))

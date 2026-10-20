@@ -689,12 +689,12 @@ public final class EditSession {
         saveTask?.cancel()
         saveTask = nil
         if dirty {
-            await withTaskGroup(of: Void.self) { group in
-                group.addTask { @MainActor [weak self] in await self?.flush() }
-                group.addTask { @MainActor [weak self] in _ = await self?.nap(timeout) }
-                await group.next()
-                group.cancelAll()
-            }
+            // The flush races the timeout; whichever ends first cancels the other (a task group here trips the compiler's
+            // region-based isolation checker).
+            let flushing = Task { @MainActor in await self.flush() }
+            let timer = Task { @MainActor in if await self.nap(timeout) { flushing.cancel() } }
+            await flushing.value
+            timer.cancel()
         }
         return !dirty && saveState == .saved
     }
@@ -849,7 +849,7 @@ public final class EditSession {
             isPlayerReady = true
             let k = min(playhead, max(0, built.timing.frames - 1))
             playhead = k
-            player.seek(to: CMTime(value: Int64(k), timescale: Int32(built.timing.fps)), toleranceBefore: .zero, toleranceAfter: .zero)
+            player.seek(to: CMTime(value: Int64(k), timescale: Int32(built.timing.fps)), toleranceBefore: .zero, toleranceAfter: .zero) { _ in }
             if wasPlaying { player.play() }
         } catch {
             guard generation == rebuildGeneration else { return }

@@ -39,7 +39,7 @@ public struct EditPlayable: @unchecked Sendable {
     }
 
     /// A player item with the picture and the sound set, and the pitch kept at any speed.
-    public func playerItem() -> AVPlayerItem {
+    @MainActor public func playerItem() -> AVPlayerItem {
         let item = AVPlayerItem(asset: composition)
         item.videoComposition = videoComposition
         item.audioMix = audioMix

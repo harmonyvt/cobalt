@@ -85,11 +85,15 @@ actor PreviewEditorMedia {
         let task = Task<URL?, Never> {
             do {
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                let part = dir.appendingPathComponent("\(key).part.\(spec.fileExtension)")
-                try? FileManager.default.removeItem(at: part)
+                // a part file of its own: two instances on one directory (parallel tests) must not remove each other's
+                let part = dir.appendingPathComponent("\(key).\(UUID().uuidString).part.\(spec.fileExtension)")
+                defer { try? FileManager.default.removeItem(at: part) }
                 try await Self.write(spec, to: part)
-                try? FileManager.default.removeItem(at: dest)
-                try FileManager.default.moveItem(at: part, to: dest)
+                do {
+                    try FileManager.default.moveItem(at: part, to: dest)
+                } catch where FileManager.default.fileExists(atPath: dest.path) {
+                    // another writer finished first; its file is the same
+                }
                 return dest
             } catch {
                 return nil
@@ -178,11 +182,32 @@ actor PreviewEditorMedia {
 
         let frames = max(1, Int((spec.seconds * Double(fps)).rounded()))
         let perFrame = sampleRate / fps
-        for i in 0..<frames {
-            while !video.isReadyForMoreMediaData || !(audio?.isReadyForMoreMediaData ?? true) {
+        // Each input is fed whenever it is ready and finished as soon as its data runs out: the writer holds one input back until
+        // the other catches up (interleaving), so waiting for both to be ready at once never ends.
+        var videoFrame = 0, audioFrame = 0
+        while videoFrame < frames || (audio != nil && audioFrame < frames) {
+            var progressed = false
+            if videoFrame < frames, video.isReadyForMoreMediaData {
+                try appendVideo(videoFrame)
+                videoFrame += 1
+                if videoFrame == frames { video.markAsFinished() }
+                progressed = true
+            }
+            if let audio, audioFrame < frames, audio.isReadyForMoreMediaData {
+                try appendAudio(audio, audioFrame)
+                audioFrame += 1
+                if audioFrame == frames { audio.markAsFinished() }
+                progressed = true
+            }
+            if !progressed {
                 if writer.status == .failed { throw writer.error ?? WriteError.writer }
                 try await Task.sleep(nanoseconds: 2_000_000)
             }
+        }
+        await writer.finishWriting()
+        if writer.status != .completed { throw writer.error ?? WriteError.writer }
+
+        func appendVideo(_ i: Int) throws {
             guard let pool = adaptor.pixelBufferPool else { throw WriteError.buffer }
             var buffer: CVPixelBuffer?
             guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess, let buffer else { throw WriteError.buffer }
@@ -196,20 +221,17 @@ actor PreviewEditorMedia {
             guard adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(i), timescale: Int32(fps))) else {
                 throw writer.error ?? WriteError.writer
             }
-            if let audio {
-                var samples = [Int16](repeating: 0, count: perFrame)
-                for s in 0..<perFrame {
-                    let n = Double(i * perFrame + s)
-                    samples[s] = Int16(sin(2 * .pi * 1_000 * n / Double(sampleRate)) * 8_000)
-                }
-                guard let sample = pcmBuffer(samples, start: Int64(i * perFrame)) else { throw WriteError.buffer }
-                guard audio.append(sample) else { throw writer.error ?? WriteError.writer }
-            }
         }
-        video.markAsFinished()
-        audio?.markAsFinished()
-        await writer.finishWriting()
-        if writer.status != .completed { throw writer.error ?? WriteError.writer }
+
+        func appendAudio(_ audio: AVAssetWriterInput, _ i: Int) throws {
+            var samples = [Int16](repeating: 0, count: perFrame)
+            for s in 0..<perFrame {
+                let n = Double(i * perFrame + s)
+                samples[s] = Int16(sin(2 * .pi * 1_000 * n / Double(sampleRate)) * 8_000)
+            }
+            guard let sample = pcmBuffer(samples, start: Int64(i * perFrame)) else { throw WriteError.buffer }
+            guard audio.append(sample) else { throw writer.error ?? WriteError.writer }
+        }
     }
 
     /// Mono 16-bit PCM at 44.1 kHz as a sample buffer starting at `start` samples.

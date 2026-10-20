@@ -156,7 +156,8 @@ struct EditTimingTests {
 
     @Test func halfFramesRoundUp() {
         #expect(EditMath.roundHalfUp(2.5) == 3)
-        #expect(EditMath.roundHalfUp(2.4999999999) == 2)
+        #expect(EditMath.roundHalfUp(2.4999) == 2)
+        #expect(EditMath.roundHalfUp(2.4999999999) == 3)   // within the contract's 1e-9 epsilon (31.3)
         #expect(EditMath.evenNearest(5) == 6)       // 2 * roundHalfUp(2.5)
         #expect(EditMath.evenNearest(3) == 4)
         #expect(EditMath.evenFloor(7) == 6)

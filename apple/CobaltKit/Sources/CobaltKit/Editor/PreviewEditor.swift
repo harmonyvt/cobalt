@@ -255,9 +255,13 @@ final class PreviewEditorState: Sendable {
         }
     }
 
-    /// The public file of a finished render, as a private library post.
+    /// The file of a render that finished during this run, as a private library post (3.8: "then a new private library item
+    /// appears"). The seeded "cat compilation" render is not one: the preview library stays the page the library tests know.
     func libraryPosts(now: Date, timeScale: Double, scenario: PreviewScenario) -> [LibraryPost] {
-        renders(now: now, timeScale: timeScale, scenario: scenario).compactMap { r in
+        let fresh = state.withLock { s in
+            s.renderOrder.compactMap { id in s.running[id].map { Self.view($0, now: now, timeScale: timeScale, scenario: scenario) } }
+        }
+        return fresh.compactMap { r in
             guard r.status == .done, let item = r.itemID else { return nil }
             let name = "\(r.title).mp4"
             let file = LibraryFile(

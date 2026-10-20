@@ -45,8 +45,10 @@ public final class EditorStore {
             ?? (context.isPreview
                 ? FileManager.default.temporaryDirectory.appendingPathComponent("capystore-editor-preview", isDirectory: true)
                 : EditSourceCache.defaultDirectory)
-        let provider: (@Sendable @MainActor (String) async -> URL?)? =
-            context.isPreview ? { id in await PreviewEditorMedia.shared.url(forFile: id) } : nil
+        var provider: (@Sendable @MainActor (String) async -> URL?)? = nil
+        if context.isPreview {
+            provider = { @Sendable @MainActor id in await PreviewEditorMedia.shared.url(forFile: id) }
+        }
         self.cache = EditSourceCache(
             directory: dir, client: { context.client }, provider: provider)
     }
