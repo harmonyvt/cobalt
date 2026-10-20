@@ -13,6 +13,7 @@ extension Copy {
         static let editLine = "edit the picked videos together"
         static let editNoVideo = "pick at least one video to edit"
         static let creating = "making the edit…"
+        static let previewFailed = "the preview can't play here. render still works."
         static let couldntCreate = "couldn't start the edit. try again."
         static func leftOut(_ n: Int) -> String {
             n == 1 ? "1 photo or gif left out · add it on the overlay" : "\(n) photos and gifs left out · add them on the overlay"

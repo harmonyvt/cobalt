@@ -92,6 +92,13 @@ struct EditorCanvasView<Overlay: View>: View {
                 EditorPlayerView(player: session.player)
                     .opacity(session.isPlayerReady ? 1 : 0)
                 stateLine
+                if session.previewFailed {
+                    Text(Copy.Editor.previewFailed)
+                        .font(CobaltType.captionSmall)
+                        .foregroundStyle(CobaltColor.caption)
+                        .multilineTextAlignment(.center)
+                        .padding(16)
+                }
                 overlay(fit)
             }
             .frame(width: fit.width, height: fit.height)

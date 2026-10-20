@@ -45,7 +45,10 @@ public final class EditSession {
     public private(set) var activeRender: EditRender?
     /// The composition the player plays; nil until every main clip's file is on the device.
     public private(set) var playable: EditPlayable?
+    /// True once an item reports `.readyToPlay` (kept while a rebuilt item loads); false before the first one and after a failure.
     public private(set) var isPlayerReady = false
+    /// True when the current item's status is `.failed` (the preview cannot play; render still works). Reset on every rebuild.
+    public private(set) var previewFailed = false
     public private(set) var canUndo = false
     public private(set) var canRedo = false
 
@@ -82,6 +85,7 @@ public final class EditSession {
     @ObservationIgnored private var loads: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var statusObservation: NSKeyValueObservation?
     @ObservationIgnored private var renderPoll: Task<Void, Never>?
     @ObservationIgnored private(set) var builds = 0
 
@@ -177,6 +181,25 @@ public final class EditSession {
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.reachedEnd() }
+        }
+    }
+
+    /// Follows the item's status: ready only at `.readyToPlay`, `previewFailed` at `.failed`. `token` drops stale callbacks.
+    private func observeStatus(of item: AVPlayerItem) {
+        statusObservation?.invalidate()
+        let token = builds
+        statusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+            let status = item.status
+            Task { @MainActor [weak self] in self?.itemStatus(status, token: token) }
+        }
+    }
+
+    private func itemStatus(_ status: AVPlayerItem.Status, token: Int) {
+        guard token == builds, !isClosed else { return }
+        switch status {
+        case .readyToPlay: isPlayerReady = true; previewFailed = false
+        case .failed: isPlayerReady = false; previewFailed = true
+        default: break   // still loading: keep the last item's state
         }
     }
 
@@ -858,7 +881,10 @@ public final class EditSession {
         guard generation == rebuildGeneration, !isClosed else { return }
 
         guard snapshot.main.allSatisfy({ assets[$0.item] != nil }), !snapshot.main.isEmpty else {
+            statusObservation?.invalidate()
+            statusObservation = nil
             isPlayerReady = false
+            previewFailed = false
             playable = nil
             player.replaceCurrentItem(with: nil)
             return
@@ -872,16 +898,21 @@ public final class EditSession {
             let wasPlaying = isPlaying
             let item = built.playerItem()
             observeEnd(of: item)
+            // keep the last item's readiness while the new one loads (no flicker on every edit); its status decides
+            previewFailed = false
+            observeStatus(of: item)
             player.replaceCurrentItem(with: item)
             playable = built
-            isPlayerReady = true
             let k = min(playhead, max(0, built.timing.frames - 1))
             playhead = k
             player.seek(to: CMTime(value: Int64(k), timescale: Int32(built.timing.fps)), toleranceBefore: .zero, toleranceAfter: .zero) { _ in }
             if wasPlaying { player.play() }
         } catch {
             guard generation == rebuildGeneration else { return }
+            statusObservation?.invalidate()
+            statusObservation = nil
             isPlayerReady = false
+            previewFailed = false
             playable = nil
             player.replaceCurrentItem(with: nil)
         }
@@ -929,6 +960,7 @@ public final class EditSession {
     /// Stops everything the session runs: timers, downloads, the player. The store calls it when the editor closes.
     func tearDown() {
         isClosed = true
+        statusObservation?.invalidate(); statusObservation = nil
         saveTask?.cancel(); saveTask = nil
         retryTask?.cancel(); retryTask = nil
         rebuildTask?.cancel(); rebuildTask = nil
