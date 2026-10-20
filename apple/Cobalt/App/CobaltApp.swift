@@ -125,6 +125,10 @@ struct CobaltApp: App {
         DebugHooks.log("CobaltApp scene .task")
         #endif
         LinkInbox.shared.install { [model] url in handleAppLink(url, model: model) }
+        #if os(macOS)
+        // the studio wallpaper, when it was on (once, however often the window opens again)
+        StageWallpaper.shared.restoreAtLaunch(model)
+        #endif
         #if DEBUG
         LaunchConfig.runDebugLiveIfRequested()
         await LaunchConfig.runPreviewScriptIfRequested(model)
@@ -183,7 +187,29 @@ struct CobaltApp: App {
                     Button(Copy.trimNewWebp, systemImage: Symbol.trim) { trimSelected(model) }
                         .keyboardShortcut("t", modifiers: .command)
                 }
+                // the studio canvas behind the desktop icons; off works without opening the tab
+                CommandGroup(after: .toolbar) {
+                    StageWallpaperCommand(model: model)
+                }
             }
     }
     #endif
 }
+
+#if os(macOS)
+/// View ▸ "studio wallpaper": a checkmark item. On reads the stage first when the tab has not; it can be turned on only
+/// while the server has the studio, and off always.
+private struct StageWallpaperCommand: View {
+    let model: AppModel
+
+    var body: some View {
+        let wallpaper = StageWallpaper.shared
+        Toggle(Copy.Stage.wallpaperMenu, isOn: Binding(
+            get: { wallpaper.isOn },
+            set: { on in
+                if on { wallpaper.turnOn(model) } else { wallpaper.hide() }
+            }))
+            .disabled(!wallpaper.isOn && !model.capabilities.stage)
+    }
+}
+#endif

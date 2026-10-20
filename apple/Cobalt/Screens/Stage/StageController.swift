@@ -40,7 +40,8 @@ final class StageController {
     var confirmingDisconnect = false
     /// The reward editor's sheet.
     var editingReward: StageRewardKind?
-    /// What is in flight (a second tap does nothing): "air", "action", "pool", "sound", "rotate", "store", "reward-<name>".
+    /// What is in flight (a second tap does nothing): "air", "action", "pool", "sound", "soundAll", "playThrough", "auto",
+    /// "rotate", "store", "twitch", "reward-<name>".
     private(set) var busy: Set<String> = []
     /// The Twitch sign-in is open.
     private(set) var connecting = false
@@ -140,6 +141,16 @@ final class StageController {
 
     func setSpotlightAuto(_ on: Bool, shell: ShellActions) {
         run("auto", shell: shell) { try await self.store.apply(StagePatch(spotlightAuto: on)) }
+    }
+
+    /// "play videos through": a video stays until it has played once.
+    func setPlayThrough(_ on: Bool, shell: ShellActions) {
+        run("playThrough", shell: shell) { try await self.store.setPlayThrough(on) }
+    }
+
+    /// "unmute all videos" (on also turns the stream's sound on).
+    func setSoundAll(_ on: Bool, shell: ShellActions) {
+        run("soundAll", shell: shell) { try await self.store.setSoundAll(on) }
     }
 
     // MARK: links

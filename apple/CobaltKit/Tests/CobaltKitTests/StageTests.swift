@@ -145,6 +145,24 @@ struct StageModelTests {
         #expect(s.density == 100 && s.tileSeconds == 3 && s.tileScale == 1.6)
     }
 
+    @Test func theTwoVideoSwitchesDecodeAndDefaultOff() throws {
+        let off = try decode(StageSettings.self, wireStage)
+        #expect(!off.soundAll && !off.playThrough, "absent means off")
+        let json = wireStage.replacingOccurrences(of: "\"video_max\":12,", with: "\"video_max\":12,\"sound_all\":true,\"play_through\":true,")
+        let on = try decode(StageSettings.self, json)
+        #expect(on.soundAll && on.playThrough && on.sound)
+        let explicit = wireStage.replacingOccurrences(of: "\"video_max\":12,", with: "\"video_max\":12,\"sound_all\":false,\"play_through\":false,")
+        let stillOff = try decode(StageSettings.self, explicit)
+        #expect(!stillOff.soundAll && !stillOff.playThrough)
+    }
+
+    @Test func aLongTileLifeIsKeptAndAnOverlongOneIsClamped() throws {
+        let long = try decode(StageSettings.self, wireStage.replacingOccurrences(of: "\"tile_seconds\":10", with: "\"tile_seconds\":90"))
+        #expect(long.tileSeconds == 90)
+        let over = try decode(StageSettings.self, wireStage.replacingOccurrences(of: "\"tile_seconds\":10", with: "\"tile_seconds\":500"))
+        #expect(over.tileSeconds == 120)
+    }
+
     @Test func aMissingStoreFlagMeansLocked() throws {
         let json = wireStage.replacingOccurrences(of: "\"store_open\":false,", with: "")
         #expect(try !decode(StageSettings.self, json).storeOpen)
@@ -164,6 +182,18 @@ struct StageModelTests {
         var again = s
         again.liveURL = s.previewURL
         #expect(again.previewURL == s.previewURL)
+    }
+
+    @Test func theAmbientLinkAddsAmbientOnceAndKeepsThePath() throws {
+        let s = try decode(StageSettings.self, wireStage)
+        let ambient = s.ambientURL
+        #expect(ambient.path() == "/live/Zk7Q2abcdefghijklmnopqrstuvwxk7Q2" && ambient.host() == "studio.capybaraharmony.com")
+        #expect(ambient.absoluteString.hasSuffix("?ambient=1"))
+        var again = s
+        again.liveURL = s.previewURL
+        #expect(again.ambientURL == ambient, "a preview flag is replaced, not kept beside it")
+        again.liveURL = ambient
+        #expect(again.ambientURL == ambient && again.previewURL == s.previewURL)
     }
 
     @Test func itemsDecodeForTheCanvasAndForTheStore() throws {
@@ -241,15 +271,16 @@ struct StagePatchTests {
     private func live() throws -> StageSettings { try decode(StageSettings.self, wireStage) }
 
     @Test func theRangesAreTheContracts() {
-        #expect(StageRule.densityRange == 5...100 && StageRule.tileSecondsRange == 3...30)
+        #expect(StageRule.densityRange == 5...100 && StageRule.tileSecondsRange == 3...120)
         #expect(StageRule.tileScaleRange == 0.5...1.6 && StageRule.spotlightSecondsRange == 10...120)
         #expect(StageRule.videoMaxRange == 0...24 && StageRule.costRange == 1...1_000_000 && StageRule.cooldownRange == 0...604_800)
         #expect(StageRule.debounce == 0.3 && StageRule.pollInterval == 4)
     }
 
     @Test func clampingHoldsEveryNumberInItsRange() {
-        let p = StagePatch(density: 4, tileSeconds: 99, tileScale: 0.1, spotlightSeconds: 1, videoMax: 99).clamped()
-        #expect(p.density == 5 && p.tileSeconds == 30 && p.tileScale == 0.5 && p.spotlightSeconds == 10 && p.videoMax == 24)
+        let p = StagePatch(density: 4, tileSeconds: 999, tileScale: 0.1, spotlightSeconds: 1, videoMax: 99).clamped()
+        #expect(p.density == 5 && p.tileSeconds == 120 && p.tileScale == 0.5 && p.spotlightSeconds == 10 && p.videoMax == 24)
+        #expect(StagePatch(tileSeconds: 99).clamped().tileSeconds == 99, "a tile life past the old 30 s cap is kept")
         let q = StagePatch(density: 500, tileSeconds: -3, tileScale: 9, spotlightSeconds: 500, videoMax: -1).clamped()
         #expect(q.density == 100 && q.tileSeconds == 3 && q.tileScale == 1.6 && q.spotlightSeconds == 120 && q.videoMax == 0)
         #expect(StageRule.clamp(.nan, to: StageRule.tileScaleRange) == 0.5)
@@ -268,6 +299,23 @@ struct StagePatchTests {
         let pool = try #require(body["pool"] as? [String: Any])
         #expect(pool["kind"] as? String == "group" && pool["ref"] as? String == "g1" && pool.count == 2)
         #expect(body.count == 11)
+    }
+
+    @Test func theTwoVideoSwitchesAreSentInTheWiresWords() {
+        let body = StagePatch(soundAll: true, playThrough: false).body()
+        #expect(body["sound_all"] as? Bool == true && body["play_through"] as? Bool == false && body.count == 2)
+        #expect(StagePatch(playThrough: true).body()["sound_all"] == nil)
+        let merged = StagePatch(soundAll: true).merging(StagePatch(playThrough: true))
+        #expect(merged.soundAll == true && merged.playThrough == true)
+    }
+
+    @Test func theTwoVideoSwitchesShowAndPutBack() throws {
+        let before = try live()
+        let patch = StagePatch(soundAll: true, playThrough: true)
+        let after = before.applying(patch)
+        #expect(after.soundAll && after.playThrough)
+        #expect(after.applying(patch.values(in: before)) == before)
+        #expect(patch.values(in: before).soundAll == false && patch.values(in: before).density == nil)
     }
 
     @Test func theLibraryPoolHasNoRef() throws {
@@ -648,6 +696,33 @@ struct StageStoreTests {
         }
         #expect(app.stage.stage?.sound == true, "the optimistic value was put back")
         #expect(client.stageState.patches.count == 1)
+    }
+
+    @Test func unmuteAllAlsoTurnsTheSoundOnInOnePatch() async throws {
+        let app = app()
+        await app.stage.load()
+        try await app.stage.setSound(false)
+        try await app.stage.setSoundAll(true)
+        #expect(app.stage.stage?.soundAll == true && app.stage.stage?.sound == true)
+        let last = try #require(try server(app).patches.last)
+        #expect(last.soundAll == true && last.sound == true && last.playThrough == nil)
+        try await app.stage.setSoundAll(false)
+        let off = try #require(try server(app).patches.last)
+        #expect(off.soundAll == false && off.sound == nil, "turning it off leaves the master switch alone")
+        #expect(app.stage.stage?.soundAll == false && app.stage.stage?.sound == true)
+    }
+
+    @Test func playThroughIsASwitch() async throws {
+        let app = app()
+        await app.stage.load()
+        #expect(app.stage.stage?.playThrough == false)
+        try await app.stage.setPlayThrough(true)
+        #expect(app.stage.stage?.playThrough == true)
+        #expect(try server(app).stage.playThrough)
+        let last = try #require(try server(app).patches.last)
+        #expect(last == StagePatch(playThrough: true))
+        try await app.stage.setPlayThrough(false)
+        #expect(app.stage.stage?.playThrough == false)
     }
 
     // MARK: sliders

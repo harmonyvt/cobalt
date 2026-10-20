@@ -159,11 +159,18 @@ public final class StageStore {
 
     public func setSound(_ on: Bool) async throws { try await apply(StagePatch(sound: on)) }
 
+    /// "unmute all videos": every playing video tile has sound, not only the spotlight. `sound` stays the master switch, so
+    /// turning this on also turns `sound` on (one patch).
+    public func setSoundAll(_ on: Bool) async throws { try await apply(StagePatch(sound: on ? true : nil, soundAll: on)) }
+
+    /// "play videos through": a playing video stays until it has played once, even past its tile life.
+    public func setPlayThrough(_ on: Bool) async throws { try await apply(StagePatch(playThrough: on)) }
+
     // MARK: sliders (debounced)
 
     /// "how crazy", 5...100.
     public func setDensity(_ value: Int) { edit(StagePatch(density: value)) }
-    /// "tile life", 3...30 seconds.
+    /// "tile life", 3...120 seconds.
     public func setTileSeconds(_ value: Int) { edit(StagePatch(tileSeconds: value)) }
     public func setTileScale(_ value: Double) { edit(StagePatch(tileScale: value)) }
     public func setSpotlightSeconds(_ value: Int) { edit(StagePatch(spotlightSeconds: value)) }

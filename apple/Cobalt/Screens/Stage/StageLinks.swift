@@ -4,6 +4,7 @@ import SwiftUI
 // The links (APP-API-CONTRACT 30.4, 30.11): the OBS browser source link, masked to its last 4 characters (copy puts the whole
 // link on the pasteboard; rotate makes a new one and the old one stops working at once, after a confirm), and the store for
 // viewers with its lock. The store is locked unless the owner opens it: a locked store and its sign-in are gone for everyone.
+// On the Mac, last, the wallpaper switch: the canvas behind the desktop icons (`StageWallpaper`, `?ambient=1`).
 
 struct StageLinksCard: View {
     let stage: StageSettings
@@ -16,8 +17,27 @@ struct StageLinksCard: View {
             obs
             Divider().overlay(CobaltColor.hairline)
             store
+            #if os(macOS)
+            Divider().overlay(CobaltColor.hairline)
+            wallpaper
+            #endif
         }
     }
+
+    #if os(macOS)
+    // MARK: the wallpaper
+
+    private var wallpaper: some View {
+        let shared = StageWallpaper.shared
+        return StageSwitchRow(
+            title: Copy.Stage.wallpaper, note: Copy.Stage.wallpaperNote,
+            isOn: Binding(
+                get: { shared.isOn },
+                set: { on in
+                    if on { shared.show(stage.ambientURL) } else { shared.hide() }
+                }))
+    }
+    #endif
 
     // MARK: obs
 

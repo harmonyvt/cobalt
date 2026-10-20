@@ -57,6 +57,10 @@ struct StageScreen: View {
             .onDisappear { store.stopPolling() }
             .onChange(of: scenePhase) { _, _ in syncPolling() }
             .onChange(of: model.selectedTab) { _, _ in syncPolling() }
+            #if os(macOS)
+            // a rotated link (or another server's stage) carries over to the wallpaper
+            .onChange(of: store.stage?.liveURL) { _, _ in StageWallpaper.shared.update(url: store.stage?.ambientURL) }
+            #endif
             .stagePresentations(controller)
     }
 

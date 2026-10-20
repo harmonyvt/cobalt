@@ -2522,7 +2522,7 @@ the store has a lock that turns the whole store off, sign-in included.
   `on_air` (0/1, default 0), `pool_kind` (`'library'|'collection'|'group'|'search'`, default `'library'`),
   `pool_ref` (collection or group id, or the search words; NULL for library), `pool_ids` (JSON array of
   `media_items` ids: the resolved pool, see 30.3), `pool_at` (ms), `density` (5..100, default 30), `tile_seconds`
-  (3..30, default 10), `tile_scale` (0.5..1.6, default 1.0), `spotlight_auto` (0/1, default 1),
+  (3..120, default 10; was 3..30, see 30.12), `tile_scale` (0.5..1.6, default 1.0), `spotlight_auto` (0/1, default 1),
   `spotlight_seconds` (10..120, default 20), `sound` (0/1, default 1), `video_max` (0..24, default 12),
   `store_open` (0/1, default 0: the store starts locked), `store_hint` (0/1, default 1), `live_token` (32 random
   base62 chars, made on first read), `oauth_state`, `oauth_state_at`, `updated_at`.
@@ -2790,3 +2790,28 @@ then empty). `<reward>` = `{ "action", "title", "cost", "cooldown_seconds", "ena
 - Deploy: apply 0019, add the three Twitch secrets to the secrets file, deploy the API Worker (new domain and DO).
   Twitch app (owner, once, dev.twitch.tv): OAuth redirect URLs `https://studio.capybaraharmony.com/twitch/callback`
   and `https://studio.capybaraharmony.com/store`, category "Broadcaster Suite", client type confidential.
+
+### 30.12 Unmute all, play through, wallpaper and less black (addendum, built 2026-10-19; owner: "unmute all videos on the studio", "a toggle to keep the video until played just once through ... its a bit too fast", "this as a screensaver or wallpaper on macos (no sound)", "as little black space as possible")
+
+- D1 migration `0020_stage_sound_all.sql` (owner applies it before the API deploy): `stage_settings.sound_all` and
+  `stage_settings.play_through`, both 0/1, default 0. Both are booleans in `<stage>`, `<canvas settings>` and
+  `PATCH /stage` (non-booleans: 400 `error.stage.bad_request`). `tile_seconds` now clamps to 3..120.
+- `sound_all`: every playing video tile has sound, not only the spotlight. `sound` stays the master switch
+  (`sound: false` mutes everything); preview and ambient are always silent. A browser that refuses sound without a
+  click (OBS does not) gets the tile muted rather than stopped. The app's "unmute all videos" sends `sound: true` with it.
+- `play_through`: a playing video tile is not replaced until it has played to its end once (then it goes at once if it
+  is past its tile life), at most 3 minutes, and one that never starts lets go after 15 s. Videos stop looping while it
+  is on.
+- Pacing: a tile is never replaced before it has been up `tile_seconds` (before, the first beats after a fill or a
+  shuffle replaced tiles a fraction of a second old).
+- Less black: the canvas is 1080 logical px tall and as wide as the window's shape (1920 in OBS at 16:9; 1728 on a
+  16:10 screen), so it is never letterboxed. A new tile keeps the old one up until its file is ready (no black flash;
+  the old one fades out), and lands where the canvas is emptiest: the best of 16 spots, half random and half centred on
+  an uncovered cell of a 32×18 coverage grid, with the spotlight counted as covering. Measured on a fake pool at
+  1920×1080: black 21% → 5% at density 30, 39% → 4.5% at density 10.
+- Ambient mode, `live_url?ambient=1`: the wallpaper and screensaver page. Silent, always on (it ignores `on_air`), no
+  toast, store hint, chaos pill or spotlight caption.
+- App: "play videos through" and "unmute all videos" switches under "tile life" (which goes to 120 s). Mac only: "wallpaper
+  on this mac" (studio links card, and View > studio wallpaper): one borderless window per display at the desktop window
+  level (under the icons, on every space, ignores the mouse) loading the ambient page; blanked while the displays sleep
+  or the session is locked; remembered across launches; follows a rotated link.

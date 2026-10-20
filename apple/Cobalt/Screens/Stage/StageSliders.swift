@@ -1,9 +1,10 @@
 import CobaltKit
 import SwiftUI
 
-// "how crazy" (5...100 tiles on screen) and "tile life" (3...30 s each), then a "more" fold with the tile size, the spotlight's
-// time, how many videos may play at once and the auto spotlight. A slider shows its value at once; the store sends the latest
-// values 300 ms after the last move (last write wins), so a drag is one request.
+// "how crazy" (5...100 tiles on screen) and "tile life" (3...120 s each), the "play videos through" and "unmute all videos"
+// switches, then a "more" fold with the tile size, the spotlight's time, how many videos may play at once and the auto
+// spotlight. A slider shows its value at once; the store sends the latest values 300 ms after the last move (last write wins),
+// so a drag is one request. A switch is sent at once and put back if the server refuses it.
 
 struct StageSliders: View {
     let store: StageStore
@@ -17,6 +18,8 @@ struct StageSliders: View {
             StageCard {
                 crazy(stage)
                 life(stage)
+                playThrough(stage)
+                soundAll(stage)
                 more(stage)
             }
         }
@@ -42,6 +45,30 @@ struct StageSliders: View {
                 get: { Double(store.stage?.tileSeconds ?? stage.tileSeconds) },
                 set: { store.setTileSeconds(Int($0.rounded())) }),
             range: Self.span(StageRule.tileSecondsRange), step: 1)
+    }
+
+    // MARK: the two video switches
+
+    private func playThrough(_ stage: StageSettings) -> some View {
+        StageSwitchRow(
+            title: Copy.Stage.playThrough, note: Copy.Stage.playThroughNote,
+            isOn: Binding(
+                get: { store.stage?.playThrough ?? stage.playThrough },
+                set: { controller.setPlayThrough($0, shell: shell) }),
+            busy: controller.isBusy("playThrough"))
+    }
+
+    /// On only while the master `sound` is on too (`sound: false` mutes every tile).
+    private func soundAll(_ stage: StageSettings) -> some View {
+        StageSwitchRow(
+            title: Copy.Stage.soundAll, note: Copy.Stage.soundAllNote,
+            isOn: Binding(
+                get: {
+                    let now = store.stage ?? stage
+                    return now.soundAll && now.sound
+                },
+                set: { controller.setSoundAll($0, shell: shell) }),
+            busy: controller.isBusy("soundAll") || controller.isBusy("sound"))
     }
 
     private static func span(_ range: ClosedRange<Int>) -> ClosedRange<Double> {
@@ -98,21 +125,36 @@ struct StageSliders: View {
     }
 
     private func auto(_ stage: StageSettings) -> some View {
-        Toggle(isOn: Binding(
-            get: { store.stage?.spotlightAuto ?? stage.spotlightAuto },
-            set: { controller.setSpotlightAuto($0, shell: shell) })
-        ) {
+        StageSwitchRow(
+            title: Copy.Stage.spotlightAuto, note: Copy.Stage.spotlightAutoNote,
+            isOn: Binding(
+                get: { store.stage?.spotlightAuto ?? stage.spotlightAuto },
+                set: { controller.setSpotlightAuto($0, shell: shell) }),
+            busy: controller.isBusy("auto"))
+    }
+}
+
+/// A switch with its title and a small caption note under it (the auto spotlight, the two video switches, the wallpaper).
+struct StageSwitchRow: View {
+    let title: String
+    let note: String
+    @Binding var isOn: Bool
+    var busy = false
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(Copy.Stage.spotlightAuto).font(CobaltType.bodySemibold)
-                Text(Copy.Stage.spotlightAutoNote)
+                Text(title).font(CobaltType.bodySemibold)
+                Text(note)
                     .font(CobaltType.badge)
                     .foregroundStyle(CobaltColor.caption)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .toggleStyle(.switch)
         .tint(CobaltColor.success)
         .frame(minHeight: Metrics.hit)
-        .disabled(controller.isBusy("auto"))
+        .disabled(busy)
     }
 }
 
