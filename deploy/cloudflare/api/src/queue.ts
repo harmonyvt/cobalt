@@ -8,6 +8,7 @@
 
 import { searchQueue, type SearchQueue } from "./embed";
 import { posterBacklog } from "./poster";
+import { queueEdits } from "./edits";
 import type { StudioReply } from "./studio";
 
 // A line answer slower than this is left out (null).
@@ -25,7 +26,7 @@ export type QueueDeps = {
 
 export async function queueSnapshot(d: QueueDeps): Promise<StudioReply> {
     const now = d.now();
-    const [line, search, posters] = await Promise.all([
+    const [line, search, posters, edits] = await Promise.all([
         withTimeout(d.line(), QUEUE_LINE_MS).catch(() => null),
         searchQueue({ db: d.db, mediaBaseUrl: d.mediaBaseUrl, now, enabled: d.searchEnabled }).catch((e): SearchQueue | null => {
             console.error("[queue] search failed", String(e));
@@ -35,8 +36,14 @@ export async function queueSnapshot(d: QueueDeps): Promise<StudioReply> {
             (pending) => ({ pending }),
             () => null,
         ),
+        // the editor's renders (section 31.13): one D1 query, the render container is never woken; null while the read
+        // fails or migration 0021 is not applied
+        queueEdits(d.db, now).catch((e): null => {
+            console.error("[queue] edits failed", e instanceof Error ? e.message : String(e));
+            return null;
+        }),
     ]);
-    return { status: 200, body: { status: "success", now, line, search, posters } };
+    return { status: 200, body: { status: "success", now, line, search, posters, edits } };
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {

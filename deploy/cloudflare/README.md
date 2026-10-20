@@ -1043,6 +1043,35 @@ A 1080p stream canvas that OBS loads as a Browser Source, a public viewer store,
 - The daily cron deletes redemptions older than 30 days.
 - Logs: `[stage]` lines in Workers Logs (`cf observability telemetry query ... "datasets":["cloudflare-workers"]`).
 
+## Editor (`APP-API-CONTRACT.md` section 31, `apple/CONTRACT-EDITOR.md`)
+
+Timeline projects saved in D1 (`edit_projects`, migration 0021) and rendered to an H.264 + AAC MP4 on a **separate render
+container** (`editor/`: Dockerfile, `helper/` with the shared validator `timeline.js`; image `cobalt-api-editrenderer`,
+instance `standard-4`, `maxInstances: 2`). The existing cobalt container is not touched. Code: `api/src/edits.ts` (the keyed
+`/edits*` routes, the cron's recovery, the `GET /queue` part; D1 only), `api/src/edit-render-core.ts` (the step machine, no
+Cloudflare imports) and `api/src/edit-renderer.ts` (the `EditRenderer` Container class; two instances by name, `r0` and `r1`).
+
+- **Flow.** `POST /edits/<id>/render` validates the project against the library rows, inserts a `queued` row in
+  `edit_renders` and kicks both instances (`POST https://edit.internal/kick`, 2 s cap each, 202 at once). The queue IS D1: an
+  idle instance claims the oldest queued row with one atomic `UPDATE ... RETURNING`, streams the sources from R2 into the
+  container (`cobalt-originals` or `cobalt-media`), starts the render, polls it every 5 s, copies the MP4 into
+  `cobalt-originals/edits/<render id>.mp4` and a poster into `cobalt-media`, files a private `media_items` row (source `studio`,
+  `made_spec.kind` `edit`) with the project's name as its title, sends one Hark message if asked, deletes the container's copy
+  and claims the next. Everything is poll-driven (Containers `schedule`, de-duplicated under `tick:at`); nothing relies on work
+  after a response.
+- **Failure.** A container that lost the render (404 for its id, a start that takes over 60 s) restarts it once from the first
+  input, then `error.edit.lost`. A claimed row nobody wrote to for 10 minutes is re-queued by the 15-minute cron (at most one
+  re-claim), then `lost`. Deadline `clamp(180 s + 4 x length, 300 s, 2700 s)` then `error.edit.timeout`. A cancel
+  (`DELETE /edits/renders/<id>`) ends a queued render at once and stops a running one within one tick (5 s).
+- **Switch.** `features.editor` is true exactly while the `EDIT_RENDERER` binding is there and migration 0021 is applied
+  (probed once per isolate); without the binding every `/edits*` route is 404 `error.edit.off`, without the tables 503.
+- **Deploy (owner).** 1. `cd deploy/cloudflare/web && cf d1 migrations apply 42f18bb0-837a-47f7-b1e2-606eb705ab6c --dir
+  ../d1/migrations` (0021). 2. `deploy/cobalt-deploy api` (builds and pushes the render image too; no new secret). **Unverified
+  until deployed**: the `standard-4` instance name and disk, the real encode speed, R2 to container streaming of a 200 MB
+  source inside a tick, and two instances rendering at once.
+- **Tests.** `npm test` in `deploy/cloudflare/api`: `edits*.test.ts` (routes, gate, the step machine against a fake
+  container) and `migration-0021.test.ts`; the render image's own tests are in `editor/`.
+
 ## Library search (`APP-API-CONTRACT.md` section 21)
 
 Search runs EmbeddingGemma 2 on a private Hugging Face Space (`capybaraharmony/cobalt-embed`, CPU basic, needs HF PRO); the API Worker drains the index queue every 15

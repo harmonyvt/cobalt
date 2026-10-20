@@ -3334,3 +3334,23 @@ Render outcomes (`render.error`): `error.edit.render_failed`, `error.edit.timeou
   the cobalt image is rebuilt unchanged). No new secret. **Unverified until deployed**: the `standard-4` instance name and its
   disk, the real encode speed (a 60 s 1080p30 edit is expected around 30-60 s on 4 vCPU at `veryfast`), R2 → container streaming
   throughput for a 200 MB source inside a tick, and two instances rendering at once.
+
+### 31.15 Amendments from the build (2026-10-20; these win over 31.2-31.9 where they differ)
+
+Found by lane 2 while rendering real clips; the app preview (CobaltKit) mirrors every one.
+
+1. **Speed rounding (31.2):** round to the nearest multiple of 0.05 first, then range-check 0.25..4 (0.24 is accepted as 0.25, 4.02 as 4).
+2. **Trim start (31.5 step 3):** `trim=end=<out>,setpts=(PTS-<in>/TB)/<s>,fps=F:round=up:start_time=0` instead of
+   `trim=start=<in>…`: the source frame showing at time `in` is the first output frame even when `in` falls between source frames
+   (sample-and-hold of 31.4). Same for overlay video. Each input is opened with `-ss max(0, in-3)` and `-t` so a short trim of a long
+   file does not decode it all; filter times are relative to that seek.
+3. **Colour (31.5 step 7):** `scale=…:flags=bicubic:out_color_matrix=bt709:out_range=tv,format=yuv420p,setsar=1` before `pad`/`crop`,
+   so RGB sources (PNG, GIF) are converted with BT.709. The first `zscale` of the HDR chain also gets explicit
+   `tin=<transfer>:pin=bt2020:min=bt2020nc:rin=tv`.
+4. **Mono (31.5 step 8):** a 1-channel source is copied to both sides at full level (`pan=stereo|c0=c0|c1=c0`), not upmixed at -3 dB.
+5. **Clip length:** `tpad` holds the last frame for the clip's own length plus 1 s, so every clip is exactly `frames_i` frames.
+6. **Overlay audio:** trimmed to the overlay's sample count (`atrim=end_sample=…`) before `adelay`, so it ends with its picture.
+7. **Photos:** `-noautorotate` plus explicit EXIF transpose/flip (all 8 orientations), identical on any ffmpeg version.
+8. **Container `start` (31.9):** probe and `checkSources` failures answer `400 {status:"error", error:{code}, path, items?}` (the Worker
+   maps them to 31.12's codes); a refused start stays `error` until DELETE and the DO never retries it. `GET /file` or `/poster`
+   before done: `409 error.edit.not_ready`. Tests live in `editor/helper/test/` (the fixture paths 31.2/31.4/31.6 pin).

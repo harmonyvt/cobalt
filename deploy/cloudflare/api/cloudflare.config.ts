@@ -26,6 +26,19 @@ const cobaltContainer = defineContainer({
 	maxInstances: 1,
 });
 
+// The editor's render container (APP-API-CONTRACT.md section 31.8): a SEPARATE class from the cobalt container above (which is
+// untouched), for ffmpeg renders of timeline projects. Image: ../editor (build context is that directory alone: no monorepo
+// copy, no prepare-git-info.sh). Two instances at most ("r0" and "r1", named by src/edits.ts), one render each; they sleep
+// when idle (EditRenderer.sleepAfter).
+const editContainer = defineContainer({
+	name: "cobalt-api-editrenderer",
+	image: { dockerfile: "../editor/Dockerfile", buildContext: "../editor" },
+	// 4 vCPU, 12 GiB, 20 GB disk (the inputs of one render are capped at 6 GiB, EDIT_MAX_INPUT_BYTES)
+	instanceType: "standard-4",
+	observability: { enabled: true, logs: { enabled: true } },
+	maxInstances: 2,
+});
+
 export default defineConfig({
 	worker: {
 		name: "cobalt-api",
@@ -154,6 +167,14 @@ export default defineConfig({
 				worker: "cobalt-api",
 				exportName: "StageRoom",
 			}),
+			// The editor's render containers (src/edit-renderer.ts, APP-API-CONTRACT.md section 31): two named instances,
+			// "r0" and "r1". Without this binding every /edits route is a 404 and `features.editor` is false. Needs
+			// migration 0021 (../d1/migrations/0021_edits.sql). No new secret: the container takes the internal key
+			// (COBALT_API_KEY) through envVars, and HARK_WEBHOOK_URL stays in the Worker.
+			EDIT_RENDERER: bindings.durableObject({
+				worker: "cobalt-api",
+				exportName: "EditRenderer",
+			}),
 		},
 		exports: {
 			CobaltContainer: exports.durableObject({
@@ -162,7 +183,11 @@ export default defineConfig({
 			}),
 			ModelRelay: exports.durableObject({ storage: "sqlite" }),
 			StageRoom: exports.durableObject({ storage: "sqlite" }),
+			EditRenderer: exports.durableObject({
+				storage: "sqlite",
+				container: editContainer,
+			}),
 		},
 	},
-	containers: [cobaltContainer],
+	containers: [cobaltContainer, editContainer],
 });

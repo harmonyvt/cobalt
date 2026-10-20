@@ -21,6 +21,7 @@
 // Read at bundle time from upstream's package.json (reading is fine, editing is
 // not); the fork's Worker bundles this one field.
 import { SHARE_SET_MAX } from "./share-sets";
+import { EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_MAX_SECONDS } from "../../editor/helper/timeline.js";
 import { version as apiVersion } from "../../../../api/package.json";
 
 import { LINE_MAX, LINE_WAIT_MS, parseQueryFlag } from "./line";
@@ -181,6 +182,8 @@ export async function capabilities(
     // STAGE_BASE_URL is an https URL: /stage and the stage host (section 30); the Twitch part needs all three secrets
     stage = false,
     stageTwitch = false,
+    // the EDIT_RENDERER binding is there and migration 0021 is applied: /edits* (section 31.13)
+    editor = false,
 ): Promise<StudioReply> {
     const state = await resolveKeyState(d.db, auth, key, d.now());
     const version: unknown = apiVersion;
@@ -255,6 +258,9 @@ export async function capabilities(
                 stage: stage === true,
                 // Twitch channel point rewards on the stage: with `stage` and all three TWITCH_* secrets
                 stage_twitch: stage === true && stageTwitch === true,
+                // /edits*: timeline projects rendered on Cloudflare (APP-API-CONTRACT.md section 31): exactly while the
+                // EditRenderer binding is there and migration 0021 is applied
+                editor: editor === true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,
@@ -268,6 +274,10 @@ export async function capabilities(
                 line_max: LINE_MAX,
                 line_wait_ms: LINE_WAIT_MS,
                 share_set_max: SHARE_SET_MAX,
+                // the editor's limits (section 31.1), from the validator the render image uses too
+                edit_max_seconds: EDIT_MAX_SECONDS,
+                edit_max_clips: EDIT_MAX_CLIPS,
+                edit_max_projects: EDIT_MAX_PROJECTS,
             },
             media_base_url: withSlash(d.mediaBaseUrl),
             // the rich link page of a public file https://media.../<name>.<ext> is <share_base_url><name>
