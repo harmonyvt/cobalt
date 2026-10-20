@@ -95,6 +95,9 @@ export default defineConfig({
 			// <SHARE_BASE_URL><name>, a page whose Open Graph tags make Discord, iMessage, X and the rest
 			// show the video or image. Must be one of `domains` above; empty turns the pages off.
 			SHARE_BASE_URL: bindings.text("https://share.capybaraharmony.com/"),
+			// Gallery links (APP-API-CONTRACT.md section 29.1): "1" swaps each video in Discord's gallery for a
+			// 4 s silent WebP that plays by itself; "0" (owner's pick, 2026-10-20) shows the real videos.
+			GALLERY_LOOPS: bindings.text("0"),
 			// Edge-cache purge for the public bucket (APP-API-CONTRACT.md section 16): turning a
 			// file private deletes its public object, then purges its URL here so the edge stops
 			// serving it. MEDIA_ZONE_ID is the capybaraharmony.com zone id (not a secret);

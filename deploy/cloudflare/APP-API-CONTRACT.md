@@ -2483,6 +2483,15 @@ Discord's media gallery shows up to 10 files, and it plays animated images (GIF,
 - **Not changed**: the app (it follows `limits.share_set_max`), the helper and the container image, the Mastodon status and oEmbed routes.
 - Deploy: apply 0018, then the API Worker. Check one link in Discord: the gallery should move without a tap.
 
+### 29.1 Moving previews off by default (2026-10-20; owner: "I don't need webp", picked "real videos back")
+
+The swap above cost too much: every video in Discord became a 4 s, silent, 480 px WebP. The API Worker var
+`GALLERY_LOOPS` now decides it: `"1"` is everything above; anything else, the default (`"0"` in
+`cloudflare.config.ts`), puts every file in the Media Gallery as itself (videos are the real file, full quality with
+sound, played with a tap), drops the `watch with sound` button, and queues no previews (neither at link creation nor
+in the daily cron). Existing previews and `media_loops` rows stay in place, unused, so turning it back on is the var
+alone.
+
 ## 30. Stage: the stream canvas, the viewer store and Twitch channel points (addendum, pinned 2026-10-19; owner: "a presentation mode where I can randomly cycle through my media content ... all over the canvas which will be 1080p", "a studio part of the software both macos and ios where I can also have twitch viewers submit points", "a toggle for the store which just locks it entirely not even able to login")
 
 Approved mockup: https://claude.ai/artifact/ANXn8CohVKhHrGWuuW1Tsd (boards: stream canvas, Mac studio, iPhone studio, store).

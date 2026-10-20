@@ -30,6 +30,9 @@ export type ShareSetDeps = {
     // Queues the moving previews of a new link's videos in the Durable Object (section 29). Never awaited
     // for long: the Worker hands it to waitUntil.
     kickLoops?: () => Promise<void>;
+    // Whether Discord's gallery shows a video's moving preview in its place (section 29.1). Absent = on
+    // (tests); the Worker passes GALLERY_LOOPS === "1", off by default since 2026-10-20.
+    loops?: boolean;
 };
 
 export const CAPTION_WAIT_MS = 6000;
@@ -224,7 +227,7 @@ export async function revokeShareSet(d: ShareSetDeps, id: string): Promise<Studi
 // `loop_url`: a video's moving preview (section 29), when it has one
 type LiveSet = { set: SetRow; files: (SetItem & { url: string; loop_url?: string | null })[]; caption?: Caption | null };
 
-async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl">, id: string): Promise<LiveSet | null> {
+async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "loops">, id: string): Promise<LiveSet | null> {
     if (!SET_ID_REGEX.test(id)) return null;
     const set = await d.db
         .prepare("SELECT id, items, title, created_at, revoked_at FROM share_sets WHERE id = ?1 AND revoked_at IS NULL")
@@ -234,10 +237,14 @@ async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl">, id: string)
     const ids = parseItems(set.items);
     const files = itemsOf(ids, await rowsById(d.db, ids), d.mediaBaseUrl).filter((i): i is SetItem & { url: string } => i.url !== null);
     if (files.length === 0) return null;
-    const loops = await loopUrls(
-        d.db,
-        files.filter((f) => kindOf(f.content_type) === "video").map((f) => f.id),
-    );
+    // with moving previews off, every video is the real file (full quality, sound, tap to play)
+    const loops =
+        d.loops === false
+            ? new Map<string, string>()
+            : await loopUrls(
+                  d.db,
+                  files.filter((f) => kindOf(f.content_type) === "video").map((f) => f.id),
+              );
     return {
         set,
         files: files.map((f) => ({ ...f, loop_url: loops.get(f.id) ?? null })),
