@@ -309,7 +309,7 @@ struct TimelineTrimHandle: View {
             }
             .frame(width: Self.hitWidth, height: height, alignment: edge == .leading ? .leading : .trailing)
             .contentShape(Rectangle())
-            .pointerStyle(.columnResize)
+            .columnResizePointer()
             .gesture(
                 DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { value in
@@ -330,5 +330,25 @@ struct TimelineTrimHandle: View {
                 @unknown default: break
                 }
             }
+    }
+}
+
+extension View {
+    /// The column-resize pointer on the Mac (`pointerStyle` does not exist on iOS).
+    @ViewBuilder func columnResizePointer() -> some View {
+        #if os(macOS)
+        pointerStyle(.columnResize)
+        #else
+        self
+        #endif
+    }
+
+    /// The row-resize pointer on the Mac.
+    @ViewBuilder func rowResizePointer() -> some View {
+        #if os(macOS)
+        pointerStyle(.rowResize)
+        #else
+        self
+        #endif
     }
 }

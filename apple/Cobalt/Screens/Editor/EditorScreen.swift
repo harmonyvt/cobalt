@@ -68,7 +68,7 @@ struct EditorScreen: View {
                 Color.clear
                     .frame(height: 9)
                     .contentShape(Rectangle())
-                    .pointerStyle(.rowResize)
+                    .rowResizePointer()
                     .gesture(
                         DragGesture(minimumDistance: 1, coordinateSpace: .global)
                             .onChanged { value in

@@ -23,7 +23,7 @@ struct EditPicksButton: View {
         if item.kind == .gallery {
             return item.items.contains { $0.itemType == .video && $0.file != nil }
         }
-        guard item.kind == .video || item.kind == .webp || item.kind == .gif else { return false }
+        guard item.kind == .video || item.kind == .webp else { return false }
         return item.video?.file != nil
     }
 
