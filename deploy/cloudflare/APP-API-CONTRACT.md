@@ -2815,3 +2815,522 @@ then empty). `<reward>` = `{ "action", "title", "cost", "cooldown_seconds", "ena
   on this mac" (studio links card, and View > studio wallpaper): one borderless window per display at the desktop window
   level (under the icons, on every space, ignores the mouse) loading the ambient page; blanked while the displays sleep
   or the session is locked; remembered across launches; follows a rotated link.
+
+## 31. Editor: timeline projects rendered on Cloudflare (addendum, pinned 2026-10-20; owner: "a new editor experience for mobile and Mac ... combine videos, crop videos, shrink the start and end time, speed up videos, overlay videos, and then Cloudflare would process those videos")
+
+The app half is `apple/CONTRACT-EDITOR.md` (layout from the approved boards: Mac A, iPhone A and its crop/speed/trim sheet).
+A **project** is a timeline (a JSON document, 31.2) saved in D1 so it opens on any device; a **render** turns one revision of it
+into an H.264 MP4 on a **new, separate container class** (31.8) and files the result as a new, private library item with a poster
+(31.10). Nothing under `api/`, `web/` or `packages/` changes, and the existing cobalt container (`CobaltContainer`, `basic`,
+`maxInstances: 1`) is not touched: no helper change, no image change, no new work in its line (section 17).
+
+Code read for this section on 2026-10-20: `src/{index,worker,gate,app-routes,queue,library,poster,loops,visibility,notify,apns,
+sweep,ceiling}.ts`, `helper/{supervisor,server,lib,crop}.js`, `cloudflare.config.ts`, migrations 0001-0020.
+
+### 31.1 v1 scope, limits, naming
+
+- **In**: a main track of library videos (combine, reorder, trim in/out, split, crop per clip, speed 0.25x to 4x with pitch kept,
+  volume and mute per clip, fit or fill on the canvas); ONE overlay track holding videos, GIFs and photos (start, length, position,
+  size, opacity, volume and mute); a canvas of 9:16, 1:1 or 16:9 at 720p or 1080p, 30 or 60 fps; MP4 out (H.264 + AAC).
+- **Out of v1** (not in the schema; a field for them is refused): text titles, transitions/crossfades, keyframes, filters, a music
+  track, more than one overlay track, 4K, rotate/flip, speed ramps, photos or GIFs on the main track, crop of an overlay.
+- **Limits** (constants in `editor/helper/timeline.js`, 31.3, imported by the Worker, never retyped): output ≤ **600 s**
+  (`EDIT_MAX_SECONDS`), main + overlay clips ≤ **50** (`EDIT_MAX_CLIPS`), at least 1 main clip, timeline JSON ≤ **64 KiB**
+  (`EDIT_MAX_JSON_BYTES`), projects ≤ **200** (`EDIT_MAX_PROJECTS`), renders queued or running ≤ **20** (`EDIT_QUEUE_MAX`), the
+  inputs of one render ≤ **6 GiB** together (`EDIT_MAX_INPUT_BYTES`; the standard-4 instance has a 20 GB disk), one output ≤
+  **4 GiB** (`EDIT_MAX_OUTPUT_BYTES`).
+- **Naming**: "edit" in routes, tables, error codes and code (`/edits`, `edit_*`, `error.edit.*`, `edits*.ts`, Swift `Edit*`);
+  the app's copy says "edit" and "editor". `studio` keeps meaning the save session and `stage` the stream canvas.
+
+### 31.2 The timeline (wire JSON, version 1)
+
+```json
+{ "version": 1,
+  "canvas": { "w": 1080, "h": 1920, "fps": 30 },
+  "main": [
+    { "id": "cA1b2C3d4", "item": "Ab3dEf6hIj9kLm2n", "in": 2, "out": 9.5, "speed": 1.5,
+      "crop": { "aspect": "9:16", "x": 0.3, "y": 0, "w": 0.3164, "h": 1 }, "fit": "fill", "volume": 1, "muted": false },
+    { "id": "cE5f6G7h8", "item": "Qr5tUv8xYz1bCd4f", "in": 0, "out": 4, "speed": 1, "fit": "fill", "volume": 0.7, "muted": false } ],
+  "overlay": [
+    { "id": "cI9j0K1l2", "item": "Gh7jKl0nOp3rSt6v", "at": 3, "in": 0, "out": 3,
+      "frame": { "x": 0.6, "y": 0.05, "w": 0.35 }, "opacity": 1, "volume": 1, "muted": true } ] }
+```
+
+Every field (all required unless marked optional; any other key anywhere, a wrong type, a missing field or `version` ≠ 1 is
+`400 error.edit.bad_request` with `path`):
+
+| field | type | unit, range, rounding | default the app writes |
+|---|---|---|---|
+| `version` | integer | exactly `1` | `1` |
+| `canvas.w`, `canvas.h` | integer | one of the six pairs: 9:16 `1080×1920`, `720×1280`; 1:1 `1080×1080`, `720×720`; 16:9 `1920×1080`, `1280×720` (else `error.edit.canvas`) | from the first video (31.2.1), 1080p |
+| `canvas.fps` | integer | `30` or `60` (else `error.edit.canvas`) | `30` |
+| `main` | array | 1..50 clips (0: `error.edit.empty`; with `overlay` over 50: `error.edit.too_many_clips`) | |
+| `overlay` | array | 0..49 clips, sorted by `at`, never overlapping in frames (31.5) | `[]` |
+| `*.id` | string | `^[A-Za-z0-9_-]{1,24}$`, unique across main and overlay (duplicate: `error.edit.bad_request`) | `c` + 8 base62 |
+| `*.item` | string | a library file id, `^[A-Za-z0-9]{16}$` (a `media_items.id`; a `public_id` is refused) | |
+| `main[].in`, `main[].out` | number | seconds of the SOURCE file, `0 ≤ in < out`, rounded to 0.001; `(out - in) / speed ≥ 0.1` (else `error.edit.range`); `out ≤ source duration + 0.05` checked at render (`error.edit.past_source_end`), a value within the 0.05 s slack is clamped to the duration | `0` and the duration |
+| `main[].speed` | number | `0.25 ≤ speed ≤ 4`, a multiple of `0.05` (rounded to the nearest one, then 2 decimals) | `1` |
+| `main[].crop` | object, optional | absent = the whole frame. `aspect` one of `"free"`, `"9:16"`, `"1:1"`, `"4:5"`, `"16:9"` (a UI memory: the server checks only that it is one of these); `x, y, w, h` fractions of the source's DISPLAY frame (rotation applied, section 10), rounded to 0.0001, `x ≥ 0, y ≥ 0, w > 0, h > 0, x + w ≤ 1.001, y + h ≤ 1.001` (section 10's `parseCrop` rule); the cropped size must be ≥ 64 px each side once converted (`error.edit.range` at render) | absent |
+| `main[].fit` | string | `"fill"` (cover the canvas, cut the excess) or `"fit"` (whole picture, black bars) | `"fill"` |
+| `main[].volume`, `overlay[].volume` | number | linear gain `0 ≤ v ≤ 1`, rounded to 0.01 | `1` |
+| `main[].muted`, `overlay[].muted` | boolean | `true` = silence, whatever `volume` says (so unmuting restores the level) | main `false`, overlay `true` |
+| `overlay[].at` | number | seconds on the OUTPUT timeline where it starts, `≥ 0`, rounded to 0.001 | the playhead |
+| `overlay[].in`, `overlay[].out` | number | video: source seconds as for main (no speed; `out - in ≥ 0.1`). GIF: `in` = 0 and `out` = how long it stays up, `0.1..600`; it loops (31.5). Photo: `in` = 0 and `out` = how long it stays up, `0.1..600` | video: `0` and min(duration, the rest of the timeline); GIF/photo: `0` and `3` |
+| `overlay[].frame` | object | `x, y` = top-left corner, `w` = width, all fractions of the CANVAS (x and w of its width, y of its height), rounded to 0.0001; `0.05 ≤ w ≤ 1`; the height follows the overlay's own display aspect: `h = w × canvas.w / canvas.h × srcH / srcW`; it must sit inside the canvas: `x ≥ 0, y ≥ 0, x + w ≤ 1.001, y + h ≤ 1.001` (`error.edit.range`; the `y + h` half is checked where the source size is known: at save when `media_items` has it, always at render) | `x 0.6, y 0.05, w 0.35`, then clamped inside |
+| `overlay[].opacity` | number | `0.1 ≤ opacity ≤ 1`, rounded to 0.01 | `1` |
+
+**Canonical JSON.** The server stores and returns the timeline canonicalised: numbers rounded as above, keys sorted by code point at
+every level, no whitespace, `crop` omitted when absent, numbers in the shortest round-trip decimal form (what both `JSON.stringify`
+and Swift's `JSONEncoder` with `.sortedKeys` write for the same `Double`: `2` not `2.0`, `0.3164`). The app's `EditTimeline` encodes
+to the same bytes (`apple/CONTRACT-EDITOR.md` 3.1); a parity test in each side's suite round-trips the fixture
+`editor/helper/test/fixtures/timeline-beach.json` (lane 2 writes it from the example above) to identical bytes.
+
+#### 31.2.1 What the app writes for a new project
+
+- Canvas shape from the first main video's display size: `h > 1.1 × w` → 9:16; `w > 1.1 × h` → 16:9; else 1:1; 1080p; 30 fps.
+- A clip added to the main track: `in 0`, `out` = its duration, `speed 1`, no crop, `fit "fill"`, `volume 1`, `muted false`.
+- Title: the first picked post's custom title, else its file name without the extension, cut to 60 code points; else `untitled edit`.
+
+### 31.3 One validator, two callers (lane 2 writes it, lane 3 imports it)
+
+`deploy/cloudflare/editor/helper/timeline.js`: plain ESM with JSDoc types, no imports (like `api/helper/crop.js`), so the API Worker
+imports it (`import { ... } from "../../editor/helper/timeline.js"`, the way `src/studio.ts` imports `../helper/crop.js`) and the
+render helper uses the same file. Pinned exports:
+
+```js
+export const EDIT_MAX_SECONDS = 600, EDIT_MAX_CLIPS = 50, EDIT_MAX_JSON_BYTES = 65536, EDIT_MAX_PROJECTS = 200,
+             EDIT_QUEUE_MAX = 20, EDIT_MAX_INPUT_BYTES = 6 * 1024 ** 3, EDIT_MAX_OUTPUT_BYTES = 4 * 1024 ** 3;
+export const EDIT_CANVASES = [[1080,1920],[720,1280],[1080,1080],[720,720],[1920,1080],[1280,720]];
+export const EDIT_SOURCE_TYPES = ["video/mp4","video/quicktime","video/x-m4v","image/gif","image/jpeg","image/png"];
+/** structure, types, ranges, rounding, ordering; no source lookups */
+export function parseTimeline(raw)          // -> {ok:true, timeline} | {ok:false, code, path}
+/** the checks that need the library rows: [{id, content_type, source, width, height, duration, bytes, deleted}] by id */
+export function checkSources(timeline, rows) // -> {ok:true} | {ok:false, code, path, items?}
+export function canonicalJSON(timeline)     // -> string (31.2)
+export function timing(timeline)            // -> 31.4
+export function mainPlacement(display, crop, fit, canvas)    // -> 31.6
+export function overlayPlacement(display, frame, canvas)     // -> 31.6
+export function roundHalfUp(x)              // Math.floor(x + 0.5 + 1e-9), for x >= 0
+export function evenNearest(x)              // 2 * roundHalfUp(x / 2)
+```
+
+`path` names the offending field in the request's own terms: `"canvas.fps"`, `"main[2].speed"`, `"overlay[0].frame.w"`,
+`"main"` (for `empty` / `too_many_clips` / `too_long`). The app's `EditValidation` (Swift) mirrors `parseTimeline` +
+`checkSources` rule for rule with the same codes and paths, so it can say the same thing before saving.
+
+### 31.4 Timing: frames are the unit (both renderers use exactly this)
+
+`F` = `canvas.fps`. All rounding is `roundHalfUp` (31.3); JS `Math.round` and Swift `.rounded()` differ only at the epsilon.
+
+- Main clip `i`: `frames_i = max(1, roundHalfUp((out_i - in_i) / speed_i × F))`; `start_i = Σ frames_j (j < i)`;
+  effective speed `s_i = (out_i - in_i) × F / frames_i` (what BOTH the ffmpeg graph and AVFoundation's `scaleTimeRange` use, so the
+  clip lasts exactly `frames_i` frames; `s_i` differs from `speed_i` by under half a frame over the clip).
+- Total: `N = Σ frames_i` frames, duration `N / F` seconds; `N / F > 600` → `error.edit.too_long` (path `main`).
+- Output frame `k` of clip `i` (`0 ≤ k < frames_i`) shows the source frame **sample-and-hold**: the latest source frame whose
+  presentation time (display order, after the edit list) is `≤ in_i + k / F × s_i`. Variable frame rate sources need nothing else:
+  the rule is in time, not in frame numbers.
+- Overlay `o`: `ostart_o = roundHalfUp(at_o × F)`, `oframes_o = max(1, roundHalfUp((out_o - in_o) × F))`; visible on output frames
+  `[ostart_o, ostart_o + oframes_o)`. `ostart_o + oframes_o > N` → `error.edit.overlay_past_end`; two overlays whose frame ranges
+  intersect, or `overlay` not sorted by `at` → `error.edit.overlay_overlap` (path of the later one). Output frame `k` shows overlay
+  source time `in_o + (k - ostart_o) / F` (video: sample-and-hold as above; GIF: that time modulo the GIF's length, 31.5; photo:
+  the still).
+- Audio is 48 kHz: clip `i` is exactly `frames_i × 48000 / F` samples (1,600 per frame at 30 fps, 800 at 60), overlay `o` starts at
+  sample `ostart_o × 48000 / F` and lasts `oframes_o × 48000 / F`. Integers by construction.
+
+`timing(timeline)` returns `{ fps, frames: N, seconds: N / F, main: [{id, start, frames, speed: s_i, samples}], overlay: [{id,
+start, frames, samples}] }`; the app's `EditTiming` returns the same numbers (a shared fixture of 12 timelines with expected numbers,
+`editor/helper/test/fixtures/timing.json`, is run by both suites).
+
+### 31.5 What each field does to the picture and the sound (the order of operations)
+
+The render helper compiles the timeline into ONE ffmpeg command; the app builds an `AVMutableComposition` + `AVVideoComposition`
+(custom compositor) + `AVAudioMix` from the same JSON (`apple/CONTRACT-EDITOR.md` 3.3). Both follow these steps in this order. The
+filter text below is the reference graph for lane 2 (the exact spelling is lane 2's; the semantics are pinned).
+
+**Each main clip `i`** (input `n` = its source):
+
+1. **Decode in display orientation**: rotation metadata applied (ffmpeg's default autorotate; AVFoundation's `preferredTransform`).
+   Display size `(sw, sh)` is the rotated size, as the poster code and section 10 already use. Pixel aspect is made square
+   (`setsar=1`; a non-square source is scaled to square pixels first, keeping its display width).
+2. **Colour**: everything becomes SDR BT.709 limited range. An HDR source (`color_transfer` `arib-std-b67` (HLG) or `smpte2084` (PQ),
+   e.g. an iPhone clip) is tone-mapped: `zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,
+   zscale=t=bt709:m=bt709:r=tv`; the app sets the video composition's colour properties to BT.709 so AVFoundation tone-maps the same
+   way for the preview (close, not bit-identical).
+3. **Trim**: `trim=start=<in>:end=<out>,setpts=PTS-STARTPTS` on the source's own timestamps.
+4. **Speed**: `setpts=PTS/<s_i>` (effective speed, 31.4).
+5. **Frame grid**: `fps=<F>:round=up` (an input frame at time `p` is first shown at output frame `ceil(p × F)`: sample-and-hold),
+   then `tpad=stop_mode=clone:stop_duration=1,trim=end_frame=<frames_i>` so the clip is exactly `frames_i` frames even when the
+   source ends a little early.
+6. **Crop** (when `crop` is set): pixels from `cropToPixels(crop, sw, sh)` of section 10 (`api/helper/crop.js`, unchanged: each value
+   to the nearest even number, the size clamped to the even frame, the position clamped inside; under 64 px a side →
+   `error.edit.range`). `crop=<cw>:<ch>:<cx>:<cy>`. Without a crop `(cw, ch) = (evenFloor(sw), evenFloor(sh))`, `(0, 0)`.
+7. **Scale and place on the canvas** `W × H` (31.6 `mainPlacement`): `fit` → scale to `(dw, dh)` inside the canvas and pad with black
+   centred; `fill` → scale to `(dw, dh)` covering the canvas and crop the centre. `scale=<dw>:<dh>:flags=bicubic,setsar=1`, then
+   `pad=W:H:<px>:<py>:black` or `crop=W:H:<qx>:<qy>`. `format=yuv420p`.
+8. **Audio** (stream `n:a:0` when the source has one and `muted` is false): `atrim=start=<in>:end=<out>,asetpts=PTS-STARTPTS`, the
+   **atempo chain** for `s_i` (pitch kept): factors in `[0.5, 2]`, built as: `r = s_i`; while `r > 2`: add `2`, `r /= 2`; while
+   `r < 0.5`: add `0.5`, `r /= 0.5`; add `r` unless `|r - 1| < 1e-6` (0.25 → `0.5,0.5`; 3 → `2,1.5`; 4 → `2,2`), then
+   `volume=<volume>`, `aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo` (mono is copied to both sides), then
+   `apad,atrim=end_sample=<samples_i>`. A clip that is muted, or whose source has **no audio track**, is
+   `anullsrc=r=48000:cl=stereo,atrim=end_sample=<samples_i>`. AVFoundation: the clip's audio track inserted with the same
+   `scaleTimeRange`, `audioTimePitchAlgorithm = .spectral` on the player item and the export, `AVMutableAudioMixInputParameters`
+   volume = `muted ? 0 : volume` over the clip's range.
+
+**Main track**: the clips' video and audio joined in order (`concat=n=<K>:v=1:a=1`), no gaps, no transitions.
+
+**Each overlay `o`** (one track, drawn over the main track, never over another overlay):
+
+1. Decode in display orientation and colour as main steps 1-2. A video: `trim`/`setpts` for `in..out` (speed is always 1). A **GIF**
+   (`image/gif`, by its bytes, like `helper/lib.js` already sniffs): its frames on their own timing, looped end to start for as long
+   as the overlay lasts (`loop=loop=-1:size=32767`, then `trim=duration=<out - in>`); transparency kept. A **photo** (`image/jpeg`,
+   `image/png`, EXIF orientation applied): one still held for the overlay's length (`-loop 1 -framerate <F> -t <len>`); PNG alpha
+   kept.
+2. `fps=<F>:round=up`, `tpad=stop_mode=clone:stop_duration=1,trim=end_frame=<oframes_o>`.
+3. Scale to `(ow, oh)` (31.6 `overlayPlacement`), `format=yuva420p`, opacity multiplies alpha
+   (`colorchannelmixer=aa=<opacity>`).
+4. Shift to its start: `setpts=PTS-STARTPTS+<ostart_o>/(<F>*TB)`; `overlay=<ox>:<oy>:eof_action=pass:format=auto` on the main track
+   (one `overlay` filter per overlay clip, chained in `at` order). Outside its frame range the main track shows untouched.
+5. Audio (video overlays only, not muted, with a track): as main step 8 without the tempo chain, then
+   `adelay=<ostart_o × 48000 / F>S:all=1`, `apad,atrim=end_sample=<N × 48000 / F>`; GIFs and photos are silent.
+
+**Mix**: main audio and every overlay's audio summed without normalisation (`amix=inputs=<1+m>:duration=first:dropout_transition=0:
+normalize=0`), clipped at full scale by the AAC encoder; AVFoundation sums the tracks the same way (no limiter on either side). An
+edit with everything silent still gets a silent AAC track.
+
+**Output** (`-map` the final video and audio):
+`-c:v libx264 -profile:v high -preset veryfast -crf 20 -maxrate <M> -bufsize <2M> -g <2F> -pix_fmt yuv420p -color_primaries bt709
+-color_trc bt709 -colorspace bt709 -color_range tv -fps_mode cfr -r <F> -c:a aac -b:a 160k -ar 48000 -ac 2 -movflags +faststart
+-progress pipe:1`, with `M` = 12M (1080p30), 16M (1080p60), 6M (720p30), 9M (720p60). The MP4 is exactly `N` frames and `N / F`
+seconds long (± one AAC frame of audio).
+
+**Parity** (lane 8 checks it on a real run): for the fixture timelines, frame `k` of the server's MP4 and frame `k` of the app's
+`AVAssetImageGenerator` on the composition (zero tolerance) match in geometry exactly (the same crop rectangle, scale and position,
+± 1 px from resampling) and in content within one frame (the rule is shared; the decoders are not). Colour and resampling filters
+may differ slightly (bicubic in ffmpeg, Core Image's Lanczos in the app); that is accepted.
+
+### 31.6 Geometry: integer pixels (both renderers use exactly this)
+
+`W × H` = the canvas; `evenFloor(x) = 2 × floor(x / 2)`.
+
+- `mainPlacement((sw, sh), crop, fit, (W, H))`:
+  1. `(cw, ch, cx, cy)` from step 6 above.
+  2. `fit`: `k = min(W / cw, H / ch)`; `fill`: `k = max(W / cw, H / ch)`.
+  3. `dw = evenNearest(cw × k)`, `dh = evenNearest(ch × k)`; for `fit` clamp `dw ≤ W`, `dh ≤ H`; for `fill` raise to `dw ≥ W`,
+     `dh ≥ H` (whichever side is exact stays exact).
+  4. `fit`: `px = (W - dw) / 2`, `py = (H - dh) / 2` (integers: every term is even). `fill`: `qx = (dw - W) / 2`,
+     `qy = (dh - H) / 2`.
+  Returns `{ crop: {x: cx, y: cy, w: cw, h: ch}, scaled: {w: dw, h: dh}, place: {x, y} }` where `place` is `(px, py)` for fit and
+  `(-qx, -qy)` for fill (the top-left of the scaled picture on the canvas).
+- `overlayPlacement((sw, sh), frame, (W, H))`: `ow = clamp(evenNearest(frame.w × W), 2, evenFloor(W))`;
+  `oh = clamp(evenNearest(ow × sh / sw), 2, evenFloor(H))`; `ox = clamp(roundHalfUp(frame.x × W), 0, W - ow)`;
+  `oy = clamp(roundHalfUp(frame.y × H), 0, H - oh)`. Returns `{x: ox, y: oy, w: ow, h: oh}`.
+- The fixture `editor/helper/test/fixtures/geometry.json` (sizes 1920×1080, 1080×1920, 1440×1080 rotated 90°, 480×270, a 1:1 GIF
+  and a 3024×4032 photo, on all six canvases, with and without each crop aspect, fit and fill) is run by both suites.
+
+### 31.7 D1: migration `0021_edits.sql` (additive: two tables; the owner applies it before the API deploy)
+
+```sql
+-- Editor (APP-API-CONTRACT.md section 31, apple/CONTRACT-EDITOR.md). Additive only: two new tables.
+-- A project is a timeline saved for every device; a render is one revision of it made into an MP4 by the render container.
+CREATE TABLE edit_projects (
+    id          TEXT PRIMARY KEY,      -- 16 base62
+    title       TEXT NOT NULL,         -- 1..80 code points, trimmed, no control characters (section 15.2 rules)
+    timeline    TEXT NOT NULL,         -- canonical JSON (31.2), <= 64 KiB
+    revision    INTEGER NOT NULL,      -- 1 at create, +1 on every change (timeline or title)
+    canvas_w    INTEGER NOT NULL,      -- copied from the timeline for the list (no JSON parse there)
+    canvas_h    INTEGER NOT NULL,
+    fps         INTEGER NOT NULL,
+    frames      INTEGER NOT NULL,      -- N (31.4)
+    clip_count  INTEGER NOT NULL,      -- main + overlay
+    cover_item  TEXT,                  -- media_items.id of main[0].item (its poster is the project's cover)
+    key_id      TEXT,                  -- api_keys.id that created it (bookkeeping; every key of the owner sees every project)
+    updated_key TEXT,                  -- api_keys.id of the last change
+    created_at  INTEGER NOT NULL,      -- ms
+    updated_at  INTEGER NOT NULL,
+    deleted_at  INTEGER                -- soft delete
+);
+CREATE INDEX idx_edit_projects_listing ON edit_projects (deleted_at, updated_at DESC);
+
+CREATE TABLE edit_renders (
+    id              TEXT PRIMARY KEY,  -- 20 base62 (like a render job id)
+    project_id      TEXT NOT NULL,
+    revision        INTEGER NOT NULL,  -- the project revision this renders
+    title           TEXT NOT NULL,     -- the project title at render time (the result's name and title)
+    timeline        TEXT NOT NULL,     -- the canonical timeline of that revision (the project may change meanwhile)
+    status          TEXT NOT NULL,     -- 'queued' | 'preparing' | 'rendering' | 'finishing' | 'done' | 'error' | 'cancelled'
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    instance        TEXT,              -- 'r0' | 'r1': the EditRenderer that claimed it
+    attempts        INTEGER NOT NULL DEFAULT 0,  -- claims (a lost container restarts it once: 31.9)
+    input_bytes     INTEGER,           -- sum of the inputs' bytes
+    sent_bytes      INTEGER,           -- inputs streamed into the container so far
+    seconds_done    REAL,              -- encoded so far (ffmpeg out_time)
+    seconds_total   REAL NOT NULL,     -- N / F
+    error_code      TEXT,
+    item_id         TEXT,              -- media_items.id of the result
+    bytes           INTEGER,
+    width           INTEGER,
+    height          INTEGER,
+    duration        REAL,
+    notify          INTEGER NOT NULL DEFAULT 0,  -- 1: one Hark message when it ends (31.11)
+    notified_at     INTEGER,
+    key_id          TEXT,              -- who asked
+    created_at      INTEGER NOT NULL,
+    started_at      INTEGER,           -- claimed
+    updated_at      INTEGER NOT NULL,  -- every progress write (the stale check, 31.9)
+    finished_at     INTEGER
+);
+CREATE INDEX idx_edit_renders_status ON edit_renders (status, created_at);
+CREATE INDEX idx_edit_renders_project ON edit_renders (project_id, created_at DESC);
+```
+
+`test/migration-0021.test.ts` applies it on top of 0020 with data in every table and asserts the file holds only `CREATE TABLE` and
+`CREATE INDEX`. Without the tables every `/edits*` route answers `503 error.api.generic` and `features.editor` stays false (the
+Worker probes `SELECT 1 FROM edit_projects LIMIT 0` once per isolate for the flag).
+
+### 31.8 The render container and the `EditRenderer` Durable Object
+
+- **Image**: new directory `deploy/cloudflare/editor/` (lane 2): `Dockerfile` (`node:24-alpine`, `apk add --no-cache ffmpeg`, which
+  must have libx264, libzimg and the gif/png/mjpeg decoders; build context is that directory alone, no monorepo copy, no
+  `prepare-git-info.sh`), `helper/server.js` (the render HTTP API, 31.9), `helper/timeline.js` (31.3), `helper/compile.js` (timeline
+  + probed inputs → ffmpeg argv), tests. One process: `node /app/helper/server.js`, listening on `[::]:9200` (dual-stack, as
+  `supervisor.js` learned), every request without `x-internal-key` = `EDIT_INTERNAL_KEY` → 403.
+- **Container** (`api/cloudflare.config.ts`, lane 3; the existing `cobaltContainer` block is untouched):
+
+```ts
+const editContainer = defineContainer({
+	name: "cobalt-api-editrenderer",
+	image: { dockerfile: "../editor/Dockerfile", buildContext: "../editor" },
+	instanceType: "standard-4",          // 4 vCPU, 12 GiB, 20 GB disk (lane 3 checks the name against the cf CLI's types on the dry run)
+	observability: { enabled: true, logs: { enabled: true } },
+	maxInstances: 2,
+});
+// env: EDIT_RENDERER: bindings.durableObject({ worker: "cobalt-api", exportName: "EditRenderer" })
+// exports: EditRenderer: exports.durableObject({ storage: "sqlite", container: editContainer })
+// containers: [cobaltContainer, editContainer]
+```
+
+- **Class** `EditRenderer extends Container<Env>` in `src/edit-renderer.ts` (imports `@cloudflare/containers`; only `index.ts`
+  imports it and re-exports it, like `ModelRelay`), with its decisions in `src/edit-render-core.ts` (no Cloudflare imports, so the
+  tests run it under plain node with a fake container and D1 on `node:sqlite`). `defaultPort = 9200`, `sleepAfter = "90s"`.
+  `envVars = { EDIT_INTERNAL_KEY: env.COBALT_API_KEY, EDIT_DEPLOY_VERSION: env.VERSION?.id ?? "unknown" }`; the env fingerprint
+  restart of `CobaltContainer` (a rollout keeps the old env) is copied, but checked only while the instance holds no render.
+- **Two instances, by name**: `getContainer(env.EDIT_RENDERER, "r0")` and `"r1"`; nothing else ever names one, so at most two
+  containers run (one render each). The queue is D1 itself: an idle instance **claims** the oldest queued render atomically:
+
+```sql
+UPDATE edit_renders SET status = 'preparing', instance = ?1, attempts = attempts + 1, started_at = ?2, updated_at = ?2
+ WHERE id = (SELECT id FROM edit_renders WHERE status = 'queued' AND cancel_requested = 0 ORDER BY created_at, id LIMIT 1)
+   AND status = 'queued'
+RETURNING *;
+```
+
+- **Poll-driven, nothing after a response**: the Worker's `POST /edits/<id>/render` inserts the row, then calls `POST /kick` on BOTH
+  instances (`https://edit.internal/kick`, 2 s cap each, errors swallowed: the cron recovers). `/kick` only arms the instance's
+  tick (the Containers library's `schedule(0, "tick")`, de-duplicated like `sweep.ts`'s `sweep:at` under key `tick:at`) and answers
+  `202` at once. All work happens in `tick()`, one bounded step per call, which re-arms itself (`schedule(2 | 5, "tick")`) while it
+  holds a render and stops when it holds none and the claim finds nothing, so the container sleeps after `sleepAfter`.
+- **The step record** (DO storage key `render`): `{ rid, step: "inputs" | "start" | "wait" | "collect" | "poster" | "record" |
+  "notify" | "cleanup", n: <next input>, inputs: [{n, item, bucket, key, bytes, kind}], startedAt, deadline, retried }`. Every step is
+  idempotent and writes its outcome before moving `step`, so a tick that dies (eviction, a deploy) is simply run again.
+
+### 31.9 DO ↔ container (port 9200, `x-internal-key`)
+
+| route | body | answer |
+|---|---|---|
+| `GET /health` | | `200 {"status":"ok","render":"<rid>"\|null,"version":"<EDIT_DEPLOY_VERSION>"}` |
+| `PUT /renders/<rid>/inputs/<n>` | the source bytes; `content-length` required | `204`; `409 error.edit.busy` (another render holds this container); `413 error.edit.too_large` (over the per-render 6 GiB); `400` bad `n` (0..49) |
+| `POST /renders/<rid>/start` | `{"timeline": <canonical>, "inputs": [{"n": 0, "item": "<id>", "kind": "video"\|"gif"\|"photo"}]}` | `202`; `409 error.edit.input_missing`; `400 {error:{code, path}}` from `parseTimeline` / the probe (below) |
+| `GET /renders/<rid>` | | `{"status":"receiving"\|"probing"\|"encoding"\|"poster"\|"done"\|"error","seconds_done":n\|null,"seconds_total":n,"speed":n\|null,"bytes":n\|null,"width":n,"height":n,"duration":n,"error":{"code"}\|null}`; `404` unknown rid |
+| `GET /renders/<rid>/file` | | `200 video/mp4` with `content-length` |
+| `GET /renders/<rid>/poster` | | `200 image/jpeg` (13.3's recipe on the output: the frame at 10 % of the duration, at most 3 s in, longer side ≤ 720 px, `-q:v 4`) |
+| `DELETE /renders/<rid>` | | `204` (kills ffmpeg if it runs, deletes `/tmp/edit/<rid>/`); idempotent |
+
+- **One render per container**: the first `PUT .../inputs/` of a rid takes the container; any call for another rid gets
+  `409 error.edit.busy` until `DELETE`. A render no DO call has touched for **10 minutes** is killed and deleted by the helper (the
+  DO touches it every 5 s while it waits).
+- **Probe at start**: for each input, `ffmpeg -hide_banner -i` (as `parseVideoInfo`): display size, duration, whether it has an audio
+  stream, colour transfer; the kind is checked by the bytes (`error.edit.unsupported_source` when a "video" has no video stream, a
+  GIF is not a GIF, a photo will not decode). Then `checkSources` again on the probed values (out past the end beyond the 0.05 s
+  slack → `error.edit.past_source_end`; crop under 64 px → `error.edit.range`), so the picture is computed from what ffmpeg will
+  decode, never from the row (section 10's rule).
+- **Progress**: ffmpeg `-progress pipe:1`, `out_time_us` → `seconds_done`; `speed` is ffmpeg's `speed=` (×realtime).
+- **Failures**: ffmpeg exit ≠ 0 → `error.edit.render_failed`; output over 4 GiB → `error.edit.too_large`; the poster failing does not
+  fail the render (the row gets no poster and the existing poster sweep, 13.3, makes one later: an `originals` video row without a
+  poster is in its backlog).
+
+**The DO's steps** (each tick; every container call raced against our own ceiling with `raceCeiling`, since `AbortSignal` timeouts on
+`containerFetch` are not honoured inside a Durable Object):
+
+1. **claim** (no `render` record): the SQL above. Nothing → stop ticking. Got one → read its inputs (`SELECT id, bucket, r2_key, bytes,
+   content_type, source, width, height, duration, deleted_at FROM media_items WHERE id IN (...)`), run `checkSources` (a deleted or
+   missing row → the render ends `error.edit.source_missing`), `startAndWaitForPorts(9200)`, write the record (`step: "inputs"`).
+2. **inputs**: one input per tick: the R2 object (`ORIGINALS` or `MEDIA` by `bucket`) streamed into `PUT .../inputs/<n>` through a
+   `FixedLengthStream` with a reader/writer copy loop (`pipeTo()` is not implemented between these streams), ceiling
+   `max(120 s, bytes / 4 MB/s)`; an R2 object gone → `error.edit.source_missing`; `sent_bytes` written to D1 after each. Next tick
+   in 0 s.
+3. **start**: `POST .../start`; `deadline = now + clamp(180 s + 4 × seconds_total, 300 s, 2700 s)`. Status `rendering`.
+4. **wait** (every 5 s): `GET /renders/<rid>` → `seconds_done` and `updated_at` to D1 (and `renewActivityTimeout()`). `done` → step
+   `collect`, status `finishing`. `error` → the render ends with its code. Past `deadline` → `DELETE`, `error.edit.timeout`.
+   `cancel_requested = 1` (read with the progress write: `UPDATE ... RETURNING cancel_requested`) → `DELETE`, status `cancelled`,
+   `error.edit.cancelled`.
+5. **collect**: `GET .../file` streamed into `cobalt-originals/edits/<rid>.mp4` (`content-type video/mp4`, custom metadata
+   `{keyId, source: "studio", project, render, createdAt}`), the same copy loop, ceiling `max(120 s, bytes / 4 MB/s)`. A put that
+   fails is retried by the next tick (2 attempts, then `error.edit.storage`).
+6. **poster**: `GET .../poster` → `cobalt-media/<10 base62>.jpg` with 13.3's headers (`image/jpeg`, `public, max-age=31536000,
+   immutable`) and custom metadata `{poster: "1", render: "<rid>", createdAt}` (the item id does not exist yet). Failure → no poster
+   (see above).
+7. **record**: the library row and title (31.10), `UPDATE edit_renders SET status 'done', item_id, bytes, width, height, duration,
+   finished_at`.
+8. **notify**: 31.11. 9. **cleanup**: `DELETE /renders/<rid>`, delete the record, claim the next (step 1) in the same tick.
+
+**Losing the container**: a `404` for the held rid at `wait`/`collect`/`poster`, or a container that will not start within 60 s,
+means the render's work is gone (a deploy, an eviction). First time (`retried` false): back to `inputs` from n = 0 (the R2 copies are
+still there). Second time: `error.edit.lost`. **Stale rows**: the 15-minute cron (31.12) re-queues a `preparing|rendering|finishing`
+row whose `updated_at` is over 10 minutes old (`attempts < 2`; else it ends `error.edit.lost`) and kicks both instances; an instance
+whose claim finds a row already marked with its own name but has no `render` record re-queues it the same way.
+
+**Ending a render** (any code): `UPDATE edit_renders SET status 'error' | 'cancelled', error_code, finished_at`, `DELETE` the container
+job (best effort), delete any `edits/<rid>.mp4` written for it and an unrecorded poster (lane 3 adds both `.delete(` calls to
+`test/poster-delete.test.ts`'s pinned list), then 31.11.
+
+### 31.10 The result: a private library item with a poster
+
+- One `media_items` row through `insertMediaItem` (`src/library.ts`): `kind 'private'`, `source 'studio'` (the word the app already
+  decodes for things the server made; a new word would make older apps drop the row, as `made` once did), `bucket 'originals'`,
+  `r2_key 'edits/<rid>.mp4'`, `name` = `<title>.mp4` (the title cleaned like an upload name: no `/`, no control characters, ≤ 120),
+  `content_type 'video/mp4'`, `bytes`, `width`, `height`, `duration` (from the helper's `done`), `link NULL`, `session_id NULL`,
+  `key_id` = the render's, `poster` = the step-6 URL or NULL, `role NULL`, `made_from` = JSON array of the distinct source item ids in
+  timeline order (main first, then overlay), `made_spec` = `{"kind":"edit","project":"<pid>","render":"<rid>","revision":<n>}`
+  (≤ 512 bytes), `post_key NULL` (so the post key is the row's own id, `POST_KEY_SQL`'s last branch: the render is a post of its
+  own), `created_at` = when it finished. `visibility` is `'private'` (the insert's rule for `bucket 'originals'`).
+- Title: `INSERT OR REPLACE INTO media_titles (post_key, title, key_id, updated_at)` with the row's id and the render's `title`
+  (section 15), so the library, search and roast captions show the project's name.
+- Everything else is the ordinary machinery: `GET /library` (v=2/v=3) lists it as a `video` post; `PATCH .../visibility` makes it
+  public (16.2) and share links, gallery links, captions and the search index pick it up like any save; `DELETE .../post` deletes it
+  and its poster (13.4). Deleting the project never deletes rendered videos.
+
+### 31.11 Notification
+
+APNs alert pushes do not exist on this server (section 8 is Live Activities only); the server's way to tell the owner is the Hark
+bridge (section 9). A render asked with `"notify": true` gets exactly one Hark message when it ends (`notified_at` is the
+exactly-once marker; the EditRenderer posts it itself with `harkConfigFrom(env)` and the copy helpers of `src/notify.ts`, 3 s cap,
+retried by the next two ticks, then given up and logged):
+
+- done: title `capystore`, body `<title> · video ready · <w>×<h> · <m:ss> · <size>` (private: no link line), url
+  `cobalt-apple://jobs` (the app opens the queue, where the finished render's row opens the video).
+- error: body `couldn't render <title> — <reason>` (`plainReason` gains `error.edit.render_failed` "the video couldn't be made",
+  `error.edit.timeout` "it took too long", `error.edit.source_missing` "a clip was deleted from the library", `error.edit.lost`
+  "the server restarted", `error.edit.too_large` "the video was too big", `error.edit.storage` "the server couldn't store it"),
+  same url.
+- cancelled: nothing. Bridge off: nothing stored or sent.
+
+### 31.12 Routes (keyed; a service credential gets 404; `cache-control: no-store`; no CORS)
+
+`Authorization: Api-Key <key>` with the usual D1 lookup. Every key of the owner sees every project and render (one key per device;
+"open on iPhone, continue on Mac"). With `features.editor` false every route answers `404 error.edit.off`.
+
+Shapes:
+
+- `<project>` = `{ "id", "title", "revision", "timeline": <canonical timeline>, "canvas": {"w","h","fps"}, "duration": N / F,
+  "clip_count", "cover_url": <poster_url of cover_item>|null, "created_at", "updated_at", "render": <render>|null }` (`render` = the
+  newest render of the project).
+- `<project summary>` = `<project>` without `timeline`.
+- `<source>` = `{ "id", "name", "kind": "video"|"gif"|"photo"|"unsupported", "content_type", "width", "height", "duration",
+  "bytes", "poster_url", "available": bool }` (`available` false for a deleted or unknown row: the app shows that clip as missing).
+- `<render>` = `{ "id", "project_id", "revision", "title", "status", "queue_ahead": n|null, "progress": 0..1|null, "seconds_done",
+  "seconds_total", "error": "<code>"|null, "item_id", "poster_url", "bytes", "width", "height", "duration", "cancel_requested":
+  bool, "created_at", "started_at", "finished_at" }`. `queue_ahead` (queued only) = queued renders created before it (0 = next).
+  `progress`: `preparing` = `0.1 × sent_bytes / input_bytes`; `rendering` = `0.1 + 0.85 × seconds_done / seconds_total`;
+  `finishing` = `0.95`; `done` = `1`; otherwise null.
+
+| route | body | answer |
+|---|---|---|
+| `GET /edits` | | `200 {status, "projects": [<project summary>]}`, live, most recently updated first, ≤ 200 |
+| `POST /edits` | `{"title"?: "...", "timeline": {...}}` (≤ 72 KiB) | `201 {status, "project": <project>}` (`revision` 1; title default `untitled edit`); `409 error.edit.too_many` (200 live projects) |
+| `GET /edits/<id>` | | `200 {status, "project": <project>, "sources": {"<item id>": <source>}}` (every item the timeline names) |
+| `PUT /edits/<id>` | `{"timeline": {...}, "base_revision": n, "title"?: "..."}` | `200 {status, "project"}` (`revision + 1`); `409 error.edit.conflict` with `"project": <project>` (the current one) when `base_revision` ≠ the stored revision; nothing changes |
+| `PATCH /edits/<id>` | `{"title": "..."}` | `200 {status, "project"}` (no revision check; `revision + 1`) |
+| `DELETE /edits/<id>` | | `200 {status}`; soft delete; its queued renders become `cancelled`; a running one finishes and files its video; repeat 404 |
+| `POST /edits/<id>/render` | `{"revision": n, "notify"?: bool}` | `202 {status, "render": <render>}`; the same revision already `queued`/`preparing`/`rendering`/`finishing` → `200` with that render (idempotent); `409 error.edit.conflict` with `project` when `revision` ≠ the current one; `429 error.edit.queue_full` (20 queued or running); the full check (`parseTimeline` + `checkSources` on the rows, total input bytes ≤ 6 GiB → else `413 error.edit.too_large`) runs first: its codes below |
+| `GET /edits/renders?limit=1..50` | | `200 {status, "renders": [<render>]}`, newest first (default 20) |
+| `GET /edits/renders/<rid>` | | `200 {status, "render"}` |
+| `DELETE /edits/renders/<rid>` | | queued → `cancelled` at once; preparing/rendering/finishing → `cancel_requested = 1` and the answer's `status` stays until the DO stops it (≤ 5 s); `200 {status, "render"}`; already cancelled: the same 200; `done`/`error` → `409 error.edit.finished` |
+
+Ids: project `^[A-Za-z0-9]{16}$`, render `^[A-Za-z0-9]{20}$`; anything else 404 at the gate. `renders` is never a project id (7
+characters).
+
+**Validation answers** (`POST`, `PUT`: `parseTimeline` only, plus the overlay height check where the rows know the size; `render`:
+all of it). Body `{"status":"error","error":{"code":"<code>"},"path":"<field>"}`, plus `"items": [...]` where listed:
+
+| code | status | when |
+|---|---|---|
+| `error.edit.bad_request` | 400 | not JSON, too large, wrong type, missing or unknown key, bad id, `version` ≠ 1, bad title, bad `base_revision`/`revision` |
+| `error.edit.canvas` | 400 | canvas not one of the six sizes, fps not 30/60 |
+| `error.edit.empty` | 400 | no main clip |
+| `error.edit.too_many_clips` | 400 | over 50 clips |
+| `error.edit.too_long` | 400 | over 600 s |
+| `error.edit.range` | 400 | a number out of its range (31.2), `in ≥ out`, a clip under 0.1 s, a crop under 64 px, an overlay off the canvas |
+| `error.edit.overlay_overlap` | 400 | overlays not sorted by `at` or overlapping in frames |
+| `error.edit.overlay_past_end` | 400 | an overlay that runs past the end of the main track |
+| `error.edit.source_missing` | 409 | an item deleted or unknown; `items` lists them |
+| `error.edit.not_video` | 409 | a main clip whose item is not a video; `items` |
+| `error.edit.unsupported_source` | 409 | an item of a type the editor does not take (webm, mkv, heic, webp, a file with no picture); `items` |
+| `error.edit.past_source_end` | 409 | `out` beyond the source's duration + 0.05 s |
+| `error.edit.too_large` | 413 | the inputs over 6 GiB |
+| `error.edit.not_found` | 404 | unknown or deleted project, unknown render |
+| `error.edit.conflict` | 409 | revision mismatch (`project` attached) |
+| `error.edit.too_many` | 409 | 200 projects |
+| `error.edit.queue_full` | 429 | 20 renders queued or running |
+| `error.edit.finished` | 409 | cancel of a render that already ended |
+| `error.edit.off` | 404 | the editor is off on this server |
+| `error.api.generic` | 503 | D1 failed, or migration 0021 missing |
+
+Render outcomes (`render.error`): `error.edit.render_failed`, `error.edit.timeout`, `error.edit.source_missing`,
+`error.edit.unsupported_source`, `error.edit.past_source_end`, `error.edit.range`, `error.edit.too_large`, `error.edit.storage`,
+`error.edit.lost`, `error.edit.cancelled`.
+
+### 31.13 Queue, capability, gate and Worker
+
+- **`GET /queue`** (section 23) gains `"edits": [<render>, ...]`: every render `queued|preparing|rendering|finishing`, then those that
+  ended in the last 30 minutes, newest first, at most 20; `null` when its read fails or the tables are missing; absent part = an
+  older server. One D1 query; the container is never woken. A render that is not done counts as work for the app's 5-second polling
+  (`QueueSnapshot.isActive`). The app shows them as described in `apple/CONTRACT-EDITOR.md` 6.
+- **`GET /capabilities`**: `features.editor` is true exactly while the Worker has the `EDIT_RENDERER` binding and migration 0021 is
+  applied; `limits.edit_max_seconds: 600`, `limits.edit_max_clips: 50`, `limits.edit_max_projects: 200` (imported from
+  `timeline.js`). Missing = false: the app shows no `edit` button and no edits shelf.
+- **Gate** (`src/gate.ts`): a `decideEdits` block next to `decideStage`: `/edits` `GET|POST`, `/edits/renders` `GET`,
+  `/edits/renders/<rid>` `GET|DELETE`, `/edits/<id>` `GET|PUT|PATCH|DELETE`, `/edits/<id>/render` `POST`, each `lookupThen(req,
+  "edits_<op>", {id | rid})` with ops `list, create, get, update, rename, delete, render, renders, render_get, render_cancel`; the
+  service credential and everything else 404.
+- **Worker** (`src/worker.ts`): `if (decision.then?.startsWith("edits_"))` → `editsKeyed(deps, op, request, params, searchParams)`
+  from `src/edits.ts` (no Cloudflare imports; deps: `db`, `mediaBaseUrl`, `now`, `kick: () => Promise<void>` that posts `/kick` to
+  r0 and r1). Bodies are read with `readCapped` (72 KiB). No `request_log` row.
+- **Cron** (`src/index.ts`): the 15-minute trigger also runs `editsRecover` (stale rows, 31.9) and kicks both instances when any
+  render is queued. D1 only unless there is work.
+
+### 31.14 Files, tests, deploy
+
+- **Lane 2 (renderer)**: new `deploy/cloudflare/editor/` only: `Dockerfile`, `.dockerignore`, `package.json` (test runner only),
+  `helper/server.js`, `helper/timeline.js`, `helper/compile.js`, `helper/probe.js`, `test/*` (the shared fixtures of 31.2, 31.4,
+  31.6; the compiler's argv for each fixture; the real ffmpeg on generated clips when `FFMPEG_PATH`/`ffmpeg` exists: frame counts,
+  sizes, durations, audio sample counts, a rotated source, a VFR source, a source without audio, an HLG source, a GIF and a PNG
+  overlay, speed 0.25 and 4).
+- **Lane 3 (worker)**: new `api/src/edits.ts`, `api/src/edit-renderer.ts`, `api/src/edit-render-core.ts`,
+  `d1/migrations/0021_edits.sql`, `api/test/edits*.test.ts`, `api/test/migration-0021.test.ts`. Edits to existing files, kept to the
+  lines named here: `api/cloudflare.config.ts` (the container, binding, export), `api/src/index.ts` (export the class, `Env` gains
+  `EDIT_RENDERER`, the cron call), `api/src/gate.ts` (`decideEdits` and the `LookupThen` names), `api/src/worker.ts` (the dispatch
+  and the capability argument), `api/src/app-routes.ts` (`features.editor`, the three limits), `api/src/queue.ts` (the `edits` part),
+  `api/src/notify.ts` (`plainReason` codes), `api/test/poster-delete.test.ts` (the two new deletes), `README.md` (a short "Editor"
+  section). The plan's "one route line in index.ts" was not enough: the gate, the Worker dispatch, the capability and the queue live
+  in those files.
+- **Tests (lane 3)**: gate decisions and methods; every route's shapes and codes; conflict; idempotent render; cancel in each state;
+  the claim under two instances racing (only one wins); the step machine against a fake container (inputs, start, wait, collect,
+  poster, record, notify, cleanup; a 404 mid-render restarts once then `lost`; deadline; cancel while waiting; a deleted source;
+  poster failure keeps the render); the library row and title exactly as 31.10; `GET /queue` `edits`; capability with and without
+  the binding and the tables; the cron recovery.
+- **Deploy (owner; not run by any lane)**: 1. migration 0021 (`cd deploy/cloudflare/web && cf d1 migrations apply
+  42f18bb0-837a-47f7-b1e2-606eb705ab6c --dir ../d1/migrations`, the global `cf`). 2. API: `deploy/cloudflare/api/prepare-git-info.sh`,
+  then `cd deploy/cloudflare/api && cf deploy --secrets-file ~/.config/cobalt/secrets.json` (builds and pushes the new render image;
+  the cobalt image is rebuilt unchanged). No new secret. **Unverified until deployed**: the `standard-4` instance name and its
+  disk, the real encode speed (a 60 s 1080p30 edit is expected around 30-60 s on 4 vCPU at `veryfast`), R2 → container streaming
+  throughput for a 200 MB source inside a tick, and two instances rendering at once.
