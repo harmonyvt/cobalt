@@ -33,21 +33,34 @@ public struct LibrarySort: Sendable, Equatable {
 public enum LibraryShow: String, Sendable, CaseIterable { case everything, publicOnly, privateOnly, uploads, offline }
 
 /// The kind chips (apple/CONTRACT-GALLERY.md 1.21): `all · videos · photos · galleries · webps`. A media is one kind
-/// (`MediaItem.kind`); `webps` is a media that holds nothing but webps. Remembered like the other view state.
+/// (`MediaItem.kind`) on the videos, photos and galleries chips. `webps` is every media with a webp the owner made (a
+/// webp of a video or a slideshow webp; its tile's face is that webp), so a video with webps is on both videos and
+/// webps. Remembered like the other view state.
 public enum LibraryKindFilter: String, Sendable, CaseIterable {
     case all, videos, photos, galleries, webps, emotes
 
-    /// An emote is only on the emotes chip. `all` and `webps` leave it out.
-    func passes(kind: MediaKind, emote: Bool) -> Bool {
+    /// An emote is only on the emotes chip. `all` and `webps` leave it out. `hasWebp`: the media holds a made webp.
+    func passes(kind: MediaKind, emote: Bool, hasWebp: Bool = false) -> Bool {
         if emote { return self == .emotes }
         switch self {
         case .all: return true
         case .videos: return kind == .video
         case .photos: return kind == .photo
         case .galleries: return kind == .gallery
-        case .webps: return kind == .webp
+        case .webps: return kind == .webp || hasWebp
         case .emotes: return false
         }
+    }
+
+    /// The chips a media is counted under besides `all`: its kind's, plus `webps` when it holds a made webp.
+    public static func chips(kind: MediaKind, hasWebp: Bool) -> [LibraryKindFilter] {
+        let own: LibraryKindFilter = switch kind {
+        case .video: .videos
+        case .photo: .photos
+        case .gallery: .galleries
+        case .webp: .webps
+        }
+        return hasWebp && own != .webps ? [own, .webps] : [own]
     }
 }
 
@@ -98,6 +111,8 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
     public let itemCount: Int
     /// A 7TV emote. It is not counted with webps.
     public let emote: Bool
+    /// The media holds a webp the owner made (a webp of a video, or a slideshow webp): it is on the webps chip.
+    public let hasWebp: Bool
 
     public init(item: MediaItem) {
         self.item = item
@@ -111,6 +126,7 @@ public struct LibraryRow: Identifiable, Sendable, Equatable {
         kind = item.kind
         itemCount = item.kind == .gallery ? item.itemCount : 0
         emote = item.post?.isEmote ?? false
+        hasWebp = item.hasMadeWebp
 
         let source = item.video ?? item.face
         let duration = source.duration ?? item.face.duration ?? item.post?.duration
@@ -224,7 +240,7 @@ extension AppModel {
         if let results = library.activeSearchResults { return searchRows(results) }
         var rows = library.posts.map { LibraryRow(item: mediaItem(for: $0)) }
         if library.show != .everything { rows = rows.filter { $0.passes(library.show) } }
-        rows = rows.filter { library.kindFilter.passes(kind: $0.kind, emote: $0.emote) }
+        rows = rows.filter { library.kindFilter.passes(kind: $0.kind, emote: $0.emote, hasWebp: $0.hasWebp) }
         let query = library.trimmedQuery
         if !query.isEmpty {
             let folded = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
@@ -240,7 +256,7 @@ extension AppModel {
         let show = library.show
         let kind = library.kindFilter
         func keeps(_ row: LibraryRow) -> Bool {
-            (show == .everything || row.passes(show)) && kind.passes(kind: row.kind, emote: row.emote)
+            (show == .everything || row.passes(show)) && kind.passes(kind: row.kind, emote: row.emote, hasWebp: row.hasWebp)
         }
         var seen = Set<String>()
         var rows: [LibraryRow] = []
