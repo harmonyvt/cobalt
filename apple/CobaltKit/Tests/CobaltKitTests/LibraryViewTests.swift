@@ -148,8 +148,11 @@ struct LibraryRowTests {
             p.kind = kind
             return p
         }
+        // a webp post holds only its webp (an original would make it a video)
+        var w = ofKind("w", .webp, 20)
+        w.files = [file("w-w0", .public, bytes: 10, w: 480, h: 480, d: 1, at: t0.addingTimeInterval(20), type: "image/webp")]
         let app = emptyApp(posts: [
-            ofKind("v-old", .video, 10), ofKind("w", .webp, 20), ofKind("g-old", .gallery, 30), ofKind("p", .photo, 40),
+            ofKind("v-old", .video, 10), w, ofKind("g-old", .gallery, 30), ofKind("p", .photo, 40),
             ofKind("v-new", .video, 50), ofKind("g-new", .gallery, 60),
         ])
         app.library.sort = LibrarySort(key: .kind, ascending: true)
