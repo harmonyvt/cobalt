@@ -106,6 +106,17 @@ export type LookupThen =
     | "stage_reward"
     | "stage_twitch_connect"
     | "stage_twitch_delete"
+    // editor (APP-API-CONTRACT.md section 31.12)
+    | "edits_list"
+    | "edits_create"
+    | "edits_get"
+    | "edits_update"
+    | "edits_rename"
+    | "edits_delete"
+    | "edits_render"
+    | "edits_renders"
+    | "edits_render_get"
+    | "edits_render_cancel"
     // chat (APP-API-CONTRACT.md section 27)
     | "chat_list"
     | "chat_create"
@@ -299,6 +310,9 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     // Stage (APP-API-CONTRACT.md section 30.10): keyed only; the library-service credential gets 404.
     if (req.pathname === "/stage" || req.pathname.startsWith("/stage/")) return decideStage(req);
 
+    // Editor (APP-API-CONTRACT.md section 31.12): keyed only; the library-service credential gets 404.
+    if (req.pathname === "/edits" || req.pathname.startsWith("/edits/")) return decideEdits(req);
+
     // Chat (APP-API-CONTRACT.md section 27): keyed only.
     if (req.pathname === "/chat/threads" || req.pathname.startsWith("/chat/threads/")) {
         if (req.service) return reject(404);
@@ -466,6 +480,38 @@ function decideStage(req: GateRequest): GateDecision {
         }
     }
     return then === null ? reject(404) : lookupThen(req, then, params);
+}
+
+// /edits (GET|POST), /edits/renders (GET), /edits/renders/<rid> (GET|DELETE), /edits/<id> (GET|PUT|PATCH|DELETE) and
+// /edits/<id>/render (POST). Ids are validated before anything is looked up; `renders` is never a project id (7 characters).
+// Anything else, and the library-service credential, is a 404.
+export const EDIT_PROJECT_ID_REGEX = /^[A-Za-z0-9]{16}$/;
+export const EDIT_RENDER_ID_REGEX = /^[A-Za-z0-9]{20}$/;
+function decideEdits(req: GateRequest): GateDecision {
+    if (req.service) return reject(404);
+    const m = req.method;
+    if (req.pathname === "/edits") {
+        if (m === "GET") return lookupThen(req, "edits_list");
+        return m === "POST" ? lookupThen(req, "edits_create") : reject(404);
+    }
+    const [first, second, ...rest] = req.pathname.slice("/edits/".length).split("/");
+    if (rest.length > 0) return reject(404);
+    if (first === "renders") {
+        if (second === undefined) return m === "GET" ? lookupThen(req, "edits_renders") : reject(404);
+        if (!EDIT_RENDER_ID_REGEX.test(second)) return reject(404);
+        if (m === "GET") return lookupThen(req, "edits_render_get", { rid: second });
+        return m === "DELETE" ? lookupThen(req, "edits_render_cancel", { rid: second }) : reject(404);
+    }
+    if (!EDIT_PROJECT_ID_REGEX.test(first ?? "")) return reject(404);
+    const id = first!;
+    if (second === undefined) {
+        if (m === "GET") return lookupThen(req, "edits_get", { id });
+        if (m === "PUT") return lookupThen(req, "edits_update", { id });
+        if (m === "PATCH") return lookupThen(req, "edits_rename", { id });
+        return m === "DELETE" ? lookupThen(req, "edits_delete", { id }) : reject(404);
+    }
+    if (second === "render") return m === "POST" ? lookupThen(req, "edits_render", { id }) : reject(404);
+    return reject(404);
 }
 
 // PUT|DELETE /live/start-token, PUT|DELETE /live/runs/<run>, POST

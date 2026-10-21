@@ -18,6 +18,7 @@ struct LibraryShelves: View {
 
     /// Whether the shelves have anything to show for this model.
     static func hasContent(_ model: AppModel) -> Bool {
+        if LibraryEditsShelf.shows(model) { return true }
         guard model.capabilities.shareSets else { return false }
         return !model.shareSets.sets.isEmpty || showsCollections(model)
     }
@@ -28,6 +29,7 @@ struct LibraryShelves: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if LibraryEditsShelf.shows(model) { LibraryEditsShelf(model: model) }
             if !store.sets.isEmpty {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(Copy.Library2.recentLinks)

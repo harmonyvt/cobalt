@@ -14,6 +14,7 @@ struct QueueScreen: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// +1 per cancel, retry, dismiss or open the owner asks for (a light tap).
     @State private var actionTicks = 0
+    @State private var confirmingCancel: QueueItem?
 
     private var unified: UnifiedQueue { model.unifiedQueue }
 
@@ -41,6 +42,20 @@ struct QueueScreen: View {
         .scrollIndicators(.automatic)
         .background(CobaltColor.bg)
         .refreshable { _ = await unified.refresh() }
+        .confirmationDialog(
+            Copy.Editor.cancelRenderTitle,
+            isPresented: Binding(get: { confirmingCancel != nil }, set: { if !$0 { confirmingCancel = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button(Copy.Editor.cancelRender, role: .destructive) {
+                if let item = confirmingCancel {
+                    actionTicks += 1
+                    Task { await model.perform(.cancel, on: item) }
+                }
+                confirmingCancel = nil
+            }
+            Button(Copy.Editor.keepRendering, role: .cancel) { confirmingCancel = nil }
+        }
         .navigationTitle(Copy.Queue.title)
         .toolbar {
             if model.capabilities.queue {
@@ -147,6 +162,10 @@ struct QueueScreen: View {
     }
 
     private func run(_ action: QueueAction, _ item: QueueItem) {
+        if action == .cancel, case .edit = item.kind {
+            confirmingCancel = item
+            return
+        }
         if action != .open { actionTicks += 1 }
         Task { await model.perform(action, on: item) }
     }
@@ -169,6 +188,7 @@ struct QueueScreen: View {
     private func label(_ action: QueueAction, _ item: QueueItem) -> String {
         switch action {
         case .cancel:
+            if case .edit = item.kind { return Copy.Editor.cancelRender }
             if case .download = item.kind { return Copy.Queue.stop }
             if let job = item.job, JobCardFacts.exit(for: job.pipeline, lineMode: model.queue.lineMode) == .stop {
                 return Copy.Queue.stopFollowing
@@ -180,6 +200,7 @@ struct QueueScreen: View {
             switch item.destination {
             case .library?: return Copy.Queue.openLibrary
             case .settings?: return Copy.Queue.openSettings
+            case .edit?: return Copy.Editor.openEdit
             default: return Copy.Queue.open
             }
         }
@@ -210,6 +231,8 @@ struct QueueRowFacts: Equatable {
     var fraction: Double?
     var showsBar = false
     var isError = false
+    /// The poster of an edit's render (small, beside the title); nil for every other row.
+    var poster: URL?
 
     @MainActor
     init(item: QueueItem, now: Date) {
@@ -273,6 +296,26 @@ struct QueueRowFacts: Equatable {
                 headline = Copy.Queue.finishedAt(Copy.Queue.webpReady, when: when)
                 detail = [Format.size(r.width, r.height), Format.seconds(r.seconds), Format.bytes(r.bytes)].joined(separator: " · ")
             }
+        case .edit(let render):
+            symbol = Symbol.Editor.render
+            title = Copy.Editor.queueTitle(render.title)
+            poster = render.posterURL
+            switch render.status {
+            case .done:
+                let size = [render.width, render.height].compactMap { $0 }
+                headline = Copy.Editor.queueDone(
+                    Copy.Editor.clock(render.duration ?? render.secondsTotal),
+                    size.count == 2 ? Format.size(size[0], size[1]) : Format.bytes(render.bytes ?? 0))
+            case .error:
+                headline = Copy.Editor.renderFailed(Copy.Editor.renderReason(render.error))
+                isError = true
+            case .cancelled:
+                headline = Copy.Editor.renderLine(render)
+            default:
+                headline = Copy.Editor.renderLine(render)
+                showsBar = true
+                fraction = render.status == .queued ? nil : render.progress
+            }
         case .job:
             break
         }
@@ -304,6 +347,12 @@ struct QueueRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
+                if let poster = f.poster {
+                    EditorPoster(url: poster, maxPixel: 96)
+                        .frame(width: 36, height: 24)
+                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .accessibilityHidden(true)
+                }
                 if actions.contains(.cancel) {
                     Button { perform(.cancel) } label: {
                         Image(systemName: Symbol.close)

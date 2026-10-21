@@ -189,6 +189,19 @@ export function plainReason(code: string): string {
             return "there are fewer than 2 items to use";
         case "error.studio.missing":
             return "a file is missing on the server";
+        // the editor's renders (APP-API-CONTRACT.md section 31.11)
+        case "error.edit.render_failed":
+            return "the video couldn't be made";
+        case "error.edit.timeout":
+            return "it took too long";
+        case "error.edit.source_missing":
+            return "a clip was deleted from the library";
+        case "error.edit.lost":
+            return "the server restarted";
+        case "error.edit.too_large":
+            return "the video was too big";
+        case "error.edit.storage":
+            return "the server couldn't store it";
         case "error.studio.unsupported_image":
             return "that kind of photo is not supported";
         default:

@@ -63,6 +63,11 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// off air, Twitch not connected yet (connecting works). `.stageFail`: `GET /stage` always fails (`503`), so the tab shows
     /// its failed state.
     case stageNotConnected, stageFail
+    /// The video editor (APP-API-CONTRACT 31; `Editor/PreviewEditor.swift`): `.happy` and `.renditions` have `features.editor` with
+    /// two projects ("beach day edit", "cat compilation"). `.editorEmpty`: no projects. `.editorRendering`: "beach day edit" is
+    /// rendering, queued to done in about 20 s. `.editorRenderFails`: a render ends `error.edit.render_failed` at 60 %.
+    /// `.editorConflict`: the first save answers `409`. `.editorFail`: `GET /edits` always fails (`503`).
+    case editorEmpty, editorRendering, editorRenderFails, editorConflict, editorFail
 }
 
 public struct ServerSummary: Sendable, Equatable {
@@ -86,6 +91,8 @@ public final class AppModel {
     public let chat: ChatStore
     /// Stage, the studio tab (APP-API-CONTRACT 30). Idle until `load()`.
     public let stage: StageStore
+    /// The video editor (APP-API-CONTRACT 31): the projects, this key's renders and the open project. Idle until `refresh()`.
+    public let editor: EditorStore
     /// The library as a sky map (APP-API-CONTRACT 21, `GET /library/map`). Idle until `load()`.
     public let skyMap: SkyMapModel
     /// The photos album (CONTRACT-SYNC.md): `PhotosSync.preview(_:)` in previews.
@@ -165,6 +172,7 @@ public final class AppModel {
         self.shareSets = ShareSetStore(context: context)
         self.chat = ChatStore(context: context)
         self.stage = StageStore(context: context)
+        self.editor = EditorStore(context: context)
         self.skyMap = SkyMapModel(context: context)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
@@ -176,6 +184,7 @@ public final class AppModel {
         self.queue = jobQueue
         self.unifiedQueue = UnifiedQueue(context: context, jobs: jobQueue, offline: offline, photos: sync)
         self.makeClient = makeClient
+        unifiedQueue.editRenders = { [weak self] in self?.editor.renders ?? [] }
         context.keyRejected = { [weak self] in self?.markKeyInvalid() }
         context.capabilitiesChanged = { [weak self] caps in self?.apply(caps) }
         // a gallery saved, or something made from one: the library re-reads the post (its items, its tabs)
@@ -315,6 +324,7 @@ public final class AppModel {
         liveManager?.capabilitiesChanged()
         unifiedQueue.capabilitiesChanged()            // `features.queue` came or went: poll, or stop
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
+        editor.capabilitiesChanged()                  // `features.editor` went: close the editor
     }
 
     func markKeyInvalid() {
@@ -347,6 +357,7 @@ public final class AppModel {
         shareSets.reset()
         chat.reset()
         stage.reset()
+        editor.reset()
         skyMap.reset()
     }
 

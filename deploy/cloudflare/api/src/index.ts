@@ -16,7 +16,10 @@ import { embedFrom, handleRequest, type WorkerEnv } from "./worker";
 import { loaderRunner } from "./chat-loader";
 import { relayFetch } from "./model-fetch";
 import { roomPort, stageRetention } from "./stage";
+import { editsRecover, kickRenderers, type RendererNamespace } from "./edits";
+import { notifyEndedRow } from "./edit-render-core";
 export { ModelRelay } from "./model-relay";
+export { EditRenderer } from "./edit-renderer";
 export { StageRoom } from "./stage-room";
 
 export interface Env extends WorkerEnv {
@@ -36,6 +39,8 @@ export interface Env extends WorkerEnv {
     MODEL_RELAY?: DurableObjectNamespace;
     // The stage's canvas room (src/stage-room.ts, APP-API-CONTRACT.md section 30): one instance, "main".
     STAGE_ROOM?: DurableObjectNamespace;
+    // The editor's render containers (src/edit-renderer.ts, APP-API-CONTRACT.md section 31): two instances, "r0" and "r1".
+    // Declared on WorkerEnv (src/worker.ts), which this interface extends: the Worker needs it for the routes and the flag.
 }
 
 // cobalt's API port and the webp helper's port (helper/supervisor.js).
@@ -373,6 +378,21 @@ export default {
         // SEARCH_RUN_BUDGET_MS (APP-API-CONTRACT.md sections 21 and 23). D1 and the Hugging Face Space
         // only; the container is not touched. Awaited, not waitUntil: the run is the handler's work.
         if (controller.cron === SEARCH_CRON) {
+            // Editor (section 31.9): re-queue renders whose renderer went away, and kick both instances when anything is
+            // queued. D1 only unless there is work; an owner without migration 0021 just logs.
+            if (env.EDIT_RENDERER) {
+                try {
+                    const r = await editsRecover({
+                        db: env.DB,
+                        now: () => Date.now(),
+                        kick: kickRenderers(env.EDIT_RENDERER as unknown as RendererNamespace),
+                        onLost: (rid) => notifyEndedRow({ db: env.DB, hark: harkConfigFrom(env), now: () => Date.now() }, rid),
+                    });
+                    if (r.requeued || r.lost || r.cancelled || r.queued) console.log("[edits] recover", JSON.stringify(r));
+                } catch (e) {
+                    console.error("[edits] recover failed", e instanceof Error ? e.name : "error");
+                }
+            }
             // Roast captions (section 25): new public files and gallery links, and the backfill. Anthropic
             // and D1 only; up to ROAST_RUN_BUDGET_MS, then the search indexer below.
             const captioner = captionerFrom(env, env.MODEL_RELAY ? relayFetch(env.MODEL_RELAY as any) : undefined);

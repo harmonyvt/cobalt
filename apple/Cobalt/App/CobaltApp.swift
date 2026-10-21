@@ -115,6 +115,7 @@ struct CobaltApp: App {
                 .cobaltRoot(model: model)
                 .frame(width: 560, height: 740)
         }
+        EditorWindow(model: model)
         #endif
     }
 

@@ -19,6 +19,7 @@ struct LibrarySelectPill: View {
 
     @State private var naming = false
     @State private var newName = ""
+    @State private var editNote: String?
 
     private var store: ShareSetStore { model.shareSets }
     private var makesLinks: Bool { model.capabilities.shareSets }
@@ -88,6 +89,12 @@ struct LibrarySelectPill: View {
                     .contentTransition(.opacity)
                     .padding(.horizontal, 4)
             }
+            if let editNote, !picks.isEmpty {
+                Text(editNote)
+                    .font(CobaltType.captionSmall)
+                    .foregroundStyle(CobaltColor.caption)
+                    .padding(.horizontal, 4)
+            }
             HStack(spacing: 8) {
                 if makesLinks {
                     Button(action: makeLink) {
@@ -102,6 +109,7 @@ struct LibrarySelectPill: View {
                     .accessibilityHint(Copy.Links.makeA11yHint)
                 }
                 if files { collectionMenu(picks: picks, enabled: ready) }
+                if model.editor.isAvailable { EditPicksButton(model: model, picks: picks, note: $editNote) }
                 Button(Copy.Library2.share, systemImage: Symbol.Library.share, action: share)
                     .buttonStyle(.cobaltSecondary(fullWidth: makesLinks ? false : true, compact: true))
                     .labelStyle(adaptive: makesLinks)

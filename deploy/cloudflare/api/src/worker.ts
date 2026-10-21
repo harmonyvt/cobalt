@@ -46,6 +46,7 @@ import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { captionerFrom } from "./roast";
 import { createCollection, deleteCollection, listCollections, rerollCollection, updateCollection } from "./share-collections";
 import { createGroup, deleteGroup, listGroups, updateGroup } from "./collection-groups";
+import { editTablesPresent, editsKeyed, kickRenderers, type EditsOp, type RendererNamespace } from "./edits";
 import { chatModelFrom, createThread, deleteThread, getCollage, getThread, listThreads, renameThread, sendMessage } from "./chat";
 import { ingestTelemetry } from "./telemetry";
 import {
@@ -116,6 +117,9 @@ export interface WorkerEnv {
     TWITCH_CLIENT_ID?: string;
     TWITCH_CLIENT_SECRET?: string;
     TWITCH_EVENTSUB_SECRET?: string;
+    // Editor (section 31): the EditRenderer Durable Object namespace (two instances, "r0" and "r1"). Absent: no editor,
+    // every /edits route answers 404 error.edit.off and `features.editor` is false. With it, the flag also needs migration 0021.
+    EDIT_RENDERER?: DurableObjectNamespace;
 }
 
 // What the stage needs that is not in the env: the StageRoom Durable Object (index.ts passes the real one) and
@@ -334,6 +338,8 @@ async function handleInner(
             chatOn(env, edge),
             stageBaseFrom(env) !== null,
             twitchConfigFrom(env) !== null,
+            // the editor is on exactly while the renderer binding is there and migration 0021 is applied (section 31.13)
+            !!env.EDIT_RENDERER && (await editTablesPresent(env.DB, edge.now())),
         );
         return new Response(JSON.stringify(r.body), {
             status: r.status,
@@ -586,6 +592,28 @@ async function handleInner(
                         ? await updateGroup(gd, request, decision.params!.id)
                         : await deleteGroup(gd, decision.params!.id);
             const res = json(r.status, r.body, allowOrigin);
+            res.headers.set("cache-control", "no-store");
+            return res;
+        }
+        // Editor routes (section 31.12): D1 only. The render containers are only kicked (a 202 from each EditRenderer instance);
+        // a request never waits for one. No request_log row.
+        if (decision.then?.startsWith("edits_")) {
+            const reply = env.EDIT_RENDERER
+                ? await editsKeyed(
+                      {
+                          db: env.DB,
+                          mediaBaseUrl: env.MEDIA_BASE_URL,
+                          now: edge.now,
+                          keyId,
+                          kick: kickRenderers(env.EDIT_RENDERER as unknown as RendererNamespace),
+                      },
+                      decision.then.slice("edits_".length) as EditsOp,
+                      request,
+                      decision.params ?? {},
+                      url.searchParams,
+                  )
+                : { status: 404, body: { status: "error", error: { code: "error.edit.off" } } };
+            const res = json(reply.status, reply.body);
             res.headers.set("cache-control", "no-store");
             return res;
         }

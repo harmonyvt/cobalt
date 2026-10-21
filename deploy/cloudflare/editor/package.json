@@ -1,0 +1,9 @@
+{
+    "name": "cobalt-editor-renderer",
+    "private": true,
+    "type": "module",
+    "description": "Render container for the capystore editor (APP-API-CONTRACT.md section 31). No dependencies: package.json is only the test runner.",
+    "scripts": {
+        "test": "node --test helper/test/*.test.js"
+    }
+}

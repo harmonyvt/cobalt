@@ -974,6 +974,7 @@ describe("GET /capabilities", () => {
                 gallery: false,
                 gallery_make: false,
                 direct_links: false,
+                editor: false,
                 still_webp: false,
                 // no embedding Space in this world's env (section 21)
                 search: false,
@@ -999,6 +1000,9 @@ describe("GET /capabilities", () => {
                 line_max: 50,
                 line_wait_ms: 1800000,
                 share_set_max: 10,
+                edit_max_seconds: 600,
+                edit_max_clips: 50,
+                edit_max_projects: 200,
             },
             media_base_url: "https://media.capybaraharmony.com/",
             share_base_url: null,
@@ -1024,6 +1028,9 @@ describe("GET /capabilities", () => {
             line_max: LINE_MAX,
             line_wait_ms: LINE_WAIT_MS,
             share_set_max: SHARE_SET_MAX,
+            edit_max_seconds: 600,
+            edit_max_clips: 50,
+            edit_max_projects: 200,
         });
     });
     it("a valid key: key valid with its name, and the use is stamped like on any keyed call", async () => {

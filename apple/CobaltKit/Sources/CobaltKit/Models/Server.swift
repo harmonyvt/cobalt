@@ -21,6 +21,12 @@ public struct Capabilities: Sendable, Codable, Equatable {
         public var lineWait: TimeInterval = 1_800
         /// `limits.share_set_max` (APP-API-CONTRACT 24): the most files one share link holds. 4 when absent; never below 2.
         public var shareSetMax: Int = 4
+        /// `limits.edit_max_seconds` (APP-API-CONTRACT 31.1): the longest edit, in output seconds. 600 when absent.
+        public var editMaxSeconds: Double = 600
+        /// `limits.edit_max_clips`: main + overlay clips in one edit. 50 when absent.
+        public var editMaxClips: Int = 50
+        /// `limits.edit_max_projects`: saved edits (projects). 200 when absent.
+        public var editMaxProjects: Int = 200
 
         public static let fork = Limits(
             maxWebpSeconds: 10, minWebpSeconds: 0.5, webpWidths: [320, 480], renderFPS: 15,
@@ -125,6 +131,9 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// with `stage` and its three Twitch secrets, and so does the app: false whenever `stage` is false. False when
     /// absent: the studio tab then has no Twitch card.
     public var stageTwitch: Bool = false
+    /// `features.editor` (APP-API-CONTRACT 31): the timeline editor, `/edits` (projects and renders). True exactly while the
+    /// server has its render container and migration 0021. False when absent: no `edit` button and no edits shelf.
+    public var editor: Bool = false
     /// `features.still_webp` (APP-API-CONTRACT 18.14): a photo can be made into an animated webp of itself (2 frames of the
     /// same picture, so Discord offers "favourite"), a slideshow webp of one photo. The server sets it only with
     /// `gallery_make`, and so does the app. False when absent: photos have no "animated webp" button.

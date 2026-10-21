@@ -1,0 +1,668 @@
+[
+ {
+  "name": "one clip, whole",
+  "timeline": {
+   "canvas": {
+    "fps": 30,
+    "h": 1920,
+    "w": 1080
+   },
+   "main": [
+    {
+     "fit": "fill",
+     "id": "a",
+     "in": 0,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 10,
+     "speed": 1,
+     "volume": 1
+    }
+   ],
+   "overlay": [],
+   "version": 1
+  },
+  "expect": {
+   "fps": 30,
+   "frames": 300,
+   "main": [
+    {
+     "frames": 300,
+     "id": "a",
+     "samples": 480000,
+     "speed": 1,
+     "start": 0
+    }
+   ],
+   "overlay": [],
+   "seconds": 10
+  }
+ },
+ {
+  "name": "two clips, trimmed",
+  "timeline": {
+   "canvas": {
+    "fps": 30,
+    "h": 1080,
+    "w": 1080
+   },
+   "main": [
+    {
+     "fit": "fill",
+     "id": "a",
+     "in": 1.25,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 4.5,
+     "speed": 1,
+     "volume": 1
+    },
+    {
+     "fit": "fill",
+     "id": "b",
+     "in": 0,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 2.333,
+     "speed": 1,
+     "volume": 1
+    }
+   ],
+   "overlay": [],
+   "version": 1
+  },
+  "expect": {
+   "fps": 30,
+   "frames": 168,
+   "main": [
+    {
+     "frames": 98,
+     "id": "a",
+     "samples": 156800,
+     "speed": 0.9948979591836735,
+     "start": 0
+    },
+    {
+     "frames": 70,
+     "id": "b",
+     "samples": 112000,
+     "speed": 0.999857142857143,
+     "start": 98
+    }
+   ],
+   "overlay": [],
+   "seconds": 5.6
+  }
+ },
+ {
+  "name": "half a frame rounds up (0.35 s = 10.5 frames)",
+  "timeline": {
+   "canvas": {
+    "fps": 30,
+    "h": 1280,
+    "w": 720
+   },
+   "main": [
+    {
+     "fit": "fill",
+     "id": "a",
+     "in": 0,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 0.35,
+     "speed": 1,
+     "volume": 1
+    },
+    {
+     "fit": "fill",
+     "id": "b",
+     "in": 1,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 1.45,
+     "speed": 1,
+     "volume": 1
+    }
+   ],
+   "overlay": [],
+   "version": 1
+  },
+  "expect": {
+   "fps": 30,
+   "frames": 25,
+   "main": [
+    {
+     "frames": 11,
+     "id": "a",
+     "samples": 17600,
+     "speed": 0.9545454545454546,
+     "start": 0
+    },
+    {
+     "frames": 14,
+     "id": "b",
+     "samples": 22400,
+     "speed": 0.9642857142857142,
+     "start": 11
+    }
+   ],
+   "overlay": [],
+   "seconds": 0.8333333333333334
+  }
+ },
+ {
+  "name": "speed 0.25",
+  "timeline": {
+   "canvas": {
+    "fps": 30,
+    "h": 720,
+    "w": 1280
+   },
+   "main": [
+    {
+     "fit": "fill",
+     "id": "a",
+     "in": 0,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 2,
+     "speed": 0.25,
+     "volume": 1
+    }
+   ],
+   "overlay": [],
+   "version": 1
+  },
+  "expect": {
+   "fps": 30,
+   "frames": 240,
+   "main": [
+    {
+     "frames": 240,
+     "id": "a",
+     "samples": 384000,
+     "speed": 0.25,
+     "start": 0
+    }
+   ],
+   "overlay": [],
+   "seconds": 8
+  }
+ },
+ {
+  "name": "speed 4",
+  "timeline": {
+   "canvas": {
+    "fps": 30,
+    "h": 720,
+    "w": 1280
+   },
+   "main": [
+    {
+     "fit": "fill",
+     "id": "a",
+     "in": 0,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 10,
+     "speed": 4,
+     "volume": 1
+    }
+   ],
+   "overlay": [],
+   "version": 1
+  },
+  "expect": {
+   "fps": 30,
+   "frames": 75,
+   "main": [
+    {
+     "frames": 75,
+     "id": "a",
+     "samples": 120000,
+     "speed": 4,
+     "start": 0
+    }
+   ],
+   "overlay": [],
+   "seconds": 2.5
+  }
+ },
+ {
+  "name": "speed 1.35 (a multiple of 0.05) and 60 fps",
+  "timeline": {
+   "canvas": {
+    "fps": 60,
+    "h": 1080,
+    "w": 1920
+   },
+   "main": [
+    {
+     "fit": "fill",
+     "id": "a",
+     "in": 2,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 7,
+     "speed": 1.35,
+     "volume": 1
+    },
+    {
+     "fit": "fill",
+     "id": "b",
+     "in": 0.1,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 0.5,
+     "speed": 4,
+     "volume": 1
+    }
+   ],
+   "overlay": [],
+   "version": 1
+  },
+  "expect": {
+   "fps": 60,
+   "frames": 228,
+   "main": [
+    {
+     "frames": 222,
+     "id": "a",
+     "samples": 177600,
+     "speed": 1.3513513513513513,
+     "start": 0
+    },
+    {
+     "frames": 6,
+     "id": "b",
+     "samples": 4800,
+     "speed": 4,
+     "start": 222
+    }
+   ],
+   "overlay": [],
+   "seconds": 3.8
+  }
+ },
+ {
+  "name": "shortest clip: 0.1 s at speed 4 is 0.4 s of source",
+  "timeline": {
+   "canvas": {
+    "fps": 30,
+    "h": 720,
+    "w": 720
+   },
+   "main": [
+    {
+     "fit": "fill",
+     "id": "a",
+     "in": 0,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 0.4,
+     "speed": 4,
+     "volume": 1
+    }
+   ],
+   "overlay": [],
+   "version": 1
+  },
+  "expect": {
+   "fps": 30,
+   "frames": 3,
+   "main": [
+    {
+     "frames": 3,
+     "id": "a",
+     "samples": 4800,
+     "speed": 4,
+     "start": 0
+    }
+   ],
+   "overlay": [],
+   "seconds": 0.1
+  }
+ },
+ {
+  "name": "a clip that is 30.016 s (rounds to 901 frames) and a speed of 1.05",
+  "timeline": {
+   "canvas": {
+    "fps": 30,
+    "h": 1920,
+    "w": 1080
+   },
+   "main": [
+    {
+     "fit": "fill",
+     "id": "a",
+     "in": 0,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 30.016,
+     "speed": 1,
+     "volume": 1
+    },
+    {
+     "fit": "fill",
+     "id": "b",
+     "in": 5.5,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 8.5,
+     "speed": 1.05,
+     "volume": 1
+    }
+   ],
+   "overlay": [],
+   "version": 1
+  },
+  "expect": {
+   "fps": 30,
+   "frames": 986,
+   "main": [
+    {
+     "frames": 900,
+     "id": "a",
+     "samples": 1440000,
+     "speed": 1.0005333333333333,
+     "start": 0
+    },
+    {
+     "frames": 86,
+     "id": "b",
+     "samples": 137600,
+     "speed": 1.0465116279069768,
+     "start": 900
+    }
+   ],
+   "overlay": [],
+   "seconds": 32.86666666666667
+  }
+ },
+ {
+  "name": "one overlay",
+  "timeline": {
+   "canvas": {
+    "fps": 30,
+    "h": 1920,
+    "w": 1080
+   },
+   "main": [
+    {
+     "fit": "fill",
+     "id": "a",
+     "in": 0,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 10,
+     "speed": 1,
+     "volume": 1
+    }
+   ],
+   "overlay": [
+    {
+     "at": 3,
+     "frame": {
+      "w": 0.35,
+      "x": 0.6,
+      "y": 0.05
+     },
+     "id": "o",
+     "in": 0,
+     "item": "BBBBBBBBBBBBBBBB",
+     "muted": true,
+     "opacity": 1,
+     "out": 3,
+     "volume": 1
+    }
+   ],
+   "version": 1
+  },
+  "expect": {
+   "fps": 30,
+   "frames": 300,
+   "main": [
+    {
+     "frames": 300,
+     "id": "a",
+     "samples": 480000,
+     "speed": 1,
+     "start": 0
+    }
+   ],
+   "overlay": [
+    {
+     "frames": 90,
+     "id": "o",
+     "samples": 144000,
+     "start": 90
+    }
+   ],
+   "seconds": 10
+  }
+ },
+ {
+  "name": "overlay start 0.35 s = 10.5 frames rounds up; length 0.1667 s = 5 frames",
+  "timeline": {
+   "canvas": {
+    "fps": 30,
+    "h": 1920,
+    "w": 1080
+   },
+   "main": [
+    {
+     "fit": "fill",
+     "id": "a",
+     "in": 0,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 10,
+     "speed": 1,
+     "volume": 1
+    }
+   ],
+   "overlay": [
+    {
+     "at": 0.35,
+     "frame": {
+      "w": 0.35,
+      "x": 0.6,
+      "y": 0.05
+     },
+     "id": "o",
+     "in": 0,
+     "item": "BBBBBBBBBBBBBBBB",
+     "muted": true,
+     "opacity": 1,
+     "out": 0.167,
+     "volume": 1
+    }
+   ],
+   "version": 1
+  },
+  "expect": {
+   "fps": 30,
+   "frames": 300,
+   "main": [
+    {
+     "frames": 300,
+     "id": "a",
+     "samples": 480000,
+     "speed": 1,
+     "start": 0
+    }
+   ],
+   "overlay": [
+    {
+     "frames": 5,
+     "id": "o",
+     "samples": 8000,
+     "start": 11
+    }
+   ],
+   "seconds": 10
+  }
+ },
+ {
+  "name": "two overlays back to back, 60 fps",
+  "timeline": {
+   "canvas": {
+    "fps": 60,
+    "h": 1080,
+    "w": 1920
+   },
+   "main": [
+    {
+     "fit": "fill",
+     "id": "a",
+     "in": 0,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 5,
+     "speed": 1,
+     "volume": 1
+    },
+    {
+     "fit": "fill",
+     "id": "b",
+     "in": 0,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 5,
+     "speed": 1,
+     "volume": 1
+    }
+   ],
+   "overlay": [
+    {
+     "at": 1,
+     "frame": {
+      "w": 0.35,
+      "x": 0.6,
+      "y": 0.05
+     },
+     "id": "o",
+     "in": 0,
+     "item": "BBBBBBBBBBBBBBBB",
+     "muted": true,
+     "opacity": 1,
+     "out": 2.5,
+     "volume": 1
+    },
+    {
+     "at": 3.5,
+     "frame": {
+      "w": 0.35,
+      "x": 0.6,
+      "y": 0.05
+     },
+     "id": "p",
+     "in": 0.5,
+     "item": "BBBBBBBBBBBBBBBB",
+     "muted": true,
+     "opacity": 1,
+     "out": 6.5,
+     "volume": 1
+    }
+   ],
+   "version": 1
+  },
+  "expect": {
+   "fps": 60,
+   "frames": 600,
+   "main": [
+    {
+     "frames": 300,
+     "id": "a",
+     "samples": 240000,
+     "speed": 1,
+     "start": 0
+    },
+    {
+     "frames": 300,
+     "id": "b",
+     "samples": 240000,
+     "speed": 1,
+     "start": 300
+    }
+   ],
+   "overlay": [
+    {
+     "frames": 150,
+     "id": "o",
+     "samples": 120000,
+     "start": 60
+    },
+    {
+     "frames": 360,
+     "id": "p",
+     "samples": 288000,
+     "start": 210
+    }
+   ],
+   "seconds": 10
+  }
+ },
+ {
+  "name": "overlay ending exactly at the end",
+  "timeline": {
+   "canvas": {
+    "fps": 30,
+    "h": 1080,
+    "w": 1080
+   },
+   "main": [
+    {
+     "fit": "fill",
+     "id": "a",
+     "in": 0,
+     "item": "AAAAAAAAAAAAAAAA",
+     "muted": false,
+     "out": 6,
+     "speed": 2,
+     "volume": 1
+    }
+   ],
+   "overlay": [
+    {
+     "at": 2,
+     "frame": {
+      "w": 0.35,
+      "x": 0.6,
+      "y": 0.05
+     },
+     "id": "o",
+     "in": 0,
+     "item": "BBBBBBBBBBBBBBBB",
+     "muted": true,
+     "opacity": 1,
+     "out": 1,
+     "volume": 1
+    }
+   ],
+   "version": 1
+  },
+  "expect": {
+   "fps": 30,
+   "frames": 90,
+   "main": [
+    {
+     "frames": 90,
+     "id": "a",
+     "samples": 144000,
+     "speed": 2,
+     "start": 0
+    }
+   ],
+   "overlay": [
+    {
+     "frames": 30,
+     "id": "o",
+     "samples": 48000,
+     "start": 60
+    }
+   ],
+   "seconds": 3
+  }
+ }
+]
