@@ -104,7 +104,7 @@ extension Copy {
         // MARK: detail
 
         static func photosTab(_ n: Int) -> String { n == 1 ? "photo" : "photos \(n)" }
-        static let copyPhotoLink = "copy photo link", copyText = "copy text", saveToPhotos = "save to photos"
+        static let copyPhotoLink = "copy photo link", saveToPhotos = "save to photos"
         static let selectPhotos = "select photos", saveAllToPhotos = "save all to photos", copyAllLinks = "copy all links"
         static let makeAWebp = "make a webp", deletePhoto = "delete this photo", deleteFile = "delete this file"
         /// `i`: 1-based.
