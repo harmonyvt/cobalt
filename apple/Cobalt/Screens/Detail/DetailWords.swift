@@ -57,6 +57,8 @@ enum DetailWords {
     static let postBusy = "still working on this post. try again when it's done."
     static let lastPhoto = "that is the last photo. use delete everything instead."
     static let cantMakeWebp = "can't make a webp from this one: the post is not open on the server any more."
+    /// `animated webp` was asked for: the make runs in the tray (APP-API-CONTRACT 18.14).
+    static let animatedWebpAsked = "making the animated webp. it shows up as a tab here when it is done."
     static let noPhotoFile = "this photo is not on this \(Copy.device)."
 
     /// The made file's meta: how many photos went into it.

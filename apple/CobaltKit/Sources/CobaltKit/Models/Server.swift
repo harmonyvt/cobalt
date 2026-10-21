@@ -125,6 +125,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// with `stage` and its three Twitch secrets, and so does the app: false whenever `stage` is false. False when
     /// absent: the studio tab then has no Twitch card.
     public var stageTwitch: Bool = false
+    /// `features.still_webp` (APP-API-CONTRACT 18.14): a photo can be made into an animated webp of itself (2 frames of the
+    /// same picture, so Discord offers "favourite"), a slideshow webp of one photo. The server sets it only with
+    /// `gallery_make`, and so does the app. False when absent: photos have no "animated webp" button.
+    public var stillWebp: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

@@ -76,6 +76,8 @@ final class DetailController {
     var copiedID: String?
     var photos: [Rendition.ID: Step] = [:]
     var hosting: Step = .idle
+    /// `animated webp` (APP-API-CONTRACT 18.14): the reopen and the ask, by rendition. The make itself is a job of the tray.
+    var animating: [Rendition.ID: Step] = [:]
     /// A switch that failed, in words, by rendition: shown under the public link row until the next try.
     var visibilityFailed: [Rendition.ID: String] = [:]
     /// Renditions whose last switch off could not clear the public link from the server's cache.

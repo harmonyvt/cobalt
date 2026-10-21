@@ -15,6 +15,8 @@ extension Symbol {
         /// The three makes (the paste hero's row, the combine sheet's segments, the detail's tabs).
         static let slideshowWebp = "play.square.stack"
         static let slideshowMp4 = "play.rectangle"
+        /// The animated webp of one photo (APP-API-CONTRACT 18.14).
+        static let animatedWebp = "livephoto"
         static let galleryImage = "square.grid.3x3"
         /// `make from it` / `make from this post…`.
         static let make = "wand.and.stars"
