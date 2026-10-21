@@ -201,7 +201,7 @@ extension DetailController {
     /// The key the post's switch uses in `visibilityFailed` and `visibilityCacheNote`.
     static let postKey = "post"
 
-    // MARK: - links and text
+    // MARK: - links
 
     func copyAllLinks(_ item: MediaItem) {
         let text = model.copyAllLinks(item)
@@ -212,32 +212,6 @@ extension DetailController {
         Pasteboard.copy(text)
         copiedID = nil
         say(DetailWords.copiedLinks(text.split(separator: "\n").count))
-    }
-
-    /// `copy text`: the words in the photo, read on the device.
-    func copyText(of r: Rendition) async {
-        guard readingText == nil else { return }
-        notice = nil
-        flash = nil
-        readingText = r.id
-        defer { readingText = nil }
-        var source: URL?
-        if let url = r.local?.fileURL, FileManager.default.fileExists(atPath: url.path) {
-            source = url
-        } else if let file = r.file {
-            source = try? await model.library.localCopy(file)
-        }
-        guard let source else {
-            notice = DetailWords.noPhotoFile
-            return
-        }
-        let text = await PhotoText.read(source)
-        if text.isEmpty {
-            say(DetailWords.noText)
-        } else {
-            Pasteboard.copy(text)
-            say(DetailWords.copiedText)
-        }
     }
 
     // MARK: - a photo that was never saved
@@ -278,6 +252,28 @@ extension DetailController {
         if model.makeWebp(for: item, itemIndex: index) { return true }
         notice = DetailWords.cantMakeWebp
         return false
+    }
+
+    // MARK: - the animated webp of one photo (APP-API-CONTRACT 18.14)
+
+    func canMakeAnimatedWebp(of r: Rendition, in item: MediaItem) -> Bool {
+        model.canMakeAnimatedWebp(of: r, in: item)
+    }
+
+    /// Asks for the photo's animated webp: the job goes to the tray and its tab lands on this media when it is done. The
+    /// button stays busy while an expired post is reopened, then says `done` for a moment.
+    func makeAnimatedWebp(of r: Rendition, in item: MediaItem) async {
+        guard animating[r.id] != .working else { return }
+        notice = nil
+        animating[r.id] = .working
+        do {
+            try await model.makeAnimatedWebp(of: r, in: item)
+            animating[r.id] = .done
+            say(DetailWords.animatedWebpAsked)
+        } catch {
+            animating[r.id] = nil
+            notice = Self.words(error)
+        }
     }
 
     // MARK: - make from this post (lane A2's combine sheet)

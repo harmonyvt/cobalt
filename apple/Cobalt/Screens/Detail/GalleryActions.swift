@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The buttons under a gallery's or a photo's hero (CONTRACT-GALLERY 1.19-1.20), on every tab: EXACTLY ONE prominent button
 /// (`copy photo link` when the file is public, `share` when it is private, `try photo 7 again` on a page that was never
-/// saved), then the secondary row (share, save to photos, copy text, make a webp of a video item), then the state of whatever
+/// saved), then the secondary row (share, save to photos, make a webp of a video item), then the state of whatever
 /// ran. In `select photos` the row becomes `3 selected` with share, to photos and delete. What does not apply is not shown.
 struct GalleryActions: View {
     let c: DetailContext
@@ -20,7 +20,7 @@ struct GalleryActions: View {
     private var model: AppModel { c.model }
 
     enum Primary: Equatable { case copyLink, share, savePhotos, tryAgain(Int) }
-    enum Choice: Hashable { case share, savePhotos, copyText, makeWebp }
+    enum Choice: Hashable { case share, savePhotos, makeWebp, animatedWebp }
 
     // MARK: the plan
 
@@ -32,12 +32,6 @@ struct GalleryActions: View {
     }
     private var canSave: Bool { RenditionPhotos.canSave(r) }
     private var placement: PhotosPlacement { controller.placement(of: r, in: item) }
-    /// The words in a photo, a crop or an older single photo; a long gallery image is not read.
-    private var canCopyText: Bool {
-        guard r.isStillPicture else { return false }
-        if case .galleryImage = r.kind { return false }
-        return r.hasFileHere || r.file != nil
-    }
 
     private var linkTitle: String {
         switch r.kind {
@@ -50,7 +44,7 @@ struct GalleryActions: View {
         case .slideshow(_, let format): return format == .webp ? Copy.Media.copyWebpLink : Copy.Media.copyVideoLink
         case .galleryImage: return DetailWords.copyImageLink
         case .crop: return Copy.Gallery.copyPhotoLink
-        case .webp: return Copy.Media.copyWebpLink
+        case .webp, .animated: return Copy.Media.copyWebpLink
         case .video: return r.isStillPicture ? Copy.Gallery.copyPhotoLink : Copy.Media.copyVideoLink
         }
     }
@@ -68,8 +62,8 @@ struct GalleryActions: View {
         var secondary: [Choice] = []
         if canShare, primary != .share { secondary.append(.share) }
         if canSave, primary != .savePhotos { secondary.append(.savePhotos) }
-        if canCopyText { secondary.append(.copyText) }
         if r.isItem, controller.canMakeWebp(ofItem: r, in: item) { secondary.append(.makeWebp) }
+        if controller.canMakeAnimatedWebp(of: r, in: item) { secondary.append(.animatedWebp) }
         return (primary, secondary)
     }
 
@@ -224,16 +218,17 @@ struct GalleryActions: View {
                     working: state == .working, layout: layout
                 ) { Task { await controller.savePhotos(r, in: item) } }
             }
-        case .copyText:
-            let reading = controller.readingText == r.id
-            DetailChoiceButton(
-                title: reading ? DetailWords.readingText : Copy.Gallery.copyText, symbol: Symbol.Gallery.copyText, working: reading,
-                layout: layout
-            ) { Task { await controller.copyText(of: r) } }
         case .makeWebp:
             DetailChoiceButton(title: Copy.Gallery.makeAWebp, symbol: Symbol.Media.makeWebp, layout: layout) {
                 if controller.makeWebp(ofItem: r, in: item) { leave() }
             }
+        case .animatedWebp:
+            let state = controller.animating[r.id] ?? .idle
+            DetailChoiceButton(
+                title: Copy.Gallery.animatedWebp, symbol: state == .done ? Symbol.checkmark : Symbol.Gallery.animatedWebp,
+                working: state == .working, layout: layout
+            ) { Task { await controller.makeAnimatedWebp(of: r, in: item) } }
+            .accessibilityHint(Copy.Gallery.animatedWebpHint)
         }
     }
 }

@@ -15,7 +15,7 @@ import SwiftUI
 ///     -previewDetailConfirm photo | made     the confirm of a delete (with the page or the shown made file)
 ///     -previewDetailAuto <what>   presses a button a second and a half after the detail is up, through the same calls the
 ///                                 buttons make: deletePhoto, deleteMade, deletePicked (the `-previewDetailSelect` ones),
-///                                 retry (the missing photo), saveAll, links (copy all links), text (copy text of the page),
+///                                 retry (the missing photo), saveAll, links (copy all links),
 ///                                 switchOff (the whole post private), webp (make a webp of the page, a video or a gif)
 @MainActor
 enum GalleryDebug {
@@ -54,7 +54,6 @@ enum GalleryDebug {
         case "retry": await controller.retryMissing(now)
         case "saveAll": await controller.saveToPhotos(now.items, of: now)
         case "links": controller.copyAllLinks(now)
-        case "text": await controller.copyText(of: shown)
         case "switchOff": await controller.setPostPublic(!controller.isPostPublic(now), for: now)
         case "webp": if controller.makeWebp(ofItem: shown, in: now) { leave() }
         default: break

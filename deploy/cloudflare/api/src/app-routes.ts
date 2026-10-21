@@ -58,6 +58,7 @@ import {
     RENDER_QUALITIES,
     RENDER_WIDTHS,
     SESSION_TTL_MS,
+    STILL_ADOPT_TYPES,
     cleanTitle,
     getSession,
     parseRange,
@@ -175,6 +176,8 @@ export async function capabilities(
     helperMake = false,
     // ... and `direct=1`: a link to a media file that cobalt has no service for is saved as that file (section 19)
     helperDirect = false,
+    // ... and `still=1`: a webp of one photo comes out animated, so Discord offers "favourite" (section 18.14)
+    helperStill = false,
     // the Hugging Face Space is configured: GET /library/search (section 21)
     search = false,
     // the Anthropic key and the code sandbox are there: /chat (section 27)
@@ -235,6 +238,9 @@ export async function capabilities(
                 // a pasted link straight to an image or video file (a Discord CDN attachment, ...) just saves
                 // (APP-API-CONTRACT.md section 19): only while the helper that runs said `direct=1`
                 direct_links: helperDirect === true,
+                // a webp of one photo (a slideshow webp of one photo item, or of a single photo's session): animated, so
+                // Discord offers "favourite" (APP-API-CONTRACT.md section 18.14); only while the helper that runs said `still=1`
+                still_webp: helperGallery === true && helperMake === true && helperStill === true,
                 // GET /library/search and POST /library/search/index (APP-API-CONTRACT.md section 21): only
                 // while the embedding Space is configured
                 search: search === true,
@@ -1187,7 +1193,8 @@ export async function libraryStudio(d: AppDeps, id: string, keyId: string, queue
     if (!row) return err(404, "error.library.not_found");
     if (row.bucket !== "originals" || row.kind !== "private") return err(409, "error.library.not_private");
     const type = row.content_type ?? "";
-    if (!(type.startsWith("video/") || type === "image/gif")) return err(400, "error.studio.not_video");
+    // a still photo reopens too: its webp of one photo is a make of that session (section 18.14)
+    if (!(type.startsWith("video/") || type === "image/gif" || STILL_ADOPT_TYPES.has(type))) return err(400, "error.studio.not_video");
 
     // A saved original whose own studio is still open: reopen that studio (its
     // webps stay listed) instead of minting a new one.
@@ -1236,6 +1243,7 @@ export async function libraryStudio(d: AppDeps, id: string, keyId: string, queue
             // splitting the post in two. Anything else is its own post: its item id.
             item_id: row.source === "saved" && row.session_id && /^[A-Za-z0-9]{1,64}$/.test(row.session_id) ? row.session_id : row.id,
             ...(queue ? { queue: true } : {}),
+            ...(STILL_ADOPT_TYPES.has(type) ? { photo: true } : {}),
         });
         const b = a.body as {
             status?: string;

@@ -60,8 +60,6 @@ final class DetailController {
     var postVisibility: Step = .idle
     /// Items whose `try again` was pressed and which have not landed yet.
     var retrying: Set<Int> = []
-    /// A photo being read for its text (the rendition id).
-    var readingText: Rendition.ID?
     /// A batch save to Photos (`save all`, the ticked ones).
     var batchPhotos: Step = .idle
     /// `make from this post…` is open (lane A2's combine sheet).
@@ -76,6 +74,8 @@ final class DetailController {
     var copiedID: String?
     var photos: [Rendition.ID: Step] = [:]
     var hosting: Step = .idle
+    /// `animated webp` (APP-API-CONTRACT 18.14): the reopen and the ask, by rendition. The make itself is a job of the tray.
+    var animating: [Rendition.ID: Step] = [:]
     /// A switch that failed, in words, by rendition: shown under the public link row until the next try.
     var visibilityFailed: [Rendition.ID: String] = [:]
     /// Renditions whose last switch off could not clear the public link from the server's cache.

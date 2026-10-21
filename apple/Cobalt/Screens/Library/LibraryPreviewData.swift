@@ -292,7 +292,7 @@ enum LibraryDebug {
         extra = extra.filter { row in
             if row.emote { return kind == .emotes }
             if kind == .all || kind == .emotes { return kind == .all }
-            return LibraryKindChips.filter(for: row.kind) == kind
+            return LibraryKindFilter.chips(kind: row.kind, hasWebp: row.hasWebp).contains(kind)
         }
         // the kind order groups the model's rows and the synthetic ones together; any other sort leaves the model's rows first
         guard real.isEmpty || sort.key == .kind else { return real + extra }

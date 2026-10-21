@@ -595,7 +595,7 @@ describe("routing", () => {
 
     it("capabilities says features.search only while the Space is configured", async () => {
         const w = world();
-        const on = (await capabilities(w.d, "missing", undefined, false, false, false, false, false, true)).body as any;
+        const on = (await capabilities(w.d, "missing", undefined, false, false, false, false, false, false, true)).body as any;
         const off = (await capabilities(w.d, "missing", undefined)).body as any;
         expect(on.features.search).toBe(true);
         expect(off.features.search).toBe(false);

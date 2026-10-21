@@ -460,18 +460,20 @@ export default {
         );
         // Gallery links' moving previews (APP-API-CONTRACT.md section 29): the backfill of anything a
         // link's own kick missed, and the removal of previews whose video was deleted or made private.
-        ctx.waitUntil(
-            getContainer(env.COBALT, "main")
-                .fetch(
-                    new Request("https://do.internal/loops/kick?limit=50&clean=1", {
-                        method: "POST",
-                        headers: { [KEY_ID_HEADER]: "cron:loops" },
-                    }),
-                )
-                .then(
-                    async (res) => console.log("[loops] daily kick", res.status, await res.text().catch(() => "")),
-                    (e) => console.error("[loops] daily kick failed", e instanceof Error ? e.name : "error"),
-                ),
-        );
+        // Off unless GALLERY_LOOPS is "1" (section 29.1).
+        if (env.GALLERY_LOOPS === "1")
+            ctx.waitUntil(
+                getContainer(env.COBALT, "main")
+                    .fetch(
+                        new Request("https://do.internal/loops/kick?limit=50&clean=1", {
+                            method: "POST",
+                            headers: { [KEY_ID_HEADER]: "cron:loops" },
+                        }),
+                    )
+                    .then(
+                        async (res) => console.log("[loops] daily kick", res.status, await res.text().catch(() => "")),
+                        (e) => console.error("[loops] daily kick failed", e instanceof Error ? e.name : "error"),
+                    ),
+            );
     },
 } satisfies ExportedHandler<Env>;

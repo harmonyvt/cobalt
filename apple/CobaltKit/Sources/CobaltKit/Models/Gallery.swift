@@ -181,9 +181,25 @@ public struct SlideshowPlan: Sendable, Equatable, Codable {
         return (sum * 10).rounded() / 10
     }
 
+    /// A webp of ONE photo (APP-API-CONTRACT 18.14): the "animated webp" of a photo, 2 frames of the same picture so
+    /// Discord offers "favourite" on it. Not a slideshow in the app's words, and it replaces only the still of that photo.
+    public var isStill: Bool { format == .webp && items.count == 1 }
+
+    /// The width of an animated webp of one photo (the server takes 640 only for one photo).
+    public static let stillWidth = 640
+    /// How long the animated webp of one photo plays (its 2 frames share it).
+    public static let stillSeconds = 2.0
+
+    /// The plan of the animated webp of the photo at `index` (APP-API-CONTRACT 18.14).
+    public static func still(index: Int, quality: WebpQuality?) -> SlideshowPlan {
+        SlideshowPlan(format: .webp, items: [index], photoSeconds: stillSeconds, fade: false, quality: quality ?? .high, width: stillWidth)
+    }
+
     /// Whether the server will take this plan, and if not why (section 1.15's caps and their ways out).
     public func check(_ items: [GalleryItem]) -> SlideshowCheck {
         let chosen = chosen(from: items)
+        // the animated webp of one photo: that photo, and nothing else to check
+        if isStill { return chosen.count == 1 && chosen[0].isPhoto ? .ok : .tooFew }
         guard chosen.count >= 2, Set(self.items).count == self.items.count else { return .tooFew }
         let total = length(of: items)
         let motion = motionLength(of: items)
@@ -264,7 +280,7 @@ public enum GalleryMake: Sendable, Equatable {
     /// "slideshow webp", "slideshow mp4", "gallery image" (`Copy.Gallery`'s words).
     public var what: String {
         switch self {
-        case .slideshow(let plan): return plan.format == .webp ? "slideshow webp" : "slideshow mp4"
+        case .slideshow(let plan): return plan.isStill ? "animated webp" : plan.format == .webp ? "slideshow webp" : "slideshow mp4"
         case .image: return "gallery image"
         }
     }
@@ -293,14 +309,20 @@ public struct MadeSpec: Sendable, Equatable {
     public var layout: GalleryLayout?
     public var format: SlideshowPlan.Format?
     public var items: [Int]
+    /// `"still": true`: the animated webp of one photo (APP-API-CONTRACT 18.14), `items` = that photo.
+    public var still: Bool
     /// The JSON as the server sent it (what a store record keeps).
     public var data: Data
 
-    public init(kind: String? = nil, layout: GalleryLayout? = nil, format: SlideshowPlan.Format? = nil, items: [Int] = [], data: Data = Data()) {
+    public init(
+        kind: String? = nil, layout: GalleryLayout? = nil, format: SlideshowPlan.Format? = nil, items: [Int] = [], still: Bool = false,
+        data: Data = Data()
+    ) {
         self.kind = kind
         self.layout = layout
         self.format = format
         self.items = items
+        self.still = still
         self.data = data
     }
 
@@ -312,6 +334,7 @@ public struct MadeSpec: Sendable, Equatable {
             layout: (object["layout"] as? String).flatMap(GalleryLayout.init(rawValue:)),
             format: (object["format"] as? String).flatMap(SlideshowPlan.Format.init(rawValue:)),
             items: (object["items"] as? [Any])?.compactMap { ($0 as? NSNumber)?.intValue } ?? [],
+            still: (object["still"] as? Bool) == true,
             data: data)
     }
 
@@ -325,6 +348,8 @@ public struct MadeSpec: Sendable, Equatable {
 /// one `gallery image` per layout). A crop is never replaced.
 public enum MadeKind: Sendable, Equatable, Hashable {
     case slideshow(SlideshowPlan.Format)
+    /// The animated webp of one photo (APP-API-CONTRACT 18.14): one per photo, `item` = that photo's index.
+    case still(item: Int)
     case galleryImage(GalleryLayout)
     case crop
 
@@ -332,7 +357,12 @@ public enum MadeKind: Sendable, Equatable, Hashable {
     /// is not a gallery image (a long image or a PDF made by an older build) has no kind here.
     public init?(role: GalleryRole?, spec: MadeSpec?) {
         switch role {
-        case .slideshow?: self = .slideshow(spec?.format ?? .mp4)
+        case .slideshow?:
+            if let spec, spec.still, spec.format == .webp {
+                self = .still(item: spec.items.first ?? 0)
+            } else {
+                self = .slideshow(spec?.format ?? .mp4)
+            }
         case .export?:
             guard spec?.kind == "gallery", let layout = spec?.layout else { return nil }
             self = .galleryImage(layout)
@@ -346,6 +376,7 @@ public enum MadeKind: Sendable, Equatable, Hashable {
         switch self {
         case .slideshow(.webp): return "slideshow webp"
         case .slideshow(.mp4): return "slideshow"
+        case .still: return "animated webp"
         case .galleryImage(let layout): return "gallery image · \(layout.label)"
         case .crop: return "crop"
         }

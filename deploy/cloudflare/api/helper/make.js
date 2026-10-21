@@ -8,7 +8,7 @@
 // them without running anything; the two `render*` functions run the real tools. Plain Node ESM, no dependencies.
 // (The slideshow MP4 stays in lib.js.)
 
-import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
     JobError,
@@ -21,6 +21,7 @@ import {
     buildPosterArgs,
     fillGraph,
     needsBlur,
+    animateStill,
     parseWebp,
     readFileHead,
     runProcess,
@@ -615,10 +616,20 @@ export async function renderSlideshowWebp(o) {
             label: "img2webp",
             onChild: o.onChild,
         });
-        const size = (await stat(o.output).catch(() => null))?.size ?? 0;
+        let size = (await stat(o.output).catch(() => null))?.size ?? 0;
         if (!(size > 0)) throw new JobError("error.webp.encode_failed");
+        let bytes = await readFile(o.output);
+        // one photo (APP-API-CONTRACT 18.14), or slides img2webp found identical: it wrote a plain still, which Discord
+        // will not let anyone favourite. The same picture as an animation of 2 frames instead.
+        if ((parseWebp(bytes)?.frames ?? 0) < 2) {
+            const animated = animateStill(bytes, plan.totalMs);
+            if (!animated) throw new JobError("error.webp.encode_failed");
+            bytes = animated;
+            await writeFile(o.output, bytes);
+            size = bytes.length;
+        }
         if (size > (o.maxOutputBytes ?? MAX_OUTPUT_BYTES)) throw new JobError("error.webp.too_large");
-        const webp = parseWebp(await readFile(o.output));
+        const webp = parseWebp(bytes);
         if (!webp || !webp.frames) throw new JobError("error.webp.encode_failed");
         o.onPhase?.("encoding", { done: seconds, total: seconds });
         return {

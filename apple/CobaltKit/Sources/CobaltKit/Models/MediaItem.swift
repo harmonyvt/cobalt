@@ -13,6 +13,8 @@ public struct Rendition: Sendable, Equatable, Identifiable {
         case galleryImage(layout: GalleryLayout, number: Int)
         /// A crop of item `of` (A7). `spec` is what the server stored (`aspect`, `fill`, `rect`); `spec.frame` is it as a `FrameSpec`.
         case crop(of: Int, spec: MadeSpec?)
+        /// The animated webp of one photo, item `item` (or 0 for a single photo): APP-API-CONTRACT 18.14. One per photo.
+        case animated(item: Int)
     }
 
     public var id: String               // "video", else the local record id, else "f:<library file id>"
@@ -101,7 +103,7 @@ public struct Rendition: Sendable, Equatable, Identifiable {
     /// A slideshow, a gallery image or a crop: made from the post, stored and deleted as a library row of its own.
     public var isMade: Bool {
         switch kind {
-        case .slideshow, .galleryImage, .crop: return true
+        case .slideshow, .galleryImage, .crop, .animated: return true
         default: return false
         }
     }
@@ -109,6 +111,13 @@ public struct Rendition: Sendable, Equatable, Identifiable {
     /// A made slideshow webp: stored as an animated webp record (`StoredVideo.Kind.webp`, `role .slideshow`).
     public var isAnimatedMade: Bool {
         if case .slideshow(_, .webp) = kind { return true }
+        if case .animated = kind { return true }
+        return false
+    }
+
+    /// The animated webp of one photo (APP-API-CONTRACT 18.14).
+    public var isAnimatedStill: Bool {
+        if case .animated = kind { return true }
         return false
     }
 
@@ -118,6 +127,7 @@ public struct Rendition: Sendable, Equatable, Identifiable {
         case .slideshow(_, let format): return .slideshow(format)
         case .galleryImage(let layout, _): return .galleryImage(layout)
         case .crop: return .crop
+        case .animated(let item): return .still(item: item)
         default: return nil
         }
     }
@@ -133,6 +143,7 @@ public struct Rendition: Sendable, Equatable, Identifiable {
         case .galleryImage(let layout, let n):
             return n > 1 ? "\(MadeKind.galleryImage(layout).tabName) \(n)" : MadeKind.galleryImage(layout).tabName
         case .crop(_, let spec): return spec?.frame?.tabName ?? "crop"
+        case .animated: return MadeKind.still(item: 0).tabName
         }
     }
 
@@ -198,7 +209,8 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
     /// What this media is (the library's kind chips): the server's word for the post, else derived from the renditions.
     public var kind: MediaKind {
         if items.count >= 2 || (post?.kind == .gallery) { return .gallery }
-        if let kind = post?.kind, kind != .gallery { return kind }
+        // the server calls a post with no original on it `webp`; the original this device keeps still makes it a video
+        if let kind = post?.kind, kind != .gallery, !(kind == .webp && video != nil) { return kind }
         if let only = items.first ?? video {
             let image = only.itemType.map { $0 == .photo }
                 ?? (only.local.map { StoredMedia.isStill($0) } ?? (only.file?.contentType?.lowercased().hasPrefix("image/") == true))
@@ -221,6 +233,9 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
     }
 
     public var webpCount: Int { renditions.reduce(0) { $0 + ($1.isWebp ? 1 : 0) } }
+
+    /// Holds a webp the owner made: a webp of a video, or a slideshow webp (the library's webps chip).
+    public var hasMadeWebp: Bool { renditions.contains { $0.isWebp || $0.isAnimatedMade } }
 
     public var latestAt: Date { renditions.map(\.createdAt).max() ?? .distantPast }
 
@@ -405,6 +420,7 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
         }
         func rank(_ kind: MadeKind) -> Int {
             switch kind {
+            case .still: return 0
             case .slideshow(.webp): return 0
             case .slideshow(.mp4): return 1
             case .galleryImage(let layout): return 2 + (GalleryLayout.allCases.firstIndex(of: layout) ?? 0)
@@ -428,6 +444,7 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
             case .slideshow(let format): kind = .slideshow(number: number, format: format)
             case .galleryImage(let layout): kind = .galleryImage(layout: layout, number: number)
             case .crop: kind = .crop(of: itemIndex(entry.file?.madeFrom, entry.local?.madeFrom), spec: entry.file?.madeSpec ?? entry.local?.madeSpec.flatMap { MadeSpec(data: $0) })
+            case .still(let item): kind = .animated(item: item)
             }
             let file = entry.file, stored = entry.local
             let url = file.flatMap { $0.wireVisibility == .private ? nil : $0.url } ?? stored?.publicURL

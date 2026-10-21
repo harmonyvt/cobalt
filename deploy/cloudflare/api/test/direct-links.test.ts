@@ -464,7 +464,7 @@ describe("makeSafeFetch with downloadToFile: the destination rule, against a rea
 
 describe("the helper's HELPER_CAPS header says direct=1", () => {
     it("is part of what every answer carries", () => {
-        expect(HELPER_CAPS).toBe("gallery=1,make=1,direct=1");
+        expect(HELPER_CAPS).toBe("gallery=1,make=1,direct=1,still=1");
     });
 });
 

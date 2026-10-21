@@ -13,6 +13,9 @@ extension Rendition {
             return item.webpCount > 1 || item.detailShape != .classic ? Copy.Media.webpTab(n) : Copy.Media.webp
         case .item(let index, let type): return Copy.Gallery.itemLabel(type, index: index)
         case .slideshow, .galleryImage, .crop: return self.tabName      // never numbered (R8): one of each, a remake replaces it
+        case .animated(let index):
+            // one per photo: a gallery's says which photo
+            return item.items.count > 1 ? "\(Copy.Gallery.animatedWebp) · \(Copy.Gallery.itemLabel(.photo, index: index))" : Copy.Gallery.animatedWebp
         }
     }
 
@@ -24,6 +27,7 @@ extension Rendition {
         case .slideshow(_, let format): return format == .webp ? Symbol.Gallery.slideshowWebp : Symbol.Gallery.slideshowMp4
         case .galleryImage: return Symbol.Gallery.galleryImage
         case .crop: return Symbol.Gallery.crop
+        case .animated: return Symbol.Gallery.animatedWebp
         }
     }
 
@@ -92,7 +96,7 @@ enum DetailMeta {
             let name = Copy.Gallery.itemName(type == .photo ? "photo" : type.rawValue, index + 1, of: item.galleryTotal)
             let length = type == .photo ? nil : r.duration.map { Format.seconds($0) }
             return ([name, length, size(r), bytes].compactMap { $0 } + ["saved \(when)"]).joined(separator: " · ")
-        case .slideshow, .galleryImage, .crop:
+        case .slideshow, .galleryImage, .crop, .animated:
             // `20.0 s · 480×600 · 1.4 MB · made today 14:09 · 10 photos`
             var lead: String?
             switch r.kind {

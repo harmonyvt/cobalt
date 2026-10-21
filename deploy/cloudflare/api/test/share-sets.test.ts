@@ -84,6 +84,8 @@ beforeEach(async () => {
         MEDIA: new MemoryMedia(),
         MEDIA_BASE_URL: MEDIA,
         SHARE_BASE_URL: SHARE,
+        // moving previews on (section 29); the off default has its own test below
+        GALLERY_LOOPS: "1",
     };
     db.raw.prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)").run("key-1", "test", KEY_HASH, "0b5f2c3e", 1);
 });
@@ -227,6 +229,26 @@ describe("the share host", () => {
         const doc2 = JSON.parse(/<script id="discord:component-embed" type="application\/json">([^<]*)<\/script>/.exec(plain)![1]);
         expect(doc2.component.components[1].items[0].media.url).toBe(`${MEDIA}ViDeO00001.mp4`);
         expect(doc2.component.components).toHaveLength(2);
+    });
+    it("with GALLERY_LOOPS off (the default) Discord gets the real video, no button, and nothing is queued", async () => {
+        db.raw.prepare("INSERT INTO media_loops (item_id, url, r2_key, bytes, made_at) VALUES (?, ?, ?, 900, 1)").run(video.id, `${MEDIA}LoOpLoOp01.webp`, "LoOpLoOp01.webp");
+        const off = { ...env, GALLERY_LOOPS: undefined };
+        const html = await (await get(`${SHARE}g/${set.id}`, { headers: { "user-agent": "Discordbot/2.0" } }, off)).text();
+        const doc = JSON.parse(/<script id="discord:component-embed" type="application\/json">([^<]*)<\/script>/.exec(html)![1]);
+        expect(doc.component.components[1].items.map((i: any) => i.media.url)).toEqual([
+            `${MEDIA}ViDeO00001.mp4`,
+            `${MEDIA}WeBpWeBp01.webp`,
+            `${MEDIA}PhOtO00001.jpg`,
+        ]);
+        expect(doc.component.components).toHaveLength(2);
+        containerCalls = [];
+        const r = await get(
+            `${API}/share/sets`,
+            { method: "POST", headers: { ...AUTH, "content-type": "application/json" }, body: JSON.stringify({ items: [video.id, photo.id] }) },
+            off,
+        );
+        expect(r.status).toBe(201);
+        expect(containerCalls).toEqual([]);
     });
     it("ten files stay under Discord's 3,000 bytes; a long description goes first", async () => {
         const ten = (await create({ items: [video.id, webp.id, photo.id, fifth.id, ...more.slice(0, 6).map((m) => m.id)], title: "t".repeat(80) })).body.set;

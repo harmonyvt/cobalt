@@ -134,6 +134,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `features.editor` (APP-API-CONTRACT 31): the timeline editor, `/edits` (projects and renders). True exactly while the
     /// server has its render container and migration 0021. False when absent: no `edit` button and no edits shelf.
     public var editor: Bool = false
+    /// `features.still_webp` (APP-API-CONTRACT 18.14): a photo can be made into an animated webp of itself (2 frames of the
+    /// same picture, so Discord offers "favourite"), a slideshow webp of one photo. The server sets it only with
+    /// `gallery_make`, and so does the app. False when absent: photos have no "animated webp" button.
+    public var stillWebp: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

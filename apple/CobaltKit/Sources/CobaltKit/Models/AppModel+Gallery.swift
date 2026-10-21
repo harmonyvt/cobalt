@@ -61,6 +61,75 @@ extension AppModel {
             .make(m), session: session.id, items: items, media: info, link: item.link ?? item.post?.link, mediaID: item.local?.id)
     }
 
+    // MARK: - The animated webp of one photo
+
+    /// The photo types the server can make an animated webp from (HEIC has no decoder there).
+    static let animatedWebpTypes: Set<String> = ["image/jpeg", "image/png", "image/webp"]
+
+    /// Whether `rendition` is a photo the server can turn into an animated webp of itself (APP-API-CONTRACT 18.14): a photo
+    /// of a gallery or a single photo, which the library lists (the server makes it from its stored original).
+    public func canMakeAnimatedWebp(of rendition: Rendition, in item: MediaItem) -> Bool {
+        guard capabilities.stillWebp, capabilities.studio, let file = rendition.file,
+              Self.animatedWebpTypes.contains(file.contentType?.lowercased() ?? "")
+        else { return false }
+        switch rendition.kind {
+        case .item(_, let type): return type == .photo
+        case .video: return true
+        default: return false
+        }
+    }
+
+    /// "animated webp": the photo as an animated webp of itself (2 frames of the same picture), so Discord lets people
+    /// favourite it (APP-API-CONTRACT 18.14). It is a make of one photo, a job of the queue like the combine sheet's: the
+    /// tray shows it and its result joins this media as an `animated webp` tab. A post whose session is over is reopened
+    /// first (`POST /library/items/<id>/studio`: a photo session, ready in a few seconds).
+    public func makeAnimatedWebp(of rendition: Rendition, in item: MediaItem) async throws {
+        guard canMakeAnimatedWebp(of: rendition, in: item), let file = rendition.file else { throw PipelineFailure.unsupported }
+        let index = rendition.itemIndex ?? 0
+        let m = GalleryMake.slideshow(SlideshowPlan.still(index: index, quality: .high))
+        let known = item.post?.session?.id ?? item.post?.id ?? item.local?.sessionIDs.first
+        if let known, let job = queue.galleryJob(session: known) {
+            await job.pipeline.make(m)
+            return
+        }
+        let sid: String
+        if let session = gallerySession(of: item) {
+            sid = session.id
+        } else {
+            sid = try await reopenPhoto(file.id)
+        }
+        let photo = GalleryItem(
+            id: index, type: .photo, width: rendition.width ?? file.width, height: rendition.height ?? file.height,
+            thumb: rendition.posterURL ?? rendition.local?.posterURL)
+        let info = MediaInfo(
+            name: item.titleText, duration: nil, width: photo.width, height: photo.height, bytes: nil, isImage: true)
+        queue.addGallery(
+            .make(m), session: sid, items: [photo], media: info, link: item.link ?? item.post?.link, mediaID: item.local?.id)
+    }
+
+    /// Opens a studio session on a stored photo and waits for it to be ready (the server probes it in seconds; a busy
+    /// server holds it in its line a little longer). Throws the save's failure, or `.serverBusy` after about two minutes.
+    private func reopenPhoto(_ fileID: String) async throws -> String {
+        do {
+            let created = try await ctx.client.openStudio(item: fileID, queue: capabilities.line)
+            for _ in 0..<8 {
+                let s = try await ctx.client.session(created.id, wait: 15)
+                switch s.status {
+                case .ready: return created.id
+                case .error: throw CobaltError.api(code: s.errorCode ?? "error.studio.unknown", httpStatus: 200)
+                case .saving: continue
+                }
+            }
+            throw PipelineFailure.serverBusy
+        } catch let failure as PipelineFailure {
+            throw failure
+        } catch {
+            let mapped = pipelineFailure(from: error, during: .saving, limits: ctx.capabilities.limits) ?? error
+            if let f = mapped as? PipelineFailure, f == .keyInvalid { markKeyInvalid() }
+            throw mapped
+        }
+    }
+
     /// "try photo 7 again": the server fetches the items it could not, again; they are stored here as they land.
     public func retryMissing(_ item: MediaItem) async throws {
         guard capabilities.gallery else { throw PipelineFailure.unsupported }
