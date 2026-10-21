@@ -112,6 +112,7 @@ struct TimelineMainClipView: View {
                 .font(Font.cobalt(10.5, .semibold, relativeTo: .caption2))
                 .lineLimit(1)
             if abs(clip.speed - 1) > 0.001 { badge(Copy.Editor.speedValue(clip.speed)) }
+            if abs(clip.pitch) > 0.001 { badge(Copy.Editor.pitchChip(clip.pitch)) }
             if clip.crop.map({ !$0.isFull }) ?? false { badge(Copy.Editor.crop) }
             if clip.fit == .fit { badge(Copy.Editor.fitFit) }
             if clip.muted {

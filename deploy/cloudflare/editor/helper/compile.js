@@ -28,7 +28,8 @@ export function maxrateFor(canvas) {
 }
 
 /**
- * The `atempo` factors for effective speed `s` (31.5 step 8): each in [0.5, 2]; 0.25 -> 0.5,0.5; 3 -> 2,1.5; 4 -> 2,2; 1 -> none.
+ * The `atempo` factors for a tempo `s` in [0.125, 8] (31.5 step 8; 31.16 widens it from [0.25, 4] for `speed / 2^(pitch/12)`):
+ * each in [0.5, 2], product equal to `s` to 9 decimals; 0.25 -> 0.5,0.5; 3 -> 2,1.5; 4 -> 2,2; 8 -> 2,2,2; 1 -> none.
  * @param {number} s @returns {number[]}
  */
 export function atempoChain(s) {
@@ -78,6 +79,17 @@ function inputFor(s, F, w) {
 
 /** Audio chain head shared by main and overlay: (a) trim to in..out on the seek-relative clock. @param {number} inT @param {number} outT */
 const audioTrim = (inT, outT) => `atrim=start=${dec(inT, 6)}:end=${dec(outT, 6)},asetpts=PTS-STARTPTS`;
+
+/**
+ * The audio steps that change speed and pitch together (31.16). Pitch 0: today's `atempo` chain. Otherwise
+ * `aresample=48000,asetrate=48000*r,aresample=48000` (tempo and pitch both up by r = 2^(pitch/12)) and the `atempo` chain for
+ * `speed / r`, which puts the tempo back to `speed` and keeps the new pitch. @param {number} speed @param {number | undefined} pitch
+ */
+function speedPitchSteps(speed, pitch) {
+    if (!pitch) return atempoChain(speed).map((r) => `atempo=${dec(r, 9)}`);
+    const r = 2 ** (pitch / 12);
+    return ["aresample=48000", `asetrate=48000*${dec(r, 9)}`, "aresample=48000", ...atempoChain(speed / r).map((x) => `atempo=${dec(x, 9)}`)];
+}
 
 /** Stereo 48 kHz float: mono is copied to both sides (a bare aformat would mix it in at -3 dB). @param {number | null} channels */
 const toStereo = (channels) =>
@@ -135,7 +147,7 @@ export function compile(t, sources, opts) {
         chains.push(`[${n}:v:0]${v.join(",")}[v${i}]`);
 
         if (s.hasAudio && !c.muted) {
-            const a = [audioTrim(inT, outT), ...atempoChain(m.speed).map((r) => `atempo=${dec(r, 9)}`)];
+            const a = [audioTrim(inT, outT), ...speedPitchSteps(m.speed, c.pitch)];
             a.push(`volume=${dec(c.volume, 2)}`, ...toStereo(s.channels), "apad", `atrim=end_sample=${m.samples}`, "asetpts=PTS-STARTPTS");
             chains.push(`[${n}:a:0]${a.join(",")}[a${i}]`);
         } else {
@@ -174,7 +186,7 @@ export function compile(t, sources, opts) {
         vLast = `[vo${j}]`;
 
         if (s.kind === "video" && s.hasAudio && !o.muted) {
-            const a = [audioTrim(inT, outT), `volume=${dec(o.volume, 2)}`, ...toStereo(s.channels), `atrim=end_sample=${om.samples}`, "asetpts=PTS-STARTPTS"];
+            const a = [audioTrim(inT, outT), ...speedPitchSteps(1, o.pitch), `volume=${dec(o.volume, 2)}`, ...toStereo(s.channels), `atrim=end_sample=${om.samples}`, "asetpts=PTS-STARTPTS"];
             a.push(`adelay=${om.start * spf}S:all=1`, "apad", `atrim=end_sample=${N * spf}`);
             chains.push(`[${n}:a:0]${a.join(",")}[oa${j}]`);
             mixIn.push(`[oa${j}]`);

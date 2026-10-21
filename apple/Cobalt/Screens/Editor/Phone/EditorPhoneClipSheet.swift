@@ -9,14 +9,16 @@ import SwiftUI
 struct EditorPhoneClipSheet: View {
     let session: EditSession
     let section: EditorPhoneClipSection
+    var pitchEnabled = true
 
     @Environment(\.dismiss) private var dismiss
     @State private var original: EditClip?
     @State private var clipID: String
 
-    init(session: EditSession, section: EditorPhoneClipSection) {
+    init(session: EditSession, section: EditorPhoneClipSection, pitchEnabled: Bool = true) {
         self.session = session
         self.section = section
+        self.pitchEnabled = pitchEnabled
         let clip = session.selectedMain?.clip
         _original = State(initialValue: clip)
         _clipID = State(initialValue: clip?.id ?? "")
@@ -72,6 +74,7 @@ struct EditorPhoneClipSheet: View {
             session.trim(clip: original.id, in: original.in, out: original.out)
         }
         if now.speed != original.speed { session.setSpeed(original.speed, clip: original.id) }
+        if now.pitch != original.pitch { session.setPitch(original.pitch, clip: original.id) }
         if now.crop != original.crop { session.setCrop(original.crop, clip: original.id) }
         if now.fit != original.fit { session.setFit(original.fit, clip: original.id) }
         session.endGesture()
@@ -99,6 +102,7 @@ struct EditorPhoneClipSheet: View {
                     if let clip {
                         cropSection(clip).id(EditorPhoneClipSection.crop.rawValue)
                         speedSection(clip).id(EditorPhoneClipSection.speed.rawValue)
+                        if pitchEnabled { pitchSection(clip) }
                         trimSection(clip).id(EditorPhoneClipSection.trim.rawValue)
                         EditorInspectorButton(title: Copy.Editor.deleteClip, symbol: Symbol.Editor.delete, destructive: true) {
                             session.remove(.main(clip.id))
@@ -143,6 +147,14 @@ struct EditorPhoneClipSheet: View {
                     .foregroundStyle(CobaltColor.caption)
                     .monospacedDigit()
             }
+        }
+    }
+
+    private func pitchSection(_ clip: EditClip) -> some View {
+        EditorSection(Copy.Editor.pitch, trailing: Copy.Editor.pitchValue(clip.pitch)) {
+            EditorPitchRow(
+                pitch: clip.pitch,
+                set: { session.setPitch($0, clip: clip.id) }, onEnd: { session.endGesture() })
         }
     }
 

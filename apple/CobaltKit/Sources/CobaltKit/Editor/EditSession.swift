@@ -89,12 +89,20 @@ public final class EditSession {
     @ObservationIgnored private var renderPoll: Task<Void, Never>?
     @ObservationIgnored private(set) var builds = 0
 
+    // pitch in the preview (31.16): pre-shifted copies of clips' sound, made by the cache after the edits settle
+    @ObservationIgnored private(set) var pitchCopies: [EditPitchKey: URL] = [:]
+    @ObservationIgnored private var pitchTasks: [EditPitchKey: Task<Void, Never>] = [:]
+    @ObservationIgnored private var pitchFailures: Set<EditPitchKey> = []
+    @ObservationIgnored private var pitchDebounce: Task<Void, Never>?
+
     public static let saveDelay: Double = 1
     public static let rebuildDelay: Double = 0.15
     public static let retryDelays: [Double] = [2, 5, 10, 30]
     public static let renderPollSeconds: Double = 3
     public static let undoLimit = 100
     static let coalesceWindow: TimeInterval = 0.6
+    /// Quiet time after the last rebuild before a shifted copy of a clip's sound is made (a slider drag makes one, not twenty).
+    public static let pitchDelay: Double = 0.3
     static let minSeconds = 0.1
 
     init(
@@ -328,6 +336,14 @@ public final class EditSession {
         editClip(id, key: nil) { clip, _ in clip.muted = m }
     }
 
+    /// Semitones (31.16): clamped to -12...12 and rounded to 0.5; 0 = unchanged. One undo step per drag (key `pitch:<id>`).
+    /// Does nothing when the server does not know pitch (`capabilities.limits.editPitch` false): the control is hidden then, and
+    /// a save never sends a pitch to such a server either (see `performFlush`).
+    public func setPitch(_ semitones: Double, clip id: String) {
+        guard ctx.capabilities.limits.editPitch else { return }
+        editClip(id, key: "pitch:\(id)") { clip, _ in clip.pitch = Self.clampPitch(semitones) }
+    }
+
     // MARK: - Overlay
 
     /// Puts a video, gif or photo on the overlay track at frame `k` (nil = the playhead). Refuses (false) when `k` is inside
@@ -430,6 +446,12 @@ public final class EditSession {
 
     public func setOverlayMuted(id: String, _ m: Bool) {
         editOverlay(id, key: nil) { $0.muted = m }
+    }
+
+    /// An overlay's pitch, as `setPitch` (key `opitch:<id>`). A gif or photo has no sound: the value is kept and ignored.
+    public func setOverlayPitch(_ semitones: Double, overlay id: String) {
+        guard ctx.capabilities.limits.editPitch else { return }
+        editOverlay(id, key: "opitch:\(id)") { $0.pitch = Self.clampPitch(semitones) }
     }
 
     // MARK: - Canvas, title
@@ -589,6 +611,11 @@ public final class EditSession {
         return (inP, outP)
     }
 
+    /// -12...12, then the nearest 0.5 (31.16); not a number = 0.
+    static func clampPitch(_ p: Double) -> Double {
+        EditJSON.pitch(min(EditJSON.pitchRange.upperBound, max(EditJSON.pitchRange.lowerBound, p.isFinite ? p : 0)))
+    }
+
     /// Inside the frame and at least 64 px a side (1 % when the size is not known).
     static func clampCrop(_ c: EditCrop, display: PixelSize?) -> EditCrop {
         var c = c
@@ -665,12 +692,14 @@ public final class EditSession {
         repeat {
             flushAgain = false
             let snapshot = timeline
+            // a server that does not know pitch refuses the key: it gets the timeline with every pitch at 0 (left out)
+            let sent = ctx.capabilities.limits.editPitch ? snapshot : EditJSON.withoutPitch(snapshot)
             let title = pendingTitle
             saveState = .saving
             saveCalls += 1
             do {
                 let saved = try await client.saveEditProject(
-                    id: project.id, timeline: snapshot, baseRevision: project.revision, title: title)
+                    id: project.id, timeline: sent, baseRevision: project.revision, title: title)
                 retryStep = 0
                 retryTask?.cancel()
                 retryTask = nil
@@ -891,8 +920,12 @@ public final class EditSession {
         }
         var playing = snapshot
         playing.overlay = snapshot.overlay.filter { assets[$0.item] != nil }          // an overlay whose file is missing is not drawn
+        // clips with a pitch play their shifted copy once it is made, the source's sound until then
+        let wanted = pitchKeys(playing)
+        let ready = pitchCopies.filter { wanted.contains($0.key) }
+        schedulePitchCopies(wanted.subtracting(ready.keys))
         do {
-            let built = try await EditComposition.build(playing, assets: assets)
+            let built = try await EditComposition.build(playing, assets: assets, shifted: ready)
             guard generation == rebuildGeneration, !isClosed else { return }
             builds += 1
             let wasPlaying = isPlaying
@@ -946,6 +979,56 @@ public final class EditSession {
         return task
     }
 
+    // MARK: pitch copies (31.16)
+
+    /// The copies a timeline needs: every audible clip and video overlay with a pitch whose file is here and has sound.
+    func pitchKeys(_ t: EditTimeline) -> Set<EditPitchKey> {
+        var keys = Set<EditPitchKey>()
+        for clip in t.main where !clip.muted {
+            guard let key = EditPitchKey(clip: clip), case .video(_, _, let hasAudio)? = assets[clip.item], hasAudio else { continue }
+            keys.insert(key)
+        }
+        for o in t.overlay where !o.muted {
+            guard let key = EditPitchKey(overlay: o), case .video(_, _, let hasAudio)? = assets[o.item], hasAudio else { continue }
+            keys.insert(key)
+        }
+        return keys
+    }
+
+    /// Starts making the missing copies after `pitchDelay` of quiet (each rebuild restarts the wait). A copy that failed is not
+    /// tried again in this session: that clip plays unshifted.
+    private func schedulePitchCopies(_ missing: Set<EditPitchKey>) {
+        pitchDebounce?.cancel()
+        pitchDebounce = nil
+        let todo = missing.filter { pitchTasks[$0] == nil && !pitchFailures.contains($0) }
+        guard !todo.isEmpty, !isClosed else { return }
+        pitchDebounce = Task { @MainActor [weak self] in
+            guard let self, await self.nap(Self.pitchDelay), !self.isClosed else { return }
+            self.pitchDebounce = nil
+            for key in todo { self.startPitchCopy(key) }
+        }
+    }
+
+    /// One copy, made by the cache off the main actor; when it is ready and the timeline still wants it, the player is rebuilt.
+    private func startPitchCopy(_ key: EditPitchKey) {
+        guard pitchTasks[key] == nil, pitchCopies[key] == nil, let source = sources[key.item] else { return }
+        let cache = self.cache
+        pitchTasks[key] = Task { @MainActor [weak self] in
+            do {
+                let url = try await cache.shiftedAudio(for: source, key: key)
+                guard let self else { return }
+                self.pitchTasks[key] = nil
+                guard !self.isClosed else { return }
+                self.pitchCopies[key] = url
+                if self.pitchKeys(self.timeline).contains(key) { self.scheduleRebuild(delay: 0) }
+            } catch {
+                guard let self else { return }
+                self.pitchTasks[key] = nil
+                if !Task.isCancelled, !self.isClosed { self.pitchFailures.insert(key) }
+            }
+        }
+    }
+
     /// The file of a clip that could not be fetched: try again.
     public func retrySource(_ id: String) {
         sourceFailures[id] = nil
@@ -967,6 +1050,9 @@ public final class EditSession {
         renderPoll?.cancel(); renderPoll = nil
         for task in loads.values { task.cancel() }
         loads = [:]
+        pitchDebounce?.cancel(); pitchDebounce = nil
+        for task in pitchTasks.values { task.cancel() }
+        pitchTasks = [:]
         player.pause()
         isPlaying = false
         if let timeObserver { player.removeTimeObserver(timeObserver) }

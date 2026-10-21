@@ -36,9 +36,9 @@ export const EDIT_CROP_ASPECTS = ["free", "9:16", "1:1", "4:5", "16:9"];
  * @typedef {{x: number, y: number, w: number, h: number}} Rect
  * @typedef {{aspect: string, x: number, y: number, w: number, h: number}} EditCrop
  * @typedef {{id: string, item: string, in: number, out: number, speed: number, crop?: EditCrop, fit: "fill" | "fit",
- *            volume: number, muted: boolean}} MainClip
+ *            volume: number, muted: boolean, pitch?: number}} MainClip
  * @typedef {{id: string, item: string, at: number, in: number, out: number, frame: {x: number, y: number, w: number},
- *            opacity: number, volume: number, muted: boolean}} OverlayClip
+ *            opacity: number, volume: number, muted: boolean, pitch?: number}} OverlayClip
  * @typedef {{version: 1, canvas: {w: number, h: number, fps: number}, main: MainClip[], overlay: OverlayClip[]}} Timeline
  * @typedef {{id: string, content_type: string | null, source?: string | null, width: number | null, height: number | null,
  *            duration: number | null, bytes: number | null, deleted?: boolean | number | null}} SourceRow
@@ -63,6 +63,17 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 function roundTo(x, places) {
     const m = 10 ** places;
     return roundHalfUp(x * m) / m;
+}
+/**
+ * Optional `pitch` (31.16): semitones, rounded to the nearest 0.5, then -12..12; absent when 0 so old timelines stay byte for byte.
+ * @param {Record<string, unknown>} c @param {string} p @returns {{ok: true, pitch: number} | Failure}
+ */
+function parsePitch(c, p) {
+    if (c.pitch === undefined) return { ok: true, pitch: 0 };
+    if (!isNum(c.pitch)) return bad(`${p}.pitch`);
+    const q = roundHalfUp(c.pitch / 0.5) * 0.5 + 0; // "+ 0" turns -0 into 0
+    if (q < -12 || q > 12) return range(`${p}.pitch`);
+    return { ok: true, pitch: q };
 }
 /** @param {unknown} v @returns {v is number} */
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
@@ -170,7 +181,7 @@ export function parseTimeline(raw) {
  */
 function parseMain(c, p, idOk) {
     if (!isObj(c)) return bad(p);
-    let f = keysOk(c, ["id", "item", "in", "out", "speed", "fit", "volume", "muted"], ["crop"], p);
+    let f = keysOk(c, ["id", "item", "in", "out", "speed", "fit", "volume", "muted"], ["crop", "pitch"], p);
     if (f) return f;
     f = idOk(c.id, `${p}.id`);
     if (f) return f;
@@ -195,6 +206,9 @@ function parseMain(c, p, idOk) {
 
     /** @type {MainClip} */
     const clip = { fit: c.fit, id: /** @type {string} */ (c.id), in: cin, item: c.item, muted: c.muted, out: cout, speed, volume: roundTo(rv, 2) };
+    const pt = parsePitch(c, p);
+    if (!pt.ok) return pt;
+    if (pt.pitch !== 0) clip.pitch = pt.pitch;
     if (c.crop !== undefined) {
         const cr = parseCrop(c.crop, `${p}.crop`);
         if (!cr.ok) return cr;
@@ -229,7 +243,7 @@ function parseCrop(c, p) {
  */
 function parseOverlay(c, p, idOk) {
     if (!isObj(c)) return bad(p);
-    let f = keysOk(c, ["id", "item", "at", "in", "out", "frame", "opacity", "volume", "muted"], [], p);
+    let f = keysOk(c, ["id", "item", "at", "in", "out", "frame", "opacity", "volume", "muted"], ["pitch"], p);
     if (f) return f;
     f = idOk(c.id, `${p}.id`);
     if (f) return f;
@@ -256,9 +270,12 @@ function parseOverlay(c, p, idOk) {
     const op = /** @type {number} */ (c.opacity), vol = /** @type {number} */ (c.volume);
     if (op < 0.1 - 1e-9 || op > 1) return range(`${p}.opacity`);
     if (vol < 0 || vol > 1) return range(`${p}.volume`);
+    const pt = parsePitch(c, p);
+    if (!pt.ok) return pt;
     return {
         ok: true,
         clip: sortKeys({
+            ...(pt.pitch !== 0 ? { pitch: pt.pitch } : {}),
             at: roundTo(at, 3),
             frame,
             id: /** @type {string} */ (c.id),

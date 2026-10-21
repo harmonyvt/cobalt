@@ -98,12 +98,12 @@ private struct EditorPhoneSheetContent: View {
     var body: some View {
         switch sheet {
         case .clip(let section):
-            EditorPhoneClipSheet(session: session, section: section)
+            EditorPhoneClipSheet(session: session, section: section, pitchEnabled: model.capabilities.limits.editPitch)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.hidden)
                 .interactiveDismissDisabled()
         case .overlay:
-            EditorPhoneOverlaySheet(session: session)
+            EditorPhoneOverlaySheet(session: session, pitchEnabled: model.capabilities.limits.editPitch)
                 .presentationDetents([.medium, .large])
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
                 .interactiveDismissDisabled()

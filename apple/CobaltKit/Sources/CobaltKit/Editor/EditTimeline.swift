@@ -84,10 +84,12 @@ public struct EditClip: Sendable, Equatable, Codable, Identifiable {
     public var fit: EditFit
     public var volume: Double                   // 0...1
     public var muted: Bool
+    /// Semitones, -12...12 in steps of 0.5 (31.16). 0 = unchanged, and then left out of the JSON so old timelines keep their bytes.
+    public var pitch: Double = 0
 
     public init(
         id: String, item: String, in inPoint: Double, out: Double, speed: Double = 1, crop: EditCrop? = nil,
-        fit: EditFit = .fill, volume: Double = 1, muted: Bool = false
+        fit: EditFit = .fill, volume: Double = 1, muted: Bool = false, pitch: Double = 0
     ) {
         self.id = id
         self.item = item
@@ -98,6 +100,7 @@ public struct EditClip: Sendable, Equatable, Codable, Identifiable {
         self.fit = fit
         self.volume = volume
         self.muted = muted
+        self.pitch = pitch
     }
 
     /// 31.2.1: a clip added to the main track: its whole length, speed 1, no crop, fill, full volume.
@@ -108,7 +111,35 @@ public struct EditClip: Sendable, Equatable, Codable, Identifiable {
     /// The seconds of source this clip plays.
     public var sourceSeconds: Double { out - `in` }
 
-    private enum CodingKeys: String, CodingKey { case id, item, `in`, out, speed, crop, fit, volume, muted }
+    private enum CodingKeys: String, CodingKey { case id, item, `in`, out, speed, crop, fit, volume, muted, pitch }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        item = try c.decode(String.self, forKey: .item)
+        `in` = try c.decode(Double.self, forKey: .in)
+        out = try c.decode(Double.self, forKey: .out)
+        speed = try c.decode(Double.self, forKey: .speed)
+        crop = try c.decodeIfPresent(EditCrop.self, forKey: .crop)
+        fit = try c.decode(EditFit.self, forKey: .fit)
+        volume = try c.decode(Double.self, forKey: .volume)
+        muted = try c.decode(Bool.self, forKey: .muted)
+        pitch = try c.decodeIfPresent(Double.self, forKey: .pitch) ?? 0
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(item, forKey: .item)
+        try c.encode(`in`, forKey: .in)
+        try c.encode(out, forKey: .out)
+        try c.encode(speed, forKey: .speed)
+        try c.encodeIfPresent(crop, forKey: .crop)
+        try c.encode(fit, forKey: .fit)
+        try c.encode(volume, forKey: .volume)
+        try c.encode(muted, forKey: .muted)
+        if pitch != 0 { try c.encode(pitch, forKey: .pitch) }
+    }
 }
 
 /// A crop of the source's display frame, as fractions. `aspect` is a memory for the UI; the server checks only that it is a known
@@ -169,10 +200,12 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
     public var opacity: Double                  // 0.1...1
     public var volume: Double
     public var muted: Bool                      // true by default
+    /// Semitones, -12...12 in steps of 0.5 (31.16); a gif or photo has no sound and ignores it. Left out of the JSON at 0.
+    public var pitch: Double = 0
 
     public init(
         id: String, item: String, at: Double, in inPoint: Double, out: Double, frame: EditFrame, opacity: Double = 1,
-        volume: Double = 1, muted: Bool = true
+        volume: Double = 1, muted: Bool = true, pitch: Double = 0
     ) {
         self.id = id
         self.item = item
@@ -183,6 +216,7 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
         self.opacity = opacity
         self.volume = volume
         self.muted = muted
+        self.pitch = pitch
     }
 
     /// 31.2: video `0` and min(duration, the rest of the timeline); a gif or photo `0` and 3 s (held to the rest of the
@@ -203,7 +237,35 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
     /// How long it is up, in output seconds.
     public var length: Double { out - `in` }
 
-    private enum CodingKeys: String, CodingKey { case id, item, at, `in`, out, frame, opacity, volume, muted }
+    private enum CodingKeys: String, CodingKey { case id, item, at, `in`, out, frame, opacity, volume, muted, pitch }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        item = try c.decode(String.self, forKey: .item)
+        at = try c.decode(Double.self, forKey: .at)
+        `in` = try c.decode(Double.self, forKey: .in)
+        out = try c.decode(Double.self, forKey: .out)
+        frame = try c.decode(EditFrame.self, forKey: .frame)
+        opacity = try c.decode(Double.self, forKey: .opacity)
+        volume = try c.decode(Double.self, forKey: .volume)
+        muted = try c.decode(Bool.self, forKey: .muted)
+        pitch = try c.decodeIfPresent(Double.self, forKey: .pitch) ?? 0
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(item, forKey: .item)
+        try c.encode(at, forKey: .at)
+        try c.encode(`in`, forKey: .in)
+        try c.encode(out, forKey: .out)
+        try c.encode(frame, forKey: .frame)
+        try c.encode(opacity, forKey: .opacity)
+        try c.encode(volume, forKey: .volume)
+        try c.encode(muted, forKey: .muted)
+        if pitch != 0 { try c.encode(pitch, forKey: .pitch) }
+    }
 }
 
 /// An overlay's rectangle as fractions of the canvas: `x`, `y` the top-left corner, `w` the width. The height follows the
@@ -239,6 +301,16 @@ public enum EditJSON {
         guard x.isFinite else { return x }
         return (x * 20).rounded(.toNearestOrAwayFromZero) / 20
     }
+    /// Pitch to the nearest 0.5 semitone the server's way (31.16: `roundHalfUp(x / 0.5) * 0.5`, halves toward +infinity, so
+    /// -2.75 is -2.5), and never -0. Not clamped: `EditValidation` reports a pitch outside -12...12 as `range`.
+    public static func pitch(_ x: Double) -> Double {
+        guard x.isFinite else { return x }
+        let held = min(max(x, -1_000), 1_000)          // still out of range, but safe to make an Int of
+        let q = Double(EditMath.roundHalfUp(held * 2)) / 2
+        return q == 0 ? 0 : q
+    }
+    /// The range a pitch must be in after rounding.
+    public static let pitchRange: ClosedRange<Double> = -12...12
 
     /// Every number rounded as 31.2 says: times 0.001, speed to 0.05, volume and opacity 0.01, fractions 0.0001.
     public static func rounded(_ t: EditTimeline) -> EditTimeline {
@@ -248,6 +320,7 @@ public enum EditJSON {
             out.main[i].out = time(out.main[i].out)
             out.main[i].speed = speed(out.main[i].speed)
             out.main[i].volume = level(out.main[i].volume)
+            out.main[i].pitch = pitch(out.main[i].pitch)
             if var crop = out.main[i].crop {
                 crop.x = fraction(crop.x); crop.y = fraction(crop.y); crop.w = fraction(crop.w); crop.h = fraction(crop.h)
                 out.main[i].crop = crop
@@ -259,6 +332,7 @@ public enum EditJSON {
             out.overlay[i].out = time(out.overlay[i].out)
             out.overlay[i].volume = level(out.overlay[i].volume)
             out.overlay[i].opacity = level(out.overlay[i].opacity)
+            out.overlay[i].pitch = pitch(out.overlay[i].pitch)
             out.overlay[i].frame.x = fraction(out.overlay[i].frame.x)
             out.overlay[i].frame.y = fraction(out.overlay[i].frame.y)
             out.overlay[i].frame.w = fraction(out.overlay[i].frame.w)
@@ -271,6 +345,14 @@ public enum EditJSON {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(rounded(t))
+    }
+
+    /// The timeline with every pitch at 0: what goes to a server that does not know pitch (`limits.edit_pitch` false).
+    public static func withoutPitch(_ t: EditTimeline) -> EditTimeline {
+        var out = t
+        for i in out.main.indices { out.main[i].pitch = 0 }
+        for i in out.overlay.indices { out.overlay[i].pitch = 0 }
+        return out
     }
 
     public static func decode(_ data: Data) throws -> EditTimeline {

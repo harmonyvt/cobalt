@@ -207,6 +207,7 @@ public struct HTTPCobaltClient: CobaltClient {
                 var lineMax: Int?; var lineWaitMs: Double?
                 var shareSetMax: Int?
                 var editMaxSeconds: Double?; var editMaxClips: Int?; var editMaxProjects: Int?
+                var editPitch: Bool?
             }
             var server: String?
             var cobalt: Cobalt?
@@ -235,6 +236,7 @@ public struct HTTPCobaltClient: CobaltClient {
             limits.editMaxSeconds = l.editMaxSeconds ?? limits.editMaxSeconds
             limits.editMaxClips = l.editMaxClips ?? limits.editMaxClips
             limits.editMaxProjects = l.editMaxProjects ?? limits.editMaxProjects
+            limits.editPitch = l.editPitch ?? limits.editPitch
         }
         let f = w.features
         var caps = Capabilities(

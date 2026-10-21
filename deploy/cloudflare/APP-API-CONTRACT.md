@@ -3394,3 +3394,39 @@ Found by lane 2 while rendering real clips; the app preview (CobaltKit) mirrors 
    `zscale=…t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=clip,zscale=t=bt709:m=bt709:r=tv` (the BT.2100 reference
    rendering for a 100-nit display, keeping scene brightness; `hable` halved it). PQ: the same with `tonemap=mobius:param=0.3:desat=0`.
    GIF overlays are scaled to their placed size before `loop`; `.mov` files may start with a `wide`/`mdat`/`moov`/`free`/`skip`/`pnot` atom.
+
+### 31.16 Pitch (amendment, 2026-10-21; owner: "I want to edit the pitch of the audio please")
+
+Additive to timeline version 1: a timeline without pitch is unchanged byte for byte.
+
+1. **Wire (31.2):** a new OPTIONAL key `pitch` on every main clip and every overlay clip: semitones, a number. It must be a finite
+   number (else `error.edit.bad_request` at `<path>.pitch`); it is rounded to the nearest 0.5 first (`roundHalfUp(x / 0.5) * 0.5`,
+   the helper speed uses), then range-checked -12...12 inclusive (else `error.edit.range` at `<path>.pitch`). Canonical form: `pitch`
+   is present only when non-zero after rounding, so a clip with pitch 0 or -0 has no key and the canonical JSON and hashes of every
+   existing timeline stay identical. Old servers refuse the key (strict keys), so the app sends a non-zero pitch only when
+   `GET /capabilities` has `limits.edit_pitch: true` (new boolean beside `edit_max_*`; Kit `Server.Limits.editPitch: Bool = false`,
+   decoded in HTTPCobaltClient like `editMaxClips`) and hides the pitch control when it is false or absent.
+2. **Meaning:** pitch changes the sound's pitch only, never timing, frames or samples (31.4 is untouched). With ratio
+   r = 2^(pitch/12), it applies after the speed (which already keeps pitch). A muted or no-audio clip: no effect. Photo and GIF
+   overlays have no audio; pitch on them is accepted and ignored.
+3. **Render (31.5 step 8):** when pitch is not 0, a clip's audio chain replaces the `atempo` part with
+   `aresample=48000,asetrate=48000*<r>,aresample=48000` followed by the `atempo` chain for `speed / r` (`asetrate` raises tempo and
+   pitch by r; `atempo` puts the tempo back to `speed` and keeps the new pitch). Overlay clips have speed 1, so their chain is
+   `asetrate` plus `atempo` for `1 / r`, placed before `volume`. `atempoChain(s)` now covers any s in [0.125, 8] (factors each in
+   [0.5, 2], product equal to s to 9 decimals; `speed / r` spans 0.125...8). `r` and the factors are written with 9 decimals.
+   The main clip's `apad` + `atrim=end_sample=` and the overlay's `atrim=end_sample=` / `adelay` are unchanged, so sample counts stay
+   exact. Example, +3 at speed 1.5 on a mono source: `aresample=48000,asetrate=48000*1.189207115,aresample=48000,atempo=1.261344623`.
+   Pitch 0 gives the same filter graph as before. Checked with ffmpeg 6.1 on a 440 Hz tone: +12 gives 880 Hz, -12 gives 220 Hz, +3 at
+   1.5x gives 523 Hz, and the output duration and sample count equal the pitch-0 render.
+4. **Preview (AVFoundation, CobaltKit):** the composition already does speed with `scaleTimeRange` and
+   `audioTimePitchAlgorithm = .spectral` (pitch kept). For a clip with pitch != 0 the preview uses a pre-shifted audio file instead of
+   the source's audio: the clip's source range [in, out] is rendered through `AVAudioEngine` in manual (offline) rendering mode with an
+   `AVAudioUnitTimePitch` (`pitch` in cents = semitones * 100, rate 1) to a temporary .caf/.m4a cached by (item, in, out, pitch) in
+   the edit source cache directory, and that file's audio track is inserted for the clip (then scaled for speed as today). While it
+   is being made the preview plays the unshifted audio, and the item is rebuilt (the existing rebuild path) when it is ready. Slider
+   drags are debounced (render on release or after about 300 ms idle). Cache files go with the rest of the source cache.
+5. **App UI:** the phone clip sheet gets a `pitch` section under `speed` (slider -12...12 semitones, step 0.5, centre detent at 0,
+   trailing value `+3`, `-2.5`, `0` from `Copy.Editor.pitchValue(p)`, a `reset` text button when non-zero, hint "changes the voice, not
+   the speed"); the overlay sheet has the same for video overlays; the Mac inspector has the same row in the clip and overlay
+   inspectors. A timeline clip with pitch != 0 shows a small chip like the speed chip, `pitch +3`. Each drag is one undo step (the
+   session's coalescing `key:` like volume: `pitch:<id>` / `opitch:<id>`). Hidden entirely when the server lacks `limits.edit_pitch`.

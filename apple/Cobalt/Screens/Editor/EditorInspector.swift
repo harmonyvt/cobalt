@@ -6,16 +6,18 @@ import SwiftUI
 /// volume and `delete overlay`; with nothing selected it says so and summarises the project.
 struct EditorInspector: View {
     let session: EditSession
+    /// `limits.editPitch` of the server; false hides every pitch control.
+    var pitchEnabled = true
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 switch session.selection {
                 case .main:
-                    if let (index, clip) = session.selectedMain { MainClipInspector(session: session, index: index, clip: clip) }
+                    if let (index, clip) = session.selectedMain { MainClipInspector(session: session, index: index, clip: clip, pitchEnabled: pitchEnabled) }
                     else { nothing }
                 case .overlay:
-                    if let overlay = session.selectedOverlay { OverlayInspector(session: session, overlay: overlay) }
+                    if let overlay = session.selectedOverlay { OverlayInspector(session: session, overlay: overlay, pitchEnabled: pitchEnabled) }
                     else { nothing }
                 case .none:
                     nothing
@@ -50,6 +52,7 @@ private struct MainClipInspector: View {
     let session: EditSession
     let index: Int
     let clip: EditClip
+    var pitchEnabled = true
 
     private var source: EditSource? { session.source(for: clip.item) }
     private var fps: Int { session.timeline.canvas.fps }
@@ -67,6 +70,13 @@ private struct MainClipInspector: View {
             EditorSpeedRow(
                 speed: clip.speed, sourceSeconds: clip.out - clip.in,
                 set: { session.setSpeed($0, clip: clip.id) }, onEnd: { session.endGesture() })
+        }
+        if pitchEnabled {
+            EditorSection(Copy.Editor.pitch, trailing: Copy.Editor.pitchValue(clip.pitch)) {
+                EditorPitchRow(
+                    pitch: clip.pitch,
+                    set: { session.setPitch($0, clip: clip.id) }, onEnd: { session.endGesture() })
+            }
         }
         EditorSection(Copy.Editor.crop) {
             EditorCropRows(
@@ -213,6 +223,13 @@ private struct OverlayInspector: View {
                 setVolume: { session.setOverlayVolume(id: overlay.id, $0) },
                 setMuted: { session.setOverlayMuted(id: overlay.id, $0) },
                 onEnd: { session.endGesture() }, silent: !isVideo)
+        }
+        if pitchEnabled && isVideo {
+            EditorSection(Copy.Editor.pitch, trailing: Copy.Editor.pitchValue(overlay.pitch)) {
+                EditorPitchRow(
+                    pitch: overlay.pitch,
+                    set: { session.setOverlayPitch($0, overlay: overlay.id) }, onEnd: { session.endGesture() })
+            }
         }
         EditorInspectorButton(title: Copy.Editor.deleteOverlay, symbol: Symbol.Editor.delete, destructive: true) {
             session.remove(.overlay(overlay.id))

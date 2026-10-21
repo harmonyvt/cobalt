@@ -113,6 +113,23 @@ describe("POST /edits", () => {
         expect(Object.keys(JSON.parse(row.timeline))).toEqual(["canvas", "main", "overlay", "version"]);
     });
 
+    it("pitch (31.16): saved normalised to 0.5 st, dropped at 0, bad or out of range refused, and read back", async () => {
+        const tl = timeline({ main: [mainClip(ids.a, { pitch: 3.2 })], overlay: [overlayClip(ids.b, { pitch: -0 })] });
+        const p = await create(tl);
+        expect(p.timeline.main[0].pitch).toBe(3);
+        expect("pitch" in p.timeline.overlay[0]).toBe(false);
+        const row = rowsOf("SELECT timeline FROM edit_projects")[0];
+        expect(JSON.parse(row.timeline).main[0].pitch).toBe(3);
+        expect(row.timeline).not.toContain('"pitch":0');
+        const got = await w.api("GET", `/edits/${p.id}`);
+        expect(got.json.project.timeline.main[0].pitch).toBe(3);
+        const post = (t: unknown) => w.api("POST", "/edits", { timeline: t });
+        const bad = await post(timeline({ main: [mainClip(ids.a, { pitch: "3" })] }));
+        expect([bad.status, bad.json.path]).toEqual([400, "main[0].pitch"]);
+        const range = await post(timeline({ main: [mainClip(ids.a, { pitch: 12.5 })] }));
+        expect([range.status, range.json.path]).toEqual([400, "main[0].pitch"]);
+    });
+
     it("takes a title (cleaned) and the overlay and counts clips and frames", async () => {
         const tl = timeline({ overlay: [overlayClip(ids.gif, { at: 1, out: 2 })] });
         const p = await create(tl, { title: "  Beach day  " });
@@ -661,6 +678,7 @@ describe("GET /capabilities", () => {
         const r = await w.api("GET", "/capabilities");
         expect(r.json.features.editor).toBe(true);
         expect(r.json.limits).toMatchObject({ edit_max_seconds: 600, edit_max_clips: 50, edit_max_projects: 200 });
+        expect(r.json.limits.edit_pitch).toBe(true);
         expect([EDIT_MAX_SECONDS, EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS]).toEqual([600, 50, 200]);
     });
 

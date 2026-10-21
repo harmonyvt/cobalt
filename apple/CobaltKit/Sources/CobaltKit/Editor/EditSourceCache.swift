@@ -18,6 +18,7 @@ public actor EditSourceCache {
     private var progresses: [String: Double] = [:]
     private var fetching: [String: Task<URL, Error>] = [:]
     private var decoded: [String: EditSourceAsset] = [:]
+    private var shifting: [EditPitchKey: Task<URL, Error>] = [:]
 
     /// - Parameters:
     ///   - directory: where the downloads live (`Caches/editor` in the app; a temp folder in tests).
@@ -53,6 +54,8 @@ public actor EditSourceCache {
         for task in fetching.values { task.cancel() }
         fetching = [:]
         progresses = [:]
+        for task in shifting.values { task.cancel() }
+        shifting = [:]
     }
 
     /// The decoded file for a library file: a local copy first, else a download. Throws `EditError` (`.offline` with no network,
@@ -68,6 +71,42 @@ public actor EditSourceCache {
 
     /// Forgets the decoded copies (memory), keeping the files.
     public func dropDecoded() { decoded = [:] }
+
+    // MARK: pitch (31.16)
+
+    /// The pre-shifted copy of `key`'s source range (`EditPitchShifter`), made once and kept in this folder under `key.fileName`
+    /// (trimmed with the downloads). Fetches the source first if it is not here. The work runs off this actor in a detached task;
+    /// two callers for one key share it. Throws `EditError` (`.other("no audio")` for a range with no sound).
+    public func shiftedAudio(for source: EditSource, key: EditPitchKey) async throws -> URL {
+        let dest = directory.appendingPathComponent(key.fileName)
+        if FileManager.default.fileExists(atPath: dest.path) {
+            touch(dest)
+            return dest
+        }
+        if let running = shifting[key] { return try await running.value }
+        let folder = directory
+        let task = Task.detached(priority: .utility) { [weak self] () throws -> URL in
+            guard let self else { throw CancellationError() }
+            let file = try await self.file(for: source)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try await EditPitchShifter.render(
+                source: file, in: key.inSeconds, out: key.outSeconds, semitones: key.semitones, to: dest)
+            return dest
+        }
+        shifting[key] = task
+        defer { if shifting[key] == task { shifting[key] = nil } }
+        do {
+            let url = try await task.value
+            trim(keeping: [url])
+            return url
+        } catch let e as EditError {
+            throw e
+        } catch is CancellationError {
+            throw EditError.other("cancelled")
+        } catch {
+            throw EditError.other("pitch:\(key.item)")
+        }
+    }
 
     // MARK: the file
 

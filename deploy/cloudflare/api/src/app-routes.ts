@@ -284,6 +284,8 @@ export async function capabilities(
                 edit_max_seconds: EDIT_MAX_SECONDS,
                 edit_max_clips: EDIT_MAX_CLIPS,
                 edit_max_projects: EDIT_MAX_PROJECTS,
+                // clips accept `pitch` (section 31.16); an older server answers bad_request to the key
+                edit_pitch: true,
             },
             media_base_url: withSlash(d.mediaBaseUrl),
             // the rich link page of a public file https://media.../<name>.<ext> is <share_base_url><name>

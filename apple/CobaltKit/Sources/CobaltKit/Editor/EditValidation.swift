@@ -88,6 +88,7 @@ public enum EditValidation {
                 problems.append(.range(path: "\(p).out"))
             }
             if !(clip.volume >= 0 && clip.volume <= 1) { problems.append(.range(path: "\(p).volume")) }
+            if !EditJSON.pitchRange.contains(clip.pitch) { problems.append(.range(path: "\(p).pitch")) }
             if let crop = clip.crop, !cropIsValid(crop) { problems.append(.range(path: "\(p).crop")) }
             // a crop under 64 px on a side is checked where the source's size is known
             if let crop = clip.crop, cropIsValid(crop), let display = sources[clip.item]?.display,
@@ -115,6 +116,7 @@ public enum EditValidation {
             }
             if !(o.opacity >= 0.1 && o.opacity <= 1) { problems.append(.range(path: "\(p).opacity")) }
             if !(o.volume >= 0 && o.volume <= 1) { problems.append(.range(path: "\(p).volume")) }
+            if !EditJSON.pitchRange.contains(o.pitch) { problems.append(.range(path: "\(p).pitch")) }
             let f = o.frame
             if !(f.w >= 0.05 && f.w <= 1) {
                 problems.append(.range(path: "\(p).frame.w"))

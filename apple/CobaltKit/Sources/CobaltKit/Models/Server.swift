@@ -27,6 +27,9 @@ public struct Capabilities: Sendable, Codable, Equatable {
         public var editMaxClips: Int = 50
         /// `limits.edit_max_projects`: saved edits (projects). 200 when absent.
         public var editMaxProjects: Int = 200
+        /// `limits.edit_pitch` (APP-API-CONTRACT 31.16): the server knows a clip's `pitch`. False when absent: the app hides the
+        /// pitch control and never sends a non-zero pitch (an older server refuses the key).
+        public var editPitch: Bool = false
 
         public static let fork = Limits(
             maxWebpSeconds: 10, minWebpSeconds: 0.5, webpWidths: [320, 480], renderFPS: 15,

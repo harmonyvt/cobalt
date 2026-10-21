@@ -41,7 +41,11 @@ test("the atempo chain: factors within [0.5, 2] (31.5 step 8)", () => {
     assert.deepEqual(atempoChain(0.5), [0.5]);
     assert.deepEqual(atempoChain(0.3), [0.5, 0.6]);
     assert.deepEqual(atempoChain(1 + 1e-7), []);
-    for (const s of [0.25, 0.3, 0.45, 0.7, 1.35, 2.2, 3.85, 4]) {
+    // 31.16 widens the range to [0.125, 8] for speed / 2^(pitch/12)
+    assert.deepEqual(atempoChain(8), [2, 2, 2]);
+    assert.deepEqual(atempoChain(0.125), [0.5, 0.5, 0.5]);
+    assert.deepEqual(atempoChain(5), [2, 2, 1.25]);
+    for (const s of [0.125, 0.15, 0.25, 0.3, 0.45, 0.7, 1.35, 2.2, 3.85, 4, 5.9, 8]) {
         const f = atempoChain(s);
         assert.ok(f.every((x) => x >= 0.5 && x <= 2));
         assert.ok(Math.abs(f.reduce((a, b) => a * b, 1) - s) < 1e-9, `${s}`);
@@ -230,4 +234,41 @@ test("PQ is tone-mapped with mobius, HLG is rendered for a 100 nit display and c
     const P = "PPPPPPPPPPPPPPPP";
     const f = build(edit([mc({ item: P, out: 2 })]), { [P]: V(P, 1920, 1080, { hdr: true, transfer: "smpte2084" }) }).filter;
     assert.match(f, /zscale=tin=smpte2084.*tonemap=mobius:param=0\.3:desat=0,zscale=t=bt709/);
+});
+
+test("pitch 0 or absent leaves the audio graph exactly as before (31.16)", () => {
+    const base = build(edit([mc({ out: 10, speed: 1.5 })], [oc({ muted: false })])).filter;
+    assert.equal(build(edit([mc({ out: 10, speed: 1.5, pitch: 0 })], [oc({ muted: false, pitch: 0 })])).filter, base);
+    assert.ok(!base.includes("asetrate"));
+});
+
+test("a pitched main clip: resample, asetrate, resample, then atempo for speed / r; sample counts stay (31.16)", () => {
+    const t = edit([mc({ in: 2, out: 9.5, speed: 1.5, pitch: 3, volume: 0.7 })]);
+    const f = build(t).filter;
+    const r = 2 ** (3 / 12);
+    assert.equal(dec(r, 9), "1.189207115");
+    assert.equal(dec(1.5 / r, 9), "1.261344623");
+    assert.equal(f.split(";")[1], "[0:a:0]atrim=start=2:end=9.5,asetpts=PTS-STARTPTS,aresample=48000,asetrate=48000*1.189207115,aresample=48000,atempo=1.261344623," +
+        "volume=0.7,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=end_sample=240000,asetpts=PTS-STARTPTS[a0]");
+    // the video chain is untouched
+    assert.equal(f.split(";")[0], build(edit([mc({ in: 2, out: 9.5, speed: 1.5, volume: 0.7 })])).filter.split(";")[0]);
+    // speed 1, +12 (r = 2): atempo 0.5; speed 4, -12 (r = 0.5): atempo 8 as 2,2,2
+    assert.match(build(edit([mc({ pitch: 12 })])).filter, /asetrate=48000\*2,aresample=48000,atempo=0\.5,volume/);
+    assert.match(build(edit([mc({ out: 8, speed: 4, pitch: -12 })])).filter, /asetrate=48000\*0\.5,aresample=48000,atempo=2,atempo=2,atempo=2,volume/);
+    // negative pitch at speed 1: atempo = 1 / r > 1
+    assert.match(build(edit([mc({ pitch: -3 })])).filter, /asetrate=48000\*0\.840896415,aresample=48000,atempo=1\.189207115,volume/);
+    // muted main: no audio chain, no effect
+    assert.equal(build(edit([mc({ muted: true, pitch: 5 })])).filter, build(edit([mc({ muted: true })])).filter);
+});
+
+test("a pitched video overlay keeps its atrim and delay; a photo overlay ignores pitch (31.16)", () => {
+    const t = edit([mc({ out: 10 })], [oc({ at: 1, in: 0, out: 2, muted: false, pitch: -3 })]);
+    const f = build(t).filter;
+    const a = f.split(";").find((x) => x.endsWith("[oa0]"));
+    assert.equal(a, "[1:a:0]atrim=start=0:end=2,asetpts=PTS-STARTPTS,aresample=48000,asetrate=48000*0.840896415,aresample=48000,atempo=1.189207115," +
+        "volume=1,pan=stereo|c0=c0|c1=c0,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=end_sample=96000,asetpts=PTS-STARTPTS,adelay=48000S:all=1,apad,atrim=end_sample=480000[oa0]");
+    const P = "PPPPPPPPPPPPPPPP";
+    const photo = { [P]: V(P, 800, 600, { kind: "photo", contentType: "image/jpeg", duration: null, hasAudio: false, channels: null }) };
+    const tp = edit([mc({ out: 10 })], [oc({ item: P, out: 2, pitch: 7 })]);
+    assert.equal(build(tp, photo).filter, build(edit([mc({ out: 10 })], [oc({ item: P, out: 2 })]), photo).filter);
 });

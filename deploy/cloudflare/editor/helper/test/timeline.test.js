@@ -324,3 +324,40 @@ test("checkSources: crop under 64 px of the real source, overlay kinds, overlay 
     r = T.checkSources(vo, [row(A), row(B, { duration: 2.9 })]);
     assert.deepEqual([r.code, r.path], ["error.edit.past_source_end", "overlay[0].out"]);
 });
+
+test("pitch (31.16): optional, rounded to 0.5 st, range -12..12, omitted at 0, main and overlay", () => {
+    const ok = (/** @type {any} */ raw) => {
+        const r = T.parseTimeline(raw);
+        assert.ok(r.ok, JSON.stringify(r));
+        return r.timeline;
+    };
+    // absent / 0 / -0: no key, canonical bytes identical to a clip without it
+    const plain = T.canonicalJSON(ok(tl({ overlay: [over()] })));
+    for (const p of [undefined, 0, -0, 0.2, -0.2, 0.249]) {
+        const t = ok(tl({ main: [main({ pitch: p })], overlay: [over({ pitch: p })] }));
+        assert.ok(!("pitch" in t.main[0]) && !("pitch" in t.overlay[0]), `${p}`);
+        assert.equal(T.canonicalJSON(t), plain, `${p}`);
+    }
+    // rounding to the nearest 0.5 (halves up, like speed's helper), main and overlay
+    for (const [raw, want] of [[3, 3], [3.2, 3], [3.25, 3.5], [3.3, 3.5], [-2.5, -2.5], [-2.7, -2.5], [-2.25, -2], [12, 12], [-12, -12], [12.2, 12], [-12.2, -12]]) {
+        const t = ok(tl({ main: [main({ pitch: raw })], overlay: [over({ pitch: raw })] }));
+        assert.equal(t.main[0].pitch, want, `${raw}`);
+        assert.equal(t.overlay[0].pitch, want, `${raw}`);
+    }
+    // canonical: pitch sits in sorted key order and canonicalising twice changes nothing
+    const s = T.canonicalJSON(ok(tl({ main: [main({ pitch: 3 })] })));
+    assert.ok(s.includes('"out":4,"pitch":3,"speed":1'), s);
+    assert.equal(T.canonicalJSON(ok(s)), s);
+    // range after rounding, bad for non-numbers
+    for (const p of [12.25, 12.5, 13, -12.3, -13, 1e9]) {
+        refuses(tl({ main: [main({ pitch: p })] }), "error.edit.range", "main[0].pitch");
+        refuses(tl({ main: [main()], overlay: [over({ pitch: p })] }), "error.edit.range", "overlay[0].pitch");
+    }
+    for (const p of ["3", null, NaN, Infinity, true, [1], {}]) {
+        refuses(tl({ main: [main({ pitch: p })] }), "error.edit.bad_request", "main[0].pitch");
+        refuses(tl({ overlay: [over({ pitch: p })] }), "error.edit.bad_request", "overlay[0].pitch");
+    }
+    // pitch changes no timing
+    const a = T.timing(ok(tl({ main: [main({ speed: 1.5 })] }))), b = T.timing(ok(tl({ main: [main({ speed: 1.5, pitch: 7 })] })));
+    assert.deepEqual(a, b);
+});
