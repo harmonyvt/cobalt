@@ -2,7 +2,7 @@ import CobaltKit
 import SwiftUI
 
 /// The kind chips (apple/CONTRACT-GALLERY.md 1.21, board `Library-Mixed`): `all · videos · photos · galleries · webps`,
-/// each with how many there are. Its own row, so it combines with `show` (public, kept on this device) and with the sort;
+/// each with how many there are (a video with webps counts under videos and webps). Its own row, so it combines with `show` (public, kept on this device) and with the sort;
 /// the same state the `kind` list of the sort and show menu sets (`LibraryModel.kindFilter`). Only on a server that has
 /// photos and galleries (`features.gallery`).
 ///
@@ -20,29 +20,22 @@ struct LibraryKindChips: View {
     private var counts: [LibraryKindFilter: Int]? {
         guard !library.hasMore else { return nil }
         var out: [LibraryKindFilter: Int] = [:]
-        func add(_ kind: MediaKind) {
+        func add(_ kind: MediaKind, hasWebp: Bool) {
             out[.all, default: 0] += 1
-            out[Self.filter(for: kind), default: 0] += 1
+            for chip in LibraryKindFilter.chips(kind: kind, hasWebp: hasWebp) { out[chip, default: 0] += 1 }
         }
         for post in library.posts {
             if post.isEmote { out[.emotes, default: 0] += 1 }
-            else { add(model.mediaItem(for: post).kind) }
+            else {
+                let item = model.mediaItem(for: post)
+                add(item.kind, hasWebp: item.hasMadeWebp)
+            }
         }
         for row in extra {
             if row.emote { out[.emotes, default: 0] += 1 }
-            else { add(row.kind) }
+            else { add(row.kind, hasWebp: row.hasWebp) }
         }
         return out
-    }
-
-    /// The chip a media of this kind is counted under.
-    nonisolated static func filter(for kind: MediaKind) -> LibraryKindFilter {
-        switch kind {
-        case .video: return .videos
-        case .photo: return .photos
-        case .gallery: return .galleries
-        case .webp: return .webps
-        }
     }
 
     var body: some View {

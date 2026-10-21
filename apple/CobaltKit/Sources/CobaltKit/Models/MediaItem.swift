@@ -198,7 +198,8 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
     /// What this media is (the library's kind chips): the server's word for the post, else derived from the renditions.
     public var kind: MediaKind {
         if items.count >= 2 || (post?.kind == .gallery) { return .gallery }
-        if let kind = post?.kind, kind != .gallery { return kind }
+        // the server calls a post with no original on it `webp`; the original this device keeps still makes it a video
+        if let kind = post?.kind, kind != .gallery, !(kind == .webp && video != nil) { return kind }
         if let only = items.first ?? video {
             let image = only.itemType.map { $0 == .photo }
                 ?? (only.local.map { StoredMedia.isStill($0) } ?? (only.file?.contentType?.lowercased().hasPrefix("image/") == true))
@@ -221,6 +222,9 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
     }
 
     public var webpCount: Int { renditions.reduce(0) { $0 + ($1.isWebp ? 1 : 0) } }
+
+    /// Holds a webp the owner made: a webp of a video, or a slideshow webp (the library's webps chip).
+    public var hasMadeWebp: Bool { renditions.contains { $0.isWebp || $0.isAnimatedMade } }
 
     public var latestAt: Date { renditions.map(\.createdAt).max() ?? .distantPast }
 
