@@ -3536,16 +3536,18 @@ export class StudioService {
     }
 
     // A session with no item rows whose original is one photo (a single saved photo, an upload, a reopened library
-    // photo): that photo as item 0, for the webp of one photo (18.14). Its size falls back to the session's probe.
+    // photo): that photo as item 0 (a reopened gallery photo: its own item_index), for the webp of one photo (18.14).
+    // Its size falls back to the session's probe.
     private async leadPhotoRows(sid: string): Promise<Awaited<ReturnType<StudioService["makeRows"]>>> {
         const session = await getSession(this.d.db, sid);
         if (!session?.r2_key || itemTypeOf(session.content_type ?? null) !== "photo") return [];
         const row = await this.d.db
-            .prepare("SELECT id, r2_key, content_type, width, height, duration FROM media_items WHERE bucket = 'originals' AND r2_key = ?1 AND deleted_at IS NULL LIMIT 1")
+            .prepare("SELECT id, item_index, r2_key, content_type, width, height, duration FROM media_items WHERE bucket = 'originals' AND r2_key = ?1 AND deleted_at IS NULL LIMIT 1")
             .bind(session.r2_key)
-            .first<{ id: string; r2_key: string; content_type: string | null; width: number | null; height: number | null; duration: number | null }>();
+            .first<{ id: string; item_index: number | null; r2_key: string; content_type: string | null; width: number | null; height: number | null; duration: number | null }>();
         if (!row || itemTypeOf(row.content_type) !== "photo") return [];
-        return [{ ...row, item_index: 0, width: row.width ?? session.width ?? null, height: row.height ?? session.height ?? null }];
+        // a reopened photo of a gallery keeps its place in that post (so its still replaces only its own)
+        return [{ ...row, item_index: row.item_index ?? 0, width: row.width ?? session.width ?? null, height: row.height ?? session.height ?? null }];
     }
 
     // Validates a plan against the session's stored items: which are stills and which are videos, the total

@@ -273,6 +273,24 @@ describe("the webp of a library photo whose session is over: reopened first", ()
         expect(lib.posts).toHaveLength(1);
     });
 
+    it("a reopened photo of a gallery keeps its item_index: its still is that photo's, in the gallery's post", async () => {
+        const L = await lineWorld();
+        const { sid: gallery } = await saveGallery(L as any, photos(3));
+        const third = itemRows(L as any, gallery)[2];
+        L.db.raw.prepare("UPDATE studio_sessions SET expires_at = 1 WHERE id = ?").run(gallery);
+        const opened = await L.keyed(`/library/items/${third.id}/studio`, "POST");
+        expect(opened.status).toBe(201);
+        const sid = ((await opened.json()) as any).id as string;
+        await L.settle(sid);
+        expect((await slide(L, sid, still({ items: [0] }))).status).toBe(400);
+        const { done } = await make(L, sid, still({ items: [2] }));
+        expect(done.status).toBe("success");
+        const row = madeRows(L)[0]!;
+        expect(row).toMatchObject({ post_key: gallery });
+        expect(JSON.parse(row.made_spec)).toMatchObject({ still: true, items: [2] });
+        expect(JSON.parse(row.made_from)).toEqual([third.id]);
+    });
+
     it("a HEIC photo is not reopened (no decoder here)", async () => {
         const L = await lineWorld();
         L.db.raw

@@ -2142,7 +2142,8 @@ identical frames and writes a lone frame as a plain still (`VP8 `, no `VP8X`/`AN
   gif alone → `400 error.webp.invalid_params` (that is a render). `width` may be **640** here (320 | 480 | 640; 2+ items keep
   320 | 480). The mp4 and a plan chained to a save (18.12) still need 2 items.
 - **Which photo**: a gallery's photo item by `item_index`; a session with no item rows whose original is a photo (a single
-  saved photo, an upload, a reopened library photo) has that photo as item 0.
+  saved photo, an upload, a reopened library photo) has that photo as item 0, or as its own `item_index` when it is a
+  reopened photo of a gallery (so the client sends the same index either way).
 - **Reopening**: `POST /library/items/<id>/studio` (5d) takes a private `image/jpeg|png|webp` original too and opens a photo
   session (probed like an upload); HEIC stays `400 error.studio.not_video`. Internally the adopt body carries `photo: true`; the
   web Worker's `/library/adopt` sends no such field and still refuses photos. `POST /studio/<sid>/render` on a photo session
