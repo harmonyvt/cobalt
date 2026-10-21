@@ -48,7 +48,7 @@ import Testing
         #expect(MadeKind.still(item: 1) != MadeKind.slideshow(.webp))
     }
 
-    @Test func theLocalSpecSaysStill() throws {
+    @Test @MainActor func theLocalSpecSaysStill() throws {
         let data = try #require(Pipeline.madeSpec(
             for: .slideshow(.still(index: 1, quality: .high)),
             result: MadeResult(job: "j", itemID: "x", bytes: 1, width: 640, height: 800, seconds: 2, format: .webp)))

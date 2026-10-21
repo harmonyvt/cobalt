@@ -64,6 +64,7 @@ private func touchMediaModels(_ app: AppModel, _ pipeline: Pipeline, _ media: St
     case .slideshow(number: let n, format: let f): _ = (n, f)
     case .galleryImage(layout: let l, number: let n): _ = (l, n)
     case .crop(of: let i, spec: let s): _ = (i, s)
+    case .animated(item: let i): _ = i
     }
     let _: StoredVideo? = face.local
     let _: LibraryFile? = face.file
