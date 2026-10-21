@@ -60,8 +60,6 @@ final class DetailController {
     var postVisibility: Step = .idle
     /// Items whose `try again` was pressed and which have not landed yet.
     var retrying: Set<Int> = []
-    /// A photo being read for its text (the rendition id).
-    var readingText: Rendition.ID?
     /// A batch save to Photos (`save all`, the ticked ones).
     var batchPhotos: Step = .idle
     /// `make from this post…` is open (lane A2's combine sheet).
