@@ -2132,6 +2132,32 @@ carousel with `error.webp.no_video` (`helper/lib.js:188-202`, `server.js:582`). 
 (checked as `gallery=1` is, `studio.ts:812-836`); without it the app hides the three makes and the share sheet draws only `save all`.
 New code: `error.studio.too_few_photos`. Reused: `error.studio.not_video`, `error.studio.not_gallery`, `error.webp.*` as above.
 
+### 18.14 The webp of one photo: a still made animated so Discord offers "favourite" (added 2026-10-21; owner: "convert jpg still images to animated webp so people can favourite on discord")
+
+Discord offers "favourite" only on animated files. img2webp cannot write one from a single picture: WebPAnimEncoder merges
+identical frames and writes a lone frame as a plain still (`VP8 `, no `VP8X`/`ANIM`; checked with libwebp 1.3.2).
+
+- **Route**: `POST /studio/<sid>/slideshow` (18.5, 18.10) with `format: "webp"` and **one** item: `items: [i]`, `seconds: [s]`
+  (0.5-15). The item must be a photo (`image/*` other than gif; HEIC `400 error.studio.unsupported_image` as before); a video or
+  gif alone → `400 error.webp.invalid_params` (that is a render). `width` may be **640** here (320 | 480 | 640; 2+ items keep
+  320 | 480). The mp4 and a plan chained to a save (18.12) still need 2 items.
+- **Which photo**: a gallery's photo item by `item_index`; a session with no item rows whose original is a photo (a single
+  saved photo, an upload, a reopened library photo) has that photo as item 0.
+- **Reopening**: `POST /library/items/<id>/studio` (5d) takes a private `image/jpeg|png|webp` original too and opens a photo
+  session (probed like an upload); HEIC stays `400 error.studio.not_video`. Internally the adopt body carries `photo: true`; the
+  web Worker's `/library/adopt` sends no such field and still refuses photos. `POST /studio/<sid>/render` on a photo session
+  (no `item`) → `409 error.studio.not_video`.
+- **Helper**: one slide is allowed (it always was, 1-20); `width` 640 only with one slide. After img2webp, a webp with fewer than
+  2 frames is rewritten (`animateStill`, `helper/lib.js`) as `VP8X` (animation, + alpha when the picture has it) + `ANIM`
+  (loop forever) + 2 `ANMF` frames that each carry the same bitstream (no re-encode), the plan's time split between them. The
+  helper says `still=1` in `x-cobalt-helper`; a one-photo make is never started on a helper without it (`error.webp.unavailable`).
+- **Result row**: as 18.10 (`role 'slideshow'`, `image/webp`, the helper's poster), named `<title>-animated.webp`,
+  `made_spec` gains `"still": true`. `post_key` is the post the session's original belongs to: the session id, or `<id>` of a
+  session whose link is `upload:<id>` (a reopened photo's webp joins the original post, as GET /library groups it).
+- **Replace (R8)**: a still replaces only an earlier still of the **same photo** (same `made_spec.items[0]`); a slideshow webp
+  replaces only a slideshow webp. The mp4 rule is unchanged.
+- **Capability**: `features.still_webp: true` while `gallery_make` and the running helper said `still=1`.
+
 ---
 
 ## 19. Direct media links: a pasted link to a file just saves (addendum, built 2026-10-10; owner: pasting a Discord CDN attachment answered `error.api.link.invalid`)
