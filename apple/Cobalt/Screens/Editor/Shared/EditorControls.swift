@@ -296,6 +296,49 @@ struct EditorSpeedRow: View {
     }
 }
 
+/// Pitch: a -12...12 semitone slider in steps of a half (so 0 is a natural stop), `changes the voice, not the speed`, and a
+/// `reset` button when it is not 0. The value itself is the section's trailing text.
+struct EditorPitchRow: View {
+    let pitch: Double
+    let set: (Double) -> Void
+    var onEnd: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Slider(
+                value: Binding(get: { pitch }, set: { set(Self.snapped($0)) }), in: -12...12, step: 0.5
+            ) { editing in
+                if !editing { onEnd() }
+            }
+            .accessibilityLabel(Copy.Editor.pitch)
+            .accessibilityValue(Copy.Editor.pitchValue(pitch))
+            HStack {
+                Text(Copy.Editor.pitchHint)
+                    .font(Font.cobalt(11, .regular, relativeTo: .caption2))
+                    .foregroundStyle(CobaltColor.caption)
+                Spacer(minLength: 8)
+                if abs(pitch) > 0.001 {
+                    Button(Copy.Editor.pitchReset) {
+                        set(0)
+                        onEnd()
+                    }
+                    .buttonStyle(.plain)
+                    .font(Font.cobalt(11.5, .medium, relativeTo: .caption))
+                    .foregroundStyle(CobaltColor.text)
+                    .frame(minHeight: Platform.isMac ? 24 : Metrics.hit)
+                    .accessibilityLabel(Copy.Editor.pitchReset)
+                }
+            }
+        }
+    }
+
+    /// A multiple of 0.5 inside -12...12.
+    static func snapped(_ p: Double) -> Double {
+        guard p.isFinite else { return 0 }
+        return min(12, max(-12, (p * 2).rounded() / 2))
+    }
+}
+
 /// Crop and fit: `full free 9:16 1:1 4:5 16:9` (three by two), `edit crop` when a crop is set, then `fill` / `fit`. Presets
 /// need the file's display size; without it the crop row is disabled (the server still has it as it was).
 struct EditorCropRows: View {

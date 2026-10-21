@@ -49,7 +49,7 @@ struct EditorScreen: View {
             EditorPreviewPane(session: session)
                 .background(EditorColor.lane.opacity(0.5))
             divider
-            EditorInspector(session: session)
+            EditorInspector(session: session, pitchEnabled: model.capabilities.limits.editPitch)
                 .frame(width: Self.inspectorWidth)
         }
         .frame(maxHeight: .infinity)

@@ -72,6 +72,13 @@ extension Copy {
         static func speedValue(_ s: Double) -> String { "\(trimmedNumber(s))×" }                  // "1.5×", "0.25×", "2×"
         static func becomes(_ seconds: Double) -> String { "clip becomes \(trimmedNumber(seconds, places: 1))s" }   // "clip becomes 4.5s"
         static let pitchKept = "pitch kept"
+        static let pitch = "pitch", pitchHint = "changes the voice, not the speed", pitchReset = "reset"
+        /// "+3", "-2.5", "0" (semitones, steps of a half).
+        static func pitchValue(_ p: Double) -> String {
+            if abs(p) < 0.001 { return "0" }
+            return "\(p > 0 ? "+" : "-")\(trimmedNumber(abs(p)))"
+        }
+        static func pitchChip(_ p: Double) -> String { "pitch \(pitchValue(p))" }              // "pitch +3"
         static let mute = "mute", unmute = "unmute", muted = "muted", noSound = "no sound"
         static let splitAtPlayhead = "split at playhead", deleteClip = "delete clip", deleteOverlay = "delete overlay"
         static let overlay = "overlay", start = "start", length = "length", position = "position", size = "size", opacity = "opacity"

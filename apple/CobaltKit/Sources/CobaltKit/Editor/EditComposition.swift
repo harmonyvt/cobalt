@@ -51,7 +51,13 @@ public struct EditPlayable: @unchecked Sendable {
 public enum EditComposition {
     /// Builds exactly 31.5. Throws `EditError.other("source:<file id>")` for a clip whose file is not on the device (or is not
     /// the kind of file the track needs), `EditError.other("empty")` for a timeline with no main clip.
-    public static func build(_ t: EditTimeline, assets: [String: EditSourceAsset]) async throws -> EditPlayable {
+    ///
+    /// `shifted`: pre-shifted copies of clips' sound (31.16, `EditPitchShifter`, by `EditPitchKey`). A clip with a pitch whose copy
+    /// is here plays the copy's sound instead of the source's (scaled for speed the same way); one whose copy is not here yet
+    /// plays the source's sound unshifted.
+    public static func build(
+        _ t: EditTimeline, assets: [String: EditSourceAsset], shifted: [EditPitchKey: URL] = [:]
+    ) async throws -> EditPlayable {
         let t = EditJSON.rounded(t)
         // a clip's `out` is clamped to its file's length, as the renderer does
         var durations: [String: Double] = [:]
@@ -95,7 +101,22 @@ public enum EditComposition {
             try insertScaled(
                 into: videoTrack, from: sourceVideo, sourceRange: videoRange, in: clip.`in`,
                 out: min(clip.out, durations[clip.item] ?? clip.out), at: at, target: target)
-            if hasAudio, let sourceAudio = try await asset.loadTracks(withMediaType: .audio).first {
+            let clipOut = min(clip.out, durations[clip.item] ?? clip.out)
+            var pitched: (asset: AVURLAsset, track: AVAssetTrack, range: CMTimeRange)?
+            if hasAudio, !clip.muted, let key = EditPitchKey(clip: clip), let url = shifted[key] {
+                pitched = await shiftedTrack(url)
+            }
+            if let pitched {
+                if mainAudio == nil {
+                    mainAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 2)
+                }
+                if let audioTrack = mainAudio {
+                    // the copy starts at the clip's `in`: its 0...(out - in) stands for the source's in...out
+                    try insertScaled(
+                        into: audioTrack, from: pitched.track, sourceRange: pitched.range, in: 0, out: clipOut - clip.`in`,
+                        at: at, target: target)
+                }
+            } else if hasAudio, let sourceAudio = try await asset.loadTracks(withMediaType: .audio).first {
                 let audioRange = try await sourceAudio.load(.timeRange)
                 if mainAudio == nil {
                     mainAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 2)
@@ -103,7 +124,7 @@ public enum EditComposition {
                 if let audioTrack = mainAudio {
                     try insertScaled(
                         into: audioTrack, from: sourceAudio, sourceRange: audioRange, in: clip.`in`,
-                        out: min(clip.out, durations[clip.item] ?? clip.out), at: at, target: target)
+                        out: clipOut, at: at, target: target)
                 }
             }
             mainVolumes.append((at, clip.muted ? 0 : Float(clip.volume)))
@@ -129,7 +150,19 @@ public enum EditComposition {
                 let at = CMTime(value: Int64(clip.start), timescale: fps)
                 let length = CMTime(value: Int64(clip.frames), timescale: fps)
                 try insertPlain(into: videoTrack, from: sourceVideo, sourceRange: videoRange, in: o.`in`, length: length, at: at)
-                if hasAudio, !o.muted, let sourceAudio = try await avAsset.loadTracks(withMediaType: .audio).first {
+                var pitched: (asset: AVURLAsset, track: AVAssetTrack, range: CMTimeRange)?
+                if hasAudio, !o.muted, let key = EditPitchKey(overlay: o), let url = shifted[key] {
+                    pitched = await shiftedTrack(url)
+                }
+                if let pitched {
+                    if overlayAudio == nil {
+                        overlayAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 4)
+                    }
+                    if let audioTrack = overlayAudio {
+                        try insertPlain(into: audioTrack, from: pitched.track, sourceRange: pitched.range, in: 0, length: length, at: at)
+                        overlayVolumes.append((at, Float(o.volume)))
+                    }
+                } else if hasAudio, !o.muted, let sourceAudio = try await avAsset.loadTracks(withMediaType: .audio).first {
                     let audioRange = try await sourceAudio.load(.timeRange)
                     if overlayAudio == nil {
                         overlayAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 4)
@@ -200,6 +233,17 @@ public enum EditComposition {
     }
 
     // MARK: inserting
+
+    /// The audio track of a pre-shifted copy and its range; nil when it cannot be read (the source's sound plays instead).
+    /// The asset is returned with the track: a track does not keep its asset alive, and inserting from a track whose asset is gone
+    /// fails (AVFoundation -11800 / -12780), which took the whole preview down once a copy was ready.
+    static func shiftedTrack(_ url: URL) async -> (asset: AVURLAsset, track: AVAssetTrack, range: CMTimeRange)? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let asset = AVURLAsset(url: url)
+        guard let track = try? await asset.loadTracks(withMediaType: .audio).first,
+              let range = try? await track.load(.timeRange), range.isValid, !range.isEmpty else { return nil }
+        return (asset, track, range)
+    }
 
     /// Source seconds as a CMTime (milliseconds: the timeline's own resolution, so exact).
     static func cm(_ seconds: Double) -> CMTime { CMTime(value: Int64((seconds * 1_000).rounded()), timescale: 1_000) }

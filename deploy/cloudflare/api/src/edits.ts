@@ -25,7 +25,7 @@ import {
 // ---- the validator, as this file uses it ------------------------------------------------------------------
 
 export type Crop = { aspect: string; x: number; y: number; w: number; h: number };
-export type MainClip = { id: string; item: string; in: number; out: number; speed: number; crop?: Crop; fit: string; volume: number; muted: boolean };
+export type MainClip = { id: string; item: string; in: number; out: number; speed: number; crop?: Crop; fit: string; volume: number; muted: boolean; pitch?: number };
 export type OverlayClip = {
     id: string;
     item: string;
@@ -36,6 +36,7 @@ export type OverlayClip = {
     opacity: number;
     volume: number;
     muted: boolean;
+    pitch?: number;
 };
 export type Timeline = { version: 1; canvas: { w: number; h: number; fps: number }; main: MainClip[]; overlay: OverlayClip[] };
 export type Validation = { ok: true; timeline?: Timeline } | { ok: false; code: string; path: string; items?: string[] };

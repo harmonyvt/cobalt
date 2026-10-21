@@ -125,6 +125,7 @@ enum PreviewData {
         }
         if scenario.hasEditor && caps.kind == .fork {
             caps.editor = true
+            caps.limits.editPitch = true
         }
         if scenario == .skyMap && caps.kind == .fork {
             caps.search = true

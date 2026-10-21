@@ -1003,6 +1003,7 @@ describe("GET /capabilities", () => {
                 edit_max_seconds: 600,
                 edit_max_clips: 50,
                 edit_max_projects: 200,
+                edit_pitch: true,
             },
             media_base_url: "https://media.capybaraharmony.com/",
             share_base_url: null,
@@ -1031,6 +1032,7 @@ describe("GET /capabilities", () => {
             edit_max_seconds: 600,
             edit_max_clips: 50,
             edit_max_projects: 200,
+            edit_pitch: true,
         });
     });
     it("a valid key: key valid with its name, and the use is stamped like on any keyed call", async () => {

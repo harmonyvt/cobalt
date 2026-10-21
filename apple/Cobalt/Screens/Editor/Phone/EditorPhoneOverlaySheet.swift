@@ -7,13 +7,15 @@ import SwiftUI
 /// set by dragging on the preview above, which stays in view at the medium height. `cancel` puts the overlay back as it was.
 struct EditorPhoneOverlaySheet: View {
     let session: EditSession
+    var pitchEnabled = true
 
     @Environment(\.dismiss) private var dismiss
     @State private var original: EditOverlay?
     @State private var overlayID: String
 
-    init(session: EditSession) {
+    init(session: EditSession, pitchEnabled: Bool = true) {
         self.session = session
+        self.pitchEnabled = pitchEnabled
         let overlay = session.selectedOverlay
         _original = State(initialValue: overlay)
         _overlayID = State(initialValue: overlay?.id ?? "")
@@ -31,6 +33,7 @@ struct EditorPhoneOverlaySheet: View {
                         sizeSection(overlay)
                         opacitySection(overlay)
                         volumeSection(overlay)
+                        if pitchEnabled && session.source(for: overlay.item)?.kind == .video { pitchSection(overlay) }
                         EditorInspectorButton(title: Copy.Editor.deleteOverlay, symbol: Symbol.Editor.delete, destructive: true) {
                             session.remove(.overlay(overlay.id))
                             dismiss()
@@ -72,6 +75,7 @@ struct EditorPhoneOverlaySheet: View {
         if now.frame != original.frame { session.setOverlayFrame(id: original.id, original.frame) }
         if now.opacity != original.opacity { session.setOverlayOpacity(id: original.id, original.opacity) }
         if now.volume != original.volume { session.setOverlayVolume(id: original.id, original.volume) }
+        if now.pitch != original.pitch { session.setOverlayPitch(original.pitch, overlay: original.id) }
         if now.muted != original.muted { session.setOverlayMuted(id: original.id, original.muted) }
         session.endGesture()
     }
@@ -141,6 +145,14 @@ struct EditorPhoneOverlaySheet: View {
             EditorSlider(
                 value: Binding(get: { overlay.opacity }, set: { session.setOverlayOpacity(id: overlay.id, $0) }),
                 range: 0.1...1, step: 0.01, label: Copy.Editor.opacity, onEnd: { session.endGesture() })
+        }
+    }
+
+    private func pitchSection(_ overlay: EditOverlay) -> some View {
+        EditorSection(Copy.Editor.pitch, trailing: Copy.Editor.pitchValue(overlay.pitch)) {
+            EditorPitchRow(
+                pitch: overlay.pitch,
+                set: { session.setOverlayPitch($0, overlay: overlay.id) }, onEnd: { session.endGesture() })
         }
     }
 
