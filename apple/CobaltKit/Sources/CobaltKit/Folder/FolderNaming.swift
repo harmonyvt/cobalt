@@ -63,6 +63,7 @@ enum FolderNaming {
         case .item?:
             return assemble(stem: itemNumber(video.itemIndex ?? 0), ext: ext)
         case .slideshow?:
+            if case .still(let item)? = video.madeKind { return assemble(stem: "\(itemNumber(item)) · animated", ext: ext) }
             return assemble(stem: "slideshow", ext: ext)
         case .export?:
             if case .galleryImage(let layout)? = video.madeKind { return assemble(stem: "gallery image · \(layout.label)", ext: ext) }

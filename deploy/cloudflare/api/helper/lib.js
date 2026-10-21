@@ -1369,6 +1369,96 @@ export function parseWebp(buf) {
     return { width, height, animated, frames, durationMs };
 }
 
+/** The frames a still webp is split into (APP-API-CONTRACT 18.14): Discord only offers "favourite" on an animated file. */
+export const STILL_WEBP_FRAMES = 2;
+
+/**
+ * A webp that holds one picture, rewritten as an ANIMATED webp of STILL_WEBP_FRAMES copies of that picture
+ * (APP-API-CONTRACT 18.14). img2webp cannot make one: WebPAnimEncoder merges identical frames, and a single frame left
+ * over is written as a plain still (`VP8 ` with no `VP8X`/`ANIM`), which Discord treats as a photo. The picture's bitstream
+ * is copied as is (no re-encode). Accepts a plain still (`VP8 ` / `VP8L`, optionally under `VP8X` with `ALPH`) or an
+ * animation of one frame; a webp that already has 2 or more frames comes back unchanged. `totalMs` is shared out over the
+ * frames (at least 20 ms each). Returns null when `buf` is not a webp it can read.
+ * @param {Buffer} buf
+ * @param {number} totalMs
+ * @returns {Buffer | null}
+ */
+export function animateStill(buf, totalMs) {
+    const info = parseWebp(buf);
+    if (!info) return null;
+    if (info.frames >= STILL_WEBP_FRAMES) return buf;
+    /** @type {Buffer[]} the chunks of the one picture (ALPH + VP8, or VP8L), each with its 8-byte header and padding */
+    const picture = [];
+    let width = 0;
+    let height = 0;
+    let alpha = false;
+    let pos = 12;
+    while (pos + 8 <= buf.length) {
+        const fourcc = buf.toString("latin1", pos, pos + 4);
+        const size = buf.readUInt32LE(pos + 4);
+        const data = pos + 8;
+        const end = data + size + (size & 1);
+        if (data + size > buf.length) return null;
+        if (fourcc === "VP8X" && size >= 10) {
+            width = 1 + buf.readUIntLE(data + 4, 3);
+            height = 1 + buf.readUIntLE(data + 7, 3);
+        } else if (fourcc === "ANMF" && size >= 16) {
+            // an animation of one frame: its picture chunks follow the 16-byte frame header
+            let p = data + 16;
+            while (p + 8 <= data + size) {
+                const cc = buf.toString("latin1", p, p + 4);
+                const s = buf.readUInt32LE(p + 4);
+                const e = p + 8 + s + (s & 1);
+                if (cc === "ALPH") alpha = true;
+                if (cc === "ALPH" || cc === "VP8 " || cc === "VP8L") picture.push(buf.subarray(p, Math.min(e, buf.length)));
+                p = e;
+            }
+        } else if (fourcc === "ALPH" || fourcc === "VP8 " || fourcc === "VP8L") {
+            if (fourcc === "ALPH") alpha = true;
+            if (fourcc === "VP8 " && size >= 10 && !width) {
+                width = buf.readUInt16LE(data + 6) & 0x3fff;
+                height = buf.readUInt16LE(data + 8) & 0x3fff;
+            } else if (fourcc === "VP8L" && size >= 5 && !width) {
+                if (buf[data] !== 0x2f) return null;
+                const bits = buf.readUInt32LE(data + 1);
+                width = (bits & 0x3fff) + 1;
+                height = ((bits >>> 14) & 0x3fff) + 1;
+                if ((bits >>> 28) & 1) alpha = true;
+            }
+            picture.push(buf.subarray(pos, end));
+        }
+        pos = end;
+    }
+    if (!picture.some((c) => c.toString("latin1", 0, 4) !== "ALPH") || !(width > 0) || !(height > 0)) return null;
+    const frame = Buffer.concat(picture);
+    const chunk = (fourcc, payload) => {
+        const head = Buffer.alloc(8);
+        head.write(fourcc, 0, "latin1");
+        head.writeUInt32LE(payload.length, 4);
+        return Buffer.concat([head, payload, payload.length & 1 ? Buffer.alloc(1) : Buffer.alloc(0)]);
+    };
+    const vp8x = Buffer.alloc(10);
+    vp8x[0] = 0x02 | (alpha ? 0x10 : 0); // animation (+ alpha)
+    vp8x.writeUIntLE(width - 1, 4, 3);
+    vp8x.writeUIntLE(height - 1, 7, 3);
+    const anim = Buffer.alloc(6); // background 0 (transparent black), loop count 0 = forever
+    const each = Math.max(20, Math.round((Number.isFinite(totalMs) ? totalMs : 0) / STILL_WEBP_FRAMES));
+    const frames = [];
+    for (let i = 0; i < STILL_WEBP_FRAMES; i++) {
+        const head = Buffer.alloc(16); // x/2 = 0, y/2 = 0
+        head.writeUIntLE(width - 1, 6, 3);
+        head.writeUIntLE(height - 1, 9, 3);
+        head.writeUIntLE(Math.min(0xffffff, each), 12, 3);
+        head[15] = 0x02; // do not blend, do not dispose: every frame is the whole canvas
+        frames.push(chunk("ANMF", Buffer.concat([head, frame])));
+    }
+    const body = Buffer.concat([Buffer.from("WEBP", "latin1"), chunk("VP8X", vp8x), chunk("ANIM", anim), ...frames]);
+    const riff = Buffer.alloc(8);
+    riff.write("RIFF", 0, "latin1");
+    riff.writeUInt32LE(body.length, 4);
+    return Buffer.concat([riff, body]);
+}
+
 // --- slideshow (APP-API-CONTRACT 18.5 / 18.7, apple/CONTRACT-GALLERY.md section 6) --------------
 
 export const SLIDESHOW_FPS = 30;
@@ -1411,7 +1501,9 @@ export function validateSlideshowStart(b) {
     /** @type {{quality?: "low" | "med" | "high", fps?: number}} */
     let enc = {};
     if (webp) {
-        if (b.sound !== "none" || ![320, 480].includes(width)) return null;
+        // 640 only for a webp of one photo (APP-API-CONTRACT 18.14)
+        const one = Array.isArray(b.slides) && b.slides.length === 1;
+        if (b.sound !== "none" || !(width === 320 || width === 480 || (width === 640 && one))) return null;
         const quality = b.quality === undefined ? "med" : b.quality;
         if (typeof quality !== "string" || !Object.hasOwn(QUALITY, quality)) return null;
         const fps = b.fps === undefined ? 15 : b.fps;

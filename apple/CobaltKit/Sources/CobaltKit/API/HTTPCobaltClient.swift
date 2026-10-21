@@ -197,6 +197,7 @@ public struct HTTPCobaltClient: CobaltClient {
                 var chat: Bool?
                 var stage: Bool?
                 var stageTwitch: Bool?
+                var stillWebp: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -267,6 +268,7 @@ public struct HTTPCobaltClient: CobaltClient {
         caps.chat = f?.chat ?? false
         caps.stage = f?.stage ?? false
         caps.stageTwitch = (f?.stageTwitch ?? false) && caps.stage
+        caps.stillWebp = (f?.stillWebp ?? false) && caps.galleryMake
         return caps
     }
 

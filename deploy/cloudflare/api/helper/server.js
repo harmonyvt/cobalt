@@ -152,8 +152,9 @@ import {
 /** Sent on every answer (see `createServer`): the Durable Object's `features.gallery` follows it. */
 export const HELPER_CAPS_HEADER = "x-cobalt-helper";
 // `gallery=1`: the slideshow routes; `make=1`: the slideshow webp, the gallery image routes, `item` renders' (APP-API-CONTRACT 18.8, 18.10-18.13);
-// `direct=1`: a pasted link to a media file that cobalt does not know is saved as that file (APP-API-CONTRACT 19)
-export const HELPER_CAPS = "gallery=1,make=1,direct=1";
+// `direct=1`: a pasted link to a media file that cobalt does not know is saved as that file (APP-API-CONTRACT 19);
+// `still=1`: a webp of one photo comes out animated (2 frames), so Discord offers "favourite" (APP-API-CONTRACT 18.14)
+export const HELPER_CAPS = "gallery=1,make=1,direct=1,still=1";
 
 /** What cobalt says about a link it has no service for: the studio then tries the link as a file (section 19). */
 /** How much of a saved file's start is read to type it and read its pixel size (a JPEG's frame header can follow a big EXIF/ICC). */

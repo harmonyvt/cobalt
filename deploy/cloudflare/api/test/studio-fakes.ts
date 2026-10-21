@@ -362,10 +362,12 @@ export class FakeHelper {
     makes = true;
     // `direct=1`: a link to a media file that cobalt has no service for is saved as that file (APP-API-CONTRACT.md 19)
     directs = true;
+    // `still=1`: a webp of one photo comes out animated (APP-API-CONTRACT.md 18.14)
+    stills = true;
     helper = async (path: string, init?: RequestInit): Promise<Response> => {
         const res = await this.answer(path, init);
         if (this.advertise) {
-            res.headers.set("x-cobalt-helper", [this.makes ? "gallery=1,make=1" : "gallery=1", this.directs ? "direct=1" : ""].filter(Boolean).join(","));
+            res.headers.set("x-cobalt-helper", [this.makes ? "gallery=1,make=1" : "gallery=1", this.directs ? "direct=1" : "", this.stills ? "still=1" : ""].filter(Boolean).join(","));
         }
         return res;
     };

@@ -36,6 +36,9 @@ extension Copy {
         static func saving(_ i: Int, of n: Int) -> String { "saving \(i) of \(n)" }
         static let makeFromIt = "make from it", makeFromThisPost = "make from this post…"
         static let slideshowWebp = "slideshow webp", slideshowMp4 = "slideshow mp4", galleryImage = "gallery image"
+        /// The webp of one photo (APP-API-CONTRACT 18.14): the button, the tab and the tray's word.
+        static let animatedWebp = "animated webp"
+        static let animatedWebpHint = "makes a webp of this photo that discord lets people favourite"
         static func afterTheSave(_ i: Int, of n: Int) -> String { "after the save · \(i) of \(n)" }
         /// `place`: "Files › On My iPhone › cobalt › <title>" / "~/Movies/cobalt/<title>".
         static func savedTo(_ place: String) -> String { "saved to capystore · \(place)" }

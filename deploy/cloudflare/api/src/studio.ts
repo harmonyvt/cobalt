@@ -538,7 +538,8 @@ export type SlideshowPlan = {
     // 18.10: the webp slideshow. Absent = the mp4 (a plan stored before 18.10 reads as one); `quality` and `width` only with `webp`
     format?: "webp";
     quality?: Quality;
-    width?: 320 | 480;
+    // 640 only for a webp of one photo (18.14)
+    width?: 320 | 480 | 640;
     // asked for with the save (POST /studio, 18.12): an item that failed to save is dropped from the plan instead of ending it
     chained?: boolean;
 };
@@ -579,7 +580,9 @@ export function parseSlideshowPlan(
     const bad = (code = invalidCode) => ({ ok: false as const, status: 400 as const, code });
     if (!isPlainObject(raw)) return bad();
     const { items, seconds, fade, frame, sound, format, quality, width } = raw;
-    if (!Array.isArray(items) || items.length < 2 || items.length > MAX_ITEMS) return bad();
+    // a webp may be of ONE photo (18.14: a still made animated, so Discord offers "favourite"); everything else needs 2
+    const fewest = format === "webp" && !(opts.stored && raw.chained === true) ? 1 : 2;
+    if (!Array.isArray(items) || items.length < fewest || items.length > MAX_ITEMS) return bad();
     if (!items.every(isIndex) || new Set(items).size !== items.length) return bad();
     if (!Array.isArray(seconds) || seconds.length !== items.length) return bad();
     if (format !== undefined && format !== null && format !== "mp4" && format !== "webp") return bad();
@@ -588,7 +591,7 @@ export function parseSlideshowPlan(
     if (!webp && ((quality !== undefined && quality !== null) || (width !== undefined && width !== null))) return bad();
     if (webp) {
         if (quality !== undefined && quality !== null && !(RENDER_QUALITIES as readonly unknown[]).includes(quality)) return bad();
-        if (width !== undefined && width !== null && width !== 320 && width !== 480) return bad();
+        if (width !== undefined && width !== null && width !== 320 && width !== 480 && !(width === 640 && items.length === 1)) return bad();
         // a webp has no sound
         if (sound !== undefined && sound !== "none") return bad();
     }
@@ -611,7 +614,7 @@ export function parseSlideshowPlan(
             frame: (frame as SlideshowPlan["frame"] | undefined) ?? "keep",
             sound: (sound as SlideshowPlan["sound"] | undefined) ?? "none",
             ...(webp
-                ? { format: "webp" as const, quality: ((quality as Quality | null | undefined) ?? "med") as Quality, width: ((width as 320 | 480 | null | undefined) ?? 480) as 320 | 480 }
+                ? { format: "webp" as const, quality: ((quality as Quality | null | undefined) ?? "med") as Quality, width: ((width as 320 | 480 | 640 | null | undefined) ?? 480) as 320 | 480 | 640 }
                 : {}),
             ...(opts.stored && raw.chained === true ? { chained: true } : {}),
         },
@@ -635,6 +638,9 @@ export function parseGalleryImagePlan(
         plan: { items: [...(items as number[])], layout: layout as GalleryLayout, ...(opts.stored && raw.chained === true ? { chained: true } : {}) },
     };
 }
+
+// The still photos a library item may be reopened as (18.14), for the webp of one photo
+export const STILL_ADOPT_TYPES: ReadonlySet<string> = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 // What an item is by its stored type
 export const itemTypeOf = (contentType: string | null): "photo" | "video" | "gif" =>
@@ -907,17 +913,21 @@ export class StudioService {
     private helperMake: boolean | undefined;
     // `direct=1` (19): a pasted link to a media file that cobalt has no service for is saved as that file
     private helperDirect: boolean | undefined;
+    // `still=1` (18.14): a webp of one photo comes out animated (2 frames), so Discord offers "favourite"
+    private helperStill: boolean | undefined;
     private noteHelper(res: Response): Response {
         try {
             const caps = res.headers.get(HELPER_CAPS_HEADER) ?? "";
             const g = caps.includes("gallery=1");
             const m = caps.includes("make=1");
             const dl = caps.includes("direct=1");
-            if (g !== this.helperGallery || m !== this.helperMake || dl !== this.helperDirect) {
+            const st = caps.includes("still=1");
+            if (g !== this.helperGallery || m !== this.helperMake || dl !== this.helperDirect || st !== this.helperStill) {
                 this.helperGallery = g;
                 this.helperMake = m;
                 this.helperDirect = dl;
-                void Promise.resolve(this.d.storage.put("helper:caps", { gallery: g, make: m, direct: dl, at: this.d.now() })).catch(() => {});
+                this.helperStill = st;
+                void Promise.resolve(this.d.storage.put("helper:caps", { gallery: g, make: m, direct: dl, still: st, at: this.d.now() })).catch(() => {});
             }
         } catch {
             // a response whose headers cannot be read says nothing
@@ -928,19 +938,22 @@ export class StudioService {
         let gallery = this.helperGallery;
         let make = this.helperMake;
         let direct = this.helperDirect;
+        let still = this.helperStill;
         if (gallery === undefined) {
             try {
-                const stored = await this.d.storage.get<{ gallery?: boolean; make?: boolean; direct?: boolean }>("helper:caps");
+                const stored = await this.d.storage.get<{ gallery?: boolean; make?: boolean; direct?: boolean; still?: boolean }>("helper:caps");
                 gallery = stored?.gallery === true;
                 make = stored?.make === true;
                 direct = stored?.direct === true;
+                still = stored?.still === true;
             } catch {
                 gallery = false;
                 make = false;
                 direct = false;
+                still = false;
             }
         }
-        return { status: 200, body: { status: "success", gallery, make: make === true, direct: direct === true } };
+        return { status: 200, body: { status: "success", gallery, make: make === true, direct: direct === true, still: still === true } };
     }
     // helper job id -> when this DO started it; used only for the busy answer.
     private encodes = new Map<string, number>();
@@ -3190,7 +3203,11 @@ export class StudioService {
         if (typeof itemId !== "string" || !/^[A-Za-z0-9]{1,64}$/.test(itemId)) return invalid();
         if (typeof rawType !== "string") return invalid();
         const contentType = rawType.trim().toLowerCase();
-        if (!/^video\/[a-z0-9.+-]+$/.test(contentType) && contentType !== "image/gif") {
+        // a still photo opens too when the library reopens it for its webp of one photo (`photo: true`, 18.14); HEIC
+        // does not, ffmpeg here has no HEIF decoder
+        if (b.photo !== undefined && typeof b.photo !== "boolean") return invalid();
+        const stillOk = b.photo === true && STILL_ADOPT_TYPES.has(contentType);
+        if (!/^video\/[a-z0-9.+-]+$/.test(contentType) && contentType !== "image/gif" && !stillOk) {
             return studioErr(400, "error.studio.not_video");
         }
         if (typeof bytes !== "number" || !Number.isInteger(bytes) || bytes <= 0) return invalid();
@@ -3382,6 +3399,8 @@ export class StudioService {
             source = { r2Key: found.r2_key, duration: found.duration, width: found.width, height: found.height };
             item = { index: itemField, id: found.id };
         }
+        // a photo session renders nothing: its webp is the make of one photo (POST /studio/<sid>/slideshow, 18.14)
+        if (!item && itemTypeOf(row.content_type) === "photo") return studioErr(409, "error.studio.not_video");
         const check = validateRender(parsed, { duration: source.duration, width: source.width, height: source.height });
         if (!check.ok) return studioErr(check.status, check.code);
         const p = check.params;
@@ -3516,6 +3535,21 @@ export class StudioService {
         ).results;
     }
 
+    // A session with no item rows whose original is one photo (a single saved photo, an upload, a reopened library
+    // photo): that photo as item 0 (a reopened gallery photo: its own item_index), for the webp of one photo (18.14).
+    // Its size falls back to the session's probe.
+    private async leadPhotoRows(sid: string): Promise<Awaited<ReturnType<StudioService["makeRows"]>>> {
+        const session = await getSession(this.d.db, sid);
+        if (!session?.r2_key || itemTypeOf(session.content_type ?? null) !== "photo") return [];
+        const row = await this.d.db
+            .prepare("SELECT id, item_index, r2_key, content_type, width, height, duration FROM media_items WHERE bucket = 'originals' AND r2_key = ?1 AND deleted_at IS NULL LIMIT 1")
+            .bind(session.r2_key)
+            .first<{ id: string; item_index: number | null; r2_key: string; content_type: string | null; width: number | null; height: number | null; duration: number | null }>();
+        if (!row || itemTypeOf(row.content_type) !== "photo") return [];
+        // a reopened photo of a gallery keeps its place in that post (so its still replaces only its own)
+        return [{ ...row, item_index: row.item_index ?? 0, width: row.width ?? session.width ?? null, height: row.height ?? session.height ?? null }];
+    }
+
     // Validates a plan against the session's stored items: which are stills and which are videos, the total
     // length, the frame. The run it returns is what the line entry carries. A `chained` plan (asked for with the
     // save, 18.12) is built over the asked items that WERE saved: a failed one is dropped, and fewer than 2 left
@@ -3531,7 +3565,16 @@ export class StudioService {
         } catch {
             return { ok: false, status: 503, code: "error.api.generic" };
         }
-        if (rows.length < 2) return { ok: false, status: 409, code: "error.studio.not_gallery" };
+        // a webp of one photo (18.14): a photo item of a gallery, or the photo of a single-photo post as item 0
+        const still = plan.format === "webp" && plan.items.length === 1 && !plan.chained;
+        if (still && rows.length === 0) {
+            try {
+                rows = await this.leadPhotoRows(sid);
+            } catch {
+                return { ok: false, status: 503, code: "error.api.generic" };
+            }
+        }
+        if (rows.length < (still ? 1 : 2)) return { ok: false, status: 409, code: "error.studio.not_gallery" };
         const byIndex = new Map(rows.map((r) => [r.item_index, r]));
         let wanted = plan.items.map((index, n) => ({ index, seconds: plan.seconds[n] ?? null }));
         if (plan.chained) {
@@ -3551,6 +3594,8 @@ export class StudioService {
             const seconds = wanted[n]!.seconds;
             // a still has the seconds it is shown for; a video or a gif plays its own length (a gif once)
             if (type === "photo" ? seconds === null : seconds !== null) return bad();
+            // one video or gif is a render (POST /studio/<sid>/render), not a make
+            if (still && type !== "photo") return bad();
             // HEIC stays as it was uploaded: the container's ffmpeg has no HEIF still decoder
             if (r.content_type === "image/heic") return { ok: false, status: 400, code: "error.studio.unsupported_image" };
             total += type === "photo" ? seconds! : (r.duration ?? 0);
@@ -3794,6 +3839,8 @@ export class StudioService {
         // a helper that does not say `make=1` (an older image) would make an mp4 of a webp plan: never start that
         const webp = kind === "slideshow" && (run as SlideshowRun).format === "webp";
         if (webp && this.helperMake !== true) return { kind: "fatal", code: "error.webp.unavailable" };
+        // ... and one without `still=1` would write a plain still for one photo (18.14), which is not what was asked for
+        if (webp && run.inputs.length === 1 && this.helperStill !== true) return { kind: "fatal", code: "error.webp.unavailable" };
         let res: Response;
         try {
             const body =
@@ -4045,6 +4092,11 @@ export class StudioService {
         const run = (rec.slideshow ?? rec.gallery)!;
         const slide = rec.slideshow;
         const webp = kind === "slideshow" && slide?.format === "webp";
+        // the webp of one photo (18.14)
+        const stillMake = webp && run.inputs.length === 1;
+        // the post this file joins: the session's own, or for a reopened upload or library photo ("upload:<id>") that id,
+        // as GET /library groups it (SESSION_POST_KEY_SQL)
+        const postKey = session.link?.startsWith("upload:") && session.link.length > 7 ? session.link.slice(7) : sid;
         const transient = () => ({ status: 502, body: { status: "error", error: { code: "error.webp.storage" } } }) as StudioReply;
         let file: Response;
         try {
@@ -4105,12 +4157,19 @@ export class StudioService {
             name = `${title}-gallery-${(run as GalleryRun).layout}.jpg`;
         } else {
             const s = run as SlideshowRun;
-            // `format` always fits: a spec over 512 bytes (20 items) drops the lists first (made_from names the items)
-            const base = { format: webp ? "webp" : "mp4", fade: s.fade, frame: `${s.width}x${s.height}`, ...(webp ? { quality: s.quality ?? "med", width: s.width } : { sound: s.sound }) };
+            // `format` always fits: a spec over 512 bytes (20 items) drops the lists first (made_from names the items).
+            // `still: true` marks the webp of one photo (18.14): it replaces only the earlier still of that same photo.
+            const base = {
+                format: webp ? "webp" : "mp4",
+                ...(stillMake ? { still: true } : {}),
+                fade: s.fade,
+                frame: `${s.width}x${s.height}`,
+                ...(webp ? { quality: s.quality ?? "med", width: s.width } : { sound: s.sound }),
+            };
             const full = { ...base, items: inputs.map((i) => i.index), seconds: inputs.map((i) => i.seconds) };
             const fits = (o: object) => new TextEncoder().encode(JSON.stringify(o)).length <= 512;
             spec = JSON.stringify(fits(full) ? full : fits({ ...base, items: full.items }) ? { ...base, items: full.items } : base);
-            name = `${title}-${webp ? "slideshow.webp" : "video.mp4"}`;
+            name = `${title}-${stillMake ? "animated.webp" : webp ? "slideshow.webp" : "video.mp4"}`;
         }
         await insertMediaItem(this.d.db, {
             kind: "private",
@@ -4130,7 +4189,7 @@ export class StudioService {
             role,
             made_from: JSON.stringify(inputs.map((i) => i.itemId)),
             made_spec: new TextEncoder().encode(spec).length <= 512 ? spec : null,
-            post_key: sid,
+            post_key: postKey,
             poster: poster?.url ?? null,
         });
 
@@ -4168,7 +4227,7 @@ export class StudioService {
                     .prepare(
                         "SELECT id, bucket, r2_key, public_key, poster, url, content_type, made_spec FROM media_items WHERE post_key = ?1 AND role = ?2 AND deleted_at IS NULL AND id <> ?3 AND r2_key <> ?4",
                     )
-                    .bind(sid, role, newRowId, key)
+                    .bind(postKey, role, newRowId, key)
                     .all<{ id: string; bucket: string; r2_key: string; public_key: string | null; poster: string | null; url: string | null; content_type: string | null; made_spec: string | null }>();
                 for (const old of results) {
                     const same =
@@ -4177,8 +4236,16 @@ export class StudioService {
                                   const sp = parseJsonObject(old.made_spec);
                                   return sp?.kind === "gallery" && sp.layout === (run as GalleryRun).layout;
                               })()
-                            : // a row made before 18.10 is an mp4
-                              (old.content_type === "image/webp") === webp;
+                            : // a row made before 18.10 is an mp4; a still (18.14) replaces only the still of the same photo,
+                              // and a slideshow only a slideshow
+                              (old.content_type === "image/webp") === webp &&
+                              (() => {
+                                  const sp = parseJsonObject(old.made_spec);
+                                  const oldStill = sp?.still === true;
+                                  if (oldStill !== stillMake) return false;
+                                  if (!stillMake) return true;
+                                  return Array.isArray(sp?.items) && sp.items.length === 1 && sp.items[0] === run.inputs[0]!.index;
+                              })();
                     if (!same) continue;
                     try {
                         await this.removeMadeRow(old);

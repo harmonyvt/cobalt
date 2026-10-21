@@ -117,7 +117,7 @@ enum GalleryMakeKind: String, Identifiable, CaseIterable {
 private extension GalleryMake {
     var focusWhat: String {
         switch self {
-        case .slideshow(let plan): return plan.format == .webp ? Copy.Gallery.slideshowWebp : "video"
+        case .slideshow(let plan): return plan.isStill ? Copy.Gallery.animatedWebp : plan.format == .webp ? Copy.Gallery.slideshowWebp : "video"
         case .image: return Copy.Gallery.galleryImage
         }
     }
@@ -125,7 +125,7 @@ private extension GalleryMake {
     /// The tab it becomes (CONTRACT-GALLERY 1.19): `slideshow webp`, `slideshow`, `gallery image · 3 across`.
     var focusTab: String {
         switch self {
-        case .slideshow(let plan): return plan.format == .webp ? "slideshow webp" : "slideshow"
+        case .slideshow(let plan): return plan.isStill ? Copy.Gallery.animatedWebp : plan.format == .webp ? "slideshow webp" : "slideshow"
         case .image(let plan): return Copy.Gallery.galleryImageTab(plan.layout.label)
         }
     }
@@ -133,7 +133,7 @@ private extension GalleryMake {
     /// The file it is kept as (CONTRACT-GALLERY 1.8): `slideshow.webp`, `gallery image · 3 across.jpg`.
     var focusFile: String {
         switch self {
-        case .slideshow(let plan): return plan.format == .webp ? "slideshow.webp" : "slideshow.mp4"
+        case .slideshow(let plan): return plan.isStill ? "animated.webp" : plan.format == .webp ? "slideshow.webp" : "slideshow.mp4"
         case .image(let plan): return "\(Copy.Gallery.galleryImageTab(plan.layout.label)).jpg"
         }
     }

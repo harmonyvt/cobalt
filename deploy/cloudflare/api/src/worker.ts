@@ -771,15 +771,15 @@ async function handleInner(
 
 // What the container's helper has said it can do (the Durable Object keeps what it last answered; it never wakes the
 // container for this): the slideshow routes (`gallery`), and the webp slideshow, the gallery image and `item` renders
-// (`make`), and a pasted link straight to a media file (`direct`, section 19). Any failure is "not yet": the capability is simply not offered.
-async function helperHas(container: ContainerStub): Promise<[boolean, boolean, boolean]> {
+// (`make`), a pasted link straight to a media file (`direct`, section 19), and a webp of one photo (`still`, 18.14). Any failure is "not yet": the capability is simply not offered.
+async function helperHas(container: ContainerStub): Promise<[boolean, boolean, boolean, boolean]> {
     try {
         const res = await container.fetch(new Request("https://do.internal/helper/caps", { headers: { [KEY_ID_HEADER]: "worker:capabilities" } }));
-        if (res.status !== 200) return [false, false, false];
-        const body = (await res.json()) as { gallery?: unknown; make?: unknown; direct?: unknown };
-        return [body?.gallery === true, body?.make === true, body?.direct === true];
+        if (res.status !== 200) return [false, false, false, false];
+        const body = (await res.json()) as { gallery?: unknown; make?: unknown; direct?: unknown; still?: unknown };
+        return [body?.gallery === true, body?.make === true, body?.direct === true, body?.still === true];
     } catch {
-        return [false, false, false];
+        return [false, false, false, false];
     }
 }
 

@@ -20,7 +20,7 @@ struct GalleryActions: View {
     private var model: AppModel { c.model }
 
     enum Primary: Equatable { case copyLink, share, savePhotos, tryAgain(Int) }
-    enum Choice: Hashable { case share, savePhotos, makeWebp }
+    enum Choice: Hashable { case share, savePhotos, makeWebp, animatedWebp }
 
     // MARK: the plan
 
@@ -44,7 +44,7 @@ struct GalleryActions: View {
         case .slideshow(_, let format): return format == .webp ? Copy.Media.copyWebpLink : Copy.Media.copyVideoLink
         case .galleryImage: return DetailWords.copyImageLink
         case .crop: return Copy.Gallery.copyPhotoLink
-        case .webp: return Copy.Media.copyWebpLink
+        case .webp, .animated: return Copy.Media.copyWebpLink
         case .video: return r.isStillPicture ? Copy.Gallery.copyPhotoLink : Copy.Media.copyVideoLink
         }
     }
@@ -63,6 +63,7 @@ struct GalleryActions: View {
         if canShare, primary != .share { secondary.append(.share) }
         if canSave, primary != .savePhotos { secondary.append(.savePhotos) }
         if r.isItem, controller.canMakeWebp(ofItem: r, in: item) { secondary.append(.makeWebp) }
+        if controller.canMakeAnimatedWebp(of: r, in: item) { secondary.append(.animatedWebp) }
         return (primary, secondary)
     }
 
@@ -221,6 +222,13 @@ struct GalleryActions: View {
             DetailChoiceButton(title: Copy.Gallery.makeAWebp, symbol: Symbol.Media.makeWebp, layout: layout) {
                 if controller.makeWebp(ofItem: r, in: item) { leave() }
             }
+        case .animatedWebp:
+            let state = controller.animating[r.id] ?? .idle
+            DetailChoiceButton(
+                title: Copy.Gallery.animatedWebp, symbol: state == .done ? Symbol.checkmark : Symbol.Gallery.animatedWebp,
+                working: state == .working, layout: layout
+            ) { Task { await controller.makeAnimatedWebp(of: r, in: item) } }
+            .accessibilityHint(Copy.Gallery.animatedWebpHint)
         }
     }
 }

@@ -616,7 +616,9 @@ extension Pipeline {
             ext = "jpg"
         }
         let base = ((media?.name ?? sid) as NSString).deletingPathExtension
-        let name = "\(base)-\(role == .slideshow ? "slideshow" : "gallery-image").\(ext)"
+        let stem: String
+        if case .slideshow(let plan) = m, plan.isStill { stem = "animated" } else { stem = role == .slideshow ? "slideshow" : "gallery-image" }
+        let name = "\(base)-\(stem).\(ext)"
         do {
             let local = try await client.download(.libraryItem(id: itemID), to: store.inboxURL(for: name), progress: { _ in })
             let spec = Self.madeSpec(for: m, result: r)
@@ -646,6 +648,7 @@ extension Pipeline {
             object = ["kind": "gallery", "layout": plan.layout.rawValue, "items": plan.items]
         case .slideshow(let plan):
             object = ["format": plan.format.rawValue, "items": plan.items, "fade": plan.fade, "frame": plan.frame.rawValue]
+            if plan.isStill { object["still"] = true }
         }
         guard var data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return nil }
         if data.count > 512 {
@@ -672,7 +675,7 @@ extension GalleryMake {
     /// What a remake of this replaces.
     var madeKind: MadeKind {
         switch self {
-        case .slideshow(let plan): return .slideshow(plan.format)
+        case .slideshow(let plan): return plan.isStill ? .still(item: plan.items.first ?? 0) : .slideshow(plan.format)
         case .image(let plan): return .galleryImage(plan.layout)
         }
     }

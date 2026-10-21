@@ -436,7 +436,7 @@ struct GalleryCardParts {
         let count = Copy.Gallery.count(photos: photos, videos: items.count - photos)
         func makeWord(_ m: GalleryMake) -> String {
             switch m {
-            case .slideshow(let plan): return plan.format == .webp ? Copy.Gallery.slideshowWebp : "video"
+            case .slideshow(let plan): return plan.isStill ? Copy.Gallery.animatedWebp : plan.format == .webp ? Copy.Gallery.slideshowWebp : "video"
             case .image: return Copy.Gallery.galleryImage
             }
         }
@@ -521,7 +521,7 @@ struct GalleryCardParts {
 
     private static func tab(_ m: GalleryMake) -> String {
         switch m {
-        case .slideshow(let plan): return plan.format == .webp ? "slideshow webp" : "slideshow"
+        case .slideshow(let plan): return plan.isStill ? Copy.Gallery.animatedWebp : plan.format == .webp ? "slideshow webp" : "slideshow"
         case .image(let plan): return Copy.Gallery.galleryImageTab(plan.layout.label)
         }
     }

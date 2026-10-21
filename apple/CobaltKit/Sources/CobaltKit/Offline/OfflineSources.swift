@@ -177,7 +177,7 @@ enum OfflineSources {
             if !isPrivate, let url = r.file?.url ?? r.publicURL { add(.open(url)) }
             if let file = r.file, file.canToggleVisibility || isPrivate { add(.libraryItem(id: file.id)) }
             if !isPrivate, let url = r.local?.remoteURL { add(.open(url)) }
-        case .item, .slideshow, .galleryImage, .crop:
+        case .item, .slideshow, .galleryImage, .crop, .animated:
             // a gallery's item or a file made from it: the post's own row (keyed, either visibility), then its public link
             if let file = r.file { add(.libraryItem(id: file.id)) }
             if let url = r.publicURL { add(.open(url)) }

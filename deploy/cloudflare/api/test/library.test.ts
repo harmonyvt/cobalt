@@ -974,6 +974,7 @@ describe("GET /capabilities", () => {
                 gallery: false,
                 gallery_make: false,
                 direct_links: false,
+                still_webp: false,
                 // no embedding Space in this world's env (section 21)
                 search: false,
                 queue: true,
@@ -2506,12 +2507,19 @@ describe("POST /library/items/<id>/studio", () => {
         expect(res.status).toBe(409);
         expect(await res.json()).toEqual({ status: "error", error: { code: "error.library.not_private" } });
     });
-    it.each([["image/png"], ["image/jpeg"], ["image/heic"], ["image/webp"], [null]])("400 error.studio.not_video for %s", async (type) => {
+    it.each([["image/heic"], ["image/gif-ish"], ["text/plain"], [null]])("400 error.studio.not_video for %s", async (type) => {
         seedPriv({ r2_key: `uploads/${ID}.png`, content_type: type, name: "a.png" });
         const res = await open();
         expect(res.status).toBe(400);
         expect(await res.json()).toEqual({ status: "error", error: { code: "error.studio.not_video" } });
         expect(w.seen).toHaveLength(0);
+    });
+    it.each([["image/png"], ["image/jpeg"], ["image/webp"]])("a still photo (%s) reopens as a photo session, for its webp of one photo (18.14)", async (type) => {
+        seedPriv({ r2_key: `uploads/${ID}.png`, content_type: type, name: "a.png" });
+        const res = await open();
+        expect(res.status).toBe(201);
+        const b = (await res.json()) as any;
+        expect(w.session(b.id)).toMatchObject({ status: "saving", content_type: type, r2_key: `uploads/${ID}.png` });
     });
     it("a row with no recorded size takes it from the object (head), so a backfilled row can be opened (finding 5)", async () => {
         seedPriv({ bytes: null });

@@ -254,6 +254,28 @@ extension DetailController {
         return false
     }
 
+    // MARK: - the animated webp of one photo (APP-API-CONTRACT 18.14)
+
+    func canMakeAnimatedWebp(of r: Rendition, in item: MediaItem) -> Bool {
+        model.canMakeAnimatedWebp(of: r, in: item)
+    }
+
+    /// Asks for the photo's animated webp: the job goes to the tray and its tab lands on this media when it is done. The
+    /// button stays busy while an expired post is reopened, then says `done` for a moment.
+    func makeAnimatedWebp(of r: Rendition, in item: MediaItem) async {
+        guard animating[r.id] != .working else { return }
+        notice = nil
+        animating[r.id] = .working
+        do {
+            try await model.makeAnimatedWebp(of: r, in: item)
+            animating[r.id] = .done
+            say(DetailWords.animatedWebpAsked)
+        } catch {
+            animating[r.id] = nil
+            notice = Self.words(error)
+        }
+    }
+
     // MARK: - make from this post (lane A2's combine sheet)
 
     enum MakeAvailability: Equatable { case ready, serverCant, expired, needsTwo }
