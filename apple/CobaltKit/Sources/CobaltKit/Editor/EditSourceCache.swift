@@ -18,6 +18,8 @@ public actor EditSourceCache {
     private var progresses: [String: Double] = [:]
     private var fetching: [String: Task<URL, Error>] = [:]
     private var decoded: [String: EditSourceAsset] = [:]
+    /// Library file id -> the decoded video's length in seconds (what `measure` answers; kept when `dropDecoded` drops the rest).
+    private var lengths: [String: Double] = [:]
     private var shifting: [EditPitchKey: Task<URL, Error>] = [:]
 
     /// - Parameters:
@@ -64,10 +66,27 @@ public actor EditSourceCache {
         guard source.available, source.kind != .unsupported else { throw EditError.other("unsupported") }
         if let cached = decoded[source.id] { return cached }
         let url = try await file(for: source)
-        let asset = try await Self.decode(url, source: source)
+        let (asset, length) = try await Self.decode(url, source: source)
         decoded[source.id] = asset
+        if let length { lengths[source.id] = length }
         return asset
     }
+
+    /// A library video whose length (or size) the server does not know: uploads have none in `media_items`, a few saves too.
+    /// The file is fetched as `asset(for:)` fetches it (the device's copy first: a registered local file or the provider; else
+    /// the download into this folder, kept for the preview), decoded once, and read: its length in seconds and its display size
+    /// (the track's natural size with its preferred transform applied; `source.display` when the source already has one).
+    /// Throws `EditError` as `asset(for:)` does, and `.other("source:<id>")` for a file with no readable length.
+    public func measure(_ source: EditSource) async throws -> (duration: Double, display: PixelSize?) {
+        guard source.kind == .video else { throw EditError.other("unsupported") }
+        let read = try await self.asset(for: source)
+        guard let seconds = lengths[source.id], seconds > 0 else { throw EditError.other("source:\(source.id)") }
+        let display = read.display
+        return (seconds, display.w > 0 && display.h > 0 ? display : nil)
+    }
+
+    /// The decoded video's length in seconds; nil before it is decoded, or when it has none.
+    func length(of id: String) -> Double? { lengths[id] }
 
     /// Forgets the decoded copies (memory), keeping the files.
     public func dropDecoded() { decoded = [:] }
@@ -189,7 +208,8 @@ public actor EditSourceCache {
 
     // MARK: decoding
 
-    private static func decode(_ url: URL, source: EditSource) async throws -> EditSourceAsset {
+    /// The decoded file, and a video's length in seconds (nil when it cannot be read).
+    private static func decode(_ url: URL, source: EditSource) async throws -> (EditSourceAsset, Double?) {
         switch source.kind {
         case .video:
             let asset = AVURLAsset(url: url)
@@ -204,7 +224,12 @@ public actor EditSourceCache {
                     let rect = CGRect(origin: .zero, size: size).applying(transform)
                     display = PixelSize(w: Int(abs(rect.width).rounded()), h: Int(abs(rect.height).rounded()))
                 }
-                return .video(asset, display: display ?? PixelSize(w: 0, h: 0), hasAudio: hasAudio)
+                var length: Double?
+                if let time = try? await asset.load(.duration), time.isNumeric {
+                    let seconds = time.seconds
+                    if seconds.isFinite, seconds > 0 { length = seconds }
+                }
+                return (.video(asset, display: display ?? PixelSize(w: 0, h: 0), hasAudio: hasAudio), length)
             } catch let e as EditError {
                 throw e
             } catch {
@@ -214,7 +239,7 @@ public actor EditSourceCache {
             guard let timeline = GIFTimeline(file: url) else { throw EditError.other("source:\(source.id)") }
             let frames = (0..<timeline.count).compactMap { CGImageSourceCreateImageAtIndex(timeline.source, $0, nil) }
             guard frames.count == timeline.count, !frames.isEmpty else { throw EditError.other("source:\(source.id)") }
-            return .gif(frames: frames, delays: timeline.delays, display: PixelSize(w: frames[0].width, h: frames[0].height))
+            return (.gif(frames: frames, delays: timeline.delays, display: PixelSize(w: frames[0].width, h: frames[0].height)), nil)
         case .photo:
             guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { throw EditError.other("source:\(source.id)") }
             // the thumbnail call applies the EXIF orientation; the size cap is above any size the render uses
@@ -226,7 +251,7 @@ public actor EditSourceCache {
             guard let image = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) else {
                 throw EditError.other("source:\(source.id)")
             }
-            return .photo(image, display: PixelSize(w: image.width, h: image.height))
+            return (.photo(image, display: PixelSize(w: image.width, h: image.height)), nil)
         case .unsupported:
             throw EditError.other("unsupported")
         }

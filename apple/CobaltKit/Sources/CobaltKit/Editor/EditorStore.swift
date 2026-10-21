@@ -106,18 +106,23 @@ public final class EditorStore {
     public func create(from picks: [MediaItem]) async throws(EditError) -> EditLeftOut {
         guard isAvailable, let client = editorClient else { throw .off }
         var left = EditLeftOut()
-        var clips: [EditClip] = []
-        var first: PixelSize?
+        var wanted: [Wanted] = []
         var locals: [(String, URL)] = []
 
         func take(_ r: Rendition) {
-            guard let id = r.file?.id, let duration = r.duration ?? r.local?.duration, duration > 0 else {
+            guard let file = r.file else {
                 left.notOnServer += 1
                 return
             }
-            if first == nil, let w = r.width, let h = r.height, w > 0, h > 0 { first = PixelSize(w: w, h: h) }
-            clips.append(EditClip.added(item: id, duration: EditJSON.time(duration)))
-            if let url = r.local?.fileURL, r.local?.isOffline == true { locals.append((id, url)) }
+            // uploads (and a few saves) have no length or size on the server: they are measured below, not left out
+            let known = [r.duration, r.local?.duration, file.duration].compactMap { $0 }.first(where: { $0.isFinite && $0 > 0 })
+            var display: PixelSize?
+            if let w = r.width ?? file.width, let h = r.height ?? file.height, w > 0, h > 0 { display = PixelSize(w: w, h: h) }
+            let source = EditSource(
+                id: file.id, name: file.name, kind: .video, contentType: file.contentType, width: display?.w, height: display?.h,
+                duration: known, bytes: file.bytes, posterURL: file.posterURL)
+            wanted.append(Wanted(source: source, duration: known, display: display))
+            if let url = r.local?.fileURL, r.local?.isOffline == true { locals.append((file.id, url)) }
         }
 
         for pick in picks {
@@ -137,6 +142,36 @@ public final class EditorStore {
                 left.notOnServer += 1
             }
         }
+
+        // the device's copies first, so a measure reads them instead of downloading
+        for (id, url) in locals { await cache.register(local: url, for: id) }
+        // every file with no known length is measured at once (each its own task); the results are read in pick order
+        let measurer = cache
+        let measuring: [Measuring?] = wanted.map { w -> Measuring? in
+            guard w.duration == nil else { return nil }
+            let source = w.source
+            return Measuring { try await measurer.measure(source) }
+        }
+        var clips: [EditClip] = []
+        var first: PixelSize?
+        for (w, task) in zip(wanted, measuring) {
+            var duration = w.duration
+            var display = w.display
+            if let task {
+                guard let measured = try? await task.value, measured.duration > 0 else {
+                    left.notOnServer += 1                     // the file could not be fetched or read
+                    continue
+                }
+                duration = measured.duration
+                display = display ?? measured.display
+            }
+            guard let duration, duration > 0 else {
+                left.notOnServer += 1
+                continue
+            }
+            if first == nil, let display { first = display }
+            clips.append(EditClip.added(item: w.source.id, duration: EditJSON.time(duration)))
+        }
         guard !clips.isEmpty else { throw .invalid(.empty) }
         if clips.count > ctx.capabilities.limits.editMaxClips { throw .invalid(.tooManyClips) }
 
@@ -148,9 +183,17 @@ public final class EditorStore {
         let created: EditProject
         do { created = try await client.createEditProject(title: title, timeline: timeline) } catch { throw EditError.from(error) }
         upsert(created)
-        for (id, url) in locals { await cache.register(local: url, for: id) }
         try await open(created.id)
         return left
+    }
+
+    private typealias Measuring = Task<(duration: Double, display: PixelSize?), any Error>
+
+    /// A video `create(from:)` puts on the timeline: its file, and its length and size when the library knows them.
+    private struct Wanted {
+        var source: EditSource
+        var duration: Double?
+        var display: PixelSize?
     }
 
     /// The project's name: the post's custom title, else its file name without the extension, cut to 60 code points; else

@@ -23,6 +23,22 @@ private func mediaItem(
     return MediaItem(id: "post:\(key)", local: nil, post: post, service: "upload", ref: nil, link: nil, renditions: [video])
 }
 
+/// An uploaded video as the library lists it: the server keeps no length or size for an upload (`media_items` has them NULL).
+private func upload(_ key: String, file: String?) -> MediaItem {
+    let libraryFile = file.map {
+        LibraryFile(
+            id: $0, kind: .private, source: .upload, name: "\(key).mp4", url: nil, contentType: "video/mp4", bytes: 1_000,
+            width: nil, height: nil, duration: nil, createdAt: Date(timeIntervalSince1970: 1_790_000_000), mediaName: nil,
+            deletable: true)
+    }
+    let post = LibraryPost(
+        id: key, service: "upload", link: nil, title: nil, duration: nil, width: nil, height: nil,
+        createdAt: Date(timeIntervalSince1970: 1_790_000_000), session: nil, files: libraryFile.map { [$0] } ?? [],
+        customTitle: nil)
+    let video = Rendition(id: "video", kind: .video, file: libraryFile, createdAt: post.createdAt)
+    return MediaItem(id: "post:\(key)", local: nil, post: post, service: "upload", ref: nil, link: nil, renditions: [video])
+}
+
 private func gallery(_ key: String, items: [(String?, MediaType)]) -> MediaItem {
     var renditions: [Rendition] = []
     var files: [LibraryFile] = []
@@ -469,6 +485,35 @@ struct EditorCreateTests {
         let left = try await rig.store.create(from: [g, mediaItem("p1", file: PreviewEditorIDs.pier, seconds: 12)])
         #expect(left == EditLeftOut(photosAndGifs: 2, notOnServer: 1))
         #expect(rig.store.session?.timeline.main.map(\.item) == [PreviewEditorIDs.friends, PreviewEditorIDs.sunset, PreviewEditorIDs.pier])
+    }
+
+    /// The bug: an upload with no length on the server was "not on the server". It is measured from its file instead.
+    @Test func anUploadWithNoLengthIsMeasuredNotLeftOut() async throws {
+        let rig = StoreRig()
+        defer { rig.finish() }
+        let picks = [upload("u1", file: PreviewEditorIDs.friends), mediaItem("p1", file: PreviewEditorIDs.pier, seconds: 12)]
+        let left = try await rig.store.create(from: picks)
+        #expect(left == EditLeftOut(photosAndGifs: 0, notOnServer: 0))
+        let session = try #require(rig.store.session)
+        #expect(session.timeline.main.map(\.item) == [PreviewEditorIDs.friends, PreviewEditorIDs.pier])
+        let measured = session.timeline.main[0]
+        #expect(measured.`in` == 0 && measured.speed == 1)
+        #expect(abs(measured.out - 4) < 0.1)                                           // the generated friends.mp4 is 4 s
+        #expect(session.timeline.main[1].out == 12)                                     // the known length is taken as it is
+        // the measured size (320 x 180 turned upright by the track's rotation: 180 x 320) makes the canvas a story
+        #expect(session.timeline.canvas == EditCanvas(w: 1080, h: 1920, fps: 30))
+        #expect(rig.client.editorState.calls.filter { $0 == "POST /edits" }.count == 1)
+    }
+
+    @Test func anUploadWithNoFileIsStillNotOnTheServer() async throws {
+        let rig = StoreRig()
+        defer { rig.finish() }
+        let left = try await rig.store.create(from: [upload("u1", file: nil), upload("u2", file: PreviewEditorIDs.surf)])
+        #expect(left == EditLeftOut(photosAndGifs: 0, notOnServer: 1))
+        let session = try #require(rig.store.session)
+        #expect(session.timeline.main.map(\.item) == [PreviewEditorIDs.surf])
+        #expect(abs((session.timeline.main.first?.out ?? 0) - 10) < 0.1)               // surf.mp4 is 10 s
+        #expect(session.timeline.main.allSatisfy { $0.out > 0 })
     }
 
     @Test func nothingToEditIsRefusedBeforeAnythingIsCreated() async throws {
