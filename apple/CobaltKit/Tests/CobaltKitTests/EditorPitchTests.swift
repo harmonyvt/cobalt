@@ -294,3 +294,36 @@ struct EditPitchShifterTests {
         #expect(crossings > 780 && crossings < 980)
     }
 }
+
+// MARK: - the preview composition
+
+@MainActor
+struct EditPitchCompositionTests {
+    /// A clip with a pitch plays its shifted copy's sound once the copy is here, the source's before; the build must not fail on the
+    /// copy (it did when the copy's asset was released before its track was inserted: -11800 / -12780, and the preview went blank).
+    @Test func aPitchedClipPlaysItsShiftedCopy() async throws {
+        let pierURL = try #require(await PreviewEditorMedia.shared.url(forFile: PreviewEditorIDs.pier))
+        var clip = EditClip(id: "cOne00001", item: PreviewEditorIDs.pier, in: 1, out: 5)
+        clip.pitch = 12
+        let t = EditTimeline(canvas: story, main: [clip])
+        let assets: [String: EditSourceAsset] = [
+            PreviewEditorIDs.pier: .video(AVURLAsset(url: pierURL), display: PixelSize(w: 320, h: 180), hasAudio: true),
+        ]
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pitch-build-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let copy = dir.appendingPathComponent("shifted.caf")
+        try await EditPitchShifter.render(source: pierURL, in: 1, out: 5, semitones: 12, to: copy)
+        let key = try #require(EditPitchKey(clip: EditJSON.rounded(t).main[0]))
+
+        func audioFiles(_ p: EditPlayable) -> [String] {
+            p.composition.tracks(withMediaType: .audio).flatMap { $0.segments.compactMap { $0.sourceURL?.lastPathComponent } }
+        }
+        let before = try await EditComposition.build(t, assets: assets)
+        #expect(audioFiles(before) == [pierURL.lastPathComponent])
+        let after = try await EditComposition.build(t, assets: assets, shifted: [key: copy])
+        #expect(audioFiles(after) == ["shifted.caf"])
+        let audio = try #require(after.composition.tracks(withMediaType: .audio).first)
+        #expect(abs(audio.timeRange.duration.seconds - 4) < 0.01)            // 120 frames at 30 fps, like the picture
+    }
+}

@@ -157,6 +157,7 @@ private struct MainClipInspector: View {
 private struct OverlayInspector: View {
     let session: EditSession
     let overlay: EditOverlay
+    var pitchEnabled = true
 
     private var source: EditSource? { session.source(for: overlay.item) }
     private var fps: Int { session.timeline.canvas.fps }

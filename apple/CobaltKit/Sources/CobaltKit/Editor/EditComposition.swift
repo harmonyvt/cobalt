@@ -102,7 +102,7 @@ public enum EditComposition {
                 into: videoTrack, from: sourceVideo, sourceRange: videoRange, in: clip.`in`,
                 out: min(clip.out, durations[clip.item] ?? clip.out), at: at, target: target)
             let clipOut = min(clip.out, durations[clip.item] ?? clip.out)
-            var pitched: (track: AVAssetTrack, range: CMTimeRange)?
+            var pitched: (asset: AVURLAsset, track: AVAssetTrack, range: CMTimeRange)?
             if hasAudio, !clip.muted, let key = EditPitchKey(clip: clip), let url = shifted[key] {
                 pitched = await shiftedTrack(url)
             }
@@ -150,7 +150,7 @@ public enum EditComposition {
                 let at = CMTime(value: Int64(clip.start), timescale: fps)
                 let length = CMTime(value: Int64(clip.frames), timescale: fps)
                 try insertPlain(into: videoTrack, from: sourceVideo, sourceRange: videoRange, in: o.`in`, length: length, at: at)
-                var pitched: (track: AVAssetTrack, range: CMTimeRange)?
+                var pitched: (asset: AVURLAsset, track: AVAssetTrack, range: CMTimeRange)?
                 if hasAudio, !o.muted, let key = EditPitchKey(overlay: o), let url = shifted[key] {
                     pitched = await shiftedTrack(url)
                 }
@@ -235,12 +235,14 @@ public enum EditComposition {
     // MARK: inserting
 
     /// The audio track of a pre-shifted copy and its range; nil when it cannot be read (the source's sound plays instead).
-    static func shiftedTrack(_ url: URL) async -> (track: AVAssetTrack, range: CMTimeRange)? {
+    /// The asset is returned with the track: a track does not keep its asset alive, and inserting from a track whose asset is gone
+    /// fails (AVFoundation -11800 / -12780), which took the whole preview down once a copy was ready.
+    static func shiftedTrack(_ url: URL) async -> (asset: AVURLAsset, track: AVAssetTrack, range: CMTimeRange)? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let asset = AVURLAsset(url: url)
         guard let track = try? await asset.loadTracks(withMediaType: .audio).first,
               let range = try? await track.load(.timeRange), range.isValid, !range.isEmpty else { return nil }
-        return (track, range)
+        return (asset, track, range)
     }
 
     /// Source seconds as a CMTime (milliseconds: the timeline's own resolution, so exact).
