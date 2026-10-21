@@ -201,7 +201,7 @@ extension DetailController {
     /// The key the post's switch uses in `visibilityFailed` and `visibilityCacheNote`.
     static let postKey = "post"
 
-    // MARK: - links and text
+    // MARK: - links
 
     func copyAllLinks(_ item: MediaItem) {
         let text = model.copyAllLinks(item)
@@ -212,32 +212,6 @@ extension DetailController {
         Pasteboard.copy(text)
         copiedID = nil
         say(DetailWords.copiedLinks(text.split(separator: "\n").count))
-    }
-
-    /// `copy text`: the words in the photo, read on the device.
-    func copyText(of r: Rendition) async {
-        guard readingText == nil else { return }
-        notice = nil
-        flash = nil
-        readingText = r.id
-        defer { readingText = nil }
-        var source: URL?
-        if let url = r.local?.fileURL, FileManager.default.fileExists(atPath: url.path) {
-            source = url
-        } else if let file = r.file {
-            source = try? await model.library.localCopy(file)
-        }
-        guard let source else {
-            notice = DetailWords.noPhotoFile
-            return
-        }
-        let text = await PhotoText.read(source)
-        if text.isEmpty {
-            say(DetailWords.noText)
-        } else {
-            Pasteboard.copy(text)
-            say(DetailWords.copiedText)
-        }
     }
 
     // MARK: - a photo that was never saved

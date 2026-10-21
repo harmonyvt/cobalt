@@ -48,9 +48,6 @@ enum DetailWords {
     }
     static let noLinks = "no public links: the post is private."
     static func copiedLinks(_ n: Int) -> String { n == 1 ? "copied 1 link." : "copied \(n) links." }
-    static let copiedText = "copied the text."
-    static let noText = "no text found in this photo."
-    static let readingText = "reading the text…"
     static func savedToPhotos(_ n: Int) -> String { n == 1 ? "saved to Photos." : "saved \(n) to Photos." }
     static func savedToFolder(_ n: Int) -> String { n == 1 ? "saved." : "saved \(n) files." }
     static let notOnThisDevice = "not on this \(Copy.device) yet. keep it offline first, or turn on the link to share it."
@@ -59,7 +56,6 @@ enum DetailWords {
     static let cantMakeWebp = "can't make a webp from this one: the post is not open on the server any more."
     /// `animated webp` was asked for: the make runs in the tray (APP-API-CONTRACT 18.14).
     static let animatedWebpAsked = "making the animated webp. it shows up as a tab here when it is done."
-    static let noPhotoFile = "this photo is not on this \(Copy.device)."
 
     /// The made file's meta: how many photos went into it.
     static func fromPhotos(_ n: Int) -> String { n == 1 ? "1 photo" : "\(n) photos" }

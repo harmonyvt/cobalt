@@ -40,8 +40,7 @@ extension Symbol {
         static let sound = "speaker.wave.2"
         /// Where a kept gallery lives (the "saved to cobalt · Files › …" line).
         static let folder = "folder"
-        /// `copy text` (Live Text) and `save to photos`.
-        static let copyText = "text.viewfinder"
+        /// `save to photos`.
         static let saveToPhotos = "photo.badge.arrow.down"
         static let copyLinks = "link"
         static let selectPhotos = "checkmark.circle"

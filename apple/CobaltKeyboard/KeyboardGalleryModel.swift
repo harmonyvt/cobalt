@@ -217,7 +217,7 @@ final class KeyboardGalleryModel {
             case .videos: return !emote && item.kind == .video
             case .photos: return !emote && item.kind == .photo
             case .galleries: return !emote && item.kind == .gallery
-            case .webps: return !emote && item.kind == .webp
+            case .webps: return !emote && (item.kind == .webp || item.hasMadeWebp)
             case .emotes: return emote
             }
         }
