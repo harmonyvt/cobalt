@@ -81,6 +81,20 @@ struct EditPitchRuleTests {
         #expect(r.main[0].pitch == 12)
     }
 
+    /// The server's three parity values (timeline.js `parsePitch`): halves go toward +infinity, then the range is checked.
+    @Test func theServersParityValues() {
+        #expect(EditJSON.pitch(-2.25) == -2)
+        #expect(EditJSON.pitch(3.25) == 3.5)
+        #expect(EditJSON.pitch(12.25) == 12.5)
+        let sources = [
+            "Ab3dEf6hIj9kLm2n": EditSource(id: "Ab3dEf6hIj9kLm2n", name: "a.mp4", kind: .video, width: 1280, height: 720, duration: 10),
+        ]
+        #expect(EditValidation.check(EditTimeline.new(canvas: story, main: [clip(pitch: 12.25)]), sources: sources)
+            == [.range(path: "main[0].pitch")])
+        #expect(EditValidation.check(EditTimeline.new(canvas: story, main: [clip(pitch: -2.25)]), sources: sources).isEmpty)
+        #expect(EditValidation.check(EditTimeline.new(canvas: story, main: [clip(pitch: 3.25)]), sources: sources).isEmpty)
+    }
+
     @Test func outOfRangeIsARangeProblemAtThePitchPath() {
         let sources = [
             "Ab3dEf6hIj9kLm2n": EditSource(id: "Ab3dEf6hIj9kLm2n", name: "a.mp4", kind: .video, width: 1280, height: 720, duration: 10),
