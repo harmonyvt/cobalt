@@ -106,11 +106,11 @@ struct LibrarySelectPill: View {
                         if controller.makingShareLink {
                             ProgressView().controlSize(.small)
                         } else {
-                            Label(Copy.Links.make, systemImage: Symbol.link)
+                            // on the label itself: CobaltButtonStyle sets .titleAndIcon on its label, which wins over a style set outside it
+                            Label(Copy.Links.make, systemImage: Symbol.link).labelStyle(.iconOnly)
                         }
                     }
                     .buttonStyle(.cobaltPrimary(compact: true))
-                    .labelStyle(.iconOnly)
                     .disabled(!ready)
                     .help(Copy.Links.make)
                     .accessibilityLabel(controller.makingShareLink ? Copy.Links.making : Copy.Links.make)
@@ -118,9 +118,8 @@ struct LibrarySelectPill: View {
                 }
                 if files { collectionMenu(picks: picks, enabled: ready) }
                 if model.editor.isAvailable { EditPicksButton(model: model, picks: picks, note: $editNote) }
-                Button(Copy.Library2.share, systemImage: Symbol.Library.share, action: share)
+                Button(action: share) { Label(Copy.Library2.share, systemImage: Symbol.Library.share).labelStyle(.iconOnly) }
                     .buttonStyle(.cobaltSecondary(compact: true))
-                    .labelStyle(.iconOnly)
                     .disabled(controller.preparingShare || picks.isEmpty)
                     .help(Copy.Library2.share)
                     .accessibilityLabel(Copy.Library2.share)
