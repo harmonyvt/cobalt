@@ -3,8 +3,8 @@ import SwiftUI
 
 /// Select, by the thumb (the S3 board on the library canvas): a white `select` pill floats over the bottom of the
 /// library. Tapped, it grows into one panel that holds all of select: how many are picked, the picks as a row of
-/// thumbnails in the order they were tapped (tap one to take it out, hold one to see it), then `make link`,
-/// `collection` (make the link and file it) and `share` (the files). While the panel is up, taps on tiles pick them;
+/// thumbnails in the order they were tapped (tap one to take it out, hold one to see it), then icon buttons for `make link`,
+/// `collection` (make the link and file it), `edit` and `share` (the files). While the panel is up, taps on tiles pick them;
 /// otherwise they open, as always. It sits in the library's bottom safe area, so on the iPhone it is above the tab bar,
 /// and the same panel is the Mac's and the iPad's.
 struct LibrarySelectPill: View {
@@ -36,7 +36,11 @@ struct LibrarySelectPill: View {
             }
         }
         .padding(.horizontal, 12)
+        #if os(iOS)
+        .padding(.bottom, 12)       // clear of the floating tab bar
+        #else
         .padding(.bottom, 6)
+        #endif
         .frame(maxWidth: .infinity)
         .alert(Copy.Library2.newCollectionTitle, isPresented: $naming) {
             TextField(Copy.Collections.namePlaceholder, text: $newName)
@@ -95,26 +99,31 @@ struct LibrarySelectPill: View {
                     .foregroundStyle(CobaltColor.caption)
                     .padding(.horizontal, 4)
             }
+            // icons only, one equal slot each, so the row always fits the panel (it pushed the panel off an iPhone's edges)
             HStack(spacing: 8) {
                 if makesLinks {
                     Button(action: makeLink) {
                         if controller.makingShareLink {
-                            HStack(spacing: 6) { ProgressView().controlSize(.small); Text(Copy.Links.making) }
+                            ProgressView().controlSize(.small)
                         } else {
                             Label(Copy.Links.make, systemImage: Symbol.link)
                         }
                     }
                     .buttonStyle(.cobaltPrimary(compact: true))
+                    .labelStyle(.iconOnly)
                     .disabled(!ready)
+                    .help(Copy.Links.make)
+                    .accessibilityLabel(controller.makingShareLink ? Copy.Links.making : Copy.Links.make)
                     .accessibilityHint(Copy.Links.makeA11yHint)
                 }
                 if files { collectionMenu(picks: picks, enabled: ready) }
                 if model.editor.isAvailable { EditPicksButton(model: model, picks: picks, note: $editNote) }
                 Button(Copy.Library2.share, systemImage: Symbol.Library.share, action: share)
-                    .buttonStyle(.cobaltSecondary(fullWidth: makesLinks ? false : true, compact: true))
-                    .labelStyle(adaptive: makesLinks)
+                    .buttonStyle(.cobaltSecondary(compact: true))
+                    .labelStyle(.iconOnly)
                     .disabled(controller.preparingShare || picks.isEmpty)
                     .help(Copy.Library2.share)
+                    .accessibilityLabel(Copy.Library2.share)
             }
         }
         .padding(12)
@@ -192,10 +201,13 @@ struct LibrarySelectPill: View {
             }
         } label: {
             Label(Copy.Library2.collection, systemImage: Symbol.collection)
+                .labelStyle(.iconOnly)
         }
         .buttonStyle(.cobaltSecondary(compact: true))
         .tint(CobaltColor.collection)
         .disabled(!enabled)
+        .help(Copy.Library2.collection)
+        .accessibilityLabel(Copy.Library2.collection)
     }
 
     /// How many of the picks are already in one of the collection's links.
@@ -234,13 +246,5 @@ private struct PickThumb: View {
         .peekOnHold(row, controller: controller)
         .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
         .accessibilityHint(Copy.Library2.unpickHint)
-    }
-}
-
-private extension View {
-    /// The share button: an icon only when the link buttons share the row, so the three fit an iPhone.
-    @ViewBuilder
-    func labelStyle(adaptive iconOnly: Bool) -> some View {
-        if iconOnly { labelStyle(.iconOnly) } else { labelStyle(.titleAndIcon) }
     }
 }
