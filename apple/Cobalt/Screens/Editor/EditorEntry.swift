@@ -6,7 +6,7 @@ import SwiftUI
 
 /// `edit` in `LibrarySelectPill`'s action row, after `make link` / `collection` and before `share`. Enabled when at least one
 /// pick has a video on the server. Tapped, it makes the project and opens the editor on it (`creating` while it works);
-/// a failure is `couldntCreate` (or the more exact refusal) in the pill's line. Icon-only where the row is tight (iPhone).
+/// a failure is `couldntCreate` (or the more exact refusal) in the pill's line. Icon-only, like the rest of the row.
 struct EditPicksButton: View {
     let model: AppModel
     /// The ticked posts, in the order they were ticked.
@@ -14,7 +14,6 @@ struct EditPicksButton: View {
     /// The pill's line for the editor: `couldntCreate`, `editNoVideo` or `editLine`; nil says nothing.
     @Binding var note: String?
 
-    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var creating = false
 
     /// A pick the editor can use: a video with a server copy, or a gallery with one.
@@ -32,13 +31,13 @@ struct EditPicksButton: View {
     var body: some View {
         Button(action: create) {
             if creating {
-                HStack(spacing: 6) { ProgressView().controlSize(.small); Text(Copy.Editor.creating) }
+                ProgressView().controlSize(.small)
             } else {
-                Label(Copy.Editor.edit, systemImage: Symbol.Editor.edit)
+                // on the label itself: CobaltButtonStyle sets .titleAndIcon on its label, which wins over a style set outside it
+                Label(Copy.Editor.edit, systemImage: Symbol.Editor.edit).labelStyle(.iconOnly)
             }
         }
-        .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-        .modifier(EditLabelStyle(iconOnly: sizeClass == .compact && !creating))
+        .buttonStyle(.cobaltSecondary(compact: true))
         .disabled(!enabled)
         .help(picks.isEmpty ? Copy.Editor.editNoVideo : Copy.Editor.editLine)
         .accessibilityLabel(creating ? Copy.Editor.creating : Copy.Editor.edit)
@@ -72,15 +71,6 @@ struct EditPicksButton: View {
         if left.photosAndGifs > 0 { lines.append(Copy.Editor.leftOut(left.photosAndGifs)) }
         if left.notOnServer > 0 { lines.append(Copy.Editor.notOnServer(left.notOnServer)) }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
-    }
-}
-
-private struct EditLabelStyle: ViewModifier {
-    let iconOnly: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if iconOnly { content.labelStyle(.iconOnly) } else { content.labelStyle(.titleAndIcon) }
     }
 }
 

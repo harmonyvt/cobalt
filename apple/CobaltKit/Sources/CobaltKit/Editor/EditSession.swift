@@ -219,8 +219,29 @@ public final class EditSession {
     // MARK: - Main track
 
     /// Videos only (a gif or photo goes on the overlay); `nil` = the end. A clip is its whole file, speed 1 (31.2.1).
+    ///
+    /// A video whose length the library does not know (an upload: the server keeps none) is fetched and measured first: its
+    /// download shows in `loadingSources`, and the clips go in when it is read, in the order given, at `index` as it is then.
+    /// A file that cannot be fetched is not added (`sourceFailures` says why; adding it again tries again). A clip is never
+    /// made with no length.
     public func add(_ files: [EditSource], at index: Int?) {
-        let videos = files.filter { $0.kind == .video && $0.available && ($0.duration ?? 0) >= Self.minSeconds }
+        let videos = files.filter { $0.kind == .video && $0.available }.map { self.withMeasured($0) }
+        guard !videos.isEmpty else { return }
+        let unknown = videos.filter { $0.duration == nil }
+        guard !unknown.isEmpty else {
+            insertClips(videos, at: index)
+            return
+        }
+        let running = unknown.compactMap { measureLoad($0) }
+        Task { @MainActor [weak self] in
+            for task in running { await task.value }
+            guard let self, !self.isClosed else { return }
+            self.insertClips(videos.map { self.withMeasured($0) }, at: index)
+        }
+    }
+
+    private func insertClips(_ files: [EditSource], at index: Int?) {
+        let videos = files.filter { ($0.duration ?? 0) >= Self.minSeconds }
         guard !videos.isEmpty else { return }
         for file in videos { sources[file.id] = file }
         var firstID: String?
@@ -228,7 +249,8 @@ public final class EditSession {
             var at = min(max(0, index ?? t.main.count), t.main.count)
             for file in videos {
                 guard t.main.count + t.overlay.count < EditValidation.maxClips + 1 else { break }       // one past: the problem shows
-                let clip = EditClip.added(item: file.id, duration: file.duration ?? 0)
+                guard let duration = file.duration else { continue }
+                let clip = EditClip.added(item: file.id, duration: duration)
                 if firstID == nil { firstID = clip.id }
                 t.main.insert(clip, at: at)
                 at += 1
@@ -348,17 +370,45 @@ public final class EditSession {
 
     /// Puts a video, gif or photo on the overlay track at frame `k` (nil = the playhead). Refuses (false) when `k` is inside
     /// another overlay or less than 0.1 s of room is left; a longer one is cut at the next overlay.
+    ///
+    /// A video whose length is not known is fetched and measured first (as `add`): true means it goes on once it is read (at
+    /// that frame, if there is still room then).
     @discardableResult
     public func addOverlay(_ file: EditSource, atFrame k: Int?) -> Bool {
+        let known = withMeasured(file)
+        guard let spot = overlayRoom(for: known, atFrame: k) else { return false }
+        let start = spot.start
+        if known.kind == .video, known.duration == nil {
+            guard let task = measureLoad(known) else { return false }
+            Task { @MainActor [weak self] in
+                await task.value
+                guard let self, !self.isClosed else { return }
+                let measured = self.withMeasured(known)
+                guard (measured.duration ?? 0) >= Self.minSeconds else { return }
+                _ = self.placeOverlay(measured, atFrame: start)
+            }
+            return true
+        }
+        return placeOverlay(known, atFrame: start)
+    }
+
+    /// Where an overlay put at `k` (nil = the playhead) would start, and the frames it has; nil when it cannot go there.
+    private func overlayRoom(for file: EditSource, atFrame k: Int?) -> (start: Int, room: Int)? {
         guard file.available, file.kind != .unsupported, timeline.main.count + timeline.overlay.count < EditValidation.maxClips,
-              timing.frames > 0 else { return false }
+              timing.frames > 0 else { return nil }
         let start = min(max(0, k ?? playhead), timing.frames - 1)
         var room = timing.frames - start
         for o in timing.overlay {
-            if start >= o.start, start < o.start + o.frames { return false }
+            if start >= o.start, start < o.start + o.frames { return nil }
             if o.start > start { room = min(room, o.start - start) }
         }
-        guard room >= Self.minFrames(fps: timing.fps) else { return false }
+        guard room >= Self.minFrames(fps: timing.fps) else { return nil }
+        return (start, room)
+    }
+
+    private func placeOverlay(_ file: EditSource, atFrame k: Int) -> Bool {
+        guard let spot = overlayRoom(for: file, atFrame: k) else { return false }
+        let start = spot.start, room = spot.room
         sources[file.id] = file
         var overlay = EditOverlay.added(
             item: file.id, kind: file.kind, duration: file.duration, at: timing.time(ofFrame: start),
@@ -557,6 +607,51 @@ public final class EditSession {
             if let d = source.duration, d > 0 { out[id] = d }
         }
         return out
+    }
+
+    /// `file` with the length and size this session has measured for it filled in where it has none.
+    private func withMeasured(_ file: EditSource) -> EditSource { Self.keepingMeasured(file, sources[file.id]) }
+
+    /// `fresh` (the server's or the library's copy of a file) with `known`'s length and size where `fresh` has none: the server
+    /// keeps no length for an upload, and the session learns it when the file is decoded.
+    static func keepingMeasured(_ fresh: EditSource, _ known: EditSource?) -> EditSource {
+        guard let known, known.id == fresh.id else { return fresh }
+        var s = fresh
+        if s.duration == nil { s.duration = known.duration }
+        if s.display == nil, let d = known.display {
+            s.width = d.w
+            s.height = d.h
+        }
+        return s
+    }
+
+    /// Fills in what the server did not know of a file (an upload has no length or size) from its decoded copy, then times and
+    /// checks the timeline again with it: the bin, add, the overlay, trim limits and the end-of-source clamp see real numbers.
+    private func learn(_ id: String, display: PixelSize, duration: Double?) {
+        guard var s = sources[id] else { return }
+        var changed = false
+        if s.display == nil, display.w > 0, display.h > 0 {
+            s.width = display.w
+            s.height = display.h
+            changed = true
+        }
+        if s.duration == nil, s.kind == .video, let duration, duration.isFinite, duration > 0 {
+            s.duration = duration
+            changed = true
+        }
+        guard changed else { return }
+        sources[id] = s
+        timing = EditTiming(timeline, sourceDurations: Self.durations(of: sources))
+        problems = EditValidation.check(timeline, sources: sources)
+        if playhead > max(0, timing.frames - 1) { playhead = max(0, timing.frames - 1) }
+    }
+
+    /// Fetches and decodes a file that is not on the timeline yet, to measure it: the source joins `sources` (with what is
+    /// already known of it) and an earlier failure is forgotten (adding it again is the retry). Nil: nothing to wait for.
+    private func measureLoad(_ file: EditSource) -> Task<Void, Never>? {
+        sources[file.id] = withMeasured(file)
+        sourceFailures[file.id] = nil
+        return startLoad(file.id)
     }
 
     static func minFrames(fps: Int) -> Int { max(1, Int((Self.minSeconds * Double(fps) - 1e-9).rounded(.up))) }
@@ -794,7 +889,7 @@ public final class EditSession {
         do {
             let (fresh, fresh_sources) = try await client.editProject(id: project.id)
             guard let theirTimeline = fresh.timeline else { saveState = .failed(.other("invalid response")); return }
-            for (id, source) in fresh_sources { sources[id] = source }
+            for (id, source) in fresh_sources { sources[id] = Self.keepingMeasured(source, sources[id]) }
             undoStack.append(timeline)
             redoStack = []
             updateHistoryFlags()
@@ -967,7 +1062,10 @@ public final class EditSession {
             }
             do {
                 let asset = try await self.cache.asset(for: source)
+                var length: Double?
+                if source.kind == .video, source.duration == nil { length = await self.cache.length(of: id) }
                 self.assets[id] = asset
+                self.learn(id, display: asset.display, duration: length)
             } catch {
                 self.sourceFailures[id] = EditError.from(error)
             }

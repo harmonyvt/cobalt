@@ -682,3 +682,90 @@ struct EditSessionRenderTests {
         }
     }
 }
+
+// MARK: - files whose length the server does not know
+
+/// The beach project on a cache that reads the generated files (so they decode), with the files in `unknown` stripped of their
+/// length and size, as the server sends an upload.
+@MainActor
+private struct MeasureRig {
+    let h: Harness
+    let session: EditSession
+
+    init(unknown: Set<String> = []) async throws {
+        h = Harness(.happy)
+        let client = h.ctx.client as! PreviewClient
+        let (full, named) = try await client.editProject(id: PreviewEditorIDs.beach)
+        var summary = full
+        summary.timeline = nil
+        var sources = named
+        for id in unknown {
+            sources[id]?.duration = nil
+            sources[id]?.width = nil
+            sources[id]?.height = nil
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("edit-measure-\(UUID().uuidString)", isDirectory: true)
+        let cache = EditSourceCache(
+            directory: dir, client: { [ctx = h.ctx] in ctx.client },
+            provider: { await PreviewEditorMedia.shared.url(forFile: $0) })
+        session = EditSession(
+            project: summary, timeline: try #require(full.timeline), sources: sources, context: h.ctx, cache: cache,
+            onProject: { _ in }, onRender: { _ in })
+    }
+
+    func finish() { session.tearDown() }
+
+    /// Waits in real time (AVFoundation decodes off the virtual clock), 20 s at most.
+    func wait(until condition: @MainActor () -> Bool) async {
+        let end = Date().addingTimeInterval(20)
+        while !condition(), Date() < end { try? await Task.sleep(for: .milliseconds(20)) }
+    }
+}
+
+@MainActor
+struct EditSessionMeasureTests {
+    @Test func aFileWithNoLengthIsFilledInOnceItDecodes() async throws {
+        let rig = try await MeasureRig(unknown: [PreviewEditorIDs.pier])
+        defer { rig.finish() }
+        #expect(rig.session.sources[PreviewEditorIDs.pier]?.duration == nil)
+        await rig.wait { rig.session.sources[PreviewEditorIDs.pier]?.duration != nil }
+        let pier = try #require(rig.session.sources[PreviewEditorIDs.pier])
+        #expect(abs((pier.duration ?? 0) - 12) < 0.1)                         // the generated pier.mp4 is 12 s
+        #expect(pier.display == PixelSize(w: 320, h: 180))                    // its encoded size, no rotation
+        // the timing and the problems are made again with the real length (the end-of-source clamp sees it)
+        let s = rig.session
+        #expect(s.timing == EditTiming(s.timeline, sourceDurations: EditSession.durations(of: s.sources)))
+        #expect(EditSession.durations(of: s.sources)[PreviewEditorIDs.pier] != nil)
+        #expect(s.problems == EditValidation.check(s.timeline, sources: s.sources))
+        // a file the server knew keeps the server's numbers
+        #expect(s.sources[PreviewEditorIDs.surf]?.duration == 10)
+        #expect(s.sources[PreviewEditorIDs.surf]?.display == PixelSize(w: 1280, h: 720))
+    }
+
+    @Test func addingAVideoWithNoLengthMeasuresItFirstThenAddsItWhole() async throws {
+        let rig = try await MeasureRig()
+        defer { rig.finish() }
+        let id = "UpLoAdNoLen00001"
+        let seconds = PreviewEditorMedia.file(forID: id).seconds
+        let upload = EditSource(id: id, name: "upload.mp4", kind: .video, contentType: "video/mp4")
+        rig.session.add([upload], at: nil)
+        #expect(rig.session.timeline.main.count == 4)                         // never a clip with no length: measured first
+        await rig.wait { rig.session.timeline.main.count == 5 }
+        let added = try #require(rig.session.timeline.main.last)
+        #expect(added.item == id && added.`in` == 0 && added.speed == 1)
+        #expect(abs(added.out - seconds) < 0.1)
+        #expect(rig.session.selection == .main(added.id))
+        #expect(rig.session.sources[id]?.duration != nil)
+        #expect(rig.session.loadingSources[id] == nil)
+    }
+
+    @Test func theServersCopyOfAFileKeepsWhatTheSessionMeasured() {
+        let measured = EditSource(id: "a", name: "a.mp4", kind: .video, width: 320, height: 180, duration: 12)
+        let fresh = EditSource(id: "a", name: "a.mp4", kind: .video)
+        let kept = EditSession.keepingMeasured(fresh, measured)
+        #expect(kept.duration == 12 && kept.display == PixelSize(w: 320, h: 180))
+        let known = EditSource(id: "a", name: "a.mp4", kind: .video, width: 1280, height: 720, duration: 10)
+        #expect(EditSession.keepingMeasured(known, measured) == known)
+        #expect(EditSession.keepingMeasured(fresh, nil) == fresh)
+    }
+}
