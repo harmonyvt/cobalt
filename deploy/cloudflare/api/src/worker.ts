@@ -88,6 +88,8 @@ export interface WorkerEnv {
     // Hark notification bridge (section 9): the webhook URL, a secret. Absent, empty or not
     // an https URL means the bridge is off and `features.notify_bridge` false.
     HARK_WEBHOOK_URL?: string;
+    // "1" turns the Hark bridge on; anything else (the config's "0") keeps it off.
+    HARK_NOTIFY?: string;
     // Edge-cache purge for the public bucket (section 16): the zone id (a plain var) and a Cache Purge
     // token (a secret). Absent or empty: no purge, `cache_cleared: null`.
     MEDIA_ZONE_ID?: string;

@@ -860,6 +860,9 @@ answer as above.
 
 ## Hark notifications (stand-in for APNs, `APP-API-CONTRACT.md` section 9)
 
+**Off since 2026-10-23**: `HARK_NOTIFY` is `"0"` in `api/cloudflare.config.ts`, so nothing is sent even with the secret
+set. Set it to `"1"` and redeploy the API to bring Hark back.
+
 Until there is an APNs key, a job the owner walked away from (typically a share-sheet run) is announced through their Hark
 webhook: `POST <HARK_WEBHOOK_URL>` with `{"title","body"}`. Code: `api/src/notify.ts` (the opt-in, the exactly-once record, the
 send, the retries, the route inside the DO), hooks in `studio.ts`, retry re-arming in `sweep.ts`.

@@ -93,6 +93,9 @@ export default defineConfig({
 			// envVars. Missing, empty or not https: the bridge is off and
 			// `features.notify_bridge` is false.
 			HARK_WEBHOOK_URL: bindings.secret(),
+			// Off since 2026-10-23: the owner doesn't want Hark pushes. "1" turns the bridge
+			// back on (with the secret above); "0" keeps it off even while the secret is set.
+			HARK_NOTIFY: bindings.text("0"),
 			// Per-owner client keys (SHA-256 hashes), managed by the web
 			// Worker. Schema: ../d1/migrations/0001_api_keys.sql
 			DB: bindings.d1({
