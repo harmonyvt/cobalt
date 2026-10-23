@@ -99,7 +99,10 @@ final class ActivityKitHandle: LiveActivityHandle {
 final class ActivityKitAdapter: LiveActivityAdapter {
     init() {}
 
-    var isAvailable: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
+    var isAvailable: Bool { Self.activitiesAllowed }
+
+    /// Live Activities are allowed for capystore (Settings > capystore > Live Activities).
+    static var activitiesAllowed: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
 
     var activities: [any LiveActivityHandle] {
         Activity<CobaltActivityAttributes>.activities.map { ActivityKitHandle($0) }
