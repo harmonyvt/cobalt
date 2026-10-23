@@ -4,7 +4,7 @@ import SwiftUI
 /// Select, by the thumb (the S3 board on the library canvas): a white `select` pill floats over the bottom of the
 /// library. Tapped, it grows into one panel that holds all of select: how many are picked, the picks as a row of
 /// thumbnails in the order they were tapped (tap one to take it out, hold one to see it), then icon buttons for `make link`,
-/// `collection` (make the link and file it), `edit` and `share` (the files). While the panel is up, taps on tiles pick them;
+/// `collection` (make the link and file it, picked in `CollectionPickerSheet`), `edit` and `share` (the files). While the panel is up, taps on tiles pick them;
 /// otherwise they open, as always. It sits in the library's bottom safe area, so on the iPhone it is above the tab bar,
 /// and the same panel is the Mac's and the iPad's.
 struct LibrarySelectPill: View {
@@ -17,8 +17,7 @@ struct LibrarySelectPill: View {
     let file: (LibraryController.CollectionTarget) -> Void
     let share: () -> Void
 
-    @State private var naming = false
-    @State private var newName = ""
+    @State private var pickingCollection = false
     @State private var editNote: String?
 
     private var store: ShareSetStore { model.shareSets }
@@ -42,13 +41,8 @@ struct LibrarySelectPill: View {
         .padding(.bottom, 6)
         #endif
         .frame(maxWidth: .infinity)
-        .alert(Copy.Library2.newCollectionTitle, isPresented: $naming) {
-            TextField(Copy.Collections.namePlaceholder, text: $newName)
-            Button(Copy.Library2.create) {
-                let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !name.isEmpty { file(.new(name: name)) }
-            }
-            Button(Copy.cancel, role: .cancel) {}
+        .sheet(isPresented: $pickingCollection) {
+            CollectionPickerSheet(store: store, picks: controller.pickedRows(rows), file: file)
         }
     }
 
@@ -99,27 +93,35 @@ struct LibrarySelectPill: View {
                     .foregroundStyle(CobaltColor.caption)
                     .padding(.horizontal, 4)
             }
-            // icons only, one equal slot each, so the row always fits the panel (it pushed the panel off an iPhone's edges)
+            // icons only, one equal slot each, so the row always fits the panel (it pushed the panel off an iPhone's
+            // edges); all one capsule, each tinted for what it does (SelectActionStyle)
             HStack(spacing: 8) {
                 if makesLinks {
                     Button(action: makeLink) {
                         if controller.makingShareLink {
-                            ProgressView().controlSize(.small)
+                            ProgressView().controlSize(.small).tint(CobaltColor.onText)
                         } else {
-                            // on the label itself: CobaltButtonStyle sets .titleAndIcon on its label, which wins over a style set outside it
-                            Label(Copy.Links.make, systemImage: Symbol.link).labelStyle(.iconOnly)
+                            Label(Copy.Links.make, systemImage: Symbol.link)
                         }
                     }
-                    .buttonStyle(.cobaltPrimary(compact: true))
+                    .buttonStyle(.selectAction(.link))
                     .disabled(!ready)
                     .help(Copy.Links.make)
                     .accessibilityLabel(controller.makingShareLink ? Copy.Links.making : Copy.Links.make)
                     .accessibilityHint(Copy.Links.makeA11yHint)
                 }
-                if files { collectionMenu(picks: picks, enabled: ready) }
+                if files {
+                    Button { pickingCollection = true } label: {
+                        Label(Copy.Library2.collection, systemImage: Symbol.Library.collectionFile)
+                    }
+                    .buttonStyle(.selectAction(.collection))
+                    .disabled(!ready)
+                    .help(Copy.Library2.collection)
+                    .accessibilityLabel(Copy.Library2.collection)
+                }
                 if model.editor.isAvailable { EditPicksButton(model: model, picks: picks, note: $editNote) }
-                Button(action: share) { Label(Copy.Library2.share, systemImage: Symbol.Library.share).labelStyle(.iconOnly) }
-                    .buttonStyle(.cobaltSecondary(compact: true))
+                Button(action: share) { Label(Copy.Library2.share, systemImage: Symbol.Library.share) }
+                    .buttonStyle(.selectAction(.share))
                     .disabled(controller.preparingShare || picks.isEmpty)
                     .help(Copy.Library2.share)
                     .accessibilityLabel(Copy.Library2.share)
@@ -183,37 +185,6 @@ struct LibrarySelectPill: View {
                 withAnimation(Motion.rows) { proxy.scrollTo(last, anchor: .trailing) }
             }
         }
-    }
-
-    /// `collection`: each collection, saying how many of the picks are already in it, then `new collection…`.
-    private func collectionMenu(picks: [LibraryRow], enabled: Bool) -> some View {
-        Menu {
-            ForEach(store.collections) { collection in
-                Button(Copy.Library2.inCollection(collection.name, already: alreadyIn(collection, picks), of: picks.count)) {
-                    file(.existing(id: collection.id, name: collection.name))
-                }
-            }
-            if !store.collections.isEmpty { Divider() }
-            Button(Copy.Library2.newCollection, systemImage: Symbol.collection) {
-                newName = ""
-                naming = true
-            }
-        } label: {
-            Label(Copy.Library2.collection, systemImage: Symbol.collection)
-                .labelStyle(.iconOnly)
-        }
-        .buttonStyle(.cobaltSecondary(compact: true))
-        .tint(CobaltColor.collection)
-        .disabled(!enabled)
-        .help(Copy.Library2.collection)
-        .accessibilityLabel(Copy.Library2.collection)
-    }
-
-    /// How many of the picks are already in one of the collection's links.
-    private func alreadyIn(_ collection: ShareCollection, _ picks: [LibraryRow]) -> Int {
-        let held = Set(store.sets(in: collection).flatMap { $0.items.map(\.id) })
-        guard !held.isEmpty else { return 0 }
-        return picks.filter { !ShareSetIndex.fileIDs(of: $0.item).isDisjoint(with: held) }.count
     }
 }
 
