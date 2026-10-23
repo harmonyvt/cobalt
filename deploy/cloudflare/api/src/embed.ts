@@ -615,26 +615,33 @@ export async function searchQueue(d: { db: D1Database; mediaBaseUrl: string; now
 export type SearchHit = { post_key: string; score: number; latest: number };
 
 export type SearchOutcome =
-    | { ok: true; hits: SearchHit[]; indexed: number; pending: number }
+    | { ok: true; hits: SearchHit[]; indexed: number; pending: number; fallback: boolean }
     | { ok: false; status: number; code: string };
+
+// The words of a query for the name-match fallback: lowercase, at least two characters each.
+const queryWords = (needle: string): string[] => [...new Set(needle.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2))];
 
 export async function searchPosts(
     d: { db: D1Database; client: EmbedClient | null; mediaBaseUrl: string },
     rawQuery: string,
     limit: number,
+    opts: { textFallback?: boolean } = {},
 ): Promise<SearchOutcome> {
     const q = rawQuery.trim().replace(/\s+/g, " ");
     if (q.length === 0 || q.length > MAX_QUERY_CHARS) return { ok: false, status: 400, code: "error.library.bad_request" };
     if (!d.client) return { ok: false, status: 503, code: "error.search.off" };
 
-    let qv: number[];
+    // null: the Space could not answer (asleep, booting, down), so the answer is name matches only
+    let qv: number[] | null;
     try {
         const r = await d.client.embed("query", [{ title: null, text: q, image_url: null }], QUERY_CALL_MS);
         qv = r.vectors[0]!;
     } catch (e) {
-        // asleep or booting: the client says "waking up, try again"
-        if (!(e instanceof EmbedError) || e.kind === "unavailable") return { ok: false, status: 503, code: "error.search.waking" };
-        return { ok: false, status: 502, code: "error.search.failed" };
+        if (e instanceof EmbedError && e.kind === "rejected") return { ok: false, status: 502, code: "error.search.failed" };
+        // callers that need meaning (stage pools) say "waking up" instead of name matches
+        if (opts.textFallback === false) return { ok: false, status: 503, code: "error.search.waking" };
+        console.log("[search] space unavailable, answering with name matches");
+        qv = null;
     }
 
     const inputs = await postInputs(d.db, d.mediaBaseUrl);
@@ -645,6 +652,7 @@ export async function searchPosts(
     const vectors = new Map(rows.map((r) => [r.post_key, r]));
 
     const needle = q.toLowerCase();
+    const words = queryWords(needle);
     const hits: SearchHit[] = [];
     let indexed = 0;
     let pending = 0;
@@ -655,11 +663,20 @@ export async function searchPosts(
         if (!row || row.input_hash !== (await inputHash(p))) pending++;
         const hay = `${p.title ?? ""} ${p.text}`.toLowerCase();
         const bonus = hay.includes(needle) ? TEXT_MATCH_BONUS : 0;
-        if (!v && bonus === 0) continue;
-        hits.push({ post_key: p.post_key, score: (v ? dot(qv, v) : 0) + bonus, latest: p.latest });
+        if (qv) {
+            if (!v && bonus === 0) continue;
+            hits.push({ post_key: p.post_key, score: (v ? dot(qv, v) : 0) + bonus, latest: p.latest });
+            continue;
+        }
+        // Fallback: the whole query as text first, then posts holding more of its words; newest first within a score.
+        const found = words.filter((w) => hay.includes(w)).length;
+        if (bonus === 0 && found === 0) continue;
+        const score = bonus + (words.length > 0 ? (TEXT_MATCH_BONUS * found) / words.length : 0);
+        hits.push({ post_key: p.post_key, score, latest: p.latest });
     }
-    hits.sort((a, b) => b.score - a.score || (a.post_key < b.post_key ? -1 : 1));
-    return { ok: true, hits: hits.slice(0, limit), indexed, pending };
+    if (qv) hits.sort((a, b) => b.score - a.score || (a.post_key < b.post_key ? -1 : 1));
+    else hits.sort((a, b) => b.score - a.score || b.latest - a.latest || (a.post_key < b.post_key ? -1 : 1));
+    return { ok: true, hits: hits.slice(0, limit), indexed, pending, fallback: qv === null };
 }
 
 // GET /library/search?q=<words>&limit=<1..50>&v=<2|3>: the posts that best match, best first, in the
@@ -692,6 +709,8 @@ export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, 
                 model: EMBED_MODEL,
                 posts: out,
                 index: { posts: r.indexed, pending: r.pending },
+                // the Space could not answer: these are name matches, and a search a minute later is semantic again
+                ...(r.fallback ? { fallback: "text" } : {}),
             },
         };
     } catch (e) {

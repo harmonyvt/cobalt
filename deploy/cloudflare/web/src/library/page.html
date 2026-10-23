@@ -1205,6 +1205,8 @@ async function runSearch(isRetry) {
     var n = b.posts || 0;
     var line = n + " result" + (n === 1 ? "" : "s");
     var pending = b.index && b.index.pending || 0;
+    // the Space could not answer: name matches only, smart search comes back on its own
+    if (b.fallback === "text") { searchStatus("warn", n + " name match" + (n === 1 ? "" : "es") + " · smart search is waking up, try again in a minute"); renderGrid(); return; }
     if (pending > 0) line += " · still indexing " + pending + " post" + (pending === 1 ? "" : "s");
     searchStatus(pending > 0 ? "warn" : "", line);
     renderGrid();
