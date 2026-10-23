@@ -163,11 +163,12 @@ enum Notifications {
         try? await UNUserNotificationCenter.current().add(instantFailedRequest(link: link, status: status))
     }
 
-    /// Asked in context, never at launch and never on a plain run: when the owner closes a run that
+    /// Asked in context, never on a plain run: when the owner closes a run that
     /// still has work in flight, or the share sheet closes mid-render, which is when "your webp is
     /// ready" / "cobalt is still making your webp" have a reason to exist. Full alerts, not
     /// provisional (owner's call). Only asks while the answer is undetermined; the system shows
-    /// its prompt once, and a later call after "don't allow" does nothing.
+    /// its prompt once, and a later call after "don't allow" does nothing. The app's `AlertsPromptSheet` can also ask
+    /// shortly after launch, but only from its "turn on" button, never by itself.
     static func requestAuthorizationIfNeeded() async {
         let center = UNUserNotificationCenter.current()
         guard await center.notificationSettings().authorizationStatus == .notDetermined else { return }
