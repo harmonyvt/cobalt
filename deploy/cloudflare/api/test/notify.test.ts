@@ -159,7 +159,12 @@ describe("the bridge is off unless HARK_WEBHOOK_URL is a usable https URL", () =
         [HOOK, HOOK],
         [`  ${HOOK}  `, HOOK],
     ])("%j -> %j", (v, want) => {
-        expect(harkConfigFrom({ HARK_WEBHOOK_URL: v })).toBe(want);
+        expect(harkConfigFrom({ HARK_WEBHOOK_URL: v, HARK_NOTIFY: "1" })).toBe(want);
+    });
+    it("is off unless HARK_NOTIFY is \"1\", even with a usable URL", () => {
+        for (const flag of [undefined, "", "0", "true", 1]) {
+            expect(harkConfigFrom({ HARK_WEBHOOK_URL: HOOK, HARK_NOTIFY: flag }), String(flag)).toBeNull();
+        }
     });
     it("nothing is stored or sent with the bridge off, whatever happens", async () => {
         for (const off of [null, ""]) {

@@ -414,16 +414,22 @@ describe("GET /capabilities features.notify_bridge", () => {
     it("false without the secret, or with it empty, blank, not a URL or not https", async () => {
         expect(await flag(env())).toBe(false);
         for (const v of ["", "   ", "not a url", "http://hark.example/x"]) {
-            expect(await flag(env({ HARK_WEBHOOK_URL: v })), v).toBe(false);
+            expect(await flag(env({ HARK_WEBHOOK_URL: v, HARK_NOTIFY: "1" })), v).toBe(false);
         }
     });
-    it("true with an https webhook URL, independent of the APNs flag", async () => {
-        const res = await (await call("/capabilities", {}, env({ HARK_WEBHOOK_URL: HOOK }))).json();
+    it("false with an https webhook URL while HARK_NOTIFY is not \"1\" (the deployed \"0\")", async () => {
+        for (const v of [undefined, "0"]) {
+            const res = await (await call("/capabilities", {}, env({ HARK_WEBHOOK_URL: HOOK, HARK_NOTIFY: v }))).json();
+            expect((res as any).features.notify_bridge, String(v)).toBe(false);
+        }
+    });
+    it("true with an https webhook URL and HARK_NOTIFY \"1\", independent of the APNs flag", async () => {
+        const res = await (await call("/capabilities", {}, env({ HARK_WEBHOOK_URL: HOOK, HARK_NOTIFY: "1" }))).json();
         expect((res as any).features.notify_bridge).toBe(true);
         expect((res as any).features.live_activity_push).toBe(false);
     });
     it("is a plain boolean, and the answer never contains the secret", async () => {
-        const text = await (await call("/capabilities", {}, env({ HARK_WEBHOOK_URL: HOOK }))).text();
+        const text = await (await call("/capabilities", {}, env({ HARK_WEBHOOK_URL: HOOK, HARK_NOTIFY: "1" }))).text();
         expect(typeof JSON.parse(text).features.notify_bridge).toBe("boolean");
         expect(text).not.toContain("T0pS3cretHookToken");
         expect(text).not.toContain("hark.example");

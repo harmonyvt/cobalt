@@ -20,6 +20,7 @@ export interface EditRendererEnv {
     COBALT_API_KEY: string;
     VERSION?: { id: string; tag?: string; timestamp?: string };
     HARK_WEBHOOK_URL?: string;
+    HARK_NOTIFY?: string;
     // the main CobaltContainer namespace: an editor render's Live Activity is pushed from there (section 32)
     COBALT?: DurableObjectNamespace;
 }

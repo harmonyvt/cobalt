@@ -65,7 +65,7 @@ function wire(opts: { webhookUrl?: string | null; withNotify?: boolean } = {}) {
     const env: WorkerEnv = {
         API_URL: "https://api.capybaraharmony.com/", CORS_URL: ORIGIN, COBALT_API_KEY: INTERNAL,
         DB: db, ORIGINALS: originals, MEDIA: media, MEDIA_BASE_URL: MEDIA_BASE,
-        ...(opts.webhookUrl === null ? {} : { HARK_WEBHOOK_URL: opts.webhookUrl ?? HOOK }),
+        ...(opts.webhookUrl === null ? {} : { HARK_WEBHOOK_URL: opts.webhookUrl ?? HOOK, HARK_NOTIFY: "1" }),
     };
     const call = (url: string, init: RequestInit = {}) =>
         handleRequest(new Request(`https://api.capybaraharmony.com${url}`, init), env, container, {

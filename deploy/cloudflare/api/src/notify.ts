@@ -5,7 +5,8 @@
 // Why: APNs is not available yet (no push key), and a job started from the share sheet
 // and closed finishes with nobody watching. The webhook URL is a SECRET
 // (HARK_WEBHOOK_URL): it is never logged, never stored, never sent to a client. The bridge is
-// off (and `features.notify_bridge` false) when it is missing, empty or not an https URL.
+// off (and `features.notify_bridge` false) unless HARK_NOTIFY is "1" (it is "0": off since
+// 2026-10-23), and when the URL is missing, empty or not an https URL.
 //
 // Opt-in, so a foreground run never notifies: the app asks for it when it walks away
 // (`PUT /studio/<sid>/notify`, or `"notify": true` on a render). Storage keys, all in the
@@ -68,10 +69,13 @@ export const JOBS_URL = "cobalt-apple://jobs";
 
 // ---- config -----------------------------------------------------------------------
 
-type EnvLike = { HARK_WEBHOOK_URL?: unknown };
+type EnvLike = { HARK_WEBHOOK_URL?: unknown; HARK_NOTIFY?: unknown };
 
-// The webhook URL, or null (bridge off): a non-empty string that is an https URL.
+// The webhook URL, or null (bridge off): HARK_NOTIFY is "1" and the URL is a non-empty https
+// URL. HARK_NOTIFY is "0" in cloudflare.config.ts since 2026-10-23 (the owner doesn't want Hark
+// pushes), so the bridge is off even while the secret is still set on the Worker.
 export function harkConfigFrom(env: EnvLike): string | null {
+    if (env.HARK_NOTIFY !== "1") return null;
     const raw = env.HARK_WEBHOOK_URL;
     if (typeof raw !== "string") return null;
     const t = raw.trim();

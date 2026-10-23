@@ -913,6 +913,10 @@ push-started activity's update token) is what lets the server send the updates a
 
 ## 9. Hark notification bridge (addendum, pinned 2026-10-04)
 
+**Off since 2026-10-23** (the owner doesn't want Hark pushes): the var `HARK_NOTIFY` is `"0"`, so
+`features.notify_bridge` is `false` and nothing is sent even while `HARK_WEBHOOK_URL` is set. `"1"`
+brings it back. The app already handles the bridge being off (local notifications only).
+
 APNs is not available yet (no push key), so a job the owner walked away from (typically a share-sheet
 run) is announced through the owner's **Hark** webhook instead: the Worker's Durable Object POSTs
 `{"title": "<=80 chars", "body": "<=2000 chars"}` (`content-type: application/json`) to
@@ -925,6 +929,7 @@ run) is announced through the owner's **Hark** webhook instead: the Worker's Dur
   (the capability flag) and the Durable Object (sending). It is a SECRET: never in `envVars` (the
   container never sees it), never logged, never stored, never returned.
 - Missing, empty, blank, not a URL or not `https:` = **bridge off**: nothing is stored or sent.
+- `HARK_NOTIFY: bindings.text("0")`: anything but `"1"` = **bridge off**, whatever the secret holds.
 - `GET /capabilities` gains `features.notify_bridge: boolean` (true = a usable webhook URL is
   configured). A missing key in an older server = false. The app only offers/uses the opt-in when
   it is true (the routes still answer when it is false, see 9.2).
