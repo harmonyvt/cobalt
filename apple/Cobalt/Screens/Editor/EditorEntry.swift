@@ -33,11 +33,10 @@ struct EditPicksButton: View {
             if creating {
                 ProgressView().controlSize(.small)
             } else {
-                // on the label itself: CobaltButtonStyle sets .titleAndIcon on its label, which wins over a style set outside it
-                Label(Copy.Editor.edit, systemImage: Symbol.Editor.edit).labelStyle(.iconOnly)
+                Label(Copy.Editor.edit, systemImage: Symbol.Editor.edit)
             }
         }
-        .buttonStyle(.cobaltSecondary(compact: true))
+        .buttonStyle(.selectAction(.edit))
         .disabled(!enabled)
         .help(picks.isEmpty ? Copy.Editor.editNoVideo : Copy.Editor.editLine)
         .accessibilityLabel(creating ? Copy.Editor.creating : Copy.Editor.edit)

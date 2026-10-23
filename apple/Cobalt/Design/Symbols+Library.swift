@@ -15,6 +15,10 @@ extension Symbol {
         static let copyLink = "doc.on.doc"
         static let copied = "checkmark"
         static let share = "square.and.arrow.up"
+        /// The select panel's collection button (make the link and file it) and the picker's new-collection field.
+        static let collectionFile = "folder.badge.plus"
+        /// A collection's row in the picker: file the picks here.
+        static let collectionFileHere = "plus"
         /// Select mode: tick every post on screen, or clear them.
         static let selectAll = "checklist.checked", selectNone = "checklist.unchecked"
         static let savePhotos = "photo.badge.arrow.down"

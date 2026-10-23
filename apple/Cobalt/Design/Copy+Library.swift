@@ -45,9 +45,24 @@ extension Copy {
         static let collectionNamePrompt = "name"
         static let create = "create"
         static func filedIn(_ name: String) -> String { "link copied · in \(name)" }
-        static func inCollection(_ name: String, already: Int, of total: Int) -> String {
-            already == 0 ? name : "\(name) · \(already) of \(total) already in it"
+        // the collection picker (the select panel's collection button)
+        static let pickCollectionTitle = "add to a collection"
+        static func pickCollectionLine(_ n: Int) -> String {
+            n == 1 ? "your pick becomes one link, filed where you tap" : "your \(n) picks become one link, filed where you tap"
         }
+        static let newCollectionPlaceholder = "new collection name"
+        static let noCollectionsYet = "no collections yet. name one above"
+        static func collectionHolds(links: Int, files: Int) -> String {
+            "\(links) \(links == 1 ? "link" : "links") · \(files) \(files == 1 ? "file" : "files")"
+        }
+        static func alreadyHere(_ n: Int, of total: Int) -> String {
+            n == total ? (total == 1 ? "already in it" : "all \(total) already in it") : "\(n) of \(total) already in it"
+        }
+        static func collectionRowA11y(name: String, links: Int, files: Int, already: Int, of total: Int) -> String {
+            let base = "\(name), \(collectionHolds(links: links, files: files))"
+            return already == 0 ? base : "\(base), \(alreadyHere(already, of: total))"
+        }
+        static let fileHereHint = "makes the link and files it here"
         static let holdToPeek = "hold to see it"                               // a11y hint on a pick
         static let unpickHint = "takes it out of the picks"
         static let peekA11y = "preview"
