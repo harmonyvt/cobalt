@@ -12,6 +12,9 @@
 #   ios list           list the builds in the published Feather source, newest first, and which ones are archived
 #                      locally in ~/cobalt-ipas/
 #   ios url            print the Feather source URL (it contains the secret token; treat it like a password)
+#   ios testflight [testflight.sh options] [--commit <ref>]
+#                      archive the iOS app signed for App Store Connect and upload it to TestFlight
+#                      (deploy/apple/testflight.sh; --dry-run exports a signed ipa and uploads nothing)
 #   mac                build, sign and install the Mac app (deploy/apple/mac-install.sh)
 #   api [--dry-run]    deploy the API Worker + container (prepare-git-info.sh, then cf deploy)
 #   web [--dry-run]    build the web app and deploy the web Worker (build-web.sh, then cf deploy)
@@ -61,8 +64,9 @@ ios_list() {
     }
 }
 
-ios_release() {
-    local commit="" args=()
+ios_release() { # script [options]
+    local script="$1" commit="" args=()
+    shift
     while [ $# -gt 0 ]; do
         case "$1" in
             --commit)
@@ -75,7 +79,7 @@ ios_release() {
         shift
     done
     if [ -z "$commit" ]; then
-        exec "$HERE/apple/release.sh" ${args[@]+"${args[@]}"}
+        exec "$HERE/apple/$script" ${args[@]+"${args[@]}"}
     fi
 
     local sha wt status=0
@@ -86,9 +90,9 @@ ios_release() {
     # Ship that commit's app with this checkout's release tooling, so an older commit still gets today's rules
     # (every build kept, versioned names).
     mkdir -p "$wt/deploy/apple"
-    cp -f "$HERE/apple/release.sh" "$wt/deploy/apple/release.sh"
+    cp -f "$HERE/apple/$script" "$wt/deploy/apple/$script"
     echo "==> releasing ${sha:0:12} from a temporary worktree"
-    "$wt/deploy/apple/release.sh" ${args[@]+"${args[@]}"} || status=$?
+    "$wt/deploy/apple/$script" ${args[@]+"${args[@]}"} || status=$?
     git -C "$ROOT" worktree remove --force "$wt" || echo "cobalt-deploy: could not remove worktree $wt" >&2
     return "$status"
 }
@@ -116,7 +120,8 @@ case "$target" in
         case "${1:-}" in
             list) ios_list ;;
             url) feather_source_url ;;
-            *) ios_release "$@" ;;
+            testflight) shift; ios_release testflight.sh "$@" ;;
+            *) ios_release release.sh "$@" ;;
         esac
         ;;
     mac) exec "$HERE/apple/mac-install.sh" "$@" ;;

@@ -52,6 +52,55 @@ keeps all), `--replace` (re-publish a version + build that is already published)
 Needs `xcodegen`, Xcode, `jq`, and the global `cf` logged in (`cf r2 objects put/list/delete`). Outputs land in
 `apple/.build/feather/` (gitignored): the ipa, `source.json`, `icon.png`, `build.log`.
 
+## TestFlight
+
+`testflight.sh` (front door: `deploy/cobalt-deploy ios testflight [--dry-run] [--commit <ref>]`) archives the app signed
+by the owner's team and uploads it to App Store Connect, where it lands in TestFlight after Apple processes it (about 5 to
+15 minutes). It runs beside the Feather source, not instead of it. Signing is automatic: `xcodebuild` uses the App Store
+Connect API key (`-allowProvisioningUpdates`) to register the bundle ids, the app group and push, and to make the
+distribution certificate and profiles, so nothing is set up in Xcode or the keychain by hand. Uploads are marked
+internal testing only, so they never go to Beta App Review.
+
+Build numbers: one past the newest of the Feather source, `~/cobalt-ipas/testflight.tsv` (one line per upload) and
+`apple/project.yml`; `release.sh` reads the same log, so both channels share one rising number. `--build <n>` overrides it.
+The archive is deleted after the upload (disk), its dSYMs are copied to `~/cobalt-dsyms/<version>-<build>/` first, and
+the upload sends symbols to Apple too.
+
+### One-time setup (owner)
+
+1. **App Store Connect API key**: App Store Connect > Users and Access > Integrations > App Store Connect API > Team
+   Keys > +, access **Admin** (cloud signing needs it). Download `AuthKey_<key id>.p8` (Apple offers it only once) and
+   note the key id and the issuer id shown above the list.
+2. Save it where the script looks (no secret goes in chat or git):
+
+       mkdir -p ~/.config/cobalt && mv ~/Downloads/AuthKey_<key id>.p8 ~/.config/cobalt/ && chmod 600 ~/.config/cobalt/AuthKey_*.p8
+       printf '{"keyId":"%s","issuerId":"%s","keyPath":"~/.config/cobalt/AuthKey_%s.p8","teamId":"%s"}\n' \
+         <key id> <issuer id> <key id> <team id> > ~/.config/cobalt/appstoreconnect.json && chmod 600 ~/.config/cobalt/appstoreconnect.json
+
+   The team id is in the developer account's Membership details (10 characters). Put it in `apple/Config/Local.xcconfig`
+   too (`DEVELOPMENT_TEAM = <team id>`) for device builds from Xcode.
+3. `deploy/cobalt-deploy ios testflight --dry-run`: archives, registers the ids and exports a signed ipa without
+   uploading. This proves signing before the app record exists.
+4. **The app record**: App Store Connect > Apps > + > New App, platform iOS, bundle id `com.capybaraharmony.cobalt`,
+   any SKU, a name. The App Store name must be unique across the store, so if "capystore" is taken use any variant; it
+   only shows in TestFlight and App Store Connect, the home screen keeps `CFBundleDisplayName` (capystore).
+5. TestFlight tab > Internal Testing > + group, add yourself, turn on automatic distribution. Install the TestFlight app
+   on the phone.
+6. Then each release: `deploy/cobalt-deploy ios testflight` (production: needs the owner's go).
+
+A TestFlight install replaces a Feather install of the same bundle id. If iOS refuses because the Feather copy was signed
+by a different team, delete the Feather copy first: that loses the videos kept on the phone and the saved API key (type
+it again after). The keychain and app group are keyed by team id, so moving teams never carries them over.
+
+### Live Activities on TestFlight
+
+The Dynamic Island and Lock Screen activity (`apple/CONTRACT-LIVE.md`) is already in the app. A TestFlight build has no
+`embedded.mobileprovision`, so the app reads it as the production APNs environment (`LiveEnvironment`). Without APNs the
+activity still runs, but only updates while capystore is open; with APNs the server keeps it current with the app closed
+and starts one for share-sheet runs. To turn that on, create an APNs key (developer.apple.com > Certificates, Identifiers
+& Profiles > Keys > +, Apple Push Notifications service, environment Sandbox & Production), add it to the secrets file as
+in `deploy/cloudflare/README.md` ("Live Activities"), deploy the API, then check `GET /live/selftest`.
+
 ## dSYMs
 
 Every run copies the Release dSYMs to `~/cobalt-dsyms/<version>-<build>/` and prints the app binary UUID. Keep them: they
@@ -70,7 +119,8 @@ unless `--show-url`, and `~/.config/cobalt/feather.json` (chmod 600, never commi
 
 ## Files
 
-- `release.sh`: the whole pipeline.
+- `release.sh`: the whole Feather pipeline.
+- `testflight.sh`: the TestFlight pipeline (archive, sign, upload).
 - Source format: AltStore source v2 as Feather's `AltSourceKit` decoder reads it (required there: non-empty `apps`,
   each app's `iconURL`, each version's `version`). We also send the AltStore-required fields (`bundleIdentifier`,
   `developerName`, `localizedDescription`, `buildVersion`, `date`, `size`, `appPermissions`).

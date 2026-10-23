@@ -153,6 +153,12 @@ esac
 YML_BUILD="$BUILD"
 case "$BUILD" in *[!0-9]*) die "CURRENT_PROJECT_VERSION must be a whole number (got $BUILD)" ;; esac
 PUBLISHED_MAX="$(jq -r '[.[].buildVersion | tonumber? // empty] | max // 0' <<<"$PREV_VERSIONS")"
+# TestFlight uploads (deploy/apple/testflight.sh) share the same rising build number.
+TF_LOG="$IPA_ARCHIVE/testflight.tsv"
+if [ -f "$TF_LOG" ]; then
+    TF_MAX="$(awk -F'\t' '$2 ~ /^[0-9]+$/ && $2 > m { m = $2 } END { print m + 0 }' "$TF_LOG")"
+    [ "$TF_MAX" -gt "$PUBLISHED_MAX" ] && PUBLISHED_MAX="$TF_MAX"
+fi
 if [ "$REPLACE" -eq 0 ] && [ "$BUILD" -le "$PUBLISHED_MAX" ]; then
     BUILD=$((PUBLISHED_MAX + 1))
     say "build number: $BUILD (newest published is $PUBLISHED_MAX; apple/project.yml says $YML_BUILD)"
