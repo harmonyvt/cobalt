@@ -48,6 +48,7 @@ export const START_CALL_MS = 30_000;
 export const FILE_HEAD_MS = 60_000;
 export const POSTER_MS = 60_000;
 export const HARK_MS = 3_000;
+export const LIVE_EDIT_MS = 3_000;
 export const R2_GET_MS = 30_000;
 // the slowest copy we plan for: a stream through a tick moves at least this much per second
 export const COPY_BYTES_PER_S = 4_000_000;
@@ -209,6 +210,9 @@ export type EditCoreDeps = {
     // The Hark webhook URL (harkConfigFrom), or null: the bridge is off and nothing is sent.
     hark: string | null;
     harkFetch?: (url: string, init: RequestInit) => Promise<Response>;
+    // After a tick that held a render: let its Live Activity catch up (section 32; the main Durable Object decides whether
+    // anything is pushed). Raced against LIVE_EDIT_MS, errors swallowed: a push never holds up or fails a render.
+    liveEdit?: (rid: string) => Promise<void>;
     log?: (line: string) => void;
 };
 
@@ -274,6 +278,7 @@ export class EditRenderCore {
         // this schedule has fired; a kick from here on is for what this step may not have seen
         this.kicked = false;
         await this.d.storage.delete(TICK_KEY);
+        const before = (await this.d.storage.get<StepRecord>(RENDER_KEY))?.rid ?? null;
         let next: Outcome;
         try {
             next = await this.step();
@@ -282,8 +287,21 @@ export class EditRenderCore {
             console.error("[edit-render] step threw", e instanceof Error ? `${e.name}: ${e.message}` : String(e));
             next = await this.afterThrow();
         }
+        // the render this tick held (it may have just ended) and the one it holds now (a claim after a cleanup)
+        const after = (await this.d.storage.get<StepRecord>(RENDER_KEY).catch(() => undefined))?.rid ?? null;
+        for (const rid of new Set([before, after])) if (rid) await this.pushLive(rid);
         if (next === null && this.kicked) next = STEP_NOW_S;
         if (next !== null) await this.arm(next);
+    }
+
+    private async pushLive(rid: string): Promise<void> {
+        const live = this.d.liveEdit;
+        if (!live) return;
+        try {
+            await raceCeiling(live(rid), LIVE_EDIT_MS, "live edit push");
+        } catch (e) {
+            console.error("[edit-render] live push failed", e instanceof Error ? e.message : String(e));
+        }
     }
 
     // A step that came back: the render's count of ticks that threw starts again.

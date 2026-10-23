@@ -729,6 +729,7 @@ async function handleInner(
             decision.then === "live_run" ||
             decision.then === "live_state" ||
             decision.then === "live_selftest" ||
+            decision.then === "live_edit" ||
             // the Hark opt-in (also DO-only: D1 ownership check and DO storage)
             decision.then === "studio_notify" ||
             // the share sheet's recent saves (DO storage for the list, D1 for the rows)

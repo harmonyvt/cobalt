@@ -3430,3 +3430,34 @@ Additive to timeline version 1: a timeline without pitch is unchanged byte for b
    the speed"); the overlay sheet has the same for video overlays; the Mac inspector has the same row in the clip and overlay
    inspectors. A timeline clip with pitch != 0 shows a small chip like the speed chip, `pitch +3`. Each drag is one undo step (the
    session's coalescing `key:` like volume: `pitch:<id>` / `opitch:<id>`). Hidden entirely when the server lacks `limits.edit_pitch`.
+
+## 32. Live Activities for editor renders (addendum, 2026-10-23; owner: editor renders "also show on the Dynamic Island")
+
+A render the iPhone app sees running (the editor's own polls, `GET /edits/renders`, `GET /queue`'s `edits`) gets its own Live
+Activity (`CobaltEditActivityAttributes`, attributes `{render, project}`), separate from the run activities of section 8: no rail,
+never folded into the busy period's summary. The app writes it while it is open; with APNs configured the server writes it with
+the app closed. Code: `api/src/edit-live.ts` (state, coalescing, payloads, routes), the hook in `edit-render-core.ts`
+(`liveEdit`), `apple/CobaltKit/Sources/CobaltKit/Live/EditLive.swift`, `apple/CobaltWidgets/EditLiveActivity.swift`.
+
+- **Capability**: `features.edit_live_push` = `features.editor` and `features.live_activity_push`. Absent or false: the app never
+  sends a token and updates the activity itself while open.
+- **Content state** (camelCase, absent optionals omitted, `since` unix seconds, built the same way on both sides from a
+  `<render>`): `{status: "queued"|"preparing"|"rendering"|"finishing"|"done"|"failed"|"cancelled", since, title, progress?
+  (31.12's), queueAhead? (queued), resultSeconds?, resultWidth?, resultHeight?, resultBytes? (done), code? (failed)}`. An
+  `error` render whose code is `error.edit.cancelled` is `cancelled`.
+- **Routes** (keyed, gate op `live_edit`, the Durable Object only, never the container): `PUT /live/edits/<rid>` `{"token":
+  "<hex 64..200>", "env": "sandbox"|"production"}` → `200 {status, pushing: true}` (stored as `live:edit:<rid>` in the `main` DO;
+  the current state is pushed at once if it differs from what that token was sent), `200 {status, pushing: false, reason:
+  "not_configured"}` without APNs (nothing stored), `404 error.edit.not_found`, `400 error.live.bad_request`; `DELETE
+  /live/edits/<rid>` → `200` (forgotten). `POST /live/edits/<rid>/push` is the EditRenderer's (header `x-internal-key`), never
+  the internet's: the gate answers 404 for it.
+- **Pushes**: after every EditRenderer tick that held a render (and the one a cleanup claimed next), the renderer posts that
+  route (3 s ceiling, errors swallowed: a push never holds up or fails a render). The main DO reads the row and pushes when the
+  state differs: a status change (or the queue moving) at once, priority 10; progress at most every 10 s and only after the bar
+  moved 4 points, priority 5; the end at once, priority 10, with `dismissal-date` +15 min and the alert `video ready` / `<title>`
+  (done), +5 min and `couldn't render` / `<title> — <plainReason>` (failed), now and no alert (cancelled); then the record is
+  deleted. Updates carry `stale-date` +180 s. A dead token (410, BadDeviceToken on both hosts) is forgotten; a non-token failure
+  records nothing and the next tick tries the newest state. Same `ApnsClient` (one provider token) as section 8.
+- **Not pushed**: a render ended by the Worker (a queued cancel, a project deleted) or by the cron (`error.edit.lost`): the app
+  that cancelled is open, and otherwise the activity goes stale and the app ends it when it next comes to the front (it reads
+  `GET /edits/renders/<rid>` for any activity it has no copy of).

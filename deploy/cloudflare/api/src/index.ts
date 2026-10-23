@@ -3,6 +3,7 @@ import { PORT_HEADER, stripInternalHeaders, KEY_ID_HEADER, SERVICE_HEADER } from
 import { handleWebpRoute, isWebpRoute, WebpService, type WebpDeps } from "./webp";
 import { ApnsClient, apnsConfigFrom, fetchTransport, helperTransport } from "./apns";
 import { handleLiveRoute, isLiveRoute, LiveService } from "./live";
+import { EditLiveService, handleEditLiveRoute, isEditLiveRoute } from "./edit-live";
 import { handleNotifyRoute, harkConfigFrom, isNotifyRoute, NotifyService } from "./notify";
 import { handleStudioRoute, isStudioRoute, StudioService } from "./studio";
 import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
@@ -57,6 +58,7 @@ export class CobaltContainer extends Container<Env> {
     private webp: WebpService;
     private studio: StudioService;
     private live: LiveService;
+    private editLive: EditLiveService;
     private notify: NotifyService;
 
     constructor(ctx: DurableObjectState<{}>, env: Env) {
@@ -135,13 +137,8 @@ export class CobaltContainer extends Container<Env> {
         // nothing (capability false). The DO signs and builds every request; with
         // APNS_VIA=helper the helper only relays the bytes (POST /apns).
         const apnsConfig = apnsConfigFrom(env);
-        this.live = new LiveService({
-            storage: this.ctx.storage,
-            db: env.DB,
-            now: webpDeps.now,
-            // a failed `end` push is retried by the sweep: arm it
-            scheduleSweep: () => this.scheduleSweepSoon(),
-            apns: apnsConfig
+        // one client (one provider token) for the run activities and the editor's render activities
+        const apns = apnsConfig
                 ? new ApnsClient({
                       ...apnsConfig,
                       now: webpDeps.now,
@@ -156,8 +153,17 @@ export class CobaltContainer extends Container<Env> {
                                 })
                               : fetchTransport((url, init) => fetch(url, init)),
                   })
-                : null,
+                : null;
+        this.live = new LiveService({
+            storage: this.ctx.storage,
+            db: env.DB,
+            now: webpDeps.now,
+            // a failed `end` push is retried by the sweep: arm it
+            scheduleSweep: () => this.scheduleSweepSoon(),
+            apns,
         });
+        // editor renders (section 32): the app's token, pushes from the EditRenderer's ticks
+        this.editLive = new EditLiveService({ storage: this.ctx.storage, db: env.DB, now: webpDeps.now, apns });
 
         // Hark notification bridge (APP-API-CONTRACT.md section 9). HARK_WEBHOOK_URL is a
         // secret read only here (the Worker reads it for the capability flag); it never goes
@@ -299,6 +305,9 @@ export class CobaltContainer extends Container<Env> {
         // Live Activity routes (token and run store, APNs) never touch the
         // container: answered first, before the env-fingerprint restart below, and
         // never through super.fetch. The key id header is the Worker's word.
+        if (isEditLiveRoute(new URL(request.url).pathname)) {
+            return handleEditLiveRoute(this.editLive, request, this.env.COBALT_API_KEY);
+        }
         if (isLiveRoute(new URL(request.url).pathname)) {
             return handleLiveRoute(this.live, request);
         }

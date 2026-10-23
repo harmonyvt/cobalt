@@ -672,3 +672,17 @@ render once the API is deployed.
    in the top bar beside close (copy `Copy.Editor.undo` = "undo", `redo` = "redo"). Local only: nothing on the server changes.
 2. **Photos and GIFs stay overlay-only in v1** (a photo held on the main track is a later feature).
 3. **Push: Hark, as every other job.** No APNs alert-push work in v1.
+
+## 11. Live Activities for renders (addendum, 2026-10-23)
+
+A render this iPhone sees running gets a Live Activity of its own (`EditLiveManager`, `CobaltEditActivityAttributes`; server
+half: `deploy/cloudflare/APP-API-CONTRACT.md` section 32). It starts from any copy of a running render the app reads while in
+front (the session's render polls, the render list, the queue's snapshot), at most one per render, never for a render older
+than 6 hours or one whose activity already ended; an older copy never moves it backwards. It ends with the render: done
+dismisses after 15 minutes, failed after 5, cancelled at once. With `features.edit_live_push` and a signed build its update
+token goes to `PUT /live/edits/<rid>`, and the server keeps it current with the app closed.
+
+Copy (widget, lowercase): queued `waiting to render` / `1 render ahead` / `N renders ahead`; preparing `sending the clips`;
+rendering `rendering`; finishing `saving the video`; done `video ready` with `m:ss · w×h · size`; failed `couldn't render` with
+the reason; cancelled `cancelled`; stale `waiting for capystore…`. Compact island: a film mark and the percent (`next` / `+N`
+while queued); minimal: a progress ring. A tap opens the queue (`cobalt-apple://jobs`).
