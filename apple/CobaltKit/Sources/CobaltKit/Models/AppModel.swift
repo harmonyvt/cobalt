@@ -304,6 +304,9 @@ public final class AppModel {
         return model
     }
 
+    /// True for `AppModel.preview(...)`: system prompts and sheets that ask for permissions stay away.
+    public var isPreview: Bool { ctx.isPreview }
+
     public var serverSummary: ServerSummary {
         var features: [String] = []
         if capabilities.studio { features.append("studio") }
