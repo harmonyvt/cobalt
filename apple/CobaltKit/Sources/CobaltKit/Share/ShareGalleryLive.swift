@@ -8,6 +8,8 @@ extension InstantShareEngine {
     /// share: a background session when the build has the app group, else the foreground wait. One request, never
     /// retried here.
     func enqueue(link: LinkInfo, options: StudioCreateOptions, client: HTTPCobaltClient, job: UUID) async -> InstantShare.Result {
+        var options = options
+        if options.live == nil { options.live = ShareLiveStart(job: job, link: link, environment: liveEnvironment) }
         let built: (request: URLRequest, body: Data)
         do {
             built = try client.shareSaveRequest(link: link.url, options: options)

@@ -890,6 +890,27 @@ priority-5 updates at one per second; that a push-started activity's update toke
 
 ---
 
+### 8.10 The instant share's activity (addendum, 2026-10-23)
+
+The instant share (CONTRACT-SHARE-QUICK.md section 9) closes the extension in about 0.1 s, so it never calls
+`PUT /live/runs/<run>` and nothing was shown. Its `POST /studio` (plain or with the gallery fields, always
+`origin: "share"`) now carries:
+
+    "live": {"run": "<the share's job id, lowercase uuid>", "environment": "sandbox" | "production",
+             "service": "instagram", "ref": "Dd7P496wolG"}
+
+only when the build has a push environment. With `origin: "share"`, after the session row exists and before the
+first kick, the server registers that run for the new session exactly as `PUT /live/runs/<run>` with `start: true`
+and a `fetching` state would (same caps, same push-to-start, `startShare` in `src/live.ts`), and marks it
+`serverOnly` (`awaitsMake` when the create chains a slideshow or gallery image). Anything malformed, an existing run,
+no start token or no APNs config is skipped quietly; the save is never refused over it.
+
+The save's finalize now also sends the live hook a `saved` event (`bytes`, `width`, `height`, `seconds`). It only
+changes a `serverOnly` run without `awaitsMake`: the state becomes `done` with no `resultURL` (rail 3), and the end push
+says "saved to capystore" (the widget's headline for an `origin: "share"` done with no link). Every other run ignores
+`saved` (the device or the render ends those, as before). The app's adopted-activity path (the woken app reports the
+push-started activity's update token) is what lets the server send the updates and the end.
+
 ## 9. Hark notification bridge (addendum, pinned 2026-10-04)
 
 APNs is not available yet (no push key), so a job the owner walked away from (typically a share-sheet

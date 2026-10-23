@@ -1862,6 +1862,7 @@ export class StudioService {
         let itemCountField: unknown;
         let slideshowField: unknown;
         let galleryImageField: unknown;
+        let liveField: unknown;
         try {
             if (rawBody.length <= MAX_BODY_BYTES) {
                 const parsed = JSON.parse(rawBody);
@@ -1876,6 +1877,7 @@ export class StudioService {
                     itemCountField = (parsed as { item_count?: unknown }).item_count;
                     slideshowField = (parsed as { slideshow?: unknown }).slideshow;
                     galleryImageField = (parsed as { gallery_image?: unknown }).gallery_image;
+                    liveField = (parsed as { live?: unknown }).live;
                 }
             }
         } catch {
@@ -1992,6 +1994,11 @@ export class StudioService {
             }
         }
         if (fromShare) await this.rememberShare(keyId, sid, now);
+        // `live` (APP-API-CONTRACT 8.10): the instant share's Live Activity, push-started for this session.
+        // Before the kick, so the first save step already finds the run. Never refuses the save.
+        if (fromShare && liveField !== undefined && liveField !== null) {
+            await this.liveCall("share start", (l) => l.startShare?.(keyId, sid, liveField, make !== null) ?? Promise.resolve());
+        }
         // The opt-in goes in before the save can move, so even an instant save is announced.
         const notifyBody = optIn === null ? undefined : await this.optInAtCreate(keyId, sid, optIn);
 
@@ -2728,6 +2735,15 @@ export class StudioService {
             });
             // the save is ready: the owner who walked away is told (once: the event's record)
             await this.notifyCall("saved", (n) => n.onSaved(sid));
+            await this.liveCall("saved", (l) =>
+                l.onSave(sid, {
+                    kind: "saved",
+                    bytes: stored?.size ?? bytes ?? null,
+                    width: finite(done.width),
+                    height: finite(done.height),
+                    seconds: finite(done.duration),
+                }),
+            );
             await this.settleLine(sid, null, { kind: "saved" });
             becameReady = true;
         }
@@ -2945,6 +2961,9 @@ export class StudioService {
                 await this.d.db.prepare("UPDATE studio_sessions SET poster = ?1 WHERE id = ?2").bind(lead.poster, sid).run().catch(() => {});
             }
             if (!retry) await this.notifyCall("saved", (n) => n.onSaved(sid));
+            await this.liveCall("saved", (l) =>
+                l.onSave(sid, { kind: "saved", bytes: lead.bytes ?? null, width: lead.width ?? null, height: lead.height ?? null, seconds: lead.duration ?? null }),
+            );
             await this.settleLine(sid, null, { kind: "saved" });
             becameReady = true;
         }

@@ -11,7 +11,8 @@ import Foundation
 extension Copy {
     enum Live {
         /// The stage line of the expanded island and the lock screen card.
-        static func stage(_ s: LiveContentState, service: String?) -> String {
+        /// `origin` "share": a done state with no link is an instant share the server saved (APP-API-CONTRACT 8.10).
+        static func stage(_ s: LiveContentState, service: String?, origin: String = "app") -> String {
             switch s.stage {
             case .fetching:
                 return Copy.fetching(from: service.flatMap { $0 == "file" || $0.isEmpty ? nil : $0 })
@@ -22,7 +23,9 @@ extension Copy {
             case .rendering:
                 if s.packing { return Copy.packing }
                 return s.framesTotal != nil ? Copy.decoding : Copy.makingWebp
-            case .done: return s.resultURL == nil ? savedLocal : Copy.webpReady
+            case .done:
+                if s.resultURL != nil { return Copy.webpReady }
+                return origin == "share" ? savedToLibrary : savedLocal
             case .failed: return failure(s)
             }
         }
@@ -30,6 +33,8 @@ extension Copy {
         static let ready = "ready to trim"                                                    // new
         /// Plain cobalt, local mode: the clip was saved on this device and there is no link.
         static var savedLocal: String { "saved on this \(Copy.device)" }                       // new
+        /// An instant share's save, now in the library (no link: nothing was made from it).
+        static let savedToLibrary = "saved to capystore"                                      // new
         static let waitingForCobalt = "waiting for capystore…"                                   // new
         static let open = "open"                                                              // new
         static let copyLink = "copy link"

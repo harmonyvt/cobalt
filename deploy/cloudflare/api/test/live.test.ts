@@ -1789,3 +1789,79 @@ describe("finding 8: a failed end is retried by the sweep, bounded, with backoff
         expect(await w.live.retryEnds()).toEqual({ nextInMs: null });
     });
 });
+
+describe("instant share (startShare: POST /studio with `live`, APP-API-CONTRACT 8.10)", () => {
+    const LIVE = { run: RUN, environment: "sandbox", service: "instagram", ref: "Dd7P496wolG" };
+    const armedWorld = async () => {
+        const w = await world();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        return w;
+    };
+    const savedEv = { kind: "saved" as const, bytes: 9_000_000, width: 1080, height: 1920, seconds: 12.5 };
+
+    it("push-starts a share run for the session and marks it server-only", async () => {
+        const w = await armedWorld();
+        await w.live.startShare(KEY, SID, LIVE, false);
+        expect(w.apple.pushes).toHaveLength(1);
+        const p = w.apple.pushes[0]!;
+        expect(p.token).toBe(START);
+        expect(p.payload.aps.event).toBe("start");
+        expect(p.payload.aps.attributes).toEqual({ run: RUN, input: "link", service: "instagram", ref: "Dd7P496wolG", origin: "share" });
+        expect(p.payload.aps["content-state"]).toEqual(FETCHING);
+        const r = w.run()!;
+        expect(r.sid).toBe(SID);
+        expect(r.serverOnly).toBe(true);
+        expect(r.awaitsMake).toBeUndefined();
+        expect(w.kv.m.get(`live:sid:${SID}`)).toEqual([RUN]);
+    });
+
+    it("ignores a malformed `live`, another key's session, and a run that already exists", async () => {
+        const w = await armedWorld();
+        await w.live.startShare(KEY, SID, { ...LIVE, run: "nope" }, false);
+        await w.live.startShare(KEY, SID, { ...LIVE, environment: "dev" }, false);
+        await w.live.startShare(KEY, SID, "x", false);
+        await w.live.startShare(KEY, SID_OTHER, LIVE, false);
+        expect(w.apple.pushes).toHaveLength(0);
+        expect(w.run()).toBeUndefined();
+        await w.live.startShare(KEY, SID, LIVE, false);
+        await w.live.startShare(KEY, SID, LIVE, false);
+        expect(w.apple.pushes).toHaveLength(1);
+    });
+
+    it("the save's `saved` ends a server-only run (done, no resultURL) once the app reports its token", async () => {
+        const w = await armedWorld();
+        await w.live.startShare(KEY, SID, LIVE, false);
+        w.apple.calls.length = 0;
+        w.tick(4000);
+        await w.live.onSave(SID, saving(500));
+        w.tick(4000);
+        await w.live.onSave(SID, savedEv);
+        expect(w.apple.calls).toHaveLength(0); // no update token yet: stored only
+        expect(w.run()!.state).toMatchObject({ stage: "done", resultBytes: 9_000_000, resultWidth: 1080, resultSeconds: 12.5 });
+        expect(w.run()!.state.resultURL).toBeUndefined();
+        // the app wakes for the push-started activity and registers its token
+        await w.put({ update_token: UPDATE, attributes: { ...ATTRS, origin: "share" } });
+        expect(w.apple.pushes).toHaveLength(1);
+        expect(w.apple.pushes[0]!.payload.aps.event).toBe("end");
+        expect(w.run()!.endedAt).not.toBeNull();
+    });
+
+    it("`saved` leaves runs alone that a device follows, or that wait for a make", async () => {
+        const w = await armedWorld();
+        await w.put({ start: true, session: SID, update_token: UPDATE });
+        await w.live.onSave(SID, savedEv);
+        expect(w.run()!.state.stage).toBe("fetching");
+
+        const w2 = await armedWorld();
+        await w2.live.startShare(KEY, SID, LIVE, true);
+        expect(w2.run()!.awaitsMake).toBe(true);
+        await w2.live.onSave(SID, savedEv);
+        expect(w2.run()!.state.stage).toBe("fetching");
+    });
+
+    it("no APNs configured: nothing stored", async () => {
+        const w = await world({ configured: false });
+        await w.live.startShare(KEY, SID, LIVE, false);
+        expect(w.run()).toBeUndefined();
+    });
+});
