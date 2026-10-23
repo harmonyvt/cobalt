@@ -68,6 +68,12 @@ the upload sends symbols to Apple too.
 
 ### One-time setup (owner)
 
+Two ways to sign in. The simplest: the Apple ID of the team signed in under Xcode > Settings > Accounts, and only
+`{"teamId": "<team id>"}` in `~/.config/cobalt/appstoreconnect.json` (or `DEVELOPMENT_TEAM` in `apple/Config/Local.xcconfig`);
+the script then signs and uploads through that account (steps 1 and 2 below are skipped). Or a **team** API key (steps 1 and
+2), which works with nobody signed in to Xcode. An *individual* API key has no issuer id and xcodebuild cannot use it; the
+script falls back to the Xcode account when the config has no issuer id.
+
 1. **App Store Connect API key**: App Store Connect > Users and Access > Integrations > App Store Connect API > Team
    Keys > +, access **Admin** (cloud signing needs it). Download the key file (`AuthKey_<key id>.p8` or `ApiKey_<key id>.p8`; Apple offers it only once) and
    note the key id and the issuer id shown above the list.

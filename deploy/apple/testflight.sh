@@ -12,7 +12,9 @@
 # (-allowProvisioningUpdates), registers the bundle ids, the app group and push for the app and its extensions, and
 # makes the distribution certificate and profiles itself. Nothing is installed in the keychain by hand.
 #
-# Needs: xcodegen, Xcode, jq, curl, plutil, and ~/.config/cobalt/appstoreconnect.json (chmod 600, never committed):
+# Needs: xcodegen, Xcode, jq, curl, plutil, and either the Apple ID of the team signed in to Xcode (Settings > Accounts)
+# with "teamId" in the config or DEVELOPMENT_TEAM in apple/Config/Local.xcconfig, or a TEAM API key in
+# ~/.config/cobalt/appstoreconnect.json (chmod 600, never committed):
 #   {"keyId": "<key id>", "issuerId": "<uuid>", "keyPath": "~/.config/cobalt/AuthKey_<keyId>.p8", "teamId": "<10 chars>"}
 # The key needs the Admin role (cloud-managed distribution signing). "teamId" may be left out when
 # apple/Config/Local.xcconfig sets DEVELOPMENT_TEAM. Fork-only; see deploy/apple/README.md ("TestFlight").
@@ -42,7 +44,7 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         -h|--help)
-            sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -60,26 +62,37 @@ for tool in xcodegen xcodebuild jq curl plutil ditto; do need "$tool"; done
 
 # --- App Store Connect key and team ---------------------------------------------------------------
 
-[ -f "$ASC_CONFIG" ] || die "missing $ASC_CONFIG (see deploy/apple/README.md, TestFlight)"
-KEY_ID="$(jq -r '.keyId // empty' "$ASC_CONFIG")"
-ISSUER_ID="$(jq -r '.issuerId // empty' "$ASC_CONFIG")"
-KEY_PATH="$(jq -r '.keyPath // empty' "$ASC_CONFIG")"
-TEAM_ID="$(jq -r '.teamId // empty' "$ASC_CONFIG")"
-KEY_PATH="${KEY_PATH/#\~/$HOME}"
-[ -n "$KEY_PATH" ] || KEY_PATH="$HOME/.config/cobalt/AuthKey_$KEY_ID.p8"
-[ -f "$KEY_PATH" ] || [ ! -f "$HOME/.config/cobalt/ApiKey_$KEY_ID.p8" ] || KEY_PATH="$HOME/.config/cobalt/ApiKey_$KEY_ID.p8"
-case "$KEY_ID" in ""|*[!A-Za-z0-9]*) die "$ASC_CONFIG: keyId must be the key id (letters and digits, from the file name)" ;; esac
-[ -n "$ISSUER_ID" ] || die "$ASC_CONFIG: issuerId is missing (App Store Connect > Users and Access > Integrations)"
-[ -f "$KEY_PATH" ] || die "the API key file is missing: $KEY_PATH"
+# Two ways to sign in, picked by the config: a TEAM API key (keyId + issuerId + the .p8; works with nobody signed in to
+# Xcode), or, when the config has no issuerId (no file, or an individual key, which xcodebuild cannot use), the Apple ID
+# signed in under Xcode > Settings > Accounts, which signs and uploads the same way.
+KEY_ID=""; ISSUER_ID=""; KEY_PATH=""; TEAM_ID=""
+if [ -f "$ASC_CONFIG" ]; then
+    KEY_ID="$(jq -r '.keyId // empty' "$ASC_CONFIG")"
+    ISSUER_ID="$(jq -r '.issuerId // empty' "$ASC_CONFIG")"
+    KEY_PATH="$(jq -r '.keyPath // empty' "$ASC_CONFIG")"
+    TEAM_ID="$(jq -r '.teamId // empty' "$ASC_CONFIG")"
+fi
+case "$ISSUER_ID" in *[!0-9A-Fa-f-]*) ISSUER_ID="" ;; esac       # a placeholder left in is no issuer id
 if [ -z "$TEAM_ID" ] && [ -f "$APPLE/Config/Local.xcconfig" ]; then
     TEAM_ID="$(sed -n 's/^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*\([A-Z0-9]\{10\}\).*$/\1/p' \
         "$APPLE/Config/Local.xcconfig" | head -n 1)"
 fi
-[ "${#TEAM_ID}" -eq 10 ] || die "no team id: set \"teamId\" in $ASC_CONFIG or DEVELOPMENT_TEAM in apple/Config/Local.xcconfig"
-AUTH=(-allowProvisioningUpdates
-      -authenticationKeyPath "$KEY_PATH"
-      -authenticationKeyID "$KEY_ID"
-      -authenticationKeyIssuerID "$ISSUER_ID")
+case "$TEAM_ID" in [A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]) ;;
+    *) die "no team id: set \"teamId\" in $ASC_CONFIG or DEVELOPMENT_TEAM in apple/Config/Local.xcconfig" ;; esac
+if [ -n "$ISSUER_ID" ]; then
+    KEY_PATH="${KEY_PATH/#\~/$HOME}"
+    [ -n "$KEY_PATH" ] || KEY_PATH="$HOME/.config/cobalt/AuthKey_$KEY_ID.p8"
+    case "$KEY_ID" in ""|*[!A-Za-z0-9]*) die "$ASC_CONFIG: keyId must be the key id (letters and digits, from the file name)" ;; esac
+    [ -f "$KEY_PATH" ] || die "the API key file is missing: $KEY_PATH"
+    AUTH=(-allowProvisioningUpdates
+          -authenticationKeyPath "$KEY_PATH"
+          -authenticationKeyID "$KEY_ID"
+          -authenticationKeyIssuerID "$ISSUER_ID")
+    echo "signing in with the App Store Connect team key $KEY_ID"
+else
+    AUTH=(-allowProvisioningUpdates)
+    echo "signing in with the Apple ID in Xcode > Settings > Accounts (no team key with an issuer id in ${ASC_CONFIG/#"$HOME"/\~})"
+fi
 
 # --- version and build number ---------------------------------------------------------------------
 
