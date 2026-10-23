@@ -69,13 +69,13 @@ the upload sends symbols to Apple too.
 ### One-time setup (owner)
 
 1. **App Store Connect API key**: App Store Connect > Users and Access > Integrations > App Store Connect API > Team
-   Keys > +, access **Admin** (cloud signing needs it). Download `AuthKey_<key id>.p8` (Apple offers it only once) and
+   Keys > +, access **Admin** (cloud signing needs it). Download the key file (`AuthKey_<key id>.p8` or `ApiKey_<key id>.p8`; Apple offers it only once) and
    note the key id and the issuer id shown above the list.
 2. Save it where the script looks (no secret goes in chat or git):
 
-       mkdir -p ~/.config/cobalt && mv ~/Downloads/AuthKey_<key id>.p8 ~/.config/cobalt/ && chmod 600 ~/.config/cobalt/AuthKey_*.p8
-       printf '{"keyId":"%s","issuerId":"%s","keyPath":"~/.config/cobalt/AuthKey_%s.p8","teamId":"%s"}\n' \
-         <key id> <issuer id> <key id> <team id> > ~/.config/cobalt/appstoreconnect.json && chmod 600 ~/.config/cobalt/appstoreconnect.json
+       mkdir -p ~/.config/cobalt && mv ~/Downloads/<the key file> ~/.config/cobalt/ && chmod 600 ~/.config/cobalt/*.p8
+       printf '{"keyId":"%s","issuerId":"%s","keyPath":"~/.config/cobalt/<the key file>","teamId":"%s"}\n' \
+         <key id> <issuer id> <team id> > ~/.config/cobalt/appstoreconnect.json && chmod 600 ~/.config/cobalt/appstoreconnect.json
 
    The team id is in the developer account's Membership details (10 characters). Put it in `apple/Config/Local.xcconfig`
    too (`DEVELOPMENT_TEAM = <team id>`) for device builds from Xcode.

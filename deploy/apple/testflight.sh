@@ -13,7 +13,7 @@
 # makes the distribution certificate and profiles itself. Nothing is installed in the keychain by hand.
 #
 # Needs: xcodegen, Xcode, jq, curl, plutil, and ~/.config/cobalt/appstoreconnect.json (chmod 600, never committed):
-#   {"keyId": "<10 chars>", "issuerId": "<uuid>", "keyPath": "~/.config/cobalt/AuthKey_<keyId>.p8", "teamId": "<10 chars>"}
+#   {"keyId": "<key id>", "issuerId": "<uuid>", "keyPath": "~/.config/cobalt/AuthKey_<keyId>.p8", "teamId": "<10 chars>"}
 # The key needs the Admin role (cloud-managed distribution signing). "teamId" may be left out when
 # apple/Config/Local.xcconfig sets DEVELOPMENT_TEAM. Fork-only; see deploy/apple/README.md ("TestFlight").
 # Never prints the key or its path's contents.
@@ -67,7 +67,8 @@ KEY_PATH="$(jq -r '.keyPath // empty' "$ASC_CONFIG")"
 TEAM_ID="$(jq -r '.teamId // empty' "$ASC_CONFIG")"
 KEY_PATH="${KEY_PATH/#\~/$HOME}"
 [ -n "$KEY_PATH" ] || KEY_PATH="$HOME/.config/cobalt/AuthKey_$KEY_ID.p8"
-[ "${#KEY_ID}" -eq 10 ] || die "$ASC_CONFIG: keyId must be the 10-character key id"
+[ -f "$KEY_PATH" ] || [ ! -f "$HOME/.config/cobalt/ApiKey_$KEY_ID.p8" ] || KEY_PATH="$HOME/.config/cobalt/ApiKey_$KEY_ID.p8"
+case "$KEY_ID" in ""|*[!A-Za-z0-9]*) die "$ASC_CONFIG: keyId must be the key id (letters and digits, from the file name)" ;; esac
 [ -n "$ISSUER_ID" ] || die "$ASC_CONFIG: issuerId is missing (App Store Connect > Users and Access > Integrations)"
 [ -f "$KEY_PATH" ] || die "the API key file is missing: $KEY_PATH"
 if [ -z "$TEAM_ID" ] && [ -f "$APPLE/Config/Local.xcconfig" ]; then
