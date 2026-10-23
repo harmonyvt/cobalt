@@ -10,6 +10,8 @@ import UserNotifications
 /// "not now" keeps it away for a week; it closes by itself once both are on. Rule: `AlertsPrompt`.
 struct AlertsPromptPresenter: ViewModifier {
     let model: AppModel
+    /// Another sheet is over the shell (the paste review, the title sheet): this one waits for the next foreground.
+    var blocked = false
 
     @Environment(\.scenePhase) private var scenePhase
     @State private var shown = false
@@ -34,12 +36,11 @@ struct AlertsPromptPresenter: ViewModifier {
                 guard phase == .active else { return }
                 Task { await refresh(rise: true) }              // back from Settings: closes when both are on
             }
-            .sheet(isPresented: $shown) {
+            .sheet(isPresented: $shown, onDismiss: snoozeUnlessAllOn) {
                 AlertsPromptSheet(notifications: notifications, liveActivities: liveActivities) {
                     Task { await turnOn() }
                 } notNow: {
-                    UserDefaults.standard.set(Date().addingTimeInterval(AlertsPrompt.snooze), forKey: Self.snoozeKey)
-                    shown = false
+                    shown = false               // onDismiss snoozes it
                 }
                 .cobaltRoot(model: model)
             }
@@ -53,10 +54,16 @@ struct AlertsPromptPresenter: ViewModifier {
             shown = false
             return
         }
-        guard rise, !shown, !model.queueShown else { return }
+        guard rise, !shown, !model.queueShown, !blocked else { return }
         shown = AlertsPrompt.shouldShow(
             notifications: notifications, liveActivities: liveActivities, keyValid: model.capabilities.key == .valid,
             snoozedUntil: UserDefaults.standard.object(forKey: Self.snoozeKey) as? Date, now: Date())
+    }
+
+    /// "not now" and a swipe down both keep it away for a week; closing because both are on does not.
+    private func snoozeUnlessAllOn() {
+        guard !AlertsPrompt.allOn(notifications: notifications, liveActivities: liveActivities) else { return }
+        UserDefaults.standard.set(Date().addingTimeInterval(AlertsPrompt.snooze), forKey: Self.snoozeKey)
     }
 
     private func turnOn() async {

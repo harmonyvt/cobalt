@@ -92,7 +92,7 @@ struct AppShell: View {
             .overlay { if dropTargeted { dropHighlight } }
             #if os(iOS)
             .background { KeyboardShelfPublisher(store: model.store) }
-            .modifier(AlertsPromptPresenter(model: model))
+            .modifier(AlertsPromptPresenter(model: model, blocked: titleSheet != nil || review != nil))
             #endif
             .overlay(alignment: .bottom) {
                 if let status {
