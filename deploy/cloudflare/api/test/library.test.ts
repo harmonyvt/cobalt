@@ -975,6 +975,7 @@ describe("GET /capabilities", () => {
                 gallery_make: false,
                 direct_links: false,
                 editor: false,
+                edit_live_push: false,
                 still_webp: false,
                 // no embedding Space in this world's env (section 21)
                 search: false,

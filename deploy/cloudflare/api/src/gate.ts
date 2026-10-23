@@ -129,6 +129,7 @@ export type LookupThen =
     | "live_run"
     | "live_state"
     | "live_selftest"
+    | "live_edit"
     | "studio_notify"
     | "studio_recent"
     | "studio_line"
@@ -524,6 +525,10 @@ function decideLive(req: GateRequest): GateDecision {
         if (m === "PUT" || m === "DELETE") then = "live_start_token";
     } else if (req.pathname === "/live/selftest") {
         if (m === "GET") then = "live_selftest";
+    } else if (req.pathname.startsWith("/live/edits/")) {
+        // an editor render's activity token (section 32); /live/edits/<rid>/push is the EditRenderer's, never the internet's
+        const [rid, ...rest] = req.pathname.slice("/live/edits/".length).split("/");
+        if (/^[A-Za-z0-9]{20}$/.test(rid ?? "") && rest.length === 0 && (m === "PUT" || m === "DELETE")) then = "live_edit";
     } else if (req.pathname.startsWith("/live/runs/")) {
         const [run, sub, ...rest] = req.pathname.slice("/live/runs/".length).split("/");
         if (LIVE_RUN_REGEX.test(run ?? "") && rest.length === 0) {

@@ -215,6 +215,8 @@ public final class UnifiedQueue {
     public private(set) var dismissedEdits: Set<String> = []
     /// The editor's renders on this device (`EditorStore.renders`), wired by `AppModel`; nil in a queue with no editor.
     @ObservationIgnored var editRenders: (@MainActor () -> [EditRender])?
+    /// The renders of each fresh snapshot (the Live Activities of renders); wired by `AppModel`.
+    @ObservationIgnored var onEdits: (@MainActor ([EditRender]) -> Void)?
     /// The queue tab is on screen (`setVisible`).
     public private(set) var isVisible = false
     /// The app is in front (`setForeground`).
@@ -325,6 +327,7 @@ public final class UnifiedQueue {
             let fresh = try await ctx.client.queue()
             guard ctx.capabilities.queue else { return false }          // turned off while it was in flight
             snapshot = fresh
+            if let edits = fresh.edits, !edits.isEmpty { onEdits?(edits) }
             updatedAt = ctx.clock.now()
             serverProblem = false
             failures = 0

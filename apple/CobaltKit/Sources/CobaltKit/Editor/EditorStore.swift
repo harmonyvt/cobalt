@@ -35,6 +35,8 @@ public final class EditorStore {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var opening = false
     @ObservationIgnored private var refreshing = false
+    /// Every batch of renders merged (the Live Activities of renders, `EditLiveManager.observe`); wired by `AppModel`.
+    @ObservationIgnored var onRenders: (@MainActor ([EditRender]) -> Void)?
 
     static let maxTitleCodePoints = 60
     static let rendersLimit = 20
@@ -97,6 +99,7 @@ public final class EditorStore {
             byID[r.id] = r
         }
         renders = byID.values.sorted { $0.createdAt != $1.createdAt ? $0.createdAt > $1.createdAt : $0.id < $1.id }
+        onRenders?(incoming)
     }
 
     // MARK: create

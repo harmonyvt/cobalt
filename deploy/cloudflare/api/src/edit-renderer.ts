@@ -20,6 +20,8 @@ export interface EditRendererEnv {
     COBALT_API_KEY: string;
     VERSION?: { id: string; tag?: string; timestamp?: string };
     HARK_WEBHOOK_URL?: string;
+    // the main CobaltContainer namespace: an editor render's Live Activity is pushed from there (section 32)
+    COBALT?: DurableObjectNamespace;
 }
 
 // the render helper's port (editor/helper/server.js)
@@ -80,6 +82,16 @@ export class EditRenderer extends Container<EditRendererEnv> {
             schedule: (seconds) => this.schedule(seconds, "tick"),
             beforeClaim: () => this.restartOnEnvChange(),
             hark: harkConfigFrom(env),
+            liveEdit: env.COBALT
+                ? async (rid) => {
+                      const ns = env.COBALT!;
+                      const res = await ns.get(ns.idFromName("main")).fetch(`https://do.internal/live/edits/${rid}/push`, {
+                          method: "POST",
+                          headers: { "x-internal-key": env.COBALT_API_KEY },
+                      });
+                      await res.body?.cancel();
+                  }
+                : undefined,
         });
     }
 

@@ -84,7 +84,25 @@ extension HTTPCobaltClient: EditorClient {
         return try editAnswer(Wire.self, data, http).render
     }
 
+    public func putEditLiveToken(renderID: String, token: String, environment: LiveEnvironment) async throws -> Bool {
+        let req = try editRequest("PUT", "/live/edits/\(Self.encode(renderID))", timeout: 15)
+        let (data, http) = try await editSend(req, body: try Self.editBody(LiveTokenBody(token: token, env: environment.rawValue)))
+        struct Wire: Decodable { var pushing: Bool? }
+        return try editAnswer(Wire.self, data, http).pushing ?? false
+    }
+
+    public func deleteEditLiveToken(renderID: String) async throws {
+        let req = try editRequest("DELETE", "/live/edits/\(Self.encode(renderID))", timeout: 15)
+        let (data, http) = try await editSend(req)
+        guard (200..<300).contains(http.statusCode) else { throw editError(data, status: http.statusCode) }
+    }
+
     // MARK: bodies
+
+    private struct LiveTokenBody: Encodable {
+        var token: String
+        var env: String
+    }
 
     private struct CreateBody: Encodable {
         var title: String?

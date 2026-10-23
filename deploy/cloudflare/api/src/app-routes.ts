@@ -267,6 +267,8 @@ export async function capabilities(
                 // /edits*: timeline projects rendered on Cloudflare (APP-API-CONTRACT.md section 31): exactly while the
                 // EditRenderer binding is there and migration 0021 is applied
                 editor: editor === true,
+                // PUT /live/edits/<rid>: the server keeps an editor render's Live Activity current (section 32)
+                edit_live_push: editor === true && livePush === true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,

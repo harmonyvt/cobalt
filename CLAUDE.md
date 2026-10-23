@@ -136,5 +136,8 @@ backend routes it uses; nothing under `api/` changes). Design source: `apple/moc
   - `xcodebuild -project apple/Cobalt.xcodeproj -scheme Cobalt -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=27.0' -derivedDataPath apple/.build/ios CODE_SIGNING_ALLOWED=NO build`
   - the same with `-destination 'platform=macOS' -derivedDataPath apple/.build/mac`
   - `cd apple/CobaltKit && swift test`
+- TestFlight: `deploy/cobalt-deploy ios testflight [--dry-run]` (`deploy/apple/testflight.sh`): automatic signing via an
+  App Store Connect API key in `~/.config/cobalt/appstoreconnect.json`, internal testing only, shares the Feather build
+  number sequence (`~/cobalt-ipas/testflight.tsv`). Setup: `deploy/apple/README.md` (TestFlight).
 - Previews and tests run on `PreviewClient` / `AppModel.preview(<scenario>)`, which replay
   the mockup's real data and timings without network.

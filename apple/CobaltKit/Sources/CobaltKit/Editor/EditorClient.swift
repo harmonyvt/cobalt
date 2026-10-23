@@ -25,4 +25,15 @@ public protocol EditorClient: Sendable {
     func editRender(id: String) async throws -> EditRender
     /// `DELETE /edits/renders/<rid>`: cancels (a running one stops within a few seconds); `.finished` once it ended.
     func cancelEditRender(id: String) async throws -> EditRender
+    /// `PUT /live/edits/<rid>` (APP-API-CONTRACT 32, `features.edit_live_push`): the render's Live Activity update token, so the
+    /// server keeps the activity current with the app closed. True when the server will push.
+    func putEditLiveToken(renderID: String, token: String, environment: LiveEnvironment) async throws -> Bool
+    /// `DELETE /live/edits/<rid>`: the activity ended on the device; the server forgets the token.
+    func deleteEditLiveToken(renderID: String) async throws
+}
+
+public extension EditorClient {
+    // Previews and fakes have no server to push from.
+    func putEditLiveToken(renderID: String, token: String, environment: LiveEnvironment) async throws -> Bool { false }
+    func deleteEditLiveToken(renderID: String) async throws {}
 }

@@ -131,6 +131,17 @@ public final class AppModel {
 
     /// Live Activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
     @ObservationIgnored var liveManager: LiveActivityManager?
+    /// The editor's render activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
+    @ObservationIgnored var editLive: EditLiveManager? {
+        didSet {
+            let feed: @MainActor ([EditRender]) -> Void = { [weak self] renders in
+                guard let live = self?.editLive else { return }
+                Task { @MainActor in await live.observe(renders) }
+            }
+            editor.onRenders = editLive == nil ? nil : feed
+            unifiedQueue.onEdits = editLive == nil ? nil : feed
+        }
+    }
 
     /// Crash reports and logs to the owner's server; nil in previews and tests.
     @ObservationIgnored public internal(set) var telemetry: TelemetryService?
@@ -257,6 +268,11 @@ public final class AppModel {
         ctx.live = manager
         model.liveManager = manager
         manager.start()
+        model.editLive = EditLiveManager(
+            adapter: ActivityKitEditAdapter(), environment: LiveEnvironment.current,
+            capabilities: { [unowned model] in model.capabilities },
+            client: { [unowned ctx] in ctx.client as? any EditorClient },
+            now: { [unowned ctx] in ctx.clock.now() })
         #endif
         #if os(iOS)
         // The owner leaves mid-run: the system keeps the app working on it (`BGContinuedProcessingTask`),
@@ -325,6 +341,7 @@ public final class AppModel {
         unifiedQueue.capabilitiesChanged()            // `features.queue` came or went: poll, or stop
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
         editor.capabilitiesChanged()                  // `features.editor` went: close the editor
+        if let editLive { Task { await editLive.capabilitiesChanged() } }
     }
 
     func markKeyInvalid() {
@@ -436,6 +453,7 @@ public final class AppModel {
     /// On scenePhase `.active`: take over whatever the share extension left.
     public func pickUpSharedJobs() async {
         defer { liveManager?.foreground() }       // start token, push-started activities, orphans (after a handoff took its run)
+        if let editLive { Task { await editLive.foreground() } }   // render activities whose end no push brought
         await store.reload()
         store.startWatching()                      // the visible folder, while cobalt is in front (no-op without one)
         Telemetry.log(.info, .store, "store reloaded", data: ["media": .int(store.media.count), "videos": .int(store.videos.count)])
