@@ -63,6 +63,8 @@ export const embedConfigured = (c: EmbedConfig): boolean =>
 
 // Below this much time left, a failed call is not worth a wake and a second try.
 const WAKE_MIN_MS = 1_000;
+// The pause between wake-up GETs to a Space that refused one.
+const WAKE_POLL_MS = 3_000;
 
 // Runs `run` with an abort signal, rejecting with EmbedError("unavailable") after `timeoutMs` (our own
 // timer: an AbortSignal timeout is not always honoured in the Workers runtime).
@@ -127,16 +129,39 @@ export function spaceClient(c: EmbedConfig, fetchFn: typeof fetch = fetch): Embe
             return parsed;
         });
 
-    const wake = async (timeoutMs: number): Promise<boolean> => {
-        try {
-            return await withDeadline(timeoutMs, async (signal) => {
-                const res = await fetchFn(`${base}/`, { method: "GET", headers: { authorization: auth }, signal });
-                if (!res.ok) return false;
-                const body = (await res.json().catch(() => null)) as { status?: unknown } | null;
-                return body?.status === "ok";
+    // One GET /. A sleeping Space has been seen refusing a Worker's GET within 2 to 3 s (503) while a GET from a
+    // Mac was held open until it booted (2026-10-23), so wake() keeps asking every WAKE_POLL_MS within its time.
+    const ping = (timeoutMs: number): Promise<{ awake: boolean; status: number | null; note: string }> =>
+        withDeadline(timeoutMs, async (signal) => {
+            const res = await fetchFn(`${base}/`, {
+                method: "GET",
+                headers: { authorization: auth, accept: "application/json, */*", "user-agent": "cobalt-search-worker" },
+                signal,
             });
-        } catch {
-            return false;
+            const text = await res.text().catch(() => "");
+            let body: { status?: unknown } | null = null;
+            try {
+                body = JSON.parse(text) as { status?: unknown };
+            } catch {
+                // the Hugging Face proxy's HTML page
+            }
+            return { awake: res.ok && body?.status === "ok", status: res.status, note: text.slice(0, 120).replace(/\s+/g, " ") };
+        }).catch(() => ({ awake: false, status: null, note: "no answer" }));
+
+    const wake = async (timeoutMs: number): Promise<boolean> => {
+        const deadline = Date.now() + timeoutMs;
+        let tries = 0;
+        for (;;) {
+            const r = await ping(deadline - Date.now());
+            tries++;
+            if (r.awake) {
+                if (tries > 1) console.log("[search] space woke after", tries, "wake-ups");
+                return true;
+            }
+            if (tries === 1) console.log("[search] space wake-up refused", r.status, r.note);
+            const left = deadline - Date.now();
+            if (left < WAKE_POLL_MS + WAKE_MIN_MS) return false;
+            await new Promise((resolve) => setTimeout(resolve, WAKE_POLL_MS));
         }
     };
 

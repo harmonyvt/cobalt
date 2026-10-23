@@ -536,6 +536,16 @@ describe("Space client", () => {
         expect(await make(async () => ok({}, 503)).wake!(1000)).toBe(false);
         expect(await make(() => new Promise<Response>(() => {})).wake!(20)).toBe(false);
     });
+
+    it("wake() keeps asking a Space that refuses its first wake-ups, within its time", async () => {
+        let n = 0;
+        const c = spaceClient({ url: SPACE, token: "hf" }, (async () => {
+            n++;
+            return n < 3 ? new Response("<html>sleeping</html>", { status: 503 }) : ok({ status: "ok", ready: false });
+        }) as unknown as typeof fetch)!;
+        expect(await c.wake!(10_000)).toBe(true);
+        expect(n).toBe(3);
+    }, 15_000);
 });
 
 // ---- the gate, the Worker and capabilities ------------------------------------------------------
