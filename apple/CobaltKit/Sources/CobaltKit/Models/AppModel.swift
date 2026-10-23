@@ -278,6 +278,7 @@ public final class AppModel {
         // The owner leaves mid-run: the system keeps the app working on it (`BGContinuedProcessingTask`),
         // and the server speaks for it through the notify bridge if that task is refused or expires.
         let continued = ContinuedProcessing(context: ctx, scheduler: SystemContinuedScheduler(), home: { [unowned model] in model.pipeline })
+        continued.liveActivityCovers = { ActivityKitAdapter.activitiesAllowed }
         continued.register()
         ctx.continued = continued
         model.continuedProcessing = continued

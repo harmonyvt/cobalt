@@ -228,6 +228,13 @@ struct ContinuedQueueTests {
         #expect(rig.scheduler.submitted.count == 1)
     }
 
+    @Test func noTaskWhileALiveActivityCoversTheRun() async throws {
+        let rig = CQRig(.server)
+        rig.controller.liveActivityCovers = { true }
+        _ = rig.queue.add([.link(linkA), .link(linkB)], via: .review)
+        #expect(rig.scheduler.submitted.isEmpty, "capystore's own island shows the run: no second, system one")
+    }
+
     @Test func withoutALineTheTaskStaysForTheWholeSave() async throws {
         let rig = CQRig(.off)
         let handle = CQHandle()

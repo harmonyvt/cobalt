@@ -246,6 +246,10 @@ final class ContinuedProcessing: ContinuedWorkSink {
     /// Submissions made, expirations seen, in order: tests read these.
     private(set) var submissions: [String] = []
     private(set) var expirations = 0
+    /// True while capystore's own Live Activity covers the run (Live Activities allowed): no task is asked for, so iOS
+    /// draws no second "downloading" island beside it (owner's call, 2026-10-23). The cost: work only this device does
+    /// (the original arriving, frames being read) waits for the app to come back; the server's part carries on.
+    var liveActivityCovers: @MainActor () -> Bool = { false }
 
     init(
         context: PipelineContext, scheduler: any ContinuedTaskScheduler, home: @escaping @MainActor () -> Pipeline,
@@ -350,7 +354,7 @@ final class ContinuedProcessing: ContinuedWorkSink {
     // MARK: The task
 
     private func request(for busy: [Pipeline]) {
-        guard scheduler.isAvailable, let lead = busy.first else { return }
+        guard scheduler.isAvailable, !liveActivityCovers(), let lead = busy.first else { return }
         requestedInSpell = true
         let identifier = makeIdentifier()
         do {
