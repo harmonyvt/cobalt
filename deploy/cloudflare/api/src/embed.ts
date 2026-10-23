@@ -55,7 +55,8 @@ export type EmbedClient = {
     wake?(timeoutMs: number): Promise<boolean>;
 };
 
-export type EmbedConfig = { url?: string; token?: string; key?: string };
+// space: the Space's Hub id ("owner/name"), for restarting it when it sleeps and refuses to wake.
+export type EmbedConfig = { url?: string; token?: string; key?: string; space?: string };
 
 // The Space is configured when its URL is https and the Hugging Face token is set.
 export const embedConfigured = (c: EmbedConfig): boolean =>
@@ -63,6 +64,14 @@ export const embedConfigured = (c: EmbedConfig): boolean =>
 
 // Below this much time left, a failed call is not worth a wake and a second try.
 const WAKE_MIN_MS = 1_000;
+// The pause between wake-up GETs to a Space that refused one.
+const WAKE_POLL_MS = 3_000;
+// At most one Hub restart this often (per isolate), so a Space that is still booting is never restarted again.
+export const SPACE_RESTART_GAP_MS = 10 * 60 * 1000;
+let lastRestartAt = 0;
+export const resetSpaceRestarts = (): void => {
+    lastRestartAt = 0;
+};
 
 // Runs `run` with an abort signal, rejecting with EmbedError("unavailable") after `timeoutMs` (our own
 // timer: an AbortSignal timeout is not always honoured in the Workers runtime).
@@ -127,16 +136,65 @@ export function spaceClient(c: EmbedConfig, fetchFn: typeof fetch = fetch): Embe
             return parsed;
         });
 
-    const wake = async (timeoutMs: number): Promise<boolean> => {
+    // One GET /. A sleeping Space has been seen refusing a Worker's GET within 2 to 3 s (503) while a GET from a
+    // Mac was held open until it booted (2026-10-23), so wake() keeps asking every WAKE_POLL_MS within its time.
+    const ping = (timeoutMs: number): Promise<{ awake: boolean; status: number | null; note: string }> =>
+        withDeadline(timeoutMs, async (signal) => {
+            const res = await fetchFn(`${base}/`, {
+                method: "GET",
+                headers: { authorization: auth, accept: "application/json, */*", "user-agent": "cobalt-search-worker" },
+                signal,
+            });
+            const text = await res.text().catch(() => "");
+            let body: { status?: unknown } | null = null;
+            try {
+                body = JSON.parse(text) as { status?: unknown };
+            } catch {
+                // the Hugging Face proxy's HTML page
+            }
+            return { awake: res.ok && body?.status === "ok", status: res.status, note: text.slice(0, 120).replace(/\s+/g, " ") };
+        }).catch(() => ({ awake: false, status: null, note: "no answer" }));
+
+    // The Worker's GETs stopped waking the sleeping Space (refused 503 from 2026-10-21 to 10-23), so a refused
+    // wake-up asks the Hub: a SLEEPING Space is restarted (never a paused, building or running one).
+    const space = typeof c.space === "string" && /^[\w.-]+\/[\w.-]+$/.test(c.space) ? c.space : null;
+    const restartIfAsleep = async (timeoutMs: number): Promise<void> => {
+        if (!space || timeoutMs < WAKE_MIN_MS || Date.now() - lastRestartAt < SPACE_RESTART_GAP_MS) return;
+        const api = `https://huggingface.co/api/spaces/${space}`;
         try {
-            return await withDeadline(timeoutMs, async (signal) => {
-                const res = await fetchFn(`${base}/`, { method: "GET", headers: { authorization: auth }, signal });
-                if (!res.ok) return false;
-                const body = (await res.json().catch(() => null)) as { status?: unknown } | null;
-                return body?.status === "ok";
+            await withDeadline(timeoutMs, async (signal) => {
+                const rt = await fetchFn(`${api}/runtime`, { method: "GET", headers: { authorization: auth }, signal });
+                const stage = rt.ok ? ((await rt.json().catch(() => null)) as { stage?: unknown } | null)?.stage : null;
+                if (stage !== "SLEEPING") {
+                    console.log("[search] space not restarted, stage", rt.status, typeof stage === "string" ? stage : null);
+                    return;
+                }
+                lastRestartAt = Date.now();
+                const res = await fetchFn(`${api}/restart`, { method: "POST", headers: { authorization: auth }, signal });
+                console.log("[search] space was asleep, restart asked", res.status);
             });
         } catch {
-            return false;
+            console.log("[search] space restart check got no answer");
+        }
+    };
+
+    const wake = async (timeoutMs: number): Promise<boolean> => {
+        const deadline = Date.now() + timeoutMs;
+        let tries = 0;
+        for (;;) {
+            const r = await ping(deadline - Date.now());
+            tries++;
+            if (r.awake) {
+                if (tries > 1) console.log("[search] space woke after", tries, "wake-ups");
+                return true;
+            }
+            if (tries === 1) {
+                console.log("[search] space wake-up refused", r.status, r.note);
+                await restartIfAsleep(deadline - Date.now());
+            }
+            const left = deadline - Date.now();
+            if (left < WAKE_POLL_MS + WAKE_MIN_MS) return false;
+            await new Promise((resolve) => setTimeout(resolve, WAKE_POLL_MS));
         }
     };
 
@@ -615,26 +673,33 @@ export async function searchQueue(d: { db: D1Database; mediaBaseUrl: string; now
 export type SearchHit = { post_key: string; score: number; latest: number };
 
 export type SearchOutcome =
-    | { ok: true; hits: SearchHit[]; indexed: number; pending: number }
+    | { ok: true; hits: SearchHit[]; indexed: number; pending: number; fallback: boolean }
     | { ok: false; status: number; code: string };
+
+// The words of a query for the name-match fallback: lowercase, at least two characters each.
+const queryWords = (needle: string): string[] => [...new Set(needle.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2))];
 
 export async function searchPosts(
     d: { db: D1Database; client: EmbedClient | null; mediaBaseUrl: string },
     rawQuery: string,
     limit: number,
+    opts: { textFallback?: boolean } = {},
 ): Promise<SearchOutcome> {
     const q = rawQuery.trim().replace(/\s+/g, " ");
     if (q.length === 0 || q.length > MAX_QUERY_CHARS) return { ok: false, status: 400, code: "error.library.bad_request" };
     if (!d.client) return { ok: false, status: 503, code: "error.search.off" };
 
-    let qv: number[];
+    // null: the Space could not answer (asleep, booting, down), so the answer is name matches only
+    let qv: number[] | null;
     try {
         const r = await d.client.embed("query", [{ title: null, text: q, image_url: null }], QUERY_CALL_MS);
         qv = r.vectors[0]!;
     } catch (e) {
-        // asleep or booting: the client says "waking up, try again"
-        if (!(e instanceof EmbedError) || e.kind === "unavailable") return { ok: false, status: 503, code: "error.search.waking" };
-        return { ok: false, status: 502, code: "error.search.failed" };
+        if (e instanceof EmbedError && e.kind === "rejected") return { ok: false, status: 502, code: "error.search.failed" };
+        // callers that need meaning (stage pools) say "waking up" instead of name matches
+        if (opts.textFallback === false) return { ok: false, status: 503, code: "error.search.waking" };
+        console.log("[search] space unavailable, answering with name matches");
+        qv = null;
     }
 
     const inputs = await postInputs(d.db, d.mediaBaseUrl);
@@ -645,6 +710,7 @@ export async function searchPosts(
     const vectors = new Map(rows.map((r) => [r.post_key, r]));
 
     const needle = q.toLowerCase();
+    const words = queryWords(needle);
     const hits: SearchHit[] = [];
     let indexed = 0;
     let pending = 0;
@@ -655,11 +721,20 @@ export async function searchPosts(
         if (!row || row.input_hash !== (await inputHash(p))) pending++;
         const hay = `${p.title ?? ""} ${p.text}`.toLowerCase();
         const bonus = hay.includes(needle) ? TEXT_MATCH_BONUS : 0;
-        if (!v && bonus === 0) continue;
-        hits.push({ post_key: p.post_key, score: (v ? dot(qv, v) : 0) + bonus, latest: p.latest });
+        if (qv) {
+            if (!v && bonus === 0) continue;
+            hits.push({ post_key: p.post_key, score: (v ? dot(qv, v) : 0) + bonus, latest: p.latest });
+            continue;
+        }
+        // Fallback: the whole query as text first, then posts holding more of its words; newest first within a score.
+        const found = words.filter((w) => hay.includes(w)).length;
+        if (bonus === 0 && found === 0) continue;
+        const score = bonus + (words.length > 0 ? (TEXT_MATCH_BONUS * found) / words.length : 0);
+        hits.push({ post_key: p.post_key, score, latest: p.latest });
     }
-    hits.sort((a, b) => b.score - a.score || (a.post_key < b.post_key ? -1 : 1));
-    return { ok: true, hits: hits.slice(0, limit), indexed, pending };
+    if (qv) hits.sort((a, b) => b.score - a.score || (a.post_key < b.post_key ? -1 : 1));
+    else hits.sort((a, b) => b.score - a.score || b.latest - a.latest || (a.post_key < b.post_key ? -1 : 1));
+    return { ok: true, hits: hits.slice(0, limit), indexed, pending, fallback: qv === null };
 }
 
 // GET /library/search?q=<words>&limit=<1..50>&v=<2|3>: the posts that best match, best first, in the
@@ -692,6 +767,8 @@ export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, 
                 model: EMBED_MODEL,
                 posts: out,
                 index: { posts: r.indexed, pending: r.pending },
+                // the Space could not answer: these are name matches, and a search a minute later is semantic again
+                ...(r.fallback ? { fallback: "text" } : {}),
             },
         };
     } catch (e) {

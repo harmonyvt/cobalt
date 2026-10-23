@@ -56,3 +56,10 @@ A CPU basic Space sleeps after 48 h without traffic. A sleeping Space answers a 
 without waking up; a `GET /` wakes it (about 20 s to boot, then about 12 s to load the model). The API
 Worker's 15-minute cron sends `GET /` every run so it never sleeps, and a call that finds it asleep
 wakes it with a `GET /` and tries again.
+
+That was not enough: the Space slept anyway on 2026-10-21 (about 37 h after the last embed, despite the
+cron's GETs), and from then on the Worker's `GET /` got 503 within seconds instead of booting it, while a
+GET from a Mac woke it. So a refused wake-up now keeps asking every 3 s, and the Worker checks
+`https://huggingface.co/api/spaces/<EMBED_SPACE>/runtime`: a `SLEEPING` Space is restarted with
+`POST .../restart` (at most once per 10 minutes; a paused, building or running Space never is). That
+needs EMBED_TOKEN to have write access to the Space.

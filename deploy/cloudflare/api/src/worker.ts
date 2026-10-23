@@ -95,6 +95,8 @@ export interface WorkerEnv {
     // Library search (section 21): the private Hugging Face Space's URL (a plain var), the Hugging Face
     // token that may call it and the Space's own EMBED_KEY (secrets). No URL or token: search is off.
     EMBED_URL?: string;
+    // The Space's Hub id (owner/name, a plain var): a sleeping Space that refuses a wake-up is restarted.
+    EMBED_SPACE?: string;
     EMBED_TOKEN?: string;
     EMBED_KEY?: string;
     // Rich link pages (section 22): https://<share host>/ (a plain var). The Worker answers that host
@@ -150,7 +152,7 @@ const chatOn = (env: WorkerEnv, edge: EdgeDeps): boolean =>
 
 // The Space client, or null while search is not configured (embed.ts).
 export const embedFrom = (env: WorkerEnv): EmbedClient | null =>
-    spaceClient({ url: env.EMBED_URL, token: env.EMBED_TOKEN, key: env.EMBED_KEY });
+    spaceClient({ url: env.EMBED_URL, token: env.EMBED_TOKEN, key: env.EMBED_KEY, space: env.EMBED_SPACE });
 
 // The single "main" Container Durable Object (a stub in production).
 export interface ContainerStub {

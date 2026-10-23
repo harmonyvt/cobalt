@@ -25,6 +25,7 @@ import {
     postInputs,
     runIndexer,
     spaceClient,
+    resetSpaceRestarts,
     type EmbedClient,
     type EmbedInput,
 } from "../src/embed";
@@ -417,13 +418,28 @@ describe("GET /library/search", () => {
         for (const l of ["0", "51", "abc"]) expect((await w.search("cat", `&limit=${l}`)).status).toBe(400);
     });
 
-    it("a sleeping Space answers 503 error.search.waking; none configured is error.search.off", async () => {
+    it("a Space that cannot answer gives name matches (fallback: text) instead of an error; none configured is error.search.off", async () => {
         const w = await library();
+        addFile(w.db, { session_id: "trick", name: "kickflip trick.mp4" });
         w.space.fail = () => new EmbedError("unavailable", null);
-        const r = await w.search("cat");
-        expect(r).toEqual({ status: 503, body: { status: "error", error: { code: "error.search.waking" } } });
+        const r = await w.search("skateboard trick");
+        expect(r.status).toBe(200);
+        const body = r.body as any;
+        expect(body.fallback).toBe("text");
+        // the whole query as text first, then a post with some of its words
+        expect(body.posts.map((p: any) => p.id)).toEqual(["named", "trick"]);
+        expect(body.index).toEqual({ posts: 3, pending: 1 });
+        expect((await w.search("nothing like this")).body).toMatchObject({ status: "success", posts: [], fallback: "text" });
+        w.space.fail = null;
+        expect((await w.search("cat")).body).not.toHaveProperty("fallback");
         const off = await librarySearch({ ...w.d, embed: null }, new URLSearchParams("q=cat"));
         expect(off).toEqual({ status: 503, body: { status: "error", error: { code: "error.search.off" } } });
+    });
+
+    it("a query the Space refuses is still 502 error.search.failed", async () => {
+        const w = await library();
+        w.space.fail = () => new EmbedError("rejected", 400);
+        expect(await w.search("cat")).toEqual({ status: 502, body: { status: "error", error: { code: "error.search.failed" } } });
     });
 });
 
@@ -521,6 +537,47 @@ describe("Space client", () => {
         expect(await make(async () => ok({}, 503)).wake!(1000)).toBe(false);
         expect(await make(() => new Promise<Response>(() => {})).wake!(20)).toBe(false);
     });
+
+    it("wake() keeps asking a Space that refuses its first wake-ups, within its time", async () => {
+        let n = 0;
+        const c = spaceClient({ url: SPACE, token: "hf" }, (async () => {
+            n++;
+            return n < 3 ? new Response("<html>sleeping</html>", { status: 503 }) : ok({ status: "ok", ready: false });
+        }) as unknown as typeof fetch)!;
+        expect(await c.wake!(10_000)).toBe(true);
+        expect(n).toBe(3);
+    }, 15_000);
+
+    it("a refused wake-up restarts a SLEEPING Space through the Hub, at most once per gap; never a running one", async () => {
+        resetSpaceRestarts();
+        const run = async (stage: string, space = "capybaraharmony/cobalt-embed") => {
+            const seen: string[] = [];
+            let up = false;
+            const c = spaceClient({ url: SPACE, token: "hf", space }, (async (url: string, init: RequestInit) => {
+                seen.push(`${init.method} ${url.replace("https://huggingface.co/api/spaces/capybaraharmony/cobalt-embed", "hub")}`);
+                if (url.endsWith("/runtime")) return ok({ stage });
+                if (url.endsWith("/restart")) {
+                    up = true;
+                    return ok({});
+                }
+                return up ? ok({ status: "ok", ready: false }) : new Response("<html>sleeping</html>", { status: 503 });
+            }) as unknown as typeof fetch)!;
+            return { awake: await c.wake!(5_000), seen };
+        };
+        const asleep = await run("SLEEPING");
+        expect(asleep.awake).toBe(true);
+        expect(asleep.seen).toEqual([`GET ${SPACE}/`, "GET hub/runtime", "POST hub/restart", `GET ${SPACE}/`]);
+        // a second refusal inside the gap does not restart again
+        const again = await run("SLEEPING");
+        expect(again.awake).toBe(false);
+        expect(again.seen.filter((x) => x.startsWith("POST"))).toEqual([]);
+        resetSpaceRestarts();
+        const running = await run("RUNNING_BUILDING");
+        expect(running.seen.filter((x) => x.includes("hub"))).toEqual(["GET hub/runtime"]);
+        resetSpaceRestarts();
+        const noSpace = await run("SLEEPING", "");
+        expect(noSpace.seen.every((x) => !x.includes("hub"))).toBe(true);
+    }, 30_000);
 });
 
 // ---- the gate, the Worker and capabilities ------------------------------------------------------

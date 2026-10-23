@@ -125,6 +125,9 @@ export default defineConfig({
 			// ~/.config/cobalt/secrets.json. Missing or empty token: search is off
 			// (`features.search: false`) and the indexer does nothing.
 			EMBED_URL: bindings.text("https://capybaraharmony-cobalt-embed.hf.space"),
+			// The same Space's id on the Hub: a sleeping Space that refuses the wake-up GET is restarted
+			// through the Hub API with EMBED_TOKEN (embed.ts spaceClient). Empty: no restarts.
+			EMBED_SPACE: bindings.text("capybaraharmony/cobalt-embed"),
 			EMBED_TOKEN: bindings.secret(),
 			EMBED_KEY: bindings.secret(),
 			// Roast captions (APP-API-CONTRACT.md section 25): Claude Haiku writes a funny title and
