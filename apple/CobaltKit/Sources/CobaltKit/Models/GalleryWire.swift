@@ -29,6 +29,8 @@ public struct StudioCreateOptions: Sendable, Equatable {
     /// The items of the post as the client knows them: their types give the plan's `seconds`, and a gallery image's
     /// `items` are cut down to the photos among them.
     public var itemInfo: [GalleryItem]
+    /// `live` (8.10): the instant share's Live Activity, started by the server for the new session.
+    public var live: ShareLiveStart?
 
     public init(
         makePublic: Bool? = nil, queue: Bool = false, title: String? = nil, origin: String? = nil, notify: NotifyOptIn? = nil,
@@ -64,6 +66,7 @@ public struct StudioCreateOptions: Sendable, Equatable {
         if let itemCount { fields["item_count"] = itemCount }
         if let slideshow { fields["slideshow"] = slideshow.wireBody(items: itemInfo, includesQueue: false) }
         if let galleryImage { fields["gallery_image"] = galleryImage.wireBody(items: itemInfo, includesQueue: false) }
+        if let live { fields["live"] = live.wire }
         return fields
     }
 }

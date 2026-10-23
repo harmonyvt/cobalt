@@ -229,3 +229,46 @@ describe("a failed end after the sweep collected the result", () => {
         expect(w.apple.calls).toHaveLength(3);
     });
 });
+
+describe("the instant share's activity (POST /studio with `live`, APP-API-CONTRACT 8.10)", () => {
+    it("the create push-starts it, the save moves it, `saved` ends it once the app reports the token", async () => {
+        const w = wire();
+        await w.live.putStartToken(KEY_ID, JSON.stringify({ token: "ef".repeat(32), environment: "sandbox" }));
+        const body = {
+            url: LINK,
+            origin: "share",
+            notify: { on: ["saved", "failed"], label: "instagram · Dd7P496wolG" },
+            live: { run: RUN, environment: "sandbox", service: "instagram", ref: "Dd7P496wolG" },
+        };
+        const created = await w.studio.create(KEY_ID, JSON.stringify(body));
+        expect(created.status).toBe(201);
+        const sid = (created.body as { id: string }).id;
+        expect(w.apple.pushes[0]!.payload.aps.event).toBe("start");
+        expect(w.apple.pushes[0]!.payload.aps.attributes).toMatchObject({ run: RUN, origin: "share", service: "instagram" });
+        expect(w.kv.m.get(`live:run:${RUN}`)).toMatchObject({ sid, serverOnly: true });
+
+        // the save finishes with nobody holding an update token: stored, not sent
+        w.clock.t += 2000;
+        await w.studio.advance(sid, 0);
+        w.clock.t += 2000;
+        expect(((await w.studio.advance(sid, 0)).body as { status: string }).status).toBe("ready");
+        expect(w.apple.pushes).toHaveLength(1);
+        expect(w.kv.m.get(`live:run:${RUN}`)).toMatchObject({ state: { stage: "done" } });
+
+        // the app wakes for the activity and reports its token: the end goes out
+        await register(w, sid, { attributes: { run: RUN, input: "link", service: "instagram", ref: "Dd7P496wolG", origin: "share" } });
+        const last = w.apple.pushes.at(-1)!;
+        expect(last.token).toBe(UPDATE);
+        expect(last.payload.aps.event).toBe("end");
+        expect(last.payload.aps["content-state"].stage).toBe("done");
+        expect(last.payload.aps["content-state"].resultURL).toBeUndefined();
+        expect(last.payload.aps.alert.title).toBe("saved to capystore");
+    });
+
+    it("a malformed `live` never refuses the save", async () => {
+        const w = wire();
+        const created = await w.studio.create(KEY_ID, JSON.stringify({ url: LINK, origin: "share", live: { run: 5 } }));
+        expect(created.status).toBe(201);
+        expect(w.apple.calls).toHaveLength(0);
+    });
+});

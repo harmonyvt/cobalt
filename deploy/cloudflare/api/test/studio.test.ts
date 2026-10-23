@@ -1705,7 +1705,9 @@ describe("live hooks (what the studio tells the live service)", () => {
 
             seen.length = 0;
             expect(asBody(await st.advance(id, 0)).status).toBe("ready"); // finalize
-            expect(kinds(seen)).toEqual(["save:progress:storing"]);
+            // `saved` ends only a run the server itself started (an instant share), see live.ts
+            expect(kinds(seen)).toEqual(["save:progress:storing", "save:saved"]);
+            expect(saves(seen)[1]).toEqual({ kind: "saved", bytes: 4096, width: 480, height: 560, seconds: 9.6 });
             expect(saves(seen)[0]).toMatchObject({
                 kind: "progress",
                 progress: { step: "storing", total: 4096, waking: false },
@@ -1759,7 +1761,7 @@ describe("live hooks (what the studio tells the live service)", () => {
             const { id } = asBody(await st.create(KEY_ID, body({ url: LINK })));
             expect(asBody(await st.advance(id, 0)).status).toBe("ready");
             await new Promise((r) => setTimeout(r, 10)); // the un-awaited ones settle
-            const bytes = saves(seen).filter((e) => e.progress.step === "storing").map((e) => e.progress.bytes);
+            const bytes = saves(seen).filter((e) => e.kind === "progress" && e.progress.step === "storing").map((e) => e.progress.bytes);
             expect(bytes.length).toBeGreaterThanOrEqual(4); // 0 at the start, then one per 1.5 s chunk
             expect(bytes).toEqual([...bytes].sort((a, b) => a - b));
             expect(bytes.at(-1)).toBeGreaterThan(0);
@@ -1822,7 +1824,7 @@ describe("live hooks (what the studio tells the live service)", () => {
             expect(kinds(seen)).toEqual(["save:progress:fetching"]);
             seen.length = 0;
             expect(await st.sweep()).toEqual({ pending: 0 });
-            expect(kinds(seen)).toEqual(["save:progress:storing"]);
+            expect(kinds(seen)).toEqual(["save:progress:storing", "save:saved"]);
         });
     });
 

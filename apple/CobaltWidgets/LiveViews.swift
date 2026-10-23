@@ -90,7 +90,7 @@ struct LiveFacts {
             guard let done, let total, total > 0 else { return nil }
             return Double(done) / Double(total)
         }
-        let headline = Copy.Live.stage(state, service: service)
+        let headline = Copy.Live.stage(state, service: service, origin: attributes.origin)
         if state.isFinishedSummary {
             var story = make(state.stage == .failed ? .failed : .finished, Copy.Live.summaryDone(state))
             story.index = steps.count

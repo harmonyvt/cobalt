@@ -342,7 +342,9 @@ public struct HTTPCobaltClient: CobaltClient {
     ///
     /// `public` is sent when `makePublic` (Settings "make new saves public", on by default); off leaves the
     /// field out and the save stays private.
-    public func shareSaveRequest(link: URL, label: String, public makePublic: Bool = true) throws -> (request: URLRequest, body: Data) {
+    public func shareSaveRequest(
+        link: URL, label: String, public makePublic: Bool = true, live: ShareLiveStart? = nil
+    ) throws -> (request: URLRequest, body: Data) {
         var req = try makeRequest("POST", "/studio", keyed: true, timeout: 60)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var fields: [String: Any] = [
@@ -350,6 +352,7 @@ public struct HTTPCobaltClient: CobaltClient {
             "notify": ["on": ["saved", "failed"], "label": label] as [String: Any],
         ]
         if makePublic { fields["public"] = true }
+        if let live { fields["live"] = live.wire }
         guard let body = Self.jsonBody(fields) else { throw CobaltError.invalidResponse(httpStatus: 0) }
         return (req, body)
     }

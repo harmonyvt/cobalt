@@ -161,7 +161,9 @@ export function sanitizeState(raw: unknown): LiveState | null {
 
 export type LiveSaveEvent =
     | { kind: "progress"; progress: SaveProgress; title?: string | null; duration?: number | null }
-    | { kind: "failed"; code: string };
+    | { kind: "failed"; code: string }
+    // the save is in the library (only a share-sheet run the server started ends on it: `serverOnly`)
+    | { kind: "saved"; bytes: number | null; width: number | null; height: number | null; seconds: number | null };
 export type LiveRenderEvent =
     | { kind: "accepted"; title?: string | null; duration?: number | null }
     | { kind: "pending"; phase: "fetching" | "decode" | "pack" | null; framesDone: number | null; framesTotal: number | null }
@@ -172,6 +174,8 @@ export type LiveHooks = {
     onRender(sid: string, job: string, e: LiveRenderEvent): Promise<void>;
     // any run with an update token waiting on a server step (the sweep's 2 s cadence)
     hasActiveRuns(): Promise<boolean>;
+    // `POST /studio` from the instant share (`live` field): push-start an activity for the new session
+    startShare?(keyId: string, sid: string, raw: unknown, awaitsMake: boolean): Promise<void>;
 };
 
 // What the merge consumes: the events reduced to the state they describe.
@@ -180,10 +184,12 @@ export type StateEvent =
     | { t: "saving"; bytes: number | null; total: number | null; title?: string | null; duration?: number | null }
     | { t: "rendering"; framesDone: number | null; framesTotal: number | null; packing: boolean; title?: string | null; duration?: number | null }
     | { t: "done"; url: string; bytes: number | null; width: number | null; height: number | null; seconds: number | null }
+    | { t: "saved"; bytes: number | null; width: number | null; height: number | null; seconds: number | null }
     | { t: "failed"; code: string; phase: "saving" | "rendering" };
 
 export function stateEventOfSave(e: LiveSaveEvent): StateEvent {
     if (e.kind === "failed") return { t: "failed", code: e.code, phase: "saving" };
+    if (e.kind === "saved") return { t: "saved", bytes: e.bytes, width: e.width, height: e.height, seconds: e.seconds };
     const p = e.progress;
     if (p.step === "fetching") return { t: "fetching", waking: p.waking };
     return { t: "saving", bytes: p.bytes, total: p.total, title: e.title, duration: e.duration };
@@ -215,6 +221,8 @@ const stageOf: Record<StateEvent["t"], Stage> = {
     saving: "saving",
     rendering: "rendering",
     done: "done",
+    // a save with nothing made from it: done with no resultURL (the widget says it is in the library)
+    saved: "done",
     failed: "failed",
 };
 
@@ -259,6 +267,12 @@ export function nextState(prev: LiveState | null, ev: StateEvent, now: number): 
             break;
         case "done":
             out.resultURL = ev.url.slice(0, MAX_STR);
+            setNum(out, "resultBytes", ev.bytes);
+            setNum(out, "resultWidth", ev.width);
+            setNum(out, "resultHeight", ev.height);
+            if (typeof ev.seconds === "number" && Number.isFinite(ev.seconds)) out.resultSeconds = ev.seconds;
+            break;
+        case "saved":
             setNum(out, "resultBytes", ev.bytes);
             setNum(out, "resultWidth", ev.width);
             setNum(out, "resultHeight", ev.height);
@@ -368,7 +382,8 @@ export function endPayload(a: RunAttributes, state: LiveState, now: number, imme
     } else if (state.stage === "done") {
         aps["dismissal-date"] = secs(now) + DISMISS_DONE_S;
         aps.alert = {
-            title: "webp ready",
+            // no resultURL: a save the instant share started, now in the library
+            title: state.resultURL === undefined && a.origin === "share" ? "saved to capystore" : "webp ready",
             body: typeof state.resultBytes === "number" ? `${a.service} · ${formatBytes(state.resultBytes)}` : a.service,
         };
     } else {
@@ -405,6 +420,11 @@ export type RunRecord = {
     // a client poll retries from then on).
     endTries?: number;
     endRetryAt?: number | null;
+    // Started by the server for an instant share (`startShare`): no device relays its
+    // steps, so the save's "saved" ends it, unless a make follows (`awaitsMake`: the
+    // render's result ends it then).
+    serverOnly?: boolean;
+    awaitsMake?: boolean;
 };
 // The small per-run index (`live:idx:<key id>:<run>`): everything the caps, the
 // cleanup, hasActiveRuns and the end retries need without reading run records.
@@ -702,6 +722,8 @@ export class LiveService implements LiveHooks {
             }
             // a finished state is only repeated, never revived
             if (isTerminal(r.state) && ev.t !== "done" && ev.t !== "failed") return;
+            // "saved" only ends a run nobody else will end: one the server started, with nothing made after
+            if (ev.t === "saved" && (!r.serverOnly || r.awaitsMake)) return;
             const before = JSON.stringify(r);
             r.state = nextState(r.state, ev, this.d.now());
             await this.dispatch(r);
@@ -842,6 +864,41 @@ export class LiveService implements LiveHooks {
             await this.d.storage.put(key, now);
             return true;
         });
+    }
+
+    // The instant share (CONTRACT-LIVE.md 2.5, APP-API-CONTRACT 8.10): the extension closes at once, so it
+    // cannot register the run itself. `POST /studio` carries `live: {run, environment, service, ref}` and
+    // the session it created is registered here, as `PUT /live/runs/<run>` with `start: true` would, then
+    // marked server-only. Anything malformed is ignored: a save is never refused over its activity.
+    async startShare(keyId: string, sid: string, raw: unknown, awaitsMake: boolean): Promise<void> {
+        if (!this.d.apns || !isRecord(raw)) return;
+        const run = raw.run;
+        if (typeof run !== "string" || !RUN_ID_REGEX.test(run) || !isEnv(raw.environment)) return;
+        const service = typeof raw.service === "string" ? raw.service.slice(0, 120) : "";
+        const ref = typeof raw.ref === "string" ? raw.ref.slice(0, 120) : "";
+        if (await this.getRun(run)) return; // a retried create: the run exists already
+        const now = this.d.now();
+        const body = {
+            environment: raw.environment,
+            session: sid,
+            start: true,
+            attributes: { run, input: "link", service, ref, origin: "share" },
+            state: { stage: "fetching", rail: 0, since: secs(now), waking: false, packing: false },
+        };
+        const reply = await this.putRun(keyId, run, JSON.stringify(body));
+        if (reply.status !== 200) {
+            console.log(`[live] share start skipped: ${reply.status}`);
+            return;
+        }
+        await this.withRun(run, async () => {
+            const r = await this.getRun(run);
+            if (!r) return;
+            r.serverOnly = true;
+            if (awaitsMake) r.awaitsMake = true;
+            await this.saveRun(r);
+        });
+        const b = reply.body as { started?: boolean; reason?: string };
+        console.log(`[live] share start run=${run.slice(0, 8)} started=${b.started === true}${b.reason ? ` reason=${b.reason}` : ""}`);
     }
 
     async putRun(keyId: string, run: string, raw: string): Promise<LiveReply> {
