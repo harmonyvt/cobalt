@@ -25,6 +25,7 @@ import {
     postInputs,
     runIndexer,
     spaceClient,
+    resetSpaceRestarts,
     type EmbedClient,
     type EmbedInput,
 } from "../src/embed";
@@ -546,6 +547,37 @@ describe("Space client", () => {
         expect(await c.wake!(10_000)).toBe(true);
         expect(n).toBe(3);
     }, 15_000);
+
+    it("a refused wake-up restarts a SLEEPING Space through the Hub, at most once per gap; never a running one", async () => {
+        resetSpaceRestarts();
+        const run = async (stage: string, space = "capybaraharmony/cobalt-embed") => {
+            const seen: string[] = [];
+            let up = false;
+            const c = spaceClient({ url: SPACE, token: "hf", space }, (async (url: string, init: RequestInit) => {
+                seen.push(`${init.method} ${url.replace("https://huggingface.co/api/spaces/capybaraharmony/cobalt-embed", "hub")}`);
+                if (url.endsWith("/runtime")) return ok({ stage });
+                if (url.endsWith("/restart")) {
+                    up = true;
+                    return ok({});
+                }
+                return up ? ok({ status: "ok", ready: false }) : new Response("<html>sleeping</html>", { status: 503 });
+            }) as unknown as typeof fetch)!;
+            return { awake: await c.wake!(5_000), seen };
+        };
+        const asleep = await run("SLEEPING");
+        expect(asleep.awake).toBe(true);
+        expect(asleep.seen).toEqual([`GET ${SPACE}/`, "GET hub/runtime", "POST hub/restart", `GET ${SPACE}/`]);
+        // a second refusal inside the gap does not restart again
+        const again = await run("SLEEPING");
+        expect(again.awake).toBe(false);
+        expect(again.seen.filter((x) => x.startsWith("POST"))).toEqual([]);
+        resetSpaceRestarts();
+        const running = await run("RUNNING_BUILDING");
+        expect(running.seen.filter((x) => x.includes("hub"))).toEqual(["GET hub/runtime"]);
+        resetSpaceRestarts();
+        const noSpace = await run("SLEEPING", "");
+        expect(noSpace.seen.every((x) => !x.includes("hub"))).toBe(true);
+    }, 30_000);
 });
 
 // ---- the gate, the Worker and capabilities ------------------------------------------------------

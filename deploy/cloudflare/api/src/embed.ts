@@ -55,7 +55,8 @@ export type EmbedClient = {
     wake?(timeoutMs: number): Promise<boolean>;
 };
 
-export type EmbedConfig = { url?: string; token?: string; key?: string };
+// space: the Space's Hub id ("owner/name"), for restarting it when it sleeps and refuses to wake.
+export type EmbedConfig = { url?: string; token?: string; key?: string; space?: string };
 
 // The Space is configured when its URL is https and the Hugging Face token is set.
 export const embedConfigured = (c: EmbedConfig): boolean =>
@@ -65,6 +66,12 @@ export const embedConfigured = (c: EmbedConfig): boolean =>
 const WAKE_MIN_MS = 1_000;
 // The pause between wake-up GETs to a Space that refused one.
 const WAKE_POLL_MS = 3_000;
+// At most one Hub restart this often (per isolate), so a Space that is still booting is never restarted again.
+export const SPACE_RESTART_GAP_MS = 10 * 60 * 1000;
+let lastRestartAt = 0;
+export const resetSpaceRestarts = (): void => {
+    lastRestartAt = 0;
+};
 
 // Runs `run` with an abort signal, rejecting with EmbedError("unavailable") after `timeoutMs` (our own
 // timer: an AbortSignal timeout is not always honoured in the Workers runtime).
@@ -148,6 +155,29 @@ export function spaceClient(c: EmbedConfig, fetchFn: typeof fetch = fetch): Embe
             return { awake: res.ok && body?.status === "ok", status: res.status, note: text.slice(0, 120).replace(/\s+/g, " ") };
         }).catch(() => ({ awake: false, status: null, note: "no answer" }));
 
+    // The Worker's GETs stopped waking the sleeping Space (refused 503 from 2026-10-21 to 10-23), so a refused
+    // wake-up asks the Hub: a SLEEPING Space is restarted (never a paused, building or running one).
+    const space = typeof c.space === "string" && /^[\w.-]+\/[\w.-]+$/.test(c.space) ? c.space : null;
+    const restartIfAsleep = async (timeoutMs: number): Promise<void> => {
+        if (!space || timeoutMs < WAKE_MIN_MS || Date.now() - lastRestartAt < SPACE_RESTART_GAP_MS) return;
+        const api = `https://huggingface.co/api/spaces/${space}`;
+        try {
+            await withDeadline(timeoutMs, async (signal) => {
+                const rt = await fetchFn(`${api}/runtime`, { method: "GET", headers: { authorization: auth }, signal });
+                const stage = rt.ok ? ((await rt.json().catch(() => null)) as { stage?: unknown } | null)?.stage : null;
+                if (stage !== "SLEEPING") {
+                    console.log("[search] space not restarted, stage", rt.status, typeof stage === "string" ? stage : null);
+                    return;
+                }
+                lastRestartAt = Date.now();
+                const res = await fetchFn(`${api}/restart`, { method: "POST", headers: { authorization: auth }, signal });
+                console.log("[search] space was asleep, restart asked", res.status);
+            });
+        } catch {
+            console.log("[search] space restart check got no answer");
+        }
+    };
+
     const wake = async (timeoutMs: number): Promise<boolean> => {
         const deadline = Date.now() + timeoutMs;
         let tries = 0;
@@ -158,7 +188,10 @@ export function spaceClient(c: EmbedConfig, fetchFn: typeof fetch = fetch): Embe
                 if (tries > 1) console.log("[search] space woke after", tries, "wake-ups");
                 return true;
             }
-            if (tries === 1) console.log("[search] space wake-up refused", r.status, r.note);
+            if (tries === 1) {
+                console.log("[search] space wake-up refused", r.status, r.note);
+                await restartIfAsleep(deadline - Date.now());
+            }
             const left = deadline - Date.now();
             if (left < WAKE_POLL_MS + WAKE_MIN_MS) return false;
             await new Promise((resolve) => setTimeout(resolve, WAKE_POLL_MS));
