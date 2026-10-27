@@ -233,9 +233,13 @@ extension AppModel {
     // MARK: - Links
 
     /// Every public link of the post, one a line: the items in order, then what was made. Private files have none.
-    public func copyAllLinks(_ item: MediaItem) -> String {
-        (item.items + item.made).compactMap { $0.isPublic ? $0.publicURL.map { capabilities.shareLink(for: $0).absoluteString } : nil }
-            .joined(separator: "\n")
+    /// Each is its rich link page, or with `direct` the file's own URL.
+    public func copyAllLinks(_ item: MediaItem, direct: Bool = false) -> String {
+        (item.items + item.made).compactMap { r in
+            guard r.isPublic, let url = r.publicURL else { return nil }
+            return (direct ? url : capabilities.shareLink(for: url)).absoluteString
+        }
+        .joined(separator: "\n")
     }
 
     // MARK: - Photos (only on request)

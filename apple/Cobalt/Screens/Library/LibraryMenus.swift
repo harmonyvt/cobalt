@@ -28,16 +28,25 @@ struct LibraryMenuItems: View {
         let item = row.item
         Button(Copy.Library2.open, systemImage: Symbol.Library.open) { controller.open(row) }
         if let url = controller.photoLink(item) {
-            Button(Copy.Library2.copyPhotoLink, systemImage: Symbol.Library.copyLink) { controller.copy(url) }
+            CopyLinkMenuItems(
+                url: url, capabilities: controller.model.capabilities, name: Copy.LinkPair.photoLink,
+                single: Copy.Library2.copyPhotoLink
+            ) { controller.copy($0, form: $1) }
         }
         if controller.canCopyAllLinks(item) {
-            Button(Copy.Library2.copyAllLinks, systemImage: Symbol.Gallery.copyLinks) { controller.copyAllLinks(item) }
+            CopyAllLinksMenuItems(capabilities: controller.model.capabilities) { controller.copyAllLinks(item, form: $0) }
         }
         if let url = controller.webpLink(item) {
-            Button(Copy.Library2.copyWebpLink, systemImage: Symbol.Library.copyLink) { controller.copy(url) }
+            CopyLinkMenuItems(
+                url: url, capabilities: controller.model.capabilities, name: Copy.LinkPair.webpLink,
+                single: Copy.Library2.copyWebpLink
+            ) { controller.copy($0, form: $1) }
         }
         if item.kind != .photo, let url = controller.videoLink(item) {
-            Button(Copy.Library2.copyVideoLink, systemImage: Symbol.Library.copyLink) { controller.copy(url) }
+            CopyLinkMenuItems(
+                url: url, capabilities: controller.model.capabilities, name: Copy.LinkPair.videoLink,
+                single: Copy.Library2.copyVideoLink
+            ) { controller.copy($0, form: $1) }
         }
         if let url = controller.shareURL(item) {
             ShareLink(item: url) {

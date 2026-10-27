@@ -63,7 +63,7 @@ struct DetailMenu: View {
                 .disabled(deleting || controller.batchPhotos == .working)
             }
             if item.detailShape == .gallery {
-                Button(Copy.Gallery.copyAllLinks, systemImage: Symbol.Gallery.copyLinks) { controller.copyAllLinks(item) }
+                CopyAllLinksMenuItems(capabilities: model.capabilities) { controller.copyAllLinks(item, form: $0) }
             }
             if ToolSheet.canCrop(page?.rendition) {
                 Button(ToolsCopy.cropMenu, systemImage: Symbol.Gallery.crop) {

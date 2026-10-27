@@ -1867,6 +1867,13 @@ describe("server-made posters", () => {
             expect(LIBRARY_HTML).not.toContain("privateToPublic");
             expect(LIBRARY_HTML).not.toContain('"data-ga": "host"');
         });
+        it("a public file's copy splits into copy share (the link page, primary) and copy direct (the file itself)", () => {
+            expect(LIBRARY_HTML).toContain('btn("copy", "copy share", "primary", share)');
+            expect(LIBRARY_HTML).toContain('btn("copy-direct", "copy direct", "", String(u))');
+            expect(LIBRARY_HTML).toContain('copyButtons(f.url, "data-fa")');
+            expect(LIBRARY_HTML).toContain('copyButtons(e.it.url, "data-ga")');
+            expect(LIBRARY_HTML).not.toContain('text: "copy link", onclick');
+        });
         it("the badge is the file's visibility, and the chips filter by it on the server", () => {
             expect(LIBRARY_HTML).toContain('isPub(it) ? "public" : "private"');
             expect(LIBRARY_HTML).toContain('"/api/library?filter=" + G.filter');

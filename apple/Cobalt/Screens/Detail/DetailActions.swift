@@ -19,6 +19,8 @@ struct DetailActions: View {
 
     enum Choice: Hashable {
         case copyWebpLink, copyVideoLink, makeWebp, anotherWebp, publicShare, savePhotos, share
+        /// "copy direct" beside a secondary "copy video link" that became "copy share" (the file has a link page).
+        case copyVideoDirect
     }
 
     // MARK: the plan
@@ -64,7 +66,16 @@ struct DetailActions: View {
                 if shareURL != nil { secondary.append(.share) }
             }
         }
+        // a secondary "copy video link" with a link page splits in two: "copy share", then "copy direct"
+        if let video = videoLink, model.capabilities.hasLinkPair(video), let i = secondary.firstIndex(of: .copyVideoLink) {
+            secondary.insert(.copyVideoDirect, at: i + 1)
+        }
         return (primary, secondary)
+    }
+
+    /// The form shown as "copied" on this tab's link buttons, if one was just copied.
+    private var copiedForm: LinkForm? {
+        controller.copiedID == rendition.id ? (controller.copiedForm ?? .share) : nil
     }
 
     // MARK: body
@@ -95,16 +106,24 @@ struct DetailActions: View {
         switch choice {
         case .copyWebpLink:
             let done = controller.copiedID == rendition.id
-            DetailPrimary(
-                title: done ? Copy.Media.copied : Copy.Media.copyWebpLink, symbol: Symbol.Media.copyLink,
-                doneSymbol: Symbol.Media.copied, done: done
-            ) { if let url = rendition.publicURL { controller.copy(url, for: rendition.id) } }
+            if let url = rendition.publicURL, model.capabilities.hasLinkPair(url) {
+                CopyLinkPair(copied: copiedForm) { controller.copy(url, for: rendition.id, form: $0) }
+            } else {
+                DetailPrimary(
+                    title: done ? Copy.Media.copied : Copy.Media.copyWebpLink, symbol: Symbol.Media.copyLink,
+                    doneSymbol: Symbol.Media.copied, done: done
+                ) { if let url = rendition.publicURL { controller.copy(url, for: rendition.id) } }
+            }
         case .copyVideoLink:
             let done = controller.copiedID == rendition.id
-            DetailPrimary(
-                title: done ? Copy.Media.copied : Copy.Media.copyVideoLink, symbol: Symbol.Media.copyLink,
-                doneSymbol: Symbol.Media.copied, done: done
-            ) { if let url = videoLink { controller.copy(url, for: rendition.id) } }
+            if let url = videoLink, model.capabilities.hasLinkPair(url) {
+                CopyLinkPair(copied: copiedForm) { controller.copy(url, for: rendition.id, form: $0) }
+            } else {
+                DetailPrimary(
+                    title: done ? Copy.Media.copied : Copy.Media.copyVideoLink, symbol: Symbol.Media.copyLink,
+                    doneSymbol: Symbol.Media.copied, done: done
+                ) { if let url = videoLink { controller.copy(url, for: rendition.id) } }
+            }
         case .makeWebp, .anotherWebp:
             DetailPrimary(
                 title: item.webpCount > 0 ? Copy.Media.makeAnotherWebp : Copy.Media.makeAWebp,
@@ -112,7 +131,7 @@ struct DetailActions: View {
             ) { makeWebp() }
         case .savePhotos:
             savePrimary
-        case .publicShare, .share:
+        case .publicShare, .share, .copyVideoDirect:
             EmptyView()
         }
     }
@@ -198,11 +217,18 @@ struct DetailActions: View {
                 working: controller.hosting == .working, layout: layout
             ) { Task { await controller.publicShare(rendition) } }
         case .copyVideoLink:
-            let done = controller.copiedID == rendition.id
+            let paired = videoLink.map(model.capabilities.hasLinkPair) ?? false
+            let done = paired ? copiedForm == .share : controller.copiedID == rendition.id
             DetailChoiceButton(
-                title: done ? Copy.Media.copied : Copy.Media.copyVideoLink,
+                title: done ? Copy.Media.copied : (paired ? Copy.LinkPair.copyShare : Copy.Media.copyVideoLink),
                 symbol: done ? Symbol.Media.copied : Symbol.Media.copyLink, layout: layout
             ) { if let url = videoLink { controller.copy(url, for: rendition.id) } }
+        case .copyVideoDirect:
+            let done = copiedForm == .direct
+            DetailChoiceButton(
+                title: done ? Copy.Media.copied : Copy.LinkPair.copyDirect,
+                symbol: done ? Symbol.Media.copied : Symbol.LinkPair.direct, layout: layout
+            ) { if let url = videoLink { controller.copy(url, for: rendition.id, form: .direct) } }
         case .copyWebpLink, .makeWebp:
             EmptyView()
         }

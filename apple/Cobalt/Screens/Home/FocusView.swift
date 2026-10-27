@@ -73,6 +73,9 @@ struct FocusLayer: View {
     @State private var pulse = 0
     @State private var copiedWebp = false
     @State private var copiedLink = false
+    /// "copy direct" of the webp and of the video link (the share forms use `copiedWebp` / `copiedLink`).
+    @State private var copiedWebpDirect = false
+    @State private var copiedLinkDirect = false
     @State private var muted = true
     /// The hero's media controls (CONTRACT-ORBIT 2, owner 1.3): what the bar reads and drives.
     @State private var transport = HeroTransport()
@@ -630,6 +633,8 @@ struct FocusLayer: View {
         .haptic(.error, trigger: pulse, enabled: haptics) { $0 > 0 }
         .haptic(.success, trigger: copiedWebp, enabled: haptics) { $0 }
         .haptic(.success, trigger: copiedLink, enabled: haptics) { $0 }
+        .haptic(.success, trigger: copiedWebpDirect, enabled: haptics) { $0 }
+        .haptic(.success, trigger: copiedLinkDirect, enabled: haptics) { $0 }
         .haptic(.success, trigger: pipeline.photos, enabled: haptics) { $0 == .done }
     }
 
@@ -710,7 +715,8 @@ struct FocusLayer: View {
                 cardDivider
                 ResultRow(
                     kind: .webp, url: pipeline.shareLink(for: result.url), meta: "\(Format.size(result.width, result.height)) · \(Format.bytes(result.bytes))",
-                    copied: copiedWebp
+                    copied: copiedWebp, copiedDirect: copiedWebpDirect,
+                    onCopyDirect: hasLinkPair(result.url) ? { copyWebp(result.url, .direct) } : nil
                 ) {
                     pipeline.copyResultLink()
                     flash($copiedWebp)
@@ -719,7 +725,10 @@ struct FocusLayer: View {
             }
             if hasLink, let url = pipeline.hostedOriginalURL {
                 cardDivider
-                ResultRow(kind: .link, url: pipeline.shareLink(for: url), meta: nil, copied: copiedLink) {
+                ResultRow(
+                    kind: .link, url: pipeline.shareLink(for: url), meta: nil, copied: copiedLink, copiedDirect: copiedLinkDirect,
+                    onCopyDirect: hasLinkPair(url) ? { copyVideo(url, .direct) } : nil
+                ) {
                     Pasteboard.copy(pipeline.shareLink(for: url).absoluteString)
                     flash($copiedLink)
                 }
@@ -889,6 +898,23 @@ struct FocusLayer: View {
         .motion(Motion.rows, value: failureKey)
     }
 
+    /// The file has a share page besides its own URL: its copy buttons come in pairs.
+    private func hasLinkPair(_ url: URL) -> Bool { pipeline.shareLink(for: url) != url }
+
+    private func link(_ url: URL, _ form: LinkForm) -> String {
+        (form == .share ? pipeline.shareLink(for: url) : url).absoluteString
+    }
+
+    private func copyWebp(_ url: URL, _ form: LinkForm) {
+        Pasteboard.copy(link(url, form))
+        flash(form == .share ? $copiedWebp : $copiedWebpDirect)
+    }
+
+    private func copyVideo(_ url: URL, _ form: LinkForm) {
+        Pasteboard.copy(link(url, form))
+        flash(form == .share ? $copiedLink : $copiedLinkDirect)
+    }
+
     private func flash(_ flag: Binding<Bool>) {
         flag.wrappedValue = true
         Task {
@@ -981,14 +1007,22 @@ struct FocusLayer: View {
     private func primaryButton(_ choice: Choice) -> some View {
         switch choice {
         case .copyWebp:
-            PrimaryChoice(title: copiedWebp ? Copy.copied : Copy.copyWebpLink, symbol: Symbol.copyLink, done: copiedWebp) {
-                pipeline.copyResultLink()
-                flash($copiedWebp)
+            if let url = pipeline.webpResult?.url, hasLinkPair(url) {
+                CopyLinkPair(copied: copiedWebp ? .share : copiedWebpDirect ? .direct : nil) { copyWebp(url, $0) }
+            } else {
+                PrimaryChoice(title: copiedWebp ? Copy.copied : Copy.copyWebpLink, symbol: Symbol.copyLink, done: copiedWebp) {
+                    pipeline.copyResultLink()
+                    flash($copiedWebp)
+                }
             }
         case .copyVideo:
-            PrimaryChoice(title: copiedLink ? Copy.copied : Copy.copyVideoLink, symbol: Symbol.copyLink, done: copiedLink) {
-                if let url = pipeline.hostedOriginalURL { Pasteboard.copy(pipeline.shareLink(for: url).absoluteString) }
-                flash($copiedLink)
+            if let url = pipeline.hostedOriginalURL, hasLinkPair(url) {
+                CopyLinkPair(copied: copiedLink ? .share : copiedLinkDirect ? .direct : nil) { copyVideo(url, $0) }
+            } else {
+                PrimaryChoice(title: copiedLink ? Copy.copied : Copy.copyVideoLink, symbol: Symbol.copyLink, done: copiedLink) {
+                    if let url = pipeline.hostedOriginalURL { Pasteboard.copy(pipeline.shareLink(for: url).absoluteString) }
+                    flash($copiedLink)
+                }
             }
         case .publicShare:
             PrimaryChoice(title: Copy.publicShare, symbol: Symbol.publicShare) { pipeline.hostOriginal() }
@@ -1779,9 +1813,15 @@ private struct ResultRow: View {
     let url: URL
     let meta: String?
     let copied: Bool
+    var copiedDirect = false
+    /// "copy direct": the file's own URL, offered when `url` is its share page.
+    var onCopyDirect: (() -> Void)?
     let onCopy: () -> Void
 
-    private var copyLabel: String { kind == .webp ? Copy.copyWebpLink : Copy.copyVideoLink }
+    private var copyLabel: String {
+        if onCopyDirect != nil { return Copy.LinkPair.copyShareLink }
+        return kind == .webp ? Copy.copyWebpLink : Copy.copyVideoLink
+    }
     private var shareLabel: String { kind == .webp ? Copy.shareWebpLink : Copy.shareVideoLink }
 
     var body: some View {
@@ -1815,6 +1855,17 @@ private struct ResultRow: View {
                     .modifier(RowIconButton())
                     .symbolBounce(on: copied)
                     .accessibilityLabel(copied ? Copy.copied : copyLabel)
+                    if let onCopyDirect {
+                        Button(action: onCopyDirect) {
+                            Image(systemName: copiedDirect ? Symbol.checkmark : Symbol.LinkPair.direct)
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(copiedDirect ? CobaltColor.success : CobaltColor.text)
+                                .frame(width: Metrics.hit - 12, height: Metrics.hit - 12)
+                        }
+                        .modifier(RowIconButton())
+                        .symbolBounce(on: copiedDirect)
+                        .accessibilityLabel(copiedDirect ? Copy.copied : Copy.LinkPair.copyDirectLink)
+                    }
                     ShareLink(item: url) {
                         Image(systemName: Symbol.share)
                             .font(.system(size: 15, weight: .medium))

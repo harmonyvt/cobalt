@@ -147,8 +147,8 @@ kbd { font: 500 11px var(--f-mono); padding: 0 5px; border-radius: 4px; box-shad
 .prog .done { color: var(--secondary); } .prog .done::before { content: "● "; color: var(--green); }
 .prog .row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
 .linkbox { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--page); border-radius: 8px; padding: 8px 10px; box-shadow: 0 0 0 1px var(--input-border) inset; }
-.linkcode { flex: 1 1 200px; min-width: 0; font-size: 12.5px; user-select: all; -webkit-user-select: all; border-radius: 4px; }
-.linkbox .big { flex: 1 1 100%; }
+.linkcode { flex: 1 1 100%; min-width: 0; font-size: 12.5px; user-select: all; -webkit-user-select: all; border-radius: 4px; }
+.linkbox .big { flex: 1 1 40%; }
 .toast { font-size: 12px; color: var(--green); min-height: 1.3em; }
 .discord { background: var(--discord-bg); color: var(--discord-fg); border-radius: 8px; padding: 10px 12px; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 10px; font-size: 13px; }
 .discord .av { width: 32px; height: 32px; border-radius: 50%; background: var(--discord-link); opacity: .7; }
@@ -159,6 +159,7 @@ kbd { font: 500 11px var(--f-mono); padding: 0 5px; border-radius: 4px; box-shad
 .hist .item { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--button-stroke); }
 .hist .item:first-of-type { border-top: 0; }
 .hist .meta { min-width: 0; display: grid; gap: 1px; }
+.hist .copies { display: flex; gap: 6px; }
 
 /* touch: 44px targets, no keyboard hints, no zoom on select focus */
 @media (pointer: coarse) {
@@ -274,7 +275,8 @@ kbd { font: 500 11px var(--f-mono); padding: 0 5px; border-radius: 4px; box-shad
         <h3>ready</h3>
         <div class="linkbox">
           <code class="linkcode" id="outUrl" tabindex="0"></code>
-          <button type="button" class="primary big" id="copy">copy link</button>
+          <button type="button" class="primary big" id="copy">copy share</button>
+          <button type="button" class="big" id="copyDirect">copy direct</button>
         </div>
         <div class="toast" id="toast"></div>
         <div class="discord"><div class="av" aria-hidden="true"></div><div><b>you</b> <span class="when">today</span><br><a id="dLink" href="#" target="_blank" rel="noopener noreferrer"></a><img id="dImg" alt="the animated webp, as it will look in a chat" decoding="async"></div></div>
@@ -824,6 +826,14 @@ $("copy").addEventListener("click", function () {
     say(ok ? "link copied" : "copy failed, the link is selected");
   });
 });
+// "copy direct": the webp file itself, not its link page.
+$("copyDirect").addEventListener("click", function () {
+  if (!S.featured) return;
+  copyText(S.featured.url, $("outUrl")).then(function (ok) {
+    $("toast").textContent = ok ? "copied the direct file link." : "couldn't copy automatically. the link is selected: copy it by hand.";
+    say(ok ? "direct link copied" : "copy failed, the link is selected");
+  });
+});
 function paintRenders() {
   var list = S.renders.filter(function (r) { return !S.featured || r.url !== S.featured.url; });
   show("webps", list.length > 0);
@@ -834,11 +844,17 @@ function paintRenders() {
     var meta = fmt(r.start || 0) + "–" + fmt((r.start || 0) + (r.length || 0)) + " · " + (r.width || "?") + " px" + (r.bytes ? " · " + mb(r.bytes) : "");
     var a = h("a", { href: shareUrl(r.url), target: "_blank", rel: "noopener noreferrer", text: name });
     var code = h("code", null, a);
-    var btn = h("button", { type: "button", text: "copy", "aria-label": "copy link to " + name });
-    btn.addEventListener("click", function () {
-      copyText(shareUrl(r.url), code).then(function (ok) { btn.textContent = ok ? "copied" : "select+copy"; setTimeout(function () { btn.textContent = "copy"; }, 1800); });
-    });
-    box.append(h("div", { "class": "item" }, h("div", { "class": "meta" }, code, h("span", { "class": "muted", text: meta })), btn));
+    function copyBtn(text, label, url) {
+      var b = h("button", { type: "button", text: text, "aria-label": label });
+      b.addEventListener("click", function () {
+        copyText(url, code).then(function (ok) { b.textContent = ok ? "copied" : "select+copy"; setTimeout(function () { b.textContent = text; }, 1800); });
+      });
+      return b;
+    }
+    var btns = h("div", { "class": "copies" },
+      copyBtn("copy share", "copy share link to " + name, shareUrl(r.url)),
+      copyBtn("copy direct", "copy direct link to " + name, r.url));
+    box.append(h("div", { "class": "item" }, h("div", { "class": "meta" }, code, h("span", { "class": "muted", text: meta })), btns));
   });
 }
 
