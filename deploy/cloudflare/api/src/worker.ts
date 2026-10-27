@@ -94,6 +94,9 @@ export interface WorkerEnv {
     // token (a secret). Absent or empty: no purge, `cache_cleared: null`.
     MEDIA_ZONE_ID?: string;
     MEDIA_PURGE_TOKEN?: string;
+    // Old Discord attachment links (section 19.6): a Discord bot token, a secret. Handed to the container's helper
+    // only; absent or empty means Discord links save exactly as before and `features.discord_refresh` is false.
+    DISCORD_BOT_TOKEN?: string;
     // Library search (section 21): the private Hugging Face Space's URL (a plain var), the Hugging Face
     // token that may call it and the Space's own EMBED_KEY (secrets). No URL or token: search is off.
     EMBED_URL?: string;
@@ -331,19 +334,24 @@ async function handleInner(
 
     // GET /capabilities: the key's state is reported, never refused.
     if (decision.action === "capabilities") {
+        const helper = await helperHas(container);
         const r = await capabilities(
             appDeps(env, container, edge),
             decision.auth,
             decision.key,
             livePushConfigured(env),
             harkConfigured(env),
-            ...(await helperHas(container)),
+            helper[0],
+            helper[1],
+            helper[2],
+            helper[3],
             embedFrom(env) !== null,
             chatOn(env, edge),
             stageBaseFrom(env) !== null,
             twitchConfigFrom(env) !== null,
             // the editor is on exactly while the renderer binding is there and migration 0021 is applied (section 31.13)
             !!env.EDIT_RENDERER && (await editTablesPresent(env.DB, edge.now())),
+            helper[4],
         );
         return new Response(JSON.stringify(r.body), {
             status: r.status,
@@ -805,14 +813,15 @@ async function handleInner(
 // What the container's helper has said it can do (the Durable Object keeps what it last answered; it never wakes the
 // container for this): the slideshow routes (`gallery`), and the webp slideshow, the gallery image and `item` renders
 // (`make`), a pasted link straight to a media file (`direct`, section 19), and a webp of one photo (`still`, 18.14). Any failure is "not yet": the capability is simply not offered.
-async function helperHas(container: ContainerStub): Promise<[boolean, boolean, boolean, boolean]> {
+async function helperHas(container: ContainerStub): Promise<[boolean, boolean, boolean, boolean, boolean]> {
+    const none: [boolean, boolean, boolean, boolean, boolean] = [false, false, false, false, false];
     try {
         const res = await container.fetch(new Request("https://do.internal/helper/caps", { headers: { [KEY_ID_HEADER]: "worker:capabilities" } }));
-        if (res.status !== 200) return [false, false, false, false];
-        const body = (await res.json()) as { gallery?: unknown; make?: unknown; direct?: unknown; still?: unknown };
-        return [body?.gallery === true, body?.make === true, body?.direct === true, body?.still === true];
+        if (res.status !== 200) return none;
+        const body = (await res.json()) as { gallery?: unknown; make?: unknown; direct?: unknown; still?: unknown; discord?: unknown };
+        return [body?.gallery === true, body?.make === true, body?.direct === true, body?.still === true, body?.discord === true];
     } catch {
-        return [false, false, false, false];
+        return none;
     }
 }
 

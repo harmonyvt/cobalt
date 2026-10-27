@@ -17,6 +17,11 @@ const COBALT = process.env.WEBP_COBALT_ORIGIN || undefined;
 const WORK_DIR = process.env.WEBP_WORK_DIR || "/tmp/webp";
 const FETCH_DIR = process.env.STUDIO_FETCH_DIR || "/tmp/fetch";
 const FFMPEG_TIMEOUT_MS = Number(process.env.WEBP_FFMPEG_TIMEOUT_MS || 240_000);
+// Optional Discord bot token (APP-API-CONTRACT 19.6): refreshes old Discord attachment links. Only the helper uses
+// it; cobalt's child process does not get it in its environment.
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || "";
+const cobaltEnv = { ...process.env };
+delete cobaltEnv.DISCORD_BOT_TOKEN;
 
 let apiOrigin;
 try {
@@ -33,6 +38,7 @@ if (!INTERNAL_KEY) {
 
 const cobalt = spawn(process.execPath, ["src/cobalt"], {
     cwd: APP_DIR,
+    env: cobaltEnv,
     stdio: "inherit",
 });
 
@@ -44,6 +50,7 @@ const helper = createHelper({
     cobaltOrigin: COBALT,
     apiOrigin,
     ffmpegTimeoutMs: FFMPEG_TIMEOUT_MS,
+    discordToken: DISCORD_BOT_TOKEN,
 });
 
 // set when WE forwarded a stop signal, so cobalt dying from it is a clean exit

@@ -205,6 +205,27 @@ describe("GET /capabilities: features.direct_links follows the helper's own head
     });
 });
 
+describe("GET /capabilities: features.discord_refresh follows the helper's discord=1 (section 19.6)", () => {
+    const features = async () => (((await (await call("/capabilities", { headers: auth })).json()) as any).features) as Record<string, unknown>;
+
+    it("is false while the helper has no token (no discord=1), true once it says so, and kept across a restart", async () => {
+        expect((await features()).discord_refresh).toBe(false);
+        await settle(((await (await post({ url: DISCORD })).json()) as any).id);
+        expect(await features()).toMatchObject({ direct_links: true, discord_refresh: false });
+        w.helper.discords = true;
+        await settle(((await (await post({ url: DISCORD })).json()) as any).id);
+        expect(await features()).toMatchObject({ direct_links: true, discord_refresh: true });
+        expect(((await w.make({}).helperCaps()).body as any).discord).toBe(true);
+    });
+
+    it("needs direct=1 too", async () => {
+        w.helper.discords = true;
+        w.helper.directs = false;
+        await settle(((await (await post({ url: DISCORD })).json()) as any).id);
+        expect((await features()).discord_refresh).toBe(false);
+    });
+});
+
 // the key never reaches the helper's fetch (the Worker strips it; the helper has its own internal key)
 describe("what the Durable Object hands the helper", () => {
     it("is the link and the options, never the client's API key", async () => {

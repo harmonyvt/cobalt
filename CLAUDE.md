@@ -77,6 +77,9 @@ the files and a real run before anything is called done.
 - Library search (`APP-API-CONTRACT.md` section 21): EmbeddingGemma 2 on a private Hugging Face Space
   (`deploy/huggingface/embed`), vectors in D1 `media_embeddings`, indexed by the API Worker's 15-minute cron
   (`api/src/embed.ts`), `GET /library/search`. Off unless `EMBED_TOKEN` is in the secrets file.
+- Old Discord links (`APP-API-CONTRACT.md` section 19.6): an unsigned or expired Discord attachment link is signed again
+  through Discord's `attachments/refresh-urls` by the container's helper, then saved. Off unless `DISCORD_BOT_TOKEN` is in
+  the secrets file (the key must exist there, even empty, or `cf deploy` refuses).
 - Rich link pages (`APP-API-CONTRACT.md` section 22): `share.capybaraharmony.com/<name>` (a second domain on the API
   Worker, `src/share.ts`) serves Open Graph pages for public files so links unfurl in Discord, iMessage, X; the app
   copies them when `GET /capabilities` has `share_base_url`.

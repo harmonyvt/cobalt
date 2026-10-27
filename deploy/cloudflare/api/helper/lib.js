@@ -980,6 +980,79 @@ export function logUrl(raw) {
     }
 }
 
+// --- Discord attachment links (APP-API-CONTRACT 19.6) ------------------------------------------------------------
+
+/** Where Discord serves message attachments. */
+export const DISCORD_CDN_HOSTS = ["cdn.discordapp.com", "media.discordapp.net"];
+/** Discord's REST API: `POST /attachments/refresh-urls` lives here. */
+export const DISCORD_API_BASE = "https://discord.com/api/v10";
+/** The three query parameters that sign an attachment link (expiry, issued, hmac). */
+const DISCORD_SIGNATURE = ["ex", "is", "hm"];
+/** Statuses that mean "this signature is no good" (missing, expired): worth one refresh. */
+export const DISCORD_REFUSED = new Set([401, 403, 404, 410]);
+const DISCORD_PATH = /^\/(?:ephemeral-)?attachments\/\d+\/\d+\/[^/]+$/;
+
+/**
+ * True when `u` is a Discord CDN attachment link (`/attachments/<channel>/<attachment>/<name>`, or the ephemeral kind)
+ * on one of `hosts` (tests pass their own).
+ * @param {URL} u @param {string[]} [hosts]
+ */
+export function isDiscordAttachment(u, hosts = DISCORD_CDN_HOSTS) {
+    return hosts.includes(u.hostname.toLowerCase().replace(/\.$/, "")) && DISCORD_PATH.test(u.pathname);
+}
+
+/** True when the link carries all of Discord's signature parameters (it may still have expired). @param {URL} u */
+export function hasDiscordSignature(u) {
+    return DISCORD_SIGNATURE.every((k) => u.searchParams.get(k));
+}
+
+/**
+ * Asks Discord for a freshly signed copy of an attachment link: `POST <api>/attachments/refresh-urls` with
+ * `Authorization: Bot <token>` and `{"attachment_urls": [url]}`, answered `{"refreshed_urls": [{original, refreshed}]}`.
+ * The link is sent without its old signature (Discord does not need one; its other parameters are kept). The answer
+ * is used only when it is a link to the SAME attachment path on a Discord CDN host. Never throws and never logs the
+ * token or a query: null when there is no token, Discord says no, or the answer is not usable.
+ * @param {URL} u
+ * @param {{token: string, apiBase?: string, hosts?: string[], fetchImpl?: typeof fetch, timeoutMs?: number,
+ *          signal?: AbortSignal}} o
+ * @returns {Promise<string | null>}
+ */
+export async function refreshDiscordUrl(u, o) {
+    if (!o.token) return null;
+    const hosts = o.hosts ?? DISCORD_CDN_HOSTS;
+    const bare = new URL(u.toString());
+    for (const k of DISCORD_SIGNATURE) bare.searchParams.delete(k);
+    bare.hash = "";
+    const signals = [AbortSignal.timeout(o.timeoutMs ?? 10_000)];
+    if (o.signal) signals.push(o.signal);
+    try {
+        const res = await (o.fetchImpl ?? fetch)(`${o.apiBase ?? DISCORD_API_BASE}/attachments/refresh-urls`, {
+            method: "POST",
+            headers: {
+                authorization: `Bot ${o.token}`,
+                "content-type": "application/json",
+                "user-agent": "DiscordBot (https://github.com/harmonyvt/cobalt, 1.0)",
+            },
+            body: JSON.stringify({ attachment_urls: [bare.toString()] }),
+            signal: AbortSignal.any(signals),
+        });
+        if (!res.ok) {
+            await res.body?.cancel().catch(() => {});
+            console.log("[webp-helper] discord refresh refused:", res.status, logUrl(u.toString()));
+            return null;
+        }
+        const body = /** @type {any} */ (await res.json());
+        const refreshed = body?.refreshed_urls?.[0]?.refreshed;
+        if (typeof refreshed !== "string" || refreshed.length > 2048) return null;
+        const r = new URL(refreshed);
+        if (!isDiscordAttachment(r, hosts) || r.pathname !== u.pathname || r.username || r.password) return null;
+        return r.toString();
+    } catch (e) {
+        console.log("[webp-helper] discord refresh failed:", e instanceof Error ? e.name : "error", logUrl(u.toString()));
+        return null;
+    }
+}
+
 /** The last path segment of a URL, decoded and cleaned, or null (`/attachments/1/2/LiaPoor.png` is `LiaPoor.png`). */
 export function filenameFromUrl(u) {
     const last = u.pathname.split("/").filter(Boolean).pop();
@@ -1259,7 +1332,8 @@ export async function downloadToFile(o) {
         if (isAbort(e)) throw new JobError("error.webp.timeout");
         throw new JobError("error.webp.download_failed");
     }
-    if (!res.ok || !res.body) throw new JobError("error.webp.download_failed");
+    // the status travels with the error: a Discord link refused with 403/404 is refreshed and tried again (19.6)
+    if (!res.ok || !res.body) throw Object.assign(new JobError("error.webp.download_failed"), { status: res.status });
     o.onResponse?.(res);
 
     const declared = Number(res.headers.get("content-length"));

@@ -915,6 +915,8 @@ export class StudioService {
     private helperDirect: boolean | undefined;
     // `still=1` (18.14): a webp of one photo comes out animated (2 frames), so Discord offers "favourite"
     private helperStill: boolean | undefined;
+    // `discord=1` (19.6): the helper has a Discord bot token and refreshes old Discord attachment links
+    private helperDiscord: boolean | undefined;
     private noteHelper(res: Response): Response {
         try {
             const caps = res.headers.get(HELPER_CAPS_HEADER) ?? "";
@@ -922,12 +924,22 @@ export class StudioService {
             const m = caps.includes("make=1");
             const dl = caps.includes("direct=1");
             const st = caps.includes("still=1");
-            if (g !== this.helperGallery || m !== this.helperMake || dl !== this.helperDirect || st !== this.helperStill) {
+            const dc = caps.includes("discord=1");
+            if (
+                g !== this.helperGallery ||
+                m !== this.helperMake ||
+                dl !== this.helperDirect ||
+                st !== this.helperStill ||
+                dc !== this.helperDiscord
+            ) {
                 this.helperGallery = g;
                 this.helperMake = m;
                 this.helperDirect = dl;
                 this.helperStill = st;
-                void Promise.resolve(this.d.storage.put("helper:caps", { gallery: g, make: m, direct: dl, still: st, at: this.d.now() })).catch(() => {});
+                this.helperDiscord = dc;
+                void Promise.resolve(
+                    this.d.storage.put("helper:caps", { gallery: g, make: m, direct: dl, still: st, discord: dc, at: this.d.now() }),
+                ).catch(() => {});
             }
         } catch {
             // a response whose headers cannot be read says nothing
@@ -939,21 +951,29 @@ export class StudioService {
         let make = this.helperMake;
         let direct = this.helperDirect;
         let still = this.helperStill;
+        let discord = this.helperDiscord;
         if (gallery === undefined) {
             try {
-                const stored = await this.d.storage.get<{ gallery?: boolean; make?: boolean; direct?: boolean; still?: boolean }>("helper:caps");
+                const stored = await this.d.storage.get<{ gallery?: boolean; make?: boolean; direct?: boolean; still?: boolean; discord?: boolean }>(
+                    "helper:caps",
+                );
                 gallery = stored?.gallery === true;
                 make = stored?.make === true;
                 direct = stored?.direct === true;
                 still = stored?.still === true;
+                discord = stored?.discord === true;
             } catch {
                 gallery = false;
                 make = false;
                 direct = false;
                 still = false;
+                discord = false;
             }
         }
-        return { status: 200, body: { status: "success", gallery, make: make === true, direct: direct === true, still: still === true } };
+        return {
+            status: 200,
+            body: { status: "success", gallery, make: make === true, direct: direct === true, still: still === true, discord: discord === true },
+        };
     }
     // helper job id -> when this DO started it; used only for the busy answer.
     private encodes = new Map<string, number>();

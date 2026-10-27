@@ -2281,6 +2281,45 @@ rows, poster, public, library listing, notify, request-log prefix, capability).
 Container image (the helper) and Worker. No migration. Either order is safe: a Worker ahead of the image advertises `direct_links: false`
 until the new helper answers once; an image ahead of the Worker just works for old clients.
 
+### 19.6 Old Discord links: refreshed through Discord's API (addendum, built 2026-10-27; owner: saving `https://cdn.discordapp.com/attachments/911068860487192596/1505800458986590279/Big_Reveal.gif` failed)
+
+Discord signs every attachment link (`?ex=<expiry>&is=<issued>&hm=<hmac>`) and answers **404 to an unsigned or expired one, from
+anywhere**, so a link copied without its query (or older than about a day) failed with `error.api.link.invalid`. With a Discord
+**bot token** the helper asks Discord to sign the link again and saves that. **No new route, request field, migration or client
+change.** Without the token everything stays exactly as in 19.1.
+
+- **Secret**: `DISCORD_BOT_TOKEN` (Worker secret from the secrets file, like `COBALT_API_KEY`). The Durable Object puts it into the
+  container's env **only when it is non-empty** (so the container env is unchanged without it); the supervisor hands it to the helper
+  and keeps it out of cobalt's own child process. It is never logged. The bot needs no server, no intents and no permissions.
+- **Which links**: a section 19 direct link (cobalt answered `error.api.link.invalid` / `.unsupported` and the URL passed 19.2) whose
+  host is `cdn.discordapp.com` or `media.discordapp.net` and whose path is `/attachments/<digits>/<digits>/<name>` (or
+  `/ephemeral-attachments/...`). Avatars, emojis, other hosts and every service link are never sent to Discord.
+- **When** (`helper/server.js` `runFetch`): a link **without** all of `ex`, `is`, `hm` is refreshed **before** the download (Discord would
+  refuse it anyway). A signed link is downloaded as it is; only when that download answers **401, 403, 404 or 410** is it refreshed and
+  downloaded **once** more. At most one refresh per save.
+- **The call** (`helper/lib.js` `refreshDiscordUrl`): `POST https://discord.com/api/v10/attachments/refresh-urls`,
+  `Authorization: Bot <token>`, body `{"attachment_urls": ["<the link without ex/is/hm>"]}` (other query parameters kept), answer
+  `{"refreshed_urls": [{"original": "...", "refreshed": "<signed link>"}]}`, 10 s budget. Not in Discord's public docs; shape confirmed
+  from the community reference (docs.discord.food, "Refresh Attachment URLs": 1-50 URLs, unsigned URLs accepted) and existing bot code
+  (`refreshAttachmentURLs([url]).refreshed_urls[0].refreshed`). `refreshed` is used only when it is a URL on one of the two CDN hosts
+  with **the same attachment path** and no userinfo, and passes the public-URL rule (19.2); then the normal download with every 19.1
+  cap. Anything else (no token, a non-2xx answer such as 401 for a bad token, junk, a network failure) means no refresh: the link is
+  tried as it is and fails as before.
+- **Result**: unchanged from 19.1. Still refused after the refresh (deleted message, file gone): cobalt's original error. The
+  `title` is the file name of the link the owner pasted; the stored link is that link without query (19.1.5), so neither the old nor
+  the new signature reaches D1, R2 or a log line (the log says `discord link refreshed <host/path>`).
+- **Capability**: the helper's `x-cobalt-helper` header adds `discord=1` while it has a token (`gallery=1,make=1,direct=1,still=1,discord=1`);
+  the Durable Object keeps it in `helper:caps` next to the others, and `GET /capabilities` has **`features.discord_refresh`** (missing =
+  `false`), true only while the running helper said both `direct=1` and `discord=1`. Apps need not read it: the save just works.
+- **Files and tests**: `helper/lib.js` (`isDiscordAttachment`, `hasDiscordSignature`, `refreshDiscordUrl`, `DISCORD_REFUSED`;
+  `downloadToFile`'s refusal error carries `status`), `helper/server.js` (`refreshDiscord`, `runFetch`, `HELPER_CAPS_DISCORD`),
+  `helper/supervisor.js`, `src/index.ts` (envVars), `src/studio.ts` (`helper:caps`), `src/worker.ts` / `src/app-routes.ts`
+  (`discord_refresh`), `cloudflare.config.ts` (secret). `test/discord-refresh.test.ts` (the real helper against a local CDN + API:
+  refreshed, still refused, bad token, unusable answers, no token, non-Discord, log hygiene) and `test/direct-links-api.test.ts`
+  (the capability).
+- **Deploy (owner)**: add `"DISCORD_BOT_TOKEN"` to the secrets file (an empty string is allowed and keeps it off; `cf deploy` refuses
+  while a declared secret is missing), then one API deploy (Worker and image together). No migration.
+
 ## 20. 7TV emotes
 
 Keyed. The Worker only: it calls 7TV and writes D1 + the public media bucket. The container is not woken. The phone and the keyboard do not call 7TV.

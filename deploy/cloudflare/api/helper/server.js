@@ -126,13 +126,17 @@ import {
     checkPublicUrl,
     directHeadOk,
     filenameFromUrl,
+    hasDiscordSignature,
     imageDimensions,
+    isDiscordAttachment,
+    DISCORD_REFUSED,
     logUrl,
     makeSafeFetch,
     parseWebp,
     planClip,
     posterTime,
     readFileHead as readHead,
+    refreshDiscordUrl,
     renderSlideshow,
     runProcess,
     resolveSource,
@@ -155,6 +159,9 @@ export const HELPER_CAPS_HEADER = "x-cobalt-helper";
 // `direct=1`: a pasted link to a media file that cobalt does not know is saved as that file (APP-API-CONTRACT 19);
 // `still=1`: a webp of one photo comes out animated (2 frames), so Discord offers "favourite" (APP-API-CONTRACT 18.14)
 export const HELPER_CAPS = "gallery=1,make=1,direct=1,still=1";
+// `discord=1` is added only while a Discord bot token is set: an old, unsigned Discord attachment link is refreshed
+// through Discord's API before it is saved (APP-API-CONTRACT 19.6)
+export const HELPER_CAPS_DISCORD = `${HELPER_CAPS},discord=1`;
 
 /** What cobalt says about a link it has no service for: the studio then tries the link as a file (section 19). */
 /** How much of a saved file's start is read to type it and read its pixel size (a JPEG's frame header can follow a big EXIF/ICC). */
@@ -205,6 +212,7 @@ export const APNS_DEFAULT_TIMEOUT_MS = 2000;
  *   encodeAnimatedWebp?: typeof encodeAnimatedWebp,
  *   apnsOrigin?: (host: string) => string,
  *   apnsTimeoutMs?: number,
+ *   discordToken?: string, discordApi?: string, discordHosts?: string[],
  * }} [opts] everything but the paths and the key defaults to the real thing;
  *   tests replace the pieces that need cobalt, the network or ffmpeg.
  */
@@ -231,6 +239,12 @@ export function createHelper(opts = {}) {
     const KEEP_JOBS = opts.keepJobs ?? 20;
     const JOB_TTL_MS = opts.jobTtlMs ?? 30 * 60_000;
     const apiOrigin = opts.apiOrigin;
+    // A Discord bot token (DISCORD_BOT_TOKEN, APP-API-CONTRACT 19.6): with one, a Discord attachment link that has no
+    // signature, or whose download is refused, is signed afresh by Discord and saved from that link. Never logged.
+    const DISCORD_TOKEN = (opts.discordToken ?? "").trim();
+    const DISCORD_API = opts.discordApi;
+    const DISCORD_HOSTS = opts.discordHosts;
+    const capsHeader = DISCORD_TOKEN ? HELPER_CAPS_DISCORD : HELPER_CAPS;
 
     const doResolve = opts.resolveSource ?? resolveSource;
     // Everything that is not cobalt's own /tunnel (a redirect or picker item, a direct link) is fetched from a host
@@ -620,6 +634,22 @@ export function createHelper(opts = {}) {
         };
     }
 
+    /**
+     * A freshly signed copy of a Discord attachment link that still passes the public-URL rule, or null.
+     * @param {URL} u
+     */
+    async function refreshDiscord(u) {
+        const fresh = await refreshDiscordUrl(u, {
+            token: DISCORD_TOKEN,
+            apiBase: DISCORD_API,
+            hosts: DISCORD_HOSTS,
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        });
+        if (!fresh || !checkPublicUrl(fresh, opts.fetchPolicy)) return null;
+        console.log("[webp-helper] discord link refreshed", logUrl(fresh));
+        return fresh;
+    }
+
     /** @param {Job} job @param {{id: string, url: string, items?: "all"|"first-video"|number[], item_count?: number}} p */
     async function runFetch(job, p) {
         job.fetchProgress = { stage: "downloading", bytes: 0, total: null, item: null, itemsDone: 0, itemsTotal: null };
@@ -628,6 +658,9 @@ export function createHelper(opts = {}) {
         // whatever then goes wrong ends with cobalt's own error, as it always did
         /** @type {JobError | null} */
         let directOriginal = null;
+        // a direct Discord attachment link that may still be refreshed once if its download is refused (19.6)
+        /** @type {URL | null} */
+        let discordRetry = null;
         try {
             await mkdir(job.dir, { recursive: true });
             await waitForCobalt();
@@ -649,7 +682,14 @@ export function createHelper(opts = {}) {
                 // a pasted link to a media file: the file is the one item. Host and path only in the log.
                 directOriginal = /** @type {JobError} */ (e);
                 console.log("[webp-helper] direct link", logUrl(p.url));
-                src = { url: u.toString(), filename: filenameFromUrl(u), direct: true };
+                let url = u.toString();
+                if (DISCORD_TOKEN && isDiscordAttachment(u, DISCORD_HOSTS)) {
+                    // an unsigned link is refused by Discord whatever asks for it: refresh it first (one try);
+                    // a signed one is downloaded as it is and refreshed only when Discord refuses it
+                    if (hasDiscordSignature(u)) discordRetry = u;
+                    else url = (await refreshDiscord(u)) ?? url;
+                }
+                src = { url, filename: filenameFromUrl(u), direct: true };
             }
 
             // A plain answer (tunnel / redirect) is a picker of one of unknown type. The count the
@@ -678,15 +718,24 @@ export function createHelper(opts = {}) {
                 if (!e.url) throw new JobError("error.webp.bad_source");
                 const input = path.join(job.dir, "in");
                 const thumbOut = path.join(job.dir, "thumb.jpg");
-                const r = await fetchOne(job, {
-                    url: e.url,
-                    input,
-                    thumbOut,
-                    filename: src.filename,
-                    maxBytes: MAX_FETCH,
-                    index,
-                    itemsDone: 0,
-                    direct: src.direct,
+                const one = (/** @type {string} */ url) =>
+                    fetchOne(job, {
+                        url,
+                        input,
+                        thumbOut,
+                        filename: src.filename,
+                        maxBytes: MAX_FETCH,
+                        index,
+                        itemsDone: 0,
+                        direct: src.direct,
+                    });
+                const retry = discordRetry;
+                const r = await one(e.url).catch(async (err) => {
+                    // an expired signature: Discord answers 403/404. Ask for a new one and try once more.
+                    if (!retry || !(err instanceof JobError) || !DISCORD_REFUSED.has(/** @type {any} */ (err).status)) throw err;
+                    const fresh = await refreshDiscord(retry);
+                    if (!fresh) throw err;
+                    return one(fresh);
                 });
                 job.files.set(index, { file: input, thumb: r.thumb ? thumbOut : null, contentType: r.contentType });
                 job.lead = index;
@@ -1583,7 +1632,7 @@ export function createHelper(opts = {}) {
         try {
             // what this helper can do, on every answer: the Durable Object reads it so the API advertises
             // `features.gallery` only while the container really runs a helper with the slideshow routes
-            res.setHeader(HELPER_CAPS_HEADER, HELPER_CAPS);
+            res.setHeader(HELPER_CAPS_HEADER, capsHeader);
             if (!keyMatches(req.headers["x-internal-key"], INTERNAL_KEY)) {
                 return fail(res, 403, "error.webp.forbidden");
             }
