@@ -74,6 +74,10 @@ export const PATHS: string[] = [
     `/chat/threads/${ID16}/messages/5/collage?offset=0&limit=500`,
     `/chat/threads/${ID16}/other`,
     "/chat/threads/bad",
+    // added with the registry (section 33.5): the confirm answer, and the Durable Object's internal store, never public
+    `/chat/threads/${ID16}/confirm/${ID16}`,
+    `/chat/threads/${ID16}/confirm/bad`,
+    `/chat/pending/${ID16}`,
     "/library/adopt",
     "/emotes",
     "/library",

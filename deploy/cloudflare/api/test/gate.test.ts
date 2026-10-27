@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { decide, type GateRequest } from "../src/gate";
+import { REGISTRY } from "../src/registry/index";
 
 const KEY = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
 const ORIGIN = "https://cobalt.capybaraharmony.com";
@@ -276,7 +277,9 @@ describe("the app's library routes (keyed)", () => {
     const g = (method: string, pathname: string, o: Partial<GateRequest> = keyed) => decide(req({ method, pathname, ...o }), cfg);
 
     it("GET /library, GET|HEAD /library/items/<id>/file, POST publish and studio look the key up", () => {
-        expect(g("GET", "/library")).toEqual(lookup("library_list"));
+        // GET /library is an op now (src/registry/ops/library.ts): the registry answers it before the gate
+        expect(REGISTRY.match("GET", "/library")?.op).toMatchObject({ name: "library.index", auth: "key_or_service", cors: true });
+        expect(g("GET", "/library")).toMatchObject({ action: "reject", status: 404 });
         expect(g("GET", `/library/items/${ID}/file`)).toEqual(lookup("library_file", { id: ID }));
         expect(g("HEAD", `/library/items/${ID}/file`)).toEqual(lookup("library_file", { id: ID }));
         expect(g("POST", `/library/items/${ID}/publish`)).toEqual(lookup("library_publish", { id: ID }));
@@ -389,7 +392,6 @@ describe("the app's library routes (keyed)", () => {
     });
     it("without a key: 401 with the API's own codes; an Origin is no substitute", () => {
         for (const [method, p] of [
-            ["GET", "/library"],
             ["GET", `/library/items/${ID}/file`],
             ["POST", `/library/items/${ID}/publish`],
             ["POST", `/library/items/${ID}/studio`],
@@ -401,7 +403,6 @@ describe("the app's library routes (keyed)", () => {
         }
     });
     it("the library service credential passes without a key", () => {
-        expect(g("GET", "/library", { service: true })).toEqual({ action: "service", then: "library_list" });
         expect(g("POST", `/library/items/${ID}/publish`, { service: true })).toEqual({
             action: "service",
             then: "library_publish",

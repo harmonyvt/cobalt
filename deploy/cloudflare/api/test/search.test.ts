@@ -30,6 +30,7 @@ import {
     type EmbedInput,
 } from "../src/embed";
 import { decide, type GateRequest } from "../src/gate";
+import { REGISTRY } from "../src/registry/index";
 import { KEY_ID_HEADER, SERVICE_HEADER } from "../src/headers";
 import { hashKey } from "../src/keys";
 import { handleRequest, type WorkerEnv } from "../src/worker";
@@ -593,11 +594,12 @@ describe("routing", () => {
     });
 
     it("GET /library/search and POST /library/search/index are keyed routes; other methods 404", () => {
-        expect(decide(req("GET", "/library/search"), { corsUrl: "x", now: 0 })).toMatchObject({ action: "lookup", then: "library_search" });
+        // GET /library/search is an op (src/registry/ops/library.ts), answered before the gate
+        expect(REGISTRY.match("GET", "/library/search")?.op).toMatchObject({ name: "library.query", auth: "key_or_service", cors: false, noStore: true });
         expect(decide(req("POST", "/library/search/index"), { corsUrl: "x", now: 0 })).toMatchObject({ action: "lookup", then: "library_search_index" });
         expect(decide(req("POST", "/library/search"), { corsUrl: "x", now: 0 })).toMatchObject({ action: "reject", status: 404 });
         expect(decide(req("GET", "/library/search/index"), { corsUrl: "x", now: 0 })).toMatchObject({ action: "reject", status: 404 });
-        expect(decide({ ...req("GET", "/library/search"), authorization: null }, { corsUrl: "x", now: 0 }).action).toBe("reject");
+        expect(REGISTRY.match("POST", "/library/search")).toBeNull();
     });
 
     afterEach(() => vi.unstubAllGlobals());
@@ -732,10 +734,9 @@ describe("GET /queue", () => {
             ...over,
         });
         const cfg = { corsUrl: "x", now: 0 };
-        expect(decide(req("GET"), cfg)).toMatchObject({ action: "lookup", then: "queue" });
+        // GET /queue is an op (src/registry/ops/library.ts): keyed only, the service gets 404 (the route snapshot pins it)
+        expect(REGISTRY.match("GET", "/queue")?.op).toMatchObject({ name: "queue", auth: "key", cors: true, noStore: true });
         expect(decide(req("POST"), cfg)).toMatchObject({ action: "reject", status: 404 });
-        expect(decide(req("GET", { service: true }), cfg)).toMatchObject({ action: "reject", status: 404 });
-        expect(decide(req("GET", { authorization: null }), cfg)).toMatchObject({ action: "reject", status: 401 });
     });
 
     it("the Worker: 401 without a key; with one, the line comes from the Durable Object's GET /studio/line for that key", async () => {
@@ -1021,10 +1022,9 @@ describe("GET /library/map", () => {
             ...over,
         });
         const cfg = { corsUrl: "x", now: 0 };
-        expect(decide(req("GET"), cfg)).toMatchObject({ action: "lookup", then: "library_map" });
-        expect(decide(req("GET", { service: true, authorization: null }), cfg)).toMatchObject({ action: "service", then: "library_map" });
+        // GET /library/map is an op (src/registry/ops/library.ts), keyed or service (the route snapshot pins the answers)
+        expect(REGISTRY.match("GET", "/library/map")?.op).toMatchObject({ name: "library.map", auth: "key_or_service", cors: false });
         for (const m of ["POST", "PUT", "PATCH", "DELETE"]) expect(decide(req(m), cfg)).toMatchObject({ action: "reject", status: 404 });
-        expect(decide(req("GET", { authorization: null }), cfg)).toMatchObject({ action: "reject", status: 401 });
     });
 
     it("the Worker: keyed and service answer from D1 without the container or the Space", async () => {

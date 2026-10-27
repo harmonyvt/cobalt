@@ -2497,6 +2497,7 @@ Threads with Claude Haiku 5.5 (`claude-haiku-5-5`, `CHAT_MODEL`) about the libra
 - `cobalt.show(ids)` → shows up to 12 files in the reply as thumbnails; returns the ids accepted.
 - `cobalt.links()` → gallery share links `[{ id, url, title, created_at, post_ids }]`; `cobalt.collections()` → `[{ id, name, link_ids }]`.
 - At most 8 code runs per reply, 50 tool calls per run, results over 20,000 chars are cut for the model.
+- Since section 33 these are ops in the registry, called as `cobalt.library.list`, `cobalt.library.search`, `cobalt.library.post`, `cobalt.links.list` and `cobalt.collections.list` (the flat names above still work).
 
 ### 27.4 App (apple/CONTRACT.md)
 
@@ -3487,3 +3488,124 @@ the app closed. Code: `api/src/edit-live.ts` (state, coalescing, payloads, route
 - **Not pushed**: a render ended by the Worker (a queued cancel, a project deleted) or by the cron (`error.edit.lost`): the app
   that cancelled is open, and otherwise the activity goes stale and the app ends it when it next comes to the front (it reads
   `GET /edits/renders/<rid>` for any activity it has no copy of).
+
+## 33. The op registry: one definition per feature, for routes and the chat AI (addendum, 2026-10-27; owner: "a wrapper to define tools once and migrate the whole backend"; plan `chat-registry/PLAN.md`, thread T1)
+
+Every backend feature moves, one at a time, onto `defineOp` (`api/src/registry/`). One op gives the HTTP route, its input
+check (zod 4) and the chat AI's tool. **Nothing on the wire changes**: URLs, methods, auth, CORS, cache headers and JSON
+bodies stay exactly as sections 1 to 32 pin them. The only new route is the confirm answer (33.5). The thread numbers below
+(T3 and so on) are the plan's.
+
+### 33.1 The route snapshot
+
+`test/route-snapshot.test.ts` pins what the Worker answers for every path family the gate knows (about 95 sample paths,
+including bad ids and near misses), each crossed with the seven methods and nine callers: no key, a non-`Api-Key` header,
+a malformed key, an unknown key, a real key, the library service, a real key from the web origin, the service from the web
+origin, and a real key from a wrong origin. It also covers a few rows on the share and stage hosts. Each row records the
+status, the error code, the content type, `access-control-allow-origin`, `access-control-allow-methods`, `cache-control`,
+the body's top-level keys, and the container call (path, key id, which key) when there is one. The fixture
+(`test/fixtures/route-snapshot.json`, about 6,000 rows) was written against `main` before the registry existed. **Every
+later PR must leave it unchanged**, except that a PR adding a route adds rows (it adds the path to `PATHS`) and changes none
+of the existing ones. Regenerate with `npx vitest run test/route-snapshot.test.ts -u` and read the diff.
+
+### 33.2 `defineOp` and the HTTP side
+
+```ts
+defineOp({
+  name: "library.search",                  // unique
+  route?: { method, path: "/x/:id", params?: { id: /regex/ } },
+  auth: "key" | "key_or_service" | "open" | "capability",
+  runs: "worker" | "durable_object",
+  cors: boolean,                           // web origin gets access-control-allow-origin on the reply
+  noStore?: boolean,                       // cache-control: no-store
+  input: zodSchema, output?: zodSchema,
+  badRequest?: "error.<area>.bad_request", // the 400 code for a failed input check
+  http?: (ctx) => rawInput,                // default: path params + query + JSON body
+  ai: { tier: "free" | "ask" | "hidden", summary, call?, aliases?, only?, params?, options?, args?, when?, preview?, result? },
+  raw?: boolean,                           // the handler returns a Response (streams)
+  handler?: (ctx, input) => { status, body, headers? } | Response,  // throw OpError(status, code, message) to refuse
+})
+```
+
+- **Order** (`worker.ts`): the share and stage hosts, then the 503 on a bad internal key, the service-credential check
+  and the header strip, then **the registry**, then the old gate chain. A request whose method and path no op has (and
+  every `OPTIONS`) falls through to the gate unchanged, so a wrong method on a registered path is still the gate's 404.
+- **Matching**: whole segments only. A `:param` must match its pattern, and a trailing slash or an extra segment is no
+  match.
+- **Auth**, the same as the gate plus the Worker's D1 lookup. `key`: an `Api-Key` client key. The library service gets a
+  bodyless 404, a missing or bad header gets 401 with the API's own codes, an unknown key gets 401
+  `error.api.auth.key.invalid`, and D1 down gets 503. Every one of these carries the web origin's CORS header, as the gate's
+  rejections do. `key_or_service`: the service passes as `service:library`. `open`: no key, and `ctx.keyId` is null.
+  `capability`: the path is the credential.
+- **Input**: a failed zod check is `400 {"status":"error","error":{"code":"<badRequest or error.api.bad_request>"}}`.
+  Routes that wrap an older handler keep that handler's own parsing and error codes: they accept any query, and the handler
+  reads `ctx.query`.
+- **`runs: "durable_object"`** with no handler: the request goes to the main Durable Object with the verified key id
+  (`x-cobalt-key-id`) and without the client's `Authorization`, the same way `worker.ts` forwards today.
+- **`ctx`** (one per call): `env`, `db`, `now`, `mediaBaseUrl`, `shareBaseUrl`, `edge`, `container`, `registry`, `app()`
+  (the `AppDeps` worker.ts builds), `embed()`, `keyId`, `caller` (`key` | `service` | `chat` | `open`), and on HTTP calls
+  `request`, `url`, `query` and `params`. It also has `durableObject(path, init)`, which calls the DO with this call's key
+  id, and on chat calls `chat` (`threadId`, `collect`, `tools`).
+- **Registered so far** (T1): `GET /library` (`library.index`, key or service, CORS), `GET /library/search`
+  (`library.query`, key or service, no CORS, no-store), `GET /library/map` (`library.map`, the same), `GET /queue` (`queue`,
+  key only, CORS, no-store), and `POST /chat/threads/<id>/confirm/<cid>` (33.5). Their branches are gone from `gate.ts` and
+  `worker.ts`.
+
+### 33.3 The chat AI's `cobalt` API
+
+- `registry.toolsFor("chat", { search })` lists the ops whose tier is `free` or `ask`, plus `search` only while the Space
+  is configured. The model's cheat sheet (`TOOL_TYPES`, in the system prompt) is generated from them by
+  `registry/typescript.ts`. Field comments come from `.describe()`, a schema with `.meta({ id })` prints once as a named type
+  (`Post`, `PostFile`), and an `ask` op gets the line "Asks Harmony first".
+- **Calls are namespaced by the op's call name**: `cobalt.library.list(opts?)`, `cobalt.library.search(query, limit?)`,
+  `cobalt.library.post(id)`, `cobalt.links.list()`, `cobalt.collections.list()`, and, chat-only (`ai.only`),
+  `cobalt.look(ids)`, `cobalt.show(ids)` and `cobalt.collage(ids, opts?)`. Results are the same as 27.3 and 27.5.
+- **Old names still work** (`ai.aliases`), so saved threads replay: `cobalt.library(opts)`, `cobalt.search(...)`,
+  `cobalt.post(id)`, `cobalt.links()` and `cobalt.collections()`. In the sandbox every name is both callable and a namespace,
+  and the dotted path is what the Worker's dispatcher looks up.
+- **Arguments** map to the input by `ai.params` (positional), then a trailing options object when `ai.options` is set, or
+  by `ai.args` (collage keeps its old string title). They are checked with the op's zod schema. A failure throws in the
+  model's code as one line: `cobalt.<call>: <field>: <problem>`. A handler's `OpError` throws its message.
+- Chat calls run with key id `chat:<thread id>` and `caller: "chat"`. A `durable_object` op called from chat is sent to the
+  DO at its route path with the input as JSON.
+
+### 33.4 Ops added in T1
+
+`library.list`, `library.search`, `library.post`, `links.list`, `collections.list`, `look`, `show` and `collage` are the
+section 27.3 tools. They are tier `free`, `ai.only`, and call the same functions in `chat-tools.ts`. The four library read
+routes are tier `hidden`. Each area adds its ops in `registry/ops/<area>.ts` and lists them in `registry/index.ts`.
+
+### 33.5 Confirm cards (the `ask` tier)
+
+- An `ask` op called from chat **does not run**. Its `ai.preview(ctx, input)` gives `{ summary, effect }` (default: the
+  summary's first line and `{}`). The call is stored as one pending card per thread in the main Durable Object's storage
+  (`chat:pending:<thread>`, internal paths `/chat/pending/<thread>`, accepted only with key id `chat:<thread>` and never
+  routed from the internet) and expires after **15 minutes**. The call returns
+  `{ "pending_confirm": { "id": "<16 letters/digits>", "summary", "effect" } }`. Every later call in that run throws
+  "waiting for Harmony to answer the confirm card…", later runs in the same reply are refused, and the model is told to say
+  in one line what it asked.
+- The assistant message gains a step `{ "kind": "confirm", "status": "done", "result": "<summary>", "confirm": <card> }`
+  and a top-level `"confirm": null | <card>`, where `<card>` = `{ "id", "op", "summary", "effect", "status":
+  "waiting"|"yes"|"no"|"expired", "expires_at": <ms> }`. A waiting card past `expires_at` reads as `expired`. SSE: a new
+  event `confirm` `{ "message_id": "<id>", "confirm": <card> }` comes after the step. Older apps decode the step as an
+  unknown kind (they show it as a step) and ignore `confirm`.
+- **`POST /chat/threads/<id>/confirm/<cid>`** `{ "answer": "yes" | "no" }` (keyed, the service gets 404, CORS, no-store).
+  Errors: `400 error.chat.bad_request` (any other answer), `404 error.chat.not_found` (thread),
+  `404 error.chat.confirm_gone` (no such card, a different card, expired, or already answered), `409 error.chat.busy|full`,
+  `404 error.chat.off`. On success it answers `200 text/event-stream`:
+  - first `confirm` `{ "message_id", "confirm": <card with status yes|no> }`, then the usual `assistant`, `text`, `step`,
+    `posts`, `collage`, `done` or `error` events (27.2), with **no `user` event**;
+  - `yes` runs the stored call once, with the input checked when the model asked and key id `chat:<thread>`. The card's
+    step records the result (`status` done or error, `result` the JSON, up to 2,000 chars). `no` runs nothing;
+  - the continuation is a new assistant message. The model gets a user turn
+    `[Harmony tapped yes on the confirm card "<summary>". cobalt ran it and returned: <json>]` (or `…tapped no… Nothing
+    ran.`). It is saved at the start of that message's `api`, so the thread replays.
+- T3 adds the first real `ask` ops and the app's card. No migration: cards live in DO storage and in the message's steps.
+
+### 33.6 The sandbox bill (`LOADER.get`)
+
+Dynamic Workers bill one worker per unique id and code per day, and every `load()` counts as a new one. A stable
+per-thread id cannot serve per-run code: a cached id keeps its first code, and Workers refuse `eval` and `new Function`, so
+the module cannot take the code as an argument. `chat-loader.ts` now calls `LOADER.get("run-<sha256 of the module>", …)`,
+so a run whose exact code already ran that day reuses that worker. Anything else is billed as before. It falls back to
+`load()` when `get` is missing.

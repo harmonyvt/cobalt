@@ -1,4 +1,4 @@
-// Chat code mode (APP-API-CONTRACT.md section 27): runs the model's JavaScript in a fresh Dynamic Worker
+// Chat code mode (APP-API-CONTRACT.md section 27): runs the model's JavaScript in a Dynamic Worker
 // (Worker Loader binding LOADER). The sandbox has no network (globalOutbound: null) and no bindings;
 // the only way out is the `cobalt` object, whose calls come back here over Workers RPC. Imported only
 // by the Worker entry (index.ts): `cloudflare:workers` does not exist under node.
@@ -29,16 +29,27 @@ class Dispatcher extends RpcTarget {
     }
 }
 
+async function sha256Hex(text: string): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export function loaderRunner(loader: WorkerLoader): CodeRunner {
     return async (code: string, tools: ChatTools): Promise<CodeRun> => {
         const dispatcher = new Dispatcher(tools);
-        const worker = loader.load({
+        const source = sandboxModule(code);
+        const spec = {
             compatibilityDate: "2026-09-01",
             mainModule: "run.js",
-            modules: { "run.js": sandboxModule(code) },
+            modules: { "run.js": source },
             globalOutbound: null,
             limits: { cpuMs: CODE_CPU_MS },
-        });
+        };
+        // Billing counts one Dynamic Worker per id and code per day, and every load() as a new one. The code changes on
+        // every run, and Workers refuse eval, so a stable per-thread id cannot reuse one worker across runs (a cached id
+        // keeps running its first code). Keying by the code's hash is the most that can be shared: a run whose exact
+        // code was already loaded today reuses that worker instead of paying for a new one (section 33.6).
+        const worker = typeof loader.get === "function" ? loader.get(`run-${await sha256Hex(source)}`, async () => spec) : loader.load(spec);
         const entry = worker.getEntrypoint() as unknown as {
             evaluate(d: Dispatcher): Promise<{ result?: string; error?: string; logs: string[] }>;
         };

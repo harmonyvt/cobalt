@@ -19,6 +19,7 @@ import { relayFetch } from "./model-fetch";
 import { roomPort, stageRetention } from "./stage";
 import { editsRecover, kickRenderers, type RendererNamespace } from "./edits";
 import { notifyEndedRow } from "./edit-render-core";
+import { handleChatPendingRoute, isChatPendingRoute } from "./registry/pending";
 export { ModelRelay } from "./model-relay";
 export { EditRenderer } from "./edit-renderer";
 export { StageRoom } from "./stage-room";
@@ -302,6 +303,10 @@ export class CobaltContainer extends Container<Env> {
     }
 
     private async handle(request: Request): Promise<Response> {
+        // Chat confirm cards (APP-API-CONTRACT.md section 33.5): DO storage only, never the container.
+        if (isChatPendingRoute(new URL(request.url).pathname)) {
+            return handleChatPendingRoute(this.ctx.storage, request, Date.now());
+        }
         // Live Activity routes (token and run store, APNs) never touch the
         // container: answered first, before the env-fingerprint restart below, and
         // never through super.fetch. The key id header is the Worker's word.
