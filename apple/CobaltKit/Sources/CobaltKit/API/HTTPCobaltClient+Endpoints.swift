@@ -5,13 +5,13 @@ import Foundation
 // server's own route. The library list and the collections use them first; the other calls move over one at a time.
 extension HTTPCobaltClient {
     /// A request for a generated endpoint. The key goes along exactly when the route takes one.
-    func makeRequest<R>(_ endpoint: APIEndpoint<R>, query: [(String, String)] = [], timeout: TimeInterval = 30) throws -> URLRequest {
+    func makeRequest<R: Decodable & Sendable>(_ endpoint: APIEndpoint<R>, query: [(String, String)] = [], timeout: TimeInterval = 30) throws -> URLRequest {
         try makeRequest(endpoint.method, endpoint.path, query: query, keyed: endpoint.auth.keyed, timeout: timeout)
     }
 
     /// The endpoint's reply, decoded as its generated type. A non-2xx answer, or a 2xx that is an error envelope, throws
     /// as the keyed calls throw it; `refusal` maps a route's own error codes first.
-    func send<R>(
+    func send<R: Decodable & Sendable>(
         _ endpoint: APIEndpoint<R>, query: [(String, String)] = [], timeout: TimeInterval = 30,
         refusal: ((Data, Int) -> Error)? = nil
     ) async throws -> R {

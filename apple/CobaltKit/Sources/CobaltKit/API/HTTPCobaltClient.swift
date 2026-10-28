@@ -1252,7 +1252,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
 
 // MARK: - Wire DTOs
 
-private struct ErrorEnvelope: Decodable {
+struct ErrorEnvelope: Decodable {
     struct Body: Decodable { var code: String? }
     var error: Body?
 }
