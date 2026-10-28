@@ -17,9 +17,11 @@ export type HttpMethod = "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
 // Who may call a route:
 //  - "key":            an `Api-Key` client key (D1 lookup). The library service credential gets 404, like the gate.
 //  - "key_or_service": a client key or the web Worker's library service credential (key id "service:library").
-//  - "open":           anyone; the handler sees `ctx.keyId === null`.
+//  - "service":        the library service credential only (key id "service:library"); anyone else gets 401
+//                      error.api.auth.key.invalid.
+//  - "open":           anyone; the handler sees `ctx.keyId === null` (and `ctx.caller === "service"` for the service).
 //  - "capability":     the path itself is the credential (a studio session id); no key is read.
-export type OpAuth = "key" | "key_or_service" | "open" | "capability";
+export type OpAuth = "key" | "key_or_service" | "service" | "open" | "capability";
 
 // How the chat AI may use an op:
 //  - "free":   it runs when the model's code calls it.
@@ -112,11 +114,18 @@ export type AiSpec<I> = {
 // search: meaning search is configured; box: the workbench is on (section 33.11)
 export type AiFlags = { search: boolean; box?: boolean };
 
+// The hosts the Worker answers: the API (the default), the share host's link pages (section 22), the stage host
+// (section 30.4), and any other studio.* host (a 404 page while the stage is off or elsewhere).
+export type RouteHost = "api" | "share" | "stage" | "studio";
+
 export type RouteSpec = {
-    method: HttpMethod;
-    // "/library/items/:id/post": each `:name` segment must match `params[name]` (default: any non-empty segment)
+    // "ANY": every method (a host's own page router, which answers methods itself)
+    method: HttpMethod | "ANY";
+    // "/library/items/:id/post": each `:name` segment must match `params[name]` (default: any non-empty segment).
+    // A trailing "/*" matches the rest of the path, whatever it is (a host's catch-all).
     path: string;
     params?: Record<string, RegExp>;
+    host?: RouteHost;
 };
 
 export type OpDef<I = any, O = any> = {
@@ -149,5 +158,9 @@ export function defineOp<I, O = unknown>(def: OpDef<I, O>): Op<I, O> {
     if (def.ai.only && def.ai.tier === "hidden") throw new Error(`op ${def.name}: an ai.only op cannot be hidden`);
     if (def.runs === "worker" && !def.handler) throw new Error(`op ${def.name}: a worker op needs a handler`);
     if (def.ai.tier !== "hidden" && def.runs === "durable_object" && !def.route) throw new Error(`op ${def.name}: a DO op needs a route`);
+    // a pattern imported through an import cycle is undefined when the op is defined, and would match any segment
+    for (const [k, re] of Object.entries(def.route?.params ?? {})) {
+        if (!(re instanceof RegExp)) throw new Error(`op ${def.name}: param ${k} has no pattern`);
+    }
     return { ...def, callName: def.ai.call ?? def.name };
 }

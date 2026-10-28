@@ -1,46 +1,18 @@
 // The Worker's request handling, separated from index.ts (which imports the
 // Containers library and so cannot load under plain node) so the whole flow,
-// gate -> D1 lookup -> Durable Object / container, is testable with fakes.
-import { librarySearchIndex, librarySearchPost } from "./embed";
-import { appDeps, embedFrom, shareHost, stageDepsFrom, type ContainerStub, type StageEdge } from "./deps";
-import {
-    capabilities,
-    libraryFile,
-    libraryPostersBackfill,
-    libraryVisibilityMigrate,
-    type AppDeps,
-} from "./app-routes";
-import { livePushConfigured } from "./apns";
-import { ChatLivePusher } from "./chat-live";
-import { harkConfigured } from "./notify";
+// op registry -> D1 lookup -> handler / Durable Object / container, is testable with fakes.
+//
+// Every API route is an op (src/registry/, APP-API-CONTRACT.md 33): this file only picks the host, checks the internal
+// key, strips the internal headers, hands the request to the registry, and answers what no op takes (gate.ts).
+import { shareHost, stageDepsFrom, type ContainerStub, type StageEdge } from "./deps";
 import { decide, isStudioPath } from "./gate";
-import { KEY_ID_HEADER, SERVICE_HEADER, stripInternalHeaders } from "./headers";
-import { lookupKey } from "./keys";
-import { SERVICE_KEY_ID } from "./library";
+import { SERVICE_HEADER, stripInternalHeaders } from "./headers";
 import type { PublishBucket } from "./publish";
 import { serviceAuthorized } from "./service-auth";
-import { sharePage } from "./share";
-import { stageBaseFrom, stageSite, twitchConfigFrom } from "./stage";
-import { deleteSwitchedWebp, purgeFrom } from "./visibility";
-import { captionerFrom } from "./roast";
-import { editTablesPresent } from "./edits";
-import { chatModelFrom, createThread, deleteThread, getCollage, getThread, listThreads, renameThread, sendMessage } from "./chat";
-import { ingestTelemetry } from "./telemetry";
-import { describeBody, logRequest, normalizeUrlField } from "./request-log";
 import { handleOp, opBase, REGISTRY, type Registry } from "./registry/index";
-import { chatDepsFrom } from "./registry/ops/chat";
-import {
-    parseSourceWait,
-    parseStudioWait,
-    type OriginalsBucket,
-} from "./studio";
-import {
-    preflight,
-    studioSource,
-    studioStatus,
-    withStudioCors,
-    type EdgeDeps,
-} from "./studio-edge";
+import type { RouteHost } from "./registry/op";
+import type { OriginalsBucket } from "./studio";
+import { preflight, withStudioCors, type EdgeDeps } from "./studio-edge";
 
 export interface WorkerEnv {
     API_URL: string;
@@ -120,34 +92,11 @@ export interface WorkerEnv {
 // The op registry the Worker routes through (section 33); tests pass their own.
 export type RegistryEdge = { registry?: Registry };
 
-// Chat is on with a model (the Anthropic key) and a code runner (the LOADER binding, index.ts).
-const chatOn = (env: WorkerEnv, edge: EdgeDeps): boolean =>
-    (edge.chatModel === undefined ? chatModelFrom(env, edge.modelFetch) : edge.chatModel) !== null && !!edge.codeRunner;
-
 export { embedFrom, type ContainerStub, type StageEdge } from "./deps";
 export { bodyLink, describeBody, extractFirstUrl, logRequest, normalizeUrlField, type BodyInfo } from "./request-log";
 
 // Lowercase only: the API rejects a key file with any other spelling.
-const UUID_REGEX =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-// Rejections from the Worker carry the same CORS header cobalt would send, so
-// the web app can read the error code instead of seeing a network failure.
-const json = (status: number, body: unknown, allowOrigin?: string) =>
-    new Response(JSON.stringify(body), {
-        status,
-        headers: {
-            "content-type": "application/json",
-            ...(allowOrigin ? { "access-control-allow-origin": allowOrigin } : {}),
-        },
-    });
-
-function withCors(res: Response, allowOrigin?: string): Response {
-    if (!allowOrigin) return res;
-    const out = new Response(res.body, res);
-    out.headers.set("access-control-allow-origin", allowOrigin);
-    return out;
-}
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export async function handleRequest(
     incoming: Request,
@@ -155,33 +104,7 @@ export async function handleRequest(
     container: ContainerStub,
     deps: Partial<EdgeDeps> & StageEdge & RegistryEdge = {},
 ): Promise<Response> {
-    // The share host serves the public link pages and nothing else: no key, no container, no CORS.
-    const share = shareHost(env);
-    if (share && new URL(incoming.url).hostname === share) {
-        return sharePage(
-            {
-                db: env.DB,
-                mediaBaseUrl: env.MEDIA_BASE_URL,
-                shareBaseUrl: env.SHARE_BASE_URL!,
-                captioner: deps.captioner === undefined ? captionerFrom(env, deps.modelFetch) : deps.captioner,
-                waitUntil: deps.waitUntil,
-                loops: env.GALLERY_LOOPS === "1",
-            },
-            incoming,
-        );
-    }
-    // The stage host serves the canvas, the store and the Twitch webhooks (section 30.4): no key, no container, no CORS.
-    // Its own gate is the canvas token, the store lock and the EventSub signature.
-    const stageNow = deps.now ?? (() => Date.now());
-    const stage = stageDepsFrom(env, { now: stageNow, waitUntil: deps.waitUntil }, deps);
-    const host = new URL(incoming.url).hostname;
-    if (stage && host === new URL(stage.stageBaseUrl).hostname) return stageSite(stage, incoming);
-    // The studio host is routed to this Worker whether or not the stage is on: with it off (or on another host) it
-    // must not fall through to the API's gate and routes.
-    if (host.startsWith("studio.")) {
-        return new Response("not found\n", { status: 404, headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
-    }
-    const res = await handleInner(incoming, env, container, {
+    const edge: EdgeDeps = {
         now: deps.now ?? (() => Date.now()),
         sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
         fixedLength: deps.fixedLength,
@@ -191,12 +114,31 @@ export async function handleRequest(
         waitUntil: deps.waitUntil,
         // the Anthropic relay (src/model-fetch.ts): without it, chat and captions call from the local colo
         modelFetch: deps.modelFetch,
-    }, deps);
+    };
+    const registry = deps.registry ?? REGISTRY;
+    // The share, stage and other studio.* hosts are ops of their own (src/registry/ops/hosts.ts): their pages need no
+    // key, never reach the API's routes, and see the request as it came.
+    const host = hostOf(env, edge, deps, new URL(incoming.url).hostname);
+    if (host !== "api") {
+        const url = new URL(incoming.url);
+        const res = await handleOp(registry, opBase(env, container, edge, registry, deps), { request: incoming, url, service: false, host });
+        return res ?? new Response(null, { status: 404 });
+    }
+    const res = await handleInner(incoming, env, container, edge, deps);
     // Every /studio* response, rejections included, carries the studio page's
     // origin (STUDIO-CONTRACT.md); the page is the only intended caller.
-    return isStudioPath(new URL(incoming.url).pathname)
-        ? withStudioCors(res, env.CORS_URL)
-        : res;
+    return isStudioPath(new URL(incoming.url).pathname) ? withStudioCors(res, env.CORS_URL) : res;
+}
+
+// Which of the Worker's hosts a request came to. The stage host counts only while the stage is on; any other studio.*
+// host is routed here too and must not reach the API.
+function hostOf(env: WorkerEnv, edge: EdgeDeps, se: StageEdge, hostname: string): RouteHost {
+    const share = shareHost(env);
+    if (share && hostname === share) return "share";
+    const stage = stageDepsFrom(env, edge, se);
+    if (stage && hostname === new URL(stage.stageBaseUrl).hostname) return "stage";
+    if (hostname.startsWith("studio.")) return "studio";
+    return "api";
 }
 
 async function handleInner(
@@ -209,336 +151,44 @@ async function handleInner(
     // Misconfiguration must not wake (and crash-loop) the container: the
     // API refuses to load a key file that has a non-UUID key.
     if (!env.COBALT_API_KEY || !UUID_REGEX.test(env.COBALT_API_KEY)) {
-        return json(503, {
-            status: "error",
-            error: { code: "error.api.generic" },
+        return new Response(JSON.stringify({ status: "error", error: { code: "error.api.generic" } }), {
+            status: 503,
+            headers: { "content-type": "application/json" },
         });
     }
 
     // The library service credential is read before the headers are stripped;
     // a wrong or empty value is simply "not the service".
-    const isService = await serviceAuthorized(
-        incoming.headers.get(SERVICE_HEADER),
-        env.COBALT_API_KEY,
-    );
+    const isService = await serviceAuthorized(incoming.headers.get(SERVICE_HEADER), env.COBALT_API_KEY);
 
     // Security: drop headers only this Worker may set, from EVERY request,
     // before anything can forward it (see headers.ts).
-    let request = new Request(incoming, {
-        headers: stripInternalHeaders(incoming.headers),
-    });
+    const request = new Request(incoming, { headers: stripInternalHeaders(incoming.headers) });
 
     const url = new URL(request.url);
     const origin = request.headers.get("Origin");
     const allowOrigin = origin === env.CORS_URL ? origin : undefined;
 
-    // The op registry answers the routes it knows (section 33); everything else goes on to the gate below.
+    // Every route is an op (section 33.12).
     const registry = stageEdge.registry ?? REGISTRY;
     const byOp = await handleOp(registry, opBase(env, container, edge, registry, stageEdge), { request, url, service: isService, allowOrigin });
     if (byOp) return byOp;
 
+    // What no op takes: preflights, and a bodyless 404 for everything else.
     const decision = decide(
         {
             method: request.method,
             pathname: url.pathname,
             searchParams: url.searchParams,
-            origin: request.headers.get("Origin"),
+            origin,
             authorization: request.headers.get("Authorization"),
             service: isService,
         },
-        {
-            corsUrl: env.CORS_URL,
-            now: edge.now(),
-        },
+        { corsUrl: env.CORS_URL, now: edge.now() },
     );
-
-    if (decision.action === "reject") {
-        if (decision.errorCode) {
-            return json(
-                decision.status,
-                { status: "error", error: { code: decision.errorCode } },
-                allowOrigin,
-            );
-        }
-        return new Response(null, { status: decision.status });
-    }
-
-    if (decision.action === "studio") {
-        const { sid } = decision;
-        switch (decision.op) {
-            case "preflight":
-                return preflight(env.CORS_URL);
-            case "status":
-                return studioStatus(
-                    env.DB,
-                    container,
-                    sid!,
-                    parseStudioWait(url.searchParams.get("wait")),
-                    edge,
-                );
-            case "source":
-                return studioSource(env.DB, env.ORIGINALS, sid!, request, edge, {
-                    container,
-                    seconds: parseSourceWait(url.searchParams.get("wait")),
-                });
-        }
-    }
-
-    // GET /capabilities: the key's state is reported, never refused.
-    if (decision.action === "capabilities") {
-        const helper = await helperHas(container);
-        const r = await capabilities(
-            appDeps(env, container, edge),
-            decision.auth,
-            decision.key,
-            livePushConfigured(env),
-            harkConfigured(env),
-            helper[0],
-            helper[1],
-            helper[2],
-            helper[3],
-            embedFrom(env) !== null,
-            chatOn(env, edge),
-            stageBaseFrom(env) !== null,
-            twitchConfigFrom(env) !== null,
-            // the editor is on exactly while the renderer binding is there and migration 0021 is applied (section 31.13)
-            !!env.EDIT_RENDERER && (await editTablesPresent(env.DB, edge.now())),
-            helper[4],
-        );
-        return new Response(JSON.stringify(r.body), {
-            status: r.status,
-            headers: { "content-type": "application/json", "cache-control": "no-store" },
-        });
-    }
-
-    if (decision.action === "lookup" || decision.action === "service") {
-        let keyId: string | null;
-        if (decision.action === "service") {
-            // Already authenticated by the gate (constant-time header check).
-            keyId = SERVICE_KEY_ID;
-        } else {
-            try {
-                keyId = await lookupKey(env.DB, decision.key, Date.now());
-            } catch {
-                // Fail closed: never forward when D1 cannot vouch for the key.
-                return json(
-                    503,
-                    { status: "error", error: { code: "error.api.generic" } },
-                    allowOrigin,
-                );
-            }
-            if (keyId === null) {
-                return json(
-                    401,
-                    {
-                        status: "error",
-                        error: { code: "error.api.auth.key.invalid" },
-                    },
-                    allowOrigin,
-                );
-            }
-        }
-
-        // POST /telemetry: D1 + R2 only, no CORS. Dispatched here, before anything that
-        // reads a body or writes the request log: a batch never reaches `request_log`.
-        if (decision.then === "telemetry_ingest") {
-            const r = await ingestTelemetry({ db: env.DB, originals: env.ORIGINALS, now: edge.now }, request, keyId);
-            return new Response(JSON.stringify(r.body), {
-                status: r.status,
-                headers: { "content-type": "application/json", "cache-control": "no-store", ...r.headers },
-            });
-        }
-
-        if (decision.then === "library_search_index") {
-            const deps = { ...appDeps(env, container, edge), embed: embedFrom(env) };
-            const r = await librarySearchIndex(deps, url.searchParams);
-            return new Response(JSON.stringify(r.body), {
-                status: r.status,
-                headers: { "content-type": "application/json", "cache-control": "no-store" },
-            });
-        }
-        if (decision.then === "library_search_post") {
-            const deps = { db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, searchEnabled: embedFrom(env) !== null };
-            const r = await librarySearchPost(deps, url.searchParams);
-            return new Response(JSON.stringify(r.body), {
-                status: r.status,
-                headers: { "content-type": "application/json", "cache-control": "no-store" },
-            });
-        }
-        // Chat (section 27): D1, the model, and the code sandbox.
-        if (
-            decision.then === "chat_list" ||
-            decision.then === "chat_create" ||
-            decision.then === "chat_get" ||
-            decision.then === "chat_rename" ||
-            decision.then === "chat_delete" ||
-            decision.then === "chat_send" ||
-            decision.then === "chat_collage"
-        ) {
-            const noStore = (r: { status: number; body: unknown }) => {
-                const res = json(r.status, r.body, allowOrigin);
-                res.headers.set("cache-control", "no-store");
-                return res;
-            };
-            const base = chatDepsFrom(opBase(env, container, edge, registry, stageEdge));
-            if (!base) return noStore({ status: 404, body: { status: "error", error: { code: "error.chat.off" } } });
-            const cd = {
-                ...base,
-                // section 27.9: the reply's Live Activity on the owner's other iPhones, through the Durable Object
-                liveFor: livePushConfigured(env)
-                    ? (thread: string, prompt: string) =>
-                          new ChatLivePusher({
-                              thread,
-                              keyId,
-                              prompt,
-                              now: edge.now,
-                              post: async (body) => {
-                                  const res = await container.fetch(
-                                      new Request(`https://do.internal/live/chats/${thread}/state`, {
-                                          method: "POST",
-                                          headers: { "content-type": "application/json", "x-internal-key": env.COBALT_API_KEY },
-                                          body: JSON.stringify(body),
-                                      }),
-                                  );
-                                  if (!res.ok) {
-                                      await res.body?.cancel();
-                                      return null;
-                                  }
-                                  const j = (await res.json()) as { targets?: number };
-                                  return typeof j.targets === "number" ? { targets: j.targets } : null;
-                              },
-                          })
-                    : undefined,
-            };
-            const id = decision.params?.id ?? "";
-            if (decision.then === "chat_send") {
-                const r = await sendMessage(cd, request, id);
-                if (r instanceof Response) {
-                    if (allowOrigin) r.headers.set("access-control-allow-origin", allowOrigin);
-                    return r;
-                }
-                return noStore(r);
-            }
-            const r =
-                decision.then === "chat_list"
-                    ? await listThreads(cd)
-                    : decision.then === "chat_collage"
-                      ? await getCollage(cd, id, decision.params?.message ?? "", url.searchParams)
-                    : decision.then === "chat_create"
-                      ? await createThread(cd, request, keyId)
-                      : decision.then === "chat_get"
-                        ? await getThread(cd, id)
-                        : decision.then === "chat_rename"
-                          ? await renameThread(cd, request, id)
-                          : await deleteThread(cd, id);
-            return noStore(r);
-        }
-        // Editor routes (section 31.12) are ops in the registry (src/registry/ops/make.ts, section 33.8), and so are the
-        // collections, sets, stage owner routes and emotes (src/registry/ops/share.ts and stage.ts, sections 33.9, 33.10).
-        if (decision.then === "library_file") {
-            return libraryFile(appDeps(env, container, edge), decision.params!.id, request);
-        }
-        // POST /library/visibility/migrate (section 16.4): D1 + R2 only, no CORS. (The toggle itself is an op,
-        // src/registry/ops/library-writes.ts.)
-        if (decision.then === "library_visibility_migrate") {
-            const r = await libraryVisibilityMigrate(appDeps(env, container, edge), url.searchParams);
-            return new Response(JSON.stringify(r.body), {
-                status: r.status,
-                headers: { "content-type": "application/json", "cache-control": "no-store" },
-            });
-        }
-        // DELETE /media/<name>.webp of a webp that was switched private once: its bytes live in the
-        // private bucket now, so both copies go here; any other name is the webp service's as before.
-        if (decision.then === "media_delete") {
-            const r = await deleteSwitchedWebp(appDeps(env, container, edge), decision.params!.name);
-            if (r) return json(r.status, r.body, allowOrigin);
-        }
-        // POST /library/posters/backfill: queues the posters still missing (section 13). The
-        // Durable Object only writes records; no CORS (the page does not call it).
-        if (decision.then === "library_posters_backfill") {
-            const raw = url.searchParams.get("limit");
-            const limit = raw !== null && /^\d{1,4}$/.test(raw) ? Number(raw) : undefined;
-            const r = await libraryPostersBackfill(appDeps(env, container, edge), limit);
-            return new Response(JSON.stringify(r.body), {
-                status: r.status,
-                headers: { "content-type": "application/json", "cache-control": "no-store" },
-            });
-        }
-
-        // Live Activity push: handled by the Durable Object (token and run store, APNs),
-        // which never wakes the container. Dispatched here, before anything that
-        // reads a body or writes the request log: a relay arrives about once a
-        // second and must never reach `request_log`. The caller's key is not
-        // passed on; only its id, which the Worker just verified.
-        if (
-            decision.then === "live_start_token" ||
-            decision.then === "live_run" ||
-            decision.then === "live_state" ||
-            decision.then === "live_selftest" ||
-            decision.then === "live_edit" ||
-            decision.then === "live_chat" ||
-            // the Hark opt-in (also DO-only: D1 ownership check and DO storage)
-            decision.then === "studio_notify" ||
-            // the server's line's Hark summary (section 17): DO storage and D1; never wakes the container. (The line,
-            // the cancels, the recent saves and the items retry are ops: src/registry/ops/library-writes.ts; the slideshow and
-            // the gallery image: ops/make.ts.)
-            decision.then === "studio_line_notify"
-        ) {
-            const headers = new Headers(request.headers);
-            headers.delete("Authorization");
-            headers.set(KEY_ID_HEADER, keyId);
-            return container.fetch(new Request(request, { headers }));
-        }
-
-        // Clients (the macOS Shortcut) may send free text as `url`; take the
-        // first http(s) link from it. The Shortcut's own "Get URLs from Input"
-        // step produced an empty string on macOS 27 (2026-09-30), so link
-        // extraction lives here instead.
-        // Log AFTER extraction: the Shortcut sends its share input plus the
-        // whole clipboard as `url`, and clipboard text must never be stored.
-        // (Logging before extraction captured clipboard snippets; scrubbed
-        // 2026-09-30.) When no link is found, only the length is kept.
-        if (request.method === "POST") request = await normalizeUrlField(request);
-        const logEntry =
-            request.method === "POST" ? await describeBody(request) : null;
-        if (logEntry && logEntry.urlPrefix !== null && !/^https?:\/\//i.test(logEntry.urlPrefix)) {
-            logEntry.urlPrefix = null;
-        }
-
-        const headers = new Headers(request.headers);
-        if (decision.then) {
-            // /webp and /media: same Durable Object, with the caller's key id
-            // (trusted only because it was set here, after the D1 lookup). The
-            // client's own key is not passed on.
-            headers.delete("Authorization");
-            headers.set(KEY_ID_HEADER, keyId);
-            const res = await container.fetch(new Request(request, { headers }));
-            if (logEntry) await logRequest(env.DB, `POST ${url.pathname}`, keyId, request, logEntry, res);
-            return withCors(res, allowOrigin);
-        }
-        // The container only knows the internal key.
-        headers.set("Authorization", `Api-Key ${env.COBALT_API_KEY}`);
-        const res = await container.fetch(new Request(request, { headers }));
-        if (logEntry) await logRequest(env.DB, "POST /", keyId, request, logEntry, res);
-        return res;
-    }
-
-    // One named instance for everything: tunnels created by POST / live in
-    // that process's memory and must be served by the same one.
-    return container.fetch(request);
-}
-
-// What the container's helper has said it can do (the Durable Object keeps what it last answered; it never wakes the
-// container for this): the slideshow routes (`gallery`), and the webp slideshow, the gallery image and `item` renders
-// (`make`), a pasted link straight to a media file (`direct`, section 19), and a webp of one photo (`still`, 18.14). Any failure is "not yet": the capability is simply not offered.
-async function helperHas(container: ContainerStub): Promise<[boolean, boolean, boolean, boolean, boolean]> {
-    const none: [boolean, boolean, boolean, boolean, boolean] = [false, false, false, false, false];
-    try {
-        const res = await container.fetch(new Request("https://do.internal/helper/caps", { headers: { [KEY_ID_HEADER]: "worker:capabilities" } }));
-        if (res.status !== 200) return none;
-        const body = (await res.json()) as { gallery?: unknown; make?: unknown; direct?: unknown; still?: unknown; discord?: unknown };
-        return [body?.gallery === true, body?.make === true, body?.direct === true, body?.still === true, body?.discord === true];
-    } catch {
-        return none;
-    }
+    // Studio preflights are answered by the Worker (204), never forwarded.
+    if (decision.action === "preflight") return preflight(env.CORS_URL);
+    // One named instance for everything: upstream cobalt answers its own preflights.
+    if (decision.action === "forward") return container.fetch(request);
+    return new Response(null, { status: decision.status });
 }

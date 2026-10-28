@@ -3,7 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { libraryPostDelete, type AppDeps } from "../src/app-routes";
 import { pickWebp, previewWebp, saveEmote, searchEmotes, type EmoteImage } from "../src/emotes";
-import { decide, type GateRequest } from "../src/gate";
+import type { GateRequest } from "../src/gate";
+import { dispatch as decide } from "./dispatch";
 import { REGISTRY } from "../src/registry/index";
 import { type FakeD1 } from "../../test-support/d1-sqlite";
 import { createBatchD1 } from "./d1-batch";

@@ -1155,7 +1155,7 @@ describe("the gate", () => {
     });
     it("PUT|DELETE /studio/line/notify are keyed (studio_line_notify); GET/POST, the service credential: 404", () => {
         for (const method of ["PUT", "DELETE"]) {
-            expect(d({ method, pathname: "/studio/line/notify", ...keyed })).toEqual({ action: "lookup", key: KEY, then: "studio_line_notify" });
+            expect(d({ method, pathname: "/studio/line/notify", ...keyed })).toEqual({ action: "lookup", key: KEY, op: `studio.line.notify.${method.toLowerCase()}` });
             expect(d({ method, pathname: "/studio/line/notify" })).toMatchObject({ status: 401 });
             expect(d({ method, pathname: "/studio/line/notify", service: true })).toMatchObject(notFound);
         }

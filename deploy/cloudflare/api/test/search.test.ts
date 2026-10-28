@@ -29,7 +29,8 @@ import {
     type EmbedClient,
     type EmbedInput,
 } from "../src/embed";
-import { decide, type GateRequest } from "../src/gate";
+import type { GateRequest } from "../src/gate";
+import { dispatch as decide } from "./dispatch";
 import { REGISTRY } from "../src/registry/index";
 import { KEY_ID_HEADER, SERVICE_HEADER } from "../src/headers";
 import { hashKey } from "../src/keys";
@@ -596,7 +597,7 @@ describe("routing", () => {
     it("GET /library/search and POST /library/search/index are keyed routes; other methods 404", () => {
         // GET /library/search is an op (src/registry/ops/library.ts), answered before the gate
         expect(REGISTRY.match("GET", "/library/search")?.op).toMatchObject({ name: "library.query", auth: "key_or_service", cors: false, noStore: true });
-        expect(decide(req("POST", "/library/search/index"), { corsUrl: "x", now: 0 })).toMatchObject({ action: "lookup", then: "library_search_index" });
+        expect(decide(req("POST", "/library/search/index"), { corsUrl: "x", now: 0 })).toMatchObject({ action: "lookup", op: "library.search.index" });
         expect(decide(req("POST", "/library/search"), { corsUrl: "x", now: 0 })).toMatchObject({ action: "reject", status: 404 });
         expect(decide(req("GET", "/library/search/index"), { corsUrl: "x", now: 0 })).toMatchObject({ action: "reject", status: 404 });
         expect(REGISTRY.match("POST", "/library/search")).toBeNull();
@@ -912,8 +913,8 @@ describe("GET /library/search/post", () => {
             ...over,
         });
         const cfg = { corsUrl: "x", now: 0 };
-        expect(decide(req("GET"), cfg)).toMatchObject({ action: "lookup", then: "library_search_post" });
-        expect(decide(req("GET", { service: true, authorization: null }), cfg)).toMatchObject({ action: "service", then: "library_search_post" });
+        expect(decide(req("GET"), cfg)).toMatchObject({ action: "lookup", op: "library.search.post" });
+        expect(decide(req("GET", { service: true, authorization: null }), cfg)).toMatchObject({ action: "service", op: "library.search.post" });
         for (const m of ["POST", "PUT", "PATCH", "DELETE"]) expect(decide(req(m), cfg)).toMatchObject({ action: "reject", status: 404 });
         expect(decide(req("GET", { authorization: null }), cfg)).toMatchObject({ action: "reject", status: 401 });
     });

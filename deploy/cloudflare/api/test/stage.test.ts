@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AUTH, API, CLIENT, INTERNAL, MEDIA, STAGE, T0, world, type World } from "./stage-world";
 import { REGISTRY } from "../src/registry/index";
 import { emptyRoom, nextChaosUntil, reduceRoom, roomPort, sameSecret, spotlightView, stageBaseFrom, stageRetention } from "../src/stage";
-import { decide } from "../src/gate";
+import { dispatch as decide } from "./dispatch";
 
 const COL = "Coll000000000001";
 const COL2 = "Coll000000000002";

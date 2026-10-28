@@ -6,7 +6,7 @@ import { KEY_ID_HEADER } from "../headers";
 import { lookupKey } from "../keys";
 import { SERVICE_KEY_ID } from "../library";
 import { forCall, type OpBase } from "./context";
-import { OpError, type Op, type OpContext, type OpReply } from "./op";
+import { OpError, type Op, type OpContext, type OpReply, type RouteHost } from "./op";
 import type { Registry } from "./registry";
 
 const json = (status: number, body: unknown, allowOrigin?: string, extra: Record<string, string> = {}) =>
@@ -26,13 +26,15 @@ export type HttpCall = {
     url: URL;
     service: boolean; // the library service credential, already checked
     allowOrigin?: string; // the web origin, when the request came from it
+    host?: RouteHost; // which of the Worker's hosts it came to (default the API)
 };
 
 // The registry's answer, or null when no op has this method and path.
 export async function handleOp(registry: Registry, base: OpBase, call: HttpCall): Promise<Response | null> {
-    // Preflights stay with the gate (its OPTIONS rule covers every path).
-    if (call.request.method === "OPTIONS") return null;
-    const m = registry.match(call.request.method, call.url.pathname);
+    const host = call.host ?? "api";
+    // The API's preflights stay with the gate (its OPTIONS rule covers every path); the other hosts answer their own.
+    if (host === "api" && call.request.method === "OPTIONS") return null;
+    const m = registry.match(call.request.method, call.url.pathname, host);
     if (!m) return null;
     const { op, params } = m;
     const { allowOrigin } = call;
@@ -40,7 +42,15 @@ export async function handleOp(registry: Registry, base: OpBase, call: HttpCall)
     // ---- who is asking (the gate's rules, then the Worker's D1 lookup) ----
     let keyId: string | null = null;
     let caller: OpContext["caller"] = "open";
-    if (op.auth === "key" || op.auth === "key_or_service") {
+    if (op.auth === "service") {
+        // the web Worker's library service only; any other caller is told its key is invalid, like the gate did
+        if (!call.service) return json(401, errBody("error.api.auth.key.invalid"), allowOrigin);
+        keyId = SERVICE_KEY_ID;
+        caller = "service";
+    } else if (op.auth === "open" && call.service) {
+        // an open route may answer the service differently (GET /capabilities); there is still no key id
+        caller = "service";
+    } else if (op.auth === "key" || op.auth === "key_or_service") {
         if (call.service) {
             if (op.auth === "key") return new Response(null, { status: 404 });
             keyId = SERVICE_KEY_ID;

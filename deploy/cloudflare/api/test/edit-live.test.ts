@@ -13,7 +13,7 @@ import {
     type EditLiveRecord,
 } from "../src/edit-live";
 import type { RenderRow } from "../src/edits";
-import { decide } from "../src/gate";
+import { dispatch as decide } from "./dispatch";
 import { KEY_ID_HEADER } from "../src/headers";
 import { Apple, bad, makePem } from "./apns-fakes";
 import { coreWorld, INTERNAL, KEY_ID } from "./edits-world";
@@ -130,8 +130,8 @@ describe("the gate", () => {
     const g = (method: string, pathname: string) =>
         decide({ method, pathname, searchParams: new URLSearchParams(), origin: null, authorization: `Api-Key ${KEY}` }, { corsUrl: "https://x", now: T0 });
     it("PUT and DELETE /live/edits/<rid> are keyed; the renderer's push route and anything else is a 404", () => {
-        expect(g("PUT", `/live/edits/${RID}`)).toEqual({ action: "lookup", key: KEY, then: "live_edit" });
-        expect(g("DELETE", `/live/edits/${RID}`)).toEqual({ action: "lookup", key: KEY, then: "live_edit" });
+        expect(g("PUT", `/live/edits/${RID}`)).toEqual({ action: "lookup", key: KEY, op: "live.edit.put", params: { rid: RID } });
+        expect(g("DELETE", `/live/edits/${RID}`)).toEqual({ action: "lookup", key: KEY, op: "live.edit.delete", params: { rid: RID } });
         for (const [m, p] of [["POST", `/live/edits/${RID}/push`], ["GET", `/live/edits/${RID}`], ["PUT", "/live/edits/short"], ["PUT", `/live/edits/${RID}/x`]]) {
             expect(g(m!, p!)).toMatchObject({ action: "reject", status: 404 });
         }
