@@ -1,5 +1,6 @@
+import { dispatch as decide } from "./dispatch";
 import { describe, expect, it } from "vitest";
-import { decide, isStudioPath, type GateRequest } from "../src/gate";
+import { isStudioPath, type GateRequest } from "../src/gate";
 
 const KEY = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
 const ORIGIN = "https://cobalt.capybaraharmony.com";
@@ -33,7 +34,7 @@ describe("POST /studio (needs a key)", () => {
         expect(d({ method: "POST", pathname: "/studio", authorization: `Api-Key ${KEY}` })).toEqual({
             action: "lookup",
             key: KEY,
-            then: "studio_create",
+            op: "studio.create",
         });
     });
     it("401s like POST / without a well-formed key", () => {
@@ -135,8 +136,8 @@ describe("PUT /studio/upload (keyed) and the internal adopt path", () => {
         d({ method: "PUT", pathname: "/studio/upload", authorization: `Api-Key ${KEY}`, ...o });
 
     it("PUT looks the key up, then uploads: checked before the session id format", () => {
-        expect(put()).toEqual({ action: "lookup", key: KEY, then: "studio_upload" });
-        expect(put({ service: true, authorization: null })).toEqual({ action: "service", then: "studio_upload" });
+        expect(put()).toEqual({ action: "lookup", key: KEY, op: "studio.upload" });
+        expect(put({ service: true, authorization: null })).toEqual({ action: "service", op: "studio.upload" });
     });
     it("401s like the other keyed routes without a well-formed key", () => {
         expect(put({ authorization: null })).toMatchObject({ status: 401, errorCode: "error.api.auth.key.missing" });

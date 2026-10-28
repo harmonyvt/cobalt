@@ -86,7 +86,7 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
             const parsed = op.input.safeParse(argsToInput(op, args));
             if (!parsed.success) throw new Error(zodMessage(op.callName, parsed.error));
             const input = parsed.data;
-            if (op.ai.tier === "ask") {
+            if (op.ai.tier === "ask" && (op.ai.asks ? op.ai.asks(input) : true)) {
                 if (!o.pending) throw new Error(`cobalt.${op.callName} needs Harmony's ok, and confirm cards are off on this server`);
                 const card = op.ai.preview ? await op.ai.preview(ctx, input) : { summary: op.ai.summary.split("\n")[0]!, effect: {} };
                 const now = base.now();

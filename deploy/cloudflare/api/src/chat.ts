@@ -400,6 +400,9 @@ export async function deleteThread(d: Pick<ChatDeps, "db">, id: string): Promise
 const FINDING_WITH_SEARCH = `Finding things: for anything about what files show or are about (a topic, a person, an animal, a game, a mood, "the clip where..."), call cobalt.library.search(query) first. It ranks the whole library by meaning, from titles and pictures, so it finds things whose names say nothing (most names are just "instagram_<code>"). Write the query as a short description of the content, try a second wording if the first finds nothing good, and check the best hits with look() when it matters. Use cobalt.library.list({ query }) only for exact words in a name, link or caption, and cobalt.library.list({ since, until, source, kind }) for dates, sites and counts. If search throws because it is waking up, fall back to cobalt.library.list({ query }) and tell Harmony the search was still waking up.`;
 const FINDING_WITHOUT_SEARCH = `Finding things: search by meaning is off on this server, so use cobalt.library.list({ query }) for words in names, links and captions, cobalt.library.list({ since, until, source, kind }) for dates, sites and counts, and cobalt.look() to check what files actually show.`;
 
+// The library writes (APP-API-CONTRACT.md 33.7): only what Harmony asked for.
+const CHANGES = `You can change the library too, but only when Harmony asks you to: save a link they give you with cobalt.library.save (it waits for the save and returns the new post's id; then show() it), set a title, make posts public or private, delete posts or single files. Never change or delete anything on your own initiative, and never save links Harmony did not give you. Put every post a delete or "make private" covers into one call, so Harmony gets one card. After a save that is still going, say so and offer to check with cobalt.queue().`;
+
 const CONFIRMS = `Some calls change things that are hard to undo (the API marks them "Asks Harmony first"). Calling one runs nothing: it returns { pending_confirm } and Harmony gets a confirm card with yes and no. End that run, say in one short line what you asked, and stop. When Harmony answers, you are told what happened and carry on from there.`;
 
 export function systemPrompt(now: number, search = true, types: string = toolTypes(search)): string {
@@ -413,7 +416,7 @@ To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbn
 
 ${search ? FINDING_WITH_SEARCH : FINDING_WITHOUT_SEARCH}
 
-${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}The API:
+${/\bsave\(url/.test(types) ? `${CHANGES}\n\n` : ""}${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}The API:
 ${types}`;
 }
 
