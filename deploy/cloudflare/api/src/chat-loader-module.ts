@@ -4,7 +4,7 @@
 import { CODE_TIMEOUT_MS } from "./chat-limits";
 
 // The module the sandbox runs: `evaluate(dispatcher)` builds `cobalt`, captures console, runs the code.
-export function sandboxModule(code: string): string {
+export function sandboxModule(code: string, timeoutMs: number = CODE_TIMEOUT_MS): string {
     return [
         `import { WorkerEntrypoint } from "cloudflare:workers";`,
         `export default class Run extends WorkerEntrypoint {`,
@@ -31,7 +31,7 @@ export function sandboxModule(code: string): string {
         `        (async () => {`,
         code,
         `        })(),`,
-        `        new Promise((_, reject) => setTimeout(() => reject(new Error("timed out after ${CODE_TIMEOUT_MS / 1000} s")), ${CODE_TIMEOUT_MS})),`,
+        `        new Promise((_, reject) => setTimeout(() => reject(new Error("timed out after ${timeoutMs / 1000} s")), ${timeoutMs})),`,
         `      ]);`,
         `      let out; try { out = JSON.stringify(result === undefined ? null : result); } catch { out = JSON.stringify(String(result)); }`,
         `      return { result: out, logs: __logs };`,

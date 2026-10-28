@@ -39,6 +39,18 @@ const editContainer = defineContainer({
 	maxInstances: 2,
 });
 
+// The chat's workbench box (APP-API-CONTRACT.md section 33.11, src/workbench.ts): a Linux box with yt-dlp, curl, ffmpeg and
+// python3 the chat AI uses as a last resort. Image: ../workbench (its directory alone). One instance on basic (1/4 vCPU,
+// 1 GiB, 4 GB disk); it sleeps 2 minutes after its last call and keeps nothing. No secrets, no internet of its own: every
+// HTTP(S) request it makes goes through the Worker's outbound rule (src/workbench-rules.ts).
+const workbenchContainer = defineContainer({
+	name: "cobalt-api-workbench",
+	image: { dockerfile: "../workbench/Dockerfile", buildContext: "../workbench" },
+	instanceType: "basic",
+	observability: { enabled: true, logs: { enabled: true } },
+	maxInstances: 1,
+});
+
 export default defineConfig({
 	worker: {
 		name: "cobalt-api",
@@ -195,6 +207,14 @@ export default defineConfig({
 				worker: "cobalt-api",
 				exportName: "EditRenderer",
 			}),
+			// The chat's workbench box (src/workbench.ts, APP-API-CONTRACT.md section 33.11): one object, "main". Without this
+			// binding the chat AI is never offered cobalt.box.*. No secret, no migration.
+			WORKBENCH: bindings.durableObject({
+				worker: "cobalt-api",
+				exportName: "Workbench",
+			}),
+			// Awake minutes a day across all chat threads; "0" turns the box off (the model stops seeing cobalt.box).
+			WORKBENCH_DAILY_MINUTES: bindings.text("60"),
 		},
 		exports: {
 			CobaltContainer: exports.durableObject({
@@ -207,7 +227,11 @@ export default defineConfig({
 				storage: "sqlite",
 				container: editContainer,
 			}),
+			Workbench: exports.durableObject({
+				storage: "sqlite",
+				container: workbenchContainer,
+			}),
 		},
 	},
-	containers: [cobaltContainer, editContainer],
+	containers: [cobaltContainer, editContainer, workbenchContainer],
 });

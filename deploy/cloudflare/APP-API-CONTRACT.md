@@ -3839,3 +3839,52 @@ The chat AI's calls (the app calls the stage "studio"; the model is told so):
   (`POST /stage/action`), free.
 - `cobalt.emotes.find(query)` (`GET /emotes`) and `cobalt.emotes.save(id)` (`POST /emotes`), free.
 
+### 33.11 The workbench box: `cobalt.box.run` and `cobalt.box.save` (T6)
+
+A Linux box (yt-dlp, curl, ffmpeg, python3) the chat AI uses as a **last resort**, for a site or a file the normal tools
+cannot save. **No new route, no migration, no secret, nothing for the app.** The ops are `ai.only`, tier `free`, and the
+model sees them only while the box is on (`WORKBENCH` bound and `WORKBENCH_DAILY_MINUTES` above 0).
+
+- **Where it runs**: the `Workbench` Durable Object (`src/workbench.ts`, one object, `"main"`) on its own container app
+  `cobalt-api-workbench` (image `deploy/cloudflare/workbench`, `basic`: 1/4 vCPU, 1 GiB, 4 GB disk, `maxInstances: 1`). It is a
+  Containers-library `Container` with no port: commands go through the container exec API. The decisions are in
+  `src/workbench-core.ts`, the rules in `src/workbench-rules.ts` (both node-testable). It does **not** use
+  `@cloudflare/sandbox`: since 1.0 that package is only file helpers on top of the same exec API, and it would need
+  `nodejs_compat` on the whole API Worker.
+- **One box, one thread at a time**. A call from another thread **wipes** the box (destroy, then a fresh start) before it
+  runs, so no file crosses threads. It sleeps **2 minutes** after its last call (`sleepAfter`; a running command keeps it
+  awake), and a sleeping container keeps nothing.
+- **No secrets**: no env vars at all. Commands run as the unprivileged user `box` (uid 1000) in `/workspace`; only
+  `box-init` (adds the platform's interception CA to the system bundle) runs as root, once per start.
+- **Outbound** (`checkOutbound`): `enableInternet: false`, and every HTTP and HTTPS request (`interceptHttps`) goes to the
+  library's catch-all outbound handler in the Worker (`ContainerProxy`, exported from `src/index.ts`). It applies the 19.2
+  rule: http/https only, no `user:pass@`, port 80 or 443, an IP literal must be public (the same tables as `isPublicIp`), a
+  name must have a dot and not be a private spelling. On top of it, **our own zone is refused** (`*.capybaraharmony.com`,
+  except the public `media.` host) and so are `*.workers.dev` and `*.pages.dev`. A refusal is `403` with the body
+  `workbench: blocked (<reason>)`. Allowed requests are fetched by the Worker with `redirect: "manual"`, so each hop comes
+  back through the rule. Names resolve on Cloudflare's network, which cannot reach private addresses. Other ports and raw
+  TCP have no route out, and HTTPS to a bare IP fails (interception needs a name).
+- **`cobalt.box.run(cmd, { timeoutS? })`**: `bash -c cmd`, default 60 s, at most 120 s (then killed, `code: 124`,
+  `timed_out: true`). Returns `{ code, stdout, stderr, timed_out }`. Each stream is cut to 8 KB: the first 2 KB and the last
+  6 KB, with `… (N bytes cut) …` between.
+- **`cobalt.box.save(path, { title?, public? })`**: the file's size and first 64 bytes are read, the type comes **from the
+  bytes** (jpg, png, webp, gif, heic, mp4/m4v by a video `ftyp` brand, mov), and the bytes stream into **the
+  `PUT /studio/upload` code** (`studioUpload`) with key id `chat:<thread>`, `queue=1`, the file name with the sniffed
+  extension, and `title`/`public` when given. So it lands in the library like any upload: a private `upload` row, R2
+  `uploads/<id>.<ext>`, and a studio session for a video. Its cap is that path's **100 MB** (`MAX_UPLOAD_BYTES`), not the
+  200 MB direct-link cap. Returns `{ post_id, kind, bytes, processing, public_url }`. A webm, audio, html or anything else is
+  refused with a hint to convert it with ffmpeg.
+- **Daily cap**: `WORKBENCH_DAILY_MINUTES` (default 60) awake minutes per UTC day across all threads, counted in the
+  object's storage (`workbench:ledger`). Awake time runs from start to stop. A stop the object learns about late is charged
+  up to the last call plus 2 minutes. Past the cap the box is put to sleep and every call throws "the workbench is used up
+  for today".
+- **Run budget**: a code run whose code mentions `box` gets 240 s instead of 30 s (`CODE_TIMEOUT_BOX_MS`), and the message
+  is saved every 30 s meanwhile so it never reads as stale (27.2, `STALE_MS`).
+- **The system prompt** gains a paragraph only while the box is offered: try the normal calls first, keep commands quiet,
+  finish with `cobalt.box.save`, never send anything from the library to a site.
+- **Cost** (Workers Paid rates): memory 1 GiB × 3,600 s × $0.0000025 = **$0.009**, disk 4 GB × 3,600 s × $0.00000007 =
+  **$0.001**, CPU on active use only, up to 1/4 vCPU × 3,600 s × $0.00002 = **$0.018**. That is **$0.01 to $0.03 per awake
+  hour**, before the monthly allowances, plus egress at $0.025/GB past 1 TB (North America, Europe). The 60-minute cap bounds it
+  at about $0.85 a month.
+- **Deploy** (owner): an API deploy builds and pushes the new image and creates the container app and the Durable Object
+  class. No migration, no secret.

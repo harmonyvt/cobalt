@@ -110,6 +110,10 @@ export interface WorkerEnv {
     CHAT_DAILY_SAVES?: string;
     // The chat AI's daily cap on files it starts making per thread (section 33.8, a plain var; default 10).
     CHAT_DAILY_RENDERS?: string;
+    // The chat's workbench box (section 33.11): the Workbench Durable Object namespace (one object, "main") and its daily
+    // cap of awake minutes (default 60, "0" turns it off). Absent: the chat AI is never offered cobalt.box.*.
+    WORKBENCH?: DurableObjectNamespace;
+    WORKBENCH_DAILY_MINUTES?: string;
 }
 
 

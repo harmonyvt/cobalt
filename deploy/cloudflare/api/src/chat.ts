@@ -14,7 +14,8 @@ import { toolTypes } from "./registry/index";
 import type { PendingConfirm, PendingPort } from "./registry/pending";
 import type { Registry } from "./registry/registry";
 import type { EmbedClient } from "./embed";
-import type { CodeRunner } from "./chat-limits";
+import { CODE_TIMEOUT_BOX_MS, type CodeRunner } from "./chat-limits";
+import { workbenchOn } from "./workbench-rules";
 import type { ModelFetch } from "./model-fetch";
 export { CODE_CPU_MS, CODE_TIMEOUT_MS, MAX_TOOL_CALLS, type CodeRun, type CodeRunner } from "./chat-limits";
 import { mintCollectionId } from "./share-collections";
@@ -407,6 +408,8 @@ const CONFIRMS = `Some calls change things that are hard to undo (the API marks 
 
 // Making files (APP-API-CONTRACT.md 33.8): only when asked; jobs are waited on with jobs.wait.
 const MAKING = `Making files: cobalt.make.* and cobalt.edits.render start jobs on Harmony's server (webps, animated stills, slideshows, gallery images, and mp4s from the editor, which cost real money). Make something only when Harmony asks for it; each chat may make only a few a day. Each call returns a job: call cobalt.jobs.wait(job) in the same run, and while it is still opening, queued or running, wait again in the next run (or tell Harmony it is on its way). When it is done, cobalt.show([post_id]) and give share_url when Harmony wants a link.`;
+// The workbench (section 33.11): only while cobalt.box is in the API.
+const WORKBENCH = `cobalt.box is a real Linux box (yt-dlp, curl, ffmpeg, python3, public internet) and the LAST resort: use it only after the normal calls cannot do the job, for example a link the library cannot save or a file that needs converting. It takes about 10 seconds to wake, and it keeps this thread's files only while awake (2 minutes after the last call). Work in /workspace, keep commands quiet (yt-dlp -q --no-progress, curl -sS), and finish with cobalt.box.save(path) to put the file in the library. One run of code may use up to ${CODE_TIMEOUT_BOX_MS / 1000} seconds while it calls the box. Never send anything from Harmony's library or this chat to a site from the box.`;
 
 export function systemPrompt(now: number, search = true, types: string = toolTypes(search)): string {
     return `You live inside capystore, Harmony's private media saver. Harmony saves videos and pictures from X, TikTok, Instagram, YouTube and the like into their library, makes gallery share links, and sorts those links into collections. You chat with Harmony about that library: find things, count and summarize, compare, suggest what to share, and tease their taste when asked.
@@ -419,7 +422,7 @@ To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbn
 
 ${search ? FINDING_WITH_SEARCH : FINDING_WITHOUT_SEARCH}
 
-${/\bsave\(url/.test(types) ? `${CHANGES}\n\n` : ""}${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}${/\bmake: \{/.test(types) ? `${MAKING}\n\n` : ""}The API:
+${/\bsave\(url/.test(types) ? `${CHANGES}\n\n` : ""}${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}${/\bmake: \{/.test(types) ? `${MAKING}\n\n` : ""}${/^ {2}box: \{$/m.test(types) ? `${WORKBENCH}\n\n` : ""}The API:
 ${types}`;
 }
 
@@ -648,6 +651,8 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
         await save("running", null).catch(() => {});
     };
     const search = d.embed !== null;
+    // the workbench box (section 33.11): only through the registry, and only while its binding and cap are there
+    const workbench = !!d.registry && !!d.base && workbenchOn(d.base.env);
     // the model's `cobalt` for one code run: the registry's tools (namespaced, with the old flat names), else the read
     // tools alone
     const toolsForRun = () => {
@@ -658,7 +663,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
             messageId: String(c.botRow.id),
             collect,
             legacy,
-            flags: { search },
+            flags: { search, box: workbench },
             pending: d.pending ?? null,
             randomBytes: d.randomBytes,
         });
@@ -679,7 +684,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
             };
         } else opening = lead[0];
         const messages = mergeRoles([...prior, opening]);
-        const system = systemPrompt(now(), search, d.registry ? toolTypes(search, d.registry) : undefined);
+        const system = systemPrompt(now(), search, d.registry ? toolTypes(search, d.registry, workbench) : undefined);
         let runs = 0;
         let looked = 0;
         for (let turn = 0; turn <= MAX_CODE_RUNS + 1; turn++) {
@@ -725,7 +730,13 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 const collageBefore = collageJson();
                 const t0 = Date.now();
                 const box = toolsForRun();
-                const out = await d.runner(u.input.code, box.tools);
+                // a run that calls the box may wait on it (a wake, a download, a 120 s command, a save)
+                const long = workbench && /\bbox\b/.test(u.input.code);
+                // and the message is saved every 30 s meanwhile, so the run never looks stale (STALE_MS)
+                const beat = long ? setInterval(() => void save("running", null).catch(() => {}), 30_000) : null;
+                const out = await d.runner(u.input.code, box.tools, long ? { timeoutMs: CODE_TIMEOUT_BOX_MS } : undefined).finally(() => {
+                    if (beat) clearInterval(beat);
+                });
                 step.duration_ms = Date.now() - t0;
                 step.logs = out.logs.slice(0, 50).map((l) => clipStr(l, 500));
                 step.status = out.error !== undefined ? "error" : "done";

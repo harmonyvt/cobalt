@@ -7,6 +7,9 @@ export const MAX_TOOL_CALLS = 50; // per run
 // wall clock per run: a cobalt.library.save waits up to 60 s for its save (APP-API-CONTRACT.md 33.7)
 export const CODE_TIMEOUT_MS = 90_000;
 export const CODE_CPU_MS = 5_000;
+// a run whose code calls the workbench box (section 33.11): a wake, a 120 s command and a save fit
+export const CODE_TIMEOUT_BOX_MS = 240_000;
 
 export type CodeRun = { result?: unknown; error?: string; logs: string[]; calls: number };
-export type CodeRunner = (code: string, tools: ChatTools) => Promise<CodeRun>;
+export type CodeRunOptions = { timeoutMs?: number };
+export type CodeRunner = (code: string, tools: ChatTools, opts?: CodeRunOptions) => Promise<CodeRun>;

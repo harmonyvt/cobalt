@@ -1,0 +1,14 @@
+#!/bin/sh
+# Runs once per container start, as root, before the first command (src/workbench-core.ts). The platform re-signs the
+# box's HTTPS with its own CA so the Worker can apply the outbound rule; add that CA to the system bundle so curl,
+# ffmpeg, python and yt-dlp trust it.
+set -e
+CA=/etc/cloudflare/certs/cloudflare-containers-ca.crt
+BUNDLE=/etc/ssl/certs/ca-certificates.crt
+i=0
+while [ ! -s "$CA" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+if [ -s "$CA" ] && ! grep -q "workbench: cloudflare containers ca" "$BUNDLE"; then
+    { echo "# workbench: cloudflare containers ca"; cat "$CA"; } >> "$BUNDLE"
+fi
+mkdir -p /workspace
+chown box:box /workspace

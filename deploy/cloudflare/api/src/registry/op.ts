@@ -109,7 +109,8 @@ export type AiSpec<I> = {
     result?: (body: unknown) => unknown;
 };
 
-export type AiFlags = { search: boolean };
+// search: meaning search is configured; box: the workbench is on (section 33.11)
+export type AiFlags = { search: boolean; box?: boolean };
 
 export type RouteSpec = {
     method: HttpMethod;
