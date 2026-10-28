@@ -6,7 +6,9 @@
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
         "deploy": "./prepare-git-info.sh && cf deploy --secrets-file \"${COBALT_SECRETS_FILE:-$HOME/.config/cobalt/secrets.json}\"",
-        "dry-run": "./prepare-git-info.sh && cf deploy --dry-run --secrets-file \"${COBALT_SECRETS_FILE:-$HOME/.config/cobalt/secrets.json}\""
+        "dry-run": "./prepare-git-info.sh && cf deploy --dry-run --secrets-file \"${COBALT_SECRETS_FILE:-$HOME/.config/cobalt/secrets.json}\"",
+        "gen": "node scripts/run-gen.mjs",
+        "gen:check": "node scripts/run-gen.mjs --check"
     },
     "dependencies": {
         "@anthropic-ai/sdk": "^0.135.0",
@@ -17,6 +19,7 @@
         "@cloudflare/workers-types": "^5.20260929.1",
         "@types/node": "^22.20.4",
         "cf": "1.0.0-beta.5",
+        "esbuild": "0.28.1",
         "typescript": "^7.0.2",
         "vitest": "^5.0.2",
         "wrangler": "^4.143.0"

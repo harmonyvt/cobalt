@@ -13,5 +13,5 @@
         "resolveJsonModule": true,
         "checkJs": false
     },
-    "include": ["src/**/*.ts", "test/**/*.ts", "cloudflare.config.ts", "../test-support/**/*.ts"]
+    "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts", "cloudflare.config.ts", "../test-support/**/*.ts"]
 }

@@ -527,13 +527,13 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         var query = [("limit", String(max(1, min(50, limit))))]
         if let cursor { query.append(("cursor", cursor)) }
         if let version { query.append(("v", String(version))) }
-        let req = try makeRequest("GET", "/library", query: query, keyed: true)
-        let wire = try await sendJSON(LibraryWire.self, req)
+        // the generated endpoint and reply type (Generated/Endpoints.swift)
+        let wire = try await send(Endpoints.libraryIndex(), query: query)
         let posts = wire.posts.compactMap(\.value)
         return LibraryPage(
             posts: posts, postCount: wire.counts?.posts ?? posts.count,
             fileCount: wire.counts?.files ?? posts.reduce(0) { $0 + $1.files.count },
-            publicBytes: wire.usage?.publicBytes ?? 0, privateBytes: wire.usage?.privateBytes ?? 0,
+            publicBytes: Int64(wire.usage?.publicBytes ?? 0), privateBytes: Int64(wire.usage?.privateBytes ?? 0),
             next: wire.next)
     }
 
@@ -659,13 +659,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
 
     /// `GET /share/collections` (keyed): the collections, most recently changed first.
     public func shareCollections() async throws -> [ShareCollection] {
-        let req = try makeRequest("GET", "/share/collections", keyed: true, timeout: 20)
-        let (data, http) = try await send(req)
-        guard (200..<300).contains(http.statusCode) else { throw shareCollectionError(data, status: http.statusCode) }
-        struct Wire: Decodable { var collections: [Lossy<ShareCollection>] }
-        guard let wire = try? CobaltJSON.decoder().decode(Wire.self, from: data) else {
-            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
-        }
+        // the generated endpoint and reply type (Generated/Endpoints.swift)
+        let wire = try await send(Endpoints.shareCollectionsList(), timeout: 20, refusal: shareCollectionError)
         return wire.collections.compactMap(\.value)
     }
 
@@ -1348,15 +1343,6 @@ private struct PublishWire: Decodable {
 private struct VisibilityWire: Decodable {
     var item: LibraryFile
     var cacheCleared: Bool?
-}
-
-private struct LibraryWire: Decodable {
-    struct Counts: Decodable { var posts: Int?; var files: Int? }
-    struct Usage: Decodable { var publicBytes: Int64?; var privateBytes: Int64? }
-    var posts: [Lossy<LibraryPost>]
-    var counts: Counts?
-    var usage: Usage?
-    var next: String?
 }
 
 private struct EmoteListWire: Decodable {

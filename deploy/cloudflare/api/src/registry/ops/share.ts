@@ -24,6 +24,7 @@ import { createShareSet, listShareSets, revokeShareSet, SET_ID_REGEX, SHARE_SET_
 import type { StudioReply } from "../../studio";
 import { effectiveVisibility } from "../../visibility";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
+import { ShareCollectionsListShape } from "../shapes";
 
 // ---- deps, built exactly as worker.ts built them ---------------------------------------------------------------------
 
@@ -89,6 +90,7 @@ const route = (
     path: string,
     run: (ctx: OpContext, keyId: string) => Promise<StudioReply> | null,
     params?: Record<string, RegExp>,
+    output?: z.ZodType,
 ) =>
     defineOp({
         name,
@@ -97,6 +99,7 @@ const route = (
         runs: "worker",
         cors: true,
         input: NoInput,
+        ...(output ? { output } : {}),
         http: routeInput,
         ai: { tier: "hidden", summary: `${method} ${path}` },
         handler: async (ctx) => {
@@ -124,7 +127,7 @@ const ROUTE_OPS = [
     route("share_sets.create", "POST", "/share/sets", (ctx, key) => withSets(ctx, (d) => createShareSet(d, ctx.request!, key))),
     route("share_sets.revoke", "DELETE", "/share/sets/:id", (ctx) => withSets(ctx, (d) => revokeShareSet(d, ctx.params.id!)), { id: SET_ID_REGEX }),
     // collections (section 26)
-    route("share_collections.list", "GET", "/share/collections", (ctx) => withCollections(ctx, (d) => listCollections(d))),
+    route("share_collections.list", "GET", "/share/collections", (ctx) => withCollections(ctx, (d) => listCollections(d)), undefined, ShareCollectionsListShape),
     route("share_collections.create", "POST", "/share/collections", (ctx, key) => withCollections(ctx, (d) => createCollection(d, ctx.request!, key))),
     route(
         "share_collections.update",

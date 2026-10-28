@@ -1,0 +1,3367 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "capystore API (harmonyvt/cobalt Worker)",
+    "version": "1",
+    "description": "Generated from the op registry (deploy/cloudflare/api/src/registry). The contract is deploy/cloudflare/APP-API-CONTRACT.md."
+  },
+  "servers": [
+    {
+      "url": "https://api.capybaraharmony.com"
+    }
+  ],
+  "paths": {
+    "/": {
+      "post": {
+        "operationId": "cobalt",
+        "summary": "Upstream cobalt (POST /).",
+        "tags": [
+          "cobalt"
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "get": {
+        "operationId": "cobalt.info",
+        "summary": "Upstream cobalt's instance info (GET /).",
+        "tags": [
+          "cobalt"
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "open",
+          "runs": "worker",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/capabilities": {
+      "get": {
+        "operationId": "capabilities",
+        "summary": "What this server can do (GET /capabilities).",
+        "tags": [
+          "capabilities"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "open",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/chat/threads": {
+      "get": {
+        "operationId": "chat.threads.list",
+        "summary": "The chat threads.",
+        "tags": [
+          "chat"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "post": {
+        "operationId": "chat.threads.create",
+        "summary": "Start a chat thread.",
+        "tags": [
+          "chat"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/chat/threads/{id}": {
+      "get": {
+        "operationId": "chat.threads.get",
+        "summary": "One thread with its messages.",
+        "tags": [
+          "chat"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "patch": {
+        "operationId": "chat.threads.rename",
+        "summary": "Rename a thread.",
+        "tags": [
+          "chat"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "chat.threads.delete",
+        "summary": "Delete a thread.",
+        "tags": [
+          "chat"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/chat/threads/{id}/confirm/{cid}": {
+      "post": {
+        "operationId": "chat.confirm",
+        "summary": "Harmony's answer to a confirm card.",
+        "tags": [
+          "chat"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          },
+          {
+            "name": "cid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/chat/threads/{id}/messages": {
+      "post": {
+        "operationId": "chat.send",
+        "summary": "Send a message; the reply streams.",
+        "tags": [
+          "chat"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/chat/threads/{id}/messages/{message}/collage": {
+      "get": {
+        "operationId": "chat.collage",
+        "summary": "A reply's collage, paged (27.5).",
+        "tags": [
+          "chat"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          },
+          {
+            "name": "message",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,12}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/edits": {
+      "get": {
+        "operationId": "edits.route.list",
+        "summary": "The editor: GET /edits.",
+        "tags": [
+          "edits"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "post": {
+        "operationId": "edits.route.create",
+        "summary": "The editor: POST /edits.",
+        "tags": [
+          "edits"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/edits/renders": {
+      "get": {
+        "operationId": "edits.route.renders",
+        "summary": "The editor: GET /edits/renders.",
+        "tags": [
+          "edits"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/edits/renders/{rid}": {
+      "get": {
+        "operationId": "edits.route.render_get",
+        "summary": "The editor: GET /edits/renders/:rid.",
+        "tags": [
+          "edits"
+        ],
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{20}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "edits.route.render_cancel",
+        "summary": "The editor: DELETE /edits/renders/:rid.",
+        "tags": [
+          "edits"
+        ],
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{20}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/edits/{id}": {
+      "get": {
+        "operationId": "edits.route.get",
+        "summary": "The editor: GET /edits/:id.",
+        "tags": [
+          "edits"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "put": {
+        "operationId": "edits.route.update",
+        "summary": "The editor: PUT /edits/:id.",
+        "tags": [
+          "edits"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "patch": {
+        "operationId": "edits.route.rename",
+        "summary": "The editor: PATCH /edits/:id.",
+        "tags": [
+          "edits"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "edits.route.delete",
+        "summary": "The editor: DELETE /edits/:id.",
+        "tags": [
+          "edits"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/edits/{id}/render": {
+      "post": {
+        "operationId": "edits.route.render",
+        "summary": "The editor: POST /edits/:id/render.",
+        "tags": [
+          "edits"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/emotes": {
+      "get": {
+        "operationId": "emotes_http.search",
+        "summary": "GET /emotes",
+        "tags": [
+          "emotes_http"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "post": {
+        "operationId": "emotes_http.save",
+        "summary": "POST /emotes",
+        "tags": [
+          "emotes_http"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library": {
+      "get": {
+        "operationId": "library.index",
+        "summary": "The app's library pages (GET /library).",
+        "tags": [
+          "library"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "posts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LibraryPost"
+                      },
+                      "description": "newest first"
+                    },
+                    "counts": {
+                      "description": "over the whole library, not the page",
+                      "type": "object",
+                      "properties": {
+                        "posts": {
+                          "type": "integer"
+                        },
+                        "files": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "posts",
+                        "files"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "usage": {
+                      "description": "bytes stored, public and private",
+                      "type": "object",
+                      "properties": {
+                        "public_bytes": {
+                          "type": "integer"
+                        },
+                        "private_bytes": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "public_bytes",
+                        "private_bytes"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "next": {
+                      "description": "the cursor of the next page, null on the last",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "posts",
+                    "next"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/adopt": {
+      "post": {
+        "operationId": "library.adopt",
+        "summary": "The web library's adopt (service only).",
+        "tags": [
+          "library"
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "service": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "service",
+          "runs": "worker",
+          "cors": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/items/{id}": {
+      "delete": {
+        "operationId": "library.deleteFile.route",
+        "summary": "Delete one file of a post.",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/items/{id}/file": {
+      "get": {
+        "operationId": "library.file",
+        "summary": "A private file's bytes (GET /library/items/<id>/file).",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "head": {
+        "operationId": "library.file.head",
+        "summary": "A private file's bytes (GET /library/items/<id>/file).",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/items/{id}/made": {
+      "put": {
+        "operationId": "library.made",
+        "summary": "Store a file made on the device.",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/items/{id}/post": {
+      "patch": {
+        "operationId": "library.title.route",
+        "summary": "A post's custom title.",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "library.delete.route",
+        "summary": "Delete a whole post.",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/items/{id}/publish": {
+      "post": {
+        "operationId": "library.publish",
+        "summary": "Host an original publicly (legacy).",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/items/{id}/studio": {
+      "post": {
+        "operationId": "library.reopen",
+        "summary": "Reopen a library file in the studio (POST /library/items/<id>/studio).",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/items/{id}/visibility": {
+      "patch": {
+        "operationId": "library.visibility.route",
+        "summary": "One file public or private.",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/map": {
+      "get": {
+        "operationId": "library.map",
+        "summary": "The library map's vectors (GET /library/map).",
+        "tags": [
+          "library"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/posters/backfill": {
+      "post": {
+        "operationId": "library.posters.backfill",
+        "summary": "Queue the missing posters.",
+        "tags": [
+          "library"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/search": {
+      "get": {
+        "operationId": "library.query",
+        "summary": "The app's meaning search (GET /library/search).",
+        "tags": [
+          "library"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/search/index": {
+      "post": {
+        "operationId": "library.search.index",
+        "summary": "Index the posts not yet indexed.",
+        "tags": [
+          "library"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/search/post": {
+      "get": {
+        "operationId": "library.search.post",
+        "summary": "One post's search index status.",
+        "tags": [
+          "library"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/visibility/migrate": {
+      "post": {
+        "operationId": "library.visibility.migrate",
+        "summary": "The one-row-per-file data step.",
+        "tags": [
+          "library"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/live/chat-start-token": {
+      "put": {
+        "operationId": "live.chat_start_token.put",
+        "summary": "A device's push-to-start token for chat replies.",
+        "tags": [
+          "live"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "live.chat_start_token.delete",
+        "summary": "A device's push-to-start token for chat replies.",
+        "tags": [
+          "live"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/live/chats/{thread}": {
+      "put": {
+        "operationId": "live.chat",
+        "summary": "A push-started chat activity's token.",
+        "tags": [
+          "live"
+        ],
+        "parameters": [
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/live/edits/{rid}": {
+      "put": {
+        "operationId": "live.edit.put",
+        "summary": "An editor render's activity token.",
+        "tags": [
+          "live"
+        ],
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{20}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "live.edit.delete",
+        "summary": "An editor render's activity token.",
+        "tags": [
+          "live"
+        ],
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{20}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/live/runs/{run}": {
+      "put": {
+        "operationId": "live.run.put",
+        "summary": "A save's Live Activity token.",
+        "tags": [
+          "live"
+        ],
+        "parameters": [
+          {
+            "name": "run",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "live.run.delete",
+        "summary": "A save's Live Activity token.",
+        "tags": [
+          "live"
+        ],
+        "parameters": [
+          {
+            "name": "run",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/live/runs/{run}/state": {
+      "post": {
+        "operationId": "live.run.state",
+        "summary": "A save activity's state.",
+        "tags": [
+          "live"
+        ],
+        "parameters": [
+          {
+            "name": "run",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/live/selftest": {
+      "get": {
+        "operationId": "live.selftest",
+        "summary": "Test the APNs setup.",
+        "tags": [
+          "live"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/live/start-token": {
+      "put": {
+        "operationId": "live.start_token.put",
+        "summary": "A device's push-to-start token.",
+        "tags": [
+          "live"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "live.start_token.delete",
+        "summary": "A device's push-to-start token.",
+        "tags": [
+          "live"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/media/{name}": {
+      "delete": {
+        "operationId": "media.delete",
+        "summary": "Delete a hosted webp (DELETE /media/<name>).",
+        "tags": [
+          "media"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{10}\\.webp$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/queue": {
+      "get": {
+        "operationId": "queue",
+        "summary": "Everything in flight: the server's line of saves and renders (entries with mine: true are this chat's own saves, by sid),",
+        "tags": [
+          "queue"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "free"
+        }
+      }
+    },
+    "/share/collections": {
+      "get": {
+        "operationId": "share_collections.list",
+        "summary": "GET /share/collections",
+        "tags": [
+          "share_collections"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "collections": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ShareCollection"
+                      },
+                      "description": "most recently changed first"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "collections"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "post": {
+        "operationId": "share_collections.create",
+        "summary": "POST /share/collections",
+        "tags": [
+          "share_collections"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/collections/{id}": {
+      "patch": {
+        "operationId": "share_collections.update",
+        "summary": "PATCH /share/collections/:id",
+        "tags": [
+          "share_collections"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "share_collections.delete",
+        "summary": "DELETE /share/collections/:id",
+        "tags": [
+          "share_collections"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/collections/{id}/reroll": {
+      "post": {
+        "operationId": "share_collections.reroll",
+        "summary": "POST /share/collections/:id/reroll",
+        "tags": [
+          "share_collections"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/groups": {
+      "get": {
+        "operationId": "share_groups.list",
+        "summary": "GET /share/groups",
+        "tags": [
+          "share_groups"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "post": {
+        "operationId": "share_groups.create",
+        "summary": "POST /share/groups",
+        "tags": [
+          "share_groups"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/groups/{id}": {
+      "patch": {
+        "operationId": "share_groups.update",
+        "summary": "PATCH /share/groups/:id",
+        "tags": [
+          "share_groups"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "share_groups.delete",
+        "summary": "DELETE /share/groups/:id",
+        "tags": [
+          "share_groups"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/sets": {
+      "get": {
+        "operationId": "share_sets.list",
+        "summary": "GET /share/sets",
+        "tags": [
+          "share_sets"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "post": {
+        "operationId": "share_sets.create",
+        "summary": "POST /share/sets",
+        "tags": [
+          "share_sets"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/sets/{id}": {
+      "delete": {
+        "operationId": "share_sets.revoke",
+        "summary": "DELETE /share/sets/:id",
+        "tags": [
+          "share_sets"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{19}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/stage": {
+      "get": {
+        "operationId": "stage_owner.get",
+        "summary": "GET /stage",
+        "tags": [
+          "stage_owner"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "patch": {
+        "operationId": "stage_owner.patch",
+        "summary": "PATCH /stage",
+        "tags": [
+          "stage_owner"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/stage/action": {
+      "post": {
+        "operationId": "stage_owner.action",
+        "summary": "POST /stage/action",
+        "tags": [
+          "stage_owner"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/stage/pool": {
+      "get": {
+        "operationId": "stage_owner.pool",
+        "summary": "GET /stage/pool",
+        "tags": [
+          "stage_owner"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/stage/redemptions": {
+      "get": {
+        "operationId": "stage_owner.redemptions",
+        "summary": "GET /stage/redemptions",
+        "tags": [
+          "stage_owner"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/stage/rewards/{action}": {
+      "patch": {
+        "operationId": "stage_owner.reward",
+        "summary": "PATCH /stage/rewards/:action",
+        "tags": [
+          "stage_owner"
+        ],
+        "parameters": [
+          {
+            "name": "action",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(summon|chaos|shuffle|pin)$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/stage/rotate": {
+      "post": {
+        "operationId": "stage_owner.rotate",
+        "summary": "POST /stage/rotate",
+        "tags": [
+          "stage_owner"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/stage/twitch": {
+      "delete": {
+        "operationId": "stage_owner.twitch_delete",
+        "summary": "DELETE /stage/twitch",
+        "tags": [
+          "stage_owner"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/stage/twitch/connect": {
+      "post": {
+        "operationId": "stage_owner.twitch_connect",
+        "summary": "POST /stage/twitch/connect",
+        "tags": [
+          "stage_owner"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio": {
+      "post": {
+        "operationId": "studio.create",
+        "summary": "Save a link (POST /studio); the chat uses library.save.",
+        "tags": [
+          "studio"
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/line": {
+      "get": {
+        "operationId": "studio.line",
+        "summary": "The server's line.",
+        "tags": [
+          "studio"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/line/notify": {
+      "put": {
+        "operationId": "studio.line.notify.put",
+        "summary": "Hark when the line is done.",
+        "tags": [
+          "studio"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "studio.line.notify.delete",
+        "summary": "Hark when the line is done.",
+        "tags": [
+          "studio"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/recent": {
+      "get": {
+        "operationId": "studio.recent",
+        "summary": "A share sheet's recent saves.",
+        "tags": [
+          "studio"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/upload": {
+      "put": {
+        "operationId": "studio.upload",
+        "summary": "Upload a file (PUT /studio/upload).",
+        "tags": [
+          "studio"
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/{sid}": {
+      "get": {
+        "operationId": "studio.status",
+        "summary": "A save's progress (GET /studio/<sid>).",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/{sid}/gallery-image": {
+      "post": {
+        "operationId": "studio.gallery_image",
+        "summary": "A gallery image (POST /studio/<sid>/gallery-image).",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/{sid}/items/retry": {
+      "post": {
+        "operationId": "studio.items.retry",
+        "summary": "Save a gallery's failed items again.",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/{sid}/line": {
+      "delete": {
+        "operationId": "studio.cancel",
+        "summary": "Cancel a waiting save.",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/{sid}/notify": {
+      "put": {
+        "operationId": "studio.notify.put",
+        "summary": "Hark when this save is done.",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "studio.notify.delete",
+        "summary": "Hark when this save is done.",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/{sid}/publish": {
+      "post": {
+        "operationId": "studio.publish",
+        "summary": "Host a session's original publicly (legacy).",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/{sid}/render": {
+      "post": {
+        "operationId": "studio.render",
+        "summary": "A webp render of one video (POST /studio/<sid>/render).",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "durable_object",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/{sid}/render/{job}": {
+      "delete": {
+        "operationId": "studio.render.cancel",
+        "summary": "Cancel a waiting render.",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          },
+          {
+            "name": "job",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{20}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      },
+      "get": {
+        "operationId": "studio.render_status",
+        "summary": "A studio job's progress (GET /studio/<sid>/render/<job>).",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          },
+          {
+            "name": "job",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{20}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "durable_object",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/{sid}/slideshow": {
+      "post": {
+        "operationId": "studio.slideshow",
+        "summary": "A slideshow or a still webp (POST /studio/<sid>/slideshow).",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/{sid}/source": {
+      "get": {
+        "operationId": "studio.source",
+        "summary": "A save's original file (GET /studio/<sid>/source).",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "head": {
+        "operationId": "studio.source.head",
+        "summary": "A save's original file (GET /studio/<sid>/source).",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/telemetry": {
+      "post": {
+        "operationId": "telemetry",
+        "summary": "Crash and log telemetry (POST /telemetry).",
+        "tags": [
+          "telemetry"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/tunnel": {
+      "get": {
+        "operationId": "cobalt.tunnel",
+        "summary": "Upstream cobalt's streams (GET /tunnel).",
+        "tags": [
+          "cobalt"
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "open",
+          "runs": "worker",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/webp": {
+      "post": {
+        "operationId": "webp.create",
+        "summary": "Start a webp encode (POST /webp).",
+        "tags": [
+          "webp"
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/webp/{id}": {
+      "get": {
+        "operationId": "webp.status",
+        "summary": "A webp encode's status (GET /webp/<id>).",
+        "tags": [
+          "webp"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "durable_object",
+          "cors": true,
+          "raw": true,
+          "ai": "hidden"
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "LibraryPost": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "the post key"
+          },
+          "service": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "custom_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "width": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "height": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "poster_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "public_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "integer",
+            "description": "milliseconds since the epoch"
+          },
+          "session": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "expires_at": {
+                    "type": "integer",
+                    "description": "milliseconds since the epoch"
+                  },
+                  "source_url": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "status",
+                  "expires_at",
+                  "source_url"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the post's open studio session, if any"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "url"
+              ],
+              "additionalProperties": {},
+              "description": "one file (its fields depend on ?v)"
+            }
+          },
+          "visibility": {
+            "description": "v=2 and up",
+            "type": "string",
+            "enum": [
+              "public",
+              "private"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "service",
+          "link",
+          "title",
+          "custom_title",
+          "duration",
+          "width",
+          "height",
+          "poster_url",
+          "public_url",
+          "created_at",
+          "session",
+          "files"
+        ],
+        "additionalProperties": {},
+        "x-swift": "LibraryPost"
+      },
+      "ShareCollection": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "integer",
+            "description": "milliseconds since the epoch"
+          },
+          "updated_at": {
+            "type": "integer",
+            "description": "milliseconds since the epoch"
+          },
+          "set_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "the collection's live gallery links, most recently added first"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "created_at",
+          "updated_at",
+          "set_ids"
+        ],
+        "additionalProperties": false,
+        "x-swift": "ShareCollection"
+      }
+    },
+    "securitySchemes": {
+      "apiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "`Api-Key <uuid>`"
+      },
+      "service": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-cobalt-service",
+        "description": "the web Worker's library service"
+      }
+    }
+  }
+}

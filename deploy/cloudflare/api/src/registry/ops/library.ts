@@ -7,6 +7,7 @@ import { LIBRARY_MAX_LIMIT, SEARCH_MAX } from "../../chat-tools";
 import { libraryMap, librarySearch } from "../../embed";
 import { queueSnapshot } from "../../queue";
 import { defineOp, ok, OpError, type OpContext } from "../op";
+import { LibraryIndexShape } from "../shapes";
 
 // ---- shapes the model sees ------------------------------------------------------------------------------------------
 
@@ -216,6 +217,7 @@ export const libraryIndexOp = defineOp({
     runs: "worker",
     cors: true,
     input: AnyQuery,
+    output: LibraryIndexShape,
     http: (ctx) => Object.fromEntries(ctx.query),
     ai: { tier: "hidden", summary: "The app's library pages (GET /library)." },
     handler: async (ctx) => {
