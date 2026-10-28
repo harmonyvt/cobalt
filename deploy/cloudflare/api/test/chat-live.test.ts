@@ -40,6 +40,7 @@ describe("the tracker", () => {
         const t = new ChatLiveTracker(T0);
         expect(t.state).toEqual({ status: "thinking", since: T0 / 1000, steps: 0, failedSteps: 0, shown: 0 });
         expect(t.apply("user", {})).toBe("none");
+        expect(t.apply("text", { delta: "" })).toBe("none");
         expect(t.apply("step", step("s1", "running"))).toBe("major");
         expect(t.state).toMatchObject({ status: "working", tool: "searching your library", steps: 1 });
         expect(t.apply("step", step("s1", "done"))).toBe("major");

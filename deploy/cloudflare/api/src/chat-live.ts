@@ -145,7 +145,7 @@ export class ChatLiveTracker {
         const before = { ...this.state };
         switch (event) {
             case "text":
-                if (typeof data?.delta !== "string") return "none";
+                if (typeof data?.delta !== "string" || !data.delta) return "none";
                 this.text += data.delta;
                 this.state.reply = tail(plain(this.text), CHAT_REPLY_MAX);
                 if (!this.running) this.state.status = "writing";

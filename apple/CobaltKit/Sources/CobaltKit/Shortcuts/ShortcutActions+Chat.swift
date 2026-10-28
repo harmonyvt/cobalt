@@ -109,7 +109,7 @@ extension ShortcutActions {
     }
 
     /// 2% at the start, then towards 95% as events arrive (half way after 40).
-    static func chatProgress(events: Int) -> Int64 {
+    nonisolated static func chatProgress(events: Int) -> Int64 {
         let x = Double(max(0, events))
         return Int64((2 + 93 * x / (x + 40)).rounded())
     }

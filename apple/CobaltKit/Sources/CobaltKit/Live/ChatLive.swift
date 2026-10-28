@@ -229,6 +229,7 @@ public struct ChatLiveTracker: Sendable, Equatable {
         case .user, .assistant, .title:
             return .none
         case .text(let delta):
+            guard !delta.isEmpty else { return .none }
             text += delta
             state.reply = ChatLiveCopy.tail(ChatLiveCopy.plain(text), to: ChatLiveCopy.replyLimit)
             if !hasRunningStep { state.status = .writing }
