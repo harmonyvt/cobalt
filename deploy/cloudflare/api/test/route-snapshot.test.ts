@@ -77,6 +77,8 @@ export const PATHS: string[] = [
     // added with the registry (section 33.5): the confirm answer, and the Durable Object's internal store, never public
     `/chat/threads/${ID16}/confirm/${ID16}`,
     `/chat/threads/${ID16}/confirm/bad`,
+    // added in T7 (section 33.12): a bad thread id on the confirm route is a 404 (its pattern was lost to an import cycle)
+    `/chat/threads/bad/confirm/${ID16}`,
     `/chat/pending/${ID16}`,
     // added with the make ops (section 33.8): the daily cap store, the Durable Object's own, never public
     `/chat/budget/${ID16}/renders`,

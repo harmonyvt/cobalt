@@ -6,7 +6,8 @@ import { gzipSync } from "node:zlib";
 import { beforeEach, describe, expect, it } from "vitest";
 import config from "../cloudflare.config";
 import { capabilities } from "../src/app-routes";
-import { decide, type GateRequest } from "../src/gate";
+import type { GateRequest } from "../src/gate";
+import { dispatch as decide } from "./dispatch";
 import { SERVICE_HEADER } from "../src/headers";
 import { hashKey } from "../src/keys";
 import {
@@ -169,7 +170,7 @@ describe("gate", () => {
     const cfg = { corsUrl: "https://cobalt.capybaraharmony.com", now: 1 };
 
     it("POST /telemetry with a well-formed key is a keyed lookup", () => {
-        expect(decide(req(), cfg)).toEqual({ action: "lookup", key: CLIENT, then: "telemetry_ingest" });
+        expect(decide(req(), cfg)).toEqual({ action: "lookup", key: CLIENT, op: "telemetry" });
     });
     it("a missing, malformed or non-Api-Key authorization is a 401 with cobalt's codes", () => {
         expect(decide(req({ authorization: null }), cfg)).toMatchObject({ action: "reject", status: 401, errorCode: "error.api.auth.key.missing" });

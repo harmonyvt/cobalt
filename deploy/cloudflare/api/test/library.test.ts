@@ -185,17 +185,17 @@ describe("service auth: the gate", () => {
 
     it("a service caller is authenticated on every keyed route, with no key", () => {
         const s = (method: string, pathname: string) => decide(req({ method, pathname, service: true }), cfg);
-        expect(s("POST", "/")).toEqual({ action: "service" });
-        expect(s("POST", "/webp")).toEqual({ action: "service", then: "webp_create" });
-        expect(s("GET", `/webp/${JOB}`)).toEqual({ action: "service", then: "webp_status", params: { id: JOB } });
-        expect(s("DELETE", `/media/${NAME}`)).toEqual({ action: "service", then: "media_delete", params: { name: NAME } });
+        expect(s("POST", "/")).toEqual({ action: "service", op: "cobalt" });
+        expect(s("POST", "/webp")).toEqual({ action: "service", op: "webp.create" });
+        expect(s("GET", `/webp/${JOB}`)).toEqual({ action: "service", op: "webp.status", params: { id: JOB } });
+        expect(s("DELETE", `/media/${NAME}`)).toEqual({ action: "service", op: "media.delete", params: { name: NAME } });
         expect(s("POST", "/studio")).toEqual({ action: "service", op: "studio.create" });
         expect(s("POST", `/studio/${SID}/publish`)).toEqual({
             action: "service",
             op: "studio.publish",
             params: { sid: SID },
         });
-        expect(s("POST", "/library/adopt")).toEqual({ action: "service", then: "library_adopt" });
+        expect(s("POST", "/library/adopt")).toEqual({ action: "service", op: "library.adopt" });
     });
     it("without the service credential: publish needs an Api-Key, adopt is refused outright", () => {
         expect(decide(req({ method: "POST", pathname: `/studio/${SID}/publish` }), cfg)).toMatchObject({

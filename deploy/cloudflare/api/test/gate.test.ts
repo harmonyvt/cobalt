@@ -38,11 +38,11 @@ describe("POST /", () => {
     const invalid = { action: "reject", status: 401, errorCode: "error.api.auth.key.invalid" };
 
     it("returns a lookup for a well-formed key", () => {
-        expect(post(`Api-Key ${KEY}`)).toEqual({ action: "lookup", key: KEY });
+        expect(post(`Api-Key ${KEY}`)).toEqual({ action: "lookup", key: KEY, op: "cobalt" });
     });
     it("accepts the scheme case-insensitively, like the API", () => {
-        expect(post(`api-key ${KEY}`)).toEqual({ action: "lookup", key: KEY });
-        expect(post(`API-KEY ${KEY}`)).toEqual({ action: "lookup", key: KEY });
+        expect(post(`api-key ${KEY}`)).toEqual({ action: "lookup", key: KEY, op: "cobalt" });
+        expect(post(`API-KEY ${KEY}`)).toEqual({ action: "lookup", key: KEY, op: "cobalt" });
     });
     it("401 missing without header", () => {
         expect(post(null)).toEqual({
@@ -93,7 +93,7 @@ describe("POST /webp", () => {
         expect(post(`Api-Key ${KEY}`)).toEqual({
             action: "lookup",
             key: KEY,
-            then: "webp_create",
+            op: "webp.create",
         });
     });
     it("401s like POST / without a well-formed key", () => {
@@ -119,14 +119,14 @@ describe("GET /webp/:id", () => {
         expect(get(`/webp/${ID}`)).toEqual({
             action: "lookup",
             key: KEY,
-            then: "webp_status",
+            op: "webp.status",
             params: { id: ID },
         });
     });
     it("keeps the query (wait) out of the decision", () => {
         expect(
             decide(req({ pathname: `/webp/${ID}`, query: "wait=20", authorization: `Api-Key ${KEY}` }), cfg),
-        ).toMatchObject({ then: "webp_status", params: { id: ID } });
+        ).toMatchObject({ op: "webp.status", params: { id: ID } });
     });
     it("401 without a key", () => {
         expect(get(`/webp/${ID}`, null)).toMatchObject({ status: 401, errorCode: "error.api.auth.key.missing" });
@@ -157,7 +157,7 @@ describe("DELETE /media/:name", () => {
         expect(del(`/media/${NAME}`)).toEqual({
             action: "lookup",
             key: KEY,
-            then: "media_delete",
+            op: "media.delete",
             params: { name: NAME },
         });
     });
@@ -283,16 +283,16 @@ describe("the app's library routes (keyed)", () => {
         // GET /library is an op now (src/registry/ops/library.ts): the registry answers it before the gate
         expect(REGISTRY.match("GET", "/library")?.op).toMatchObject({ name: "library.index", auth: "key_or_service", cors: true });
         expect(g("GET", "/library")).toMatchObject({ action: "lookup", op: "library.index" });
-        expect(g("GET", `/library/items/${ID}/file`)).toEqual(lookup("library_file", { id: ID }));
-        expect(g("HEAD", `/library/items/${ID}/file`)).toEqual(lookup("library_file", { id: ID }));
+        expect(g("GET", `/library/items/${ID}/file`)).toEqual(lookupOp("library.file", { id: ID }));
+        expect(g("HEAD", `/library/items/${ID}/file`)).toEqual(lookupOp("library.file.head", { id: ID }));
         expect(g("POST", `/library/items/${ID}/publish`)).toEqual(lookupOp("library.publish", { id: ID }));
         // POST .../studio is an op now (src/registry/ops/make.ts): keyed or the service, CORS
         expect(REGISTRY.match("POST", `/library/items/${ID}/studio`)?.op).toMatchObject({ name: "library.reopen", auth: "key_or_service", cors: true });
         expect(g("POST", `/library/items/${ID}/studio`)).toEqual(lookupOp("library.reopen", { id: ID }));
     });
     it("POST /library/posters/backfill (section 13) looks the key up; the service credential passes; everything else is 404 or 401", () => {
-        expect(g("POST", "/library/posters/backfill")).toEqual(lookup("library_posters_backfill"));
-        expect(g("POST", "/library/posters/backfill", { service: true })).toEqual({ action: "service", then: "library_posters_backfill" });
+        expect(g("POST", "/library/posters/backfill")).toEqual(lookupOp("library.posters.backfill"));
+        expect(g("POST", "/library/posters/backfill", { service: true })).toEqual({ action: "service", op: "library.posters.backfill" });
         for (const method of ["GET", "HEAD", "PUT", "DELETE", "PATCH"]) {
             expect(g(method, "/library/posters/backfill")).toMatchObject({ action: "reject", status: 404 });
         }
@@ -381,13 +381,13 @@ describe("the app's library routes (keyed)", () => {
         });
     });
     it("POST /library/visibility/migrate (section 16) looks the key up; the service credential passes; everything else is 404", () => {
-        expect(g("POST", "/library/visibility/migrate")).toEqual(lookup("library_visibility_migrate"));
+        expect(g("POST", "/library/visibility/migrate")).toEqual(lookupOp("library.visibility.migrate"));
         expect(g("POST", "/library/visibility/migrate", { service: true })).toEqual({
             action: "service",
-            then: "library_visibility_migrate",
+            op: "library.visibility.migrate",
         });
         for (const method of ["GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
-            expect(g(method, "/library/visibility/migrate", method === "OPTIONS" ? { origin: ORIGIN } : keyed)).not.toMatchObject({ then: "library_visibility_migrate" });
+            expect(g(method, "/library/visibility/migrate", method === "OPTIONS" ? { origin: ORIGIN } : keyed)).not.toMatchObject({ op: "library.visibility.migrate" });
         }
         for (const path of ["/library/visibility", "/library/visibility/", "/library/visibility/migrate/", "/library/visibility/other"]) {
             expect(g("POST", path)).toMatchObject({ action: "reject", status: 404 });
@@ -435,7 +435,7 @@ describe("the app's library routes (keyed)", () => {
         expect(g("GET", "/library/nope")).toMatchObject({ status: 404 });
     });
     it("/library/adopt stays service only, whatever else /library opened", () => {
-        expect(g("POST", "/library/adopt", { service: true })).toEqual({ action: "service", then: "library_adopt" });
+        expect(g("POST", "/library/adopt", { service: true })).toEqual({ action: "service", op: "library.adopt" });
         expect(g("POST", "/library/adopt")).toMatchObject({ status: 401 });
         expect(g("POST", "/library/adopt", { authorization: `Api-Key ${KEY}`, origin: ORIGIN })).toMatchObject({ status: 401 });
         expect(g("GET", "/library/adopt")).toMatchObject({ status: 404 });
@@ -449,16 +449,17 @@ describe("/live routes: keyed, and nothing else", () => {
     const keyed: Partial<GateRequest> = { authorization: `Api-Key ${KEY}` };
     const g = (method: string, pathname: string, o: Partial<GateRequest> = keyed) => decide(req({ method, pathname, ...o }), cfg);
     const routes: [string, string, string][] = [
-        ["PUT", "/live/start-token", "live_start_token"],
-        ["DELETE", "/live/start-token", "live_start_token"],
-        ["PUT", `/live/runs/${RUN}`, "live_run"],
-        ["DELETE", `/live/runs/${RUN}`, "live_run"],
-        ["POST", `/live/runs/${RUN}/state`, "live_state"],
-        ["GET", "/live/selftest", "live_selftest"],
+        ["PUT", "/live/start-token", "live.start_token.put"],
+        ["DELETE", "/live/start-token", "live.start_token.delete"],
+        ["PUT", `/live/runs/${RUN}`, "live.run.put"],
+        ["DELETE", `/live/runs/${RUN}`, "live.run.delete"],
+        ["POST", `/live/runs/${RUN}/state`, "live.run.state"],
+        ["GET", "/live/selftest", "live.selftest"],
     ];
 
-    it.each(routes)("%s %s with a key is a lookup for %s", (method, pathname, then) => {
-        expect(g(method, pathname)).toEqual({ action: "lookup", key: KEY, then });
+    it.each(routes)("%s %s with a key is a lookup for %s", (method, pathname, op) => {
+        const run = pathname.startsWith("/live/runs/") ? { params: { run: RUN } } : {};
+        expect(g(method, pathname)).toEqual({ action: "lookup", key: KEY, op, ...run });
     });
     it.each(routes)("%s %s without a key, or with a malformed or wrong-type one, is a 401", (method, pathname) => {
         expect(g(method, pathname, {})).toEqual({ action: "reject", status: 401, errorCode: "error.api.auth.key.missing" });

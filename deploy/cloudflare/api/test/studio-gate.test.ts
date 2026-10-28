@@ -56,11 +56,11 @@ describe("POST /studio (needs a key)", () => {
 
 describe("routes that need no key (the id is the credential)", () => {
     it("GET /studio/<sid> is the status route", () => {
-        expect(d({ pathname: `/studio/${SID}` })).toEqual({ action: "studio", op: "status", sid: SID });
+        expect(d({ pathname: `/studio/${SID}` })).toEqual({ action: "service", op: "studio.status", params: { sid: SID } });
     });
     it("GET and HEAD /studio/<sid>/source", () => {
-        expect(d({ pathname: `/studio/${SID}/source` })).toEqual({ action: "studio", op: "source", sid: SID });
-        expect(d({ method: "HEAD", pathname: `/studio/${SID}/source` })).toEqual({ action: "studio", op: "source", sid: SID });
+        expect(d({ pathname: `/studio/${SID}/source` })).toEqual({ action: "service", op: "studio.source", params: { sid: SID } });
+        expect(d({ method: "HEAD", pathname: `/studio/${SID}/source` })).toEqual({ action: "service", op: "studio.source.head", params: { sid: SID } });
     });
     // the render routes are ops now (src/registry/ops/make.ts), answered before the gate
     it("POST /studio/<sid>/render", () => {
@@ -73,10 +73,10 @@ describe("routes that need no key (the id is the credential)", () => {
         expect(d({ pathname: `/studio/${SID}/render/${JOB}` })).toEqual({ action: "service", op: "studio.render_status", params: { sid: SID, job: JOB } });
     });
     it("the query (wait) is not part of the decision", () => {
-        expect(d({ pathname: `/studio/${SID}`, searchParams: new URLSearchParams("wait=20") })).toMatchObject({ op: "status" });
+        expect(d({ pathname: `/studio/${SID}`, searchParams: new URLSearchParams("wait=20") })).toMatchObject({ op: "studio.status" });
     });
     it("an Authorization header is neither needed nor used", () => {
-        expect(d({ pathname: `/studio/${SID}`, authorization: "Api-Key junk" })).toMatchObject({ action: "studio" });
+        expect(d({ pathname: `/studio/${SID}`, authorization: "Api-Key junk" })).toMatchObject({ action: "service", op: "studio.status" });
     });
 });
 
@@ -123,7 +123,7 @@ describe("methods", () => {
 describe("OPTIONS preflight", () => {
     it("studio paths from the web origin are answered by the Worker, not forwarded", () => {
         for (const pathname of ["/studio", `/studio/${SID}`, `/studio/${SID}/source`, `/studio/${SID}/render`, `/studio/${SID}/render/${JOB}`]) {
-            expect(d({ method: "OPTIONS", pathname, origin: ORIGIN })).toEqual({ action: "studio", op: "preflight" });
+            expect(d({ method: "OPTIONS", pathname, origin: ORIGIN })).toEqual({ action: "preflight" });
         }
     });
     it("other origins and no origin are 403", () => {
@@ -168,11 +168,11 @@ describe("PUT /studio/upload (keyed) and the internal adopt path", () => {
         expect(put({ pathname: "/studio/uploads" })).toMatchObject(notFound);
     });
     it("an upload does not open the session routes: a 22-char sid still works exactly as before", () => {
-        expect(d({ pathname: `/studio/${SID}` })).toEqual({ action: "studio", op: "status", sid: SID });
+        expect(d({ pathname: `/studio/${SID}` })).toEqual({ action: "service", op: "studio.status", params: { sid: SID } });
         expect(d({ method: "PUT", pathname: `/studio/${SID}`, authorization: `Api-Key ${KEY}` })).toMatchObject(notFound);
     });
     it("OPTIONS /studio/upload is a studio preflight (harmless: the Worker answers it)", () => {
-        expect(d({ method: "OPTIONS", pathname: "/studio/upload", origin: ORIGIN })).toEqual({ action: "studio", op: "preflight" });
+        expect(d({ method: "OPTIONS", pathname: "/studio/upload", origin: ORIGIN })).toEqual({ action: "preflight" });
         expect(d({ method: "OPTIONS", pathname: "/studio/upload" })).toMatchObject({ status: 403 });
     });
 });
@@ -183,8 +183,8 @@ describe("PUT|DELETE /studio/<sid>/notify (keyed, owner checked by the Durable O
     const keyed = { authorization: `Api-Key ${KEY}` };
     const pathname = `/studio/${SID}/notify`;
 
-    it.each(["PUT", "DELETE"])("%s with a key is a lookup for studio_notify carrying the sid", (method) => {
-        expect(d({ method, pathname, ...keyed })).toEqual({ action: "lookup", key: KEY, then: "studio_notify", params: { sid: SID } });
+    it.each(["PUT", "DELETE"])("%s with a key is a lookup for studio.notify carrying the sid", (method) => {
+        expect(d({ method, pathname, ...keyed })).toEqual({ action: "lookup", key: KEY, op: `studio.notify.${method.toLowerCase()}`, params: { sid: SID } });
     });
     it.each(["PUT", "DELETE"])("%s without a key, or a malformed one, is a 401", (method) => {
         expect(d({ method, pathname })).toEqual({ action: "reject", status: 401, errorCode: "error.api.auth.key.missing" });

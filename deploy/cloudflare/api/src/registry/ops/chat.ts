@@ -1,9 +1,24 @@
-// Chat ops (APP-API-CONTRACT.md 33.5): the confirm card's answer. The other chat routes (section 27.2) still go through
-// the old chain until T7 moves them.
+// Chat ops: the thread routes (section 27.2, moved in T7, 33.12) and the confirm card's answer (33.5). All keyed (the
+// library service gets 404), with the web origin's CORS and no-store, and all 404 error.chat.off while chat is off.
 import * as z from "zod";
-import { answerConfirm, CHAT_ID_REGEX, chatModelFrom, type ChatDeps } from "../../chat";
+import { livePushConfigured } from "../../apns";
+import {
+    answerConfirm,
+    chatModelFrom,
+    createThread,
+    deleteThread,
+    getCollage,
+    getThread,
+    listThreads,
+    renameThread,
+    sendMessage,
+    type ChatDeps,
+} from "../../chat";
+import { ChatLivePusher } from "../../chat-live";
+// the thread id pattern comes from gate.ts, not chat.ts: through chat.ts's import of the registry it would be undefined here
+import { THREAD_ID_REGEX as CHAT_ID_REGEX } from "../../gate";
 import type { OpBase } from "../context";
-import { defineOp, type OpContext } from "../op";
+import { defineOp, type HttpMethod, type OpContext, type OpReply } from "../op";
 import { CONFIRM_ID_REGEX, pendingPort } from "../pending";
 
 // The chat's deps for this call, or null while chat is off (no model or no code runner): every /chat route is then
@@ -51,4 +66,94 @@ export const chatConfirmOp = defineOp({
     },
 });
 
-export const CHAT_OPS = [chatConfirmOp];
+// The thread routes' deps: chatDepsFrom plus the reply's Live Activity on the owner's other iPhones (section 27.9),
+// pushed through the Durable Object.
+function threadDeps(ctx: OpContext): ChatDeps | null {
+    const base = chatDepsFrom(ctx);
+    if (!base) return null;
+    const { env, container, now } = ctx;
+    const keyId = ctx.keyId!;
+    return {
+        ...base,
+        liveFor: livePushConfigured(env)
+            ? (thread: string, prompt: string) =>
+                  new ChatLivePusher({
+                      thread,
+                      keyId,
+                      prompt,
+                      now,
+                      post: async (body) => {
+                          const res = await container.fetch(
+                              new Request(`https://do.internal/live/chats/${thread}/state`, {
+                                  method: "POST",
+                                  headers: { "content-type": "application/json", "x-internal-key": env.COBALT_API_KEY },
+                                  body: JSON.stringify(body),
+                              }),
+                          );
+                          if (!res.ok) {
+                              await res.body?.cancel();
+                              return null;
+                          }
+                          const j = (await res.json()) as { targets?: number };
+                          return typeof j.targets === "number" ? { targets: j.targets } : null;
+                      },
+                  })
+            : undefined,
+    };
+}
+
+const MESSAGE_ID_REGEX = /^\d{1,12}$/;
+
+const threadRoute = (
+    name: string,
+    method: HttpMethod,
+    path: string,
+    summary: string,
+    run: (d: ChatDeps, ctx: OpContext) => Promise<{ status: number; body: unknown } | Response>,
+    o: { raw?: boolean; params?: Record<string, RegExp> } = {},
+) =>
+    defineOp({
+        name,
+        route: { method, path, ...(o.params ? { params: o.params } : {}) },
+        auth: "key",
+        runs: "worker",
+        cors: true,
+        // the stream keeps its own headers; every JSON answer is no-store
+        noStore: !o.raw,
+        ...(o.raw ? { raw: true } : {}),
+        input: z.object({}),
+        http: () => ({}),
+        ai: { tier: "hidden", summary },
+        handler: async (ctx): Promise<OpReply | Response> => {
+            const d = threadDeps(ctx);
+            const r = d ? await run(d, ctx) : off();
+            if (r instanceof Response) return r;
+            return { status: r.status, body: r.body, headers: { "cache-control": "no-store" } };
+        },
+    });
+
+const ID = { id: CHAT_ID_REGEX };
+
+export const CHAT_OPS = [
+    threadRoute("chat.threads.list", "GET", "/chat/threads", "The chat threads.", (d) => listThreads(d)),
+    threadRoute("chat.threads.create", "POST", "/chat/threads", "Start a chat thread.", (d, ctx) => createThread(d, ctx.request!, ctx.keyId!)),
+    threadRoute("chat.threads.get", "GET", "/chat/threads/:id", "One thread with its messages.", (d, ctx) => getThread(d, ctx.params.id!), { params: ID }),
+    threadRoute("chat.threads.rename", "PATCH", "/chat/threads/:id", "Rename a thread.", (d, ctx) => renameThread(d, ctx.request!, ctx.params.id!), {
+        params: ID,
+    }),
+    threadRoute("chat.threads.delete", "DELETE", "/chat/threads/:id", "Delete a thread.", (d, ctx) => deleteThread(d, ctx.params.id!), { params: ID }),
+    // the reply streams as server-sent events (27.2)
+    threadRoute("chat.send", "POST", "/chat/threads/:id/messages", "Send a message; the reply streams.", (d, ctx) => sendMessage(d, ctx.request!, ctx.params.id!), {
+        params: ID,
+        raw: true,
+    }),
+    threadRoute(
+        "chat.collage",
+        "GET",
+        "/chat/threads/:id/messages/:message/collage",
+        "A reply's collage, paged (27.5).",
+        (d, ctx) => getCollage(d, ctx.params.id!, ctx.params.message!, ctx.query),
+        { params: { id: CHAT_ID_REGEX, message: MESSAGE_ID_REGEX } },
+    ),
+    chatConfirmOp,
+];

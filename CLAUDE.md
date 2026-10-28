@@ -96,9 +96,11 @@ the files and a real run before anything is called done.
   default), Twitch channel-point rewards via EventSub (`api/src/stage*.ts`, `StageRoom` DO, D1 `stage_*`, migration
   0019). Twitch is off unless `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_EVENTSUB_SECRET` are in the secrets file.
 - Op registry (`APP-API-CONTRACT.md` section 33): `defineOp` in `api/src/registry/` gives a route, its zod input check
-  and the chat AI's tool in one place; `worker.ts` runs it before the gate, and unregistered routes fall through.
-  `test/route-snapshot.test.ts` pins every route's answer: a PR moving routes must leave the fixture unchanged.
-  Ops live in `registry/ops/<area>.ts`; tier `ask` ops pause for a confirm card (DO storage, 15 min).
+  and the chat AI's tool in one place. Every route (and the share/stage/studio hosts) is an op; `gate.ts` only answers
+  preflights and the final 404. `test/route-snapshot.test.ts` pins every route's answer: a PR moving routes must leave
+  the fixture unchanged. Ops live in `registry/ops/<area>.ts`; tier `ask` ops pause for a confirm card (DO storage, 15 min).
+  After changing an op run `npm run gen` in `deploy/cloudflare/api`: it rewrites `openapi.json`, the contract's route
+  index and `apple/CobaltKit/.../API/Generated/Endpoints.swift` (section 33.13); `npm test` fails while they are stale.
 - Workbench (`APP-API-CONTRACT.md` section 33.11): the chat AI's last-resort Linux box (`cobalt.box.run`/`save`), the
   `Workbench` DO (`api/src/workbench*.ts`) on container app `cobalt-api-workbench` (`deploy/cloudflare/workbench/`, basic,
   one instance). No secrets, no own internet: every HTTP(S) request passes the Worker's outbound rule (19.2 + our own zone

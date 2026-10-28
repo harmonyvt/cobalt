@@ -15,7 +15,7 @@ import {
     toolWords,
     type ChatLiveState,
 } from "../src/chat-live";
-import { decide } from "../src/gate";
+import { dispatch as decide } from "./dispatch";
 import { KEY_ID_HEADER } from "../src/headers";
 import { Apple, bad, makePem } from "./apns-fakes";
 import { MemoryKV } from "./studio-fakes";
@@ -225,10 +225,10 @@ describe("the gate", () => {
     const req = (method: string, pathname: string) =>
         decide({ method, pathname, searchParams: new URLSearchParams(), origin: null, authorization: "Api-Key 00000000-0000-4000-8000-000000000000" }, { corsUrl: "https://x", now: T0 }) as any;
     it("lets the device routes through keyed and keeps the state route internal", () => {
-        expect(req("PUT", "/live/chat-start-token")).toMatchObject({ then: "live_chat" });
-        expect(req("DELETE", "/live/chat-start-token")).toMatchObject({ then: "live_chat" });
-        expect(req("PUT", `/live/chats/${THREAD}`)).toMatchObject({ then: "live_chat" });
-        expect(req("POST", `/live/chats/${THREAD}/state`)).not.toMatchObject({ then: "live_chat" });
-        expect(req("GET", `/live/chats/${THREAD}`)).not.toMatchObject({ then: "live_chat" });
+        expect(req("PUT", "/live/chat-start-token")).toMatchObject({ action: "lookup", op: "live.chat_start_token.put" });
+        expect(req("DELETE", "/live/chat-start-token")).toMatchObject({ action: "lookup", op: "live.chat_start_token.delete" });
+        expect(req("PUT", `/live/chats/${THREAD}`)).toMatchObject({ action: "lookup", op: "live.chat", params: { thread: THREAD } });
+        expect(req("POST", `/live/chats/${THREAD}/state`)).toMatchObject({ action: "reject", status: 404 });
+        expect(req("GET", `/live/chats/${THREAD}`)).toMatchObject({ action: "reject", status: 404 });
     });
 });

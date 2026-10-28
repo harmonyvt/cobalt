@@ -32,6 +32,8 @@ struct Lossy<T: Decodable>: Decodable {
     init(from decoder: Decoder) throws { value = try? T(from: decoder) }
 }
 
+extension Lossy: Sendable where T: Sendable {}
+
 // MARK: - POST /
 
 public enum MediaType: String, Sendable, Codable { case photo, video, gif }
