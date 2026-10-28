@@ -125,6 +125,7 @@ export type LookupThen =
     | "live_state"
     | "live_selftest"
     | "live_edit"
+    | "live_chat"
     | "studio_notify"
     | "studio_recent"
     | "studio_line"
@@ -507,6 +508,13 @@ function decideLive(req: GateRequest): GateDecision {
         if (m === "PUT" || m === "DELETE") then = "live_start_token";
     } else if (req.pathname === "/live/selftest") {
         if (m === "GET") then = "live_selftest";
+    } else if (req.pathname === "/live/chat-start-token") {
+        // a device's push-to-start token for chat reply activities (section 27.9)
+        if (m === "PUT" || m === "DELETE") then = "live_chat";
+    } else if (req.pathname.startsWith("/live/chats/")) {
+        // a push-started chat activity's token; /live/chats/<thread>/state is the Worker's own, never the internet's
+        const [thread, ...rest] = req.pathname.slice("/live/chats/".length).split("/");
+        if (COLLECTION_ID_REGEX.test(thread ?? "") && rest.length === 0 && m === "PUT") then = "live_chat";
     } else if (req.pathname.startsWith("/live/edits/")) {
         // an editor render's activity token (section 32); /live/edits/<rid>/push is the EditRenderer's, never the internet's
         const [rid, ...rest] = req.pathname.slice("/live/edits/".length).split("/");

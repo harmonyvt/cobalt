@@ -20,6 +20,7 @@ import {
     type AppDeps,
 } from "./app-routes";
 import { livePushConfigured } from "./apns";
+import { ChatLivePusher } from "./chat-live";
 import { harkConfigured } from "./notify";
 import { saveEmote, searchEmotes } from "./emotes";
 import { decide, isStudioPath } from "./gate";
@@ -95,6 +96,9 @@ export interface WorkerEnv {
     // token (a secret). Absent or empty: no purge, `cache_cleared: null`.
     MEDIA_ZONE_ID?: string;
     MEDIA_PURGE_TOKEN?: string;
+    // Old Discord attachment links (section 19.6): a Discord bot token, a secret. Handed to the container's helper
+    // only; absent or empty means Discord links save exactly as before and `features.discord_refresh` is false.
+    DISCORD_BOT_TOKEN?: string;
     // Library search (section 21): the private Hugging Face Space's URL (a plain var), the Hugging Face
     // token that may call it and the Space's own EMBED_KEY (secrets). No URL or token: search is off.
     EMBED_URL?: string;
@@ -322,19 +326,24 @@ async function handleInner(
 
     // GET /capabilities: the key's state is reported, never refused.
     if (decision.action === "capabilities") {
+        const helper = await helperHas(container);
         const r = await capabilities(
             appDeps(env, container, edge),
             decision.auth,
             decision.key,
             livePushConfigured(env),
             harkConfigured(env),
-            ...(await helperHas(container)),
+            helper[0],
+            helper[1],
+            helper[2],
+            helper[3],
             embedFrom(env) !== null,
             chatOn(env, edge),
             stageBaseFrom(env) !== null,
             twitchConfigFrom(env) !== null,
             // the editor is on exactly while the renderer binding is there and migration 0021 is applied (section 31.13)
             !!env.EDIT_RENDERER && (await editTablesPresent(env.DB, edge.now())),
+            helper[4],
         );
         return new Response(JSON.stringify(r.body), {
             status: r.status,
@@ -475,8 +484,36 @@ async function handleInner(
                 res.headers.set("cache-control", "no-store");
                 return res;
             };
-            const cd = chatDepsFrom(opBase(env, container, edge, registry));
-            if (!cd) return noStore({ status: 404, body: { status: "error", error: { code: "error.chat.off" } } });
+            const base = chatDepsFrom(opBase(env, container, edge, registry));
+            if (!base) return noStore({ status: 404, body: { status: "error", error: { code: "error.chat.off" } } });
+            const cd = {
+                ...base,
+                // section 27.9: the reply's Live Activity on the owner's other iPhones, through the Durable Object
+                liveFor: livePushConfigured(env)
+                    ? (thread: string, prompt: string) =>
+                          new ChatLivePusher({
+                              thread,
+                              keyId,
+                              prompt,
+                              now: edge.now,
+                              post: async (body) => {
+                                  const res = await container.fetch(
+                                      new Request(`https://do.internal/live/chats/${thread}/state`, {
+                                          method: "POST",
+                                          headers: { "content-type": "application/json", "x-internal-key": env.COBALT_API_KEY },
+                                          body: JSON.stringify(body),
+                                      }),
+                                  );
+                                  if (!res.ok) {
+                                      await res.body?.cancel();
+                                      return null;
+                                  }
+                                  const j = (await res.json()) as { targets?: number };
+                                  return typeof j.targets === "number" ? { targets: j.targets } : null;
+                              },
+                          })
+                    : undefined,
+            };
             const id = decision.params?.id ?? "";
             if (decision.then === "chat_send") {
                 const r = await sendMessage(cd, request, id);
@@ -684,6 +721,7 @@ async function handleInner(
             decision.then === "live_state" ||
             decision.then === "live_selftest" ||
             decision.then === "live_edit" ||
+            decision.then === "live_chat" ||
             // the Hark opt-in (also DO-only: D1 ownership check and DO storage)
             decision.then === "studio_notify" ||
             // the share sheet's recent saves (DO storage for the list, D1 for the rows)
@@ -757,14 +795,15 @@ async function handleInner(
 // What the container's helper has said it can do (the Durable Object keeps what it last answered; it never wakes the
 // container for this): the slideshow routes (`gallery`), and the webp slideshow, the gallery image and `item` renders
 // (`make`), a pasted link straight to a media file (`direct`, section 19), and a webp of one photo (`still`, 18.14). Any failure is "not yet": the capability is simply not offered.
-async function helperHas(container: ContainerStub): Promise<[boolean, boolean, boolean, boolean]> {
+async function helperHas(container: ContainerStub): Promise<[boolean, boolean, boolean, boolean, boolean]> {
+    const none: [boolean, boolean, boolean, boolean, boolean] = [false, false, false, false, false];
     try {
         const res = await container.fetch(new Request("https://do.internal/helper/caps", { headers: { [KEY_ID_HEADER]: "worker:capabilities" } }));
-        if (res.status !== 200) return [false, false, false, false];
-        const body = (await res.json()) as { gallery?: unknown; make?: unknown; direct?: unknown; still?: unknown };
-        return [body?.gallery === true, body?.make === true, body?.direct === true, body?.still === true];
+        if (res.status !== 200) return none;
+        const body = (await res.json()) as { gallery?: unknown; make?: unknown; direct?: unknown; still?: unknown; discord?: unknown };
+        return [body?.gallery === true, body?.make === true, body?.direct === true, body?.still === true, body?.discord === true];
     } catch {
-        return [false, false, false, false];
+        return none;
     }
 }
 

@@ -203,8 +203,8 @@ extension DetailController {
 
     // MARK: - links
 
-    func copyAllLinks(_ item: MediaItem) {
-        let text = model.copyAllLinks(item)
+    func copyAllLinks(_ item: MediaItem, form: LinkForm = .share) {
+        let text = model.copyAllLinks(item, direct: form == .direct)
         guard !text.isEmpty else {
             say(DetailWords.noLinks)
             return

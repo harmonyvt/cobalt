@@ -137,7 +137,7 @@ struct WideDetail: View {
                                 LabeledContent(row.label) { Text(row.value).monospacedDigit() }
                                     .font(CobaltType.body)
                             }
-                            if let url = c.rendition.publicURL { linkRow(c.model.capabilities.shareLink(for: url)) }
+                            if let url = c.rendition.publicURL { linkRow(url) }
                         }
                     }
                     DetailControls(c: c)
@@ -149,9 +149,14 @@ struct WideDetail: View {
         .motion(Motion.card, value: c.rendition.id)
     }
 
-    /// The link with its two icon buttons: copy (bounces to a checkmark) and share.
-    private func linkRow(_ url: URL) -> some View {
-        let copied = c.controller.copiedID == c.rendition.id
+    /// The link with its icon buttons: copy share, copy direct when the file has a link page (each bounces to a
+    /// checkmark), and share.
+    private func linkRow(_ file: URL) -> some View {
+        let caps = c.model.capabilities
+        let url = caps.shareLink(for: file)
+        let justCopied = c.controller.copiedID == c.rendition.id
+        let copied = justCopied && c.controller.copiedForm != .direct
+        let copiedDirect = justCopied && c.controller.copiedForm == .direct
         return LabeledContent(Copy.Media.link) {
             HStack(spacing: 6) {
                 Text(DetailMeta.linkText(url))
@@ -160,14 +165,26 @@ struct WideDetail: View {
                     .textSelection(.enabled)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Button { c.controller.copy(url, for: c.rendition.id) } label: {
+                Button { c.controller.copy(file, for: c.rendition.id) } label: {
                     Image(systemName: copied ? Symbol.Media.copied : Symbol.Media.copyLink)
                         .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .symbolBounce(on: copied)
-                .accessibilityLabel(Copy.copyLink)
+                .accessibilityLabel(caps.hasLinkPair(file) ? Copy.LinkPair.copyShareLink : Copy.copyLink)
+                .help(caps.hasLinkPair(file) ? Copy.LinkPair.copyShareLink : Copy.copyLink)
+                if caps.hasLinkPair(file) {
+                    Button { c.controller.copy(file, for: c.rendition.id, form: .direct) } label: {
+                        Image(systemName: copiedDirect ? Symbol.Media.copied : Symbol.LinkPair.direct)
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .symbolBounce(on: copiedDirect)
+                    .accessibilityLabel(Copy.LinkPair.copyDirectLink)
+                    .help(Copy.LinkPair.copyDirectLink)
+                }
                 ShareLink(item: url) {
                     Image(systemName: Symbol.Media.share)
                         .frame(width: 28, height: 28)

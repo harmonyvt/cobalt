@@ -1046,6 +1046,35 @@ A 1080p stream canvas that OBS loads as a Browser Source, a public viewer store,
 - The daily cron deletes redemptions older than 30 days.
 - Logs: `[stage]` lines in Workers Logs (`cf observability telemetry query ... "datasets":["cloudflare-workers"]`).
 
+## Old Discord links (`APP-API-CONTRACT.md` section 19.6)
+
+Discord answers 404 to an attachment link without its `?ex=&is=&hm=` signature, or with an expired one. With a bot token the
+container's helper asks Discord (`POST /api/v10/attachments/refresh-urls`) to sign such a link again and saves the file. Without
+the token, those links fail exactly as before. `GET /capabilities` shows `features.discord_refresh` while it is on.
+
+### Owner steps (once)
+
+1. Open <https://discord.com/developers/applications>, press **New Application**, name it (e.g. `capystore`), accept the terms.
+2. In **Bot**, press **Reset Token**, confirm, and copy the token. Leave **Public Bot** off and every privileged intent off. The bot
+   never joins a server and needs no permissions or invite: refreshing a link works for any attachment URL.
+3. Put the token in the secrets file. This asks for it without showing it, so it never lands in chat, shell history or the
+   screen (paste at the prompt, press return):
+
+       python3 - "$HOME/.config/cobalt/secrets.json" <<'PY'
+       import getpass, json, sys
+       p = sys.argv[1]
+       d = json.load(open(p))
+       d["DISCORD_BOT_TOKEN"] = getpass.getpass("discord bot token: ").strip()
+       json.dump(d, open(p, "w"), indent=2)
+       PY
+       chmod 600 ~/.config/cobalt/secrets.json
+
+   An empty string keeps the feature off; the key itself must be in the file, because `cf deploy` refuses while a declared secret is
+   missing.
+4. Deploy the API (`deploy/cobalt-deploy api`): Worker and image together. No migration.
+
+To turn it off, set the value to `""` and deploy again. To rotate, press **Reset Token** again and repeat steps 3 and 4.
+
 ## Editor (`APP-API-CONTRACT.md` section 31, `apple/CONTRACT-EDITOR.md`)
 
 Timeline projects saved in D1 (`edit_projects`, migration 0021) and rendered to an H.264 + AAC MP4 on a **separate render

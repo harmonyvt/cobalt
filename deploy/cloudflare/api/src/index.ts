@@ -4,6 +4,7 @@ import { handleWebpRoute, isWebpRoute, WebpService, type WebpDeps } from "./webp
 import { ApnsClient, apnsConfigFrom, fetchTransport, helperTransport } from "./apns";
 import { handleLiveRoute, isLiveRoute, LiveService } from "./live";
 import { EditLiveService, handleEditLiveRoute, isEditLiveRoute } from "./edit-live";
+import { ChatLiveService, handleChatLiveRoute, isChatLiveRoute } from "./chat-live";
 import { handleNotifyRoute, harkConfigFrom, isNotifyRoute, NotifyService } from "./notify";
 import { handleStudioRoute, isStudioRoute, StudioService } from "./studio";
 import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
@@ -60,6 +61,7 @@ export class CobaltContainer extends Container<Env> {
     private studio: StudioService;
     private live: LiveService;
     private editLive: EditLiveService;
+    private chatLive: ChatLiveService;
     private notify: NotifyService;
 
     constructor(ctx: DurableObjectState<{}>, env: Env) {
@@ -91,6 +93,9 @@ export class CobaltContainer extends Container<Env> {
             // 480 s for headroom (= MAX_RENDER_SECONDS in studio.ts).
             WEBP_MAX_SECONDS: "30",
             WEBP_FFMPEG_TIMEOUT_MS: "480000",
+            // Old Discord attachment links (APP-API-CONTRACT.md 19.6): the helper asks Discord to sign them again.
+            // Only set when the secret is there, so the container's env stays exactly as before without it.
+            ...(env.DISCORD_BOT_TOKEN?.trim() ? { DISCORD_BOT_TOKEN: env.DISCORD_BOT_TOKEN.trim() } : {}),
         };
 
         const webpDeps: WebpDeps = {
@@ -165,6 +170,8 @@ export class CobaltContainer extends Container<Env> {
         });
         // editor renders (section 32): the app's token, pushes from the EditRenderer's ticks
         this.editLive = new EditLiveService({ storage: this.ctx.storage, db: env.DB, now: webpDeps.now, apns });
+        // chat replies shown on the owner's other devices (section 27.9): the start tokens, pushes from the chat route
+        this.chatLive = new ChatLiveService({ storage: this.ctx.storage, now: webpDeps.now, apns });
 
         // Hark notification bridge (APP-API-CONTRACT.md section 9). HARK_WEBHOOK_URL is a
         // secret read only here (the Worker reads it for the capability flag); it never goes
@@ -312,6 +319,9 @@ export class CobaltContainer extends Container<Env> {
         // never through super.fetch. The key id header is the Worker's word.
         if (isEditLiveRoute(new URL(request.url).pathname)) {
             return handleEditLiveRoute(this.editLive, request, this.env.COBALT_API_KEY);
+        }
+        if (isChatLiveRoute(new URL(request.url).pathname)) {
+            return handleChatLiveRoute(this.chatLive, request, this.env.COBALT_API_KEY);
         }
         if (isLiveRoute(new URL(request.url).pathname)) {
             return handleLiveRoute(this.live, request);

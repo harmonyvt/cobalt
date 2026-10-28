@@ -974,8 +974,10 @@ describe("GET /capabilities", () => {
                 gallery: false,
                 gallery_make: false,
                 direct_links: false,
+                discord_refresh: false,
                 editor: false,
                 edit_live_push: false,
+                chat_live_push: false,
                 still_webp: false,
                 // no embedding Space in this world's env (section 21)
                 search: false,

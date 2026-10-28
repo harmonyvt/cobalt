@@ -30,14 +30,25 @@ struct SideActions: View {
                     }
                 }
             }
-            // Publishing no longer copies the link by itself: once it is public the button copies it.
-            StatusButton(title: pipeline.hosting == .done ? Copy.copyLink : hostLabel,
-                         systemImage: Symbol.host, status: pipeline.hosting, prominent: true) {
-                if pipeline.hosting == .done, let url = pipeline.hostedOriginalURL {
-                    Pasteboard.copy(pipeline.shareLink(for: url).absoluteString)
-                    copiedTick += 1
-                } else {
-                    pipeline.hostOriginal()
+            // Publishing no longer copies the link by itself: once it is public the button copies it, as
+            // "copy share" and "copy direct" when the file has a share page.
+            if pipeline.hosting == .done, let url = pipeline.hostedOriginalURL, pipeline.shareLink(for: url) != url {
+                ForEach(LinkForm.allCases, id: \.self) { form in
+                    Button(form.copyTitle, systemImage: form.symbol) {
+                        Pasteboard.copy((form == .share ? pipeline.shareLink(for: url) : url).absoluteString)
+                        copiedTick += 1
+                    }
+                    .buttonStyle(CobaltButtonStyle(kind: form == .share ? .primary : .secondary))
+                }
+            } else {
+                StatusButton(title: pipeline.hosting == .done ? Copy.copyLink : hostLabel,
+                             systemImage: Symbol.host, status: pipeline.hosting, prominent: true) {
+                    if pipeline.hosting == .done, let url = pipeline.hostedOriginalURL {
+                        Pasteboard.copy(pipeline.shareLink(for: url).absoluteString)
+                        copiedTick += 1
+                    } else {
+                        pipeline.hostOriginal()
+                    }
                 }
             }
         }

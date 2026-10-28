@@ -27,6 +27,8 @@ struct ShareRootView: View {
     var onFit: ((CGFloat) -> Void)?
 
     @State private var copied = false
+    /// Which link the pair copied a moment ago ("copy share" / "copy direct").
+    @State private var copiedForm: LinkForm?
     /// What is typed in the inline title row (nil until the owner touches it: the row shows the default).
     @State private var titleDraft: String?
     @State private var sharing = false
@@ -265,17 +267,29 @@ struct ShareRootView: View {
             }
             GlassEffectContainer(spacing: 8) {
                 VStack(spacing: 8) {
-                    Button(copied ? Copy.copied : ShareCopy.copyWebpLink, systemImage: copied ? Symbol.checkmark : Symbol.copyLink) {
-                        model.noteInteraction()
-                        pipeline.copyResultLink()
-                        copied = true
-                        Task {
-                            try? await Task.sleep(for: .seconds(1.8))
-                            copied = false
+                    if pipeline.shareLink(for: result.url) != result.url {
+                        CopyLinkPair(copied: copiedForm) { form in
+                            model.noteInteraction()
+                            UIPasteboard.general.string = (form == .share ? pipeline.shareLink(for: result.url) : result.url).absoluteString
+                            copiedForm = form
+                            Task {
+                                try? await Task.sleep(for: .seconds(1.8))
+                                if copiedForm == form { copiedForm = nil }
+                            }
                         }
+                    } else {
+                        Button(copied ? Copy.copied : ShareCopy.copyWebpLink, systemImage: copied ? Symbol.checkmark : Symbol.copyLink) {
+                            model.noteInteraction()
+                            pipeline.copyResultLink()
+                            copied = true
+                            Task {
+                                try? await Task.sleep(for: .seconds(1.8))
+                                copied = false
+                            }
+                        }
+                        .buttonStyle(copied ? .cobaltDone() : .cobaltPrimary())
+                        .symbolBounce(on: copied)
                     }
-                    .buttonStyle(copied ? .cobaltDone() : .cobaltPrimary())
-                    .symbolBounce(on: copied)
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 8) { doneSecondaries }
                         VStack(spacing: 8) { doneSecondaries }
@@ -504,13 +518,26 @@ struct ShareRootView: View {
     private func imageBody(_ info: MediaInfo) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             note(Copy.imageNote)
-            // Publishing no longer copies the link by itself: once it is public the button copies it.
-            StatusButton(title: pipeline.hosting == .done ? Copy.copyLink : Copy.hostAsIs, systemImage: Symbol.host, status: pipeline.hosting, prominent: true) {
-                model.noteInteraction()
-                if pipeline.hosting == .done, let url = pipeline.hostedOriginalURL {
-                    UIPasteboard.general.string = pipeline.shareLink(for: url).absoluteString
-                } else {
-                    pipeline.hostOriginal()
+            // Publishing no longer copies the link by itself: once it is public the button copies it, as "copy share"
+            // and "copy direct" when the file has a share page.
+            if pipeline.hosting == .done, let url = pipeline.hostedOriginalURL, pipeline.shareLink(for: url) != url {
+                CopyLinkPair(copied: copiedForm) { form in
+                    model.noteInteraction()
+                    UIPasteboard.general.string = (form == .share ? pipeline.shareLink(for: url) : url).absoluteString
+                    copiedForm = form
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.8))
+                        if copiedForm == form { copiedForm = nil }
+                    }
+                }
+            } else {
+                StatusButton(title: pipeline.hosting == .done ? Copy.copyLink : Copy.hostAsIs, systemImage: Symbol.host, status: pipeline.hosting, prominent: true) {
+                    model.noteInteraction()
+                    if pipeline.hosting == .done, let url = pipeline.hostedOriginalURL {
+                        UIPasteboard.general.string = pipeline.shareLink(for: url).absoluteString
+                    } else {
+                        pipeline.hostOriginal()
+                    }
                 }
             }
         }

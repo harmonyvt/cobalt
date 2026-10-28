@@ -469,8 +469,9 @@ final class LibraryController {
 
     // MARK: actions
 
-    func copy(_ url: URL) {
-        Pasteboard.copy(model.capabilities.shareLink(for: url).absoluteString)
+    /// Copies a public file's link: its share page by default, or the file itself with `.direct`.
+    func copy(_ url: URL, form: LinkForm = .share) {
+        Pasteboard.copy(model.capabilities.link(for: url, form).absoluteString)
         showStatus(Copy.Media.copied)
         doneTick += 1
     }
@@ -543,8 +544,8 @@ final class LibraryController {
     }
 
     /// `copy all links`: the public links of the items and of what was made, one a line.
-    func copyAllLinks(_ item: MediaItem) {
-        let text = model.copyAllLinks(item)
+    func copyAllLinks(_ item: MediaItem, form: LinkForm = .share) {
+        let text = model.copyAllLinks(item, direct: form == .direct)
         guard !text.isEmpty else {
             showStatus(Copy.Library2.noPublicLinks)
             warnTick += 1

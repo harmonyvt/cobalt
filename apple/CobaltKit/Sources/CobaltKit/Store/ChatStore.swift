@@ -237,6 +237,8 @@ public final class ChatStore {
     /// Bumped by `reset()`: an answer from the old server arriving later is dropped.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var followers: [String: Task<Void, Never>] = [:]
+    /// The reply activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
+    @ObservationIgnored var live: ChatLiveManager?
 
     init(context: PipelineContext) {
         self.ctx = context
@@ -459,7 +461,13 @@ public final class ChatStore {
     /// `.full`, `.notFound`, `.off`, `.badRequest`, `.unavailable`, or the transport's error when the message never
     /// reached it. A stream that drops after the reply began is followed by reading the thread every 2 s while its last
     /// message is running (3 minutes at most, then it is marked `error.chat.interrupted`).
-    public func send(text: String, postIDs: [String] = [], in id: String) async throws {
+    ///
+    /// `source` is what the reply's Live Activity says it came from; `onEvent` sees every event of the reply as it is
+    /// applied (the "Ask chat" Shortcut's progress).
+    public func send(
+        text: String, postIDs: [String] = [], in id: String, source: ChatLiveSource = .app,
+        onEvent: (@MainActor (ChatEvent) -> Void)? = nil
+    ) async throws {
         guard let cleaned = ChatRule.cleanMessage(text) else { throw ChatError.badRequest }
         guard !isBusy(id) else { throw ChatError.busy }
         var attached: [String] = []
@@ -477,6 +485,14 @@ public final class ChatStore {
         contents[id]?.messages.append(stand)
         let kept = drafts[id]
         drafts[id] = nil
+        live?.began(thread: id, prompt: cleaned, source: source)
+        var refusal: ChatError?
+        defer {
+            // only a message after this send's own (a rollback leaves the thread's earlier reply last)
+            let messages = contents[id]?.messages ?? []
+            let last = messages.count > baseCount + 1 ? messages.last : nil
+            live?.ended(thread: id, final: last?.role == .assistant ? last : nil, code: refusal?.code ?? ChatError.interrupted.code)
+        }
 
         var received = 0
         var finished = false
@@ -486,6 +502,7 @@ public final class ChatStore {
                 guard started == generation else { return }
                 received += 1
                 apply(event, to: id)
+                onEvent?(event)
                 if event.isFinal { finished = true }
             }
         } catch {
@@ -496,9 +513,10 @@ public final class ChatStore {
 
         if received == 0 {
             // Nothing came back. A refusal is final; a dropped connection may still have reached the server.
-            if let refusal = failure as? ChatError {
+            if let refused = failure as? ChatError {
+                refusal = refused
                 rollback(id, stand: stand.id, draft: kept)
-                throw refusal
+                throw refused
             }
             if await !serverHasMessages(beyond: baseCount, in: id, started: started) {
                 rollback(id, stand: stand.id, draft: kept)
@@ -573,6 +591,7 @@ public final class ChatStore {
 
     private func apply(_ event: ChatEvent, to id: String) {
         contents[id]?.apply(event)
+        live?.observe(event, thread: id)
         switch event {
         case .collage:
             // a later collage of the same reply replaces the earlier one: start the pages over
@@ -621,6 +640,7 @@ public final class ChatStore {
     /// Another server or key: nothing from the old one is kept.
     func reset() {
         generation += 1
+        live?.reset()
         for task in followers.values { task.cancel() }
         followers = [:]
         threads = []

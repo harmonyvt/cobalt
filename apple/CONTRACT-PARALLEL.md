@@ -741,6 +741,32 @@ window for a background action is **unverified**. The signed Shortcuts in `deplo
 changed and keep working without the app; with the app installed, "Save links" covers what `cobalt studio` does
 (without opening the web studio page), so the owner may remove the old one.
 
+### 15.10 Ask chat (owner request 2026-10-28)
+
+**Ask chat** (`AskChatIntent`, iOS/macOS 27): `Message` `String` (Siri asks "what do you want to ask?"), `Chat`
+`CobaltChat?` (an `AppEntity` over `GET /chat/threads`; empty starts a new chat, which the AI names after its reply),
+`Saves` `[CobaltSave]` (posts to ask about, at most 20). Returns the reply as `String` (markdown); the dialog (what Siri
+reads) is the same reply in plain text, cut at 1,000 characters. `[.background]`, `LongRunningIntent` + `CancellableIntent`
+(the stop button cancels the stream; the server finishes and saves the reply anyway), `LiveActivityIntent` on iOS (so it
+can start its activity from the background), `.requiresAuthentication`. Siri phrases: "Ask \(.applicationName)", "Ask
+\(.applicationName) chat", "Chat with \(.applicationName)" (short title "ask chat"). Logic: `ShortcutActions.askChat`
+(`ShortcutActions+Chat.swift`), which goes through `ChatStore.send` like the chat tab, so the reply is in the tab too.
+Errors (lowercase): chat off, a reply still running in that chat, a full chat, 200 chats, a gone chat, an empty or long
+message, "the reply was cut off. it may still be in the chat tab.", "the reply failed. try again."
+
+**The reply's Live Activity** (`ChatLive.swift`, `CobaltWidgets/ChatLiveActivity.swift`): every message this device sends
+(chat tab or Shortcut) gets one when Live Activities are on. Compact: a glyph for what the AI is doing (sparkles thinking,
+hammer for a tool, a bubble while writing, a check when done) and the tool count; expanded and Lock Screen: the question,
+the headline ("thinking…", "searching your library…", "writing…", "replied"), "2 tools · 3 files", the reply so far (its
+start once done) and a timer. Text updates at most once a second. A tap opens the thread (`cobalt-apple://chat/<thread>`).
+A reply sent from the chat tab that ends while the app is in front ends at once; otherwise it stays 10 min (failed 5).
+Messages sent from another device: the server push-starts the same activity (APP-API-CONTRACT 27.9); the app registers
+its chat push-to-start token at launch and hands back each push-started activity's update token.
+
+Not verified (no device run yet): whether iOS also shows the system's own progress activity for the long-running
+action next to ours (two islands; PR #50 avoided that for runs); whether `LiveActivityIntent` lets the request through
+from a background Siri run; the push-to-start wake on a sideloaded build.
+
 ### 15.9 Not verified (say so to the owner)
 
 - **Whether a Feather-resigned build's actions appear in Shortcuts, Siri and Spotlight.** App Intents need no

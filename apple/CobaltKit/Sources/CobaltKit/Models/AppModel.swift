@@ -273,6 +273,14 @@ public final class AppModel {
             capabilities: { [unowned model] in model.capabilities },
             client: { [unowned ctx] in ctx.client as? any EditorClient },
             now: { [unowned ctx] in ctx.clock.now() })
+        let chatLive = ChatLiveManager(
+            adapter: ActivityKitChatAdapter(), now: { [unowned ctx] in ctx.clock.now() },
+            isAppActive: { [unowned ctx] in ctx.background.activity.isActive },
+            environment: LiveEnvironment.current,
+            capabilities: { [unowned model] in model.capabilities },
+            client: { [unowned ctx] in ctx.client as? any ChatLiveClient })
+        model.chat.live = chatLive
+        chatLive.start()             // a chat sent from the Mac push-starts its activity here (APP-API-CONTRACT 27.9)
         #endif
         #if os(iOS)
         // The owner leaves mid-run: the system keeps the app working on it (`BGContinuedProcessingTask`),
@@ -346,6 +354,7 @@ public final class AppModel {
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
         editor.capabilitiesChanged()                  // `features.editor` went: close the editor
         if let editLive { Task { await editLive.capabilitiesChanged() } }
+        if let chatLive = chat.live { Task { await chatLive.capabilitiesChanged() } }
     }
 
     func markKeyInvalid() {
@@ -394,7 +403,7 @@ public final class AppModel {
     }
 
     /// `cobalt-apple://job/<uuid>`, `cobalt-apple://library` ("your webp is ready"), `cobalt-apple://stage` (the Twitch
-    /// sign-in's return) and `cobalt-apple://open`.
+    /// sign-in's return), `cobalt-apple://chat/<thread>` (a chat reply's Live Activity) and `cobalt-apple://open`.
     public func open(_ url: URL) {
         guard url.scheme?.lowercased() == "cobalt-apple" else { return }
         queueShown = false                              // a link to somewhere else leaves the queue sheet behind
@@ -408,6 +417,16 @@ public final class AppModel {
             // reads the stage again either way, so the card shows what Twitch did.
             if capabilities.stage || capabilities.kind == .unreachable { selectedTab = .stage }
             if capabilities.stage { Task { await self.stage.load() } }
+            return
+        }
+        if url.host(percentEncoded: false)?.lowercased() == "chat" {
+            // a chat reply's Live Activity: `cobalt-apple://chat/<thread>` opens that thread in the chat tab
+            if capabilities.chat || capabilities.kind == .unreachable { selectedTab = .chat }
+            let thread = url.lastPathComponent
+            if !thread.isEmpty, thread != "/" {
+                chat.openThreadID = thread
+                Task { await self.chat.load(thread) }
+            }
             return
         }
         if url.host(percentEncoded: false)?.lowercased() == "jobs" {

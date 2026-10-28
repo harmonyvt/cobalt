@@ -129,9 +129,13 @@ struct GalleryActions: View {
         switch choice {
         case .copyLink:
             let done = controller.copiedID == r.id
-            DetailPrimary(
-                title: done ? Copy.Media.copied : linkTitle, symbol: Symbol.Media.copyLink, doneSymbol: Symbol.Media.copied, done: done
-            ) { if let url = r.publicURL { controller.copy(url, for: r.id) } }
+            if let url = r.publicURL, model.capabilities.hasLinkPair(url) {
+                CopyLinkPair(copied: done ? (controller.copiedForm ?? .share) : nil) { controller.copy(url, for: r.id, form: $0) }
+            } else {
+                DetailPrimary(
+                    title: done ? Copy.Media.copied : linkTitle, symbol: Symbol.Media.copyLink, doneSymbol: Symbol.Media.copied, done: done
+                ) { if let url = r.publicURL { controller.copy(url, for: r.id) } }
+            }
         case .share:
             DetailPrimary(
                 title: Copy.Media.share, symbol: Symbol.Media.share, working: controller.preparingShare

@@ -14,7 +14,7 @@ extension HTTPCobaltClient: RemoteFileRequests {}
 /// only to `baseURL`'s host; `Accept: application/json` everywhere; long polls time out at
 /// `wait + 15` s; `POST /` carries `{"url": …}` and nothing else; a missing key on a keyed route
 /// throws `.noAPIKey` before any request.
-public struct HTTPCobaltClient: CobaltClient {
+public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     public let baseURL: URL
     let apiKey: @Sendable () -> String?
     let urlSession: URLSession
@@ -199,6 +199,7 @@ public struct HTTPCobaltClient: CobaltClient {
                 var stageTwitch: Bool?
                 var editor: Bool?
                 var editLivePush: Bool?
+                var chatLivePush: Bool?
                 var stillWebp: Bool?
             }
             struct Limits: Decodable {
@@ -278,6 +279,7 @@ public struct HTTPCobaltClient: CobaltClient {
         caps.stageTwitch = (f?.stageTwitch ?? false) && caps.stage
         caps.editor = f?.editor ?? false
         caps.editLivePush = f?.editLivePush ?? false
+        caps.chatLivePush = (f?.chatLivePush ?? false) && caps.chat
         caps.stillWebp = (f?.stillWebp ?? false) && caps.galleryMake
         return caps
     }
@@ -1136,6 +1138,20 @@ public struct HTTPCobaltClient: CobaltClient {
         let req = try makeRequest("PUT", "/live/start-token", keyed: true)
         let body = Self.jsonBody(["token": token, "environment": environment.rawValue])
         try await sendEmpty(req, body: body)
+    }
+
+    // MARK: chat reply activities (APP-API-CONTRACT 27.9)
+
+    /// `PUT /live/chat-start-token`: this device's push-to-start token for chat reply activities.
+    public func registerChatLiveStartToken(_ token: String, environment: LiveEnvironment) async throws {
+        let req = try makeRequest("PUT", "/live/chat-start-token", keyed: true)
+        try await sendEmpty(req, body: Self.jsonBody(["token": token, "environment": environment.rawValue]))
+    }
+
+    /// `PUT /live/chats/<thread>`: the update token of a chat activity the server push-started on this device.
+    public func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment) async throws {
+        let req = try makeRequest("PUT", "/live/chats/\(Self.encode(threadID))", keyed: true)
+        try await sendEmpty(req, body: Self.jsonBody(["token": token, "environment": environment.rawValue]))
     }
 
     public func registerLiveRun(_ r: LiveRunRegistration) async throws -> LiveRunReply {

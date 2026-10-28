@@ -140,6 +140,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `features.edit_live_push` (APP-API-CONTRACT 32): `PUT /live/edits/<rid>` takes an editor render's activity token and
     /// the server keeps that Live Activity current with the app closed. False when absent: the app updates it while open.
     public var editLivePush: Bool = false
+    /// `features.chat_live_push` (APP-API-CONTRACT 27.9): with a chat push-to-start token (`PUT /live/chat-start-token`) the
+    /// server starts and updates a chat reply's Live Activity on this device when the message was sent from another one (the
+    /// Mac, a Mac Shortcut). False when absent: only replies sent from this device get an activity.
+    public var chatLivePush: Bool = false
     /// `features.still_webp` (APP-API-CONTRACT 18.14): a photo can be made into an animated webp of itself (2 frames of the
     /// same picture, so Discord offers "favourite"), a slideshow webp of one photo. The server sets it only with
     /// `gallery_make`, and so does the app. False when absent: photos have no "animated webp" button.

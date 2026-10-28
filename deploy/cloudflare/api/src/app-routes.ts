@@ -187,6 +187,8 @@ export async function capabilities(
     stageTwitch = false,
     // the EDIT_RENDERER binding is there and migration 0021 is applied: /edits* (section 31.13)
     editor = false,
+    // the helper that runs said `discord=1`: it has a Discord bot token and refreshes old attachment links (section 19.6)
+    helperDiscord = false,
 ): Promise<StudioReply> {
     const state = await resolveKeyState(d.db, auth, key, d.now());
     const version: unknown = apiVersion;
@@ -238,6 +240,9 @@ export async function capabilities(
                 // a pasted link straight to an image or video file (a Discord CDN attachment, ...) just saves
                 // (APP-API-CONTRACT.md section 19): only while the helper that runs said `direct=1`
                 direct_links: helperDirect === true,
+                // an old Discord attachment link (no `ex`/`is`/`hm`, or an expired one) is signed again by Discord and
+                // saved (APP-API-CONTRACT.md section 19.6): only while the helper that runs said `discord=1`
+                discord_refresh: helperDirect === true && helperDiscord === true,
                 // a webp of one photo (a slideshow webp of one photo item, or of a single photo's session): animated, so
                 // Discord offers "favourite" (APP-API-CONTRACT.md section 18.14); only while the helper that runs said `still=1`
                 still_webp: helperGallery === true && helperMake === true && helperStill === true,
@@ -269,6 +274,8 @@ export async function capabilities(
                 editor: editor === true,
                 // PUT /live/edits/<rid>: the server keeps an editor render's Live Activity current (section 32)
                 edit_live_push: editor === true && livePush === true,
+                // PUT /live/chat-start-token: a chat reply sent from another device shows on this one (section 27.9)
+                chat_live_push: chat === true && livePush === true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,

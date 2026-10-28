@@ -72,6 +72,8 @@ final class DetailController {
     var notice: String?
     /// The rendition whose link was just copied (the button reads "copied" for a moment).
     var copiedID: String?
+    /// Which of its links was copied ("copy share" or "copy direct"); nil for a single link button.
+    var copiedForm: LinkForm?
     var photos: [Rendition.ID: Step] = [:]
     var hosting: Step = .idle
     /// `animated webp` (APP-API-CONTRACT 18.14): the reopen and the ask, by rendition. The make itself is a job of the tray.
@@ -169,10 +171,12 @@ final class DetailController {
 
     // MARK: - buttons
 
-    func copy(_ url: URL, for id: String) {
-        Pasteboard.copy(model.capabilities.shareLink(for: url).absoluteString)
+    /// Copies a public file's link: its share page by default, or the file itself with `.direct`.
+    func copy(_ url: URL, for id: String, form: LinkForm = .share) {
+        Pasteboard.copy(model.capabilities.link(for: url, form).absoluteString)
         notice = nil
         copiedID = id
+        copiedForm = form
         Task {
             try? await Task.sleep(for: .seconds(1.8))
             if copiedID == id { copiedID = nil }
@@ -227,6 +231,7 @@ final class DetailController {
             _ = try await model.library.host(file)
             hosting = .done
             copiedID = r.id
+            copiedForm = nil
             Task {
                 try? await Task.sleep(for: .seconds(1.8))
                 if copiedID == r.id { copiedID = nil }
