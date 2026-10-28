@@ -65,7 +65,6 @@ export type LookupThen =
     | "studio_publish"
     | "studio_upload"
     | "library_adopt"
-    | "library_list"
     | "emotes_search"
     | "emotes_save"
     | "library_file"
@@ -76,12 +75,8 @@ export type LookupThen =
     | "library_post_delete"
     | "library_post_title"
     | "library_posters_backfill"
-    | "library_search"
     | "library_search_index"
     | "library_search_post"
-    | "library_map"
-    // GET /queue (APP-API-CONTRACT.md section 23)
-    | "queue"
     // gallery share links (APP-API-CONTRACT.md section 24)
     | "share_sets_create"
     | "share_sets_list"
@@ -186,8 +181,9 @@ const UUID_REGEX =
 
 // Mirrors validateAuthorization() up to the key lookup. The gate cannot know
 // whether a key is registered (that is D1), so a well-formed key becomes a
-// "lookup" decision for the Worker.
-function parseAuthorization(
+// "lookup" decision for the Worker. Exported for the op registry (src/registry/http.ts),
+// which checks keys the same way.
+export function parseAuthorization(
     header: string | null,
 ): { key: string } | { errorCode: string } {
     if (header === null) return { errorCode: "error.api.auth.key.missing" };
@@ -253,12 +249,9 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
             : { action: "capabilities", auth: "invalid" };
     }
 
-    // The server's work in one snapshot (APP-API-CONTRACT.md section 23): keyed GET only; the
-    // library-service credential and every other method are 404.
-    if (req.pathname === "/queue") {
-        if (req.service) return reject(404);
-        return req.method === "GET" ? lookupThen(req, "queue") : reject(404);
-    }
+    // GET /queue, GET /library, GET /library/search and GET /library/map are ops in the registry
+    // (src/registry/ops/library.ts, APP-API-CONTRACT.md section 33), which answers them before the gate. Every
+    // other method on those paths falls through to the 404 at the end.
 
     // Gallery share links (APP-API-CONTRACT.md section 24): keyed only.
     if (req.pathname === "/share/sets" || req.pathname.startsWith("/share/sets/")) {
@@ -355,21 +348,10 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         return reject(404);
     }
 
-    // The app's library (keyed): GET /library, then per item /library/items/<id>/<sub>.
-    if (req.pathname === "/library") {
-        return req.method === "GET" ? lookupThen(req, "library_list") : reject(404);
-    }
-    // Library search (APP-API-CONTRACT.md section 21): keyed or service.
-    if (req.pathname === "/library/search") {
-        return req.method === "GET" ? lookupThen(req, "library_search") : reject(404);
-    }
+    // The app's library (keyed): per item /library/items/<id>/<sub>.
     // One post's index status (section 21): keyed or service.
     if (req.pathname === "/library/search/post") {
         return req.method === "GET" ? lookupThen(req, "library_search_post") : reject(404);
-    }
-    // The library map's vectors (section 21): keyed or service.
-    if (req.pathname === "/library/map") {
-        return req.method === "GET" ? lookupThen(req, "library_map") : reject(404);
     }
     if (req.pathname === "/library/search/index") {
         return req.method === "POST" ? lookupThen(req, "library_search_index") : reject(404);

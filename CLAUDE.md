@@ -95,6 +95,10 @@ the files and a real run before anything is called done.
   session in code): an OBS canvas at `studio.capybaraharmony.com/live/<token>`, a viewer store at `/store` (locked by
   default), Twitch channel-point rewards via EventSub (`api/src/stage*.ts`, `StageRoom` DO, D1 `stage_*`, migration
   0019). Twitch is off unless `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_EVENTSUB_SECRET` are in the secrets file.
+- Op registry (`APP-API-CONTRACT.md` section 33): `defineOp` in `api/src/registry/` gives a route, its zod input check
+  and the chat AI's tool in one place; `worker.ts` runs it before the gate, and unregistered routes fall through.
+  `test/route-snapshot.test.ts` pins every route's answer: a PR moving routes must leave the fixture unchanged.
+  Ops live in `registry/ops/<area>.ts`; tier `ask` ops pause for a confirm card (DO storage, 15 min).
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.

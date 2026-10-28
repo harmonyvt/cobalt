@@ -7,7 +7,12 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { assemblePosts, libraryHide, type AppDeps } from "./app-routes";
-import { chatTools, loadPosts, picturesOf, recordsOf, toolTypes, type ChatCollect, type ChatToolDeps, type ChatTools } from "./chat-tools";
+import { chatTools, loadPosts, picturesOf, recordsOf, type ChatCollect, type ChatToolDeps, type ChatTools } from "./chat-tools";
+import { chatToolbox, runConfirmed } from "./registry/ai";
+import type { OpBase } from "./registry/context";
+import { toolTypes } from "./registry/index";
+import type { PendingConfirm, PendingPort } from "./registry/pending";
+import type { Registry } from "./registry/registry";
 import type { EmbedClient } from "./embed";
 import type { CodeRunner } from "./chat-limits";
 import type { ModelFetch } from "./model-fetch";
@@ -116,6 +121,12 @@ export type ChatDeps = {
     pingMs?: number;
     // the reply's Live Activity on the owner's other devices (section 27.9, chat-live.ts); absent when push is off
     liveFor?: (thread: string, prompt: string) => { event(name: string, data: unknown): void; close(): Promise<void> };
+    // The op registry (section 33): the model's `cobalt` API and cheat sheet come from it. Without it (older callers)
+    // the read tools of chat-tools.ts are called directly, under their flat names.
+    registry?: Registry;
+    base?: OpBase;
+    // where `ask` calls wait for Harmony (the main Durable Object); null: confirm cards are off
+    pending?: PendingPort | null;
 };
 
 // ---- rows and shapes ----------------------------------------------------------------------------
@@ -136,15 +147,27 @@ type MessageRow = {
     updated_at: number;
 };
 
+// A confirm card (section 33.5): an `ask` call waiting for Harmony, and what became of it.
+export type ConfirmCard = {
+    id: string;
+    op: string;
+    summary: string;
+    effect: Record<string, unknown>;
+    status: "waiting" | "yes" | "no" | "expired";
+    expires_at: number;
+};
+
 export type Step = {
     id: string;
-    kind: "code";
+    kind: "code" | "confirm";
     status: "running" | "done" | "error";
     code: string;
     logs: string[];
     result: string | null;
     error: string | null;
     duration_ms: number | null;
+    // kind "confirm" only
+    confirm?: ConfirmCard;
 };
 
 const err = (status: number, code: string): StudioReply => ({ status, body: { status: "error", error: { code } } });
@@ -176,15 +199,23 @@ const collageShape = (s: string | null) => {
     return c && Array.isArray(c.ids) && c.ids.length > 0 ? { title: c.title ?? null, query: c.query ?? null, total: c.ids.length } : null;
 };
 
+// The message's confirm card (its last confirm step), with a card nobody answered in time shown as expired.
+const confirmOf = (steps: Step[], now: number): ConfirmCard | null => {
+    const c = [...steps].reverse().find((s) => s.kind === "confirm" && s.confirm)?.confirm ?? null;
+    return c && c.status === "waiting" && c.expires_at <= now ? { ...c, status: "expired" } : c;
+};
+
 const messageShape = (r: MessageRow, now: number) => {
     const stale = r.status === "running" && now - r.updated_at > STALE_MS;
+    const steps = parse<Step[]>(r.steps, []);
     return {
         id: String(r.id),
         role: r.role,
         text: r.text,
         post_ids: parse<string[]>(r.post_ids, []),
         collage: collageShape(r.collage ?? null),
-        steps: parse<Step[]>(r.steps, []),
+        confirm: confirmOf(steps, now),
+        steps,
         status: stale ? "error" : r.status,
         error: stale ? "error.chat.interrupted" : r.error,
         created_at: r.created_at,
@@ -366,10 +397,12 @@ export async function deleteThread(d: Pick<ChatDeps, "db">, id: string): Promise
 
 // How to find things: meaning search first when the Space is configured (owner: "the chat should use the embedding
 // search when available"), plain name matching otherwise.
-const FINDING_WITH_SEARCH = `Finding things: for anything about what files show or are about (a topic, a person, an animal, a game, a mood, "the clip where..."), call cobalt.search(query) first. It ranks the whole library by meaning, from titles and pictures, so it finds things whose names say nothing (most names are just "instagram_<code>"). Write the query as a short description of the content, try a second wording if the first finds nothing good, and check the best hits with look() when it matters. Use library({ query }) only for exact words in a name, link or caption, and library({ since, until, source, kind }) for dates, sites and counts. If search throws because it is waking up, fall back to library({ query }) and tell Harmony the search was still waking up.`;
-const FINDING_WITHOUT_SEARCH = `Finding things: search by meaning is off on this server, so use library({ query }) for words in names, links and captions, library({ since, until, source, kind }) for dates, sites and counts, and look() to check what files actually show.`;
+const FINDING_WITH_SEARCH = `Finding things: for anything about what files show or are about (a topic, a person, an animal, a game, a mood, "the clip where..."), call cobalt.library.search(query) first. It ranks the whole library by meaning, from titles and pictures, so it finds things whose names say nothing (most names are just "instagram_<code>"). Write the query as a short description of the content, try a second wording if the first finds nothing good, and check the best hits with look() when it matters. Use cobalt.library.list({ query }) only for exact words in a name, link or caption, and cobalt.library.list({ since, until, source, kind }) for dates, sites and counts. If search throws because it is waking up, fall back to cobalt.library.list({ query }) and tell Harmony the search was still waking up.`;
+const FINDING_WITHOUT_SEARCH = `Finding things: search by meaning is off on this server, so use cobalt.library.list({ query }) for words in names, links and captions, cobalt.library.list({ since, until, source, kind }) for dates, sites and counts, and cobalt.look() to check what files actually show.`;
 
-export function systemPrompt(now: number, search = true): string {
+const CONFIRMS = `Some calls change things that are hard to undo (the API marks them "Asks Harmony first"). Calling one runs nothing: it returns { pending_confirm } and Harmony gets a confirm card with yes and no. End that run, say in one short line what you asked, and stop. When Harmony answers, you are told what happened and carry on from there.`;
+
+export function systemPrompt(now: number, search = true, types: string = toolTypes(search)): string {
     return `You live inside capystore, Harmony's private media saver. Harmony saves videos and pictures from X, TikTok, Instagram, YouTube and the like into their library, makes gallery share links, and sorts those links into collections. You chat with Harmony about that library: find things, count and summarize, compare, suggest what to share, and tease their taste when asked.
 
 Be helpful first. Your voice is a cute, funny furry anime cat girl: bubbly and a little teasing. Show it through tone and wording only: never write "nya", "meow" or "purr", and never open a reply with a sound or an interjection; start with the answer. Never introduce yourself, never say what you are, never narrate your character. Decorate with text faces (kaomoji) such as (=^･ω･^=), ฅ^•ﻌ•^ฅ, (≧▽≦), (｡•̀ᴗ-)✧, >w<, :3 or UwU, and never emoji. Keep replies short; use markdown lists only when they help.
@@ -380,8 +413,8 @@ To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbn
 
 ${search ? FINDING_WITH_SEARCH : FINDING_WITHOUT_SEARCH}
 
-The API:
-${toolTypes(search)}`;
+${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}The API:
+${types}`;
 }
 
 const RUN_CODE_TOOL = {
@@ -530,6 +563,11 @@ export async function sendMessage(d: ChatDeps, request: Request, id: string): Pr
         return err(503, "error.api.generic");
     }
 
+    return streamReply(d, { thread: thread!, earlier, userRow, botRow, text, postIds });
+}
+
+// The reply as server-sent events. The reply keeps going (and is saved) after the app goes away.
+function streamReply(d: ChatDeps, c: Omit<ReplyCtx, "emit">, first?: { event: string; data: unknown }): Response {
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const writer = writable.getWriter();
     const enc = new TextEncoder();
@@ -541,13 +579,15 @@ export async function sendMessage(d: ChatDeps, request: Request, id: string): Pr
         });
     };
     const ping = setInterval(() => write(": ping\n\n"), d.pingMs ?? PING_MS);
+    if (first) write(sse(first.event, first.data));
 
-    const live = d.liveFor?.(id, text);
+    // the Live Activity follows replies to a new message (not the reply that goes on after a confirm card)
+    const live = c.userRow ? d.liveFor?.(c.thread.id, c.text) : undefined;
     const emit = (e: string, v: unknown) => {
         write(sse(e, v));
         live?.event(e, v);
     };
-    const run = reply(d, { thread: thread!, earlier, userRow, botRow, text, postIds, emit }).finally(async () => {
+    const run = reply(d, { ...c, emit }).finally(async () => {
         clearInterval(ping);
         if (open) writer.close().catch(() => {});
         await live?.close();
@@ -562,30 +602,38 @@ export async function sendMessage(d: ChatDeps, request: Request, id: string): Pr
 type ReplyCtx = {
     thread: ThreadRow;
     earlier: MessageRow[];
-    userRow: MessageRow;
+    // the user's message; null when the reply continues after a confirm card (section 33.5)
+    userRow: MessageRow | null;
     botRow: MessageRow;
+    // the user's text, or the note on how Harmony answered the card
     text: string;
     postIds: string[];
     emit: (event: string, data: unknown) => void;
 };
 
+const PAUSED_NOTE =
+    "Harmony now sees a confirm card with yes and no. Nothing has run yet. End here: say in one short line what you asked them to confirm, and do not call run_code again in this reply.";
+
 async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
     const now = () => d.now();
-    c.emit("user", { message: messageShape(c.userRow, now()) });
+    if (c.userRow) c.emit("user", { message: messageShape(c.userRow, now()) });
     c.emit("assistant", { message: messageShape(c.botRow, now()) });
 
     let text = "";
     const steps: Step[] = [];
     const api: any[] = [];
+    // a continuation's opening user turn is saved with its reply, so the thread replays
+    const lead: any[] = c.userRow ? [] : [{ role: "user", content: c.text }];
     const collect: ChatCollect = { look: [], show: [], collage: null };
     const toolDeps: ChatToolDeps = { db: d.db, mediaBaseUrl: d.mediaBaseUrl, shareBaseUrl: d.shareBaseUrl, embed: d.embed };
     let lastSave = now();
+    let paused: PendingConfirm | null = null;
     const collageJson = () => (collect.collage ? JSON.stringify(collect.collage) : null);
     const row = (status: string, error: string | null) => ({ ...c.botRow, text, post_ids: JSON.stringify(collect.show), collage: collageJson(), steps: JSON.stringify(steps), status, error, updated_at: now() });
     const save = async (status: string, error: string | null) => {
         await d.db
             .prepare("UPDATE chat_messages SET text = ?2, post_ids = ?3, steps = ?4, api = ?5, status = ?6, error = ?7, updated_at = ?8, collage = ?9 WHERE id = ?1")
-            .bind(c.botRow.id, text, JSON.stringify(collect.show), JSON.stringify(steps), status === "running" ? null : JSON.stringify(api), status, error, now(), collageJson())
+            .bind(c.botRow.id, text, JSON.stringify(collect.show), JSON.stringify(steps), status === "running" ? null : JSON.stringify([...lead, ...api]), status, error, now(), collageJson())
             .run();
     };
     const progress = async () => {
@@ -593,17 +641,39 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
         lastSave = now();
         await save("running", null).catch(() => {});
     };
+    const search = d.embed !== null;
+    // the model's `cobalt` for one code run: the registry's tools (namespaced, with the old flat names), else the read
+    // tools alone
+    const toolsForRun = () => {
+        const legacy = chatTools(toolDeps, collect);
+        if (!d.registry || !d.base) return { tools: legacy, paused: () => null };
+        return chatToolbox(d.registry, d.base, {
+            threadId: c.thread.id,
+            messageId: String(c.botRow.id),
+            collect,
+            legacy,
+            flags: { search },
+            pending: d.pending ?? null,
+            randomBytes: d.randomBytes,
+        });
+    };
 
     try {
         const prior = await history(d, c.earlier);
-        const records = await recordsOf(d, c.postIds);
-        const pics = await picturesOf(d, c.postIds.slice(0, 4));
-        const userContent: any[] = [
-            ...[...pics.values()].map((url) => ({ type: "image", source: { type: "url", url } })),
-            { type: "text", text: c.text + attachedNote(records) },
-        ];
-        const messages = mergeRoles([...prior, { role: "user", content: userContent }]);
-        const system = systemPrompt(now(), d.embed !== null);
+        let opening: any;
+        if (c.userRow) {
+            const records = await recordsOf(d, c.postIds);
+            const pics = await picturesOf(d, c.postIds.slice(0, 4));
+            opening = {
+                role: "user",
+                content: [
+                    ...[...pics.values()].map((url) => ({ type: "image", source: { type: "url", url } })),
+                    { type: "text", text: c.text + attachedNote(records) },
+                ],
+            };
+        } else opening = lead[0];
+        const messages = mergeRoles([...prior, opening]);
+        const system = systemPrompt(now(), search, d.registry ? toolTypes(search, d.registry) : undefined);
         let runs = 0;
         let looked = 0;
         for (let turn = 0; turn <= MAX_CODE_RUNS + 1; turn++) {
@@ -633,6 +703,10 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                     results.push({ type: "tool_result", tool_use_id: u.id, is_error: true, content: "Only run_code exists, with { code: string }." });
                     continue;
                 }
+                if (paused) {
+                    results.push({ type: "tool_result", tool_use_id: u.id, is_error: true, content: "Waiting for Harmony to answer the confirm card: answer in one short line, without code." });
+                    continue;
+                }
                 if (runs >= MAX_CODE_RUNS) {
                     results.push({ type: "tool_result", tool_use_id: u.id, is_error: true, content: "No more code runs in this reply: answer with what you have." });
                     continue;
@@ -644,7 +718,8 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 const shownBefore = collect.show.length;
                 const collageBefore = collageJson();
                 const t0 = Date.now();
-                const out = await d.runner(u.input.code, chatTools(toolDeps, collect));
+                const box = toolsForRun();
+                const out = await d.runner(u.input.code, box.tools);
                 step.duration_ms = Date.now() - t0;
                 step.logs = out.logs.slice(0, 50).map((l) => clipStr(l, 500));
                 step.status = out.error !== undefined ? "error" : "done";
@@ -657,10 +732,20 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                     c.emit("posts", { post_ids: added, posts: await postsMap(d, added) });
                 }
                 if (collageJson() !== collageBefore) c.emit("collage", { collage: collageShape(collageJson()) });
+                // an `ask` call stopped the run: the card goes on this message (section 33.5)
+                const card = box.paused();
+                if (card) {
+                    paused = card;
+                    const confirm: ConfirmCard = { id: card.id, op: card.op, summary: card.summary, effect: card.effect, status: "waiting", expires_at: card.expires_at };
+                    const cstep: Step = { id: card.id, kind: "confirm", status: "done", code: "", logs: [], result: card.summary, error: null, duration_ms: null, confirm };
+                    steps.push(cstep);
+                    c.emit("step", { step: cstep });
+                    c.emit("confirm", { message_id: String(c.botRow.id), confirm });
+                }
                 const body = out.error !== undefined
                     ? { error: out.error, logs: step.logs }
                     : { result: full!.length > RESULT_MAX ? `${full!.slice(0, RESULT_MAX)}… (cut: return less)` : out.result ?? null, logs: step.logs };
-                const content: any[] = [{ type: "text", text: clipStr(stringify(body), RESULT_MAX + 2000) }];
+                const content: any[] = [{ type: "text", text: clipStr(stringify(card ? { ...body, pending_confirm: { id: card.id, summary: card.summary, effect: card.effect }, note: PAUSED_NOTE } : body), RESULT_MAX + 2000) }];
                 // pictures asked for with look() in this run
                 const fresh = collect.look.slice(looked);
                 looked = collect.look.length;
@@ -683,7 +768,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
 
         await save("done", null);
         let thread = c.thread;
-        if (c.earlier.length === 0 && c.thread.titled_by === "auto" && text) {
+        if (c.userRow && c.earlier.length === 0 && c.thread.titled_by === "auto" && text) {
             const named = cleanTitle(await d.model.title(c.text, text));
             if (named) {
                 const t = now();
@@ -706,4 +791,82 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
         await save("error", code).catch(() => {});
         c.emit("error", { code, message: messageShape(row("error", code), now()) });
     }
+}
+
+// ---- POST /chat/threads/<id>/confirm/<cid> (section 33.5) ---------------------------------------------------------------
+
+const CONFIRM_RESULT_MAX = 4000;
+
+export async function answerConfirm(d: ChatDeps, request: Request, id: string, cid: string): Promise<Response | StudioReply> {
+    const b = await readBody(request);
+    const answer = b?.answer;
+    if (answer !== "yes" && answer !== "no") return err(400, "error.chat.bad_request");
+    if (!d.pending || !d.registry || !d.base) return err(404, "error.chat.off");
+    const now = d.now();
+    let thread: ThreadRow | null;
+    let earlier: MessageRow[];
+    let rec: PendingConfirm | null;
+    let botRow: MessageRow;
+    let card: ConfirmCard | null = null;
+    let note: string;
+    try {
+        thread = await oneThread(d.db, id);
+        if (!thread) return err(404, "error.chat.not_found");
+        const { results } = await d.db.prepare("SELECT * FROM chat_messages WHERE thread_id = ?1 ORDER BY id").bind(id).all<MessageRow>();
+        if (results.length + 1 > MESSAGES_MAX) return err(409, "error.chat.full");
+        const last = results[results.length - 1];
+        if (last && last.status === "running" && now - last.updated_at <= STALE_MS) return err(409, "error.chat.busy");
+        if (last && last.status === "running") {
+            await d.db.prepare("UPDATE chat_messages SET status = 'error', error = 'error.chat.interrupted' WHERE id = ?1").bind(last.id).run();
+            last.status = "error";
+        }
+        rec = await d.pending.take(id, cid);
+        if (!rec) return err(404, "error.chat.confirm_gone");
+
+        // run it (yes) or drop it (no), with the input that was checked when the model asked
+        let outcome: { result?: unknown; error?: string } | null = null;
+        if (answer === "yes") {
+            const collect: ChatCollect = { look: [], show: [], collage: null };
+            const legacy = chatTools({ db: d.db, mediaBaseUrl: d.mediaBaseUrl, shareBaseUrl: d.shareBaseUrl, embed: d.embed }, collect);
+            outcome = await runConfirmed(d.registry, d.base, id, rec, legacy, collect);
+        }
+        const shown = outcome ? clipStr(stringify(outcome.error !== undefined ? { error: outcome.error } : { result: outcome.result ?? null }), CONFIRM_RESULT_MAX) : null;
+        note =
+            answer === "yes"
+                ? `[Harmony tapped yes on the confirm card "${rec.summary}". cobalt ran it and returned: ${shown}]`
+                : `[Harmony tapped no on the confirm card "${rec.summary}". Nothing ran.]`;
+
+        // the card on its message records the answer
+        const host = rec.message_id && results.find((r) => String(r.id) === rec!.message_id);
+        if (host) {
+            const steps = parse<Step[]>(host.steps, []);
+            const step = steps.find((s) => s.kind === "confirm" && s.id === rec!.id);
+            if (step?.confirm) {
+                step.confirm = { ...step.confirm, status: answer };
+                if (outcome) {
+                    step.status = outcome.error !== undefined ? "error" : "done";
+                    step.error = outcome.error ?? null;
+                    step.result = clipStr(shown!, STEP_RESULT_MAX);
+                }
+                card = step.confirm;
+                await d.db.prepare("UPDATE chat_messages SET steps = ?2 WHERE id = ?1 AND thread_id = ?3").bind(host.id, JSON.stringify(steps), id).run();
+            }
+        }
+        card ??= { id: rec.id, op: rec.op, summary: rec.summary, effect: rec.effect, status: answer, expires_at: rec.expires_at };
+
+        earlier = results.slice(-HISTORY_MESSAGES);
+        botRow = (await d.db
+            .prepare("INSERT INTO chat_messages (thread_id, role, text, status, created_at, updated_at) VALUES (?1, 'assistant', '', 'running', ?2, ?2) RETURNING *")
+            .bind(id, now)
+            .first<MessageRow>())!;
+        await d.db.prepare("UPDATE chat_threads SET updated_at = ?2 WHERE id = ?1").bind(id, now).run();
+    } catch (e) {
+        console.error("[chat] confirm failed", String(e));
+        return err(503, "error.api.generic");
+    }
+    return streamReply(
+        d,
+        { thread: thread!, earlier, userRow: null, botRow, text: note, postIds: [] },
+        { event: "confirm", data: { message_id: rec!.message_id, confirm: card } },
+    );
 }

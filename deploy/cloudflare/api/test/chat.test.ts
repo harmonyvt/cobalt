@@ -448,17 +448,17 @@ describe("chat: the sandbox module", () => {
 describe("the system prompt", () => {
     it("sends the model to the meaning search first when search is on", () => {
         const p = systemPrompt(Date.UTC(2026, 9, 18), true);
-        expect(p).toContain("call cobalt.search(query) first");
+        expect(p).toContain("call cobalt.library.search(query) first");
         expect(p).toContain("search(query: string, limit?: number)");
-        expect(p).toContain("fall back to library({ query })");
+        expect(p).toContain("fall back to cobalt.library.list({ query })");
         expect(p).toContain("Today is 2026-10-18");
     });
     it("leaves search out entirely when it is off", () => {
         const p = systemPrompt(Date.UTC(2026, 9, 18), false);
         expect(p).toContain("search by meaning is off");
-        expect(p).not.toContain("cobalt.search");
+        expect(p).not.toContain("cobalt.library.search");
         expect(p).not.toContain("search(query");
-        expect(p).toContain("library(opts?:");
+        expect(p).toContain("list(opts?:");
     });
 });
 

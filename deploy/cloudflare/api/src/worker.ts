@@ -1,12 +1,12 @@
 // The Worker's request handling, separated from index.ts (which imports the
 // Containers library and so cannot load under plain node) so the whole flow,
 // gate -> D1 lookup -> Durable Object / container, is testable with fakes.
-import { type EmbedClient, librarySearch, librarySearchIndex, librarySearchPost, libraryMap, spaceClient } from "./embed";
+import { type EmbedClient, librarySearchIndex, librarySearchPost } from "./embed";
+import { appDeps, embedFrom, shareHost, type ContainerStub } from "./deps";
 import {
     capabilities,
     libraryFile,
     libraryItemDelete,
-    libraryList,
     libraryMade,
     libraryPostDelete,
     libraryPostTitle,
@@ -28,7 +28,6 @@ import { KEY_ID_HEADER, SERVICE_HEADER, stripInternalHeaders } from "./headers";
 import { lookupKey } from "./keys";
 import { SERVICE_KEY_ID } from "./library";
 import { publishStudio, type PublishBucket } from "./publish";
-import { queueSnapshot } from "./queue";
 import { serviceAuthorized } from "./service-auth";
 import { sharePage } from "./share";
 import {
@@ -50,6 +49,8 @@ import { createGroup, deleteGroup, listGroups, updateGroup } from "./collection-
 import { editTablesPresent, editsKeyed, kickRenderers, type EditsOp, type RendererNamespace } from "./edits";
 import { chatModelFrom, createThread, deleteThread, getCollage, getThread, listThreads, renameThread, sendMessage } from "./chat";
 import { ingestTelemetry } from "./telemetry";
+import { handleOp, opBase, REGISTRY, type Registry } from "./registry/index";
+import { chatDepsFrom } from "./registry/ops/chat";
 import {
     linkFrom,
     parseSourceWait,
@@ -134,6 +135,9 @@ export interface WorkerEnv {
 // the fetch the Twitch client uses (tests pass a fake).
 export type StageEdge = { stageRoom?: RoomPort; twitchFetch?: TwitchFetch; stageEmbed?: EmbedClient | null; stageLimits?: StageDeps["limits"] };
 
+// The op registry the Worker routes through (section 33); tests pass their own.
+export type RegistryEdge = { registry?: Registry };
+
 // The stage's deps, or null while STAGE_BASE_URL is not an https URL (every /stage* route is then 404).
 function stageDepsFrom(env: WorkerEnv, edge: Pick<EdgeDeps, "now" | "waitUntil">, se: StageEdge): StageDeps | null {
     const stageBaseUrl = stageBaseFrom(env);
@@ -156,14 +160,7 @@ function stageDepsFrom(env: WorkerEnv, edge: Pick<EdgeDeps, "now" | "waitUntil">
 const chatOn = (env: WorkerEnv, edge: EdgeDeps): boolean =>
     (edge.chatModel === undefined ? chatModelFrom(env, edge.modelFetch) : edge.chatModel) !== null && !!edge.codeRunner;
 
-// The Space client, or null while search is not configured (embed.ts).
-export const embedFrom = (env: WorkerEnv): EmbedClient | null =>
-    spaceClient({ url: env.EMBED_URL, token: env.EMBED_TOKEN, key: env.EMBED_KEY, space: env.EMBED_SPACE });
-
-// The single "main" Container Durable Object (a stub in production).
-export interface ContainerStub {
-    fetch(request: Request): Promise<Response>;
-}
+export { embedFrom, type ContainerStub } from "./deps";
 
 // Lowercase only: the API rejects a key file with any other spelling.
 const UUID_REGEX =
@@ -187,22 +184,11 @@ function withCors(res: Response, allowOrigin?: string): Response {
     return out;
 }
 
-// The hostname of SHARE_BASE_URL, or null while it is not set (or not an https URL).
-const shareHost = (env: WorkerEnv): string | null => {
-    if (!env.SHARE_BASE_URL) return null;
-    try {
-        const u = new URL(env.SHARE_BASE_URL);
-        return u.protocol === "https:" ? u.hostname : null;
-    } catch {
-        return null;
-    }
-};
-
 export async function handleRequest(
     incoming: Request,
     env: WorkerEnv,
     container: ContainerStub,
-    deps: Partial<EdgeDeps> & StageEdge = {},
+    deps: Partial<EdgeDeps> & StageEdge & RegistryEdge = {},
 ): Promise<Response> {
     // The share host serves the public link pages and nothing else: no key, no container, no CORS.
     const share = shareHost(env);
@@ -253,7 +239,7 @@ async function handleInner(
     env: WorkerEnv,
     container: ContainerStub,
     edge: EdgeDeps,
-    stageEdge: StageEdge = {},
+    stageEdge: StageEdge & RegistryEdge = {},
 ): Promise<Response> {
     // Misconfiguration must not wake (and crash-loop) the container: the
     // API refuses to load a key file that has a non-UUID key.
@@ -278,6 +264,14 @@ async function handleInner(
     });
 
     const url = new URL(request.url);
+    const origin = request.headers.get("Origin");
+    const allowOrigin = origin === env.CORS_URL ? origin : undefined;
+
+    // The op registry answers the routes it knows (section 33); everything else goes on to the gate below.
+    const registry = stageEdge.registry ?? REGISTRY;
+    const byOp = await handleOp(registry, opBase(env, container, edge, registry), { request, url, service: isService, allowOrigin });
+    if (byOp) return byOp;
+
     const decision = decide(
         {
             method: request.method,
@@ -292,9 +286,6 @@ async function handleInner(
             now: edge.now(),
         },
     );
-
-    const origin = request.headers.get("Origin");
-    const allowOrigin = origin === env.CORS_URL ? origin : undefined;
 
     if (decision.action === "reject") {
         if (decision.errorCode) {
@@ -425,47 +416,21 @@ async function handleInner(
             await logRequest(env.DB, "PUT /studio/upload", keyId, request, uploadLogInfo(request), res);
             return res;
         }
-        if (decision.then === "library_list") {
-            const r = await libraryList(appDeps(env, container, edge), url.searchParams);
-            return json(r.status, r.body, allowOrigin);
-        }
-        if (decision.then === "library_search" || decision.then === "library_search_index") {
+        if (decision.then === "library_search_index") {
             const deps = { ...appDeps(env, container, edge), embed: embedFrom(env) };
-            const r =
-                decision.then === "library_search"
-                    ? await librarySearch(deps, url.searchParams)
-                    : await librarySearchIndex(deps, url.searchParams);
+            const r = await librarySearchIndex(deps, url.searchParams);
             return new Response(JSON.stringify(r.body), {
                 status: r.status,
                 headers: { "content-type": "application/json", "cache-control": "no-store" },
             });
         }
-        if (decision.then === "library_search_post" || decision.then === "library_map") {
+        if (decision.then === "library_search_post") {
             const deps = { db: env.DB, mediaBaseUrl: env.MEDIA_BASE_URL, searchEnabled: embedFrom(env) !== null };
-            const r = decision.then === "library_map" ? await libraryMap(deps) : await librarySearchPost(deps, url.searchParams);
+            const r = await librarySearchPost(deps, url.searchParams);
             return new Response(JSON.stringify(r.body), {
                 status: r.status,
                 headers: { "content-type": "application/json", "cache-control": "no-store" },
             });
-        }
-        // GET /queue (section 23): D1, plus the Durable Object's line answer (never the container).
-        if (decision.then === "queue") {
-            const id = keyId;
-            const r = await queueSnapshot({
-                db: env.DB,
-                mediaBaseUrl: env.MEDIA_BASE_URL,
-                now: edge.now,
-                searchEnabled: embedFrom(env) !== null,
-                line: async () => {
-                    const res = await container.fetch(
-                        new Request("https://do.internal/studio/line", { headers: { [KEY_ID_HEADER]: id } }),
-                    );
-                    return res.ok ? await res.json() : null;
-                },
-            });
-            const res = json(r.status, r.body, allowOrigin);
-            res.headers.set("cache-control", "no-store");
-            return res;
         }
         // Gallery share links (section 24): D1 only.
         if (decision.then === "share_sets_create" || decision.then === "share_sets_list" || decision.then === "share_sets_revoke") {
@@ -514,25 +479,15 @@ async function handleInner(
             decision.then === "chat_send" ||
             decision.then === "chat_collage"
         ) {
-            const model = edge.chatModel === undefined ? chatModelFrom(env, edge.modelFetch) : edge.chatModel;
-            const runner = edge.codeRunner ?? null;
             const noStore = (r: { status: number; body: unknown }) => {
                 const res = json(r.status, r.body, allowOrigin);
                 res.headers.set("cache-control", "no-store");
                 return res;
             };
-            if (!model || !runner) return noStore({ status: 404, body: { status: "error", error: { code: "error.chat.off" } } });
-            const app = appDeps(env, container, edge);
+            const base = chatDepsFrom(opBase(env, container, edge, registry));
+            if (!base) return noStore({ status: 404, body: { status: "error", error: { code: "error.chat.off" } } });
             const cd = {
-                db: env.DB,
-                app,
-                mediaBaseUrl: env.MEDIA_BASE_URL,
-                shareBaseUrl: shareHost(env) ? env.SHARE_BASE_URL : undefined,
-                embed: embedFrom(env),
-                model,
-                runner,
-                now: edge.now,
-                waitUntil: edge.waitUntil,
+                ...base,
                 // section 27.9: the reply's Live Activity on the owner's other iPhones, through the Durable Object
                 liveFor: livePushConfigured(env)
                     ? (thread: string, prompt: string) =>
@@ -850,57 +805,6 @@ async function helperHas(container: ContainerStub): Promise<[boolean, boolean, b
     } catch {
         return none;
     }
-}
-
-// What the app's routes need, wired to this request's bindings. The one call
-// into the Durable Object is the internal adopt path a stored video continues
-// into; the caller's key id (set here, after the D1 lookup) travels in the
-// header the Worker strips from every client request.
-function appDeps(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps): AppDeps {
-    return {
-        db: env.DB,
-        originals: env.ORIGINALS,
-        media: env.MEDIA,
-        mediaBaseUrl: env.MEDIA_BASE_URL,
-        shareBaseUrl: shareHost(env) ? env.SHARE_BASE_URL : undefined,
-        apiUrl: env.API_URL,
-        webUrl: env.CORS_URL,
-        now: edge.now,
-        purge: purgeFrom(env),
-        fixedLength: edge.fixedLength ?? ((n) => new FixedLengthStream(n)),
-        // Queues the missing posters in the Durable Object (records only; it answers at once).
-        kickPosters: async (limit) => {
-            const res = await container.fetch(
-                new Request(`https://do.internal/posters/kick${limit ? `?limit=${limit}` : ""}`, {
-                    method: "POST",
-                    headers: { [KEY_ID_HEADER]: "worker:posters" },
-                }),
-            );
-            let parsed: unknown = null;
-            try {
-                parsed = await res.json();
-            } catch {
-                // not JSON: reported as a generic failure below
-            }
-            return { status: res.status, body: parsed ?? { status: "error", error: { code: "error.api.generic" } } };
-        },
-        adopt: async (keyId, body) => {
-            const res = await container.fetch(
-                new Request("https://do.internal/studio/upload/adopt", {
-                    method: "POST",
-                    headers: { "content-type": "application/json", [KEY_ID_HEADER]: keyId },
-                    body: JSON.stringify(body),
-                }),
-            );
-            let parsed: unknown = null;
-            try {
-                parsed = await res.json();
-            } catch {
-                // not JSON: reported as a generic failure below
-            }
-            return { status: res.status, body: parsed ?? { status: "error", error: { code: "error.api.generic" } } };
-        },
-    };
 }
 
 // The normalised `url` of a JSON body, if it is one clean http(s) link.

@@ -323,40 +323,5 @@ export async function recordsOf(d: Pick<ChatToolDeps, "db" | "mediaBaseUrl">, id
     return ids.flatMap((i) => (posts.has(i) ? [posts.get(i)!] : []));
 }
 
-// The TypeScript the model is shown for the sandbox API (run_code's description).
-export const TOOL_TYPES = `type Post = {
-  id: string;              // the post id (use it with post, look, show)
-  title: string | null;
-  saved_at: string;        // ISO date it was saved
-  source: string | null;   // host it was saved from, e.g. "tiktok.com", "x.com"
-  link: string | null;     // the original link
-  kind: "video" | "image" | "gallery";
-  files: number;           // items in a gallery, else 1
-  duration: number | null; // seconds (videos)
-  public: boolean;         // has a public link
-  caption: string | null;  // the roast caption title, if written
-};
-declare const cobalt: {
-  // Posts newest first. since/until: ISO date or ms. source: a host. query: substring of title, names, link, caption.
-  library(opts?: { since?: string | number; until?: string | number; source?: string; kind?: "video" | "image" | "gallery"; query?: string; limit?: number /* default 100, max 1000 */ }): Promise<Post[]>;
-  // Meaning search over titles and pictures, best first (default 10, max 500; every post gets a score, so cut where the scores drop). Throws while the search model is waking up.
-  search(query: string, limit?: number): Promise<(Post & { score: number })[]>;
-  // One post with its files (public url and share_url when public).
-  post(id: string): Promise<Post & { files: { id: string; name: string | null; role: string; kind: "video" | "image"; content_type: string | null; duration: number | null; width: number | null; height: number | null; bytes: number | null; public: boolean; url: string | null; share_url: string | null }[] }>;
-  // You get to SEE these posts' pictures (poster or image) after this code returns. Max 4 per reply. Returns how many are queued.
-  look(ids: string[]): Promise<number>;
-  // Show these posts to Harmony as thumbnails under your reply (max 12 per reply). Returns the ids accepted.
-  show(ids: string[]): Promise<string[]>;
-  // A big result set (up to 500 posts, in order) shown as a paged collage under your reply, e.g. every
-  // cat when Harmony asks for cats. title: a short label; query: the search words, so Harmony can open the
-  // same search in the library. One per reply (a later call replaces it). Returns how many were kept.
-  collage(ids: string[], opts?: { title?: string; query?: string }): Promise<number>;
-  // Gallery share links and the collections (folders) they are in.
-  links(): Promise<{ id: string; url: string | null; title: string | null; created_at: string; post_ids: string[] }[]>;
-  collections(): Promise<{ id: string; name: string; link_ids: string[] }[]>;
-};`;
-
-// The types without `search` while meaning search is off (no Space configured), so the model never reaches for it.
-export const toolTypes = (search: boolean): string =>
-    search ? TOOL_TYPES : TOOL_TYPES.split("\n").filter((l) => !/^\s*(search\(|\/\/ Meaning search)/.test(l)).join("\n");
-
+// The TypeScript the model is shown for these tools (TOOL_TYPES) is generated from the op registry: src/registry/index.ts,
+// whose ops (src/registry/ops/library.ts) call the functions above.
