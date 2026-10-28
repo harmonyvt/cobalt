@@ -4,7 +4,8 @@
 import type { ChatTools } from "./chat-tools";
 
 export const MAX_TOOL_CALLS = 50; // per run
-export const CODE_TIMEOUT_MS = 30_000;
+// wall clock per run: a cobalt.library.save waits up to 60 s for its save (APP-API-CONTRACT.md 33.7)
+export const CODE_TIMEOUT_MS = 90_000;
 export const CODE_CPU_MS = 5_000;
 
 export type CodeRun = { result?: unknown; error?: string; logs: string[]; calls: number };

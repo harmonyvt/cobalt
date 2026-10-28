@@ -61,19 +61,12 @@ export type LookupThen =
     | "webp_create"
     | "webp_status"
     | "media_delete"
-    | "studio_create"
-    | "studio_publish"
-    | "studio_upload"
     | "library_adopt"
     | "emotes_search"
     | "emotes_save"
     | "library_file"
-    | "library_publish"
-    | "library_visibility"
     | "library_visibility_migrate"
     | "library_studio"
-    | "library_post_delete"
-    | "library_post_title"
     | "library_posters_backfill"
     | "library_search_index"
     | "library_search_post"
@@ -127,16 +120,10 @@ export type LookupThen =
     | "live_edit"
     | "live_chat"
     | "studio_notify"
-    | "studio_recent"
-    | "studio_line"
     | "studio_line_notify"
-    | "studio_cancel"
     // photos and galleries (APP-API-CONTRACT.md section 18)
     | "studio_slideshow"
     | "studio_gallery_image"
-    | "studio_items_retry"
-    | "library_item_delete"
-    | "library_made"
     | "telemetry_ingest";
 
 export type StudioOp =
@@ -367,35 +354,15 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     if (req.pathname.startsWith("/library/items/")) {
         const [id, sub, ...rest] = req.pathname.slice("/library/items/".length).split("/");
         if (!ITEM_ID_REGEX.test(id ?? "") || rest.length > 0) return reject(404);
-        // Delete one item or made file of a post (section 18.4): DELETE on the bare item path only
-        if (sub === undefined) {
-            return req.method === "DELETE" ? lookupThen(req, "library_item_delete", { id: id! }) : reject(404);
-        }
-        // A crop or an export made on the device (section 18.6): PUT only
-        if (sub === "made") {
-            return req.method === "PUT" ? lookupThen(req, "library_made", { id: id! }) : reject(404);
-        }
+        // DELETE of the bare item path, PUT .../made, POST .../publish, PATCH .../visibility and PATCH|DELETE .../post
+        // are ops (src/registry/ops/library-writes.ts); every other method on them is a 404 here.
         if (sub === "file") {
             return req.method === "GET" || req.method === "HEAD"
                 ? lookupThen(req, "library_file", { id: id! })
                 : reject(404);
         }
-        if (sub === "publish") {
-            return req.method === "POST" ? lookupThen(req, "library_publish", { id: id! }) : reject(404);
-        }
-        // The public/private toggle (section 16)
-        if (sub === "visibility") {
-            return req.method === "PATCH" ? lookupThen(req, "library_visibility", { id: id! }) : reject(404);
-        }
         if (sub === "studio") {
             return req.method === "POST" ? lookupThen(req, "library_studio", { id: id! }) : reject(404);
-        }
-        // Delete a whole post (APP-API-CONTRACT.md section 12) or set its custom title
-        // (section 15): any file id of the post.
-        if (sub === "post") {
-            if (req.method === "DELETE") return lookupThen(req, "library_post_delete", { id: id! });
-            if (req.method === "PATCH") return lookupThen(req, "library_post_title", { id: id! });
-            return reject(404);
         }
         return reject(404);
     }
@@ -535,32 +502,16 @@ function decideLive(req: GateRequest): GateDecision {
 // /studio/<sid>/render/<job>. Ids are validated before anything is looked up;
 // every other path or method is a 404.
 function decideStudio(req: GateRequest): GateDecision {
-    if (req.pathname === "/studio") {
-        return req.method === "POST"
-            ? lookupThen(req, "studio_create")
-            : reject(404);
+    // POST /studio, PUT /studio/upload, GET /studio/recent, GET /studio/line, POST /studio/<sid>/publish,
+    // DELETE /studio/<sid>/line, DELETE /studio/<sid>/render/<job> and POST /studio/<sid>/items/retry are ops
+    // (src/registry/ops/library-writes.ts, APP-API-CONTRACT.md 33.7), answered before the gate. Every other method on
+    // those paths is a 404 here. The internal /studio/upload/adopt (Worker -> Durable Object) is not public: it fails
+    // the session id check below.
+    if (req.pathname === "/studio" || req.pathname === "/studio/upload" || req.pathname === "/studio/recent" || req.pathname === "/studio/line") {
+        return reject(404);
     }
-    // PUT /studio/upload (keyed) is the one public path whose second segment is
-    // not a session id; it must be checked before the id format. The internal
-    // /studio/upload/adopt (Worker -> Durable Object) is not public: it fails
-    // the session id check below and is a 404.
-    if (req.pathname === "/studio/upload") {
-        return req.method === "PUT" ? lookupThen(req, "studio_upload") : reject(404);
-    }
-    // GET /studio/recent (keyed; the library service credential gets 404): the sessions this
-    // key created from a share sheet (APP-API-CONTRACT.md section 14). Like /studio/upload, the
-    // only public path under /studio/ whose second segment is not a session id.
-    if (req.pathname === "/studio/recent") {
-        if (req.service) return reject(404);
-        return req.method === "GET" ? lookupThen(req, "studio_recent") : reject(404);
-    }
-    // The server's line (APP-API-CONTRACT.md section 17): GET /studio/line, PUT|DELETE
-    // /studio/line/notify. Keyed; the library-service credential and every other method are 404.
-    // Neither path segment is a session id.
-    if (req.pathname === "/studio/line") {
-        if (req.service) return reject(404);
-        return req.method === "GET" ? lookupThen(req, "studio_line") : reject(404);
-    }
+    // PUT|DELETE /studio/line/notify (APP-API-CONTRACT.md section 17). Keyed; the library-service credential and every
+    // other method are 404.
     if (req.pathname === "/studio/line/notify") {
         if (req.service) return reject(404);
         return req.method === "PUT" || req.method === "DELETE" ? lookupThen(req, "studio_line_notify") : reject(404);
@@ -572,13 +523,6 @@ function decideStudio(req: GateRequest): GateDecision {
     if (sub === undefined) {
         return req.method === "GET"
             ? { action: "studio", op: "status", sid }
-            : reject(404);
-    }
-    // Publishing makes a public copy: Api-Key or service auth (the session id
-    // alone is not enough).
-    if (sub === "publish" && job === undefined) {
-        return req.method === "POST"
-            ? lookupThen(req, "studio_publish", { sid })
             : reject(404);
     }
     // Hark notification opt-in (APP-API-CONTRACT.md section 9): keyed, the session's owner
@@ -600,14 +544,7 @@ function decideStudio(req: GateRequest): GateDecision {
             ? { action: "studio", op: "render_create", sid }
             : reject(404);
     }
-    // Cancel what has not started (section 17.7): keyed, the creating key only (the Durable Object
-    // checks the owner). The library service credential never reaches it.
-    if (sub === "line" && job === undefined) {
-        if (req.service) return reject(404);
-        return req.method === "DELETE" ? lookupThen(req, "studio_cancel", { sid }) : reject(404);
-    }
-    // A slideshow made from the items of a gallery, and the retry of the items that failed to save
-    // (section 18.5, 18.2): keyed POST, the session's creating key only (the Durable Object checks the
+    // A slideshow made from the items of a gallery (section 18.5): keyed POST, the session's creating key only (the Durable Object checks the
     // owner). The library service credential never reaches them.
     if (sub === "slideshow" && job === undefined) {
         if (req.service) return reject(404);
@@ -618,14 +555,8 @@ function decideStudio(req: GateRequest): GateDecision {
         if (req.service) return reject(404);
         return req.method === "POST" ? lookupThen(req, "studio_gallery_image", { sid }) : reject(404);
     }
-    if (sub === "items" && job === "retry") {
-        if (req.service) return reject(404);
-        return req.method === "POST" ? lookupThen(req, "studio_items_retry", { sid }) : reject(404);
-    }
     if (sub === "render" && job !== undefined && STUDIO_JOB_REGEX.test(job)) {
-        if (req.method === "DELETE") {
-            return req.service ? reject(404) : lookupThen(req, "studio_cancel", { sid, job });
-        }
+        // DELETE (cancel, section 17.7) is an op
         return req.method === "GET"
             ? { action: "studio", op: "render_status", sid, job }
             : reject(404);

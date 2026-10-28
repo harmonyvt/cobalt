@@ -99,6 +99,8 @@ export type AiSpec<I> = {
     args?: (args: unknown[]) => unknown;
     // only offered while this holds (e.g. search while the Space is configured)
     when?: (flags: AiFlags) => boolean;
+    // an ask op that only asks for some inputs (e.g. making something private, not public): false runs it at once
+    asks?: (input: I) => boolean;
     // an ask op's card: the one-line summary and the effect (counts, sizes, links affected)
     preview?: (ctx: OpContext, input: I) => Promise<{ summary: string; effect: Record<string, unknown> }>;
     // what the model gets from a 2xx reply body (default: the body)

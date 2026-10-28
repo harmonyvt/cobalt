@@ -178,6 +178,10 @@ public protocol CobaltClient: Sendable {
     /// `GET /chat/threads/<id>/messages/<message id>/collage?offset=&limit=` (27.5): one page of the collage a reply attached.
     /// `limit` is 1...60. `ChatError.notFound` when the message has no collage, `.badRequest` for a bad offset or limit.
     func chatCollage(threadID: String, messageID: String, offset: Int, limit: Int) async throws -> ChatCollagePage
+    /// `POST /chat/threads/<id>/confirm/<card id>` `{answer: "yes"|"no"}` (33.5): runs or drops the card's call, then the
+    /// reply goes on as a stream like a send's: first a `confirm` event with the card's new status, then a new assistant
+    /// message (no `user` event). `ChatError.confirmGone` when the card was answered, expired or replaced.
+    func answerChatConfirm(threadID: String, confirmID: String, yes: Bool) -> AsyncThrowingStream<ChatEvent, Error>
     // Stage, the studio tab (APP-API-CONTRACT 30.10; keyed; only when `features.stage`). Defaulted below
     // (`.unsupported`) so older fakes compile. The routes throw `StageError` for the server's refusals.
     /// `GET /stage`: the stage and its four rewards. Also retries what Twitch refused earlier.
@@ -295,6 +299,9 @@ extension CobaltClient {
     }
     public func chatCollage(threadID: String, messageID: String, offset: Int, limit: Int) async throws -> ChatCollagePage {
         throw PipelineFailure.unsupported
+    }
+    public func answerChatConfirm(threadID: String, confirmID: String, yes: Bool) -> AsyncThrowingStream<ChatEvent, Error> {
+        AsyncThrowingStream { $0.finish(throwing: PipelineFailure.unsupported) }
     }
     public func stage() async throws -> StageSnapshot { throw PipelineFailure.unsupported }
     public func updateStage(_ patch: StagePatch) async throws -> StageSettings { throw PipelineFailure.unsupported }

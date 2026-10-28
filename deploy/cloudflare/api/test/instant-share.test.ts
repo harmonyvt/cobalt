@@ -2,8 +2,8 @@
 // and GET /studio/recent. The Worker, the Durable Object's services (the real StudioService with
 // the real NotifyService) and the real SQL on node:sqlite run together; the helper, both R2
 // buckets and the Hark webhook are fakes.
+import { dispatch as decide } from "./dispatch";
 import { beforeEach, describe, expect, it } from "vitest";
-import { decide } from "../src/gate";
 import { KEY_ID_HEADER } from "../src/headers";
 import { NotifyService } from "../src/notify";
 import { RECENT_MAX, SHARE_KEEP_MS, SHARE_KICK_MS, handleStudioRoute, isStudioRoute } from "../src/studio";
@@ -345,7 +345,7 @@ describe("the gate for /studio/recent", () => {
     const cfg = { corsUrl: ORIGIN, now: 1_800_000_000_000 };
 
     it("GET with a well-formed key is a lookup for studio_recent; the key is what is looked up", () => {
-        expect(decide(mk("GET", `Api-Key ${CLIENT}`), cfg)).toEqual({ action: "lookup", key: CLIENT, then: "studio_recent", params: undefined });
+        expect(decide(mk("GET", `Api-Key ${CLIENT}`), cfg)).toEqual({ action: "lookup", key: CLIENT, op: "studio.recent", params: undefined });
     });
     it("a missing or malformed key is a 401, the service credential and other methods are 404", () => {
         expect(decide(mk("GET", null), cfg)).toMatchObject({ action: "reject", status: 401 });

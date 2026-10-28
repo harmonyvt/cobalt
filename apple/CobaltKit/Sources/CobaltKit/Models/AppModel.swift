@@ -54,6 +54,9 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// threads. `.chatEmpty`: no threads yet. `.chatFail`: `GET /chat/threads` always fails (`503`), so the tab shows its
     /// failed state. `.chatReplyFails`: the sample threads, but every reply ends in `error.chat.model` after a few words.
     case chatEmpty, chatFail, chatReplyFails
+    /// The sample threads plus a fifth, "tidy up the timer clips", whose last reply waits on a confirm card (33.5): "delete 3"
+    /// deletes and the reply goes on, "cancel" keeps them.
+    case chatConfirm
     /// The library's sky map (APP-API-CONTRACT 21, `PreviewSkyMap.swift`): a server with `features.search` whose
     /// `GET /library/map` hands over about 150 mock posts in eight clusters (cats, minecraft, anime, cooking, coffee, the
     /// harbour, guitar, skate). `.happy` and `.renditions` serve the same map but do not advertise `features.search`.

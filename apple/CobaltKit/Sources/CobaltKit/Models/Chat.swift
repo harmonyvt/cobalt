@@ -161,6 +161,109 @@ public struct ChatCollagePage: Sendable, Equatable, Decodable {
     }
 }
 
+// MARK: - a confirm card
+
+/// What a confirm card says will happen (APP-API-CONTRACT 33.7): every field is optional and the card shows what is there.
+public struct ChatConfirmEffect: Sendable, Equatable, Decodable {
+    /// Up to 5 post titles.
+    public var titles: [String]
+    public var posts: Int?
+    public var files: Int?
+    public var bytes: Int64?
+    /// Public file links that stop working.
+    public var publicLinks: Int?
+    /// Live gallery share links that show any of these files.
+    public var shareLinks: Int?
+
+    public init(titles: [String] = [], posts: Int? = nil, files: Int? = nil, bytes: Int64? = nil, publicLinks: Int? = nil, shareLinks: Int? = nil) {
+        self.titles = titles
+        self.posts = posts
+        self.files = files
+        self.bytes = bytes
+        self.publicLinks = publicLinks
+        self.shareLinks = shareLinks
+    }
+
+    enum CodingKeys: String, CodingKey { case titles, title, posts, files, bytes, publicLinks, shareLinks }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func int(_ key: CodingKeys) -> Int? { (try? c.decodeIfPresent(Double.self, forKey: key)).flatMap { $0 }.map { Int($0) } }
+        var titles = ((try? c.decodeIfPresent([Lossy<String>].self, forKey: .titles)) ?? nil)?.compactMap(\.value) ?? []
+        if titles.isEmpty, let one = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? nil { titles = [one] }
+        self.titles = titles
+        posts = int(.posts)
+        files = int(.files)
+        bytes = (try? c.decodeIfPresent(Double.self, forKey: .bytes)).flatMap { $0 }.map { Int64($0) }
+        publicLinks = int(.publicLinks)
+        shareLinks = int(.shareLinks)
+    }
+}
+
+/// A confirm card (APP-API-CONTRACT 33.5, 33.7): a call the chat made that waits for the owner's yes, such as deleting
+/// posts or making them private. It rides on the assistant message that asked (`confirm`), and the `confirm` event of a
+/// reply stream sets or updates it.
+public struct ChatConfirm: Sendable, Equatable, Identifiable, Decodable {
+    public enum Status: String, Sendable, Equatable {
+        case waiting, yes, no, expired
+    }
+
+    /// What the red button does, from the op the card runs.
+    public enum Action: Sendable, Equatable {
+        /// `library.delete` / `library.deleteFile`: "delete N" (N = files).
+        case delete(files: Int)
+        /// `library.visibility`: "make private".
+        case makePrivate
+        /// Any other op: "yes".
+        case other
+    }
+
+    /// 16 letters and digits.
+    public var id: String
+    /// The op the card runs (`library.delete`, `library.visibility`, ...).
+    public var op: String
+    /// One lowercase line: `delete “cat jumps” (3 files)`.
+    public var summary: String
+    public var effect: ChatConfirmEffect
+    public var status: Status
+    /// When a waiting card stops being answerable (the server reads it as expired after this).
+    public var expiresAt: Date?
+
+    public init(id: String, op: String, summary: String, effect: ChatConfirmEffect = ChatConfirmEffect(), status: Status = .waiting, expiresAt: Date? = nil) {
+        self.id = id
+        self.op = op
+        self.summary = summary
+        self.effect = effect
+        self.status = status
+        self.expiresAt = expiresAt
+    }
+
+    enum CodingKeys: String, CodingKey { case id, op, summary, effect, status, expiresAt }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        op = try c.decodeIfPresent(String.self, forKey: .op) ?? ""
+        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        effect = ((try? c.decodeIfPresent(ChatConfirmEffect.self, forKey: .effect)) ?? nil) ?? ChatConfirmEffect()
+        status = (try? c.decodeIfPresent(String.self, forKey: .status)).flatMap { $0 }.flatMap(Status.init(rawValue:)) ?? .expired
+        expiresAt = (try? c.decodeIfPresent(Date.self, forKey: .expiresAt)) ?? nil
+    }
+
+    public var action: Action {
+        switch op {
+        case "library.delete", "library.deleteFile": return .delete(files: max(1, effect.files ?? 1))
+        case "library.visibility": return .makePrivate
+        default: return .other
+        }
+    }
+
+    /// The card can still be answered: waiting, and not past its time.
+    public func isOpen(at now: Date) -> Bool {
+        status == .waiting && (expiresAt.map { $0 > now } ?? true)
+    }
+}
+
 // MARK: - a message
 
 /// One message (27.1). A user message carries the files the owner attached; an assistant message carries the files the
@@ -187,11 +290,13 @@ public struct ChatMessage: Sendable, Equatable, Identifiable, Decodable {
     public var error: String?
     /// The big result set the reply attached (27.5); nil when it has none (always nil on a user message).
     public var collage: ChatCollage?
+    /// The confirm card the reply stopped on (33.5); nil when it asked nothing.
+    public var confirm: ChatConfirm?
     public var createdAt: Date
 
     public init(
         id: String, role: Role, text: String = "", postIDs: [String] = [], steps: [ChatStep] = [],
-        status: Status = .done, error: String? = nil, collage: ChatCollage? = nil, createdAt: Date
+        status: Status = .done, error: String? = nil, collage: ChatCollage? = nil, confirm: ChatConfirm? = nil, createdAt: Date
     ) {
         self.id = id
         self.role = role
@@ -201,6 +306,7 @@ public struct ChatMessage: Sendable, Equatable, Identifiable, Decodable {
         self.status = status
         self.error = error
         self.collage = collage
+        self.confirm = confirm
         self.createdAt = createdAt
     }
 
@@ -208,7 +314,7 @@ public struct ChatMessage: Sendable, Equatable, Identifiable, Decodable {
     public var isLocal: Bool { id.hasPrefix(ChatMessage.localPrefix) }
     static let localPrefix = "local-"
 
-    enum CodingKeys: String, CodingKey { case id, role, text, postIDs = "postIds", steps, status, error, collage, createdAt }
+    enum CodingKeys: String, CodingKey { case id, role, text, postIDs = "postIds", steps, status, error, collage, confirm, createdAt }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -229,6 +335,7 @@ public struct ChatMessage: Sendable, Equatable, Identifiable, Decodable {
         status = (try? c.decodeIfPresent(String.self, forKey: .status)).flatMap { $0 }.flatMap(Status.init(rawValue:)) ?? .done
         error = try c.decodeIfPresent(String.self, forKey: .error)
         collage = (try? c.decodeIfPresent(ChatCollage.self, forKey: .collage)) ?? nil
+        confirm = (try? c.decodeIfPresent(ChatConfirm.self, forKey: .confirm)) ?? nil
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date(timeIntervalSince1970: 0)
     }
 }
@@ -290,6 +397,9 @@ public enum ChatEvent: Sendable, Equatable {
     case collage(ChatCollage)
     /// The model renamed the thread (after the first reply only).
     case title(ChatThread)
+    /// A confirm card (33.5): set on the message `messageID` (nil: the running assistant message), or its new status
+    /// after an answer (the first event of `POST .../confirm/<cid>`).
+    case confirm(messageID: String?, ChatConfirm)
     /// The final, saved assistant message and the thread as it is now. Last event.
     case done(ChatMessage, ChatThread)
     /// The reply failed: `error.chat.model`, `error.chat.interrupted` or `error.api.generic`; the message is saved with
@@ -321,6 +431,8 @@ public enum ChatError: Error, Sendable, Equatable {
     case full
     /// `409 error.chat.too_many`: 200 threads.
     case tooMany
+    /// `404 error.chat.confirm_gone`: the confirm card was already answered, expired, or replaced.
+    case confirmGone
     /// `error.chat.model`: the model failed to answer (an `error` event).
     case model
     /// `error.chat.interrupted`: the reply was cut off (an `error` event, or a reply still running after 3 minutes).
@@ -337,6 +449,7 @@ public enum ChatError: Error, Sendable, Equatable {
         case "error.chat.busy": self = .busy
         case "error.chat.full": self = .full
         case "error.chat.too_many": self = .tooMany
+        case "error.chat.confirm_gone": self = .confirmGone
         case "error.chat.model": self = .model
         case "error.chat.interrupted": self = .interrupted
         default: return nil
@@ -352,6 +465,7 @@ public enum ChatError: Error, Sendable, Equatable {
         case .busy: return "error.chat.busy"
         case .full: return "error.chat.full"
         case .tooMany: return "error.chat.too_many"
+        case .confirmGone: return "error.chat.confirm_gone"
         case .model: return "error.chat.model"
         case .interrupted: return "error.chat.interrupted"
         case .unavailable: return "error.api.generic"

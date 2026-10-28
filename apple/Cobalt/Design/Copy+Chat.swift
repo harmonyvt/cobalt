@@ -123,6 +123,47 @@ extension Copy {
         static let askAbout = "ask about this"
         static let askAboutA11yHint = "starts a new chat with this post"
 
+        // MARK: a confirm card (33.7)
+
+        /// The red button of a delete card: "delete 3" / "delete 1".
+        static func confirmDelete(_ files: Int) -> String { "delete \(files)" }
+        static let confirmMakePrivate = "make private"
+        static let confirmYes = "yes"
+        static let confirmCancel = "cancel"
+        static func confirmButton(_ action: ChatConfirm.Action) -> String {
+            switch action {
+            case .delete(let files): return confirmDelete(files)
+            case .makePrivate: return confirmMakePrivate
+            case .other: return confirmYes
+            }
+        }
+        /// "3 posts · 3 files · 18.4 MB · 1 public link stops working · 1 share link shows them": the parts that are there.
+        static func confirmEffect(_ effect: ChatConfirmEffect) -> String {
+            var parts: [String] = []
+            if let posts = effect.posts, posts > 1 { parts.append("\(posts) posts") }
+            if let files = effect.files, files > 0 { parts.append("\(files) \(files == 1 ? "file" : "files")") }
+            if let bytes = effect.bytes, bytes > 0 { parts.append(Format.bytes(bytes)) }
+            if let links = effect.publicLinks, links > 0 {
+                parts.append(links == 1 ? "1 public link stops working" : "\(links) public links stop working")
+            }
+            if let links = effect.shareLinks, links > 0 {
+                parts.append(links == 1 ? "1 share link shows them" : "\(links) share links show them")
+            }
+            return parts.joined(separator: " · ")
+        }
+        /// The titles the card covers, the first few: "“cat jumps”, “timer 2”".
+        static func confirmTitles(_ titles: [String]) -> String {
+            titles.prefix(5).map { "“\($0)”" }.joined(separator: ", ")
+        }
+        static let confirmDone = "done"
+        static let confirmKept = "kept · nothing changed"
+        static let confirmExpired = "this ask timed out · nothing changed"
+        static let confirmAnswering = "on it…"
+        static func confirmA11y(summary: String, effect: String) -> String {
+            effect.isEmpty ? "asks first: \(summary)" : "asks first: \(summary), \(effect)"
+        }
+        static let confirmGone = "that ask is gone · nothing changed"
+
         // MARK: refusals
 
         static let busy = "wait for the reply to finish"
@@ -141,6 +182,7 @@ extension Copy {
             case ChatError.off: return off
             case ChatError.notFound: return gone
             case ChatError.badRequest: return tooLong
+            case ChatError.confirmGone: return confirmGone
             default: return Copy.actionFailed
             }
         }

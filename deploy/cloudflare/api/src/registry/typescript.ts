@@ -146,7 +146,13 @@ export function toolTypesFor(registry: Registry, flags: AiFlags): string {
         }
         for (const { name, op } of t.calls) {
             for (const l of op.ai.summary.split("\n")) lines.push(`${indent}// ${l}`);
-            if (op.ai.tier === "ask") lines.push(`${indent}// Asks Harmony first: returns { pending_confirm } and nothing runs until they tap yes.`);
+            if (op.ai.tier === "ask") {
+                lines.push(
+                    op.ai.asks
+                        ? `${indent}// When it asks Harmony first (above), it returns { pending_confirm } and nothing runs until they tap yes.`
+                        : `${indent}// Asks Harmony first: returns { pending_confirm } and nothing runs until they tap yes.`,
+                );
+            }
             const out = op.output ? p.type(op.output, indent) : "unknown";
             lines.push(`${indent}${name}(${signature(p, op, indent)}): Promise<${out}>;`);
         }

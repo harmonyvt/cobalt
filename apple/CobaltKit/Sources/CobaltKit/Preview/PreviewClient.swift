@@ -232,7 +232,12 @@ public struct PreviewClient: CobaltClient {
             editorState.seed(scenario, now: now, timeScale: scale)
         }
         if scenario.hasChat {
-            let seed = PreviewData.chatSeed(now: now)
+            var seed = PreviewData.chatSeed(now: now)
+            if scenario == .chatConfirm {
+                let extra = PreviewData.chatConfirmSeed(now: now)
+                seed.threads.insert(extra.thread, at: 0)
+                seed.messages[extra.thread.id] = extra.messages
+            }
             let empty = scenario == .chatEmpty || scenario == .chatFail
             chatState.seed(empty ? [] : seed.threads, messages: empty ? [:] : seed.messages,
                            listFails: scenario == .chatFail, replyFails: scenario == .chatReplyFails)

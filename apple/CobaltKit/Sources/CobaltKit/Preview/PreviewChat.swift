@@ -7,13 +7,14 @@ import Synchronization
 // A fourth thread ("every cat i saved") ends in a collage (27.5): 95 generated posts, served 30 at a time, with one of them
 // deleted since; the replies in that thread (and any message that says "collage") stream a `collage` event too.
 // `PreviewScenario.chatEmpty` has no threads, `.chatFail` cannot list them, `.chatReplyFails` ends every reply in
-// `error.chat.model`. `.happy` and `.renditions` have the three samples.
+// `error.chat.model`. `.happy` and `.renditions` have the three samples. `.chatConfirm` adds a fifth thread whose last reply
+// waits on a confirm card (33.5): answering it streams the card's new status and a short reply.
 
 extension PreviewScenario {
     /// The preview server has `features.chat`.
     var hasChat: Bool {
         switch self {
-        case .happy, .renditions, .chatEmpty, .chatFail, .chatReplyFails: return true
+        case .happy, .renditions, .chatEmpty, .chatFail, .chatReplyFails, .chatConfirm: return true
         default: return false
         }
     }
@@ -62,6 +63,43 @@ extension PreviewData {
             return post
         }
     }
+    /// The `.chatConfirm` thread, the message that asks, and its card.
+    static let confirmThreadID = "PrEvIeWchat00005"
+    static let confirmMessageID = "142"
+    static let confirmCardID = "PrEvIeWcard00001"
+
+    /// "tidy up the timer clips": the chat found three timer clips and asks before deleting them.
+    static func chatConfirmSeed(now: Date) -> (thread: ChatThread, messages: [ChatMessage]) {
+        func t(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
+        let shown = chatShownPostIDs(now: now)
+        let card = ChatConfirm(
+            id: confirmCardID, op: "library.delete", summary: "delete 3 posts",
+            effect: ChatConfirmEffect(
+                titles: ["the timer one", "the timer, again", "timer (final)"], posts: 3, files: 3, bytes: 18_400_000,
+                publicLinks: 1, shareLinks: 1),
+            status: .waiting, expiresAt: now.addingTimeInterval(14 * 60))
+        let code = """
+        const timers = (await cobalt.library.list({ query: "timer" })).map(p => p.id);
+        await cobalt.show(timers);
+        return await cobalt.library.delete(timers);
+        """
+        let thread = ChatThread(
+            id: confirmThreadID, title: "tidy up the timer clips", createdAt: t(2), updatedAt: t(1),
+            preview: "found 3 timer clips. tap delete if you're sure (=^･ω･^=)", messageCount: 2)
+        let messages = [
+            ChatMessage(id: "141", role: .user, text: "delete all the kitchen timer clips, i'm over them", createdAt: t(2)),
+            ChatMessage(
+                id: confirmMessageID, role: .assistant, text: "found 3 timer clips. tap delete if you're sure (=^･ω･^=)",
+                postIDs: shown,
+                steps: [
+                    ChatStep(id: "toolu_31", status: .done, code: code, logs: [], result: #"{"pending_confirm":{"id":"PrEvIeWcard00001"}}"#, durationMS: 380),
+                    ChatStep(id: confirmCardID, kind: "confirm", status: .done, result: card.summary),
+                ],
+                confirm: card, createdAt: t(1)),
+        ]
+        return (thread, messages)
+    }
+
     /// A post a sample message shows that the library no longer has (the "removed" tile).
     static let chatGonePostID = "PrEvIeWgone000001"
 
@@ -217,6 +255,19 @@ final class PreviewChatState: Sendable {
     var collageFails: Bool {
         get { state.withLock { $0.collageFails } }
         set { state.withLock { $0.collageFails = newValue } }
+    }
+
+    /// The card's message and the card, while it can be answered; marks it answered (the card runs once).
+    func takeConfirm(_ cardID: String, in id: String, yes: Bool, at now: Date) throws -> (messageID: String, card: ChatConfirm) {
+        try state.withLock { s in
+            guard s.threads.contains(where: { $0.id == id }) else { throw ChatError.notFound }
+            guard !s.replying.contains(id) else { throw ChatError.busy }
+            guard let i = s.messages[id]?.firstIndex(where: { $0.confirm?.id == cardID }),
+                  let card = s.messages[id]?[i].confirm, card.isOpen(at: now)
+            else { throw ChatError.confirmGone }
+            s.messages[id]![i].confirm?.status = yes ? .yes : .no
+            return (s.messages[id]![i].id, s.messages[id]![i].confirm!)
+        }
     }
 
     /// Tests: every reply ends in `error.chat.model` while this is true.
@@ -401,6 +452,46 @@ extension PreviewClient {
                     try chatState.beginReply(threadID)
                     defer { chatState.endReply(threadID) }
                     try await streamReply(threadID: threadID, text: cleaned, postIDs: postIDs) { continuation.yield($0) }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// `POST /chat/threads/<id>/confirm/<card id>` (33.5): the card's new status, then a short reply that says what
+    /// happened. `confirmGone` for a card that was answered or has expired.
+    public func answerChatConfirm(threadID: String, confirmID: String, yes: Bool) -> AsyncThrowingStream<ChatEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard scenario.hasChat else { throw PipelineFailure.unsupported }
+                    chatState.record("CONFIRM \(threadID) \(confirmID) \(yes ? "yes" : "no")")
+                    try await pause(0.3)
+                    let taken = try chatState.takeConfirm(confirmID, in: threadID, yes: yes, at: clock.now())
+                    try chatState.beginReply(threadID)
+                    defer { chatState.endReply(threadID) }
+                    continuation.yield(.confirm(messageID: taken.messageID, taken.card))
+                    try await pause(yes ? 0.8 : 0.2)
+                    var reply = ChatMessage(id: chatState.nextMessageID(), role: .assistant, status: .running, createdAt: clock.now())
+                    chatState.append(reply, to: threadID)
+                    continuation.yield(.assistant(reply))
+                    let text = yes ? "done, all 3 timer clips are gone. your library feels lighter already ฅ^•ﻌ•^ฅ" : "okay, kept them all. the timers live on (=^･ω･^=)"
+                    var streamed = ""
+                    for word in Self.words(text) {
+                        try await pause(0.045)
+                        streamed += word
+                        continuation.yield(.text(word))
+                    }
+                    reply.text = streamed
+                    reply.status = .done
+                    chatState.update(reply.id, in: threadID) { $0 = reply }
+                    guard let thread = chatState.thread(threadID) else { throw ChatError.notFound }
+                    continuation.yield(.done(reply, thread))
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish(throwing: CancellationError())
