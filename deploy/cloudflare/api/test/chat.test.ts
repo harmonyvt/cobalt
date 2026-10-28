@@ -461,3 +461,40 @@ describe("the system prompt", () => {
         expect(p).toContain("library(opts?:");
     });
 });
+
+describe("chat: the reply's Live Activity on other devices (section 27.9)", () => {
+    it("hands the reply's state to the Durable Object through the entry point when push is configured", async () => {
+        const seenDo: { path: string; key: string | null; body: any }[] = [];
+        const recording = {
+            fetch: async (r: Request) => {
+                const u = new URL(r.url);
+                if (u.pathname.startsWith("/live/chats/")) {
+                    seenDo.push({ path: u.pathname, key: r.headers.get("x-internal-key"), body: await r.json() });
+                    return new Response(JSON.stringify({ status: "success", targets: 1 }), { headers: { "content-type": "application/json" } });
+                }
+                return new Response("{}", { headers: { "content-type": "application/json" } });
+            },
+        };
+        Object.assign(env, { APNS_KEY_P8: "pem", APNS_KEY_ID: "ABC123DEFG", APNS_TEAM_ID: "TEAM123456" });
+        const t = await newThread();
+        script = [() => code("c1", "return await cobalt.library({ limit: 1 })"), () => say("nothing yet")];
+        const r = await handleRequest(
+            new Request(`${API}/chat/threads/${t.id}/messages`, { method: "POST", headers: { ...AUTH, "content-type": "application/json" }, body: JSON.stringify({ text: "anything new?" }) }),
+            env,
+            recording,
+            { now: () => clock, chatModel: model, codeRunner: runner } as any,
+        );
+        await r.text();
+        await new Promise((res) => setTimeout(res, 20));
+        expect(seenDo.every((x) => x.path === `/live/chats/${t.id}/state` && x.key === INTERNAL && x.body.key_id === "key-1")).toBe(true);
+        expect(seenDo[0]!.body).toMatchObject({ prompt: "anything new?", state: { status: "thinking" } });
+        expect(seenDo.map((x) => x.body.state.status)).toContain("working");
+        expect(seenDo.at(-1)!.body.state).toMatchObject({ status: "done", steps: 1, reply: "nothing yet" });
+    });
+
+    it("advertises chat_live_push only with chat and APNs", async () => {
+        expect((await jsonOf(await call("/capabilities", { headers: AUTH }))).features.chat_live_push).toBe(false);
+        Object.assign(env, { APNS_KEY_P8: "pem", APNS_KEY_ID: "ABC123DEFG", APNS_TEAM_ID: "TEAM123456" });
+        expect((await jsonOf(await call("/capabilities", { headers: AUTH }))).features.chat_live_push).toBe(true);
+    });
+});

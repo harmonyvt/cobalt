@@ -114,6 +114,8 @@ export type ChatDeps = {
     // keeps a reply going after the app goes away (ctx.waitUntil); absent in tests
     waitUntil?: (p: Promise<unknown>) => void;
     pingMs?: number;
+    // the reply's Live Activity on the owner's other devices (section 27.9, chat-live.ts); absent when push is off
+    liveFor?: (thread: string, prompt: string) => { event(name: string, data: unknown): void; close(): Promise<void> };
 };
 
 // ---- rows and shapes ----------------------------------------------------------------------------
@@ -540,9 +542,15 @@ export async function sendMessage(d: ChatDeps, request: Request, id: string): Pr
     };
     const ping = setInterval(() => write(": ping\n\n"), d.pingMs ?? PING_MS);
 
-    const run = reply(d, { thread: thread!, earlier, userRow, botRow, text, postIds, emit: (e, v) => write(sse(e, v)) }).finally(() => {
+    const live = d.liveFor?.(id, text);
+    const emit = (e: string, v: unknown) => {
+        write(sse(e, v));
+        live?.event(e, v);
+    };
+    const run = reply(d, { thread: thread!, earlier, userRow, botRow, text, postIds, emit }).finally(async () => {
         clearInterval(ping);
         if (open) writer.close().catch(() => {});
+        await live?.close();
     });
     d.waitUntil?.(run);
     return new Response(readable, {

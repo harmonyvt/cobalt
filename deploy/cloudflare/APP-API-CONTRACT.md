@@ -2511,6 +2511,32 @@ Tabs become save · library · links · chat · settings (`chat` only with `feat
 - `GET /chat/threads/<id>/messages/<message id>/collage?offset=<0..>&limit=<1..60, default 30>` (keyed) → `200 { "status": "success", "title", "query", "total": <n>, "offset": <n>, "next": <offset of the next page>|null, "post_ids": [...], "posts": { "<post id>": <GET /library?v=3 post shape> } }`. `post_ids` is the page in order, minus posts deleted since (so a page can be shorter than `limit`; `total` does not change). No collage on that message: 404 `error.chat.not_found`; bad offset/limit: 400 `error.chat.bad_request`.
 - App: under the reply text, a masonry collage (2 columns on iPhone, more on iPad/Mac) of the first page, with the title and "N results", a "more" control that loads the next page, tap opens the post, long-press shows a context-menu preview (poster or image, title) with open/share actions, and "open in library" runs `query` as a library search (shown only when `query` is set).
 - Deploy: apply 0016, then the API Worker.
+### 27.9 Chat replies on the owner's iPhone (addendum, 2026-10-28; owner: "support apple shortcut for also calling the ai and inputting a msg along with live activity for agent activity", "if i use mac ... it shows up on ios?")
+
+A reply's Live Activity (`CobaltChatActivityAttributes` in the app: `thread`, `prompt`, `source`; content state below)
+shows what the AI is doing. The app draws it itself for a message it sent (the chat tab, the "Ask chat" Shortcut,
+apple/CONTRACT-PARALLEL.md 15.10). A message sent from another device (the Mac app, a Mac Shortcut) reaches the iPhone
+through APNs, with the same APNs secrets as section 8 (`src/chat-live.ts`).
+
+- `features.chat_live_push`: `chat` and APNs configured.
+- `PUT /live/chat-start-token` `{"token": "<hex>", "environment": "sandbox"|"production"}` (keyed; `DELETE` forgets it): the
+  device's push-to-start token for chat activities. `200 {"pushing": true}`; `{"pushing": false}` without APNs.
+- `PUT /live/chats/<thread>` (keyed, same body): the update token of an activity the server push-started on this device.
+- The chat route hands the reply's state to the `main` Durable Object (`POST /live/chats/<thread>/state`, internal key,
+  never public): at its start, at once on a status change (a tool call starts or ends, files shown, done, failed), and
+  more text at most every 3 s. On a new reply the DO push-starts the activity (`attributes.source: "other"`, alert
+  "chat is thinking") on every device with a start token **except the sender's** (the sender draws its own), then updates
+  it once that device has sent its update token (text at most every 5 s, priority 5; anything else priority 10) and ends
+  it with the reply (alert "chat replied" + the start of the reply, dismissed after 10 min; failed: 5 min). A reply with no
+  device to show it stops handing over after the first call.
+- Content state (Swift property names; `steps`, `failedSteps`, `shown` always present): `status` `thinking` | `working` |
+  `writing` | `done` | `failed`, `since` (unix s, the reply's start), `steps` (code runs started), `failedSteps`,
+  `tool?` (what the running or last code run does, from its `cobalt.<tool>(` calls: "searching your library"; a tool added
+  later reads "using <name>"), `reply?` (plain text: the last 160 characters while writing, the first 160 once done),
+  `shown` (files shown plus the collage's size), `code?` (failed).
+- Not done: no push while the iPhone itself is the sender and the app is suspended mid-reply (its own activity then goes
+  stale until the app runs again).
+
 ## 28. Collection sets (addendum, built 2026-10-19; owner: "a new primitive called sets which has groups of collections")
 
 A set is a named group of collections (section 26). Internally it is a "collection group" everywhere (D1 `collection_groups`, `src/collection-groups.ts`, routes `/share/groups`, Swift `CollectionGroup`), because "share set" already means a gallery link (section 24); only the app's copy says "set". Keyed routes only (a service credential gets 404), D1 only, `cache-control: no-store`, 404 `error.share.off` while the share host is not configured. `GET /capabilities` has `features.share_groups` (true exactly with `share_collections`).

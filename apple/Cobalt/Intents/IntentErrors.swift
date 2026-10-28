@@ -23,6 +23,7 @@ enum IntentErrors {
         case is CancellationError: return error
         case let e as CobaltIntentError: return e
         case let e as PipelineFailure: return CobaltIntentError(message: Copy.failure(e))
+        case let e as ChatError: return CobaltIntentError(message: Copy.Shortcuts.chatMessage(e))
         default: return error
         }
     }

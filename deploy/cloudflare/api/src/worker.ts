@@ -20,6 +20,7 @@ import {
     type AppDeps,
 } from "./app-routes";
 import { livePushConfigured } from "./apns";
+import { ChatLivePusher } from "./chat-live";
 import { harkConfigured } from "./notify";
 import { saveEmote, searchEmotes } from "./emotes";
 import { decide, isStudioPath } from "./gate";
@@ -524,6 +525,31 @@ async function handleInner(
                 runner,
                 now: edge.now,
                 waitUntil: edge.waitUntil,
+                // section 27.9: the reply's Live Activity on the owner's other iPhones, through the Durable Object
+                liveFor: livePushConfigured(env)
+                    ? (thread: string, prompt: string) =>
+                          new ChatLivePusher({
+                              thread,
+                              keyId,
+                              prompt,
+                              now: edge.now,
+                              post: async (body) => {
+                                  const res = await container.fetch(
+                                      new Request(`https://do.internal/live/chats/${thread}/state`, {
+                                          method: "POST",
+                                          headers: { "content-type": "application/json", "x-internal-key": env.COBALT_API_KEY },
+                                          body: JSON.stringify(body),
+                                      }),
+                                  );
+                                  if (!res.ok) {
+                                      await res.body?.cancel();
+                                      return null;
+                                  }
+                                  const j = (await res.json()) as { targets?: number };
+                                  return typeof j.targets === "number" ? { targets: j.targets } : null;
+                              },
+                          })
+                    : undefined,
             };
             const id = decision.params?.id ?? "";
             if (decision.then === "chat_send") {
@@ -732,6 +758,7 @@ async function handleInner(
             decision.then === "live_state" ||
             decision.then === "live_selftest" ||
             decision.then === "live_edit" ||
+            decision.then === "live_chat" ||
             // the Hark opt-in (also DO-only: D1 ownership check and DO storage)
             decision.then === "studio_notify" ||
             // the share sheet's recent saves (DO storage for the list, D1 for the rows)
