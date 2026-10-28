@@ -6,7 +6,7 @@
 import type { z } from "zod";
 import type { AppDeps } from "../app-routes";
 import type { ChatCollect, ChatTools } from "../chat-tools";
-import type { ContainerStub } from "../deps";
+import type { ContainerStub, StageEdge } from "../deps";
 import type { EmbedClient } from "../embed";
 import type { EdgeDeps } from "../studio-edge";
 import type { WorkerEnv } from "../worker";
@@ -57,6 +57,8 @@ export type OpContext = {
     container: ContainerStub;
     // the registry this call came through (ops may call each other through it)
     registry: Registry;
+    // what the stage needs beyond the env (the StageRoom Durable Object; tests pass fakes)
+    stageEdge: StageEdge;
     // lazily built, once per call
     app(): AppDeps;
     embed(): EmbedClient | null;

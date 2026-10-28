@@ -1,8 +1,8 @@
 // The Worker's request handling, separated from index.ts (which imports the
 // Containers library and so cannot load under plain node) so the whole flow,
 // gate -> D1 lookup -> Durable Object / container, is testable with fakes.
-import { type EmbedClient, librarySearchIndex, librarySearchPost } from "./embed";
-import { appDeps, embedFrom, shareHost, type ContainerStub } from "./deps";
+import { librarySearchIndex, librarySearchPost } from "./embed";
+import { appDeps, embedFrom, shareHost, stageDepsFrom, type ContainerStub, type StageEdge } from "./deps";
 import {
     capabilities,
     libraryFile,
@@ -13,7 +13,6 @@ import {
 import { livePushConfigured } from "./apns";
 import { ChatLivePusher } from "./chat-live";
 import { harkConfigured } from "./notify";
-import { saveEmote, searchEmotes } from "./emotes";
 import { decide, isStudioPath } from "./gate";
 import { KEY_ID_HEADER, SERVICE_HEADER, stripInternalHeaders } from "./headers";
 import { lookupKey } from "./keys";
@@ -21,22 +20,9 @@ import { SERVICE_KEY_ID } from "./library";
 import type { PublishBucket } from "./publish";
 import { serviceAuthorized } from "./service-auth";
 import { sharePage } from "./share";
-import {
-    noRoom,
-    stageBaseFrom,
-    stageKeyed,
-    stageSite,
-    twitchConfigFrom,
-    type RoomPort,
-    type StageDeps,
-    type StageOp,
-} from "./stage";
-import type { TwitchFetch } from "./stage-twitch";
-import { createShareSet, listShareSets, revokeShareSet } from "./share-sets";
-import { deleteSwitchedWebp } from "./visibility";
+import { stageBaseFrom, stageSite, twitchConfigFrom } from "./stage";
+import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { captionerFrom } from "./roast";
-import { createCollection, deleteCollection, listCollections, rerollCollection, updateCollection } from "./share-collections";
-import { createGroup, deleteGroup, listGroups, updateGroup } from "./collection-groups";
 import { editTablesPresent } from "./edits";
 import { chatModelFrom, createThread, deleteThread, getCollage, getThread, listThreads, renameThread, sendMessage } from "./chat";
 import { ingestTelemetry } from "./telemetry";
@@ -126,36 +112,15 @@ export interface WorkerEnv {
     CHAT_DAILY_RENDERS?: string;
 }
 
-// What the stage needs that is not in the env: the StageRoom Durable Object (index.ts passes the real one) and
-// the fetch the Twitch client uses (tests pass a fake).
-export type StageEdge = { stageRoom?: RoomPort; twitchFetch?: TwitchFetch; stageEmbed?: EmbedClient | null; stageLimits?: StageDeps["limits"] };
 
 // The op registry the Worker routes through (section 33); tests pass their own.
 export type RegistryEdge = { registry?: Registry };
-
-// The stage's deps, or null while STAGE_BASE_URL is not an https URL (every /stage* route is then 404).
-function stageDepsFrom(env: WorkerEnv, edge: Pick<EdgeDeps, "now" | "waitUntil">, se: StageEdge): StageDeps | null {
-    const stageBaseUrl = stageBaseFrom(env);
-    if (!stageBaseUrl) return null;
-    return {
-        db: env.DB,
-        mediaBaseUrl: env.MEDIA_BASE_URL,
-        stageBaseUrl,
-        twitch: twitchConfigFrom(env),
-        twitchFetch: se.twitchFetch,
-        embed: se.stageEmbed === undefined ? embedFrom(env) : se.stageEmbed,
-        room: se.stageRoom ?? noRoom,
-        now: edge.now,
-        waitUntil: edge.waitUntil,
-        limits: se.stageLimits,
-    };
-}
 
 // Chat is on with a model (the Anthropic key) and a code runner (the LOADER binding, index.ts).
 const chatOn = (env: WorkerEnv, edge: EdgeDeps): boolean =>
     (edge.chatModel === undefined ? chatModelFrom(env, edge.modelFetch) : edge.chatModel) !== null && !!edge.codeRunner;
 
-export { embedFrom, type ContainerStub } from "./deps";
+export { embedFrom, type ContainerStub, type StageEdge } from "./deps";
 export { bodyLink, describeBody, extractFirstUrl, logRequest, normalizeUrlField, type BodyInfo } from "./request-log";
 
 // Lowercase only: the API rejects a key file with any other spelling.
@@ -265,7 +230,7 @@ async function handleInner(
 
     // The op registry answers the routes it knows (section 33); everything else goes on to the gate below.
     const registry = stageEdge.registry ?? REGISTRY;
-    const byOp = await handleOp(registry, opBase(env, container, edge, registry), { request, url, service: isService, allowOrigin });
+    const byOp = await handleOp(registry, opBase(env, container, edge, registry, stageEdge), { request, url, service: isService, allowOrigin });
     if (byOp) return byOp;
 
     const decision = decide(
@@ -396,43 +361,6 @@ async function handleInner(
                 headers: { "content-type": "application/json", "cache-control": "no-store" },
             });
         }
-        // Gallery share links (section 24): D1 only.
-        if (decision.then === "share_sets_create" || decision.then === "share_sets_list" || decision.then === "share_sets_revoke") {
-            const shareBaseUrl = shareHost(env) ? env.SHARE_BASE_URL : undefined;
-            if (!shareBaseUrl) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
-            const sd = {
-                db: env.DB,
-                mediaBaseUrl: env.MEDIA_BASE_URL,
-                shareBaseUrl,
-                now: edge.now,
-                captioner: edge.captioner ?? captionerFrom(env, edge.modelFetch),
-                // a new link's videos get moving previews (section 29): the Durable Object only writes records
-                kickLoops: env.GALLERY_LOOPS !== "1" ? undefined : async () => {
-                    const p = container
-                        .fetch(
-                            new Request("https://do.internal/loops/kick", {
-                                method: "POST",
-                                headers: { [KEY_ID_HEADER]: "worker:loops" },
-                            }),
-                        )
-                        .then(
-                            (res) => void res.body?.cancel().catch(() => {}),
-                            (e) => console.error("[loops] kick failed", e instanceof Error ? e.name : "error"),
-                        );
-                    if (edge.waitUntil) edge.waitUntil(p);
-                    else await p;
-                },
-            };
-            const r =
-                decision.then === "share_sets_create"
-                    ? await createShareSet(sd, request, keyId)
-                    : decision.then === "share_sets_list"
-                      ? await listShareSets(sd)
-                      : await revokeShareSet(sd, decision.params!.id);
-            const res = json(r.status, r.body, allowOrigin);
-            res.headers.set("cache-control", "no-store");
-            return res;
-        }
         // Chat (section 27): D1, the model, and the code sandbox.
         if (
             decision.then === "chat_list" ||
@@ -448,7 +376,7 @@ async function handleInner(
                 res.headers.set("cache-control", "no-store");
                 return res;
             };
-            const base = chatDepsFrom(opBase(env, container, edge, registry));
+            const base = chatDepsFrom(opBase(env, container, edge, registry, stageEdge));
             if (!base) return noStore({ status: 404, body: { status: "error", error: { code: "error.chat.off" } } });
             const cd = {
                 ...base,
@@ -501,76 +429,8 @@ async function handleInner(
                           : await deleteThread(cd, id);
             return noStore(r);
         }
-        // Share link collections (section 26): D1 only.
-        if (
-            decision.then === "collections_list" ||
-            decision.then === "collections_create" ||
-            decision.then === "collections_update" ||
-            decision.then === "collections_delete" ||
-            decision.then === "collections_reroll"
-        ) {
-            if (!shareHost(env)) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
-            const cd = {
-                db: env.DB,
-                now: edge.now,
-                mediaBaseUrl: env.MEDIA_BASE_URL,
-                shareBaseUrl: env.SHARE_BASE_URL,
-                captioner: edge.captioner === undefined ? captionerFrom(env, edge.modelFetch) : edge.captioner,
-            };
-            const r =
-                decision.then === "collections_list"
-                    ? await listCollections(cd)
-                    : decision.then === "collections_create"
-                      ? await createCollection(cd, request, keyId)
-                      : decision.then === "collections_update"
-                        ? await updateCollection(cd, request, decision.params!.id)
-                        : decision.then === "collections_delete"
-                          ? await deleteCollection(cd, decision.params!.id)
-                          : await rerollCollection(cd, decision.params!.id, keyId);
-            const res = json(r.status, r.body, allowOrigin);
-            res.headers.set("cache-control", "no-store");
-            return res;
-        }
-        // Collection sets (section 28): D1 only.
-        if (
-            decision.then === "groups_list" ||
-            decision.then === "groups_create" ||
-            decision.then === "groups_update" ||
-            decision.then === "groups_delete"
-        ) {
-            if (!shareHost(env)) return json(404, { status: "error", error: { code: "error.share.off" } }, allowOrigin);
-            const gd = { db: env.DB, now: edge.now };
-            const r =
-                decision.then === "groups_list"
-                    ? await listGroups(gd)
-                    : decision.then === "groups_create"
-                      ? await createGroup(gd, request, keyId)
-                      : decision.then === "groups_update"
-                        ? await updateGroup(gd, request, decision.params!.id)
-                        : await deleteGroup(gd, decision.params!.id);
-            const res = json(r.status, r.body, allowOrigin);
-            res.headers.set("cache-control", "no-store");
-            return res;
-        }
-        // Editor routes (section 31.12) are ops in the registry (src/registry/ops/make.ts, section 33.8).
-        // Stage owner routes (section 30.10): D1, the StageRoom Durable Object and Twitch; never the container.
-        if (decision.then?.startsWith("stage_")) {
-            const sd = stageDepsFrom(env, edge, stageEdge);
-            const reply = sd
-                ? await stageKeyed(sd, decision.then.slice("stage_".length) as StageOp, request, decision.params ?? {}, url.searchParams)
-                : { status: 404, body: { status: "error", error: { code: "error.stage.off" } } };
-            const res = json(reply.status, reply.body, allowOrigin);
-            res.headers.set("cache-control", "no-store");
-            return res;
-        }
-        if (decision.then === "emotes_search" || decision.then === "emotes_save") {
-            const deps = appDeps(env, container, edge);
-            const r =
-                decision.then === "emotes_search"
-                    ? await searchEmotes(deps, url.searchParams)
-                    : await saveEmote(deps, request, keyId);
-            return json(r.status, r.body, allowOrigin);
-        }
+        // Editor routes (section 31.12) are ops in the registry (src/registry/ops/make.ts, section 33.8), and so are the
+        // collections, sets, stage owner routes and emotes (src/registry/ops/share.ts and stage.ts, sections 33.9, 33.10).
         if (decision.then === "library_file") {
             return libraryFile(appDeps(env, container, edge), decision.params!.id, request);
         }
