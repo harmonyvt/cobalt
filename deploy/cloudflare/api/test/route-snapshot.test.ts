@@ -130,6 +130,11 @@ export const PATHS: string[] = [
     `/live/edits/${ID20}/push`,
     `/live/runs/${RUN}`,
     `/live/runs/${RUN}/state`,
+    // added with chat reply Live Activities (PR #55); /state is the Durable Object's own, never public
+    "/live/chat-start-token",
+    `/live/chats/${ID16}`,
+    `/live/chats/${ID16}/state`,
+    "/live/chats/bad",
     "/live/other",
     "/nope",
 ];
