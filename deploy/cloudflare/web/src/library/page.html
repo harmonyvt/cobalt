@@ -334,6 +334,19 @@ function shareUrl(u) {
   var m = /^([A-Za-z0-9]{6,40})\.[A-Za-z0-9]{1,8}$/.exec(s.slice(MEDIA_BASE.length));
   return m ? SHARE_BASE + m[1] : s;
 }
+// "copy share" (the rich link page, prominent) beside "copy direct" (the file itself) when a file has both;
+// one "copy link" otherwise. attr: the data attribute the row's tests look for ("data-fa", "data-ga").
+function copyButtons(u, attr) {
+  var share = shareUrl(u);
+  function btn(key, text, cls, url) {
+    var o = { type: "button", text: text, onclick: function () { copyText(url); } };
+    if (cls) o["class"] = cls;
+    o[attr] = key;
+    return h("button", o);
+  }
+  if (share === String(u || "")) return [btn("copy", "copy link", "", share)];
+  return [btn("copy", "copy share", "primary", share), btn("copy-direct", "copy direct", "", String(u))];
+}
 // content type -> extension (the server accepts exactly these)
 var TYPES = { "image/gif": "gif", "image/webp": "webp", "image/png": "png", "image/jpeg": "jpg", "video/mp4": "mp4", "video/quicktime": "mov", "image/heic": "heic" };
 var EXT_TYPE = { gif: "image/gif", webp: "image/webp", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", mp4: "video/mp4", mov: "video/quicktime", heic: "image/heic", heif: "image/heic" };
@@ -694,7 +707,7 @@ function fileOptions(f) {
     o.push(remove);
   } else if (f.state === "done") {
     if (f.url) {
-      o.push(h("button", { type: "button", "data-fa": "copy", text: "copy link", onclick: function () { copyText(shareUrl(f.url)); } }));
+      copyButtons(f.url, "data-fa").forEach(function (b) { o.push(b); });
       o.push(h("a", { class: "btn", "data-fa": "open", href: shareUrl(f.url), target: "_blank", rel: "noopener", text: "open" }));
     }
     o.push(remove);
@@ -1018,7 +1031,7 @@ function tileFor(e) {
       var pub = isPub(e.it);
       // one tile per original: the switch is where "host as-is" used to be (webps are always public)
       if (e.it.visibility_toggle) acts.push(visSwitch(e.it, busy));
-      if (pub && e.it.url) acts.push(h("button", { type: "button", "data-ga": "copy", text: "copy link", onclick: function () { copyText(shareUrl(e.it.url)); } }));
+      if (pub && e.it.url) copyButtons(e.it.url, "data-ga").forEach(function (b) { acts.push(b); });
       if (e.it.visibility_toggle && (isVideoType(t) || t === "image/gif")) acts.push(h("button", { type: "button", "data-ga": "studio", disabled: busy, text: "open in studio", onclick: function () { privateToStudio(e.it); } }));
     }
     acts.push(h("button", { type: "button", class: "danger", "data-ga": "del", disabled: busy, text: "delete", onclick: function () { G.confirm = id; G.confirmAct = "delete"; renderGrid(); } }));

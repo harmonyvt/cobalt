@@ -359,6 +359,9 @@ struct GalleryPipelineTests {
         // saves are public by default (the app's setting), so every item has a link
         var links = app.copyAllLinks(item).split(separator: "\n")
         #expect(links.count == 10 && links.allSatisfy { $0.hasPrefix("https://media.capybaraharmony.com/") })
+        // "copy all direct": the files themselves, in the same order
+        let direct = app.copyAllLinks(item, direct: true).split(separator: "\n")
+        #expect(direct.count == 10 && direct.allSatisfy { $0.hasPrefix("https://media.capybaraharmony.com/") })
         _ = try await driven(h) { try await app.setPublic(false, for: item) }
         #expect(calls(h, "visibility") == ["private post"])
         item = app.mediaItem(for: try #require(app.library.posts.first { $0.id == sid }))
