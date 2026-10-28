@@ -2,9 +2,10 @@
 // the two guards that would silently jump the line or lose a job, the pump, the ceilings, cancel,
 // `GET /studio/line`, the validation of `queue` / `title` / `priority`, and the gate. The Hark
 // summary has its own file (line-notify.test.ts).
+import { dispatch as decide } from "./dispatch";
 import { describe, expect, it, vi } from "vitest";
 import { REGISTRY } from "../src/registry/index";
-import { decide, type GateRequest } from "../src/gate";
+import type { GateRequest } from "../src/gate";
 import { KEY_ID_HEADER, SERVICE_HEADER } from "../src/headers";
 import {
     LINE_BUSY_WAIT_MS,
@@ -1146,7 +1147,7 @@ describe("the gate", () => {
     const notFound = { action: "reject", status: 404 };
 
     it("GET /studio/line is keyed (studio_line); other methods and the service credential are 404; no key is 401", () => {
-        expect(d({ pathname: "/studio/line", ...keyed })).toEqual({ action: "lookup", key: KEY, then: "studio_line" });
+        expect(d({ pathname: "/studio/line", ...keyed })).toEqual({ action: "lookup", key: KEY, op: "studio.line" });
         expect(d({ pathname: "/studio/line" })).toMatchObject({ status: 401 });
         for (const method of ["POST", "PUT", "DELETE", "PATCH", "HEAD"]) expect(d({ method, pathname: "/studio/line", ...keyed })).toMatchObject(notFound);
         expect(d({ pathname: "/studio/line", service: true })).toMatchObject(notFound);
@@ -1160,12 +1161,12 @@ describe("the gate", () => {
         }
         for (const method of ["GET", "POST", "PATCH", "HEAD"]) expect(d({ method, pathname: "/studio/line/notify", ...keyed })).toMatchObject(notFound);
     });
-    it("DELETE /studio/<sid>/line and DELETE /studio/<sid>/render/<job> are keyed (studio_cancel); the render's GET stays unkeyed", () => {
+    it("DELETE /studio/<sid>/line and DELETE /studio/<sid>/render/<job> are keyed (the studio.cancel and studio.render.cancel ops); the render's GET stays unkeyed", () => {
         expect(d({ method: "DELETE", pathname: `/studio/${SID}/line`, ...keyed })).toEqual({
-            action: "lookup", key: KEY, then: "studio_cancel", params: { sid: SID },
+            action: "lookup", key: KEY, op: "studio.cancel", params: { sid: SID },
         });
         expect(d({ method: "DELETE", pathname: `/studio/${SID}/render/${JOB}`, ...keyed })).toEqual({
-            action: "lookup", key: KEY, then: "studio_cancel", params: { sid: SID, job: JOB },
+            action: "lookup", key: KEY, op: "studio.render.cancel", params: { sid: SID, job: JOB },
         });
         expect(d({ method: "DELETE", pathname: `/studio/${SID}/line` })).toMatchObject({ status: 401 });
         expect(d({ method: "DELETE", pathname: `/studio/${SID}/render/${JOB}` })).toMatchObject({ status: 401 });
@@ -1173,7 +1174,6 @@ describe("the gate", () => {
         expect(d({ method: "DELETE", pathname: `/studio/${SID}/render/${JOB}`, service: true })).toMatchObject(notFound);
         // the render's GET is an op now (src/registry/ops/make.ts): still the capability URL, no key
         expect(REGISTRY.match("GET", `/studio/${SID}/render/${JOB}`)?.op).toMatchObject({ name: "studio.render_status", auth: "capability" });
-        expect(REGISTRY.match("DELETE", `/studio/${SID}/render/${JOB}`)).toBeNull();
         for (const method of ["GET", "POST", "PUT", "PATCH"]) expect(d({ method, pathname: `/studio/${SID}/line`, ...keyed })).toMatchObject(notFound);
         expect(d({ method: "DELETE", pathname: `/studio/${SID}/render/short`, ...keyed })).toMatchObject(notFound);
         expect(d({ method: "DELETE", pathname: `/studio/${SID}/line/extra`, ...keyed })).toMatchObject(notFound);

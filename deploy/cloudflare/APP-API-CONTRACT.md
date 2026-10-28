@@ -3675,7 +3675,56 @@ the module cannot take the code as an argument. `chat-loader.ts` now calls `LOAD
 so a run whose exact code already ran that day reuses that worker. Anything else is billed as before. It falls back to
 `load()` when `get` is missing.
 
-### 33.7 Make ops (T4): webps, stills, slideshows, gallery images, trims, crops and the editor from chat
+### 33.7 Library writes and the chat's saves (T3)
+
+**Routes moved onto ops** (`registry/ops/library-writes.ts`, all tier `hidden`; nothing on the wire changed and the route
+snapshot is identical): `POST /studio` (`studio.create`, still cut to its first link and written to `request_log`),
+`PUT /studio/upload` (`studio.upload`), `POST /studio/<sid>/publish` (`studio.publish`), `POST /library/items/<id>/publish`
+(`library.publish`), `PATCH /library/items/<id>/visibility`, `PATCH|DELETE /library/items/<id>/post`,
+`DELETE /library/items/<id>`, `PUT /library/items/<id>/made`, and the Durable Object's `GET /studio/recent`,
+`GET /studio/line`, `DELETE /studio/<sid>/line`, `DELETE /studio/<sid>/render/<job>` and `POST /studio/<sid>/items/retry`
+(key only: the library service gets a bodyless 404). Their gate and `worker.ts` branches are gone. `GET /queue` keeps its
+route and becomes tier `free` (`cobalt.queue()`).
+
+**The chat's calls** (`ai.only`, key id `chat:<thread id>`). A post id is the `id` the read tools give (the post key):
+
+| call | tier | what it does |
+| --- | --- | --- |
+| `cobalt.library.save(url, { items?, public?, title?, wait? })` | free | `POST /studio` to the Durable Object with `queue: true` (never refused as busy), then the save's own long-poll (`GET /studio/<sid>?wait=20`, up to `wait` seconds, default and max 60). Returns `SaveResult { status: ready\|saving\|queued\|error, save_id, post_id, title, kind, files, public, error, saves_left_today }`; `post_id` is set once ready (the session id). |
+| `cobalt.library.title(id, title \| null)` | free | `PATCH .../post` on the post's first file (section 15 rules). |
+| `cobalt.library.visibility(ids, public)` | ask when `public` is false | Every toggleable file of each post (16.2) that is not already as asked. Public runs at once and returns the new links. |
+| `cobalt.library.delete(ids)` | ask | `DELETE .../post` for each post (section 12). A post gone by the time of yes is skipped. |
+| `cobalt.library.deleteFile(fileId)` | ask | `DELETE /library/items/<id>` (18.4). A post's original is refused before asking (use `delete`). |
+| `cobalt.queue()` | free | `GET /queue`'s body; the line is read with the chat's key id, so `mine: true` are the chat's own saves. |
+
+- `ids` is one post id or a list of 1 to 50, so several posts go on **one** card. An unknown id fails the whole call
+  before anything is asked.
+- **Per-input ask** (`ai.asks(input)`): an `ask` op with it only asks when it returns true. Making posts public just runs.
+  A "make private" with nothing public refuses (`error.library.already_private`) instead of asking.
+- **Daily cap**: a thread may save `CHAT_DAILY_SAVES` links (a plain var, default `20`, `0` = off) in any 24 hours,
+  counted from `studio_sessions.key_id = chat:<thread>`. Over it the call throws `error.chat.save_cap` with a line telling
+  the model to send Harmony to the app. No migration.
+- A code run may now take **90 s** of wall time (`CODE_TIMEOUT_MS`, was 30 s) so a save can wait. The CPU limit is unchanged.
+- The system prompt gains one paragraph: change the library only when Harmony asks, never save links Harmony did not give,
+  and put every post of one delete or "make private" into one call.
+
+**The card's `effect`** for these ops (all keys optional; the app shows what is there):
+
+```json
+{ "titles": ["cat jumps", "untitled"], "posts": 2, "files": 3, "bytes": 3000, "public_links": 3, "share_links": 1 }
+```
+
+`titles`: up to 5 post titles. `public_links`: public file links that stop working. `share_links`: live gallery share
+links (section 24) that show any of these files. `summary` is lowercase: `delete “cat jumps” (3 files)`, `delete 2 posts`,
+`make “cat jumps” private`, `delete “clip.mp4” from “three cats”`.
+
+**The app's confirm card** (Apple, `ChatConfirmCard`): shown on the assistant message whose `confirm` is set, or live from
+the `confirm` SSE event. It shows the summary, the effect as one line (`3 files · 2.9 kb · 3 public links stop working ·
+1 share link`), and while `waiting` two buttons: a red destructive one (`delete N` for `library.delete` /
+`library.deleteFile`, N = `effect.files`; `make private` for `library.visibility`; `yes` for any other op) and `cancel`.
+A tap calls `POST /chat/threads/<id>/confirm/<cid>` and streams the reply like a send. `yes`, `no` and `expired` show as a
+quiet status line instead of the buttons. Older apps show the card's step as a plain step and ignore it.
+### 33.8 Make ops (T4): webps, stills, slideshows, gallery images, trims, crops and the editor from chat
 
 Owner: "let the chat AI make things". Ops in `registry/ops/make.ts`; the daily cap in `registry/budget.ts`. **No URL, method,
 auth, CORS or body changes**: the route snapshot is unchanged except for the rows of the new internal path below.

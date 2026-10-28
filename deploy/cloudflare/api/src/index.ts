@@ -315,7 +315,7 @@ export class CobaltContainer extends Container<Env> {
         if (isChatPendingRoute(new URL(request.url).pathname)) {
             return handleChatPendingRoute(this.ctx.storage, request, Date.now());
         }
-        // The chat AI's daily caps (section 33.7): DO storage only.
+        // The chat AI's daily caps (section 33.8): DO storage only.
         if (isChatBudgetRoute(new URL(request.url).pathname)) {
             return handleChatBudgetRoute(this.ctx.storage, request, Date.now());
         }

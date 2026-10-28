@@ -268,7 +268,12 @@ export const queueOp = defineOp({
     noStore: true,
     input: AnyQuery,
     http: (ctx) => Object.fromEntries(ctx.query),
-    ai: { tier: "hidden", summary: "Everything in flight (GET /queue)." },
+    // the chat may read it (section 33.7): its own saves are the line's `mine` entries
+    ai: {
+        tier: "free",
+        summary:
+            "Everything in flight: the server's line of saves and renders (entries with mine: true are this chat's own saves, by sid),\nthe search index and the posters. Use it to check on a save that was still going.",
+    },
     handler: async (ctx) => {
         const r = await queueSnapshot({
             db: ctx.db,

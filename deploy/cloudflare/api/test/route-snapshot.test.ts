@@ -78,7 +78,7 @@ export const PATHS: string[] = [
     `/chat/threads/${ID16}/confirm/${ID16}`,
     `/chat/threads/${ID16}/confirm/bad`,
     `/chat/pending/${ID16}`,
-    // added with the make ops (section 33.7): the daily cap store, the Durable Object's own, never public
+    // added with the make ops (section 33.8): the daily cap store, the Durable Object's own, never public
     `/chat/budget/${ID16}/renders`,
     "/library/adopt",
     "/emotes",
@@ -135,6 +135,7 @@ export const PATHS: string[] = [
     "/live/chat-start-token",
     `/live/chats/${ID16}`,
     `/live/chats/${ID16}/state`,
+    "/live/chats/bad",
     "/live/other",
     "/nope",
 ];

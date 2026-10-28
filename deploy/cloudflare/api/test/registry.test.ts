@@ -256,11 +256,37 @@ describe("defineOp and the registry", () => {
     it("lists the chat's tools: free and ask, never hidden, search only while it is on", () => {
         const names = (search: boolean) => TEST_REGISTRY.toolsFor("chat", { search }).map((o) => o.callName);
         expect(names(true)).toEqual([
-            "library.list", "library.search", "library.post", "look", "show", "collage", "links.list", "collections.list",
-            // the make ops (registry/ops/make.ts, section 33.7)
-            "make.webp", "make.still", "make.trim", "make.crop", "make.slideshow", "make.galleryImage",
-            "edits.list", "edits.get", "edits.create", "edits.update", "edits.render", "edits.delete", "jobs.wait",
-            "test.wipe", "test.echo", "test.do",
+            "library.list",
+            "library.search",
+            "library.post",
+            "look",
+            "show",
+            "collage",
+            "links.list",
+            "collections.list",
+            "queue",
+            "library.save",
+            "library.title",
+            "library.visibility",
+            "library.delete",
+            "library.deleteFile",
+            // the make ops (registry/ops/make.ts, section 33.8)
+            "make.webp",
+            "make.still",
+            "make.trim",
+            "make.crop",
+            "make.slideshow",
+            "make.galleryImage",
+            "edits.list",
+            "edits.get",
+            "edits.create",
+            "edits.update",
+            "edits.render",
+            "edits.delete",
+            "jobs.wait",
+            "test.wipe",
+            "test.echo",
+            "test.do",
         ]);
         expect(names(false)).not.toContain("library.search");
         expect(TEST_REGISTRY.byCall("search")?.name).toBe("library.search");
@@ -336,7 +362,12 @@ describe("the model's cobalt API", () => {
         expect(TOOL_TYPES).toContain("limit?: number; // default 100, max 1000");
         expect(toolTypes(false)).not.toContain("search(");
         // hidden route ops are never shown
-        expect(TOOL_TYPES).not.toMatch(/index\(|query\(|map\(|queue\(/);
+        // (edits.create is the editor's own free call, section 33.8; studio.create stays hidden)
+        expect(TOOL_TYPES).not.toMatch(/index\(|query\(|map\(|made\(|upload\(|recent\(|\bstudio: \{/);
+        // the chat's own reads and writes of section 33.7
+        expect(TOOL_TYPES).toContain("queue(): Promise<unknown>;");
+        expect(TOOL_TYPES).toContain("save(url: string, opts?: {");
+        expect(TOOL_TYPES).toContain("delete(ids: string[]): Promise<{ deleted: string[]; files: number }>;");
         // an ask op says so
         expect(toolTypes(true, TEST_REGISTRY)).toContain("// Asks Harmony first: returns { pending_confirm }");
         expect(toolTypes(true, TEST_REGISTRY)).toContain("wipe(name: string, opts?: { count?: number }): Promise<{ wiped: string }>;");

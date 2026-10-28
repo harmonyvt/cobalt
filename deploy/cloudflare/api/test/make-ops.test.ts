@@ -1,4 +1,4 @@
-// The make ops (APP-API-CONTRACT.md 33.7, plan T4): the chat AI's cobalt.make.*, cobalt.edits.* and cobalt.jobs.wait,
+// The make ops (APP-API-CONTRACT.md 33.8, plan T4): the chat AI's cobalt.make.*, cobalt.edits.* and cobalt.jobs.wait,
 // each called through the registry's chat toolbox (zod check, then the handler), plus one whole chat reply through the
 // real sandbox source. The real SQL runs on node:sqlite; the Durable Object is a fake that keeps the daily cap and the
 // confirm cards for real (their handlers on a Map) and answers the studio routes from a script.

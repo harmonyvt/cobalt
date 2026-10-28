@@ -1,4 +1,4 @@
-// The /edits routes (APP-API-CONTRACT.md sections 31.13, 33.7): ops in the registry (src/registry/ops/make.ts), keyed, no
+// The /edits routes (APP-API-CONTRACT.md sections 31.13, 33.8): ops in the registry (src/registry/ops/make.ts), keyed, no
 // CORS, no-store. The registry matches whole segments and checks ids; anything it does not match falls through to the
 // gate, which answers 404 for every /edits path. The answers per caller (401 codes, the service's 404) are pinned by the
 // route snapshot (test/route-snapshot.test.ts).

@@ -1,5 +1,6 @@
+import { dispatch as decide } from "./dispatch";
 import { describe, expect, it } from "vitest";
-import { decide, isStudioPath, type GateRequest } from "../src/gate";
+import { isStudioPath, type GateRequest } from "../src/gate";
 import { REGISTRY } from "../src/registry/index";
 
 const KEY = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
@@ -34,7 +35,7 @@ describe("POST /studio (needs a key)", () => {
         expect(d({ method: "POST", pathname: "/studio", authorization: `Api-Key ${KEY}` })).toEqual({
             action: "lookup",
             key: KEY,
-            then: "studio_create",
+            op: "studio.create",
         });
     });
     it("401s like POST / without a well-formed key", () => {
@@ -64,12 +65,12 @@ describe("routes that need no key (the id is the credential)", () => {
     // the render routes are ops now (src/registry/ops/make.ts), answered before the gate
     it("POST /studio/<sid>/render", () => {
         expect(REGISTRY.match("POST", `/studio/${SID}/render`)?.op).toMatchObject({ name: "studio.render", auth: "capability" });
-        expect(d({ method: "POST", pathname: `/studio/${SID}/render` })).toMatchObject({ action: "reject", status: 404 });
+        expect(d({ method: "POST", pathname: `/studio/${SID}/render` })).toEqual({ action: "service", op: "studio.render", params: { sid: SID } });
     });
     it("GET /studio/<sid>/render/<job>", () => {
         expect(REGISTRY.match("GET", `/studio/${SID}/render/${JOB}`)?.op).toMatchObject({ name: "studio.render_status", auth: "capability" });
         expect(REGISTRY.match("GET", `/studio/${SID}/render/short`)).toBeNull();
-        expect(d({ pathname: `/studio/${SID}/render/${JOB}` })).toMatchObject({ action: "reject", status: 404 });
+        expect(d({ pathname: `/studio/${SID}/render/${JOB}` })).toEqual({ action: "service", op: "studio.render_status", params: { sid: SID, job: JOB } });
     });
     it("the query (wait) is not part of the decision", () => {
         expect(d({ pathname: `/studio/${SID}`, searchParams: new URLSearchParams("wait=20") })).toMatchObject({ op: "status" });
@@ -140,8 +141,8 @@ describe("PUT /studio/upload (keyed) and the internal adopt path", () => {
         d({ method: "PUT", pathname: "/studio/upload", authorization: `Api-Key ${KEY}`, ...o });
 
     it("PUT looks the key up, then uploads: checked before the session id format", () => {
-        expect(put()).toEqual({ action: "lookup", key: KEY, then: "studio_upload" });
-        expect(put({ service: true, authorization: null })).toEqual({ action: "service", then: "studio_upload" });
+        expect(put()).toEqual({ action: "lookup", key: KEY, op: "studio.upload" });
+        expect(put({ service: true, authorization: null })).toEqual({ action: "service", op: "studio.upload" });
     });
     it("401s like the other keyed routes without a well-formed key", () => {
         expect(put({ authorization: null })).toMatchObject({ status: 401, errorCode: "error.api.auth.key.missing" });

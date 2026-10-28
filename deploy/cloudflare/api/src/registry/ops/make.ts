@@ -1,4 +1,4 @@
-// Make ops (APP-API-CONTRACT.md 33.7, plan T4): the routes that make files (the webp render of one video, the slideshow,
+// Make ops (APP-API-CONTRACT.md 33.8, plan T4): the routes that make files (the webp render of one video, the slideshow,
 // the gallery image, reopening a library file, the editor) moved onto the registry unchanged, and the chat AI's calls
 // that use them: cobalt.make.webp / still / trim / crop / slideshow / galleryImage, cobalt.edits.*, and
 // cobalt.jobs.wait. Everything the AI starts counts against a per-thread daily cap (CHAT_DAILY_RENDERS, default 10).

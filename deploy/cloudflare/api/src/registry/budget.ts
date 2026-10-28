@@ -1,4 +1,4 @@
-// Per-thread daily caps for what the chat AI may start (APP-API-CONTRACT.md 33.7): renders (T4) and anything later
+// Per-thread daily caps for what the chat AI may start (APP-API-CONTRACT.md 33.8): renders (T4) and anything later
 // that costs real money. One counter per thread and kind in the main Durable Object's storage
 // (`chat:budget:<thread>:<kind>`, `{ day, n }`, reset when the UTC day changes). The Worker reaches it through internal
 // paths the gate never routes (`/chat/budget/...` is a 404 from the internet), with key id `chat:<thread id>`, like the
