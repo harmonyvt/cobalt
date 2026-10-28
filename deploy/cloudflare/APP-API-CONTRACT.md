@@ -397,6 +397,20 @@ Errors (nothing stored): 401 auth codes as today, 411 `error.library.length_requ
 Limit note: 100 MB is Cloudflare's request body limit on this plan, not a choice. The app
 refuses bigger files before uploading ("that file is over the 100 MB limit.").
 
+### 3.1 A file with no usable type
+
+A file with no extension reaches the server as `application/octet-stream` (or with no
+`Content-Type`). For those two only, after the length checks (411, 413, 400 empty), the Worker
+reads the first 16 bytes and names the file by its signature (`sniffSave` in
+`workbench-rules.ts`: jpeg, png, webp, gif, heic, mov, mp4). Not one of the upload types → 415
+`error.library.unsupported`, body cancelled, nothing stored. Otherwise the upload continues as if
+it had been sent with that type: the bytes already read go first into the same stream to R2
+(a FixedLengthStream fed by a reader/writer loop), the item gets the sniffed `content_type`, and
+a `name` with no extension gets one (`file` → `file.mp4`). A body shorter than its
+`Content-Length` stays 400 `error.library.incomplete`. Any other declared type the server does
+not take is still 415 at once, unread. The app does the same check on the device before it
+uploads (2026-10-28: a video named just "file" was sent whole, twice, then refused).
+
 ---
 
 ## 4. Render progress

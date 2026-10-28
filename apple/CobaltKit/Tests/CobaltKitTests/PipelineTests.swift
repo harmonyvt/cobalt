@@ -155,6 +155,40 @@ struct PipelineStateMachineTests {
         #expect(name == "big.mov" && bytes > 100_000_000)
     }
 
+    @Test func aFileThatIsNotMediaIsRefusedBeforeAnyUpload() throws {
+        let h = Harness(.happy)
+        h.pipeline.start(file: try makeTempFile("notes.pdf"))
+        #expect(h.pipeline.state == .failed(.server(code: PipelineFailure.fileUnsupportedCode)))
+        #expect(!h.kinds.contains("uploading"))
+        #expect(h.clock.registrations == 0)
+    }
+
+    @Test func theUploadWaitsForTheNameSheet() async throws {
+        let h = Harness(.happy)
+        let p = h.pipeline
+        p.start(file: try makeTempFile("IMG_0412.mov"))
+        p.holdUploadForTitle()
+        #expect(p.waitsForTitle)
+        // with the sheet up nothing is sent, however long it stays
+        for _ in 0..<50 { await Task.yield() }
+        let sentWhileHeld = h.log.contains { if case .uploading(let t) = $0 { return t.bytes > 0 }; return false }
+        #expect(!sentWhileHeld)
+        p.setTitle("harbour")                       // done
+        #expect(!p.waitsForTitle)
+        await h.driveToSettled()
+        #expect(p.state == .ready)
+    }
+
+    @Test func skippingTheNameSheetSendsTheFileAsItIs() async throws {
+        let h = Harness(.happy)
+        let p = h.pipeline
+        p.start(file: try makeTempFile("IMG_0412.mov"))
+        p.holdUploadForTitle()
+        p.releaseTitleHold()                        // skip / swipe down
+        await h.driveToSettled()
+        #expect(p.state == .ready)
+    }
+
     @Test func renderBusyKeepsTheTrimAndRetries() async throws {
         let h = Harness(.renderBusy)
         let p = h.pipeline

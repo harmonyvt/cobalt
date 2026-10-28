@@ -218,7 +218,13 @@ public final class AppModel {
         let keychain = settings.keychain
         let factory: @MainActor (Settings) -> any CobaltClient = { settings in
             let server = settings.serverURL
+            #if os(iOS)
+            // studio uploads keep going with the app suspended or ended (BackgroundUploads)
+            return HTTPCobaltClient(
+                baseURL: server, apiKey: { Settings.apiKey(in: keychain, forServer: server) }, backgroundUploads: .shared)
+            #else
             return HTTPCobaltClient(baseURL: server, apiKey: { Settings.apiKey(in: keychain, forServer: server) })
+            #endif
         }
         let store = OfflineStore.shared()
         Telemetry.log(.info, .store, "store opened", data: [
@@ -570,6 +576,10 @@ public final class AppModel {
     /// The system woke the app for a finished download of one of those sessions
     /// (`.backgroundTask(.urlSession(matching:))`): the files move into the store, then the photos sync runs.
     public func handleBackgroundDownloads(identifier: String) async {
+        if identifier == BackgroundUploads.identifier {
+            await BackgroundUploads.shared.handleWake()                       // a studio upload ended (`…bg.upload`)
+            return
+        }
         if identifier == OfflineDownloads.sessionIdentifier {
             await offlineDownloads.handleWake(identifier: identifier)          // "keep offline" (`…bg.offline`)
         } else {

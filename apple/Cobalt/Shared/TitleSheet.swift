@@ -1,11 +1,11 @@
 import CobaltKit
 import SwiftUI
 
-// Naming an upload (CONTRACT-LIBRARY2 decision 3). The upload starts the instant a file is picked; this is the
-// small sheet that rises over the save tab while it runs (`name it`), and the one inline row the share
-// sheet's progress card gains for a file. Neither ever blocks the run: `done` and `skip` only decide what the
-// pipeline is told (`Pipeline.setTitle`), an unchanged default is the same as skip, and the run goes on
-// whatever the sheet does.
+// Naming an upload (CONTRACT-LIBRARY2 decision 3). In the app the picked file is measured and copied in, then
+// this small sheet rises over the save tab (`name it`) and the upload waits for it (Harmony, 2026-10-28: nothing
+// goes up before the file has its name): `done` names it, `skip` or closing the sheet sends it as it is, and an
+// unchanged default is the same as skip. The share sheet's progress card gains one inline row for a file, which
+// never blocks its run.
 //
 // Compiled into the share extension too: nothing here may name an app-only type (`AppModel`, `shell`...).
 // The app presents `TitleSheet` from `AppShell`; `ShareRootView` draws `TitleRow`.
@@ -153,7 +153,9 @@ struct TitleSheet: View {
     }
 
     var body: some View {
-        let line = TitleText.liveLine(story: pipeline.progressStory, failed: failed)
+        // the upload waits for this sheet (`holdUploadForTitle`): say so instead of a progress line stuck at 0
+        let line = pipeline.waitsForTitle && !failed
+            ? Copy.Media.waitsForName : TitleText.liveLine(story: pipeline.progressStory, failed: failed)
         VStack(alignment: .leading, spacing: 12) {
             Text(Copy.Library2.nameIt)
                 .font(Font.cobalt(16, .semibold, relativeTo: .headline))
@@ -199,6 +201,8 @@ struct TitleSheet: View {
         .onChange(of: pipeline.state == .idle) { _, idle in
             if idle { dismiss() }
         }
+        // skip, a swipe down, escape: the file goes up with the name it has
+        .onDisappear { pipeline.releaseTitleHold() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Library2.nameIt)
     }

@@ -8,8 +8,33 @@ extension Pipeline {
     /// The owner typed (or cleared) a title. `nil`, empty or blank = back to the default. Safe at any state;
     /// ignored once the run was reset (an idle pipeline has no run to name).
     public func setTitle(_ raw: String?) {
+        releaseTitleHold()
         if case .idle = state { return }
         applyTitle(raw)
+    }
+
+    /// Holds this run's file upload until the `name it` sheet is answered (Harmony, 2026-10-28: nothing goes up
+    /// before the file has its name). The file is still measured and copied into the inbox meanwhile. Call right
+    /// after `start(file:)`; `setTitle` (done) or `releaseTitleHold` (skip, the sheet closing, or never showing)
+    /// lets it go. A new run lets it go too.
+    public func holdUploadForTitle() {
+        titleHold = EventSignal()
+    }
+
+    /// The upload is held for the `name it` sheet.
+    public var waitsForTitle: Bool { titleHold != nil }
+
+    public func releaseTitleHold() {
+        guard let hold = titleHold else { return }
+        titleHold = nil
+        hold.fire()
+    }
+
+    /// Waits while the sheet holds the upload.
+    func waitForTitle() async {
+        guard let hold = titleHold else { return }
+        Telemetry.log(.info, .upload, "upload waits for its name", data: [:])
+        await hold.wait()
     }
 
     /// `setTitle` without the idle guard: a resumed job's `pendingTitle` applies before its first state.

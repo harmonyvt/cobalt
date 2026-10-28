@@ -240,6 +240,7 @@ enum Copy {
         case "error.app.no_original": return "capystore couldn't get the original video. try again."
         case "error.app.job_lost": return "capystore lost track of that video. save it again."
         case "error.app.not_cobalt": return "that server doesn't look like cobalt."
+        case PipelineFailure.fileUnsupportedCode: return "that file isn't a video or photo capystore can upload."
         case "error.app.photos", "error.app.photos_failed": return "couldn't save to photos. try again."
         default: return "something went wrong. try again."                                        // error.app.unknown and the rest
         }

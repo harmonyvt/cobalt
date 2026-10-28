@@ -18,11 +18,18 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     public let baseURL: URL
     let apiKey: @Sendable () -> String?
     let urlSession: URLSession
+    /// Studio uploads go through the system's background session when set (the iOS app); nil sends them on
+    /// `urlSession` (the Mac, extensions, tests).
+    let backgroundUploads: BackgroundUploads?
 
-    public init(baseURL: URL, apiKey: @escaping @Sendable () -> String?, session: URLSession = .shared) {
+    public init(
+        baseURL: URL, apiKey: @escaping @Sendable () -> String?, session: URLSession = .shared,
+        backgroundUploads: BackgroundUploads? = nil
+    ) {
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.urlSession = session
+        self.backgroundUploads = backgroundUploads
     }
 
     // MARK: - Request plumbing
@@ -408,14 +415,18 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         if let title { query.append(("title", title)) }
         var req = try makeRequest("PUT", "/studio/upload", query: query, keyed: true, timeout: 120)
         req.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        let delegate = ProgressDelegate(progress)
-        defer { delegate.finish() }
         let data: Data
         let http: HTTPURLResponse
         do {
-            let (d, r) = try await urlSession.upload(for: req, fromFile: file, delegate: delegate)
-            guard let h = r as? HTTPURLResponse else { throw CobaltError.invalidResponse(httpStatus: 0) }
-            data = d; http = h
+            if let backgroundUploads {
+                (data, http) = try await backgroundUploads.upload(req, fromFile: file, progress: progress)
+            } else {
+                let delegate = ProgressDelegate(progress)
+                defer { delegate.finish() }
+                let (d, r) = try await urlSession.upload(for: req, fromFile: file, delegate: delegate)
+                guard let h = r as? HTTPURLResponse else { throw CobaltError.invalidResponse(httpStatus: 0) }
+                data = d; http = h
+            }
         } catch let e as URLError {
             throw CobaltError.network(e.code)
         }
