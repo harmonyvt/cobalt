@@ -129,6 +129,10 @@ export interface WorkerEnv {
     // Editor (section 31): the EditRenderer Durable Object namespace (two instances, "r0" and "r1"). Absent: no editor,
     // every /edits route answers 404 error.edit.off and `features.editor` is false. With it, the flag also needs migration 0021.
     EDIT_RENDERER?: DurableObjectNamespace;
+    // The chat's workbench box (section 33.7): the Workbench Durable Object namespace (one object, "main") and its daily
+    // cap of awake minutes (default 60, "0" turns it off). Absent: the chat AI is never offered cobalt.box.*.
+    WORKBENCH?: DurableObjectNamespace;
+    WORKBENCH_DAILY_MINUTES?: string;
 }
 
 // What the stage needs that is not in the env: the StageRoom Durable Object (index.ts passes the real one) and

@@ -99,6 +99,10 @@ the files and a real run before anything is called done.
   and the chat AI's tool in one place; `worker.ts` runs it before the gate, and unregistered routes fall through.
   `test/route-snapshot.test.ts` pins every route's answer: a PR moving routes must leave the fixture unchanged.
   Ops live in `registry/ops/<area>.ts`; tier `ask` ops pause for a confirm card (DO storage, 15 min).
+- Workbench (`APP-API-CONTRACT.md` section 33.7): the chat AI's last-resort Linux box (`cobalt.box.run`/`save`), the
+  `Workbench` DO (`api/src/workbench*.ts`) on container app `cobalt-api-workbench` (`deploy/cloudflare/workbench/`, basic,
+  one instance). No secrets, no own internet: every HTTP(S) request passes the Worker's outbound rule (19.2 + our own zone
+  refused). Wiped on sleep (2 min) and between threads; `WORKBENCH_DAILY_MINUTES` caps awake time (default 60, 0 = off).
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.
