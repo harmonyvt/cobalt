@@ -130,6 +130,9 @@ export const PATHS: string[] = [
     `/live/edits/${ID20}/push`,
     `/live/runs/${RUN}`,
     `/live/runs/${RUN}/state`,
+    "/live/chat-start-token",
+    `/live/chats/${ID16}`,
+    `/live/chats/${ID16}/state`,
     "/live/other",
     "/nope",
 ];
