@@ -283,7 +283,9 @@ describe("the app's library routes (keyed)", () => {
         expect(g("GET", `/library/items/${ID}/file`)).toEqual(lookup("library_file", { id: ID }));
         expect(g("HEAD", `/library/items/${ID}/file`)).toEqual(lookup("library_file", { id: ID }));
         expect(g("POST", `/library/items/${ID}/publish`)).toEqual(lookup("library_publish", { id: ID }));
-        expect(g("POST", `/library/items/${ID}/studio`)).toEqual(lookup("library_studio", { id: ID }));
+        // POST .../studio is an op now (src/registry/ops/make.ts): keyed or the service, CORS
+        expect(REGISTRY.match("POST", `/library/items/${ID}/studio`)?.op).toMatchObject({ name: "library.reopen", auth: "key_or_service", cors: true });
+        expect(g("POST", `/library/items/${ID}/studio`)).toMatchObject({ action: "reject", status: 404 });
     });
     it("POST /library/posters/backfill (section 13) looks the key up; the service credential passes; everything else is 404 or 401", () => {
         expect(g("POST", "/library/posters/backfill")).toEqual(lookup("library_posters_backfill"));
@@ -394,7 +396,6 @@ describe("the app's library routes (keyed)", () => {
         for (const [method, p] of [
             ["GET", `/library/items/${ID}/file`],
             ["POST", `/library/items/${ID}/publish`],
-            ["POST", `/library/items/${ID}/studio`],
         ] as const) {
             expect(g(method, p, {})).toMatchObject({ action: "reject", status: 401, errorCode: "error.api.auth.key.missing" });
             expect(g(method, p, { origin: ORIGIN })).toMatchObject({ status: 401 });

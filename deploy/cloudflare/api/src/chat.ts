@@ -402,6 +402,9 @@ const FINDING_WITHOUT_SEARCH = `Finding things: search by meaning is off on this
 
 const CONFIRMS = `Some calls change things that are hard to undo (the API marks them "Asks Harmony first"). Calling one runs nothing: it returns { pending_confirm } and Harmony gets a confirm card with yes and no. End that run, say in one short line what you asked, and stop. When Harmony answers, you are told what happened and carry on from there.`;
 
+// Making files (APP-API-CONTRACT.md 33.7): only when asked; jobs are waited on with jobs.wait.
+const MAKING = `Making files: cobalt.make.* and cobalt.edits.render start jobs on Harmony's server (webps, animated stills, slideshows, gallery images, and mp4s from the editor, which cost real money). Make something only when Harmony asks for it; each chat may make only a few a day. Each call returns a job: call cobalt.jobs.wait(job) in the same run, and while it is still opening, queued or running, wait again in the next run (or tell Harmony it is on its way). When it is done, cobalt.show([post_id]) and give share_url when Harmony wants a link.`;
+
 export function systemPrompt(now: number, search = true, types: string = toolTypes(search)): string {
     return `You live inside capystore, Harmony's private media saver. Harmony saves videos and pictures from X, TikTok, Instagram, YouTube and the like into their library, makes gallery share links, and sorts those links into collections. You chat with Harmony about that library: find things, count and summarize, compare, suggest what to share, and tease their taste when asked.
 
@@ -413,7 +416,7 @@ To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbn
 
 ${search ? FINDING_WITH_SEARCH : FINDING_WITHOUT_SEARCH}
 
-${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}The API:
+${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}${/\bmake: \{/.test(types) ? `${MAKING}\n\n` : ""}The API:
 ${types}`;
 }
 

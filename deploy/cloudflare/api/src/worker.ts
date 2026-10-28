@@ -12,7 +12,6 @@ import {
     libraryPostTitle,
     libraryPostersBackfill,
     libraryPublish,
-    libraryStudio,
     libraryVisibility,
     libraryVisibilityMigrate,
     studioUpload,
@@ -46,7 +45,7 @@ import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { captionerFrom } from "./roast";
 import { createCollection, deleteCollection, listCollections, rerollCollection, updateCollection } from "./share-collections";
 import { createGroup, deleteGroup, listGroups, updateGroup } from "./collection-groups";
-import { editTablesPresent, editsKeyed, kickRenderers, type EditsOp, type RendererNamespace } from "./edits";
+import { editTablesPresent } from "./edits";
 import { chatModelFrom, createThread, deleteThread, getCollage, getThread, listThreads, renameThread, sendMessage } from "./chat";
 import { ingestTelemetry } from "./telemetry";
 import { handleOp, opBase, REGISTRY, type Registry } from "./registry/index";
@@ -129,6 +128,8 @@ export interface WorkerEnv {
     // Editor (section 31): the EditRenderer Durable Object namespace (two instances, "r0" and "r1"). Absent: no editor,
     // every /edits route answers 404 error.edit.off and `features.editor` is false. With it, the flag also needs migration 0021.
     EDIT_RENDERER?: DurableObjectNamespace;
+    // The chat AI's daily cap on files it starts making per thread (section 33.7, a plain var; default 10).
+    CHAT_DAILY_RENDERS?: string;
 }
 
 // What the stage needs that is not in the env: the StageRoom Durable Object (index.ts passes the real one) and
@@ -316,11 +317,6 @@ async function handleInner(
                     container,
                     seconds: parseSourceWait(url.searchParams.get("wait")),
                 });
-            default:
-                // render_create / render_status: the Durable Object owns the
-                // helper and the job records. The session id in the path is
-                // the credential, so there is no key and no key id here.
-                return container.fetch(request);
         }
     }
 
@@ -588,28 +584,7 @@ async function handleInner(
             res.headers.set("cache-control", "no-store");
             return res;
         }
-        // Editor routes (section 31.12): D1 only. The render containers are only kicked (a 202 from each EditRenderer instance);
-        // a request never waits for one. No request_log row.
-        if (decision.then?.startsWith("edits_")) {
-            const reply = env.EDIT_RENDERER
-                ? await editsKeyed(
-                      {
-                          db: env.DB,
-                          mediaBaseUrl: env.MEDIA_BASE_URL,
-                          now: edge.now,
-                          keyId,
-                          kick: kickRenderers(env.EDIT_RENDERER as unknown as RendererNamespace),
-                      },
-                      decision.then.slice("edits_".length) as EditsOp,
-                      request,
-                      decision.params ?? {},
-                      url.searchParams,
-                  )
-                : { status: 404, body: { status: "error", error: { code: "error.edit.off" } } };
-            const res = json(reply.status, reply.body);
-            res.headers.set("cache-control", "no-store");
-            return res;
-        }
+        // Editor routes (section 31.12) are ops in the registry (src/registry/ops/make.ts, section 33.7).
         // Stage owner routes (section 30.10): D1, the StageRoom Durable Object and Twitch; never the container.
         if (decision.then?.startsWith("stage_")) {
             const sd = stageDepsFrom(env, edge, stageEdge);
@@ -653,15 +628,6 @@ async function handleInner(
         if (decision.then === "media_delete") {
             const r = await deleteSwitchedWebp(appDeps(env, container, edge), decision.params!.name);
             if (r) return json(r.status, r.body, allowOrigin);
-        }
-        if (decision.then === "library_studio") {
-            // `?queue=1`: the adopted session joins the server's line (section 17.3)
-            const queue = url.searchParams.get("queue");
-            if (queue !== null && queue !== "" && !["1", "true", "0", "false"].includes(queue)) {
-                return json(400, { status: "error", error: { code: "error.library.bad_request" } }, allowOrigin);
-            }
-            const r = await libraryStudio(appDeps(env, container, edge), decision.params!.id, keyId, queue === "1" || queue === "true");
-            return json(r.status, r.body, allowOrigin);
         }
         // DELETE /library/items/<id>/post: D1 + R2 only, no CORS (the web page does not call it).
         if (decision.then === "library_post_delete") {
@@ -731,10 +697,8 @@ async function handleInner(
             decision.then === "studio_line" ||
             decision.then === "studio_line_notify" ||
             decision.then === "studio_cancel" ||
-            // a slideshow made from a gallery's items and the retry of the items that failed to save (section 18):
-            // the Durable Object owns the line and the helper
-            decision.then === "studio_slideshow" ||
-            decision.then === "studio_gallery_image" ||
+            // the retry of the items that failed to save (section 18.2): the Durable Object owns the line and the
+            // helper (the slideshow and the gallery image are ops in the registry)
             decision.then === "studio_items_retry"
         ) {
             const headers = new Headers(request.headers);

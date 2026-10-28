@@ -144,6 +144,9 @@ export default defineConfig({
 			// Chat (APP-API-CONTRACT.md section 27): the model (same key as the captions), and the Worker
 			// Loader the model's code runs in (a fresh Dynamic Worker per run, no network: src/chat-loader.ts).
 			CHAT_MODEL: bindings.text("claude-haiku-5-5"),
+			// How many files the chat AI may start making per thread per day (webps, slideshows, editor renders;
+			// APP-API-CONTRACT.md section 33.7). Editor renders run on a standard-4 container, so each costs real money.
+			CHAT_DAILY_RENDERS: bindings.text("10"),
 			LOADER: bindings.workerLoader(),
 			// Stage (APP-API-CONTRACT.md section 30): https://<stage host>/ , one of `domains` above; empty turns the stage
 			// off (every /stage* route is a 404, `features.stage` false). The three Twitch values are SECRETS from

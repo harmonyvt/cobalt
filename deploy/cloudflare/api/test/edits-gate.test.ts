@@ -1,7 +1,10 @@
-// The gate's /edits block (APP-API-CONTRACT.md section 31.13): every route is keyed, the library-service credential and
-// everything else is a 404, ids are checked before anything is looked up.
+// The /edits routes (APP-API-CONTRACT.md sections 31.13, 33.7): ops in the registry (src/registry/ops/make.ts), keyed, no
+// CORS, no-store. The registry matches whole segments and checks ids; anything it does not match falls through to the
+// gate, which answers 404 for every /edits path. The answers per caller (401 codes, the service's 404) are pinned by the
+// route snapshot (test/route-snapshot.test.ts).
 import { describe, expect, it } from "vitest";
 import { decide, type GateRequest } from "../src/gate";
+import { REGISTRY } from "../src/registry/index";
 
 const KEY = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
 const ORIGIN = "https://cobalt.capybaraharmony.com";
@@ -12,25 +15,35 @@ const auth = `Api-Key ${KEY}`;
 
 const g = (method: string, pathname: string, o: Partial<GateRequest> = {}) =>
     decide({ method, pathname, searchParams: new URLSearchParams(), origin: null, authorization: auth, ...o }, cfg);
-const lookup = (then: string, params?: Record<string, string>) => ({ action: "lookup", key: KEY, then, ...(params ? { params } : {}) });
 const notFound = { action: "reject", status: 404, errorCode: undefined };
+const m = (method: string, path: string) => REGISTRY.match(method, path);
 
-describe("the /edits gate", () => {
+describe("the /edits routes", () => {
     it("maps every route and method to its op", () => {
-        expect(g("GET", "/edits")).toEqual(lookup("edits_list"));
-        expect(g("POST", "/edits")).toEqual(lookup("edits_create"));
-        expect(g("GET", `/edits/${PID}`)).toEqual(lookup("edits_get", { id: PID }));
-        expect(g("PUT", `/edits/${PID}`)).toEqual(lookup("edits_update", { id: PID }));
-        expect(g("PATCH", `/edits/${PID}`)).toEqual(lookup("edits_rename", { id: PID }));
-        expect(g("DELETE", `/edits/${PID}`)).toEqual(lookup("edits_delete", { id: PID }));
-        expect(g("POST", `/edits/${PID}/render`)).toEqual(lookup("edits_render", { id: PID }));
-        expect(g("GET", "/edits/renders")).toEqual(lookup("edits_renders"));
-        expect(g("GET", `/edits/renders/${RID}`)).toEqual(lookup("edits_render_get", { rid: RID }));
-        expect(g("DELETE", `/edits/renders/${RID}`)).toEqual(lookup("edits_render_cancel", { rid: RID }));
+        const want: [string, string, string, Record<string, string>][] = [
+            ["GET", "/edits", "edits.route.list", {}],
+            ["POST", "/edits", "edits.route.create", {}],
+            ["GET", `/edits/${PID}`, "edits.route.get", { id: PID }],
+            ["PUT", `/edits/${PID}`, "edits.route.update", { id: PID }],
+            ["PATCH", `/edits/${PID}`, "edits.route.rename", { id: PID }],
+            ["DELETE", `/edits/${PID}`, "edits.route.delete", { id: PID }],
+            ["POST", `/edits/${PID}/render`, "edits.route.render", { id: PID }],
+            ["GET", "/edits/renders", "edits.route.renders", {}],
+            ["GET", `/edits/renders/${RID}`, "edits.route.render_get", { rid: RID }],
+            ["DELETE", `/edits/renders/${RID}`, "edits.route.render_cancel", { rid: RID }],
+        ];
+        for (const [method, path, name, params] of want) {
+            const hit = m(method, path);
+            expect(hit?.op, `${method} ${path}`).toMatchObject({ name, auth: "key", cors: false, noStore: true });
+            expect(hit?.params).toEqual(params);
+            expect(hit?.op.ai.tier).toBe("hidden");
+            // the gate no longer knows them: what the registry does not match is its 404
+            expect(g(method, path)).toEqual(notFound);
+        }
     });
 
-    it("any other method is a 404, not a 405 and not a lookup", () => {
-        for (const [m, p] of [
+    it("any other method is no match, so the gate's 404", () => {
+        for (const [method, p] of [
             ["DELETE", "/edits"],
             ["PUT", "/edits"],
             ["PATCH", "/edits"],
@@ -45,7 +58,8 @@ describe("the /edits gate", () => {
             ["PATCH", `/edits/renders/${RID}`],
             ["HEAD", "/edits"],
         ] as const) {
-            expect(g(m, p), `${m} ${p}`).toEqual(notFound);
+            expect(m(method, p), `${method} ${p}`).toBeNull();
+            expect(g(method, p), `${method} ${p}`).toEqual(notFound);
         }
     });
 
@@ -69,38 +83,14 @@ describe("the /edits gate", () => {
             "/editsx",
             "/edits/%2e%2e",
         ]) {
-            expect(g("GET", p), p).toEqual(notFound);
-            expect(g("DELETE", p), p).toEqual(notFound);
-            expect(g("POST", p), p).toEqual(notFound);
+            for (const method of ["GET", "DELETE", "POST"]) {
+                expect(m(method, p), `${method} ${p}`).toBeNull();
+                expect(g(method, p), p).toEqual(notFound);
+            }
         }
     });
 
-    it("the library-service credential gets a 404 on every route", () => {
-        for (const [m, p] of [
-            ["GET", "/edits"],
-            ["POST", "/edits"],
-            ["GET", `/edits/${PID}`],
-            ["PUT", `/edits/${PID}`],
-            ["PATCH", `/edits/${PID}`],
-            ["DELETE", `/edits/${PID}`],
-            ["POST", `/edits/${PID}/render`],
-            ["GET", "/edits/renders"],
-            ["GET", `/edits/renders/${RID}`],
-            ["DELETE", `/edits/renders/${RID}`],
-        ] as const) {
-            expect(g(m, p, { service: true, authorization: null }), `${m} ${p}`).toEqual(notFound);
-        }
-    });
-
-    it("a missing or malformed key is a 401 with cobalt's codes", () => {
-        expect(g("GET", "/edits", { authorization: null })).toEqual({ action: "reject", status: 401, errorCode: "error.api.auth.key.missing" });
-        expect(g("GET", "/edits", { authorization: "Bearer x" })).toEqual({ action: "reject", status: 401, errorCode: "error.api.auth.key.not_api_key" });
-        expect(g("GET", `/edits/${PID}`, { authorization: "Api-Key nope" })).toEqual({ action: "reject", status: 401, errorCode: "error.api.auth.key.invalid" });
-    });
-
-    it("has no CORS: a preflight from the web origin is not answered by the studio path and an Origin changes nothing", () => {
-        expect(g("GET", "/edits", { origin: ORIGIN })).toEqual(lookup("edits_list"));
-        expect(g("GET", "/edits", { origin: "https://evil.example" })).toEqual(lookup("edits_list"));
+    it("a preflight is still the gate's: a wrong origin is a 403", () => {
         expect(g("OPTIONS", "/edits", { origin: "https://evil.example" })).toEqual({ action: "reject", status: 403, errorCode: undefined });
     });
 });

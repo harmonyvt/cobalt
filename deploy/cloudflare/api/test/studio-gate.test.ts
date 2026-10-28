@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { decide, isStudioPath, type GateRequest } from "../src/gate";
+import { REGISTRY } from "../src/registry/index";
 
 const KEY = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
 const ORIGIN = "https://cobalt.capybaraharmony.com";
@@ -60,11 +61,15 @@ describe("routes that need no key (the id is the credential)", () => {
         expect(d({ pathname: `/studio/${SID}/source` })).toEqual({ action: "studio", op: "source", sid: SID });
         expect(d({ method: "HEAD", pathname: `/studio/${SID}/source` })).toEqual({ action: "studio", op: "source", sid: SID });
     });
+    // the render routes are ops now (src/registry/ops/make.ts), answered before the gate
     it("POST /studio/<sid>/render", () => {
-        expect(d({ method: "POST", pathname: `/studio/${SID}/render` })).toEqual({ action: "studio", op: "render_create", sid: SID });
+        expect(REGISTRY.match("POST", `/studio/${SID}/render`)?.op).toMatchObject({ name: "studio.render", auth: "capability" });
+        expect(d({ method: "POST", pathname: `/studio/${SID}/render` })).toMatchObject({ action: "reject", status: 404 });
     });
     it("GET /studio/<sid>/render/<job>", () => {
-        expect(d({ pathname: `/studio/${SID}/render/${JOB}` })).toEqual({ action: "studio", op: "render_status", sid: SID, job: JOB });
+        expect(REGISTRY.match("GET", `/studio/${SID}/render/${JOB}`)?.op).toMatchObject({ name: "studio.render_status", auth: "capability" });
+        expect(REGISTRY.match("GET", `/studio/${SID}/render/short`)).toBeNull();
+        expect(d({ pathname: `/studio/${SID}/render/${JOB}` })).toMatchObject({ action: "reject", status: 404 });
     });
     it("the query (wait) is not part of the decision", () => {
         expect(d({ pathname: `/studio/${SID}`, searchParams: new URLSearchParams("wait=20") })).toMatchObject({ op: "status" });
@@ -198,6 +203,6 @@ describe("PUT|DELETE /studio/<sid>/notify (keyed, owner checked by the Durable O
         expect(d({ method: "PUT", pathname: `/studio/${SID}x/notify`, ...keyed })).toMatchObject(notFound);
     });
     it("the render route is untouched: still the capability URL, no key", () => {
-        expect(d({ method: "POST", pathname: `/studio/${SID}/render` })).toEqual({ action: "studio", op: "render_create", sid: SID });
+        expect(REGISTRY.match("POST", `/studio/${SID}/render`)?.op).toMatchObject({ name: "studio.render", auth: "capability" });
     });
 });

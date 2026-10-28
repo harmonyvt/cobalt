@@ -255,7 +255,13 @@ describe("defineOp and the registry", () => {
 
     it("lists the chat's tools: free and ask, never hidden, search only while it is on", () => {
         const names = (search: boolean) => TEST_REGISTRY.toolsFor("chat", { search }).map((o) => o.callName);
-        expect(names(true)).toEqual(["library.list", "library.search", "library.post", "look", "show", "collage", "links.list", "collections.list", "test.wipe", "test.echo", "test.do"]);
+        expect(names(true)).toEqual([
+            "library.list", "library.search", "library.post", "look", "show", "collage", "links.list", "collections.list",
+            // the make ops (registry/ops/make.ts, section 33.7)
+            "make.webp", "make.still", "make.trim", "make.crop", "make.slideshow", "make.galleryImage",
+            "edits.list", "edits.get", "edits.create", "edits.update", "edits.render", "edits.delete", "jobs.wait",
+            "test.wipe", "test.echo", "test.do",
+        ]);
         expect(names(false)).not.toContain("library.search");
         expect(TEST_REGISTRY.byCall("search")?.name).toBe("library.search");
         expect(TEST_REGISTRY.byCall("library")?.name).toBe("library.list");
