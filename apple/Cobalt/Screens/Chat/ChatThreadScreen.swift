@@ -19,6 +19,9 @@ struct ChatThreadScreen: View {
     @State private var opened: OpenedMedia?
     @State private var atBottom = true
     @State private var sent = 0
+    /// Counts the confirm cards answered yes / no, for their haptics.
+    @State private var confirmedYes = 0
+    @State private var confirmedNo = 0
     @FocusState private var composerFocused: Bool
 
     init(model: AppModel, threadID: String, tier: Tier) {
@@ -76,13 +79,14 @@ struct ChatThreadScreen: View {
         }
         .haptic(.impact(weight: .light), trigger: sent, enabled: haptics)
         .modifier(ReplyHaptics(status: content?.messages.last?.status))
+        .modifier(ConfirmHaptics(yes: confirmedYes, no: confirmedNo))
     }
 
     // MARK: the messages
 
     private func scrollToken(_ content: ChatThreadContent) -> String {
         guard let last = content.messages.last else { return "empty" }
-        return "\(content.messages.count)|\(last.id)|\(last.text.count)|\(last.steps.count)|\(last.steps.last?.status.rawValue ?? "")|\(last.postIDs.count)|\(last.status.rawValue)"
+        return "\(content.messages.count)|\(last.id)|\(last.text.count)|\(last.steps.count)|\(last.steps.last?.status.rawValue ?? "")|\(last.postIDs.count)|\(last.status.rawValue)|\(content.messages.compactMap(\.confirm?.status.rawValue).joined())"
     }
 
     private func messages(_ content: ChatThreadContent) -> some View {
@@ -93,7 +97,9 @@ struct ChatThreadScreen: View {
                     ForEach(content.messages) { message in
                         ChatMessageView(
                             model: model, message: message, content: content, tier: tier, open: open,
-                            retry: { send($0, attaching: false) }, canRetry: !busy)
+                            retry: { send($0, attaching: false) }, canRetry: !busy,
+                            answer: { answer($0, yes: $1) },
+                            answering: message.confirm.map { store.answeringConfirms.contains($0.id) } ?? false)
                             .id(message.id)
                     }
                     Color.clear.frame(height: 1).id(Self.bottom)
@@ -218,6 +224,20 @@ struct ChatThreadScreen: View {
         }
     }
 
+    /// A confirm card's "delete 3" / "make private" (yes) or "cancel" (no). The answer streams the reply on into the
+    /// thread like a send; a card the server no longer has shows as a status line and the thread reloads.
+    private func answer(_ card: ChatConfirm, yes: Bool) {
+        if yes { confirmedYes += 1 } else { confirmedNo += 1 }
+        atBottom = true
+        Task {
+            do {
+                try await store.answer(card, yes: yes, in: threadID)
+            } catch {
+                shell.showStatus(Copy.Chat.message(for: error))
+            }
+        }
+    }
+
     /// A shown file: the phone pushes its detail, the iPad and Mac show it in the library tab (the inspector).
     private func open(_ post: LibraryPost) {
         if tier == .compact {
@@ -233,6 +253,18 @@ struct ChatThreadScreen: View {
         // after the push has settled: focus asked for sooner is dropped
         try? await Task.sleep(for: .milliseconds(600))
         composerFocused = true
+    }
+}
+
+/// A confirm card answered: a firm thud for the yes that changes the library, a soft tick for "cancel".
+private struct ConfirmHaptics: ViewModifier {
+    let yes: Int
+    let no: Int
+
+    func body(content: Content) -> some View {
+        content
+            .haptic(.impact(weight: .heavy), trigger: yes)
+            .haptic(.impact(weight: .light), trigger: no)
     }
 }
 

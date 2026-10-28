@@ -862,15 +862,26 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     /// `ChatError` and no event; a transport failure at any point finishes it with `CobaltError.network`. Dropping the
     /// consumer cancels the request.
     public func sendChatMessage(threadID: String, text: String, postIDs: [String]) -> AsyncThrowingStream<ChatEvent, Error> {
+        var body: [String: Any] = ["text": text]
+        if !postIDs.isEmpty { body["post_ids"] = postIDs }
+        return chatStream("/chat/threads/\(Self.encode(threadID))/messages", body: Self.jsonBody(body))
+    }
+
+    /// `POST /chat/threads/<id>/confirm/<card id>` `{answer}` (keyed, 33.5): the card's answer, then the reply as it goes on.
+    public func answerChatConfirm(threadID: String, confirmID: String, yes: Bool) -> AsyncThrowingStream<ChatEvent, Error> {
+        chatStream("/chat/threads/\(Self.encode(threadID))/confirm/\(Self.encode(confirmID))", body: Self.jsonBody(["answer": yes ? "yes" : "no"]))
+    }
+
+    /// A POST whose answer is a reply stream (`text/event-stream`, 27.2): refusals before the stream finish it with their
+    /// `ChatError`, a drop later with the transport's error.
+    private func chatStream(_ path: String, body: Data?) -> AsyncThrowingStream<ChatEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    var req = try makeRequest("POST", "/chat/threads/\(Self.encode(threadID))/messages", keyed: true, timeout: 90)
+                    var req = try makeRequest("POST", path, keyed: true, timeout: 90)
                     req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    var body: [String: Any] = ["text": text]
-                    if !postIDs.isEmpty { body["post_ids"] = postIDs }
-                    req.httpBody = Self.jsonBody(body)
+                    req.httpBody = body
                     let (bytes, response) = try await urlSession.bytes(for: req)
                     guard let http = response as? HTTPURLResponse else { throw CobaltError.invalidResponse(httpStatus: 0) }
                     guard (200..<300).contains(http.statusCode) else {

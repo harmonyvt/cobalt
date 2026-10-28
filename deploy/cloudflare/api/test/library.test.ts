@@ -3,11 +3,12 @@
 // and the soft delete. The Worker, the Durable Object's services and the real
 // SQL (node:sqlite on the real migrations) run together; the helper and R2 are
 // the fakes from studio-fakes.ts.
+import { dispatch as decide } from "./dispatch";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 import { MAX_UPLOAD_BYTES } from "../src/app-routes";
 import { SHARE_SET_MAX } from "../src/share-sets";
-import { decide, type GateRequest } from "../src/gate";
+import type { GateRequest } from "../src/gate";
 import { KEY_ID_HEADER, PORT_HEADER, SERVICE_HEADER } from "../src/headers";
 import { hashKey } from "../src/keys";
 import { SERVICE_KEY_ID } from "../src/library";
@@ -188,10 +189,10 @@ describe("service auth: the gate", () => {
         expect(s("POST", "/webp")).toEqual({ action: "service", then: "webp_create" });
         expect(s("GET", `/webp/${JOB}`)).toEqual({ action: "service", then: "webp_status", params: { id: JOB } });
         expect(s("DELETE", `/media/${NAME}`)).toEqual({ action: "service", then: "media_delete", params: { name: NAME } });
-        expect(s("POST", "/studio")).toEqual({ action: "service", then: "studio_create" });
+        expect(s("POST", "/studio")).toEqual({ action: "service", op: "studio.create" });
         expect(s("POST", `/studio/${SID}/publish`)).toEqual({
             action: "service",
-            then: "studio_publish",
+            op: "studio.publish",
             params: { sid: SID },
         });
         expect(s("POST", "/library/adopt")).toEqual({ action: "service", then: "library_adopt" });
@@ -205,7 +206,7 @@ describe("service auth: the gate", () => {
         expect(decide(req({ method: "POST", pathname: `/studio/${SID}/publish`, authorization: `Api-Key ${CLIENT}` }), cfg)).toEqual({
             action: "lookup",
             key: CLIENT,
-            then: "studio_publish",
+            op: "studio.publish",
             params: { sid: SID },
         });
         // an Api-Key client never reaches adopt

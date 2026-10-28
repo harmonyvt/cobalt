@@ -12,6 +12,8 @@ private let deletedPostThread = "PrEvIeWchat00003"
 /// The fourth sample thread ends in a collage of 95 posts (message 132), served 30 at a time.
 private let collageThread = "PrEvIeWchat00004"
 private let collageMessage = "132"
+/// The `.chatConfirm` scenario's thread: the chat asks before deleting three timer clips.
+private let confirmThread = "PrEvIeWchat00005"
 
 #Preview("chat · happy", traits: .fixedLayout(width: 390, height: 844)) {
     PreviewHost(.happy, tab: .chat) { model in NavigationStack { ChatScreen(model: model, tier: .compact) } }
@@ -95,6 +97,21 @@ private struct ThreadPreview: View {
     PreviewHost(.happy, tab: .chat) { model in
         ThreadPreview(model: model, threadID: collageThread) { model in
             try? await model.chat.send(text: "and the kittens", in: collageThread)
+        }
+    }
+}
+#Preview("thread · confirm card", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.chatConfirm, tab: .chat) { model in ThreadPreview(model: model, threadID: confirmThread) }
+}
+#Preview("thread · confirm card, dark", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.chatConfirm, tab: .chat) { model in ThreadPreview(model: model, threadID: confirmThread) }
+        .preferredColorScheme(.dark)
+}
+#Preview("thread · confirm card answered", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.chatConfirm, tab: .chat) { model in
+        ThreadPreview(model: model, threadID: confirmThread) { model in
+            guard let card = model.chat.content(of: confirmThread)?.messages.last?.confirm else { return }
+            try? await model.chat.answer(card, yes: true, in: confirmThread)
         }
     }
 }

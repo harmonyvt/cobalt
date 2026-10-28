@@ -51,6 +51,7 @@ extension Copy {
             case .notFound: return "capystore couldn't find that chat."
             case .badRequest: return "the message is empty or over \(ChatRule.messageLimit) characters."
             case .interrupted: return "the reply was cut off. it may still be in the chat tab."
+            case .confirmGone: return "that ask is gone. nothing changed."
             case .model, .unavailable: return "the reply failed. try again."
             }
         }

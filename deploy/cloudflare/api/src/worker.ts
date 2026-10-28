@@ -6,17 +6,8 @@ import { appDeps, embedFrom, shareHost, stageDepsFrom, type ContainerStub, type 
 import {
     capabilities,
     libraryFile,
-    libraryItemDelete,
-    libraryMade,
-    libraryPostDelete,
-    libraryPostTitle,
     libraryPostersBackfill,
-    libraryPublish,
-    libraryStudio,
-    libraryVisibility,
     libraryVisibilityMigrate,
-    studioUpload,
-    uploadLogInfo,
     type AppDeps,
 } from "./app-routes";
 import { livePushConfigured } from "./apns";
@@ -26,22 +17,21 @@ import { decide, isStudioPath } from "./gate";
 import { KEY_ID_HEADER, SERVICE_HEADER, stripInternalHeaders } from "./headers";
 import { lookupKey } from "./keys";
 import { SERVICE_KEY_ID } from "./library";
-import { publishStudio, type PublishBucket } from "./publish";
+import type { PublishBucket } from "./publish";
 import { serviceAuthorized } from "./service-auth";
 import { sharePage } from "./share";
 import { stageBaseFrom, stageSite, twitchConfigFrom } from "./stage";
 import { deleteSwitchedWebp, purgeFrom } from "./visibility";
 import { captionerFrom } from "./roast";
-import { editTablesPresent, editsKeyed, kickRenderers, type EditsOp, type RendererNamespace } from "./edits";
+import { editTablesPresent } from "./edits";
 import { chatModelFrom, createThread, deleteThread, getCollage, getThread, listThreads, renameThread, sendMessage } from "./chat";
 import { ingestTelemetry } from "./telemetry";
+import { describeBody, logRequest, normalizeUrlField } from "./request-log";
 import { handleOp, opBase, REGISTRY, type Registry } from "./registry/index";
 import { chatDepsFrom } from "./registry/ops/chat";
 import {
-    linkFrom,
     parseSourceWait,
     parseStudioWait,
-    studioErr,
     type OriginalsBucket,
 } from "./studio";
 import {
@@ -115,6 +105,11 @@ export interface WorkerEnv {
     // Editor (section 31): the EditRenderer Durable Object namespace (two instances, "r0" and "r1"). Absent: no editor,
     // every /edits route answers 404 error.edit.off and `features.editor` is false. With it, the flag also needs migration 0021.
     EDIT_RENDERER?: DurableObjectNamespace;
+    // Chat saves (section 33.7): how many links one chat thread may save in any 24 hours (a plain var, default 20; "0"
+    // turns the chat's saves off).
+    CHAT_DAILY_SAVES?: string;
+    // The chat AI's daily cap on files it starts making per thread (section 33.8, a plain var; default 10).
+    CHAT_DAILY_RENDERS?: string;
 }
 
 
@@ -126,6 +121,7 @@ const chatOn = (env: WorkerEnv, edge: EdgeDeps): boolean =>
     (edge.chatModel === undefined ? chatModelFrom(env, edge.modelFetch) : edge.chatModel) !== null && !!edge.codeRunner;
 
 export { embedFrom, type ContainerStub, type StageEdge } from "./deps";
+export { bodyLink, describeBody, extractFirstUrl, logRequest, normalizeUrlField, type BodyInfo } from "./request-log";
 
 // Lowercase only: the API rejects a key file with any other spelling.
 const UUID_REGEX =
@@ -281,11 +277,6 @@ async function handleInner(
                     container,
                     seconds: parseSourceWait(url.searchParams.get("wait")),
                 });
-            default:
-                // render_create / render_status: the Durable Object owns the
-                // helper and the job records. The session id in the path is
-                // the credential, so there is no key and no key id here.
-                return container.fetch(request);
         }
     }
 
@@ -344,23 +335,6 @@ async function handleInner(
             }
         }
 
-        // POST /studio/<sid>/publish: D1 + R2 only, answered right here.
-        if (decision.then === "studio_publish") {
-            const r = await publishStudio(
-                {
-                    db: env.DB,
-                    originals: env.ORIGINALS,
-                    media: env.MEDIA,
-                    mediaBaseUrl: env.MEDIA_BASE_URL,
-                    now: edge.now,
-                    purge: purgeFrom(env),
-                },
-                decision.params!.sid,
-                keyId,
-            );
-            return json(r.status, r.body, allowOrigin);
-        }
-
         // POST /telemetry: D1 + R2 only, no CORS. Dispatched here, before anything that
         // reads a body or writes the request log: a batch never reaches `request_log`.
         if (decision.then === "telemetry_ingest") {
@@ -371,16 +345,6 @@ async function handleInner(
             });
         }
 
-        // The app's routes: D1 + R2 only (the one Durable Object call is the
-        // internal adopt path). Handled before anything below, which reads
-        // request bodies: an upload body is never read, only streamed to R2, and
-        // never reaches the request log.
-        if (decision.then === "studio_upload") {
-            const r = await studioUpload(appDeps(env, container, edge), request, keyId, url.searchParams);
-            const res = json(r.status, r.body, allowOrigin);
-            await logRequest(env.DB, "PUT /studio/upload", keyId, request, uploadLogInfo(request), res);
-            return res;
-        }
         if (decision.then === "library_search_index") {
             const deps = { ...appDeps(env, container, edge), embed: embedFrom(env) };
             const r = await librarySearchIndex(deps, url.searchParams);
@@ -465,43 +429,15 @@ async function handleInner(
                           : await deleteThread(cd, id);
             return noStore(r);
         }
-        // Editor routes (section 31.12): D1 only. The render containers are only kicked (a 202 from each EditRenderer instance);
-        // a request never waits for one. No request_log row.
-        if (decision.then?.startsWith("edits_")) {
-            const reply = env.EDIT_RENDERER
-                ? await editsKeyed(
-                      {
-                          db: env.DB,
-                          mediaBaseUrl: env.MEDIA_BASE_URL,
-                          now: edge.now,
-                          keyId,
-                          kick: kickRenderers(env.EDIT_RENDERER as unknown as RendererNamespace),
-                      },
-                      decision.then.slice("edits_".length) as EditsOp,
-                      request,
-                      decision.params ?? {},
-                      url.searchParams,
-                  )
-                : { status: 404, body: { status: "error", error: { code: "error.edit.off" } } };
-            const res = json(reply.status, reply.body);
-            res.headers.set("cache-control", "no-store");
-            return res;
-        }
+        // Editor routes (section 31.12) are ops in the registry (src/registry/ops/make.ts, section 33.8), and so are the
+        // collections, sets, stage owner routes and emotes (src/registry/ops/share.ts and stage.ts, sections 33.9, 33.10).
         if (decision.then === "library_file") {
             return libraryFile(appDeps(env, container, edge), decision.params!.id, request);
         }
-        if (decision.then === "library_publish") {
-            const r = await libraryPublish(appDeps(env, container, edge), decision.params!.id, keyId);
-            return json(r.status, r.body, allowOrigin);
-        }
-        // PATCH /library/items/<id>/visibility and POST /library/visibility/migrate (section 16):
-        // D1 + R2 only, no CORS (the web Worker calls them through the service binding).
-        if (decision.then === "library_visibility" || decision.then === "library_visibility_migrate") {
-            const deps = appDeps(env, container, edge);
-            const r =
-                decision.then === "library_visibility"
-                    ? await libraryVisibility(deps, decision.params!.id, request, keyId)
-                    : await libraryVisibilityMigrate(deps, url.searchParams);
+        // POST /library/visibility/migrate (section 16.4): D1 + R2 only, no CORS. (The toggle itself is an op,
+        // src/registry/ops/library-writes.ts.)
+        if (decision.then === "library_visibility_migrate") {
+            const r = await libraryVisibilityMigrate(appDeps(env, container, edge), url.searchParams);
             return new Response(JSON.stringify(r.body), {
                 status: r.status,
                 headers: { "content-type": "application/json", "cache-control": "no-store" },
@@ -513,50 +449,6 @@ async function handleInner(
             const r = await deleteSwitchedWebp(appDeps(env, container, edge), decision.params!.name);
             if (r) return json(r.status, r.body, allowOrigin);
         }
-        if (decision.then === "library_studio") {
-            // `?queue=1`: the adopted session joins the server's line (section 17.3)
-            const queue = url.searchParams.get("queue");
-            if (queue !== null && queue !== "" && !["1", "true", "0", "false"].includes(queue)) {
-                return json(400, { status: "error", error: { code: "error.library.bad_request" } }, allowOrigin);
-            }
-            const r = await libraryStudio(appDeps(env, container, edge), decision.params!.id, keyId, queue === "1" || queue === "true");
-            return json(r.status, r.body, allowOrigin);
-        }
-        // DELETE /library/items/<id>/post: D1 + R2 only, no CORS (the web page does not call it).
-        if (decision.then === "library_post_delete") {
-            const r = await libraryPostDelete(appDeps(env, container, edge), decision.params!.id);
-            return new Response(JSON.stringify(r.body), {
-                status: r.status,
-                headers: { "content-type": "application/json", "cache-control": "no-store" },
-            });
-        }
-
-        // DELETE /library/items/<id> (one item or made file, section 18.4) and PUT /library/items/<id>/made (a crop or an
-        // export made on the device, 18.6): D1 + R2 only, no CORS. The made body is streamed to R2, never read here.
-        if (decision.then === "library_item_delete") {
-            const r = await libraryItemDelete(appDeps(env, container, edge), decision.params!.id);
-            return new Response(JSON.stringify(r.body), {
-                status: r.status,
-                headers: { "content-type": "application/json", "cache-control": "no-store" },
-            });
-        }
-        if (decision.then === "library_made") {
-            const r = await libraryMade(appDeps(env, container, edge), decision.params!.id, request, keyId, url.searchParams);
-            return new Response(JSON.stringify(r.body), {
-                status: r.status,
-                headers: { "content-type": "application/json", "cache-control": "no-store" },
-            });
-        }
-
-        // PATCH /library/items/<id>/post: a post's custom title (section 15). D1 only, no CORS.
-        if (decision.then === "library_post_title") {
-            const r = await libraryPostTitle(appDeps(env, container, edge), decision.params!.id, request, keyId);
-            return new Response(JSON.stringify(r.body), {
-                status: r.status,
-                headers: { "content-type": "application/json", "cache-control": "no-store" },
-            });
-        }
-
         // POST /library/posters/backfill: queues the posters still missing (section 13). The
         // Durable Object only writes records; no CORS (the page does not call it).
         if (decision.then === "library_posters_backfill") {
@@ -583,18 +475,10 @@ async function handleInner(
             decision.then === "live_chat" ||
             // the Hark opt-in (also DO-only: D1 ownership check and DO storage)
             decision.then === "studio_notify" ||
-            // the share sheet's recent saves (DO storage for the list, D1 for the rows)
-            decision.then === "studio_recent" ||
-            // the server's line (section 17): the line, its Hark summary and the cancel routes. DO
-            // storage and D1; never wake the container
-            decision.then === "studio_line" ||
-            decision.then === "studio_line_notify" ||
-            decision.then === "studio_cancel" ||
-            // a slideshow made from a gallery's items and the retry of the items that failed to save (section 18):
-            // the Durable Object owns the line and the helper
-            decision.then === "studio_slideshow" ||
-            decision.then === "studio_gallery_image" ||
-            decision.then === "studio_items_retry"
+            // the server's line's Hark summary (section 17): DO storage and D1; never wakes the container. (The line,
+            // the cancels, the recent saves and the items retry are ops: src/registry/ops/library-writes.ts; the slideshow and
+            // the gallery image: ops/make.ts.)
+            decision.then === "studio_line_notify"
         ) {
             const headers = new Headers(request.headers);
             headers.delete("Authorization");
@@ -615,17 +499,6 @@ async function handleInner(
             request.method === "POST" ? await describeBody(request) : null;
         if (logEntry && logEntry.urlPrefix !== null && !/^https?:\/\//i.test(logEntry.urlPrefix)) {
             logEntry.urlPrefix = null;
-        }
-
-        // POST /studio: a body with no http(s) link is refused here, before the
-        // container is involved (the log row still records the attempt).
-        if (decision.then === "studio_create") {
-            const link = await bodyLink(request);
-            if (link === null) {
-                const res = json(400, studioErr(400, "error.studio.no_link").body);
-                if (logEntry) await logRequest(env.DB, "POST /studio", keyId, request, logEntry, res);
-                return res;
-            }
         }
 
         const headers = new Headers(request.headers);
@@ -663,142 +536,5 @@ async function helperHas(container: ContainerStub): Promise<[boolean, boolean, b
         return [body?.gallery === true, body?.make === true, body?.direct === true, body?.still === true, body?.discord === true];
     } catch {
         return none;
-    }
-}
-
-// The normalised `url` of a JSON body, if it is one clean http(s) link.
-async function bodyLink(request: Request): Promise<string | null> {
-    try {
-        const body = JSON.parse(await request.clone().text());
-        if (!body || typeof body !== "object" || Array.isArray(body)) return null;
-        return linkFrom((body as { url?: unknown }).url);
-    } catch {
-        return null;
-    }
-}
-
-// ---- link extraction ---------------------------------------------------------
-
-const FIRST_URL = /https?:\/\/[^\s<>"'`]+/i;
-
-/** First http(s) URL in free text, trailing punctuation trimmed; null if none. */
-export function extractFirstUrl(text: string): string | null {
-    const m = FIRST_URL.exec(text);
-    if (!m) return null;
-    return m[0].replace(/[),.;:!?\]}]+$/, "");
-}
-
-/**
- * If a JSON POST body's `url` is a string that isn't already a bare URL,
- * replace it with the first http(s) URL found in it. Other bodies pass through.
- */
-export async function normalizeUrlField(request: Request): Promise<Request> {
-    if (!(request.headers.get("content-type") ?? "").includes("json")) return request;
-    let body: unknown;
-    try {
-        body = JSON.parse(await request.clone().text());
-    } catch {
-        return request;
-    }
-    if (!body || typeof body !== "object" || Array.isArray(body)) return request;
-    const obj = body as Record<string, unknown>;
-    if (typeof obj.url !== "string") return request;
-    const trimmed = obj.url.trim();
-    if (/^https?:\/\/\S+$/i.test(trimmed) && trimmed === obj.url) return request;
-    const found = extractFirstUrl(obj.url);
-    const next = { ...obj, url: found ?? trimmed };
-    const headers = new Headers(request.headers);
-    headers.delete("content-length");
-    return new Request(request, { body: JSON.stringify(next), headers });
-}
-
-// ---- request log (d1/migrations/0002_request_log.sql) -----------------------
-// Records what a keyed POST carried and what came back, never keys. Failures
-// here are swallowed: logging must not break a download.
-
-export type BodyInfo = {
-    contentType: string | null;
-    bytes: number;
-    keys: string;
-    urlType: string;
-    urlLen: number | null;
-    urlPrefix: string | null;
-};
-
-export async function describeBody(request: Request): Promise<BodyInfo> {
-    const contentType = request.headers.get("content-type");
-    try {
-        const text = await request.clone().text();
-        let parsed: unknown = undefined;
-        try {
-            parsed = JSON.parse(text);
-        } catch {
-            // not JSON: keys/url stay empty
-        }
-        const obj =
-            parsed && typeof parsed === "object" && !Array.isArray(parsed)
-                ? (parsed as Record<string, unknown>)
-                : null;
-        const u = obj?.url;
-        return {
-            contentType,
-            bytes: text.length,
-            keys: obj ? Object.keys(obj).join(",") : "",
-            urlType: u === undefined ? "missing" : Array.isArray(u) ? "array" : typeof u,
-            urlLen: typeof u === "string" ? u.length : null,
-            urlPrefix:
-                typeof u === "string"
-                    ? // never the query or userinfo: a signed link's token and a `user:pass@` are credentials (APP-API-CONTRACT.md 19)
-                      u.split(/[?#]/)[0].replace(/^(https?:\/\/)[^/]*@/i, "$1").slice(0, 80)
-                    : u !== undefined
-                      ? JSON.stringify(u).slice(0, 80)
-                      : null,
-        };
-    } catch {
-        return { contentType, bytes: -1, keys: "", urlType: "unreadable", urlLen: null, urlPrefix: null };
-    }
-}
-
-export async function logRequest(
-    db: D1Database,
-    route: string,
-    keyId: string,
-    request: Request,
-    info: BodyInfo,
-    res: Response,
-): Promise<void> {
-    try {
-        let result: string | null = null;
-        let errorCode: string | null = null;
-        if ((res.headers.get("content-type") ?? "").includes("json")) {
-            const body = (await res.clone().json().catch(() => null)) as {
-                status?: unknown;
-                error?: { code?: unknown };
-            } | null;
-            if (typeof body?.status === "string") result = body.status;
-            if (typeof body?.error?.code === "string") errorCode = body.error.code;
-        }
-        await db
-            .prepare(
-                "INSERT INTO request_log (ts, route, key_id, user_agent, content_type, body_bytes, body_keys, url_type, url_len, url_prefix, status, result, error_code) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            )
-            .bind(
-                Date.now(),
-                route,
-                keyId,
-                (request.headers.get("user-agent") ?? "").slice(0, 200),
-                info.contentType,
-                info.bytes,
-                info.keys,
-                info.urlType,
-                info.urlLen,
-                info.urlPrefix,
-                res.status,
-                result,
-                errorCode,
-            )
-            .run();
-    } catch {
-        // never let logging fail the request
     }
 }

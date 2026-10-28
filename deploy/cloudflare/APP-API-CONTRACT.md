@@ -3676,6 +3676,118 @@ the module cannot take the code as an argument. `chat-loader.ts` now calls `LOAD
 so a run whose exact code already ran that day reuses that worker. Anything else is billed as before. It falls back to
 `load()` when `get` is missing.
 
+### 33.7 Library writes and the chat's saves (T3)
+
+**Routes moved onto ops** (`registry/ops/library-writes.ts`, all tier `hidden`; nothing on the wire changed and the route
+snapshot is identical): `POST /studio` (`studio.create`, still cut to its first link and written to `request_log`),
+`PUT /studio/upload` (`studio.upload`), `POST /studio/<sid>/publish` (`studio.publish`), `POST /library/items/<id>/publish`
+(`library.publish`), `PATCH /library/items/<id>/visibility`, `PATCH|DELETE /library/items/<id>/post`,
+`DELETE /library/items/<id>`, `PUT /library/items/<id>/made`, and the Durable Object's `GET /studio/recent`,
+`GET /studio/line`, `DELETE /studio/<sid>/line`, `DELETE /studio/<sid>/render/<job>` and `POST /studio/<sid>/items/retry`
+(key only: the library service gets a bodyless 404). Their gate and `worker.ts` branches are gone. `GET /queue` keeps its
+route and becomes tier `free` (`cobalt.queue()`).
+
+**The chat's calls** (`ai.only`, key id `chat:<thread id>`). A post id is the `id` the read tools give (the post key):
+
+| call | tier | what it does |
+| --- | --- | --- |
+| `cobalt.library.save(url, { items?, public?, title?, wait? })` | free | `POST /studio` to the Durable Object with `queue: true` (never refused as busy), then the save's own long-poll (`GET /studio/<sid>?wait=20`, up to `wait` seconds, default and max 60). Returns `SaveResult { status: ready\|saving\|queued\|error, save_id, post_id, title, kind, files, public, error, saves_left_today }`; `post_id` is set once ready (the session id). |
+| `cobalt.library.title(id, title \| null)` | free | `PATCH .../post` on the post's first file (section 15 rules). |
+| `cobalt.library.visibility(ids, public)` | ask when `public` is false | Every toggleable file of each post (16.2) that is not already as asked. Public runs at once and returns the new links. |
+| `cobalt.library.delete(ids)` | ask | `DELETE .../post` for each post (section 12). A post gone by the time of yes is skipped. |
+| `cobalt.library.deleteFile(fileId)` | ask | `DELETE /library/items/<id>` (18.4). A post's original is refused before asking (use `delete`). |
+| `cobalt.queue()` | free | `GET /queue`'s body; the line is read with the chat's key id, so `mine: true` are the chat's own saves. |
+
+- `ids` is one post id or a list of 1 to 50, so several posts go on **one** card. An unknown id fails the whole call
+  before anything is asked.
+- **Per-input ask** (`ai.asks(input)`): an `ask` op with it only asks when it returns true. Making posts public just runs.
+  A "make private" with nothing public refuses (`error.library.already_private`) instead of asking.
+- **Daily cap**: a thread may save `CHAT_DAILY_SAVES` links (a plain var, default `20`, `0` = off) in any 24 hours,
+  counted from `studio_sessions.key_id = chat:<thread>`. Over it the call throws `error.chat.save_cap` with a line telling
+  the model to send Harmony to the app. No migration.
+- A code run may now take **90 s** of wall time (`CODE_TIMEOUT_MS`, was 30 s) so a save can wait. The CPU limit is unchanged.
+- The system prompt gains one paragraph: change the library only when Harmony asks, never save links Harmony did not give,
+  and put every post of one delete or "make private" into one call.
+
+**The card's `effect`** for these ops (all keys optional; the app shows what is there):
+
+```json
+{ "titles": ["cat jumps", "untitled"], "posts": 2, "files": 3, "bytes": 3000, "public_links": 3, "share_links": 1 }
+```
+
+`titles`: up to 5 post titles. `public_links`: public file links that stop working. `share_links`: live gallery share
+links (section 24) that show any of these files. `summary` is lowercase: `delete “cat jumps” (3 files)`, `delete 2 posts`,
+`make “cat jumps” private`, `delete “clip.mp4” from “three cats”`.
+
+**The app's confirm card** (Apple, `ChatConfirmCard`): shown on the assistant message whose `confirm` is set, or live from
+the `confirm` SSE event. It shows the summary, the effect as one line (`3 files · 2.9 kb · 3 public links stop working ·
+1 share link`), and while `waiting` two buttons: a red destructive one (`delete N` for `library.delete` /
+`library.deleteFile`, N = `effect.files`; `make private` for `library.visibility`; `yes` for any other op) and `cancel`.
+A tap calls `POST /chat/threads/<id>/confirm/<cid>` and streams the reply like a send. `yes`, `no` and `expired` show as a
+quiet status line instead of the buttons. Older apps show the card's step as a plain step and ignore it.
+### 33.8 Make ops (T4): webps, stills, slideshows, gallery images, trims, crops and the editor from chat
+
+Owner: "let the chat AI make things". Ops in `registry/ops/make.ts`; the daily cap in `registry/budget.ts`. **No URL, method,
+auth, CORS or body changes**: the route snapshot is unchanged except for the rows of the new internal path below.
+
+**Routes moved onto the registry** (all tier `hidden`; each wraps the old handler with its own parsing and error codes):
+
+| op | route | auth | notes |
+|---|---|---|---|
+| `studio.render` | `POST /studio/<sid>/render` (4, 10, 18.13) | `capability` | the request goes to the Durable Object exactly as it came (no key id) |
+| `studio.render_status` | `GET /studio/<sid>/render/<job>` (4) | `capability` | the same; `DELETE` (17.7 cancel) stays with the gate |
+| `studio.slideshow` | `POST /studio/<sid>/slideshow` (18.5, 18.10, 18.14) | `key` | Durable Object with the verified key id |
+| `studio.gallery_image` | `POST /studio/<sid>/gallery-image` (18.11) | `key` | the same |
+| `library.reopen` | `POST /library/items/<id>/studio` (5d, 17.3, 18.14) | `key_or_service` | CORS; `?queue` as before (`400 error.library.bad_request`) |
+| `edits.route.*` | the ten `/edits` routes (31.12) | `key` | no CORS, no-store, `404 error.edit.off` without the renderer binding |
+
+Their branches are gone from `gate.ts` (`decideEdits`, the render, slideshow, gallery image and reopen branches) and from
+`worker.ts`. Every other method or path under them is still the gate's 404. `/studio*` answers still get the studio CORS
+wrap in `handleRequest`.
+
+**The chat AI's calls** (tier `free` unless noted, `ai.only`, key id `chat:<thread id>`). Every `id` is a post id or one
+file's id from `library.post`; a post id means its first source file of the right type (an item or the original, never a
+made file):
+
+- `cobalt.make.webp(id, { start, end, crop?, width?: 320|480, quality? })`: the 4/10/18.13 render of 0.5 to 10 s of a video
+  or gif. It runs on the file's own session while that is open (a gallery item with `item: <index>`), else the file is
+  reopened as the chat (`library.reopen`'s handler with `queue`) and rendered once the session is ready.
+- `cobalt.make.still(id, { seconds?, width?: 320|480|640, quality? })`: the 18.14 webp of one photo (jpeg, png, webp).
+- `cobalt.make.slideshow(id, { items?: fileIds, seconds?, format?, fade?, frame?, sound?, width?, quality? })` and
+  `cobalt.make.galleryImage(id, { layout?, items? })`: 18.5/18.10/18.11 on the gallery's own session, so only within its 7
+  days. `seconds` is per photo; videos and gifs get `null`.
+- `cobalt.make.trim(id, { start, end, fit?, canvas?, title? })` and `cobalt.make.crop(id, { x, y, w, h }, { start?, end?, … })`:
+  a one-clip editor project (31.2; canvas from the picture's shape as 31.2.1, 1080p 30 fps, `fit` default `"fit"`) rendered at
+  once to an mp4. A project whose render is refused is deleted again. Answers `Job & { project_id }`.
+- `cobalt.edits.list()`, `.get(id)`, `.create(timeline, { title? })`, `.update(id, timeline, { title? })` (sends the current
+  revision as `base_revision`), `.render(id)`, and `.delete(id)` (tier `ask`, card "delete the edit "<title>"", effect
+  `{ edits: 1, clips }`). The timeline input is checked by the editor's own `parseTimeline` (31.3) wrapped in zod; a refusal
+  reads `cobalt.edits.create: timeline: <code> at <path>`. The model's cheat sheet gets the timeline's shape as a comment.
+- `cobalt.jobs.wait(job, seconds ≤ 25, default 15)`: the plan said 60, but a code run stops at 30 s (`CODE_TIMEOUT_MS`), so the model
+  waits again in the next run. Job ids: `studio:<sid>:<job>` (polled through `GET /studio/<sid>/render/<job>?wait=≤10` in
+  the Durable Object), `edit:<rid>` (D1, every 3 s), and `open:<sid>:<plan>` (a reopened file still opening: the wait
+  advances the save and starts the make when it is ready, then returns the new `studio:` id). Answer, the `Job` type:
+  `{ job, status: "opening"|"queued"|"running"|"done"|"error"|"cancelled", progress?, queue_ahead?, error?, file_id?,
+  post_id?, kind?, bytes?, width?, height?, seconds?, public?, share_url? }`. Done answers name the new file and its post;
+  `share_url` only when it is public (never a raw media URL).
+
+**Keyed studio routes run as the session's owner.** The Durable Object lets only a session's creating key add to it
+(slideshow, gallery image). The chat is Harmony's own, so the chat's slideshow, still and gallery image calls carry the
+session's `key_id` (a reopened file's session is the chat's own). The render route has no key, as before.
+
+**Daily cap.** Every start (each `make.*`, `edits.render`, and the start inside `jobs.wait` for an `open:` job) takes one
+unit of a per-thread, per-UTC-day counter, `CHAT_DAILY_RENDERS` (a plain var, default `10`, `0..1000`). At the cap the call
+throws `cobalt.<call>: this chat already made <n> files today, …` and nothing starts (a trim makes no project). A start
+that is refused, or an `edits.render` that answers an already running render, gives its unit back. The counter lives in
+the main Durable Object's storage (`chat:budget:<thread>:<kind>` = `{ day, n }`), reached through the internal
+`POST /chat/budget/<thread>/<kind>` `{ "limit": n }` or `{ "refund": true }`, accepted only with key id `chat:<thread>`;
+from the internet it is the gate's 404 (snapshot rows added). No migration.
+
+**System prompt.** While `make` calls are in the cheat sheet, the prompt says to make things only when Harmony asks, that
+editor mp4s cost real money, to wait with `jobs.wait`, and to `show()` the result's post and give its `share_url`.
+
+**Not moved here**: `POST /webp` and `GET /webp/<id>` (the older link webp service with the request log) stay with the gate
+for T7. `DELETE /studio/<sid>/render/<job>` (cancel) is T3's.
 ### 33.9 Share ops (T5): gallery links, collections and sets
 
 `registry/ops/share.ts`. **The routes** of sections 24, 26 and 28 are tier `hidden` ops that call the same handlers with the
