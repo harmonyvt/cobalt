@@ -5,6 +5,8 @@ import Foundation
 enum BackgroundSessionID {
     static let prefix = "com.capybaraharmony.cobalt.bg."
     static let app = prefix + "app"
+    /// The app's studio uploads (`BackgroundUploads`), one session for all of them.
+    static let upload = prefix + "upload"
     static func share(job: UUID) -> String { prefix + "share." + job.uuidString.lowercased() }
 
     /// The instant share's save request (`POST /studio`, CONTRACT-SHARE-QUICK.md section 9): one session per

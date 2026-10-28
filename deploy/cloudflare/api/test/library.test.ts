@@ -1420,10 +1420,13 @@ describe("PUT /studio/upload", () => {
         };
         it("415 for an unsupported or missing content type", async () => {
             await refused({ "content-type": "text/plain", "content-length": "10" }, 415, "error.library.unsupported");
-            await refused({ "content-type": "application/octet-stream", "content-length": "10" }, 415, "error.library.unsupported");
             await refused({ "content-type": "image/svg+xml", "content-length": "10" }, 415, "error.library.unsupported");
             await refused({ "content-type": "video/webm", "content-length": "10" }, 415, "error.library.unsupported");
-            await refused({ "content-length": "10" }, 415, "error.library.unsupported");
+        });
+        it("no type or application/octet-stream: the length checks still come first, before any byte is read", async () => {
+            await refused({ "content-type": "application/octet-stream" }, 411, "error.library.length_required");
+            await refused({ "content-type": "application/octet-stream", "content-length": "100000001" }, 413, "error.library.too_large");
+            await refused({ "content-length": "100000001" }, 413, "error.library.too_large");
         });
         it("411 without a numeric content-length", async () => {
             const s = spy();
@@ -1473,6 +1476,70 @@ describe("PUT /studio/upload", () => {
         it("the content-length is the contract's check order: type, then length, then size", async () => {
             // unsupported type AND too large: the type is reported first
             await refused({ "content-type": "text/plain", "content-length": "999999999" }, 415, "error.library.unsupported");
+        });
+    });
+
+    describe("a file with no usable type (section 3.1): its first bytes decide", () => {
+        const mp4 = () => {
+            const b = new Uint8Array(4096).fill(7);
+            b.set([0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d], 0); // ....ftypisom
+            return b;
+        };
+        const mov = () => {
+            const b = new Uint8Array(2048).fill(3);
+            b.set([0, 0, 0, 0x14, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20], 0); // ....ftypqt
+            return b;
+        };
+        it("an mp4 sent as application/octet-stream named 'file' is stored whole as video/mp4, named file.mp4, and adopted", async () => {
+            const data = mp4();
+            const res = await put(data, "application/octet-stream", "file");
+            expect(res.status).toBe(201);
+            const b = (await res.json()) as any;
+            expect(b.item).toMatchObject({ name: "file.mp4", content_type: "video/mp4", bytes: 4096 });
+            const key = `uploads/${b.item.id}.mp4`;
+            expect(w.originals.objects.get(key)!.bytes).toEqual(data);
+            expect(w.originals.objects.get(key)!.contentType).toBe("video/mp4");
+            expect(w.items()[0]).toMatchObject({ content_type: "video/mp4", r2_key: key });
+            expect(w.session(b.id)).toMatchObject({ status: "saving", content_type: "video/mp4", r2_key: key });
+        });
+        it("with no content-type at all; a name that has an extension keeps it", async () => {
+            const res = await put(mov(), null, "clip.bin");
+            expect(res.status).toBe(201);
+            const b = (await res.json()) as any;
+            expect(b.item).toMatchObject({ name: "clip.bin", content_type: "video/quicktime" });
+            expect(w.originals.objects.has(`uploads/${b.item.id}.mov`)).toBe(true);
+        });
+        it("the bytes arrive in pieces smaller than the signature: still whole and in order", async () => {
+            const data = mp4();
+            let at = 0;
+            const stream = new ReadableStream<Uint8Array>({
+                pull(c) {
+                    if (at >= data.length) return c.close();
+                    const n = at < 12 ? 3 : 1000;
+                    c.enqueue(data.slice(at, at + n));
+                    at += n;
+                },
+            });
+            const res = await putStream(stream, { ...auth, "content-type": "application/octet-stream", "content-length": String(data.length) }, "file");
+            expect(res.status).toBe(201);
+            const b = (await res.json()) as any;
+            expect(w.originals.objects.get(`uploads/${b.item.id}.mp4`)!.bytes).toEqual(data);
+        });
+        it("anything that is not one of the upload types is 415, the body cancelled and nothing kept", async () => {
+            const s = spy();
+            const res = await putStream(s.stream, { ...auth, "content-type": "application/octet-stream", "content-length": "10000" }, "file");
+            expect(res.status).toBe(415);
+            expect(await res.json()).toEqual({ status: "error", error: { code: "error.library.unsupported" } });
+            expect(s.state.cancelled).toBe(true);
+            expect(s.state.pulls).toBeLessThan(10);
+            noTraces();
+            expect(w.seen).toHaveLength(0);
+        });
+        it("a short body is still 400 incomplete, with nothing kept", async () => {
+            const res = await put(mp4().slice(0, 100), "application/octet-stream", "file", auth, { length: "4096" });
+            expect(res.status).toBe(400);
+            expect(await res.json()).toEqual({ status: "error", error: { code: "error.library.incomplete" } });
+            noTraces();
         });
     });
 

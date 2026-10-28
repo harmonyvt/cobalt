@@ -769,6 +769,11 @@ extension Pipeline {
     /// finished save does with its download). Off for a picker item's own download, which is not an upload
     /// the owner made.
     func runUpload(_ file: IntakeFile, keepsOriginal: Bool = true) async throws {
+        // the server would refuse it, but only after the whole file had gone up (2026-10-28: 67.6 MB, twice)
+        guard MIME.uploadTypes.contains(file.contentType) else {
+            Telemetry.log(.info, .upload, "upload refused on device", data: ["type": .string(file.contentType)])
+            throw PipelineFailure.server(code: PipelineFailure.fileUnsupportedCode)
+        }
         let client = ctx.client
         let token = runToken
         localFile = file.url

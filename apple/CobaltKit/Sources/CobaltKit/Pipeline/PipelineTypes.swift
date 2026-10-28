@@ -64,6 +64,8 @@ public enum PipelineFailure: Sendable, Equatable, Error {
     /// settings"); they never show as raw codes.
     public static let photosDeniedCode = "error.app.photos_denied"
     public static let photosFailedCode = "error.app.photos_failed"
+    /// A picked file that is none of the upload types, by its name or its first bytes: refused before a byte is sent.
+    public static let fileUnsupportedCode = "error.app.file_unsupported"
 
     /// This is the Photos permission being refused.
     public var isPhotosDenied: Bool { self == .server(code: Self.photosDeniedCode) }

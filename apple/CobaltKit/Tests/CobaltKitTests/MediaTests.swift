@@ -177,4 +177,48 @@ struct MediaToolsTests {
         #expect(MIME.type(forFileName: "noextension") == "application/octet-stream")
         #expect(!MIME.uploadTypes.contains(MIME.type(forFileName: "notes.pdf")))   // the server will say 415
     }
+
+    // MARK: a file with no extension: its first bytes decide (APP-API-CONTRACT 3.1)
+
+    private static func ftyp(_ brand: String) -> Data {
+        Data([0, 0, 0, 0x20]) + Data("ftyp".utf8) + Data(brand.utf8) + Data(repeating: 0, count: 8)
+    }
+
+    @Test func sniffNamesEveryUploadTypeByItsSignature() {
+        #expect(MIME.sniff(Self.ftyp("isom"))! == ("video/mp4", "mp4"))
+        #expect(MIME.sniff(Self.ftyp("mp42"))! == ("video/mp4", "mp4"))
+        #expect(MIME.sniff(Self.ftyp("qt  "))! == ("video/quicktime", "mov"))
+        #expect(MIME.sniff(Self.ftyp("heic"))! == ("image/heic", "heic"))
+        #expect(MIME.sniff(Data([0xFF, 0xD8, 0xFF, 0xE0]))! == ("image/jpeg", "jpg"))
+        #expect(MIME.sniff(Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))! == ("image/png", "png"))
+        #expect(MIME.sniff(Data("RIFF\0\0\0\0WEBPVP8 ".utf8))! == ("image/webp", "webp"))
+        #expect(MIME.sniff(Data("GIF89a".utf8))! == ("image/gif", "gif"))
+        #expect(MIME.sniff(Data("%PDF-1.7".utf8)) == nil)
+        #expect(MIME.sniff(Self.ftyp("M4A ")) == nil)                               // audio is not an upload type
+        #expect(MIME.sniff(Data([0, 0])) == nil)
+    }
+
+    @Test func aNamelessVideoIsIdentifiedByItsBytesAndNamed() {
+        let mp4 = MIME.identify(name: "file", head: { Self.ftyp("isom") })
+        #expect(mp4.name == "file.mp4" && mp4.contentType == "video/mp4")
+        // a known extension wins and the bytes are not read
+        let mov = MIME.identify(name: "IMG_0412.MOV", head: { Issue.record("read"); return nil })
+        #expect(mov.name == "IMG_0412.MOV" && mov.contentType == "video/quicktime")
+        // an extension the server does not take keeps its name; the bytes still decide the type
+        let bin = MIME.identify(name: "clip.bin", head: { Self.ftyp("qt  ") })
+        #expect(bin.name == "clip.bin" && bin.contentType == "video/quicktime")
+        // not media: unchanged, and the pipeline refuses it before uploading
+        let pdf = MIME.identify(name: "file", head: { Data("%PDF-1.7".utf8) })
+        #expect(pdf.name == "file" && !MIME.uploadTypes.contains(pdf.contentType))
+    }
+
+    @Test func systemIntakeReadsTheFirstBytesOfAFileWithNoExtension() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("sniff-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = url.appendingPathComponent("file")
+        try (Self.ftyp("isom") + Data(repeating: 7, count: 4096)).write(to: file)
+        let picked = try SystemFileIntake().inspect(file)
+        #expect(picked.name == "file.mp4" && picked.contentType == "video/mp4" && picked.bytes == 4096 + 20)
+    }
 }

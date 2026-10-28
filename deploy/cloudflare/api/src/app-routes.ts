@@ -69,6 +69,7 @@ import {
     type StudioReply,
 } from "./studio";
 import { serviceFromUrl } from "./webp";
+import { sniffSave, type SniffedSave } from "./workbench-rules";
 
 export const MAX_UPLOAD_BYTES = 100_000_000;
 export const MAX_NAME_CHARS = 120;
@@ -333,6 +334,72 @@ export function uploadLogInfo(request: Request) {
     };
 }
 
+// How many bytes the type check reads: every signature sniffSave knows sits in the first 12.
+const SNIFF_BYTES = 16;
+
+// Reads the first bytes of an upload that came without a usable type and names it by its signature (sniffSave, the
+// workbench's check). Null (the body cancelled) when it is not one of the upload types. Otherwise the whole body again,
+// the bytes already read first, as a stream R2 can store: a FixedLengthStream fed by a reader/writer loop, since
+// pipeTo between these streams is not implemented in the Workers runtime.
+async function sniffUpload(
+    stream: ReadableStream<Uint8Array>,
+    fixedLength: AppDeps["fixedLength"],
+    size: number,
+): Promise<{ type: SniffedSave; body: ReadableStream<Uint8Array>; short: () => boolean } | null> {
+    const reader = stream.getReader();
+    const head: Uint8Array[] = [];
+    let got = 0;
+    let ended = false;
+    try {
+        while (got < SNIFF_BYTES) {
+            const { done, value } = await reader.read();
+            if (done) {
+                ended = true;
+                break;
+            }
+            if (value.byteLength === 0) continue;
+            head.push(value);
+            got += value.byteLength;
+        }
+    } catch {
+        await reader.cancel().catch(() => {});
+        return null;
+    }
+    const first = new Uint8Array(got);
+    let at = 0;
+    for (const c of head) {
+        first.set(c, at);
+        at += c.byteLength;
+    }
+    const type = sniffSave(first.subarray(0, SNIFF_BYTES));
+    if (!type || !UPLOAD_TYPES[type.contentType]) {
+        await reader.cancel().catch(() => {});
+        return null;
+    }
+    const fls = fixedLength(size);
+    let sent = 0;
+    void (async () => {
+        const writer = fls.writable.getWriter();
+        try {
+            if (first.byteLength > 0) await writer.write(first);
+            sent = first.byteLength;
+            while (!ended) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                sent += value.byteLength;
+                await writer.write(value);
+            }
+            await writer.close();
+        } catch (e) {
+            console.error("[upload] stream copy failed", String(e));
+            await writer.abort(e).catch(() => {});
+            await reader.cancel(e).catch(() => {});
+        }
+    })();
+    // a body shorter than its content-length fails the FixedLengthStream: that is "incomplete", not a storage fault
+    return { type, body: fls.readable, short: () => sent < size };
+}
+
 export async function studioUpload(
     d: AppDeps,
     request: Request,
@@ -344,9 +411,13 @@ export async function studioUpload(
         void request.body?.cancel().catch(() => {});
         return err(status, code);
     };
-    const type = (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-    const ext = UPLOAD_TYPES[type];
-    if (!ext) return reject(415, "error.library.unsupported");
+    const declaredType = (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+    // A file with no extension reaches us as application/octet-stream (or with no type at all): its first bytes
+    // decide (section 3.1), once the length checks below have passed.
+    const sniff = declaredType === "" || declaredType === "application/octet-stream";
+    let type = declaredType;
+    let ext = UPLOAD_TYPES[type];
+    if (!ext && !sniff) return reject(415, "error.library.unsupported");
     // `?public=1|true` (section 13): host the original publicly once it is ready. Absent or
     // empty = today's behaviour; anything but 1/true/0/false is refused before the body is read.
     const rawPublic = q.get("public");
@@ -373,21 +444,37 @@ export async function studioUpload(
     if (size > MAX_UPLOAD_BYTES) return reject(413, "error.library.too_large");
     if (size === 0 || !request.body) return reject(400, "error.library.empty");
 
+    let body: ReadableStream<Uint8Array> = request.body;
+    let sniffedName = false;
+    let short = () => false;
+    if (!ext) {
+        const peeked = await sniffUpload(request.body, d.fixedLength, size);
+        if (!peeked) return err(415, "error.library.unsupported");
+        type = peeked.type.contentType;
+        ext = peeked.type.ext;
+        body = peeked.body;
+        short = peeked.short;
+        sniffedName = true;
+    }
+
     const id = mintItemId(d.randomBytes);
     const key = `uploads/${id}.${ext}`;
-    const name = cleanName(q.get("name"), ext);
+    let name = cleanName(q.get("name"), ext);
+    // "file" becomes "file.mp4": the name is what the library and the studio show
+    if (sniffedName && !/\.[A-Za-z0-9]{1,8}$/.test(name)) name = `${name}.${ext}`;
     const now = d.now();
 
     // Straight from the request to R2: the body has a known length, nothing is buffered.
     let obj: { size: number } | null;
     try {
-        obj = await d.originals.put(key, request.body, {
+        obj = await d.originals.put(key, body, {
             httpMetadata: { contentType: type },
             customMetadata: { keyId, source: "upload", createdAt: String(now) },
         });
     } catch (e) {
-        console.error("[upload] R2 put failed", String(e));
         await d.originals.delete(key).catch(() => {});
+        if (short()) return err(400, "error.library.incomplete");
+        console.error("[upload] R2 put failed", String(e));
         return err(502, "error.library.storage");
     }
     if (!obj || obj.size !== size) {
