@@ -3675,7 +3675,7 @@ the module cannot take the code as an argument. `chat-loader.ts` now calls `LOAD
 so a run whose exact code already ran that day reuses that worker. Anything else is billed as before. It falls back to
 `load()` when `get` is missing.
 
-### 33.7 The workbench box: `cobalt.box.run` and `cobalt.box.save` (T6)
+### 33.11 The workbench box: `cobalt.box.run` and `cobalt.box.save` (T6)
 
 A Linux box (yt-dlp, curl, ffmpeg, python3) the chat AI uses as a **last resort**, for a site or a file the normal tools
 cannot save. **No new route, no migration, no secret, nothing for the app.** The ops are `ai.only`, tier `free`, and the

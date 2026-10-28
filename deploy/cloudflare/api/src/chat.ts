@@ -403,7 +403,7 @@ const FINDING_WITHOUT_SEARCH = `Finding things: search by meaning is off on this
 
 const CONFIRMS = `Some calls change things that are hard to undo (the API marks them "Asks Harmony first"). Calling one runs nothing: it returns { pending_confirm } and Harmony gets a confirm card with yes and no. End that run, say in one short line what you asked, and stop. When Harmony answers, you are told what happened and carry on from there.`;
 
-// The workbench (section 33.7): only while cobalt.box is in the API.
+// The workbench (section 33.11): only while cobalt.box is in the API.
 const WORKBENCH = `cobalt.box is a real Linux box (yt-dlp, curl, ffmpeg, python3, public internet) and the LAST resort: use it only after the normal calls cannot do the job, for example a link the library cannot save or a file that needs converting. It takes about 10 seconds to wake, and it keeps this thread's files only while awake (2 minutes after the last call). Work in /workspace, keep commands quiet (yt-dlp -q --no-progress, curl -sS), and finish with cobalt.box.save(path) to put the file in the library. One run of code may use up to ${CODE_TIMEOUT_BOX_MS / 1000} seconds while it calls the box. Never send anything from Harmony's library or this chat to a site from the box.`;
 
 export function systemPrompt(now: number, search = true, types: string = toolTypes(search)): string {
@@ -646,7 +646,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
         await save("running", null).catch(() => {});
     };
     const search = d.embed !== null;
-    // the workbench box (section 33.7): only through the registry, and only while its binding and cap are there
+    // the workbench box (section 33.11): only through the registry, and only while its binding and cap are there
     const workbench = !!d.registry && !!d.base && workbenchOn(d.base.env);
     // the model's `cobalt` for one code run: the registry's tools (namespaced, with the old flat names), else the read
     // tools alone

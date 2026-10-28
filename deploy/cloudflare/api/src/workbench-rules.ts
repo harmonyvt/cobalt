@@ -1,4 +1,4 @@
-// The chat's workbench (APP-API-CONTRACT.md section 33.7): the pure parts, free of Cloudflare imports so the tests run them
+// The chat's workbench (APP-API-CONTRACT.md section 33.11): the pure parts, free of Cloudflare imports so the tests run them
 // under node. The outbound rule every request from the box passes (the section 19.2 rule, plus our own hosts), the type
 // of a file the box hands to the library (by its bytes), the 8 KB output clip, and the daily ledger of awake minutes.
 

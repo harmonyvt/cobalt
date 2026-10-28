@@ -24,7 +24,7 @@ import { handleChatPendingRoute, isChatPendingRoute } from "./registry/pending";
 export { ModelRelay } from "./model-relay";
 export { EditRenderer } from "./edit-renderer";
 export { StageRoom } from "./stage-room";
-// The chat's workbench box (APP-API-CONTRACT.md section 33.7) and the Containers library's outbound proxy, which carries
+// The chat's workbench box (APP-API-CONTRACT.md section 33.11) and the Containers library's outbound proxy, which carries
 // every request the box makes to its outbound rule (the library finds it in ctx.exports).
 export { Workbench } from "./workbench";
 export { ContainerProxy } from "@cloudflare/containers";

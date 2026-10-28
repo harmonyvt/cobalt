@@ -1,4 +1,4 @@
-// Workbench ops (APP-API-CONTRACT.md 33.7): the chat AI's Linux box, for sites and files the normal tools cannot read.
+// Workbench ops (APP-API-CONTRACT.md 33.11): the chat AI's Linux box, for sites and files the normal tools cannot read.
 // AI only (no route), tier free, offered only while the box is on (the WORKBENCH binding and a daily cap above zero).
 // The box runs in the Workbench Durable Object (src/workbench.ts); these ops reach it over Workers RPC. A saved file
 // goes through the normal upload path (PUT /studio/upload's own code), typed by its bytes, as the chat's key id.

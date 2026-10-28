@@ -1,4 +1,4 @@
-// The Workbench Durable Object (APP-API-CONTRACT.md section 33.7): the chat AI's Linux box (deploy/cloudflare/workbench:
+// The Workbench Durable Object (APP-API-CONTRACT.md section 33.11): the chat AI's Linux box (deploy/cloudflare/workbench:
 // yt-dlp, curl, ffmpeg, python3) for sites the normal tools cannot read. A Container subclass on its own container app
 // (basic, one instance), one object named "main". The decisions live in src/workbench-core.ts and the outbound rule in
 // src/workbench-rules.ts (no Cloudflare imports, so the tests run them under node); this file wires them to the

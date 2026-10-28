@@ -1,4 +1,4 @@
-// The chat's workbench box (APP-API-CONTRACT.md section 33.7): the outbound rule, typing a saved file by its bytes, the
+// The chat's workbench box (APP-API-CONTRACT.md section 33.11): the outbound rule, typing a saved file by its bytes, the
 // 8 KB output clip, the daily ledger, the box itself (WorkbenchCore) against a stub container that runs real bash in a
 // temp directory, and the two ops through a whole chat reply (the real sandbox source, the real upload path, the real
 // SQL on node:sqlite).

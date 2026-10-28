@@ -1,4 +1,4 @@
-// The chat's workbench box (APP-API-CONTRACT.md section 33.7): what the Workbench Durable Object does, free of Cloudflare
+// The chat's workbench box (APP-API-CONTRACT.md section 33.11): what the Workbench Durable Object does, free of Cloudflare
 // imports so the tests run it under node against a stub container. src/workbench.ts wires it to the Containers library.
 //
 // One box for the whole server (the container app allows one instance). It belongs to one chat thread while awake: a

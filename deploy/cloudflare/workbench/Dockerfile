@@ -1,4 +1,4 @@
-# The chat's workbench box (APP-API-CONTRACT.md section 33.7): a plain Linux box with yt-dlp, curl, ffmpeg and python3 that
+# The chat's workbench box (APP-API-CONTRACT.md section 33.11): a plain Linux box with yt-dlp, curl, ffmpeg and python3 that
 # the chat AI runs commands in when the normal tools cannot save something. Build context is THIS directory alone:
 # `docker build -t cobalt-workbench deploy/cloudflare/workbench`. linux/amd64 (Cloudflare Containers).
 #
