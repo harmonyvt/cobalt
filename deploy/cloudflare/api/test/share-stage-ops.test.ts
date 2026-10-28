@@ -1,4 +1,4 @@
-// The chat AI's share and stage calls (APP-API-CONTRACT.md 33.7, 33.8): cobalt.links.*, cobalt.collections.*,
+// The chat AI's share and stage calls (APP-API-CONTRACT.md 33.9, 33.10): cobalt.links.*, cobalt.collections.*,
 // cobalt.sets.*, cobalt.stage.* and cobalt.emotes.*, called through the registry's chat toolbox (the functions the
 // sandbox dispatches to) against the real SQL, the real handlers and a fake StageRoom. Ask ops pause on a confirm card
 // and run when it is answered yes.

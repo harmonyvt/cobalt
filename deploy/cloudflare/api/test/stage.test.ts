@@ -65,7 +65,7 @@ describe("capabilities (30.1)", () => {
     });
 });
 
-describe("the owner routes (30.10, ops since APP-API-CONTRACT 33.8)", () => {
+describe("the owner routes (30.10, ops since APP-API-CONTRACT 33.10)", () => {
     const req = (method: string, pathname: string, over: Record<string, unknown> = {}) =>
         decide({ method, pathname, searchParams: new URLSearchParams(), origin: null, authorization: `Api-Key ${CLIENT}`, ...over }, { corsUrl: "https://cobalt.capybaraharmony.com", now: T0 });
 

@@ -3614,7 +3614,7 @@ defineOp({
 - **Registered so far** (T1): `GET /library` (`library.index`, key or service, CORS), `GET /library/search`
   (`library.query`, key or service, no CORS, no-store), `GET /library/map` (`library.map`, the same), `GET /queue` (`queue`,
   key only, CORS, no-store), and `POST /chat/threads/<id>/confirm/<cid>` (33.5). T5 added every `/share/sets`,
-  `/share/collections`, `/share/groups`, `/stage*` owner route and `/emotes` (33.7, 33.8). Their branches are gone from
+  `/share/collections`, `/share/groups`, `/stage*` owner route and `/emotes` (33.9, 33.10). Their branches are gone from
   `gate.ts` and `worker.ts`.
 
 ### 33.3 The chat AI's `cobalt` API
@@ -3676,7 +3676,7 @@ the module cannot take the code as an argument. `chat-loader.ts` now calls `LOAD
 so a run whose exact code already ran that day reuses that worker. Anything else is billed as before. It falls back to
 `load()` when `get` is missing.
 
-### 33.7 Share ops (T5): gallery links, collections and sets
+### 33.9 Share ops (T5): gallery links, collections and sets
 
 `registry/ops/share.ts`. **The routes** of sections 24, 26 and 28 are tier `hidden` ops that call the same handlers with the
 same parsing, codes and headers: `GET|POST /share/sets`, `DELETE /share/sets/<19 digits>`, `GET|POST /share/collections`,
@@ -3704,7 +3704,7 @@ named by its id or its name (case-insensitive; the most recently changed wins a 
   when missing), `cobalt.sets.update(set, { name?, add?, remove? })` (free) and `cobalt.sets.delete(set)` (**ask**; effect
   `{ set, collections, collections_stay }`). Results are `{ id, name, collection_ids }`.
 
-### 33.8 Stage and emote ops (T5)
+### 33.10 Stage and emote ops (T5)
 
 `registry/ops/stage.ts`. **The routes** of section 30.10 (`GET|PATCH /stage`, `POST /stage/rotate`, `POST /stage/action`,
 `GET /stage/pool`, `GET /stage/redemptions`, `PATCH /stage/rewards/<summon|chaos|shuffle|pin>`, `POST /stage/twitch/connect`,

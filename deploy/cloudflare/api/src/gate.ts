@@ -224,7 +224,7 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     // GET /queue, GET /library, GET /library/search and GET /library/map are ops in the registry
     // (src/registry/ops/library.ts, APP-API-CONTRACT.md section 33), which answers them before the gate. So are the
     // gallery links, collections and sets (/share/sets, /share/collections, /share/groups), the stage owner routes
-    // (/stage*) and /emotes (src/registry/ops/share.ts and stage.ts, section 33.7). Every other method on those paths
+    // (/stage*) and /emotes (src/registry/ops/share.ts and stage.ts, section 33.9). Every other method on those paths
     // falls through to the 404 at the end.
 
     // Editor (APP-API-CONTRACT.md section 31.12): keyed only; the library-service credential gets 404.

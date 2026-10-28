@@ -257,7 +257,7 @@ describe("defineOp and the registry", () => {
         const names = (search: boolean) => TEST_REGISTRY.toolsFor("chat", { search }).map((o) => o.callName);
         expect(names(true)).toEqual([
             "library.list", "library.search", "library.post", "look", "show", "collage", "links.list", "collections.list",
-            // T5 (33.7, 33.8)
+            // T5 (33.9, 33.10)
             "links.create", "links.revoke", "collections.create", "collections.add", "collections.update", "collections.reroll",
             "collections.delete", "sets.list", "sets.create", "sets.add", "sets.update", "sets.delete",
             "stage.get", "stage.set", "stage.store", "stage.pool", "stage.items", "stage.action", "emotes.find", "emotes.save",

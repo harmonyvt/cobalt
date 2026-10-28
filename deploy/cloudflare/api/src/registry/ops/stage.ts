@@ -1,4 +1,4 @@
-// Stage and emote ops (APP-API-CONTRACT.md 33.8): the stage owner routes (section 30.10) and the 7TV routes (section
+// Stage and emote ops (APP-API-CONTRACT.md 33.10): the stage owner routes (section 30.10) and the 7TV routes (section
 // 20), tier hidden, wrapping the existing handlers unchanged; plus the chat AI's calls cobalt.stage.* and
 // cobalt.emotes.*. Locking or unlocking the viewer store asks Harmony first. Rewards, redemptions, the canvas token and
 // Twitch connect stay owner-only (no AI call).

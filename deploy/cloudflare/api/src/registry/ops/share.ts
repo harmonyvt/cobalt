@@ -1,4 +1,4 @@
-// Share ops (APP-API-CONTRACT.md 33.7): gallery links (section 24), their collections (26) and the collection sets
+// Share ops (APP-API-CONTRACT.md 33.9): gallery links (section 24), their collections (26) and the collection sets
 // (28). Two kinds of op:
 //  - the routes, tier hidden, wrapping the existing handlers unchanged (same parsing, bodies, codes and headers);
 //  - the chat AI's calls (ai.only): cobalt.links.create/revoke, cobalt.collections.create/add/update/reroll/delete and
