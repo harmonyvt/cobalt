@@ -103,6 +103,22 @@ public struct ChatSSEParser: Sendable {
     }
     private struct CollageWire: Decodable { var collage: ChatCollage }
     private struct TitleWire: Decodable { var thread: ChatThread }
+    private struct ConfirmWire: Decodable {
+        var messageId: String?
+        var confirm: ChatConfirm
+        enum CodingKeys: String, CodingKey { case messageId, confirm }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            confirm = try c.decode(ChatConfirm.self, forKey: .confirm)
+            if let s = try? c.decodeIfPresent(String.self, forKey: .messageId) {
+                messageId = s
+            } else if let n = try? c.decodeIfPresent(Int64.self, forKey: .messageId) {
+                messageId = String(n)
+            } else {
+                messageId = nil
+            }
+        }
+    }
     private struct DoneWire: Decodable { var message: ChatMessage; var thread: ChatThread }
     private struct ErrorWire: Decodable {
         var code: String
@@ -133,6 +149,7 @@ public struct ChatSSEParser: Sendable {
             return .posts(ids: wire.postIds, posts: ordered + extra.sorted { $0.id < $1.id })
         case "collage": return (try? decoder.decode(CollageWire.self, from: data)).map { .collage($0.collage) }
         case "title": return (try? decoder.decode(TitleWire.self, from: data)).map { .title($0.thread) }
+        case "confirm": return (try? decoder.decode(ConfirmWire.self, from: data)).map { .confirm(messageID: $0.messageId, $0.confirm) }
         case "done": return (try? decoder.decode(DoneWire.self, from: data)).map { .done($0.message, $0.thread) }
         case "error": return (try? decoder.decode(ErrorWire.self, from: data)).map { .error(code: $0.code, message: $0.message) }
         default: return nil

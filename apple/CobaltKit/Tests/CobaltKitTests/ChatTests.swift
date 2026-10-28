@@ -48,7 +48,7 @@ struct ChatCapabilityTests {
     }
 
     @Test func thePreviewServersWithChat() {
-        for scenario in [PreviewScenario.happy, .renditions, .chatEmpty, .chatFail, .chatReplyFails] {
+        for scenario in [PreviewScenario.happy, .renditions, .chatEmpty, .chatFail, .chatReplyFails, .chatConfirm] {
             #expect(PreviewData.capabilities(for: scenario).chat, "\(scenario)")
         }
         #expect(!PreviewData.capabilities(for: .plainCobalt).chat)
@@ -1383,5 +1383,114 @@ struct ChatCollageStoreTests {
         app.selectedTab = .chat
         app.openInLibrary(search: "   ")
         #expect(app.selectedTab == .chat && app.library.query == "cats", "blank words do nothing")
+    }
+}
+
+// MARK: - confirm cards (33.7)
+
+private let wireConfirm = """
+{"id":"Zz12Yy34Xx56Ww78","op":"library.delete","summary":"delete 3 posts","effect":{"titles":["a","b","c"],"posts":3,"files":4,"bytes":18400000,"public_links":2,"share_links":1},"status":"waiting","expires_at":1790000900000}
+"""
+
+struct ChatConfirmTests {
+    private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+        try CobaltJSON.decoder().decode(type, from: Data(json.utf8))
+    }
+
+    @Test func aCardDecodesOnItsMessage() throws {
+        let json = #"{"id":"140","role":"assistant","text":"sure?","steps":[{"id":"Zz12Yy34Xx56Ww78","kind":"confirm","status":"done","code":"","logs":[]}],"status":"done","confirm":\#(wireConfirm),"created_at":1}"#
+        let message = try decode(ChatMessage.self, json)
+        let card = try #require(message.confirm)
+        #expect(card.id == "Zz12Yy34Xx56Ww78" && card.op == "library.delete" && card.status == .waiting)
+        #expect(card.effect.titles == ["a", "b", "c"] && card.effect.posts == 3 && card.effect.files == 4)
+        #expect(card.effect.bytes == 18_400_000 && card.effect.publicLinks == 2 && card.effect.shareLinks == 1)
+        #expect(card.expiresAt == Date(timeIntervalSince1970: 1_790_000_900))
+        #expect(card.action == .delete(files: 4))
+        #expect(card.isOpen(at: Date(timeIntervalSince1970: 1_790_000_000)))
+        #expect(!card.isOpen(at: Date(timeIntervalSince1970: 1_790_001_000)), "past its time")
+        #expect(message.steps.first?.kind == "confirm")
+    }
+
+    @Test func theButtonFollowsTheOp() throws {
+        var card = try decode(ChatConfirm.self, wireConfirm)
+        card.op = "library.visibility"
+        #expect(card.action == .makePrivate)
+        card.op = "library.deleteFile"
+        card.effect.files = nil
+        #expect(card.action == .delete(files: 1))
+        card.op = "something.else"
+        #expect(card.action == .other)
+    }
+
+    @Test func anUnknownStatusReadsAsExpiredAndAThinEffectStillDecodes() throws {
+        let card = try decode(ChatConfirm.self, #"{"id":"x","op":"library.delete","summary":"s","effect":{"title":"one"},"status":"weird"}"#)
+        #expect(card.status == .expired && card.effect.titles == ["one"] && card.effect.files == nil)
+        #expect(!card.isOpen(at: .now))
+    }
+
+    @Test func theSSEConfirmEventParsesWithAStringOrNumberID() {
+        var parser = ChatSSEParser()
+        let events = parser.feed(Array("event: confirm\ndata: {\"message_id\":\"140\",\"confirm\":\(wireConfirm)}\n\n".utf8))
+        guard case .confirm(let id, let card)? = events.first else { Issue.record("\(events)"); return }
+        #expect(id == "140" && card.id == "Zz12Yy34Xx56Ww78")
+        var numbered = ChatSSEParser()
+        let more = numbered.feed(Array("event: confirm\ndata: {\"message_id\":140,\"confirm\":\(wireConfirm)}\n\n".utf8))
+        guard case .confirm(let id2, _)? = more.first else { Issue.record("\(more)"); return }
+        #expect(id2 == "140")
+    }
+
+    @Test func theRefusalCode() {
+        #expect(ChatError(code: "error.chat.confirm_gone") == .confirmGone)
+        #expect(ChatError.confirmGone.code == "error.chat.confirm_gone")
+    }
+}
+
+@MainActor
+struct ChatConfirmStoreTests {
+    private func app() -> AppModel {
+        AppModel.makePreview(.chatConfirm, timeScale: 0.01, clock: SystemClock())
+    }
+
+    private let thread = PreviewData.confirmThreadID
+
+    @Test func thePreviewThreadEndsInAnOpenCard() async throws {
+        let app = app()
+        await app.chat.load(thread)
+        let content = try #require(app.chat.content(of: thread))
+        let card = try #require(content.messages.last?.confirm)
+        #expect(card.id == PreviewData.confirmCardID && card.op == "library.delete" && card.isOpen(at: .now))
+        #expect(card.effect.posts == 3 && card.action == .delete(files: 3))
+    }
+
+    @Test func yesClosesTheCardAndTheReplyStreamsOn() async throws {
+        let app = app()
+        await app.chat.load(thread)
+        let card = try #require(app.chat.content(of: thread)?.messages.last?.confirm)
+        let before = try #require(app.chat.content(of: thread)).messages.count
+        try await app.chat.answer(card, yes: true, in: thread)
+        let content = try #require(app.chat.content(of: thread))
+        let asked = try #require(content.messages.first { $0.id == PreviewData.confirmMessageID })
+        #expect(asked.confirm?.status == .yes)
+        #expect(content.messages.count == before + 1)
+        #expect(content.messages.last?.role == .assistant && content.messages.last?.status == .done)
+        #expect(content.messages.last?.text.contains("gone") == true)
+        #expect(!app.chat.answeringConfirms.contains(card.id) && !app.chat.isBusy(thread))
+        let client = try #require(app.ctx.client as? PreviewClient)
+        #expect(client.chatState.calls.contains("CONFIRM \(thread) \(card.id) yes"))
+    }
+
+    @Test func noKeepsThemAndASecondAnswerIsRefused() async throws {
+        let app = app()
+        await app.chat.load(thread)
+        let card = try #require(app.chat.content(of: thread)?.messages.last?.confirm)
+        try await app.chat.answer(card, yes: false, in: thread)
+        let asked = try #require(app.chat.content(of: thread)?.messages.first { $0.id == PreviewData.confirmMessageID })
+        #expect(asked.confirm?.status == .no)
+        await #expect(throws: ChatError.confirmGone) {
+            try await app.chat.answer(card, yes: true, in: thread)
+        }
+        let again = try #require(app.chat.content(of: thread)?.messages.first { $0.id == PreviewData.confirmMessageID })
+        #expect(again.confirm?.status == .no, "the reload shows the answer that stood")
+        #expect(!app.chat.isBusy(thread))
     }
 }

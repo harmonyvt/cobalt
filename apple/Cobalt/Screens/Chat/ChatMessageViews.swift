@@ -94,6 +94,10 @@ struct ChatMessageView: View {
     /// "try again" on a failed reply, with the text it answered.
     let retry: (String) -> Void
     let canRetry: Bool
+    /// A confirm card's button: the card and the owner's answer.
+    var answer: (ChatConfirm, Bool) -> Void = { _, _ in }
+    /// The card's answer is on its way.
+    var answering = false
 
     @Environment(\.shell) private var shell
 
@@ -131,7 +135,8 @@ struct ChatMessageView: View {
 
     private var reply: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(message.steps) { step in
+            // a confirm step is drawn as the card below, not as a code row
+            ForEach(message.steps.filter { $0.kind != "confirm" }) { step in
                 ChatStepRow(step: step)
             }
             if !message.text.isEmpty {
@@ -147,6 +152,9 @@ struct ChatMessageView: View {
             if let collage = message.collage {
                 ChatCollageView(
                     model: model, threadID: content.thread.id, messageID: message.id, collage: collage, tier: tier, open: open)
+            }
+            if let card = message.confirm {
+                ChatConfirmCard(card: card, answering: answering) { answer(card, $0) }
             }
             if message.status == .error { failure }
         }
@@ -187,6 +195,97 @@ struct ChatMessageView: View {
             Pasteboard.copy(message.text)
             shell.showStatus(Copy.Media.copied)
         }
+    }
+}
+
+// MARK: - a confirm card
+
+/// A call the chat makes only after the owner's yes (APP-API-CONTRACT 33.7): the summary, what it touches (posts, files,
+/// size, links that stop working), and a red "delete 3" / "make private" beside "cancel". Answered or timed out, the
+/// buttons give way to a quiet status line. The card ticks over to "timed out" on its own when its 15 minutes run out.
+struct ChatConfirmCard: View {
+    let card: ChatConfirm
+    let answering: Bool
+    let answer: (Bool) -> Void
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            content(open: card.isOpen(at: context.date))
+        }
+    }
+
+    private func content(open: Bool) -> some View {
+        let effect = Copy.Chat.confirmEffect(card.effect)
+        let titles = card.effect.titles.count > 1 ? Copy.Chat.confirmTitles(card.effect.titles) : ""
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: Symbol.chatConfirm)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(open ? Color.red : CobaltColor.caption)
+                    .accessibilityHidden(true)
+                Text(card.summary)
+                    .font(CobaltType.bodySemibold)
+                    .foregroundStyle(CobaltColor.text)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !effect.isEmpty {
+                Text(effect)
+                    .font(CobaltType.caption)
+                    .foregroundStyle(CobaltColor.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !titles.isEmpty {
+                Text(titles)
+                    .font(CobaltType.caption)
+                    .foregroundStyle(CobaltColor.caption)
+                    .lineLimit(2)
+            }
+            if open {
+                buttons
+            } else {
+                status
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(open ? Color.red.opacity(0.35) : CobaltColor.border, lineWidth: 1)
+        }
+        .animation(Motion.card, value: open)
+        .animation(Motion.card, value: answering)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Copy.Chat.confirmA11y(summary: card.summary, effect: effect))
+    }
+
+    private var buttons: some View {
+        ButtonRow {
+            Button(role: .destructive) { answer(true) } label: {
+                if answering {
+                    Label(Copy.Chat.confirmAnswering, systemImage: Symbol.chatConfirm)
+                } else {
+                    Text(Copy.Chat.confirmButton(card.action))
+                }
+            }
+            .buttonStyle(.cobaltDestructive(fullWidth: false, compact: true))
+            Button(Copy.Chat.confirmCancel, role: .cancel) { answer(false) }
+                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+        }
+        .disabled(answering)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var status: some View {
+        let (symbol, text): (String, String) = switch card.status {
+        case .yes: (Symbol.chatConfirmDone, Copy.Chat.confirmDone)
+        case .no: (Symbol.chatConfirmKept, Copy.Chat.confirmKept)
+        case .waiting, .expired: (Symbol.chatConfirmKept, Copy.Chat.confirmExpired)
+        }
+        return Label(text, systemImage: symbol)
+            .font(CobaltType.caption)
+            .foregroundStyle(CobaltColor.caption)
+            .contentTransition(.opacity)
     }
 }
 
