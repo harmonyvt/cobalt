@@ -90,6 +90,9 @@ export class CobaltContainer extends Container<Env> {
             // 480 s for headroom (= MAX_RENDER_SECONDS in studio.ts).
             WEBP_MAX_SECONDS: "30",
             WEBP_FFMPEG_TIMEOUT_MS: "480000",
+            // Old Discord attachment links (APP-API-CONTRACT.md 19.6): the helper asks Discord to sign them again.
+            // Only set when the secret is there, so the container's env stays exactly as before without it.
+            ...(env.DISCORD_BOT_TOKEN?.trim() ? { DISCORD_BOT_TOKEN: env.DISCORD_BOT_TOKEN.trim() } : {}),
         };
 
         const webpDeps: WebpDeps = {

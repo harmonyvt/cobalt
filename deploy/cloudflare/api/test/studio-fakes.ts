@@ -364,10 +364,12 @@ export class FakeHelper {
     directs = true;
     // `still=1`: a webp of one photo comes out animated (APP-API-CONTRACT.md 18.14)
     stills = true;
+    // `discord=1`: the helper has a Discord bot token and refreshes old attachment links (APP-API-CONTRACT.md 19.6)
+    discords = false;
     helper = async (path: string, init?: RequestInit): Promise<Response> => {
         const res = await this.answer(path, init);
         if (this.advertise) {
-            res.headers.set("x-cobalt-helper", [this.makes ? "gallery=1,make=1" : "gallery=1", this.directs ? "direct=1" : "", this.stills ? "still=1" : ""].filter(Boolean).join(","));
+            res.headers.set("x-cobalt-helper", [this.makes ? "gallery=1,make=1" : "gallery=1", this.directs ? "direct=1" : "", this.stills ? "still=1" : "", this.discords ? "discord=1" : ""].filter(Boolean).join(","));
         }
         return res;
     };
