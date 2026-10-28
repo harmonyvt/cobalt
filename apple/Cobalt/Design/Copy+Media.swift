@@ -129,6 +129,7 @@ extension Copy {
         static func displayTitle(_ name: String) -> String { MediaTitle.stripExtension(name) }
         /// The title sheet's live line when the upload stopped behind it (CONTRACT-LIBRARY2 decision 3).
         static let titleKept = "the upload stopped. your title is kept for try again."
+        static let waitsForName = "the upload starts when you tap done or skip."
         /// The title field's clear button (VoiceOver).
         static let clearTitle = "clear"
         /// VoiceOver on the full-screen webp viewer (it closes with a tap, a swipe down or Escape).

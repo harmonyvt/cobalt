@@ -251,18 +251,24 @@ struct AppShell: View {
         showStatus(Copy.Jobs.uploadingAlongside(jobs.count))
     }
 
-    /// Files from the picker, Photos, a paste and a drop come through here: the upload starts first
-    /// (`importFile`), then the title sheet rises over it (never in its way: the run does not wait for it). A beat
-    /// later, so the picker that returned the file has finished leaving, and only if the run is still that upload.
+    /// Files from the picker, Photos, a paste and a drop come through here: the run starts (`importFile`: the file
+    /// is measured and copied in), then the title sheet rises, and the upload itself waits for it (Harmony,
+    /// 2026-10-28: nothing goes up before the file has its name). `done` names it, `skip` or closing the sheet sends
+    /// it as it is. A beat later, so the picker that returned the file has finished leaving, and only if the run is
+    /// still that upload; otherwise the hold is let go at once.
     private func intake(_ url: URL, photosAssetID: String? = nil, via: JobVia = .circle) {
         guard let job = model.importFile(url, photosAssetID: photosAssetID, via: via),
               let request = model.titleRequest(for: job.pipeline)
         else { return }
         let pipeline = job.pipeline
+        guard case .uploading = pipeline.state else { return }              // refused at once (too big, not media)
+        pipeline.holdUploadForTitle()
         Task {
             try? await Task.sleep(for: .milliseconds(350))
-            if pipeline.state != .idle, case .file = pipeline.input {
+            if case .uploading = pipeline.state, case .file = pipeline.input {
                 titleSheet = TitleSheetRequest(request: request, pipeline: pipeline)
+            } else {
+                pipeline.releaseTitleHold()
             }
         }
     }

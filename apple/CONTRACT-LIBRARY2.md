@@ -85,7 +85,11 @@ route, one additive response field, one capability flag.** Marked **(owner)** wh
    (`uploading · 1.2 of 18.2 MB`, then `reading the video`, the same `ProgressStory` detail the card
    shows), `done` (`.glassProminent`, the screen's one prominent button) and `skip` (plain). Return
    = done. Swipe down = skip. `skip` keeps the default (nothing is sent). An unchanged prefilled
-   value counts as skip. The run never waits for the sheet; if the run fails while the sheet is up,
+   value counts as skip. **Amended 2026-10-28 (owner): in the app the upload waits for the sheet.**
+   The file is measured and copied in first, then nothing is sent until `done`, `skip`, a swipe down
+   or escape (`Pipeline.holdUploadForTitle` / `releaseTitleHold`); the live line says `the upload
+   starts when you tap done or skip.` A file that is too big or not media is refused before the sheet
+   shows. Several files at once, the share sheet and Shortcuts are not held. If the run fails while the sheet is up,
    the sheet stays (the typed title is kept on the pipeline for `try again`) and the card behind it
    shows the error as today. On a server without `features.titles` the sheet is not shown (rename
    later is local-only, decision 7). Plain cobalt: no uploads, no sheet.

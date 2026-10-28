@@ -761,6 +761,8 @@ extension Pipeline {
         var local = file
         local.url = copy
         jobEvent?(self, .inboxCopy(copy, name: file.name, bytes: file.bytes, contentType: file.contentType))
+        await waitForTitle()
+        try Task.checkCancellation()
         try await runUpload(local)
     }
 

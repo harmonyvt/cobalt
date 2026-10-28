@@ -187,6 +187,8 @@ public final class Pipeline: Identifiable {
     @ObservationIgnored var jobEvent: (@MainActor (Pipeline, PipelineJobEvent) -> Void)?
     /// The server has this run (`201`/`202`), for `JobQueue.accepted`.
     @ObservationIgnored var acceptance: JobAcceptance?
+    /// Set while the app's `name it` sheet is up for this file: the upload waits for it (`holdUploadForTitle`).
+    @ObservationIgnored var titleHold: EventSignal?
 
     /// The key this run goes by in the line.
     var lineKey: UUID { jobKey ?? liveRunID }
@@ -366,6 +368,7 @@ public final class Pipeline: Identifiable {
 
     /// Starts a new run: everything from the last one is dropped.
     func begin(input: PipelineInput?) {
+        releaseTitleHold()
         cancelRunning()
         removeTemporaryFiles()
         releaseStorePins()
@@ -497,6 +500,10 @@ public final class Pipeline: Identifiable {
         case .fork where caps.limits.maxUploadBytes > 0 && file.bytes > caps.limits.maxUploadBytes:
             setState(.failed(.tooLarge(limit: caps.limits.maxUploadBytes))); return
         default: break
+        }
+        // none of the upload types, by its name or its first bytes: said now, not after the whole file went up
+        guard MIME.uploadTypes.contains(file.contentType) else {
+            setState(.failed(.server(code: PipelineFailure.fileUnsupportedCode))); return
         }
         setState(.uploading(TransferProgress(bytes: 0, total: file.bytes)))
         if let title = jobOptions.title { applyTitle(title) }
