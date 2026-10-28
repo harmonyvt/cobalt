@@ -3724,3 +3724,66 @@ the `confirm` SSE event. It shows the summary, the effect as one line (`3 files 
 `library.deleteFile`, N = `effect.files`; `make private` for `library.visibility`; `yes` for any other op) and `cancel`.
 A tap calls `POST /chat/threads/<id>/confirm/<cid>` and streams the reply like a send. `yes`, `no` and `expired` show as a
 quiet status line instead of the buttons. Older apps show the card's step as a plain step and ignore it.
+### 33.8 Make ops (T4): webps, stills, slideshows, gallery images, trims, crops and the editor from chat
+
+Owner: "let the chat AI make things". Ops in `registry/ops/make.ts`; the daily cap in `registry/budget.ts`. **No URL, method,
+auth, CORS or body changes**: the route snapshot is unchanged except for the rows of the new internal path below.
+
+**Routes moved onto the registry** (all tier `hidden`; each wraps the old handler with its own parsing and error codes):
+
+| op | route | auth | notes |
+|---|---|---|---|
+| `studio.render` | `POST /studio/<sid>/render` (4, 10, 18.13) | `capability` | the request goes to the Durable Object exactly as it came (no key id) |
+| `studio.render_status` | `GET /studio/<sid>/render/<job>` (4) | `capability` | the same; `DELETE` (17.7 cancel) stays with the gate |
+| `studio.slideshow` | `POST /studio/<sid>/slideshow` (18.5, 18.10, 18.14) | `key` | Durable Object with the verified key id |
+| `studio.gallery_image` | `POST /studio/<sid>/gallery-image` (18.11) | `key` | the same |
+| `library.reopen` | `POST /library/items/<id>/studio` (5d, 17.3, 18.14) | `key_or_service` | CORS; `?queue` as before (`400 error.library.bad_request`) |
+| `edits.route.*` | the ten `/edits` routes (31.12) | `key` | no CORS, no-store, `404 error.edit.off` without the renderer binding |
+
+Their branches are gone from `gate.ts` (`decideEdits`, the render, slideshow, gallery image and reopen branches) and from
+`worker.ts`. Every other method or path under them is still the gate's 404. `/studio*` answers still get the studio CORS
+wrap in `handleRequest`.
+
+**The chat AI's calls** (tier `free` unless noted, `ai.only`, key id `chat:<thread id>`). Every `id` is a post id or one
+file's id from `library.post`; a post id means its first source file of the right type (an item or the original, never a
+made file):
+
+- `cobalt.make.webp(id, { start, end, crop?, width?: 320|480, quality? })`: the 4/10/18.13 render of 0.5 to 10 s of a video
+  or gif. It runs on the file's own session while that is open (a gallery item with `item: <index>`), else the file is
+  reopened as the chat (`library.reopen`'s handler with `queue`) and rendered once the session is ready.
+- `cobalt.make.still(id, { seconds?, width?: 320|480|640, quality? })`: the 18.14 webp of one photo (jpeg, png, webp).
+- `cobalt.make.slideshow(id, { items?: fileIds, seconds?, format?, fade?, frame?, sound?, width?, quality? })` and
+  `cobalt.make.galleryImage(id, { layout?, items? })`: 18.5/18.10/18.11 on the gallery's own session, so only within its 7
+  days. `seconds` is per photo; videos and gifs get `null`.
+- `cobalt.make.trim(id, { start, end, fit?, canvas?, title? })` and `cobalt.make.crop(id, { x, y, w, h }, { start?, end?, … })`:
+  a one-clip editor project (31.2; canvas from the picture's shape as 31.2.1, 1080p 30 fps, `fit` default `"fit"`) rendered at
+  once to an mp4. A project whose render is refused is deleted again. Answers `Job & { project_id }`.
+- `cobalt.edits.list()`, `.get(id)`, `.create(timeline, { title? })`, `.update(id, timeline, { title? })` (sends the current
+  revision as `base_revision`), `.render(id)`, and `.delete(id)` (tier `ask`, card "delete the edit "<title>"", effect
+  `{ edits: 1, clips }`). The timeline input is checked by the editor's own `parseTimeline` (31.3) wrapped in zod; a refusal
+  reads `cobalt.edits.create: timeline: <code> at <path>`. The model's cheat sheet gets the timeline's shape as a comment.
+- `cobalt.jobs.wait(job, seconds ≤ 25, default 15)`: the plan said 60, but a code run stops at 30 s (`CODE_TIMEOUT_MS`), so the model
+  waits again in the next run. Job ids: `studio:<sid>:<job>` (polled through `GET /studio/<sid>/render/<job>?wait=≤10` in
+  the Durable Object), `edit:<rid>` (D1, every 3 s), and `open:<sid>:<plan>` (a reopened file still opening: the wait
+  advances the save and starts the make when it is ready, then returns the new `studio:` id). Answer, the `Job` type:
+  `{ job, status: "opening"|"queued"|"running"|"done"|"error"|"cancelled", progress?, queue_ahead?, error?, file_id?,
+  post_id?, kind?, bytes?, width?, height?, seconds?, public?, share_url? }`. Done answers name the new file and its post;
+  `share_url` only when it is public (never a raw media URL).
+
+**Keyed studio routes run as the session's owner.** The Durable Object lets only a session's creating key add to it
+(slideshow, gallery image). The chat is Harmony's own, so the chat's slideshow, still and gallery image calls carry the
+session's `key_id` (a reopened file's session is the chat's own). The render route has no key, as before.
+
+**Daily cap.** Every start (each `make.*`, `edits.render`, and the start inside `jobs.wait` for an `open:` job) takes one
+unit of a per-thread, per-UTC-day counter, `CHAT_DAILY_RENDERS` (a plain var, default `10`, `0..1000`). At the cap the call
+throws `cobalt.<call>: this chat already made <n> files today, …` and nothing starts (a trim makes no project). A start
+that is refused, or an `edits.render` that answers an already running render, gives its unit back. The counter lives in
+the main Durable Object's storage (`chat:budget:<thread>:<kind>` = `{ day, n }`), reached through the internal
+`POST /chat/budget/<thread>/<kind>` `{ "limit": n }` or `{ "refund": true }`, accepted only with key id `chat:<thread>`;
+from the internet it is the gate's 404 (snapshot rows added). No migration.
+
+**System prompt.** While `make` calls are in the cheat sheet, the prompt says to make things only when Harmony asks, that
+editor mp4s cost real money, to wait with `jobs.wait`, and to `show()` the result's post and give its `share_url`.
+
+**Not moved here**: `POST /webp` and `GET /webp/<id>` (the older link webp service with the request log) stay with the gate
+for T7. `DELETE /studio/<sid>/render/<job>` (cancel) is T3's.

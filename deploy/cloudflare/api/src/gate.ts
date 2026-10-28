@@ -42,9 +42,9 @@ export type GateDecision =
       }
     // cobalt studio routes that need no API key (the session id is the
     // capability). The Worker answers "preflight", "status" and "source" itself
-    // (D1 / R2, no container); "render_create" and "render_status" go to the
-    // Durable Object. `sid` and `job` are already format-checked.
-    | { action: "studio"; op: StudioOp; sid?: string; job?: string }
+    // (D1 / R2, no container). `sid` is already format-checked. (The render
+    // routes are ops in the registry: src/registry/ops/make.ts.)
+    | { action: "studio"; op: StudioOp; sid?: string }
     // The library service: like "lookup" with a valid key, but nothing to look
     // up (the Worker's key id is "service:library").
     | {
@@ -66,7 +66,6 @@ export type LookupThen =
     | "emotes_save"
     | "library_file"
     | "library_visibility_migrate"
-    | "library_studio"
     | "library_posters_backfill"
     | "library_search_index"
     | "library_search_post"
@@ -94,17 +93,6 @@ export type LookupThen =
     | "stage_reward"
     | "stage_twitch_connect"
     | "stage_twitch_delete"
-    // editor (APP-API-CONTRACT.md section 31.12)
-    | "edits_list"
-    | "edits_create"
-    | "edits_get"
-    | "edits_update"
-    | "edits_rename"
-    | "edits_delete"
-    | "edits_render"
-    | "edits_renders"
-    | "edits_render_get"
-    | "edits_render_cancel"
     // chat (APP-API-CONTRACT.md section 27)
     | "chat_list"
     | "chat_create"
@@ -122,16 +110,9 @@ export type LookupThen =
     | "studio_notify"
     | "studio_line_notify"
     // photos and galleries (APP-API-CONTRACT.md section 18)
-    | "studio_slideshow"
-    | "studio_gallery_image"
     | "telemetry_ingest";
 
-export type StudioOp =
-    | "preflight"
-    | "status"
-    | "source"
-    | "render_create"
-    | "render_status";
+export type StudioOp = "preflight" | "status" | "source";
 
 // /webp/:id ids are 16-32 alphanumerics (the DO mints 20); media names are 10
 // alphanumerics + ".webp". Validated here so nothing else reaches a handler.
@@ -292,8 +273,8 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     // Stage (APP-API-CONTRACT.md section 30.10): keyed only; the library-service credential gets 404.
     if (req.pathname === "/stage" || req.pathname.startsWith("/stage/")) return decideStage(req);
 
-    // Editor (APP-API-CONTRACT.md section 31.12): keyed only; the library-service credential gets 404.
-    if (req.pathname === "/edits" || req.pathname.startsWith("/edits/")) return decideEdits(req);
+    // Editor (APP-API-CONTRACT.md section 31.12): ops in the registry (src/registry/ops/make.ts, section 33.8). Every
+    // other method or path under /edits falls through to the 404 at the end.
 
     // Chat (APP-API-CONTRACT.md section 27): keyed only.
     if (req.pathname === "/chat/threads" || req.pathname.startsWith("/chat/threads/")) {
@@ -360,9 +341,6 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
             return req.method === "GET" || req.method === "HEAD"
                 ? lookupThen(req, "library_file", { id: id! })
                 : reject(404);
-        }
-        if (sub === "studio") {
-            return req.method === "POST" ? lookupThen(req, "library_studio", { id: id! }) : reject(404);
         }
         return reject(404);
     }
@@ -433,37 +411,10 @@ function decideStage(req: GateRequest): GateDecision {
     return then === null ? reject(404) : lookupThen(req, then, params);
 }
 
-// /edits (GET|POST), /edits/renders (GET), /edits/renders/<rid> (GET|DELETE), /edits/<id> (GET|PUT|PATCH|DELETE) and
-// /edits/<id>/render (POST). Ids are validated before anything is looked up; `renders` is never a project id (7 characters).
-// Anything else, and the library-service credential, is a 404.
+// Editor ids (section 31.12), used by the registry's edit routes: a project is 16 base62, a render 20 (`renders`, 7
+// characters, is never a project id).
 export const EDIT_PROJECT_ID_REGEX = /^[A-Za-z0-9]{16}$/;
 export const EDIT_RENDER_ID_REGEX = /^[A-Za-z0-9]{20}$/;
-function decideEdits(req: GateRequest): GateDecision {
-    if (req.service) return reject(404);
-    const m = req.method;
-    if (req.pathname === "/edits") {
-        if (m === "GET") return lookupThen(req, "edits_list");
-        return m === "POST" ? lookupThen(req, "edits_create") : reject(404);
-    }
-    const [first, second, ...rest] = req.pathname.slice("/edits/".length).split("/");
-    if (rest.length > 0) return reject(404);
-    if (first === "renders") {
-        if (second === undefined) return m === "GET" ? lookupThen(req, "edits_renders") : reject(404);
-        if (!EDIT_RENDER_ID_REGEX.test(second)) return reject(404);
-        if (m === "GET") return lookupThen(req, "edits_render_get", { rid: second });
-        return m === "DELETE" ? lookupThen(req, "edits_render_cancel", { rid: second }) : reject(404);
-    }
-    if (!EDIT_PROJECT_ID_REGEX.test(first ?? "")) return reject(404);
-    const id = first!;
-    if (second === undefined) {
-        if (m === "GET") return lookupThen(req, "edits_get", { id });
-        if (m === "PUT") return lookupThen(req, "edits_update", { id });
-        if (m === "PATCH") return lookupThen(req, "edits_rename", { id });
-        return m === "DELETE" ? lookupThen(req, "edits_delete", { id }) : reject(404);
-    }
-    if (second === "render") return m === "POST" ? lookupThen(req, "edits_render", { id }) : reject(404);
-    return reject(404);
-}
 
 // PUT|DELETE /live/start-token, PUT|DELETE /live/runs/<run>, POST
 // /live/runs/<run>/state, GET /live/selftest. <run> is a lowercase UUID.
@@ -537,28 +488,6 @@ function decideStudio(req: GateRequest): GateDecision {
     if (sub === "source" && job === undefined) {
         return req.method === "GET" || req.method === "HEAD"
             ? { action: "studio", op: "source", sid }
-            : reject(404);
-    }
-    if (sub === "render" && job === undefined) {
-        return req.method === "POST"
-            ? { action: "studio", op: "render_create", sid }
-            : reject(404);
-    }
-    // A slideshow made from the items of a gallery (section 18.5): keyed POST, the session's creating key only (the Durable Object checks the
-    // owner). The library service credential never reaches them.
-    if (sub === "slideshow" && job === undefined) {
-        if (req.service) return reject(404);
-        return req.method === "POST" ? lookupThen(req, "studio_slideshow", { sid }) : reject(404);
-    }
-    // The gallery image made from a gallery's photos (section 18.11): the same rules as the slideshow
-    if (sub === "gallery-image" && job === undefined) {
-        if (req.service) return reject(404);
-        return req.method === "POST" ? lookupThen(req, "studio_gallery_image", { sid }) : reject(404);
-    }
-    if (sub === "render" && job !== undefined && STUDIO_JOB_REGEX.test(job)) {
-        // DELETE (cancel, section 17.7) is an op
-        return req.method === "GET"
-            ? { action: "studio", op: "render_status", sid, job }
             : reject(404);
     }
     return reject(404);

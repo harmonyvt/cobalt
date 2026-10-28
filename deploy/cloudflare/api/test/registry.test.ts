@@ -270,6 +270,20 @@ describe("defineOp and the registry", () => {
             "library.visibility",
             "library.delete",
             "library.deleteFile",
+            // the make ops (registry/ops/make.ts, section 33.8)
+            "make.webp",
+            "make.still",
+            "make.trim",
+            "make.crop",
+            "make.slideshow",
+            "make.galleryImage",
+            "edits.list",
+            "edits.get",
+            "edits.create",
+            "edits.update",
+            "edits.render",
+            "edits.delete",
+            "jobs.wait",
             "test.wipe",
             "test.echo",
             "test.do",
@@ -348,7 +362,8 @@ describe("the model's cobalt API", () => {
         expect(TOOL_TYPES).toContain("limit?: number; // default 100, max 1000");
         expect(toolTypes(false)).not.toContain("search(");
         // hidden route ops are never shown
-        expect(TOOL_TYPES).not.toMatch(/index\(|query\(|map\(|made\(|upload\(|create\(|recent\(/);
+        // (edits.create is the editor's own free call, section 33.8; studio.create stays hidden)
+        expect(TOOL_TYPES).not.toMatch(/index\(|query\(|map\(|made\(|upload\(|recent\(|\bstudio: \{/);
         // the chat's own reads and writes of section 33.7
         expect(TOOL_TYPES).toContain("queue(): Promise<unknown>;");
         expect(TOOL_TYPES).toContain("save(url: string, opts?: {");

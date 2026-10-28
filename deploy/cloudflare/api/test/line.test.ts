@@ -4,6 +4,7 @@
 // summary has its own file (line-notify.test.ts).
 import { dispatch as decide } from "./dispatch";
 import { describe, expect, it, vi } from "vitest";
+import { REGISTRY } from "../src/registry/index";
 import type { GateRequest } from "../src/gate";
 import { KEY_ID_HEADER, SERVICE_HEADER } from "../src/headers";
 import {
@@ -1171,7 +1172,8 @@ describe("the gate", () => {
         expect(d({ method: "DELETE", pathname: `/studio/${SID}/render/${JOB}` })).toMatchObject({ status: 401 });
         expect(d({ method: "DELETE", pathname: `/studio/${SID}/line`, service: true })).toMatchObject(notFound);
         expect(d({ method: "DELETE", pathname: `/studio/${SID}/render/${JOB}`, service: true })).toMatchObject(notFound);
-        expect(d({ method: "GET", pathname: `/studio/${SID}/render/${JOB}` })).toEqual({ action: "studio", op: "render_status", sid: SID, job: JOB });
+        // the render's GET is an op now (src/registry/ops/make.ts): still the capability URL, no key
+        expect(REGISTRY.match("GET", `/studio/${SID}/render/${JOB}`)?.op).toMatchObject({ name: "studio.render_status", auth: "capability" });
         for (const method of ["GET", "POST", "PUT", "PATCH"]) expect(d({ method, pathname: `/studio/${SID}/line`, ...keyed })).toMatchObject(notFound);
         expect(d({ method: "DELETE", pathname: `/studio/${SID}/render/short`, ...keyed })).toMatchObject(notFound);
         expect(d({ method: "DELETE", pathname: `/studio/${SID}/line/extra`, ...keyed })).toMatchObject(notFound);

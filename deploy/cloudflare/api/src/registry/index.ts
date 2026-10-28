@@ -3,10 +3,11 @@
 import { CHAT_OPS } from "./ops/chat";
 import { LIBRARY_OPS } from "./ops/library";
 import { LIBRARY_WRITE_OPS } from "./ops/library-writes";
+import { MAKE_OPS } from "./ops/make";
 import { Registry } from "./registry";
 import { toolTypesFor } from "./typescript";
 
-export const REGISTRY = new Registry([...LIBRARY_OPS, ...LIBRARY_WRITE_OPS, ...CHAT_OPS]);
+export const REGISTRY = new Registry([...LIBRARY_OPS, ...LIBRARY_WRITE_OPS, ...CHAT_OPS, ...MAKE_OPS]);
 
 // The model's cheat sheet for the sandbox API, generated from the ops (`search` only while meaning search is on).
 export const toolTypes = (search: boolean, registry: Registry = REGISTRY): string => toolTypesFor(registry, { search });
