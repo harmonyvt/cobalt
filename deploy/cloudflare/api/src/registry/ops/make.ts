@@ -1,7 +1,7 @@
 // Make ops (APP-API-CONTRACT.md 33.8, plan T4): the routes that make files (the webp render of one video, the slideshow,
 // the gallery image, reopening a library file, the editor) moved onto the registry unchanged, and the chat AI's calls
 // that use them: cobalt.make.webp / still / trim / crop / slideshow / galleryImage, cobalt.edits.*, and
-// cobalt.jobs.wait. Everything the AI starts counts against a per-thread daily cap (CHAT_DAILY_RENDERS, default 10).
+// cobalt.jobs.wait / jobs.onDone. Everything the AI starts counts against a per-thread daily cap (CHAT_DAILY_RENDERS, default 10).
 //
 // The route ops wrap the old handlers: same parsing, same error codes, same headers (the route snapshot pins them).
 import * as z from "zod";
@@ -235,7 +235,7 @@ const unb64url = (s: string) => atob(s.replace(/-/g, "+").replace(/_/g, "/"));
 
 export const JobSchema = z
     .object({
-        job: z.string().describe("pass it to cobalt.jobs.wait; it can change while a file opens, so keep the newest"),
+        job: z.string().describe("pass it to cobalt.jobs.onDone; it can change while a file opens, so keep the newest"),
         status: z.enum(["opening", "queued", "running", "done", "error", "cancelled"]),
         progress: z.number().nullable().optional().describe("0..1 while running, when known"),
         queue_ahead: z.number().nullable().optional().describe("jobs ahead of it in the line"),
@@ -399,7 +399,8 @@ async function waitEdit(ctx: OpContext, rid: string, deadline: number): Promise<
     return { job: id, status: "running" };
 }
 
-async function waitJob(ctx: OpContext, job: string, seconds: number): Promise<Job> {
+// A job's state after waiting up to `seconds` (0: right now). The chat's job watcher (chat-jobs.ts) reads it too.
+export async function waitJob(ctx: OpContext, job: string, seconds: number): Promise<Job> {
     const deadline = ctx.now() + seconds * 1000;
     const studio = /^studio:([A-Za-z0-9]{22}):([A-Za-z0-9]{20})$/.exec(job);
     if (studio) return waitStudio(ctx, studio[1]!, studio[2]!, deadline);
@@ -464,7 +465,7 @@ export const makeWebpOp = defineOp({
     ai: {
         tier: "free",
         only: true,
-        summary: "An animated webp (silent, loops) of 0.5 to 10 s of a video or gif, optionally cropped. Returns a job: wait for it with jobs.wait.",
+        summary: "An animated webp (silent, loops) of 0.5 to 10 s of a video or gif, optionally cropped. Returns a job: hand it to jobs.onDone.",
         params: ["id"],
         options: true,
     },
@@ -904,12 +905,44 @@ export const jobsWaitOp = defineOp({
     ai: {
         tier: "free",
         only: true,
-        summary: `Wait up to \`seconds\` for a job, then its state. Still opening, queued or running: call again (in a new run if needed); keep the job id it returns.`,
+        summary: `A quick look at a job: waits up to \`seconds\`, then its state. Never call it again in later runs to poll: hand a job that is still going to jobs.onDone instead.`,
         params: ["job", "seconds"],
     },
     handler: async (ctx, input) => {
         threadOf(ctx, "jobs.wait");
         return ok(await waitJob(ctx, input.job, input.seconds ?? 15).catch((e) => fail("jobs.wait", e)));
+    },
+});
+
+// cobalt.jobs.onDone(job, note?) (section 33.14): the server hook. A job that ends within a few seconds answers at once;
+// otherwise the chat's job watcher (the ChatJobs Durable Object) takes it, the model ends its reply, and the server
+// continues the chat with the result when the job ends. Never a route.
+export const JOB_ONDONE_FIRST_WAIT_S = 8;
+export const jobsOnDoneOp = defineOp({
+    name: "jobs.onDone",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({
+        job: z.string().min(1).max(4100),
+        note: z.string().max(300).optional().describe("what to do with the result, e.g. \"show it and give the share link\""),
+    }),
+    output: JobSchema.extend({ watching: z.boolean().optional().describe("true: the server continues the chat when it ends; end your reply now") }),
+    ai: {
+        tier: "free",
+        only: true,
+        summary:
+            "Hand a job to the server: it tells you when the job ends, with the result. Done within a few seconds: the result at once. Otherwise `watching: true`: end your reply in one short line (it is on its way); a new reply starts by itself when the job ends.",
+        params: ["job", "note"],
+    },
+    handler: async (ctx, input) => {
+        threadOf(ctx, "jobs.onDone");
+        const state = await waitJob(ctx, input.job, JOB_ONDONE_FIRST_WAIT_S).catch((e) => fail("jobs.onDone", e));
+        if (["done", "error", "cancelled"].includes(state.status)) return ok(state);
+        const watch = ctx.chat?.watchJob;
+        if (!watch) return ok(state);
+        await watch(state.job, input.note ?? null).catch((e) => fail("jobs.onDone", e));
+        return ok({ ...state, watching: true });
     },
 });
 
@@ -933,4 +966,5 @@ export const MAKE_OPS = [
     editsRenderOp,
     editsDeleteOp,
     jobsWaitOp,
+    jobsOnDoneOp,
 ];

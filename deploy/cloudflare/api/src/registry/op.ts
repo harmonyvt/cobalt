@@ -83,6 +83,9 @@ export type ChatCallContext = {
     collect: ChatCollect;
     // the read tools of chat-tools.ts, one instance per code run (it caches the library for the run)
     tools: ChatTools;
+    // cobalt.jobs.onDone (section 33.14): hand a job to the server, which continues the chat when it ends. Absent: the
+    // hook is off (no CHAT_JOBS binding, or a confirmed card's run).
+    watchJob?: (job: string, note: string | null) => Promise<void>;
 };
 
 export type AiSpec<I> = {

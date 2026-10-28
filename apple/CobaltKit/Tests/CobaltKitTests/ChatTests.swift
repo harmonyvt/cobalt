@@ -87,6 +87,20 @@ struct ChatModelTests {
         #expect(running.status == .running && running.durationMS == nil && running.result == nil)
     }
 
+    @Test func aJobStepDecodesAndWaits() throws {
+        let waiting = try decode(ChatStep.self, #"{"id":"tu_1:job:0","kind":"job","status":"running","code":"","logs":[],"result":null,"error":null,"duration_ms":null,"job":{"job":"studio:a:b","note":"show it","status":"waiting"}}"#)
+        #expect(waiting.isWaitingJob && waiting.job == ChatJobCard(status: "waiting", note: "show it"))
+        let done = try decode(ChatStep.self, #"{"id":"tu_1:job:0","kind":"job","status":"done","job":{"job":"studio:a:b","note":null,"status":"done"}}"#)
+        #expect(!done.isWaitingJob && done.job?.status == "done")
+        #expect(try !decode(ChatStep.self, wireStep).isWaitingJob)
+        let thread = try decode(ChatThread.self, wireThread)
+        let reply = ChatMessage(id: "9", role: .assistant, text: "on its way", steps: [waiting], createdAt: Date())
+        #expect(ChatThreadContent(thread: thread, messages: [reply]).isWaitingOnJob)
+        var settled = reply
+        settled.steps = [done]
+        #expect(!ChatThreadContent(thread: thread, messages: [settled]).isWaitingOnJob)
+    }
+
     @Test func aMessageDecodes() throws {
         let m = try decode(ChatMessage.self, wireUser)
         #expect(m.id == "101" && m.role == .user && m.text == "what did i save?" && m.postIDs == ["Dd7P496wolG"])

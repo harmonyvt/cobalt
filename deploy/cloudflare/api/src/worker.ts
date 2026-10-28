@@ -86,6 +86,9 @@ export interface WorkerEnv {
     // cap of awake minutes (default 60, "0" turns it off). Absent: the chat AI is never offered cobalt.box.*.
     WORKBENCH?: DurableObjectNamespace;
     WORKBENCH_DAILY_MINUTES?: string;
+    // The chat's job hooks (section 33.14): the ChatJobs Durable Object namespace (one object per chat thread). Absent:
+    // cobalt.jobs.onDone only looks at the job, it never continues the chat.
+    CHAT_JOBS?: DurableObjectNamespace;
 }
 
 

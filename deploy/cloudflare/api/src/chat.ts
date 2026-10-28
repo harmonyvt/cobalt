@@ -17,6 +17,7 @@ import type { EmbedClient } from "./embed";
 import { CODE_TIMEOUT_BOX_MS, type CodeRunner } from "./chat-limits";
 import { workbenchOn } from "./workbench-rules";
 import type { ModelFetch } from "./model-fetch";
+import type { JobEnded, JobsPort, ResumeOutcome } from "./chat-jobs";
 export { CODE_CPU_MS, CODE_TIMEOUT_MS, MAX_TOOL_CALLS, type CodeRun, type CodeRunner } from "./chat-limits";
 import { mintCollectionId } from "./share-collections";
 import type { StudioReply } from "./studio";
@@ -128,6 +129,8 @@ export type ChatDeps = {
     base?: OpBase;
     // where `ask` calls wait for Harmony (the main Durable Object); null: confirm cards are off
     pending?: PendingPort | null;
+    // where cobalt.jobs.onDone hands jobs (the thread's ChatJobs Durable Object, section 33.14); null: the hook is off
+    jobs?: JobsPort | null;
 };
 
 // ---- rows and shapes ----------------------------------------------------------------------------
@@ -158,9 +161,16 @@ export type ConfirmCard = {
     expires_at: number;
 };
 
+// A job the model handed to the server (section 33.14) and what became of it.
+export type JobCard = {
+    job: string;
+    note: string | null;
+    status: "waiting" | "done" | "error" | "cancelled" | "timeout";
+};
+
 export type Step = {
     id: string;
-    kind: "code" | "confirm";
+    kind: "code" | "confirm" | "job";
     status: "running" | "done" | "error";
     code: string;
     logs: string[];
@@ -169,6 +179,8 @@ export type Step = {
     duration_ms: number | null;
     // kind "confirm" only
     confirm?: ConfirmCard;
+    // kind "job" only (status "running" while the server waits for it)
+    job?: JobCard;
 };
 
 const err = (status: number, code: string): StudioReply => ({ status, body: { status: "error", error: { code } } });
@@ -406,8 +418,9 @@ const CHANGES = `You can change the library too, but only when Harmony asks you 
 
 const CONFIRMS = `Some calls change things that are hard to undo (the API marks them "Asks Harmony first"). Calling one runs nothing: it returns { pending_confirm } and Harmony gets a confirm card with yes and no. End that run, say in one short line what you asked, and stop. When Harmony answers, you are told what happened and carry on from there.`;
 
-// Making files (APP-API-CONTRACT.md 33.8): only when asked; jobs are waited on with jobs.wait.
-const MAKING = `Making files: cobalt.make.* and cobalt.edits.render start jobs on Harmony's server (webps, animated stills, slideshows, gallery images, and mp4s from the editor, which cost real money). Make something only when Harmony asks for it; each chat may make only a few a day. Each call returns a job: call cobalt.jobs.wait(job) in the same run, and while it is still opening, queued or running, wait again in the next run (or tell Harmony it is on its way). When it is done, cobalt.show([post_id]) and give share_url when Harmony wants a link.`;
+// Making files (APP-API-CONTRACT.md 33.8): only when asked. A job is handed to the server with jobs.onDone (33.14),
+// never polled across runs.
+const MAKING = `Making files: cobalt.make.* and cobalt.edits.render start jobs on Harmony's server (webps, animated stills, slideshows, gallery images, and mp4s from the editor, which cost real money). Make something only when Harmony asks for it; each chat may make only a few a day. Each call returns a job: in the same run, pass it to cobalt.jobs.onDone(job, note) with a short note of what to do with the result. If it finishes within a few seconds you get the result at once: cobalt.show([post_id]) and give share_url when Harmony wants a link. Otherwise it answers watching: true, and the server tells you when the job ends: end your reply right there in one short line (it is on its way), without more code. A new reply starts by itself with the result. Never poll: do not call cobalt.jobs.wait over and over, and never ask Harmony to tell you to check.`;
 // The workbench (section 33.11): only while cobalt.box is in the API.
 const WORKBENCH = `cobalt.box is a real Linux box (yt-dlp, curl, ffmpeg, python3, public internet) and the LAST resort: use it only after the normal calls cannot do the job, for example a link the library cannot save or a file that needs converting. It takes about 10 seconds to wake, and it keeps this thread's files only while awake (2 minutes after the last call). Work in /workspace, keep commands quiet (yt-dlp -q --no-progress, curl -sS), and finish with cobalt.box.save(path) to put the file in the library. One run of code may use up to ${CODE_TIMEOUT_BOX_MS / 1000} seconds while it calls the box. Never send anything from Harmony's library or this chat to a site from the box.`;
 
@@ -620,6 +633,9 @@ type ReplyCtx = {
     emit: (event: string, data: unknown) => void;
 };
 
+const WAITING_NOTE =
+    "The server is watching that job and continues this chat by itself when it ends, with the result. End here: say in one short line that it is on its way, and do not call run_code again in this reply.";
+
 const PAUSED_NOTE =
     "Harmony now sees a confirm card with yes and no. Nothing has run yet. End here: say in one short line what you asked them to confirm, and do not call run_code again in this reply.";
 
@@ -657,7 +673,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
     // tools alone
     const toolsForRun = () => {
         const legacy = chatTools(toolDeps, collect);
-        if (!d.registry || !d.base) return { tools: legacy, paused: () => null };
+        if (!d.registry || !d.base) return { tools: legacy, paused: () => null, waiting: () => [] as { job: string; note: string | null }[] };
         return chatToolbox(d.registry, d.base, {
             threadId: c.thread.id,
             messageId: String(c.botRow.id),
@@ -665,9 +681,12 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
             legacy,
             flags: { search, box: workbench },
             pending: d.pending ?? null,
+            jobs: d.jobs ?? null,
             randomBytes: d.randomBytes,
         });
     };
+    // jobs handed to the server in this reply (section 33.14): the reply ends after the run that handed them over
+    let handedOver = false;
 
     try {
         const prior = await history(d, c.earlier);
@@ -718,6 +737,10 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                     results.push({ type: "tool_result", tool_use_id: u.id, is_error: true, content: "Waiting for Harmony to answer the confirm card: answer in one short line, without code." });
                     continue;
                 }
+                if (handedOver) {
+                    results.push({ type: "tool_result", tool_use_id: u.id, is_error: true, content: "The server continues this chat when the job ends: answer in one short line, without code." });
+                    continue;
+                }
                 if (runs >= MAX_CODE_RUNS) {
                     results.push({ type: "tool_result", tool_use_id: u.id, is_error: true, content: "No more code runs in this reply: answer with what you have." });
                     continue;
@@ -759,10 +782,23 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                     c.emit("step", { step: cstep });
                     c.emit("confirm", { message_id: String(c.botRow.id), confirm });
                 }
+                // jobs handed to the server: one "job" step each, and the reply ends after this run
+                const handed = box.waiting();
+                handed.forEach((w, i) => {
+                    const jstep: Step = { id: `${u.id}:job:${i}`, kind: "job", status: "running", code: "", logs: [], result: null, error: null, duration_ms: null, job: { job: w.job, note: w.note, status: "waiting" } };
+                    steps.push(jstep);
+                    c.emit("step", { step: jstep });
+                });
+                if (handed.length > 0) handedOver = true;
                 const body = out.error !== undefined
                     ? { error: out.error, logs: step.logs }
                     : { result: full!.length > RESULT_MAX ? `${full!.slice(0, RESULT_MAX)}… (cut: return less)` : out.result ?? null, logs: step.logs };
-                const content: any[] = [{ type: "text", text: clipStr(stringify(card ? { ...body, pending_confirm: { id: card.id, summary: card.summary, effect: card.effect }, note: PAUSED_NOTE } : body), RESULT_MAX + 2000) }];
+                const noted = card
+                    ? { ...body, pending_confirm: { id: card.id, summary: card.summary, effect: card.effect }, note: PAUSED_NOTE }
+                    : handed.length > 0
+                      ? { ...body, note: WAITING_NOTE }
+                      : body;
+                const content: any[] = [{ type: "text", text: clipStr(stringify(noted), RESULT_MAX + 2000) }];
                 // pictures asked for with look() in this run
                 const fresh = collect.look.slice(looked);
                 looked = collect.look.length;
@@ -886,4 +922,71 @@ export async function answerConfirm(d: ChatDeps, request: Request, id: string, c
         { thread: thread!, earlier, userRow: null, botRow, text: note, postIds: [] },
         { event: "confirm", data: { message_id: rec!.message_id, confirm: card } },
     );
+}
+
+// ---- a job handed over with cobalt.jobs.onDone ended (section 33.14) -----------------------------------------------------
+
+const JOB_RESULT_MAX = 2000;
+
+// Called by the thread's ChatJobs Durable Object (chat-jobs.ts) when jobs it watched ended: marks their "job" steps, then
+// runs a new reply that starts from the results, saved to D1 and shown on the Live Activity (there is no stream: the app
+// reads the thread). "busy" while another reply is running (the watcher tries again), "gone" when the thread is gone.
+export async function resumeAfterJobs(d: ChatDeps, id: string, ended: JobEnded[]): Promise<ResumeOutcome> {
+    if (ended.length === 0) return "done";
+    const now = d.now();
+    let thread: ThreadRow | null;
+    let earlier: MessageRow[];
+    let botRow: MessageRow;
+    let note: string;
+    try {
+        thread = await oneThread(d.db, id);
+        if (!thread) return "gone";
+        const { results } = await d.db.prepare("SELECT * FROM chat_messages WHERE thread_id = ?1 ORDER BY id").bind(id).all<MessageRow>();
+        if (results.length + 1 > MESSAGES_MAX) return "gone";
+        const last = results[results.length - 1];
+        if (last && last.status === "running" && now - last.updated_at <= STALE_MS) return "busy";
+        if (last && last.status === "running") {
+            await d.db.prepare("UPDATE chat_messages SET status = 'error', error = 'error.chat.interrupted' WHERE id = ?1").bind(last.id).run();
+            last.status = "error";
+        }
+
+        // the "job" steps on the messages that handed the jobs over
+        const hosts = new Map<string, MessageRow>();
+        for (const e of ended) {
+            const host = e.watch.message_id ? results.find((r) => String(r.id) === e.watch.message_id) : undefined;
+            if (host) hosts.set(String(host.id), host);
+        }
+        for (const host of hosts.values()) {
+            const steps = parse<Step[]>(host.steps, []);
+            let changed = false;
+            for (const s of steps) {
+                const e = s.kind === "job" && s.job ? ended.find((x) => x.watch.handed === s.job!.job && x.watch.message_id === String(host.id)) : undefined;
+                if (!e || !s.job || s.job.status !== "waiting") continue;
+                const st = e.result.status;
+                s.job = { ...s.job, status: st === "done" || st === "error" || st === "cancelled" || st === "timeout" ? st : "error" };
+                s.status = st === "done" ? "done" : "error";
+                s.result = clipStr(stringify(e.result), STEP_RESULT_MAX);
+                s.error = st === "done" ? null : typeof e.result.error === "string" ? e.result.error : st;
+                changed = true;
+            }
+            if (changed) await d.db.prepare("UPDATE chat_messages SET steps = ?2 WHERE id = ?1 AND thread_id = ?3").bind(host.id, JSON.stringify(steps), id).run();
+        }
+
+        const lines = ended.map((e) => `- ${clipStr(stringify(e.result), JOB_RESULT_MAX)}${e.watch.note ? ` (your note: ${e.watch.note})` : ""}`);
+        note = `[The server: ${ended.length === 1 ? "a job you handed over with cobalt.jobs.onDone has" : "jobs you handed over with cobalt.jobs.onDone have"} ended.\n${lines.join("\n")}\nCarry on from here without waiting for Harmony: when it is done, cobalt.show([post_id]) and say it is ready (give share_url if they wanted a link); if it failed or timed out, say so in one short line.]`;
+        earlier = results.slice(-HISTORY_MESSAGES);
+        botRow = (await d.db
+            .prepare("INSERT INTO chat_messages (thread_id, role, text, status, created_at, updated_at) VALUES (?1, 'assistant', '', 'running', ?2, ?2) RETURNING *")
+            .bind(id, now)
+            .first<MessageRow>())!;
+        await d.db.prepare("UPDATE chat_threads SET updated_at = ?2 WHERE id = ?1").bind(id, now).run();
+    } catch (e) {
+        console.error("[chat] job resume failed", String(e));
+        throw e;
+    }
+    const prompt = ended.find((e) => e.watch.note)?.watch.note ?? (ended.every((e) => e.result.status === "done") ? "your file is ready" : "a job ended");
+    const live = d.liveFor?.(id, prompt);
+    await reply(d, { thread: thread!, earlier, userRow: null, botRow, text: note, postIds: [], emit: (e, v) => live?.event(e, v) });
+    await live?.close();
+    return "done";
 }

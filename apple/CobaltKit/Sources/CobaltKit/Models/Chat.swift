@@ -57,10 +57,16 @@ public struct ChatStep: Sendable, Equatable, Identifiable, Decodable {
     public var result: String?
     public var error: String?
     public var durationMS: Int?
+    /// Kind `"job"` only (APP-API-CONTRACT 33.14): a job the chat handed to the server, which continues the chat when it
+    /// ends. The step runs while the server waits for it.
+    public var job: ChatJobCard?
+
+    /// The server is still waiting for this step's job: a new reply comes by itself when it ends.
+    public var isWaitingJob: Bool { kind == "job" && status == .running }
 
     public init(
         id: String, kind: String = "code", status: Status, code: String = "", logs: [String] = [],
-        result: String? = nil, error: String? = nil, durationMS: Int? = nil
+        result: String? = nil, error: String? = nil, durationMS: Int? = nil, job: ChatJobCard? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -70,9 +76,10 @@ public struct ChatStep: Sendable, Equatable, Identifiable, Decodable {
         self.result = result
         self.error = error
         self.durationMS = durationMS
+        self.job = job
     }
 
-    enum CodingKeys: String, CodingKey { case id, kind, status, code, logs, result, error, durationMS = "durationMs" }
+    enum CodingKeys: String, CodingKey { case id, kind, status, code, logs, result, error, durationMS = "durationMs", job }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -84,6 +91,28 @@ public struct ChatStep: Sendable, Equatable, Identifiable, Decodable {
         result = try c.decodeIfPresent(String.self, forKey: .result)
         error = try c.decodeIfPresent(String.self, forKey: .error)
         durationMS = (try? c.decodeIfPresent(Double.self, forKey: .durationMS)).flatMap { $0 }.map { Int($0.rounded()) }
+        job = (try? c.decodeIfPresent(ChatJobCard.self, forKey: .job)).flatMap { $0 }
+    }
+}
+
+/// A job the chat handed to the server with `cobalt.jobs.onDone` (APP-API-CONTRACT 33.14) and what became of it.
+public struct ChatJobCard: Sendable, Equatable, Decodable {
+    /// "waiting", "done", "error", "cancelled" or "timeout"
+    public var status: String
+    /// What the chat meant to do with the result.
+    public var note: String?
+
+    public init(status: String, note: String? = nil) {
+        self.status = status
+        self.note = note
+    }
+
+    enum CodingKeys: String, CodingKey { case status, note }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "waiting"
+        note = try c.decodeIfPresent(String.self, forKey: .note)
     }
 }
 

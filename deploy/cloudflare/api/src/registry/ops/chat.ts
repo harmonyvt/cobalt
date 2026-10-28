@@ -14,6 +14,7 @@ import {
     sendMessage,
     type ChatDeps,
 } from "../../chat";
+import { jobsPort, type JobsNamespace } from "../../chat-jobs";
 import { ChatLivePusher } from "../../chat-live";
 // the thread id pattern comes from gate.ts, not chat.ts: through chat.ts's import of the registry it would be undefined here
 import { THREAD_ID_REGEX as CHAT_ID_REGEX } from "../../gate";
@@ -41,6 +42,7 @@ export function chatDepsFrom(base: OpBase): ChatDeps | null {
         registry: base.registry,
         base,
         pending: pendingPort(base.container),
+        jobs: env.CHAT_JOBS ? jobsPort(env.CHAT_JOBS as unknown as JobsNamespace, env.COBALT_API_KEY) : null,
     };
 }
 
@@ -71,35 +73,38 @@ export const chatConfirmOp = defineOp({
 function threadDeps(ctx: OpContext): ChatDeps | null {
     const base = chatDepsFrom(ctx);
     if (!base) return null;
-    const { env, container, now } = ctx;
-    const keyId = ctx.keyId!;
-    return {
-        ...base,
-        liveFor: livePushConfigured(env)
-            ? (thread: string, prompt: string) =>
-                  new ChatLivePusher({
-                      thread,
-                      keyId,
-                      prompt,
-                      now,
-                      post: async (body) => {
-                          const res = await container.fetch(
-                              new Request(`https://do.internal/live/chats/${thread}/state`, {
-                                  method: "POST",
-                                  headers: { "content-type": "application/json", "x-internal-key": env.COBALT_API_KEY },
-                                  body: JSON.stringify(body),
-                              }),
-                          );
-                          if (!res.ok) {
-                              await res.body?.cancel();
-                              return null;
-                          }
-                          const j = (await res.json()) as { targets?: number };
-                          return typeof j.targets === "number" ? { targets: j.targets } : null;
-                      },
-                  })
-            : undefined,
-    };
+    return { ...base, liveFor: chatLiveFor(ctx.env, ctx.container, ctx.now, ctx.keyId!) };
+}
+
+// The sender of a reply the server started itself: no device's key id, so every device is shown it.
+export const SERVER_SENDER = "server:chat-jobs";
+
+// A reply's Live Activity pusher (section 27.9), or undefined while push is off. `keyId` is the sender (its own device
+// draws the activity itself); SERVER_SENDER (a reply the server started, section 33.14) shows it on every device.
+export function chatLiveFor(env: OpBase["env"], container: OpBase["container"], now: () => number, keyId: string): ChatDeps["liveFor"] {
+    if (!livePushConfigured(env)) return undefined;
+    return (thread: string, prompt: string) =>
+        new ChatLivePusher({
+            thread,
+            keyId,
+            prompt,
+            now,
+            post: async (body) => {
+                const res = await container.fetch(
+                    new Request(`https://do.internal/live/chats/${thread}/state`, {
+                        method: "POST",
+                        headers: { "content-type": "application/json", "x-internal-key": env.COBALT_API_KEY },
+                        body: JSON.stringify(body),
+                    }),
+                );
+                if (!res.ok) {
+                    await res.body?.cancel();
+                    return null;
+                }
+                const j = (await res.json()) as { targets?: number };
+                return typeof j.targets === "number" ? { targets: j.targets } : null;
+            },
+        });
 }
 
 const MESSAGE_ID_REGEX = /^\d{1,12}$/;

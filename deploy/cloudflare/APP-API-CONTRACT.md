@@ -124,15 +124,15 @@ Response (streams, uploads, file bytes, forwarding). Chat: the op is also a chat
 | ANY | `stage host /*` | `host.stage` | open |  |  | Worker | yes |  |
 | ANY | `studio host /*` | `host.studio` | open |  |  | Worker | yes |  |
 
-The chat AI's calls (49): `cobalt.library.list`, `cobalt.library.search`, `cobalt.library.post`, `cobalt.look`,
+The chat AI's calls (50): `cobalt.library.list`, `cobalt.library.search`, `cobalt.library.post`, `cobalt.look`,
 `cobalt.show`, `cobalt.collage`, `cobalt.links.list`, `cobalt.collections.list`, `cobalt.queue`, `cobalt.library.save`,
 `cobalt.library.title`, `cobalt.library.visibility` (asks first), `cobalt.library.delete` (asks first),
 `cobalt.library.deleteFile` (asks first), `cobalt.make.webp`, `cobalt.make.still`, `cobalt.make.trim`,
 `cobalt.make.crop`, `cobalt.make.slideshow`, `cobalt.make.galleryImage`, `cobalt.edits.list`, `cobalt.edits.get`,
 `cobalt.edits.create`, `cobalt.edits.update`, `cobalt.edits.render`, `cobalt.edits.delete` (asks first),
-`cobalt.jobs.wait`, `cobalt.links.create`, `cobalt.links.revoke` (asks first), `cobalt.collections.create`,
-`cobalt.collections.add`, `cobalt.collections.update`, `cobalt.collections.reroll` (asks first),
-`cobalt.collections.delete` (asks first), `cobalt.sets.list`, `cobalt.sets.create`, `cobalt.sets.add`,
+`cobalt.jobs.wait`, `cobalt.jobs.onDone`, `cobalt.links.create`, `cobalt.links.revoke` (asks first),
+`cobalt.collections.create`, `cobalt.collections.add`, `cobalt.collections.update`, `cobalt.collections.reroll` (asks
+first), `cobalt.collections.delete` (asks first), `cobalt.sets.list`, `cobalt.sets.create`, `cobalt.sets.add`,
 `cobalt.sets.update`, `cobalt.sets.delete` (asks first), `cobalt.stage.get`, `cobalt.stage.set`, `cobalt.stage.store`
 (asks first), `cobalt.stage.pool`, `cobalt.stage.items`, `cobalt.stage.action`, `cobalt.emotes.find`,
 `cobalt.emotes.save`, `cobalt.box.run`, `cobalt.box.save`.
@@ -4081,3 +4081,41 @@ from the registry:
   and `Endpoints.shareCollectionsList()` and decode the generated reply types (`HTTPCobaltClient+Endpoints.swift`). The
   library screens and the collection screens (links tab, collection picker) get their data through these two calls; their
   behaviour is unchanged. The other calls move over screen by screen.
+
+### 33.14 Job hooks: `cobalt.jobs.onDone` (addendum, 2026-10-28; owner: "I dont like how it polled it should have a hook from the server as a primitive")
+
+Before this, the chat AI waited for a job it started with `cobalt.jobs.wait` (at most 25 s per call), so a webp render
+took several code runs that each answered `running`, and the reply often gave up with "say the word and I'll check".
+Now the server watches the job and continues the chat itself.
+
+- **The call** (chat only, tier free, no route): `cobalt.jobs.onDone(job: string, note?: string)`. It first waits up to
+  8 s (`JOB_ONDONE_FIRST_WAIT_S`); a job that ended by then answers its result at once, like `jobs.wait`. Otherwise it hands
+  the job (its newest id) to the thread's watcher and answers the job's state with `watching: true`. `note` (at most 300
+  characters) is what the model means to do with the result ("show it and give the share link"); it comes back with the
+  result. Without the `CHAT_JOBS` binding it only looks (no `watching`).
+- **The reply ends**: the run that handed a job over gets a `note` telling the model the server is watching, and any later
+  `run_code` in that reply is refused ("the server continues this chat when the job ends"). The message gets one step per
+  job: `{ kind: "job", status: "running", job: { job, note, status: "waiting" } }` (no code).
+- **The watcher**: the `ChatJobs` Durable Object (`src/chat-jobs-do.ts`, rules in `src/chat-jobs.ts`), one instance per
+  thread (`idFromName(<thread id>)`), reached only from the Worker (`PUT /watch`, `x-internal-key`). Its alarm looks at each
+  job every 4 s with the same code as `jobs.wait` (wait 0), as the thread's chat key (`chat:<thread id>`): a studio job
+  through the main Durable Object's status route, an editor render in D1, a file still opening is started when it is
+  ready (its id becomes `studio:...`). At most 5 jobs per thread. A job ends when it is `done`, `error` or `cancelled`; one
+  still going after an hour ends as `timeout`, and one whose state cannot be read 15 ticks in a row as `error`
+  (`error.chat.job_unreadable`).
+- **The continuation**: when jobs end, the alarm marks their `job` steps (`status` `done` or `error`, `job.status` the
+  outcome, `result` the job's JSON) and writes a new assistant message, exactly like the reply after a confirm card
+  (33.5): the model's opening user turn is a note from the server with each job's result and note, and it carries on
+  (`cobalt.show`, the share link, or a one-line failure). It is saved to D1 as it goes; there is no stream. Its Live
+  Activity (27.9) goes to every device with a chat start token (the sender is `server:chat-jobs`, so none is left out).
+  A thread with a reply still running is tried again on each tick for up to 10 minutes; a deleted or full thread drops
+  its jobs.
+- **The model's instructions**: "Making files" in the system prompt now says to pass every job to `jobs.onDone` in the
+  same run, end the reply in one line when it answers `watching: true`, and never poll `jobs.wait` or ask Harmony to say
+  when to check. `jobs.wait` stays for a quick look.
+- **The app**: `ChatStep.job` (`ChatJobCard`) and `isWaitingJob`; `ChatThreadContent.isWaitingOnJob`. While the open
+  thread waits on a job, `ChatStore` reads it every 4 s (at most an hour) until the server's reply appears, then follows
+  that reply like any other. The step row says "making it… the chat carries on when it's ready", then "made it" or
+  why it did not finish.
+- **Deploy**: a new Durable Object class and binding (`CHAT_JOBS` → `ChatJobs`, sqlite) in `cloudflare.config.ts`. No
+  secret, no D1 migration, no route change (the route snapshot is unchanged).
