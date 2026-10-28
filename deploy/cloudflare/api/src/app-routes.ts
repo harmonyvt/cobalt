@@ -274,6 +274,8 @@ export async function capabilities(
                 editor: editor === true,
                 // PUT /live/edits/<rid>: the server keeps an editor render's Live Activity current (section 32)
                 edit_live_push: editor === true && livePush === true,
+                // PUT /live/chat-start-token: a chat reply sent from another device shows on this one (section 27.9)
+                chat_live_push: chat === true && livePush === true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,

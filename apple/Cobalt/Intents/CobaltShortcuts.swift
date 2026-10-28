@@ -30,6 +30,16 @@ struct CobaltShortcuts: AppShortcutsProvider {
                 ],
                 shortTitle: "make webp",
                 systemImageName: "photo.stack")
+            // a String can't be part of a phrase: Siri asks for the message ("what do you want to ask?")
+            AppShortcut(
+                intent: AskChatIntent(),
+                phrases: [
+                    "Ask \(.applicationName)",
+                    "Ask \(.applicationName) chat",
+                    "Chat with \(.applicationName)",
+                ],
+                shortTitle: "ask chat",
+                systemImageName: "bubble.left.and.text.bubble.right")
         }
     }
 }

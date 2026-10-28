@@ -39,6 +39,32 @@ extension Copy {
             }
         }
 
+        // MARK: ask chat (15.10)
+
+        /// A refused message or a failed reply.
+        static func chatMessage(_ error: ChatError) -> String {
+            switch error {
+            case .off: return "chat is off on capystore's server."
+            case .busy: return "that chat is still replying. try again when it's done."
+            case .full: return "that chat is full. leave the chat empty to start a new one."
+            case .tooMany: return "capystore has 200 chats. delete one first."
+            case .notFound: return "capystore couldn't find that chat."
+            case .badRequest: return "the message is empty or over \(ChatRule.messageLimit) characters."
+            case .interrupted: return "the reply was cut off. it may still be in the chat tab."
+            case .model, .unavailable: return "the reply failed. try again."
+            }
+        }
+
+        /// What Siri says after the reply: the reply itself, plain, cut at 1,000 characters.
+        static func chatDialog(_ reply: ShortcutChatReply) -> String {
+            let text = reply.plain.isEmpty ? "done." : reply.plain
+            return ChatLiveCopy.clip(text, to: 1_000)
+        }
+
+        static func chatSubtitle(updated: Date) -> String {
+            updated.formatted(.relative(presentation: .named))
+        }
+
         // MARK: dialogs
 
         /// "saved 2 of 3 links; 1 couldn't be sent: <reason>." (15.3 step 5). `noun`: "link" / "file". After a wait the
