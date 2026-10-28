@@ -65,8 +65,6 @@ export type LookupThen =
     | "studio_publish"
     | "studio_upload"
     | "library_adopt"
-    | "emotes_search"
-    | "emotes_save"
     | "library_file"
     | "library_publish"
     | "library_visibility"
@@ -77,30 +75,6 @@ export type LookupThen =
     | "library_posters_backfill"
     | "library_search_index"
     | "library_search_post"
-    // gallery share links (APP-API-CONTRACT.md section 24)
-    | "share_sets_create"
-    | "share_sets_list"
-    | "share_sets_revoke"
-    | "collections_list"
-    | "collections_create"
-    | "collections_update"
-    | "collections_delete"
-    | "collections_reroll"
-    // collection sets (APP-API-CONTRACT.md section 28)
-    | "groups_list"
-    | "groups_create"
-    | "groups_update"
-    | "groups_delete"
-    // stage (APP-API-CONTRACT.md section 30.10)
-    | "stage_get"
-    | "stage_patch"
-    | "stage_rotate"
-    | "stage_action"
-    | "stage_pool"
-    | "stage_redemptions"
-    | "stage_reward"
-    | "stage_twitch_connect"
-    | "stage_twitch_delete"
     // editor (APP-API-CONTRACT.md section 31.12)
     | "edits_list"
     | "edits_create"
@@ -157,8 +131,6 @@ export const STUDIO_JOB_REGEX = /^[A-Za-z0-9]{20}$/;
 
 // Library item id: 16 base62 chars (mintItemId, the web's base62(16)).
 export const ITEM_ID_REGEX = /^[A-Za-z0-9]{16}$/;
-// a gallery share link's id (section 24): 19 digits
-export const SHARE_SET_ID_REGEX = /^[0-9]{19}$/;
 const COLLECTION_ID_REGEX = /^[A-Za-z0-9]{16}$/;
 
 export const isStudioPath = (pathname: string) =>
@@ -250,60 +222,10 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     }
 
     // GET /queue, GET /library, GET /library/search and GET /library/map are ops in the registry
-    // (src/registry/ops/library.ts, APP-API-CONTRACT.md section 33), which answers them before the gate. Every
-    // other method on those paths falls through to the 404 at the end.
-
-    // Gallery share links (APP-API-CONTRACT.md section 24): keyed only.
-    if (req.pathname === "/share/sets" || req.pathname.startsWith("/share/sets/")) {
-        if (req.service) return reject(404);
-        if (req.pathname === "/share/sets") {
-            if (req.method === "GET") return lookupThen(req, "share_sets_list");
-            if (req.method === "POST") return lookupThen(req, "share_sets_create");
-            return reject(404);
-        }
-        const id = req.pathname.slice("/share/sets/".length);
-        if (!SHARE_SET_ID_REGEX.test(id) || req.method !== "DELETE") return reject(404);
-        return lookupThen(req, "share_sets_revoke", { id });
-    }
-
-    // Share link collections (APP-API-CONTRACT.md section 26): keyed only.
-    if (req.pathname === "/share/collections" || req.pathname.startsWith("/share/collections/")) {
-        if (req.service) return reject(404);
-        if (req.pathname === "/share/collections") {
-            if (req.method === "GET") return lookupThen(req, "collections_list");
-            if (req.method === "POST") return lookupThen(req, "collections_create");
-            return reject(404);
-        }
-        const rest = req.pathname.slice("/share/collections/".length);
-        if (rest.endsWith("/reroll")) {
-            const rid = rest.slice(0, -"/reroll".length);
-            if (!COLLECTION_ID_REGEX.test(rid) || req.method !== "POST") return reject(404);
-            return lookupThen(req, "collections_reroll", { id: rid });
-        }
-        const id = rest;
-        if (!COLLECTION_ID_REGEX.test(id)) return reject(404);
-        if (req.method === "PATCH") return lookupThen(req, "collections_update", { id });
-        if (req.method === "DELETE") return lookupThen(req, "collections_delete", { id });
-        return reject(404);
-    }
-
-    // Collection sets (APP-API-CONTRACT.md section 28): keyed only.
-    if (req.pathname === "/share/groups" || req.pathname.startsWith("/share/groups/")) {
-        if (req.service) return reject(404);
-        if (req.pathname === "/share/groups") {
-            if (req.method === "GET") return lookupThen(req, "groups_list");
-            if (req.method === "POST") return lookupThen(req, "groups_create");
-            return reject(404);
-        }
-        const id = req.pathname.slice("/share/groups/".length);
-        if (!COLLECTION_ID_REGEX.test(id)) return reject(404);
-        if (req.method === "PATCH") return lookupThen(req, "groups_update", { id });
-        if (req.method === "DELETE") return lookupThen(req, "groups_delete", { id });
-        return reject(404);
-    }
-
-    // Stage (APP-API-CONTRACT.md section 30.10): keyed only; the library-service credential gets 404.
-    if (req.pathname === "/stage" || req.pathname.startsWith("/stage/")) return decideStage(req);
+    // (src/registry/ops/library.ts, APP-API-CONTRACT.md section 33), which answers them before the gate. So are the
+    // gallery links, collections and sets (/share/sets, /share/collections, /share/groups), the stage owner routes
+    // (/stage*) and /emotes (src/registry/ops/share.ts and stage.ts, section 33.7). Every other method on those paths
+    // falls through to the 404 at the end.
 
     // Editor (APP-API-CONTRACT.md section 31.12): keyed only; the library-service credential gets 404.
     if (req.pathname === "/edits" || req.pathname.startsWith("/edits/")) return decideEdits(req);
@@ -339,13 +261,6 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
         return req.service
             ? { action: "service", then: "library_adopt" }
             : reject(401, "error.api.auth.key.invalid");
-    }
-
-    // 7TV search and save (APP-API-CONTRACT.md section 20). Worker only: no container.
-    if (req.pathname === "/emotes") {
-        if (req.method === "GET") return lookupThen(req, "emotes_search");
-        if (req.method === "POST") return lookupThen(req, "emotes_save");
-        return reject(404);
     }
 
     // The app's library (keyed): per item /library/items/<id>/<sub>.
@@ -438,32 +353,6 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     }
 
     return reject(404);
-}
-
-// /stage, /stage/rotate, /stage/action, /stage/pool, /stage/redemptions, /stage/rewards/<action>,
-// /stage/twitch and /stage/twitch/connect. Anything else (or the service credential) is a 404.
-export const STAGE_ACTION_REGEX = /^(summon|chaos|shuffle|pin)$/;
-function decideStage(req: GateRequest): GateDecision {
-    if (req.service) return reject(404);
-    const m = req.method;
-    const p = req.pathname;
-    let then: LookupThen | null = null;
-    let params: Record<string, string> | undefined;
-    if (p === "/stage") then = m === "GET" ? "stage_get" : m === "PATCH" ? "stage_patch" : null;
-    else if (p === "/stage/rotate") then = m === "POST" ? "stage_rotate" : null;
-    else if (p === "/stage/action") then = m === "POST" ? "stage_action" : null;
-    else if (p === "/stage/pool") then = m === "GET" ? "stage_pool" : null;
-    else if (p === "/stage/redemptions") then = m === "GET" ? "stage_redemptions" : null;
-    else if (p === "/stage/twitch") then = m === "DELETE" ? "stage_twitch_delete" : null;
-    else if (p === "/stage/twitch/connect") then = m === "POST" ? "stage_twitch_connect" : null;
-    else if (p.startsWith("/stage/rewards/")) {
-        const action = p.slice("/stage/rewards/".length);
-        if (STAGE_ACTION_REGEX.test(action) && m === "PATCH") {
-            then = "stage_reward";
-            params = { action };
-        }
-    }
-    return then === null ? reject(404) : lookupThen(req, then, params);
 }
 
 // /edits (GET|POST), /edits/renders (GET), /edits/renders/<rid> (GET|DELETE), /edits/<id> (GET|PUT|PATCH|DELETE) and

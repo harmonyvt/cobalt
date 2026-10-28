@@ -3613,8 +3613,9 @@ defineOp({
   id, and on chat calls `chat` (`threadId`, `collect`, `tools`).
 - **Registered so far** (T1): `GET /library` (`library.index`, key or service, CORS), `GET /library/search`
   (`library.query`, key or service, no CORS, no-store), `GET /library/map` (`library.map`, the same), `GET /queue` (`queue`,
-  key only, CORS, no-store), and `POST /chat/threads/<id>/confirm/<cid>` (33.5). Their branches are gone from `gate.ts` and
-  `worker.ts`.
+  key only, CORS, no-store), and `POST /chat/threads/<id>/confirm/<cid>` (33.5). T5 added every `/share/sets`,
+  `/share/collections`, `/share/groups`, `/stage*` owner route and `/emotes` (33.7, 33.8). Their branches are gone from
+  `gate.ts` and `worker.ts`.
 
 ### 33.3 The chat AI's `cobalt` API
 
@@ -3674,3 +3675,55 @@ per-thread id cannot serve per-run code: a cached id keeps its first code, and W
 the module cannot take the code as an argument. `chat-loader.ts` now calls `LOADER.get("run-<sha256 of the module>", …)`,
 so a run whose exact code already ran that day reuses that worker. Anything else is billed as before. It falls back to
 `load()` when `get` is missing.
+
+### 33.7 Share ops (T5): gallery links, collections and sets
+
+`registry/ops/share.ts`. **The routes** of sections 24, 26 and 28 are tier `hidden` ops that call the same handlers with the
+same parsing, codes and headers: `GET|POST /share/sets`, `DELETE /share/sets/<19 digits>`, `GET|POST /share/collections`,
+`PATCH|DELETE /share/collections/<id>`, `POST /share/collections/<id>/reroll`, `GET|POST /share/groups` and
+`PATCH|DELETE /share/groups/<id>` (keyed, the service gets 404, CORS, `cache-control: no-store`; the share host off is still
+`404 error.share.off` without no-store). The route snapshot is unchanged.
+
+**The chat AI's calls** (`ai.only`, key id `chat:<thread>`, so rows it makes carry that `key_id`). A collection or a set is
+named by its id or its name (case-insensitive; the most recently changed wins a tie). A link is its 19-digit id or its
+`<share>/g/<id>` URL. A refusal throws one line that says what to do.
+
+- `cobalt.links.create(ids, { title? })` → `{ id, url, title, files }` (free). `ids` are post ids, or file ids from
+  `library.post`. Each post brings its public files: a gallery post all its public items in order, any other post its
+  lead file when public, else its newest public file. 2 to 10 files make a gallery link (`POST /share/sets`, so the
+  caption is written as in section 25). One file answers that file's own share page `<share>/<name>` with `id: null`.
+  The URL is always on the share host, never a media URL. A private post, an unknown id or more than 10 files is refused
+  before anything is made.
+- `cobalt.links.revoke(link)` (**ask**; effect `{ link, files, collections }`).
+- `cobalt.collections.create(name, { links? })`, `cobalt.collections.add(collection, links)` (makes the collection when
+  no collection has that name; the result has `created`), `cobalt.collections.update(collection, { name?, add?, remove? })`
+  (free); `cobalt.collections.reroll(collection)` (**ask**: every old URL stops working; effect `{ collection, links,
+  old_links_stop_working }`) and `cobalt.collections.delete(collection)` (**ask**; effect `{ collection, links,
+  links_stay_live }`). Results are `{ id, name, link_ids }`, the shape of `collections.list`.
+- `cobalt.sets.list()`, `cobalt.sets.create(name, { collections? })`, `cobalt.sets.add(set, collections)` (makes the set
+  when missing), `cobalt.sets.update(set, { name?, add?, remove? })` (free) and `cobalt.sets.delete(set)` (**ask**; effect
+  `{ set, collections, collections_stay }`). Results are `{ id, name, collection_ids }`.
+
+### 33.8 Stage and emote ops (T5)
+
+`registry/ops/stage.ts`. **The routes** of section 30.10 (`GET|PATCH /stage`, `POST /stage/rotate`, `POST /stage/action`,
+`GET /stage/pool`, `GET /stage/redemptions`, `PATCH /stage/rewards/<summon|chaos|shuffle|pin>`, `POST /stage/twitch/connect`,
+`DELETE /stage/twitch`) and section 20 (`GET|POST /emotes`, keyed or the service, CORS) are tier `hidden` ops around the
+same handlers. Rewards, redemptions, rotating the canvas token and Twitch stay owner-only: the AI has no call for them.
+
+The chat AI's calls (the app calls the stage "studio"; the model is told so):
+
+- `cobalt.stage.get()` → `<stage>` (30.10); `cobalt.stage.set({ on_air?, density?, tile_seconds?, tile_scale?,
+  spotlight_auto?, spotlight_seconds?, sound?, sound_all?, play_through?, video_max?, store_hint? })` → `<stage>` (free;
+  `PATCH /stage`, clamped as there; any other key, `store_open` included, is refused).
+- `cobalt.stage.store(open)` (**ask**: lock or unlock the viewer store; effect `{ store_url, now, after }`).
+- `cobalt.stage.pool(pool)` → `{ pool, links?, not_public? }` (free). `pool` is `"library"`, `{ collection }`, `{ set }`
+  (an id or a name), `{ search: "words" }`, or **an array of post ids**. Picks need no new pool kind (and no migration):
+  their public files (at most 200, at least 2) become gallery links of 2 to 10 files titled "stage picks", without inline
+  captions (the 15-minute cron writes them), filed in the collection "stage picks" (made when missing), and the pool
+  becomes that collection. The collection then holds only this call's links; links from earlier picks stay live in the
+  links tab. Private picks are left out and named in `not_public`.
+- `cobalt.stage.items({ offset?, limit? })` (`GET /stage/pool`), `cobalt.stage.action(type, { item_id? })`
+  (`POST /stage/action`), free.
+- `cobalt.emotes.find(query)` (`GET /emotes`) and `cobalt.emotes.save(id)` (`POST /emotes`), free.
+

@@ -255,7 +255,14 @@ describe("defineOp and the registry", () => {
 
     it("lists the chat's tools: free and ask, never hidden, search only while it is on", () => {
         const names = (search: boolean) => TEST_REGISTRY.toolsFor("chat", { search }).map((o) => o.callName);
-        expect(names(true)).toEqual(["library.list", "library.search", "library.post", "look", "show", "collage", "links.list", "collections.list", "test.wipe", "test.echo", "test.do"]);
+        expect(names(true)).toEqual([
+            "library.list", "library.search", "library.post", "look", "show", "collage", "links.list", "collections.list",
+            // T5 (33.7, 33.8)
+            "links.create", "links.revoke", "collections.create", "collections.add", "collections.update", "collections.reroll",
+            "collections.delete", "sets.list", "sets.create", "sets.add", "sets.update", "sets.delete",
+            "stage.get", "stage.set", "stage.store", "stage.pool", "stage.items", "stage.action", "emotes.find", "emotes.save",
+            "test.wipe", "test.echo", "test.do",
+        ]);
         expect(names(false)).not.toContain("library.search");
         expect(TEST_REGISTRY.byCall("search")?.name).toBe("library.search");
         expect(TEST_REGISTRY.byCall("library")?.name).toBe("library.list");
