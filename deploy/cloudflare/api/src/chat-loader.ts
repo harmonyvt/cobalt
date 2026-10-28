@@ -4,7 +4,7 @@
 // by the Worker entry (index.ts): `cloudflare:workers` does not exist under node.
 
 import { RpcTarget } from "cloudflare:workers";
-import { CODE_CPU_MS, CODE_TIMEOUT_MS, MAX_TOOL_CALLS, type CodeRun, type CodeRunner } from "./chat-limits";
+import { CODE_CPU_MS, CODE_TIMEOUT_MS, MAX_TOOL_CALLS, type CodeRun, type CodeRunOptions, type CodeRunner } from "./chat-limits";
 import type { ChatTools } from "./chat-tools";
 import { sandboxModule } from "./chat-loader-module";
 
@@ -35,9 +35,10 @@ async function sha256Hex(text: string): Promise<string> {
 }
 
 export function loaderRunner(loader: WorkerLoader): CodeRunner {
-    return async (code: string, tools: ChatTools): Promise<CodeRun> => {
+    return async (code: string, tools: ChatTools, opts?: CodeRunOptions): Promise<CodeRun> => {
         const dispatcher = new Dispatcher(tools);
-        const source = sandboxModule(code);
+        const timeoutMs = opts?.timeoutMs ?? CODE_TIMEOUT_MS;
+        const source = sandboxModule(code, timeoutMs);
         const spec = {
             compatibilityDate: "2026-09-01",
             mainModule: "run.js",
@@ -58,7 +59,7 @@ export function loaderRunner(loader: WorkerLoader): CodeRunner {
             const r = await Promise.race([
                 entry.evaluate(dispatcher),
                 new Promise<never>((_, reject) => {
-                    timer = setTimeout(() => reject(new Error(`timed out after ${CODE_TIMEOUT_MS / 1000} s`)), CODE_TIMEOUT_MS + 2000);
+                    timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs / 1000} s`)), timeoutMs + 2000);
                 }),
             ]);
             if (r.error !== undefined) return { error: r.error, logs: r.logs ?? [], calls: dispatcher.calls };

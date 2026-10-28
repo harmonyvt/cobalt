@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { libraryPostDelete, type AppDeps } from "../src/app-routes";
 import { pickWebp, previewWebp, saveEmote, searchEmotes, type EmoteImage } from "../src/emotes";
 import { decide, type GateRequest } from "../src/gate";
+import { REGISTRY } from "../src/registry/index";
 import { type FakeD1 } from "../../test-support/d1-sqlite";
 import { createBatchD1 } from "./d1-batch";
 import { MemoryMedia, MemoryOriginals } from "./studio-fakes";
@@ -103,22 +104,11 @@ describe("GET /emotes", () => {
         authorization,
     });
 
-    it("asks for a key, then searches", () => {
-        expect(decide(req(null), { corsUrl: "https://cobalt.capybaraharmony.com", now: 0 })).toEqual({
-            action: "reject",
-            status: 401,
-            errorCode: "error.api.auth.key.missing",
-        });
-        expect(decide(req(`Api-Key ${KEY}`), { corsUrl: "https://cobalt.capybaraharmony.com", now: 0 })).toEqual({
-            action: "lookup",
-            key: KEY,
-            then: "emotes_search",
-        });
-        expect(decide(req(`Api-Key ${KEY}`, "/emotes", "POST"), { corsUrl: "https://cobalt.capybaraharmony.com", now: 0 })).toEqual({
-            action: "lookup",
-            key: KEY,
-            then: "emotes_save",
-        });
+    it("is an op: keyed or the library service; other methods are the gate's 404", () => {
+        expect(REGISTRY.match("GET", "/emotes")).toMatchObject({ op: { name: "emotes_http.search", auth: "key_or_service" } });
+        expect(REGISTRY.match("POST", "/emotes")).toMatchObject({ op: { name: "emotes_http.save", auth: "key_or_service" } });
+        expect(REGISTRY.match("PUT", "/emotes")).toBeNull();
+        expect(decide(req(`Api-Key ${KEY}`, "/emotes", "PUT"), { corsUrl: "https://cobalt.capybaraharmony.com", now: 0 })).toEqual({ action: "reject", status: 404, errorCode: undefined });
     });
 
     it("rejects a blank query and hides a zero-width emote", async () => {

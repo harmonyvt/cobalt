@@ -35,4 +35,10 @@ extension Symbol {
     static let chatLatest = "arrow.down.circle.fill"
     /// "open in library" on a collage: runs its search in the library.
     static let chatCollageLibrary = "square.grid.2x2"
+    /// A confirm card: the chat asks first.
+    static let chatConfirm = "hand.raised"
+    /// A confirm card that was answered yes.
+    static let chatConfirmDone = "checkmark.circle"
+    /// A confirm card answered no, or one that timed out.
+    static let chatConfirmKept = "xmark.circle"
 }

@@ -39,6 +39,18 @@ const editContainer = defineContainer({
 	maxInstances: 2,
 });
 
+// The chat's workbench box (APP-API-CONTRACT.md section 33.11, src/workbench.ts): a Linux box with yt-dlp, curl, ffmpeg and
+// python3 the chat AI uses as a last resort. Image: ../workbench (its directory alone). One instance on basic (1/4 vCPU,
+// 1 GiB, 4 GB disk); it sleeps 2 minutes after its last call and keeps nothing. No secrets, no internet of its own: every
+// HTTP(S) request it makes goes through the Worker's outbound rule (src/workbench-rules.ts).
+const workbenchContainer = defineContainer({
+	name: "cobalt-api-workbench",
+	image: { dockerfile: "../workbench/Dockerfile", buildContext: "../workbench" },
+	instanceType: "basic",
+	observability: { enabled: true, logs: { enabled: true } },
+	maxInstances: 1,
+});
+
 export default defineConfig({
 	worker: {
 		name: "cobalt-api",
@@ -144,7 +156,13 @@ export default defineConfig({
 			// Chat (APP-API-CONTRACT.md section 27): the model (same key as the captions), and the Worker
 			// Loader the model's code runs in (a fresh Dynamic Worker per run, no network: src/chat-loader.ts).
 			CHAT_MODEL: bindings.text("claude-haiku-5-5"),
+			// How many files the chat AI may start making per thread per day (webps, slideshows, editor renders;
+			// APP-API-CONTRACT.md section 33.8). Editor renders run on a standard-4 container, so each costs real money.
+			CHAT_DAILY_RENDERS: bindings.text("10"),
 			LOADER: bindings.workerLoader(),
+			// Chat saves (APP-API-CONTRACT.md 33.7): how many links one chat thread may save in any 24 hours; "0" turns the
+			// chat's cobalt.library.save off.
+			CHAT_DAILY_SAVES: bindings.text("20"),
 			// Stage (APP-API-CONTRACT.md section 30): https://<stage host>/ , one of `domains` above; empty turns the stage
 			// off (every /stage* route is a 404, `features.stage` false). The three Twitch values are SECRETS from
 			// ~/.config/cobalt/secrets.json (`cf deploy` refuses while a declared one is missing; empty is fine and
@@ -189,6 +207,14 @@ export default defineConfig({
 				worker: "cobalt-api",
 				exportName: "EditRenderer",
 			}),
+			// The chat's workbench box (src/workbench.ts, APP-API-CONTRACT.md section 33.11): one object, "main". Without this
+			// binding the chat AI is never offered cobalt.box.*. No secret, no migration.
+			WORKBENCH: bindings.durableObject({
+				worker: "cobalt-api",
+				exportName: "Workbench",
+			}),
+			// Awake minutes a day across all chat threads; "0" turns the box off (the model stops seeing cobalt.box).
+			WORKBENCH_DAILY_MINUTES: bindings.text("60"),
 		},
 		exports: {
 			CobaltContainer: exports.durableObject({
@@ -201,7 +227,11 @@ export default defineConfig({
 				storage: "sqlite",
 				container: editContainer,
 			}),
+			Workbench: exports.durableObject({
+				storage: "sqlite",
+				container: workbenchContainer,
+			}),
 		},
 	},
-	containers: [cobaltContainer, editContainer],
+	containers: [cobaltContainer, editContainer, workbenchContainer],
 });

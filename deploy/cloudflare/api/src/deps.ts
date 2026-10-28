@@ -4,6 +4,8 @@
 import type { AppDeps } from "./app-routes";
 import { spaceClient, type EmbedClient } from "./embed";
 import { KEY_ID_HEADER } from "./headers";
+import { noRoom, stageBaseFrom, twitchConfigFrom, type RoomPort, type StageDeps } from "./stage";
+import type { TwitchFetch } from "./stage-twitch";
 import type { EdgeDeps } from "./studio-edge";
 import { purgeFrom } from "./visibility";
 import type { WorkerEnv } from "./worker";
@@ -79,5 +81,27 @@ export function appDeps(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps
                     }),
                 ),
             ),
+    };
+}
+
+// What the stage needs that is not in the env: the StageRoom Durable Object (index.ts passes the real one) and
+// the fetch the Twitch client uses (tests pass a fake).
+export type StageEdge = { stageRoom?: RoomPort; twitchFetch?: TwitchFetch; stageEmbed?: EmbedClient | null; stageLimits?: StageDeps["limits"] };
+
+// The stage's deps, or null while STAGE_BASE_URL is not an https URL (every /stage* route is then 404).
+export function stageDepsFrom(env: WorkerEnv, edge: Pick<EdgeDeps, "now" | "waitUntil">, se: StageEdge): StageDeps | null {
+    const stageBaseUrl = stageBaseFrom(env);
+    if (!stageBaseUrl) return null;
+    return {
+        db: env.DB,
+        mediaBaseUrl: env.MEDIA_BASE_URL,
+        stageBaseUrl,
+        twitch: twitchConfigFrom(env),
+        twitchFetch: se.twitchFetch,
+        embed: se.stageEmbed === undefined ? embedFrom(env) : se.stageEmbed,
+        room: se.stageRoom ?? noRoom,
+        now: edge.now,
+        waitUntil: edge.waitUntil,
+        limits: se.stageLimits,
     };
 }

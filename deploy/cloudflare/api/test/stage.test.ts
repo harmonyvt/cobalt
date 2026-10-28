@@ -1,7 +1,8 @@
 // Stage (APP-API-CONTRACT.md section 30): settings, the pool, codes, the store and its lock, the canvas token,
 // owner actions and capabilities. The Worker and the real SQL run together; the room and the Space are fakes.
 import { describe, expect, it, vi } from "vitest";
-import { AUTH, API, CLIENT, MEDIA, STAGE, T0, world, type World } from "./stage-world";
+import { AUTH, API, CLIENT, INTERNAL, MEDIA, STAGE, T0, world, type World } from "./stage-world";
+import { REGISTRY } from "../src/registry/index";
 import { emptyRoom, nextChaosUntil, reduceRoom, roomPort, sameSecret, spotlightView, stageBaseFrom, stageRetention } from "../src/stage";
 import { decide } from "../src/gate";
 
@@ -64,29 +65,33 @@ describe("capabilities (30.1)", () => {
     });
 });
 
-describe("the gate (30.10)", () => {
+describe("the owner routes (30.10, ops since APP-API-CONTRACT 33.10)", () => {
     const req = (method: string, pathname: string, over: Record<string, unknown> = {}) =>
         decide({ method, pathname, searchParams: new URLSearchParams(), origin: null, authorization: `Api-Key ${CLIENT}`, ...over }, { corsUrl: "https://cobalt.capybaraharmony.com", now: T0 });
 
     it("routes the keyed stage paths and nothing else", () => {
-        const then = (m: string, p: string) => (req(m, p) as any).then;
-        expect(then("GET", "/stage")).toBe("stage_get");
-        expect(then("PATCH", "/stage")).toBe("stage_patch");
-        expect(then("POST", "/stage/rotate")).toBe("stage_rotate");
-        expect(then("POST", "/stage/action")).toBe("stage_action");
-        expect(then("GET", "/stage/pool")).toBe("stage_pool");
-        expect(then("GET", "/stage/redemptions")).toBe("stage_redemptions");
-        expect(then("POST", "/stage/twitch/connect")).toBe("stage_twitch_connect");
-        expect(then("DELETE", "/stage/twitch")).toBe("stage_twitch_delete");
-        expect(req("PATCH", "/stage/rewards/pin")).toMatchObject({ then: "stage_reward", params: { action: "pin" } });
+        const op = (m: string, p: string) => REGISTRY.match(m, p)?.op.name;
+        expect(op("GET", "/stage")).toBe("stage_owner.get");
+        expect(op("PATCH", "/stage")).toBe("stage_owner.patch");
+        expect(op("POST", "/stage/rotate")).toBe("stage_owner.rotate");
+        expect(op("POST", "/stage/action")).toBe("stage_owner.action");
+        expect(op("GET", "/stage/pool")).toBe("stage_owner.pool");
+        expect(op("GET", "/stage/redemptions")).toBe("stage_owner.redemptions");
+        expect(op("POST", "/stage/twitch/connect")).toBe("stage_owner.twitch_connect");
+        expect(op("DELETE", "/stage/twitch")).toBe("stage_owner.twitch_delete");
+        expect(REGISTRY.match("PATCH", "/stage/rewards/pin")).toMatchObject({ op: { name: "stage_owner.reward" }, params: { action: "pin" } });
+        // no op: the gate's 404
         for (const [m, p] of [["POST", "/stage"], ["GET", "/stage/rotate"], ["PATCH", "/stage/rewards/bogus"], ["GET", "/stage/rewards/pin"], ["GET", "/stage/x"], ["PUT", "/stage/twitch"]]) {
+            expect(REGISTRY.match(m!, p!), `${m} ${p}`).toBeNull();
             expect(req(m!, p!), `${m} ${p}`).toMatchObject({ action: "reject", status: 404 });
         }
     });
 
-    it("needs a key (401) and gives a service credential a 404", () => {
-        expect(req("GET", "/stage", { authorization: null })).toMatchObject({ action: "reject", status: 401 });
-        expect(req("GET", "/stage", { authorization: null, service: true })).toMatchObject({ action: "reject", status: 404 });
+    it("needs a key (401) and gives a service credential a 404", async () => {
+        const w = await world();
+        expect((await w.handle(new Request(`${API}/stage`))).status).toBe(401);
+        const svc = await w.handle(new Request(`${API}/stage`, { headers: { "x-cobalt-service": INTERNAL } }));
+        expect(svc.status).toBe(404);
     });
 
     it("answers with no-store", async () => {

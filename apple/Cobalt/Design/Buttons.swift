@@ -7,6 +7,8 @@ import SwiftUI
 //                                                  (black fill + white label in light, #e1e1e1 fill +
 //                                                  black label in dark). One per card.
 //   secondary    .buttonStyle(.cobaltSecondary())  system `.glass`
+//   destructive  .buttonStyle(.cobaltDestructive())  `.glassProminent` in red with a white label, for a primary
+//                                                  that cannot be undone (the primary's tint beats the role)
 //   done         .buttonStyle(.cobaltDone())       `.glassProminent` in success green with a black
 //                                                  label (copied, saved, link copied)
 //   destructive  role: .destructive                on any of the above: the system paints it red
@@ -19,7 +21,7 @@ import SwiftUI
 // Reduce Transparency are the system's.
 
 struct CobaltButtonStyle: PrimitiveButtonStyle {
-    enum Kind { case primary, secondary, done }
+    enum Kind { case primary, secondary, done, destructive }
 
     var kind: Kind = .primary
     /// Fills the width of its container (card actions). Inline buttons turn it off.
@@ -53,6 +55,9 @@ struct CobaltButtonStyle: PrimitiveButtonStyle {
             base(configuration, ink: CobaltColor.onText).buttonStyle(.glassProminent).tint(CobaltColor.text)
         case .done:
             base(configuration, ink: .black).buttonStyle(.glassProminent).tint(CobaltColor.success)
+        case .destructive:
+            // the primary's monochrome tint would win over `role: .destructive`, so this one is red by kind
+            base(configuration, ink: .white).buttonStyle(.glassProminent).tint(.red)
         case .secondary:
             #if os(macOS)
             // On the Mac a glass button over the glass card washes out to a pale slab with a pale
@@ -106,6 +111,10 @@ extension PrimitiveButtonStyle where Self == CobaltButtonStyle {
     }
     static func cobaltDone(fullWidth: Bool = true, compact: Bool = false) -> CobaltButtonStyle {
         CobaltButtonStyle(kind: .done, fullWidth: fullWidth, compact: compact)
+    }
+    /// A red primary for a step that cannot be undone (a chat confirm card's "delete 3").
+    static func cobaltDestructive(fullWidth: Bool = true, compact: Bool = false) -> CobaltButtonStyle {
+        CobaltButtonStyle(kind: .destructive, fullWidth: fullWidth, compact: compact)
     }
 }
 
