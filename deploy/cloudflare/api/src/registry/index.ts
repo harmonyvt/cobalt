@@ -3,10 +3,14 @@
 import { BOX_OPS } from "./ops/box";
 import { CHAT_OPS } from "./ops/chat";
 import { LIBRARY_OPS } from "./ops/library";
+import { LIBRARY_WRITE_OPS } from "./ops/library-writes";
+import { MAKE_OPS } from "./ops/make";
+import { SHARE_OPS } from "./ops/share";
+import { STAGE_OPS } from "./ops/stage";
 import { Registry } from "./registry";
 import { toolTypesFor } from "./typescript";
 
-export const REGISTRY = new Registry([...LIBRARY_OPS, ...CHAT_OPS, ...BOX_OPS]);
+export const REGISTRY = new Registry([...LIBRARY_OPS, ...LIBRARY_WRITE_OPS, ...CHAT_OPS, ...MAKE_OPS, ...SHARE_OPS, ...STAGE_OPS, ...BOX_OPS]);
 
 // The model's cheat sheet for the sandbox API, generated from the ops (`search` only while meaning search is on, `box`
 // only while the workbench is on).

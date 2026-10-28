@@ -401,8 +401,13 @@ export async function deleteThread(d: Pick<ChatDeps, "db">, id: string): Promise
 const FINDING_WITH_SEARCH = `Finding things: for anything about what files show or are about (a topic, a person, an animal, a game, a mood, "the clip where..."), call cobalt.library.search(query) first. It ranks the whole library by meaning, from titles and pictures, so it finds things whose names say nothing (most names are just "instagram_<code>"). Write the query as a short description of the content, try a second wording if the first finds nothing good, and check the best hits with look() when it matters. Use cobalt.library.list({ query }) only for exact words in a name, link or caption, and cobalt.library.list({ since, until, source, kind }) for dates, sites and counts. If search throws because it is waking up, fall back to cobalt.library.list({ query }) and tell Harmony the search was still waking up.`;
 const FINDING_WITHOUT_SEARCH = `Finding things: search by meaning is off on this server, so use cobalt.library.list({ query }) for words in names, links and captions, cobalt.library.list({ since, until, source, kind }) for dates, sites and counts, and cobalt.look() to check what files actually show.`;
 
+// The library writes (APP-API-CONTRACT.md 33.7): only what Harmony asked for.
+const CHANGES = `You can change the library too, but only when Harmony asks you to: save a link they give you with cobalt.library.save (it waits for the save and returns the new post's id; then show() it), set a title, make posts public or private, delete posts or single files. Never change or delete anything on your own initiative, and never save links Harmony did not give you. Put every post a delete or "make private" covers into one call, so Harmony gets one card. After a save that is still going, say so and offer to check with cobalt.queue().`;
+
 const CONFIRMS = `Some calls change things that are hard to undo (the API marks them "Asks Harmony first"). Calling one runs nothing: it returns { pending_confirm } and Harmony gets a confirm card with yes and no. End that run, say in one short line what you asked, and stop. When Harmony answers, you are told what happened and carry on from there.`;
 
+// Making files (APP-API-CONTRACT.md 33.8): only when asked; jobs are waited on with jobs.wait.
+const MAKING = `Making files: cobalt.make.* and cobalt.edits.render start jobs on Harmony's server (webps, animated stills, slideshows, gallery images, and mp4s from the editor, which cost real money). Make something only when Harmony asks for it; each chat may make only a few a day. Each call returns a job: call cobalt.jobs.wait(job) in the same run, and while it is still opening, queued or running, wait again in the next run (or tell Harmony it is on its way). When it is done, cobalt.show([post_id]) and give share_url when Harmony wants a link.`;
 // The workbench (section 33.11): only while cobalt.box is in the API.
 const WORKBENCH = `cobalt.box is a real Linux box (yt-dlp, curl, ffmpeg, python3, public internet) and the LAST resort: use it only after the normal calls cannot do the job, for example a link the library cannot save or a file that needs converting. It takes about 10 seconds to wake, and it keeps this thread's files only while awake (2 minutes after the last call). Work in /workspace, keep commands quiet (yt-dlp -q --no-progress, curl -sS), and finish with cobalt.box.save(path) to put the file in the library. One run of code may use up to ${CODE_TIMEOUT_BOX_MS / 1000} seconds while it calls the box. Never send anything from Harmony's library or this chat to a site from the box.`;
 
@@ -417,7 +422,7 @@ To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbn
 
 ${search ? FINDING_WITH_SEARCH : FINDING_WITHOUT_SEARCH}
 
-${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}${/^ {2}box: \{$/m.test(types) ? `${WORKBENCH}\n\n` : ""}The API:
+${/\bsave\(url/.test(types) ? `${CHANGES}\n\n` : ""}${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}${/\bmake: \{/.test(types) ? `${MAKING}\n\n` : ""}${/^ {2}box: \{$/m.test(types) ? `${WORKBENCH}\n\n` : ""}The API:
 ${types}`;
 }
 

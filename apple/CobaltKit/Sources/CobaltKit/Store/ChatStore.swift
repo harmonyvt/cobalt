@@ -47,6 +47,7 @@ public struct ChatThreadContent: Sendable, Equatable {
     /// - `step` replaces the step with the same id, or is appended;
     /// - `posts` appends the ids the message does not show yet, and merges the shapes;
     /// - `collage` sets the collage of the running message;
+    /// - `confirm` sets the card on its message (or updates its status after an answer);
     /// - `title` and `done` carry the thread as it is now; `done` replaces the message;
     /// - `error` marks the message failed (with the saved one when the server sent it).
     public mutating func apply(_ event: ChatEvent) {
@@ -78,6 +79,14 @@ public struct ChatThreadContent: Sendable, Equatable {
             edit { $0.collage = collage }
         case .title(let renamed):
             thread = renamed
+        case .confirm(let messageID, let card):
+            if let messageID, let i = messages.firstIndex(where: { $0.id == messageID }) {
+                messages[i].confirm = card
+            } else if let i = messages.lastIndex(where: { $0.confirm?.id == card.id }) {
+                messages[i].confirm = card
+            } else {
+                edit { $0.confirm = card }
+            }
         case .done(let message, let current):
             replaceAssistant(with: message)
             thread = current
@@ -216,6 +225,8 @@ public final class ChatStore {
     public private(set) var loadStates: [String: LoadState] = [:]
     /// Threads with a reply on its way from this device (streaming or being followed).
     public private(set) var sendingIDs: Set<String> = []
+    /// Confirm cards whose answer is on its way (33.5): their buttons wait.
+    public private(set) var answeringConfirms: Set<String> = []
     /// What is typed and attached per thread.
     public private(set) var drafts: [String: ChatDraft] = [:]
     /// The thread the chat tab shows (its screen is pushed); nil shows the list.
@@ -526,6 +537,59 @@ public final class ChatStore {
         await poll(id, started: started)
     }
 
+    // MARK: confirm cards
+
+    /// Answers a confirm card (`POST /chat/threads/<id>/confirm/<card id>`, APP-API-CONTRACT 33.5): yes runs the call the
+    /// chat asked for, no drops it, and either way the reply goes on and is applied as it streams (the card's new status
+    /// first, then a new assistant message). A second tap while the answer is on its way does nothing.
+    ///
+    /// Throws, with nothing changed, when the server refuses before the stream: `ChatError.confirmGone` (answered elsewhere,
+    /// expired or replaced; the thread is read again so the card shows what became of it), `.busy`, `.notFound`, `.off`,
+    /// `.unavailable`, or the transport's error. A stream that drops later is followed like a send's.
+    public func answer(_ card: ChatConfirm, yes: Bool, in id: String) async throws {
+        guard !answeringConfirms.contains(card.id) else { return }
+        guard !isBusy(id) else { throw ChatError.busy }
+        let started = generation
+        sendingIDs.insert(id)
+        answeringConfirms.insert(card.id)
+        defer {
+            sendingIDs.remove(id)
+            answeringConfirms.remove(card.id)
+        }
+        let baseCount = contents[id]?.messages.count ?? 0
+
+        var received = 0
+        var finished = false
+        var failure: Error?
+        do {
+            for try await event in ctx.client.answerChatConfirm(threadID: id, confirmID: card.id, yes: yes) {
+                guard started == generation else { return }
+                received += 1
+                apply(event, to: id)
+                if event.isFinal { finished = true }
+            }
+        } catch {
+            failure = error
+        }
+        guard started == generation else { return }
+        if finished { return }
+
+        if received == 0 {
+            if let refused = failure as? ChatError {
+                if refused == .confirmGone {
+                    // what became of the card is the server's: read the thread again
+                    sendingIDs.remove(id)
+                    await load(id)
+                }
+                throw refused
+            }
+            if await !serverHasMessages(beyond: baseCount, in: id, started: started) {
+                throw failure ?? CobaltError.network(.networkConnectionLost)
+            }
+        }
+        await poll(id, started: started)
+    }
+
     private func rollback(_ id: String, stand: String, draft: ChatDraft?) {
         contents[id]?.messages.removeAll { $0.id == stand }
         if let draft, drafts[id] == nil { drafts[id] = draft }
@@ -648,6 +712,7 @@ public final class ChatStore {
         collagePages = [:]
         loadStates = [:]
         sendingIDs = []
+        answeringConfirms = []
         drafts = [:]
         openThreadID = nil
         state = .idle

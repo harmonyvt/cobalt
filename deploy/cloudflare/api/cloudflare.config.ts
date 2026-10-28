@@ -156,7 +156,13 @@ export default defineConfig({
 			// Chat (APP-API-CONTRACT.md section 27): the model (same key as the captions), and the Worker
 			// Loader the model's code runs in (a fresh Dynamic Worker per run, no network: src/chat-loader.ts).
 			CHAT_MODEL: bindings.text("claude-haiku-5-5"),
+			// How many files the chat AI may start making per thread per day (webps, slideshows, editor renders;
+			// APP-API-CONTRACT.md section 33.8). Editor renders run on a standard-4 container, so each costs real money.
+			CHAT_DAILY_RENDERS: bindings.text("10"),
 			LOADER: bindings.workerLoader(),
+			// Chat saves (APP-API-CONTRACT.md 33.7): how many links one chat thread may save in any 24 hours; "0" turns the
+			// chat's cobalt.library.save off.
+			CHAT_DAILY_SAVES: bindings.text("20"),
 			// Stage (APP-API-CONTRACT.md section 30): https://<stage host>/ , one of `domains` above; empty turns the stage
 			// off (every /stage* route is a 404, `features.stage` false). The three Twitch values are SECRETS from
 			// ~/.config/cobalt/secrets.json (`cf deploy` refuses while a declared one is missing; empty is fine and

@@ -1,5 +1,6 @@
+import { dispatch as decide } from "./dispatch";
 import { describe, expect, it } from "vitest";
-import { decide, type GateRequest } from "../src/gate";
+import type { GateRequest } from "../src/gate";
 import { REGISTRY } from "../src/registry/index";
 
 const KEY = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
@@ -274,16 +275,20 @@ describe("the app's library routes (keyed)", () => {
         then,
         ...(params ? { params } : {}),
     });
+    // a route the registry answers (src/registry/ops/library-writes.ts): the op's name in place of `then`
+    const lookupOp = (op: string, params?: Record<string, string>) => ({ action: "lookup", key: KEY, op, ...(params ? { params } : {}) });
     const g = (method: string, pathname: string, o: Partial<GateRequest> = keyed) => decide(req({ method, pathname, ...o }), cfg);
 
     it("GET /library, GET|HEAD /library/items/<id>/file, POST publish and studio look the key up", () => {
         // GET /library is an op now (src/registry/ops/library.ts): the registry answers it before the gate
         expect(REGISTRY.match("GET", "/library")?.op).toMatchObject({ name: "library.index", auth: "key_or_service", cors: true });
-        expect(g("GET", "/library")).toMatchObject({ action: "reject", status: 404 });
+        expect(g("GET", "/library")).toMatchObject({ action: "lookup", op: "library.index" });
         expect(g("GET", `/library/items/${ID}/file`)).toEqual(lookup("library_file", { id: ID }));
         expect(g("HEAD", `/library/items/${ID}/file`)).toEqual(lookup("library_file", { id: ID }));
-        expect(g("POST", `/library/items/${ID}/publish`)).toEqual(lookup("library_publish", { id: ID }));
-        expect(g("POST", `/library/items/${ID}/studio`)).toEqual(lookup("library_studio", { id: ID }));
+        expect(g("POST", `/library/items/${ID}/publish`)).toEqual(lookupOp("library.publish", { id: ID }));
+        // POST .../studio is an op now (src/registry/ops/make.ts): keyed or the service, CORS
+        expect(REGISTRY.match("POST", `/library/items/${ID}/studio`)?.op).toMatchObject({ name: "library.reopen", auth: "key_or_service", cors: true });
+        expect(g("POST", `/library/items/${ID}/studio`)).toEqual(lookupOp("library.reopen", { id: ID }));
     });
     it("POST /library/posters/backfill (section 13) looks the key up; the service credential passes; everything else is 404 or 401", () => {
         expect(g("POST", "/library/posters/backfill")).toEqual(lookup("library_posters_backfill"));
@@ -299,10 +304,10 @@ describe("the app's library routes (keyed)", () => {
         expect(g("POST", "/library/posters/backfill", { origin: ORIGIN })).toMatchObject({ status: 401 });
     });
     it("DELETE /library/items/<id>/post looks the key up; the service credential passes; other methods are 404", () => {
-        expect(g("DELETE", `/library/items/${ID}/post`)).toEqual(lookup("library_post_delete", { id: ID }));
+        expect(g("DELETE", `/library/items/${ID}/post`)).toEqual(lookupOp("library.delete.route", { id: ID }));
         expect(g("DELETE", `/library/items/${ID}/post`, { service: true })).toEqual({
             action: "service",
-            then: "library_post_delete",
+            op: "library.delete.route",
             params: { id: ID },
         });
         for (const method of ["GET", "HEAD", "POST", "PUT"]) {
@@ -322,10 +327,10 @@ describe("the app's library routes (keyed)", () => {
         expect(g("DELETE", `/library/items/${ID}/post/x`)).toMatchObject({ status: 404 });
     });
     it("PATCH /library/items/<id>/post (section 15) looks the key up; the service credential passes; ids are checked; no key is 401", () => {
-        expect(g("PATCH", `/library/items/${ID}/post`)).toEqual(lookup("library_post_title", { id: ID }));
+        expect(g("PATCH", `/library/items/${ID}/post`)).toEqual(lookupOp("library.title.route", { id: ID }));
         expect(g("PATCH", `/library/items/${ID}/post`, { service: true })).toEqual({
             action: "service",
-            then: "library_post_title",
+            op: "library.title.route",
             params: { id: ID },
         });
         for (const id of [ID.slice(0, 15), ID + "x", "", "Ab3dE6gH9jK2mN5-", "../../studio/aaaaa"]) {
@@ -347,7 +352,7 @@ describe("the app's library routes (keyed)", () => {
         for (const method of ["GET", "HEAD", "POST", "PUT"]) {
             expect(g(method, `/library/items/${ID}/post`)).toMatchObject({ action: "reject", status: 404 });
         }
-        expect(g("DELETE", `/library/items/${ID}/post`)).toEqual(lookup("library_post_delete", { id: ID }));
+        expect(g("DELETE", `/library/items/${ID}/post`)).toEqual(lookupOp("library.delete.route", { id: ID }));
     });
     it("DELETE .../post: ids of 15 or 17 characters (or odd ones) are 404 before any lookup", () => {
         for (const id of [ID.slice(0, 15), ID + "x", "", "Ab3dE6gH9jK2mN5-", "../../studio/aaaaa"]) {
@@ -355,10 +360,10 @@ describe("the app's library routes (keyed)", () => {
         }
     });
     it("PATCH /library/items/<id>/visibility (section 16) looks the key up; the service credential passes; ids are checked; every other method is 404", () => {
-        expect(g("PATCH", `/library/items/${ID}/visibility`)).toEqual(lookup("library_visibility", { id: ID }));
+        expect(g("PATCH", `/library/items/${ID}/visibility`)).toEqual(lookupOp("library.visibility.route", { id: ID }));
         expect(g("PATCH", `/library/items/${ID}/visibility`, { service: true })).toEqual({
             action: "service",
-            then: "library_visibility",
+            op: "library.visibility.route",
             params: { id: ID },
         });
         for (const method of ["GET", "HEAD", "POST", "PUT", "DELETE"]) {
@@ -394,7 +399,6 @@ describe("the app's library routes (keyed)", () => {
         for (const [method, p] of [
             ["GET", `/library/items/${ID}/file`],
             ["POST", `/library/items/${ID}/publish`],
-            ["POST", `/library/items/${ID}/studio`],
         ] as const) {
             expect(g(method, p, {})).toMatchObject({ action: "reject", status: 401, errorCode: "error.api.auth.key.missing" });
             expect(g(method, p, { origin: ORIGIN })).toMatchObject({ status: 401 });
@@ -405,7 +409,7 @@ describe("the app's library routes (keyed)", () => {
     it("the library service credential passes without a key", () => {
         expect(g("POST", `/library/items/${ID}/publish`, { service: true })).toEqual({
             action: "service",
-            then: "library_publish",
+            op: "library.publish",
             params: { id: ID },
         });
     });

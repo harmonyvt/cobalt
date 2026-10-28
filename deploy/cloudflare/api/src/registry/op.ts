@@ -6,7 +6,7 @@
 import type { z } from "zod";
 import type { AppDeps } from "../app-routes";
 import type { ChatCollect, ChatTools } from "../chat-tools";
-import type { ContainerStub } from "../deps";
+import type { ContainerStub, StageEdge } from "../deps";
 import type { EmbedClient } from "../embed";
 import type { EdgeDeps } from "../studio-edge";
 import type { WorkerEnv } from "../worker";
@@ -57,6 +57,8 @@ export type OpContext = {
     container: ContainerStub;
     // the registry this call came through (ops may call each other through it)
     registry: Registry;
+    // what the stage needs beyond the env (the StageRoom Durable Object; tests pass fakes)
+    stageEdge: StageEdge;
     // lazily built, once per call
     app(): AppDeps;
     embed(): EmbedClient | null;
@@ -99,6 +101,8 @@ export type AiSpec<I> = {
     args?: (args: unknown[]) => unknown;
     // only offered while this holds (e.g. search while the Space is configured)
     when?: (flags: AiFlags) => boolean;
+    // an ask op that only asks for some inputs (e.g. making something private, not public): false runs it at once
+    asks?: (input: I) => boolean;
     // an ask op's card: the one-line summary and the effect (counts, sizes, links affected)
     preview?: (ctx: OpContext, input: I) => Promise<{ summary: string; effect: Record<string, unknown> }>;
     // what the model gets from a 2xx reply body (default: the body)

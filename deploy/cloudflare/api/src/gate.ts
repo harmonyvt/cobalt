@@ -42,9 +42,9 @@ export type GateDecision =
       }
     // cobalt studio routes that need no API key (the session id is the
     // capability). The Worker answers "preflight", "status" and "source" itself
-    // (D1 / R2, no container); "render_create" and "render_status" go to the
-    // Durable Object. `sid` and `job` are already format-checked.
-    | { action: "studio"; op: StudioOp; sid?: string; job?: string }
+    // (D1 / R2, no container). `sid` is already format-checked. (The render
+    // routes are ops in the registry: src/registry/ops/make.ts.)
+    | { action: "studio"; op: StudioOp; sid?: string }
     // The library service: like "lookup" with a valid key, but nothing to look
     // up (the Worker's key id is "service:library").
     | {
@@ -61,57 +61,12 @@ export type LookupThen =
     | "webp_create"
     | "webp_status"
     | "media_delete"
-    | "studio_create"
-    | "studio_publish"
-    | "studio_upload"
     | "library_adopt"
-    | "emotes_search"
-    | "emotes_save"
     | "library_file"
-    | "library_publish"
-    | "library_visibility"
     | "library_visibility_migrate"
-    | "library_studio"
-    | "library_post_delete"
-    | "library_post_title"
     | "library_posters_backfill"
     | "library_search_index"
     | "library_search_post"
-    // gallery share links (APP-API-CONTRACT.md section 24)
-    | "share_sets_create"
-    | "share_sets_list"
-    | "share_sets_revoke"
-    | "collections_list"
-    | "collections_create"
-    | "collections_update"
-    | "collections_delete"
-    | "collections_reroll"
-    // collection sets (APP-API-CONTRACT.md section 28)
-    | "groups_list"
-    | "groups_create"
-    | "groups_update"
-    | "groups_delete"
-    // stage (APP-API-CONTRACT.md section 30.10)
-    | "stage_get"
-    | "stage_patch"
-    | "stage_rotate"
-    | "stage_action"
-    | "stage_pool"
-    | "stage_redemptions"
-    | "stage_reward"
-    | "stage_twitch_connect"
-    | "stage_twitch_delete"
-    // editor (APP-API-CONTRACT.md section 31.12)
-    | "edits_list"
-    | "edits_create"
-    | "edits_get"
-    | "edits_update"
-    | "edits_rename"
-    | "edits_delete"
-    | "edits_render"
-    | "edits_renders"
-    | "edits_render_get"
-    | "edits_render_cancel"
     // chat (APP-API-CONTRACT.md section 27)
     | "chat_list"
     | "chat_create"
@@ -127,24 +82,11 @@ export type LookupThen =
     | "live_edit"
     | "live_chat"
     | "studio_notify"
-    | "studio_recent"
-    | "studio_line"
     | "studio_line_notify"
-    | "studio_cancel"
     // photos and galleries (APP-API-CONTRACT.md section 18)
-    | "studio_slideshow"
-    | "studio_gallery_image"
-    | "studio_items_retry"
-    | "library_item_delete"
-    | "library_made"
     | "telemetry_ingest";
 
-export type StudioOp =
-    | "preflight"
-    | "status"
-    | "source"
-    | "render_create"
-    | "render_status";
+export type StudioOp = "preflight" | "status" | "source";
 
 // /webp/:id ids are 16-32 alphanumerics (the DO mints 20); media names are 10
 // alphanumerics + ".webp". Validated here so nothing else reaches a handler.
@@ -157,8 +99,6 @@ export const STUDIO_JOB_REGEX = /^[A-Za-z0-9]{20}$/;
 
 // Library item id: 16 base62 chars (mintItemId, the web's base62(16)).
 export const ITEM_ID_REGEX = /^[A-Za-z0-9]{16}$/;
-// a gallery share link's id (section 24): 19 digits
-export const SHARE_SET_ID_REGEX = /^[0-9]{19}$/;
 const COLLECTION_ID_REGEX = /^[A-Za-z0-9]{16}$/;
 
 export const isStudioPath = (pathname: string) =>
@@ -250,63 +190,13 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     }
 
     // GET /queue, GET /library, GET /library/search and GET /library/map are ops in the registry
-    // (src/registry/ops/library.ts, APP-API-CONTRACT.md section 33), which answers them before the gate. Every
-    // other method on those paths falls through to the 404 at the end.
+    // (src/registry/ops/library.ts, APP-API-CONTRACT.md section 33), which answers them before the gate. So are the
+    // gallery links, collections and sets (/share/sets, /share/collections, /share/groups), the stage owner routes
+    // (/stage*) and /emotes (src/registry/ops/share.ts and stage.ts, section 33.9). Every other method on those paths
+    // falls through to the 404 at the end.
 
-    // Gallery share links (APP-API-CONTRACT.md section 24): keyed only.
-    if (req.pathname === "/share/sets" || req.pathname.startsWith("/share/sets/")) {
-        if (req.service) return reject(404);
-        if (req.pathname === "/share/sets") {
-            if (req.method === "GET") return lookupThen(req, "share_sets_list");
-            if (req.method === "POST") return lookupThen(req, "share_sets_create");
-            return reject(404);
-        }
-        const id = req.pathname.slice("/share/sets/".length);
-        if (!SHARE_SET_ID_REGEX.test(id) || req.method !== "DELETE") return reject(404);
-        return lookupThen(req, "share_sets_revoke", { id });
-    }
-
-    // Share link collections (APP-API-CONTRACT.md section 26): keyed only.
-    if (req.pathname === "/share/collections" || req.pathname.startsWith("/share/collections/")) {
-        if (req.service) return reject(404);
-        if (req.pathname === "/share/collections") {
-            if (req.method === "GET") return lookupThen(req, "collections_list");
-            if (req.method === "POST") return lookupThen(req, "collections_create");
-            return reject(404);
-        }
-        const rest = req.pathname.slice("/share/collections/".length);
-        if (rest.endsWith("/reroll")) {
-            const rid = rest.slice(0, -"/reroll".length);
-            if (!COLLECTION_ID_REGEX.test(rid) || req.method !== "POST") return reject(404);
-            return lookupThen(req, "collections_reroll", { id: rid });
-        }
-        const id = rest;
-        if (!COLLECTION_ID_REGEX.test(id)) return reject(404);
-        if (req.method === "PATCH") return lookupThen(req, "collections_update", { id });
-        if (req.method === "DELETE") return lookupThen(req, "collections_delete", { id });
-        return reject(404);
-    }
-
-    // Collection sets (APP-API-CONTRACT.md section 28): keyed only.
-    if (req.pathname === "/share/groups" || req.pathname.startsWith("/share/groups/")) {
-        if (req.service) return reject(404);
-        if (req.pathname === "/share/groups") {
-            if (req.method === "GET") return lookupThen(req, "groups_list");
-            if (req.method === "POST") return lookupThen(req, "groups_create");
-            return reject(404);
-        }
-        const id = req.pathname.slice("/share/groups/".length);
-        if (!COLLECTION_ID_REGEX.test(id)) return reject(404);
-        if (req.method === "PATCH") return lookupThen(req, "groups_update", { id });
-        if (req.method === "DELETE") return lookupThen(req, "groups_delete", { id });
-        return reject(404);
-    }
-
-    // Stage (APP-API-CONTRACT.md section 30.10): keyed only; the library-service credential gets 404.
-    if (req.pathname === "/stage" || req.pathname.startsWith("/stage/")) return decideStage(req);
-
-    // Editor (APP-API-CONTRACT.md section 31.12): keyed only; the library-service credential gets 404.
-    if (req.pathname === "/edits" || req.pathname.startsWith("/edits/")) return decideEdits(req);
+    // Editor (APP-API-CONTRACT.md section 31.12): ops in the registry (src/registry/ops/make.ts, section 33.8). Every
+    // other method or path under /edits falls through to the 404 at the end.
 
     // Chat (APP-API-CONTRACT.md section 27): keyed only.
     if (req.pathname === "/chat/threads" || req.pathname.startsWith("/chat/threads/")) {
@@ -341,13 +231,6 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
             : reject(401, "error.api.auth.key.invalid");
     }
 
-    // 7TV search and save (APP-API-CONTRACT.md section 20). Worker only: no container.
-    if (req.pathname === "/emotes") {
-        if (req.method === "GET") return lookupThen(req, "emotes_search");
-        if (req.method === "POST") return lookupThen(req, "emotes_save");
-        return reject(404);
-    }
-
     // The app's library (keyed): per item /library/items/<id>/<sub>.
     // One post's index status (section 21): keyed or service.
     if (req.pathname === "/library/search/post") {
@@ -367,35 +250,12 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     if (req.pathname.startsWith("/library/items/")) {
         const [id, sub, ...rest] = req.pathname.slice("/library/items/".length).split("/");
         if (!ITEM_ID_REGEX.test(id ?? "") || rest.length > 0) return reject(404);
-        // Delete one item or made file of a post (section 18.4): DELETE on the bare item path only
-        if (sub === undefined) {
-            return req.method === "DELETE" ? lookupThen(req, "library_item_delete", { id: id! }) : reject(404);
-        }
-        // A crop or an export made on the device (section 18.6): PUT only
-        if (sub === "made") {
-            return req.method === "PUT" ? lookupThen(req, "library_made", { id: id! }) : reject(404);
-        }
+        // DELETE of the bare item path, PUT .../made, POST .../publish, PATCH .../visibility and PATCH|DELETE .../post
+        // are ops (src/registry/ops/library-writes.ts); every other method on them is a 404 here.
         if (sub === "file") {
             return req.method === "GET" || req.method === "HEAD"
                 ? lookupThen(req, "library_file", { id: id! })
                 : reject(404);
-        }
-        if (sub === "publish") {
-            return req.method === "POST" ? lookupThen(req, "library_publish", { id: id! }) : reject(404);
-        }
-        // The public/private toggle (section 16)
-        if (sub === "visibility") {
-            return req.method === "PATCH" ? lookupThen(req, "library_visibility", { id: id! }) : reject(404);
-        }
-        if (sub === "studio") {
-            return req.method === "POST" ? lookupThen(req, "library_studio", { id: id! }) : reject(404);
-        }
-        // Delete a whole post (APP-API-CONTRACT.md section 12) or set its custom title
-        // (section 15): any file id of the post.
-        if (sub === "post") {
-            if (req.method === "DELETE") return lookupThen(req, "library_post_delete", { id: id! });
-            if (req.method === "PATCH") return lookupThen(req, "library_post_title", { id: id! });
-            return reject(404);
         }
         return reject(404);
     }
@@ -440,63 +300,10 @@ export function decide(req: GateRequest, cfg: GateConfig): GateDecision {
     return reject(404);
 }
 
-// /stage, /stage/rotate, /stage/action, /stage/pool, /stage/redemptions, /stage/rewards/<action>,
-// /stage/twitch and /stage/twitch/connect. Anything else (or the service credential) is a 404.
-export const STAGE_ACTION_REGEX = /^(summon|chaos|shuffle|pin)$/;
-function decideStage(req: GateRequest): GateDecision {
-    if (req.service) return reject(404);
-    const m = req.method;
-    const p = req.pathname;
-    let then: LookupThen | null = null;
-    let params: Record<string, string> | undefined;
-    if (p === "/stage") then = m === "GET" ? "stage_get" : m === "PATCH" ? "stage_patch" : null;
-    else if (p === "/stage/rotate") then = m === "POST" ? "stage_rotate" : null;
-    else if (p === "/stage/action") then = m === "POST" ? "stage_action" : null;
-    else if (p === "/stage/pool") then = m === "GET" ? "stage_pool" : null;
-    else if (p === "/stage/redemptions") then = m === "GET" ? "stage_redemptions" : null;
-    else if (p === "/stage/twitch") then = m === "DELETE" ? "stage_twitch_delete" : null;
-    else if (p === "/stage/twitch/connect") then = m === "POST" ? "stage_twitch_connect" : null;
-    else if (p.startsWith("/stage/rewards/")) {
-        const action = p.slice("/stage/rewards/".length);
-        if (STAGE_ACTION_REGEX.test(action) && m === "PATCH") {
-            then = "stage_reward";
-            params = { action };
-        }
-    }
-    return then === null ? reject(404) : lookupThen(req, then, params);
-}
-
-// /edits (GET|POST), /edits/renders (GET), /edits/renders/<rid> (GET|DELETE), /edits/<id> (GET|PUT|PATCH|DELETE) and
-// /edits/<id>/render (POST). Ids are validated before anything is looked up; `renders` is never a project id (7 characters).
-// Anything else, and the library-service credential, is a 404.
+// Editor ids (section 31.12), used by the registry's edit routes: a project is 16 base62, a render 20 (`renders`, 7
+// characters, is never a project id).
 export const EDIT_PROJECT_ID_REGEX = /^[A-Za-z0-9]{16}$/;
 export const EDIT_RENDER_ID_REGEX = /^[A-Za-z0-9]{20}$/;
-function decideEdits(req: GateRequest): GateDecision {
-    if (req.service) return reject(404);
-    const m = req.method;
-    if (req.pathname === "/edits") {
-        if (m === "GET") return lookupThen(req, "edits_list");
-        return m === "POST" ? lookupThen(req, "edits_create") : reject(404);
-    }
-    const [first, second, ...rest] = req.pathname.slice("/edits/".length).split("/");
-    if (rest.length > 0) return reject(404);
-    if (first === "renders") {
-        if (second === undefined) return m === "GET" ? lookupThen(req, "edits_renders") : reject(404);
-        if (!EDIT_RENDER_ID_REGEX.test(second)) return reject(404);
-        if (m === "GET") return lookupThen(req, "edits_render_get", { rid: second });
-        return m === "DELETE" ? lookupThen(req, "edits_render_cancel", { rid: second }) : reject(404);
-    }
-    if (!EDIT_PROJECT_ID_REGEX.test(first ?? "")) return reject(404);
-    const id = first!;
-    if (second === undefined) {
-        if (m === "GET") return lookupThen(req, "edits_get", { id });
-        if (m === "PUT") return lookupThen(req, "edits_update", { id });
-        if (m === "PATCH") return lookupThen(req, "edits_rename", { id });
-        return m === "DELETE" ? lookupThen(req, "edits_delete", { id }) : reject(404);
-    }
-    if (second === "render") return m === "POST" ? lookupThen(req, "edits_render", { id }) : reject(404);
-    return reject(404);
-}
 
 // PUT|DELETE /live/start-token, PUT|DELETE /live/runs/<run>, POST
 // /live/runs/<run>/state, GET /live/selftest. <run> is a lowercase UUID.
@@ -535,32 +342,16 @@ function decideLive(req: GateRequest): GateDecision {
 // /studio/<sid>/render/<job>. Ids are validated before anything is looked up;
 // every other path or method is a 404.
 function decideStudio(req: GateRequest): GateDecision {
-    if (req.pathname === "/studio") {
-        return req.method === "POST"
-            ? lookupThen(req, "studio_create")
-            : reject(404);
+    // POST /studio, PUT /studio/upload, GET /studio/recent, GET /studio/line, POST /studio/<sid>/publish,
+    // DELETE /studio/<sid>/line, DELETE /studio/<sid>/render/<job> and POST /studio/<sid>/items/retry are ops
+    // (src/registry/ops/library-writes.ts, APP-API-CONTRACT.md 33.7), answered before the gate. Every other method on
+    // those paths is a 404 here. The internal /studio/upload/adopt (Worker -> Durable Object) is not public: it fails
+    // the session id check below.
+    if (req.pathname === "/studio" || req.pathname === "/studio/upload" || req.pathname === "/studio/recent" || req.pathname === "/studio/line") {
+        return reject(404);
     }
-    // PUT /studio/upload (keyed) is the one public path whose second segment is
-    // not a session id; it must be checked before the id format. The internal
-    // /studio/upload/adopt (Worker -> Durable Object) is not public: it fails
-    // the session id check below and is a 404.
-    if (req.pathname === "/studio/upload") {
-        return req.method === "PUT" ? lookupThen(req, "studio_upload") : reject(404);
-    }
-    // GET /studio/recent (keyed; the library service credential gets 404): the sessions this
-    // key created from a share sheet (APP-API-CONTRACT.md section 14). Like /studio/upload, the
-    // only public path under /studio/ whose second segment is not a session id.
-    if (req.pathname === "/studio/recent") {
-        if (req.service) return reject(404);
-        return req.method === "GET" ? lookupThen(req, "studio_recent") : reject(404);
-    }
-    // The server's line (APP-API-CONTRACT.md section 17): GET /studio/line, PUT|DELETE
-    // /studio/line/notify. Keyed; the library-service credential and every other method are 404.
-    // Neither path segment is a session id.
-    if (req.pathname === "/studio/line") {
-        if (req.service) return reject(404);
-        return req.method === "GET" ? lookupThen(req, "studio_line") : reject(404);
-    }
+    // PUT|DELETE /studio/line/notify (APP-API-CONTRACT.md section 17). Keyed; the library-service credential and every
+    // other method are 404.
     if (req.pathname === "/studio/line/notify") {
         if (req.service) return reject(404);
         return req.method === "PUT" || req.method === "DELETE" ? lookupThen(req, "studio_line_notify") : reject(404);
@@ -572,13 +363,6 @@ function decideStudio(req: GateRequest): GateDecision {
     if (sub === undefined) {
         return req.method === "GET"
             ? { action: "studio", op: "status", sid }
-            : reject(404);
-    }
-    // Publishing makes a public copy: Api-Key or service auth (the session id
-    // alone is not enough).
-    if (sub === "publish" && job === undefined) {
-        return req.method === "POST"
-            ? lookupThen(req, "studio_publish", { sid })
             : reject(404);
     }
     // Hark notification opt-in (APP-API-CONTRACT.md section 9): keyed, the session's owner
@@ -593,41 +377,6 @@ function decideStudio(req: GateRequest): GateDecision {
     if (sub === "source" && job === undefined) {
         return req.method === "GET" || req.method === "HEAD"
             ? { action: "studio", op: "source", sid }
-            : reject(404);
-    }
-    if (sub === "render" && job === undefined) {
-        return req.method === "POST"
-            ? { action: "studio", op: "render_create", sid }
-            : reject(404);
-    }
-    // Cancel what has not started (section 17.7): keyed, the creating key only (the Durable Object
-    // checks the owner). The library service credential never reaches it.
-    if (sub === "line" && job === undefined) {
-        if (req.service) return reject(404);
-        return req.method === "DELETE" ? lookupThen(req, "studio_cancel", { sid }) : reject(404);
-    }
-    // A slideshow made from the items of a gallery, and the retry of the items that failed to save
-    // (section 18.5, 18.2): keyed POST, the session's creating key only (the Durable Object checks the
-    // owner). The library service credential never reaches them.
-    if (sub === "slideshow" && job === undefined) {
-        if (req.service) return reject(404);
-        return req.method === "POST" ? lookupThen(req, "studio_slideshow", { sid }) : reject(404);
-    }
-    // The gallery image made from a gallery's photos (section 18.11): the same rules as the slideshow
-    if (sub === "gallery-image" && job === undefined) {
-        if (req.service) return reject(404);
-        return req.method === "POST" ? lookupThen(req, "studio_gallery_image", { sid }) : reject(404);
-    }
-    if (sub === "items" && job === "retry") {
-        if (req.service) return reject(404);
-        return req.method === "POST" ? lookupThen(req, "studio_items_retry", { sid }) : reject(404);
-    }
-    if (sub === "render" && job !== undefined && STUDIO_JOB_REGEX.test(job)) {
-        if (req.method === "DELETE") {
-            return req.service ? reject(404) : lookupThen(req, "studio_cancel", { sid, job });
-        }
-        return req.method === "GET"
-            ? { action: "studio", op: "render_status", sid, job }
             : reject(404);
     }
     return reject(404);

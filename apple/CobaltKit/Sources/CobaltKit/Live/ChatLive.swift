@@ -226,7 +226,7 @@ public struct ChatLiveTracker: Sendable, Equatable {
         events += 1
         let before = state
         switch event {
-        case .user, .assistant, .title:
+        case .user, .assistant, .title, .confirm:
             return .none
         case .text(let delta):
             guard !delta.isEmpty else { return .none }
