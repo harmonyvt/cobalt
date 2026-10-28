@@ -28,6 +28,8 @@ export { StageRoom } from "./stage-room";
 // The chat's workbench box (APP-API-CONTRACT.md section 33.11) and the Containers library's outbound proxy, which carries
 // every request the box makes to its outbound rule (the library finds it in ctx.exports).
 export { Workbench } from "./workbench";
+// The chat's job hooks (APP-API-CONTRACT.md section 33.14): one object per chat thread.
+export { ChatJobs } from "./chat-jobs-do";
 export { ContainerProxy } from "@cloudflare/containers";
 
 export interface Env extends WorkerEnv {

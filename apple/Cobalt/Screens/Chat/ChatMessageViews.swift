@@ -320,6 +320,14 @@ struct ChatStepRow: View {
     @State private var expanded = false
 
     private var title: String {
+        // a job handed to the server (33.14): no code, just how it is going
+        if step.kind == "job" {
+            switch step.status {
+            case .running: return Copy.Chat.jobWaiting
+            case .error: return Copy.Chat.jobFailed(step.job?.status)
+            case .done: return Copy.Chat.jobDone
+            }
+        }
         switch step.status {
         case .running: return Copy.Chat.running
         case .error: return Copy.Chat.failedStep

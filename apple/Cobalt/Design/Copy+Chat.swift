@@ -83,6 +83,16 @@ extension Copy {
             return "ran code · \(duration(seconds))"
         }
         static let running = "running code…"
+        // a job the chat handed to the server (APP-API-CONTRACT 33.14)
+        static let jobWaiting = "making it… the chat carries on when it's ready"
+        static let jobDone = "made it"
+        static func jobFailed(_ status: String?) -> String {
+            switch status {
+            case "timeout": return "it took too long"
+            case "cancelled": return "it was cancelled"
+            default: return "it didn't finish"
+            }
+        }
         static let failedStep = "code failed"
         static let code = "code"
         static let logs = "logs"

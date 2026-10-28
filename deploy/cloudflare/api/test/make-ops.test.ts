@@ -4,7 +4,12 @@
 // confirm cards for real (their handlers on a Map) and answers the studio routes from a script.
 import { beforeEach, describe, expect, it } from "vitest";
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
-import type { ChatModel, CodeRunner, ModelTurn } from "../src/chat";
+import { resumeAfterJobs, type ChatModel, type CodeRunner, type ModelTurn } from "../src/chat";
+import { CHAT_JOBS_TICK_MS, ChatJobsCore, handleChatJobsRoute } from "../src/chat-jobs";
+import { chatKeyId } from "../src/registry/ai";
+import { forCall } from "../src/registry/context";
+import { chatDepsFrom } from "../src/registry/ops/chat";
+import { waitJob } from "../src/registry/ops/make";
 import { sandboxModule } from "../src/chat-loader-module";
 import { chatTools } from "../src/chat-tools";
 import { hashKey } from "../src/keys";
@@ -538,5 +543,152 @@ describe("through the chat", () => {
         expect(seen[0]!.system).toContain("webp(id: string, opts: {");
         expect(doCalls[0]).toMatchObject({ path: `POST /studio/${SID}/render`, key: null, body: { start: 0, length: 2, queue: true } });
         expect((storage.get(`chat:budget:${t.id}:renders`) as any).n).toBe(1);
+    });
+});
+
+// ---- the job hook: cobalt.jobs.onDone (section 33.14) ---------------------------------------------------------------
+
+describe("cobalt.jobs.onDone: the server continues the chat when a job ends", () => {
+    const mapStorage = (m: Map<string, unknown>) => ({
+        get: async <T,>(k: string) => m.get(k) as T | undefined,
+        put: async (k: string, v: unknown) => void m.set(k, structuredClone(v)),
+        delete: async (k: string) => m.delete(k),
+        list: async <T,>(o: { prefix: string }) => new Map([...m].filter(([k]) => k.startsWith(o.prefix)).sort(([a], [b]) => a.localeCompare(b, "en", { numeric: true })) as [string, T][]),
+    });
+
+    it("hands a running webp over, ends the reply, then a new reply starts with the result when the server sees it end", async () => {
+        file("MadeWebp00000001", { session_id: SID, bucket: "media", kind: "public", source: "studio", content_type: "image/webp", url: `${MEDIA}AbCdEfGh12.webp`, r2_key: "AbCdEfGh12.webp" });
+        const seen: { system: string; messages: any[] }[] = [];
+        const say = (text: string): ModelTurn => ({ content: [{ type: "text", text }], stop_reason: "end_turn" });
+        const code = (id: string, src: string): ModelTurn => ({ content: [{ type: "tool_use", id, name: "run_code", input: { code: src } }], stop_reason: "tool_use" });
+        const lastResult = (s: { messages: any[] }) => s.messages[s.messages.length - 1].content[0];
+        const script: ((s: { system: string; messages: any[] }) => ModelTurn)[] = [
+            () => code("tu_1", `const j = await cobalt.make.webp("${SID}", { start: 0, end: 2 }); return await cobalt.jobs.onDone(j.job, "show it and give the link");`),
+            (s) => {
+                const r = JSON.parse(lastResult(s).content[0].text);
+                expect(r.result).toMatchObject({ job: `studio:${SID}:${JOB}`, status: "running", watching: true });
+                expect(r.note).toMatch(/server is watching that job/);
+                // a model that tries to poll anyway is refused
+                return code("tu_2", `return await cobalt.jobs.wait("studio:${SID}:${JOB}", 25);`);
+            },
+            (s) => {
+                expect(lastResult(s)).toMatchObject({ is_error: true, content: expect.stringMatching(/server continues this chat/) });
+                return say("on its way (=^･ω･^=)");
+            },
+            // the continuation, started by the server
+            (s) => {
+                const opening = s.messages[s.messages.length - 1];
+                expect(opening.role).toBe("user");
+                const text = JSON.stringify(opening.content);
+                expect(text).toContain("cobalt.jobs.onDone has ended");
+                expect(text).toContain(`${SHARE}AbCdEfGh12`);
+                expect(text).toContain("your note: show it and give the link");
+                return code("tu_3", `await cobalt.show(["${SID}"]); return 1;`);
+            },
+            () => say("here it is ฅ^•ﻌ•^ฅ"),
+        ];
+        const model: ChatModel = {
+            model: "claude-haiku-5-5",
+            async turn({ system, messages, onText }) {
+                seen.push({ system, messages: JSON.parse(JSON.stringify(messages)) });
+                const r = script.shift()!(seen[seen.length - 1]!);
+                for (const b of r.content) if (b.type === "text") onText(b.text);
+                return r;
+            },
+            async title() {
+                return null;
+            },
+        };
+        const edgeDeps = { now: () => clock, sleep: async (ms: number) => void (clock += ms), chatModel: model, codeRunner: runner };
+
+        // the thread's ChatJobs object: its rules for real on a Map; the job is looked at like jobs.wait, the chat resumed
+        // with the route's own deps
+        const jobsStore = new Map<string, unknown>();
+        let alarmIn: number | null = null;
+        const base = opBase(env, container, edgeDeps, REGISTRY);
+        const core = new ChatJobsCore({
+            storage: mapStorage(jobsStore),
+            now: () => clock,
+            setAlarm: async (ms) => void (alarmIn = ms),
+            check: (thread, job) => waitJob(forCall(base, { keyId: chatKeyId(thread), caller: "chat", chat: { threadId: thread, collect: { look: [], show: [], collage: null }, tools: {} } }), job, 0),
+            resume: (thread, ended) => resumeAfterJobs(chatDepsFrom(base)!, thread, ended),
+        });
+        env.CHAT_JOBS = {
+            idFromName: (n: string) => n,
+            get: () => ({ fetch: (r: Request) => handleChatJobsRoute(core, r, INTERNAL) }),
+        } as unknown as DurableObjectNamespace;
+
+        const call = (path: string, method: string, body?: unknown) =>
+            handleRequest(
+                new Request(`${API}${path}`, { method, headers: { ...AUTH, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) }),
+                env,
+                container,
+                edgeDeps,
+            );
+        const t = ((await (await call("/chat/threads", "POST", {})).json()) as any).thread;
+        const text = await (await call(`/chat/threads/${t.id}/messages`, "POST", { text: "make a webp of the first 2 s" })).text();
+        expect(text).toContain("event: done");
+        expect(seen[0]!.system).toContain("cobalt.jobs.onDone(job, note)");
+        expect(seen[0]!.system).toContain("Never poll");
+        expect(seen[0]!.system).toContain("onDone(job: string, note?: string)");
+        expect(alarmIn).toBe(CHAT_JOBS_TICK_MS);
+        expect(await core.list()).toMatchObject([{ job: `studio:${SID}:${JOB}`, thread: t.id, note: "show it and give the link", message_id: expect.stringMatching(/^\d+$/) }]);
+
+        // the reply ends with a waiting "job" step
+        let thread = (await (await call(`/chat/threads/${t.id}`, "GET")).json()) as any;
+        expect(thread.messages).toHaveLength(2);
+        const jobStep = thread.messages[1].steps.find((s: any) => s.kind === "job");
+        expect(jobStep).toMatchObject({ status: "running", job: { job: `studio:${SID}:${JOB}`, note: "show it and give the link", status: "waiting" } });
+
+        // a tick while it still runs: nothing happens, the watch stays
+        alarmIn = null;
+        await core.tick();
+        expect(await core.list()).toHaveLength(1);
+        expect(alarmIn).toBe(CHAT_JOBS_TICK_MS);
+
+        // the render finishes: the next tick continues the chat by itself
+        statusAnswers = [{ status: 200, body: { status: "success", job: JOB, url: `${MEDIA}AbCdEfGh12.webp`, bytes: 1, width: 480, height: 560, seconds: 2 } }];
+        alarmIn = null;
+        await core.tick();
+        expect(script).toHaveLength(0);
+        expect(await core.list()).toHaveLength(0);
+        expect([...jobsStore.keys()].filter((k) => k.startsWith("ended:"))).toEqual([]);
+        expect(alarmIn).toBeNull();
+
+        thread = (await (await call(`/chat/threads/${t.id}`, "GET")).json()) as any;
+        expect(thread.messages).toHaveLength(3);
+        expect(thread.messages[1].steps.find((s: any) => s.kind === "job")).toMatchObject({ status: "done", job: { status: "done" } });
+        expect(thread.messages[2]).toMatchObject({ role: "assistant", status: "done", text: "here it is ฅ^•ﻌ•^ฅ", post_ids: [SID] });
+        expect(thread.posts[SID]).toBeDefined();
+    });
+
+    it("a job that ends within a few seconds answers at once, with no watch", async () => {
+        statusAnswers = [{ status: 200, body: { status: "error", error: { code: "error.webp.encode_failed" } } }];
+        const watched: unknown[] = [];
+        const collect = { look: [], show: [] };
+        const legacy = chatTools({ db, mediaBaseUrl: MEDIA, shareBaseUrl: SHARE, embed: null }, collect);
+        const box = chatToolbox(REGISTRY, opBase(env, container, edge, REGISTRY), {
+            threadId: THREAD,
+            messageId: "1",
+            collect,
+            legacy,
+            flags: { search: false },
+            pending: null,
+            jobs: { watch: async (_t, w) => void watched.push(w) },
+        });
+        expect(await box.tools["jobs.onDone"]!(`studio:${SID}:${JOB}`)).toEqual({ job: `studio:${SID}:${JOB}`, status: "error", error: "error.webp.encode_failed" });
+        expect(watched).toEqual([]);
+        expect(box.waiting()).toEqual([]);
+        // still running after the first wait: handed over
+        expect(await box.tools["jobs.onDone"]!(`studio:${SID}:${JOB}`, "show it")).toMatchObject({ status: "running", watching: true });
+        expect(watched).toEqual([{ job: `studio:${SID}:${JOB}`, message_id: "1", note: "show it" }]);
+        expect(box.waiting()).toEqual([{ job: `studio:${SID}:${JOB}`, note: "show it" }]);
+    });
+
+    it("without the hook (no CHAT_JOBS) it only looks", async () => {
+        const r = await cobalt("jobs.onDone", `studio:${SID}:${JOB}`);
+        expect(r).toMatchObject({ job: `studio:${SID}:${JOB}`, status: "running" });
+        expect(r.watching).toBeUndefined();
+        expect(await thrown(cobalt("jobs.onDone", "nope"))).toMatch(/is not a job id/);
     });
 });

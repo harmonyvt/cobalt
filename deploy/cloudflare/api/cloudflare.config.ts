@@ -215,6 +215,12 @@ export default defineConfig({
 			}),
 			// Awake minutes a day across all chat threads; "0" turns the box off (the model stops seeing cobalt.box).
 			WORKBENCH_DAILY_MINUTES: bindings.text("60"),
+			// The chat's job hooks (src/chat-jobs-do.ts, APP-API-CONTRACT.md section 33.14): one object per chat thread
+			// watches the jobs cobalt.jobs.onDone handed over and continues the chat when they end. No secret, no migration.
+			CHAT_JOBS: bindings.durableObject({
+				worker: "cobalt-api",
+				exportName: "ChatJobs",
+			}),
 		},
 		exports: {
 			CobaltContainer: exports.durableObject({
@@ -231,6 +237,7 @@ export default defineConfig({
 				storage: "sqlite",
 				container: workbenchContainer,
 			}),
+			ChatJobs: exports.durableObject({ storage: "sqlite" }),
 		},
 	},
 	containers: [cobaltContainer, editContainer, workbenchContainer],

@@ -3,6 +3,7 @@
 // so saved threads replay. Each call's arguments are checked with the op's zod schema. An `ask` op does not run: it is
 // stored as a confirm card and the run stops.
 import type { z } from "zod";
+import type { JobsPort } from "../chat-jobs";
 import type { ChatCollect, ChatTools } from "../chat-tools";
 import { mintCollectionId } from "../share-collections";
 import { forCall, type OpBase } from "./context";
@@ -63,6 +64,8 @@ export type ChatToolboxOpts = {
     legacy: ChatTools;
     flags: AiFlags;
     pending: PendingPort | null;
+    // the chat's job watcher (section 33.14); null: cobalt.jobs.onDone only looks
+    jobs?: JobsPort | null;
     randomBytes?: (n: number) => Uint8Array;
 };
 
@@ -70,14 +73,24 @@ export type ChatToolbox = {
     tools: ChatTools;
     // the confirm card this run stopped on, if any
     paused(): PendingConfirm | null;
+    // the jobs this run handed to the server with cobalt.jobs.onDone
+    waiting(): { job: string; note: string | null }[];
 };
 
 export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts): ChatToolbox {
     let paused: PendingConfirm | null = null;
+    const waiting: { job: string; note: string | null }[] = [];
+    const jobs = o.jobs ?? null;
+    const watchJob = jobs
+        ? async (job: string, note: string | null) => {
+              await jobs.watch(o.threadId, { job, message_id: o.messageId, note });
+              waiting.push({ job, note });
+          }
+        : undefined;
     const ctx = forCall(base, {
         keyId: chatKeyId(o.threadId),
         caller: "chat",
-        chat: { threadId: o.threadId, collect: o.collect, tools: o.legacy },
+        chat: { threadId: o.threadId, collect: o.collect, tools: o.legacy, ...(watchJob ? { watchJob } : {}) },
     });
     const tools: ChatTools = {};
     for (const op of registry.toolsFor("chat", o.flags)) {
@@ -113,7 +126,7 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
         };
         for (const name of [op.callName, ...(op.ai.aliases ?? [])]) tools[name] = fn;
     }
-    return { tools, paused: () => paused };
+    return { tools, paused: () => paused, waiting: () => [...waiting] };
 }
 
 // The op behind a stored card, run with the input it was checked with when the model asked (a confirmed "yes").

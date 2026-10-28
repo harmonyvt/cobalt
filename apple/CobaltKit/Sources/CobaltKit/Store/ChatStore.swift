@@ -29,6 +29,9 @@ public struct ChatThreadContent: Sendable, Equatable {
     /// The last message is still being written.
     public var isReplying: Bool { messages.last.map { $0.role == .assistant && $0.status == .running } ?? false }
 
+    /// A job the chat handed to the server is still going (33.14): the server adds a reply by itself when it ends.
+    public var isWaitingOnJob: Bool { messages.contains { $0.role == .assistant && $0.steps.contains(where: \.isWaitingJob) } }
+
     /// The posts of a message, in its order; ids with no post (deleted) are skipped.
     public func posts(of message: ChatMessage) -> [LibraryPost] { message.postIDs.compactMap { posts[$0] } }
 
@@ -238,6 +241,10 @@ public final class ChatStore {
     /// How often a reply that lost its stream is read again, and for how long (27.2: every 2 s, at most 3 minutes).
     public static let pollInterval = 2.0
     public static let pollLimit = Int(180.0 / pollInterval)
+    /// How often an open thread whose chat handed a job to the server is read again, and for how long (33.14: the server
+    /// continues the chat when the job ends; it gives up on a job after an hour).
+    public static let jobPollInterval = 4.0
+    public static let jobPollLimit = Int(3600.0 / jobPollInterval)
 
     /// The collages read so far, by the message that carries them (27.5).
     public private(set) var collagePages: [String: ChatCollageState] = [:]
@@ -248,6 +255,7 @@ public final class ChatStore {
     /// Bumped by `reset()`: an answer from the old server arriving later is dropped.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var followers: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var jobWatchers: [String: Task<Void, Never>] = [:]
     /// The reply activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
     @ObservationIgnored var live: ChatLiveManager?
 
@@ -645,6 +653,31 @@ public final class ChatStore {
         }
     }
 
+    /// While the open thread waits on a job its chat handed to the server (33.14), reads it every 4 s (at most an hour)
+    /// until the server's new reply shows up; a reply it is still writing is then followed like any other. Stops when the
+    /// thread is no longer open (opening it again reads it, which starts this again).
+    private func watchJobs(_ id: String) {
+        guard jobWatchers[id] == nil, contents[id]?.isWaitingOnJob == true else { return }
+        let started = generation
+        jobWatchers[id] = Task { [weak self] in
+            guard let self else { return }
+            defer { if started == self.generation { self.jobWatchers[id] = nil } }
+            for _ in 0..<Self.jobPollLimit {
+                do { try await self.ctx.clock.sleep(seconds: Self.jobPollInterval) } catch { return }
+                guard started == self.generation, self.openThreadID == id, self.contents[id]?.isWaitingOnJob == true else { return }
+                // a reply streaming from this device is the newer truth
+                if self.sendingIDs.contains(id) { continue }
+                guard let detail = try? await self.ctx.client.chatThread(id: id), started == self.generation else { continue }
+                if self.sendingIDs.contains(id) { continue }
+                self.adopt(detail)
+                if self.contents[id]?.isReplying == true {
+                    self.follow(id)
+                    return
+                }
+            }
+        }
+    }
+
     private func markInterrupted(_ id: String) {
         guard var content = contents[id], content.isReplying else { return }
         content.apply(.error(code: ChatError.interrupted.code, message: nil))
@@ -664,6 +697,7 @@ public final class ChatStore {
         case .done(_, let thread):
             put(thread)
             pruneCollagePages(of: id)
+            watchJobs(id)
         default: break
         }
     }
@@ -675,6 +709,7 @@ public final class ChatStore {
         contents[id] = ChatThreadContent(thread: detail.thread, messages: detail.messages, posts: merged)
         put(detail.thread)
         pruneCollagePages(of: id)
+        watchJobs(id)
     }
 
     /// A thread as the server just answered it: in the list, ordered by when it changed.
@@ -691,6 +726,8 @@ public final class ChatStore {
         drafts[id] = nil
         followers[id]?.cancel()
         followers[id] = nil
+        jobWatchers[id]?.cancel()
+        jobWatchers[id] = nil
         if openThreadID == id { openThreadID = nil }
     }
 
@@ -707,6 +744,8 @@ public final class ChatStore {
         live?.reset()
         for task in followers.values { task.cancel() }
         followers = [:]
+        for task in jobWatchers.values { task.cancel() }
+        jobWatchers = [:]
         threads = []
         contents = [:]
         collagePages = [:]
