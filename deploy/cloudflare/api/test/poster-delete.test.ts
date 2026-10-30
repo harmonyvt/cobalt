@@ -211,6 +211,9 @@ describe("a poster can not be deleted by hand, and nothing on a lifetime path or
         expect([...new Set(hits)].sort()).toEqual(
             [
                 "app-routes.ts:originals.delete(", // upload rollbacks, post delete (session originals)
+                // section 34.2: the probe's own private objects (about/<item id>/frame-N.jpg, audio.mp3), never a poster
+                "about-probe.ts:originals.delete(",
+                "about-store.ts:bucket.delete(",
                 "app-routes.ts:media.delete(", // post delete (the file's mirror), poster release
                 // section 31.9 "Ending a render": the editor's half-made mp4 (`edits/<rid>.mp4`, originals) and a poster no library
                 // row names yet (media); the poster object is named only by the render until the record step files the row

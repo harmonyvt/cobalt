@@ -93,6 +93,9 @@ export const capabilitiesOp = defineOp({
             // the editor is on exactly while the renderer binding is there and migration 0021 is applied (section 31.13)
             !!env.EDIT_RENDERER && (await editTablesPresent(ctx.db, ctx.now())),
             helper[4],
+            // section 34: the words need the Anthropic key, the sound Workers AI
+            !!env.ANTHROPIC_API_KEY?.trim(),
+            !!env.AI,
         );
         return { status: r.status, body: r.body };
     },

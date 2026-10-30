@@ -91,6 +91,16 @@
 //                      content-length | 400 error.studio.not_video | 413 error.studio.too_large
 //                      | 422 error.poster.failed (ffmpeg made no frame) | 429 busy (one job at
 //                      a time, like /probe) | 502 error.studio.upload_failed
+//
+// "What it's about" (APP-API-CONTRACT.md section 34.2): frames and sound of a stored video, for the description.
+//   POST   /about?id=         body = the video bytes (streamed to /tmp/about/<id>, at most 200 MB); ffmpeg cuts 3 JPEG
+//                      frames at 15 %, 50 % and 85 % of the duration (one for a clip under 2 s), long side at most
+//                      768 px (never upscaled, rotation applied), and the first 180 s of sound as mono 16 kHz MP3 at
+//                      32 kbit/s; everything is deleted and the answer is JSON:
+//                      200 {frames: ["<base64 jpeg>", ...], audio: "<base64 mp3>" | null, duration: <s> | null}
+//                      (audio null: no audio stream, or silent: mean volume under -60 dB) | 400 error.studio.not_video
+//                      | 413 error.studio.too_large | 422 error.about.failed (no frame) | 429 busy (one job at a
+//                      time, like /poster) | 502 error.studio.upload_failed. 90 s wall for the cutting.
 
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
@@ -123,6 +133,11 @@ import {
     parseHasAudio,
     parseVideoInfo,
     buildPosterArgs,
+    ABOUT_FRAME_SIDE,
+    ABOUT_SILENCE_DB,
+    aboutTimes,
+    buildAboutAudioArgs,
+    parseMeanVolume,
     checkPublicUrl,
     directHeadOk,
     filenameFromUrl,
@@ -197,7 +212,7 @@ export const APNS_DEFAULT_TIMEOUT_MS = 2000;
 /**
  * @param {{
  *   appDir?: string, internalKey?: string, workDir?: string, fetchDir?: string, probeDir?: string,
- *   posterDir?: string, posterTimeoutMs?: number,
+ *   posterDir?: string, posterTimeoutMs?: number, aboutDir?: string, aboutTimeoutMs?: number,
  *   cobaltOrigin?: string, apiOrigin?: string,
  *   ffmpegTimeoutMs?: number, downloadTimeoutMs?: number, fetchTimeoutMs?: number,
  *   maxFetchBytes?: number, maxJobBytes?: number, keepJobs?: number, jobTtlMs?: number,
@@ -223,6 +238,9 @@ export function createHelper(opts = {}) {
     const FETCH_DIR = opts.fetchDir ?? "/tmp/fetch";
     const PROBE_DIR = opts.probeDir ?? "/tmp/probe";
     const POSTER_DIR = opts.posterDir ?? "/tmp/poster";
+    const ABOUT_DIR = opts.aboutDir ?? "/tmp/about";
+    // the whole cut (frames and sound) of one POST /about
+    const ABOUT_TIMEOUT_MS = opts.aboutTimeoutMs ?? 90_000;
     // one frame out of a local file: a second or two; the budget only stops a hung ffmpeg
     const POSTER_TIMEOUT_MS = opts.posterTimeoutMs ?? 30_000;
     const COBALT = opts.cobaltOrigin ?? COBALT_ORIGIN;
@@ -1087,6 +1105,127 @@ export function createHelper(opts = {}) {
         );
     }
 
+    /**
+     * ffmpeg with its stderr kept (the head and the tail: volumedetect prints at the end), inside `timeoutMs`.
+     * Resolves with the exit code (null: killed) and the stderr.
+     * @param {string[]} args @param {number} timeoutMs
+     * @returns {Promise<{code: number | null, stderr: string, timedOut: boolean}>}
+     */
+    const runFfmpegCapture = (args, timeoutMs) =>
+        new Promise((resolve) => {
+            if (!(timeoutMs > 0)) return resolve({ code: null, stderr: "", timedOut: true });
+            let child;
+            try {
+                child = spawn(ffmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] });
+            } catch {
+                return resolve({ code: null, stderr: "", timedOut: false });
+            }
+            let err = "";
+            child.stderr?.on("data", (d) => {
+                err = (err + d).slice(-16384);
+            });
+            let timedOut = false;
+            const timer = setTimeout(() => {
+                timedOut = true;
+                child.kill("SIGKILL");
+            }, timeoutMs);
+            child.on("error", () => {
+                clearTimeout(timer);
+                resolve({ code: null, stderr: err, timedOut });
+            });
+            child.on("close", (code) => {
+                clearTimeout(timer);
+                resolve({ code, stderr: err, timedOut });
+            });
+        });
+
+    // POST /about?id=: the body goes to disk, ffmpeg cuts the frames and the sound, everything is deleted, and the
+    // answer is JSON with them (a few hundred KB). One request, one answer; the helper is busy until the directory is
+    // gone (like /poster).
+    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {URL} url */
+    async function handleAbout(req, res, url) {
+        if (req.method !== "POST") return fail(res, 405, "error.webp.bad_request");
+        const id = url.searchParams.get("id") ?? "";
+        if (!ID_RE.test(id)) return failAndClose(req, res, 400, "error.webp.invalid_params");
+        if (busy()) return failAndClose(req, res, 429, "error.webp.busy");
+
+        const declared = Number(req.headers["content-length"]);
+        if (Number.isFinite(declared) && declared > MAX_FETCH) {
+            return failAndClose(req, res, 413, "error.studio.too_large");
+        }
+
+        probing.add(id);
+        const dir = path.join(ABOUT_DIR, id);
+        const input = path.join(dir, "in");
+        let n = 0;
+        const counter = new Transform({
+            transform(chunk, _e, cb) {
+                n += chunk.length;
+                if (n > MAX_FETCH) cb(new JobError("error.studio.too_large"));
+                else cb(null, chunk);
+            },
+        });
+        /** @type {{frames: string[], audio: string | null, duration: number | null} | null} */
+        let answer = null;
+        let code = "";
+        try {
+            await mkdir(dir, { recursive: true });
+            await pipeline(req, counter, createWriteStream(input));
+            if (n === 0) throw new JobError("error.studio.not_video");
+            const deadline = Date.now() + ABOUT_TIMEOUT_MS;
+            const info = await probeAV(input);
+            if (info.width === null || info.height === null) throw new JobError("error.studio.not_video");
+
+            /** @type {string[]} */
+            const frames = [];
+            let triedStart = false;
+            for (const [i, at] of aboutTimes(info.duration).entries()) {
+                const output = path.join(dir, `frame-${i + 1}.jpg`);
+                const cut = async (t) => {
+                    const r = await runFfmpegCapture(buildPosterArgs({ input, output, at: t, side: ABOUT_FRAME_SIDE }), deadline - Date.now());
+                    if (r.timedOut) throw new JobError("error.about.failed");
+                    const size = (await stat(output).catch(() => null))?.size ?? 0;
+                    return r.code === 0 && size > 0 && size <= MAX_POSTER_BYTES;
+                };
+                let made = await cut(at);
+                // a seek past the end of a clip that reports a longer duration than it has: the very start, once
+                if (!made && at > 0 && !triedStart) {
+                    triedStart = true;
+                    made = await cut(0);
+                }
+                if (made) frames.push((await readFile(output)).toString("base64"));
+            }
+            if (frames.length === 0) throw new JobError("error.about.failed");
+
+            /** @type {string | null} */
+            let audio = null;
+            if (info.hasAudio) {
+                const output = path.join(dir, "audio.mp3");
+                const r = await runFfmpegCapture(buildAboutAudioArgs({ input, output }), deadline - Date.now());
+                const mean = parseMeanVolume(r.stderr);
+                const size = (await stat(output).catch(() => null))?.size ?? 0;
+                // silent (or no measurement): no sound worth transcribing
+                if (r.code === 0 && size > 0 && mean !== null && mean >= ABOUT_SILENCE_DB) audio = (await readFile(output)).toString("base64");
+            }
+            answer = { frames, audio, duration: info.duration ?? null };
+        } catch (e) {
+            code = e instanceof JobError ? e.code : "error.studio.upload_failed";
+            if (code === "error.webp.timeout" || code === "error.webp.encode_failed") code = "error.about.failed";
+            if (!(e instanceof JobError)) console.error("[webp-helper] about failed:", e);
+        }
+        // files first, then the answer (and the helper stays busy until both)
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+        probing.delete(id);
+        if (res.headersSent || res.destroyed) return;
+        if (answer) return send(res, 200, answer);
+        return failAndClose(
+            req,
+            res,
+            code === "error.studio.too_large" ? 413 : code === "error.studio.not_video" ? 400 : code === "error.about.failed" ? 422 : 502,
+            code,
+        );
+    }
+
     /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {URL} url */
     async function handleFetchRoute(req, res, url) {
         const { pathname } = url;
@@ -1643,6 +1782,7 @@ export function createHelper(opts = {}) {
             if (pathname === "/jobs/upload") return await handleUpload(req, res, url);
             if (pathname === "/probe") return await handleProbe(req, res, url);
             if (pathname === "/poster") return await handlePoster(req, res, url);
+            if (pathname === "/about") return await handleAbout(req, res, url);
             if (pathname === "/fetch" || pathname.startsWith("/fetch/")) {
                 return await handleFetchRoute(req, res, url);
             }

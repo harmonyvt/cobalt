@@ -857,6 +857,435 @@
         }
       }
     },
+    "/library/about": {
+      "get": {
+        "operationId": "library.about",
+        "summary": "What a post is about: its description, tags and sound tags, what is said in it, the words its vector reads closest to, its nearest posts.",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "description": "the post id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "post_key": {
+                      "type": "string"
+                    },
+                    "probe": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "done",
+                        "none",
+                        "failed"
+                      ]
+                    },
+                    "about": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "sentence": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "edited": {
+                              "type": "boolean",
+                              "description": "Harmony set these tags"
+                            },
+                            "sound_tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "transcript": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "language": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "frames": {
+                              "type": "number"
+                            },
+                            "has_audio": {
+                              "type": "boolean"
+                            },
+                            "model": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "written_at": {
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "sentence",
+                            "tags",
+                            "edited",
+                            "sound_tags",
+                            "transcript",
+                            "language",
+                            "frames",
+                            "has_audio",
+                            "model",
+                            "written_at"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "null until it is described"
+                    },
+                    "words": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "word": {
+                            "type": "string"
+                          },
+                          "score": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "word",
+                          "score"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "the words its vector reads closest to"
+                    },
+                    "neighbours": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "post_id": {
+                            "type": "string"
+                          },
+                          "score": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "post_id",
+                          "score"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "the 4 nearest posts"
+                    },
+                    "posts": {
+                      "description": "the neighbours' GET /library post shapes (left out for the chat: use post(id))",
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
+                    },
+                    "index": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {},
+                      "description": "the body of GET /library/search/post"
+                    }
+                  },
+                  "required": [
+                    "post_key",
+                    "probe",
+                    "about",
+                    "words",
+                    "neighbours",
+                    "index"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "ai": "free"
+        }
+      },
+      "patch": {
+        "operationId": "library.about.set",
+        "summary": "Replace a post's tags with Harmony's own (null goes back to the written ones). Only when Harmony asks.",
+        "tags": [
+          "library"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "the post id"
+                  },
+                  "tags": {
+                    "anyOf": [
+                      {
+                        "maxItems": 16,
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "0..16 tags, each 1..30 characters (lowercased); null goes back to the written ones"
+                  }
+                },
+                "required": [
+                  "key",
+                  "tags"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "post_key": {
+                      "type": "string"
+                    },
+                    "probe": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "done",
+                        "none",
+                        "failed"
+                      ]
+                    },
+                    "about": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "sentence": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "edited": {
+                              "type": "boolean",
+                              "description": "Harmony set these tags"
+                            },
+                            "sound_tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "transcript": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "language": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "frames": {
+                              "type": "number"
+                            },
+                            "has_audio": {
+                              "type": "boolean"
+                            },
+                            "model": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "written_at": {
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "sentence",
+                            "tags",
+                            "edited",
+                            "sound_tags",
+                            "transcript",
+                            "language",
+                            "frames",
+                            "has_audio",
+                            "model",
+                            "written_at"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "null until it is described"
+                    },
+                    "words": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "word": {
+                            "type": "string"
+                          },
+                          "score": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "word",
+                          "score"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "the words its vector reads closest to"
+                    },
+                    "neighbours": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "post_id": {
+                            "type": "string"
+                          },
+                          "score": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "post_id",
+                          "score"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "the 4 nearest posts"
+                    },
+                    "posts": {
+                      "description": "the neighbours' GET /library post shapes (left out for the chat: use post(id))",
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
+                    },
+                    "index": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {},
+                      "description": "the body of GET /library/search/post"
+                    }
+                  },
+                  "required": [
+                    "post_key",
+                    "probe",
+                    "about",
+                    "words",
+                    "neighbours",
+                    "index"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "ai": "ask"
+        }
+      }
+    },
     "/library/adopt": {
       "post": {
         "operationId": "library.adopt",

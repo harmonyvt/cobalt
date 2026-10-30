@@ -86,7 +86,7 @@ struct ChatThreadScreen: View {
 
     private func scrollToken(_ content: ChatThreadContent) -> String {
         guard let last = content.messages.last else { return "empty" }
-        return "\(content.messages.count)|\(last.id)|\(last.text.count)|\(last.steps.count)|\(last.steps.last?.status.rawValue ?? "")|\(last.postIDs.count)|\(last.status.rawValue)|\(content.messages.compactMap(\.confirm?.status.rawValue).joined())"
+        return "\(content.messages.count)|\(last.id)|\(last.text.count)|\(last.steps.count)|\(last.steps.last?.status.rawValue ?? "")|\(last.postIDs.count)|\(last.ranked?.hits.count ?? 0)|\(last.status.rawValue)|\(content.messages.compactMap(\.confirm?.status.rawValue).joined())"
     }
 
     private func messages(_ content: ChatThreadContent) -> some View {

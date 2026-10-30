@@ -21,6 +21,16 @@ struct APIEndpoint<Response: Decodable & Sendable>: Sendable {
 struct APIUntyped: Decodable, Sendable {}
 
 enum Endpoints {
+    /// `GET /library/about` (op `library.about`, auth key_or_service): What a post is about: its description, tags and sound tags, what is said in it, the words its vector reads closest to, its nearest posts.
+    static func libraryAbout() -> APIEndpoint<LibraryAboutResponse> {
+        APIEndpoint(op: "library.about", method: "GET", path: "/library/about", auth: .keyOrService)
+    }
+
+    /// `PATCH /library/about` (op `library.about.set`, auth key): Replace a post's tags with Harmony's own (null goes back to the written ones). Only when Harmony asks.
+    static func libraryAboutSet() -> APIEndpoint<LibraryAboutSetResponse> {
+        APIEndpoint(op: "library.about.set", method: "PATCH", path: "/library/about", auth: .key)
+    }
+
     /// `GET /library` (op `library.index`, auth key_or_service): The app's library pages (GET /library).
     static func libraryIndex() -> APIEndpoint<LibraryIndexResponse> {
         APIEndpoint(op: "library.index", method: "GET", path: "/library", auth: .keyOrService)
@@ -508,6 +518,76 @@ enum Endpoints {
 }
 
 // MARK: - Reply types
+
+struct LibraryAboutResponseAbout: Decodable, Sendable {
+    var sentence: String?
+    var tags: [String]
+    /// Harmony set these tags
+    var edited: Bool
+    var soundTags: [String]
+    var transcript: String?
+    var language: String?
+    var frames: Double
+    var hasAudio: Bool
+    var model: String?
+    var writtenAt: Double?
+}
+
+struct LibraryAboutResponseWordsItem: Decodable, Sendable {
+    var word: String
+    var score: Double
+}
+
+struct LibraryAboutResponseNeighboursItem: Decodable, Sendable {
+    var postId: String
+    var score: Double
+}
+
+struct LibraryAboutResponse: Decodable, Sendable {
+    var postKey: String
+    var probe: String
+    /// null until it is described
+    var about: LibraryAboutResponseAbout?
+    /// the words its vector reads closest to
+    var words: [LibraryAboutResponseWordsItem]
+    /// the 4 nearest posts
+    var neighbours: [LibraryAboutResponseNeighboursItem]
+}
+
+struct LibraryAboutSetResponseAbout: Decodable, Sendable {
+    var sentence: String?
+    var tags: [String]
+    /// Harmony set these tags
+    var edited: Bool
+    var soundTags: [String]
+    var transcript: String?
+    var language: String?
+    var frames: Double
+    var hasAudio: Bool
+    var model: String?
+    var writtenAt: Double?
+}
+
+struct LibraryAboutSetResponseWordsItem: Decodable, Sendable {
+    var word: String
+    var score: Double
+}
+
+struct LibraryAboutSetResponseNeighboursItem: Decodable, Sendable {
+    var postId: String
+    var score: Double
+}
+
+struct LibraryAboutSetResponse: Decodable, Sendable {
+    var postKey: String
+    var probe: String
+    /// null until it is described
+    var about: LibraryAboutSetResponseAbout?
+    /// the words its vector reads closest to
+    var words: [LibraryAboutSetResponseWordsItem]
+    /// the 4 nearest posts
+    var neighbours: [LibraryAboutSetResponseNeighboursItem]
+}
 
 /// over the whole library, not the page
 struct LibraryIndexResponseCounts: Decodable, Sendable {

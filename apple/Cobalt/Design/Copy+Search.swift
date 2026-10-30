@@ -32,6 +32,37 @@ extension Copy {
             }
         }
 
+
+        // the detail's "what it's about" section (APP-API-CONTRACT 34; with `features.about`)
+        static let aboutSection = "what it's about"
+        static let aboutLoading = "reading what it's about…"
+        static let aboutUnavailable = "couldn't read what it's about."
+        static let aboutPending = "cutting frames…"
+        static let aboutNotDescribed = "not described yet. it is picked up in the next pass."
+        static let aboutFailed = "couldn't describe it yet. it is tried again later."
+        static let heard = "heard"
+        static let noSound = "no sound"
+        static let noSpeech = "no speech"
+        static let tags = "tags"
+        static let addTag = "add a tag"
+        static let addTagA11y = "add a tag"
+        static let tagsFull = "16 tags is the most."
+        static let editedTags = "your tags"
+        static let resetTags = "reset"
+        static let resetTagsA11yHint = "goes back to the tags the server wrote"
+        static let tagsNotSaved = "couldn't save the tags. they are back as they were."
+        static let closestWords = "reads closest to"
+        static let noWords = "no words yet. they show once the post is indexed."
+        static let closestVideos = "closest videos"
+        static func removeTag(_ tag: String) -> String { "remove \(tag)" }
+        static func closestA11y(_ title: String, score: Double) -> String { "\(title), \(percent(score)) close" }
+        static func wordA11y(_ word: String, score: Double) -> String { "\(word), \(scoreText(score))" }
+        /// A score as the rows show it: two places ("0.42").
+        static func scoreText(_ score: Double) -> String { String(format: "%.2f", score) }
+        private static func percent(_ score: Double) -> String { "\(Int((max(0, min(1, score)) * 100).rounded())) %" }
+        /// The language the speech was detected in, as the server's code ("en").
+        static func language(_ code: String) -> String { "speech: \(code)" }
+
         // the detail's "search index" section
         static let section = "search index"
         static let loading = "checking the index…"

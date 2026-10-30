@@ -12,8 +12,11 @@
 // - searchPosts(): GET /library/search. Embeds the query, scores every vector, and adds a bonus
 //   for a plain text match, so a post found by its name ranks first even before it is embedded.
 
+import { whyFor } from "./about";
+import { aboutWordsOf, pickLead } from "./about-store";
 import { assemblePosts, libraryHide, POST_KEY_SQL, type AppDeps } from "./app-routes";
 import type { StudioReply } from "./studio";
+import { resolveWithin, withinFromQuery, WithinError, type Within } from "./within";
 
 export const EMBED_MODEL = "google/embeddinggemma-2";
 export const EMBED_DIMS = 256;
@@ -290,6 +293,7 @@ async function sha256(s: string): Promise<string> {
 export type PostInput = EmbedInput & { post_key: string; latest: number };
 
 type InputRow = {
+    id: string;
     post_key: string;
     name: string | null;
     link: string | null;
@@ -312,16 +316,9 @@ function linkWords(link: string | null): string {
     }
 }
 
-// The post's lead file, as GET /library picks it (app-routes.ts leadOf): a gallery's first video, else
-// its first item; else the original.
-function lead(fs: InputRow[]): InputRow | undefined {
-    const items = fs.filter((f) => f.role === "item").sort((a, b) => (a.item_index ?? 0) - (b.item_index ?? 0));
-    return (
-        items.find((f) => (f.content_type ?? "").startsWith("video/")) ??
-        items[0] ??
-        fs.find((f) => f.bucket === "originals" && (f.source === "saved" || f.source === "upload"))
-    );
-}
+// What a post's text is cut at (section 34.4), and how much of the transcript goes in.
+export const INPUT_TEXT_MAX = 3000;
+export const INPUT_TRANSCRIPT_MAX = 1200;
 
 // Every live post's inputs, newest post first (or only `onlyPostKey`'s, which D1 filters: one post's
 // rows and title come back, not the whole library's). Posters are used only from the public media
@@ -329,7 +326,7 @@ function lead(fs: InputRow[]): InputRow | undefined {
 export async function postInputs(db: D1Database, mediaBaseUrl: string, onlyPostKey?: string): Promise<PostInput[]> {
     const one = onlyPostKey !== undefined;
     const filesStmt = db.prepare(
-        `SELECT * FROM (SELECT m.name, m.link, m.poster, m.content_type, m.bucket, m.source, m.role, m.item_index,
+        `SELECT * FROM (SELECT m.id, m.name, m.link, m.poster, m.content_type, m.bucket, m.source, m.role, m.item_index,
                                m.created_at, ${POST_KEY_SQL} AS post_key
                         FROM media_items m WHERE m.deleted_at IS NULL)${one ? " WHERE post_key = ?1" : ""}
          ORDER BY created_at DESC`,
@@ -339,6 +336,21 @@ export async function postInputs(db: D1Database, mediaBaseUrl: string, onlyPostK
     const titlesStmt = db.prepare(`SELECT post_key, title FROM media_titles${one ? " WHERE post_key = ?1" : ""}`);
     const { results: titleRows } = await (one ? titlesStmt.bind(onlyPostKey) : titlesStmt).all<{ post_key: string; title: string }>();
     const titles = new Map(titleRows.map((t) => [t.post_key, t.title]));
+    // what the post is about (section 34.3) and its caption title (section 25): empty before their migrations
+    const words = await aboutWordsOf(db, onlyPostKey);
+    const captions = new Map<string, string>();
+    try {
+        const ids = one ? files.map((f) => `item:${f.id}`) : null;
+        const capStmt = db.prepare(
+            ids
+                ? `SELECT subject, title FROM media_captions WHERE title IS NOT NULL AND subject IN (${ids.map((_, i) => `?${i + 1}`).join(", ")})`
+                : "SELECT subject, title FROM media_captions WHERE title IS NOT NULL AND subject LIKE 'item:%'",
+        );
+        const { results: caps } = await (ids ? capStmt.bind(...ids) : capStmt).all<{ subject: string; title: string }>();
+        for (const c of caps) captions.set(c.subject.slice(5), c.title);
+    } catch {
+        // no captions table
+    }
 
     const byPost = new Map<string, InputRow[]>();
     for (const f of files) {
@@ -349,12 +361,28 @@ export async function postInputs(db: D1Database, mediaBaseUrl: string, onlyPostK
     const base = mediaBaseUrl.endsWith("/") ? mediaBaseUrl : `${mediaBaseUrl}/`;
     const out: PostInput[] = [];
     for (const [post_key, fs] of byPost) {
-        const l = lead(fs);
+        const l = pickLead(fs);
         const names = [...new Set(fs.map((f) => (f.name ?? "").trim()).filter(Boolean))].slice(0, 5);
         const link = l?.link ?? fs.find((f) => f.link)?.link ?? null;
         const poster = l?.poster ?? fs.find((f) => f.poster)?.poster ?? null;
         const title = titles.get(post_key) ?? l?.name ?? names[0] ?? null;
-        const text = [names.join(" · "), linkWords(link)].filter(Boolean).join(" · ").slice(0, 2000);
+        const w = words.get(post_key);
+        const caption = fs.map((f) => captions.get(f.id)).find(Boolean) ?? null;
+        // section 34.4: the file names, the link words, the sentence, the tags (the owner's when set), the sound tags,
+        // the caption title and the start of the transcript
+        const text = [
+            names.join(" · "),
+            linkWords(link),
+            w?.sentence ?? "",
+            (w?.tags ?? []).join(", "),
+            (w?.sound_tags ?? []).join(", "),
+            caption ?? "",
+            (w?.transcript ?? "").slice(0, INPUT_TRANSCRIPT_MAX),
+        ]
+            .map((x) => x.trim())
+            .filter(Boolean)
+            .join(" · ")
+            .slice(0, INPUT_TEXT_MAX);
         out.push({
             post_key,
             latest: fs[0]!.created_at,
@@ -670,20 +698,22 @@ export async function searchQueue(d: { db: D1Database; mediaBaseUrl: string; now
 
 // ---- GET /library/search -----------------------------------------------------------------------
 
-export type SearchHit = { post_key: string; score: number; latest: number };
+export type SearchHit = { post_key: string; score: number; latest: number; indexed: boolean };
 
 export type SearchOutcome =
-    | { ok: true; hits: SearchHit[]; indexed: number; pending: number; fallback: boolean }
+    | { ok: true; hits: SearchHit[]; indexed: number; pending: number; fallback: boolean; queryVector: number[] | null }
     | { ok: false; status: number; code: string };
 
 // The words of a query for the name-match fallback: lowercase, at least two characters each.
 const queryWords = (needle: string): string[] => [...new Set(needle.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2))];
 
+// `within` (section 34.6): only these posts, and every one of them is scored (a post without a vector gets its text
+// score only), so the caller's limit is the only cut.
 export async function searchPosts(
     d: { db: D1Database; client: EmbedClient | null; mediaBaseUrl: string },
     rawQuery: string,
     limit: number,
-    opts: { textFallback?: boolean } = {},
+    opts: { textFallback?: boolean; within?: ReadonlySet<string> } = {},
 ): Promise<SearchOutcome> {
     const q = rawQuery.trim().replace(/\s+/g, " ");
     if (q.length === 0 || q.length > MAX_QUERY_CHARS) return { ok: false, status: 400, code: "error.library.bad_request" };
@@ -711,6 +741,7 @@ export async function searchPosts(
 
     const needle = q.toLowerCase();
     const words = queryWords(needle);
+    const within = opts.within;
     const hits: SearchHit[] = [];
     let indexed = 0;
     let pending = 0;
@@ -719,46 +750,69 @@ export async function searchPosts(
         const v = row ? decodeVector(row.vector) : null;
         if (v) indexed++;
         if (!row || row.input_hash !== (await inputHash(p))) pending++;
+        if (within && !within.has(p.post_key)) continue;
         const hay = `${p.title ?? ""} ${p.text}`.toLowerCase();
         const bonus = hay.includes(needle) ? TEXT_MATCH_BONUS : 0;
         if (qv) {
-            if (!v && bonus === 0) continue;
-            hits.push({ post_key: p.post_key, score: (v ? dot(qv, v) : 0) + bonus, latest: p.latest });
+            if (!v && bonus === 0 && !within) continue;
+            hits.push({ post_key: p.post_key, score: (v ? dot(qv, v) : 0) + bonus, latest: p.latest, indexed: !!v });
             continue;
         }
         // Fallback: the whole query as text first, then posts holding more of its words; newest first within a score.
         const found = words.filter((w) => hay.includes(w)).length;
-        if (bonus === 0 && found === 0) continue;
+        if (bonus === 0 && found === 0 && !within) continue;
         const score = bonus + (words.length > 0 ? (TEXT_MATCH_BONUS * found) / words.length : 0);
-        hits.push({ post_key: p.post_key, score, latest: p.latest });
+        hits.push({ post_key: p.post_key, score, latest: p.latest, indexed: !!v });
     }
     if (qv) hits.sort((a, b) => b.score - a.score || (a.post_key < b.post_key ? -1 : 1));
     else hits.sort((a, b) => b.score - a.score || b.latest - a.latest || (a.post_key < b.post_key ? -1 : 1));
-    return { ok: true, hits: hits.slice(0, limit), indexed, pending, fallback: qv === null };
+    return { ok: true, hits: hits.slice(0, limit), indexed, pending, fallback: qv === null, queryVector: qv };
 }
 
 // GET /library/search?q=<words>&limit=<1..50>&v=<2|3>: the posts that best match, best first, in the
-// GET /library post shape plus `score`. Keyed or service (the web Worker).
+// GET /library post shape plus `score` and `why` (section 34.6). Keyed or service (the web Worker).
+// `collection=<id or name>`, `link=<set id>` or `posts=<id,...>` (exactly one, section 34.6) scores every post in
+// it instead (`limit` default and maximum WITHIN_MAX) and adds `within` to the answer.
+export const WITHIN_MAX = 500;
+
 export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, q: URLSearchParams): Promise<StudioReply> {
     const fail = (status: number, code: string): StudioReply => ({ status, body: { status: "error", error: { code } } });
-    let limit = DEFAULT_SEARCH_LIMIT;
+    const spec = withinFromQuery(q);
+    if (spec === "bad") return fail(400, "error.library.bad_request");
+    const max = spec ? WITHIN_MAX : MAX_SEARCH_LIMIT;
+    let limit = spec ? WITHIN_MAX : DEFAULT_SEARCH_LIMIT;
     if (q.has("limit")) {
         const raw = q.get("limit") ?? "";
         if (!/^\d{1,3}$/.test(raw)) return fail(400, "error.library.bad_request");
         limit = Number(raw);
-        if (limit < 1 || limit > MAX_SEARCH_LIMIT) return fail(400, "error.library.bad_request");
+        if (limit < 1 || limit > max) return fail(400, "error.library.bad_request");
     }
     try {
-        const r = await searchPosts({ db: d.db, client: d.embed, mediaBaseUrl: d.mediaBaseUrl }, q.get("q") ?? "", limit);
+        let within: Within | null = null;
+        if (spec) {
+            try {
+                within = await resolveWithin(d.db, spec);
+            } catch (e) {
+                if (e instanceof WithinError) return fail(e.status, e.code);
+                throw e;
+            }
+        }
+        const r = await searchPosts({ db: d.db, client: d.embed, mediaBaseUrl: d.mediaBaseUrl }, q.get("q") ?? "", limit, within ? { within: within.postKeys } : {});
         if (!r.ok) return fail(r.status, r.code);
         const v3 = q.get("v") === "3";
         const v2 = v3 || q.get("v") === "2";
         const page = r.hits.map((h) => ({ post_key: h.post_key, latest: h.latest }));
         const { posts } = await assemblePosts(d, page, { v2, v3, hide: libraryHide(v2, v3), now: d.now() });
-        const scores = new Map(r.hits.map((h) => [h.post_key, h.score]));
+        const hits = new Map(r.hits.map((h) => [h.post_key, h]));
+        const why = await whyFor(d.db, r.queryVector, (q.get("q") ?? "").trim(), r.hits.map((h) => h.post_key));
         const out = posts
             .filter((p) => Array.isArray(p.files) && p.files.length > 0)
-            .map((p) => ({ ...p, score: Math.round((scores.get(p.id) ?? 0) * 10000) / 10000 }));
+            .map((p) => ({
+                ...p,
+                score: Math.round((hits.get(p.id)?.score ?? 0) * 10000) / 10000,
+                why: why.get(p.id) ?? [],
+                ...(within ? { indexed: hits.get(p.id)?.indexed ?? false } : {}),
+            }));
         return {
             status: 200,
             body: {
@@ -767,6 +821,7 @@ export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, 
                 model: EMBED_MODEL,
                 posts: out,
                 index: { posts: r.indexed, pending: r.pending },
+                ...(within ? { within: { kind: within.kind, id: within.id, name: within.name, posts: within.postKeys.size } } : {}),
                 // the Space could not answer: these are name matches, and a search a minute later is semantic again
                 ...(r.fallback ? { fallback: "text" } : {}),
             },

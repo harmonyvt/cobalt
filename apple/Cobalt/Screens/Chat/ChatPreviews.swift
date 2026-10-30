@@ -100,6 +100,21 @@ private struct ThreadPreview: View {
         }
     }
 }
+#Preview("thread · scored list streaming in", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.happy, tab: .chat) { model in
+        ThreadPreview(model: model, threadID: sampleThread) { model in
+            try? await model.chat.send(text: "which of these are furry", in: sampleThread)
+        }
+    }
+}
+#Preview("thread · scored list, dark", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.happy, tab: .chat) { model in
+        ThreadPreview(model: model, threadID: sampleThread) { model in
+            try? await model.chat.send(text: "which of these are furry", in: sampleThread)
+        }
+    }
+    .preferredColorScheme(.dark)
+}
 #Preview("thread · confirm card", traits: .fixedLayout(width: 390, height: 844)) {
     PreviewHost(.chatConfirm, tab: .chat) { model in ThreadPreview(model: model, threadID: confirmThread) }
 }

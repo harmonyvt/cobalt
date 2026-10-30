@@ -208,6 +208,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var editLivePush: Bool?
                 var chatLivePush: Bool?
                 var stillWebp: Bool?
+                var about: Bool?
+                var aboutSound: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -288,6 +290,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.editLivePush = f?.editLivePush ?? false
         caps.chatLivePush = (f?.chatLivePush ?? false) && caps.chat
         caps.stillWebp = (f?.stillWebp ?? false) && caps.galleryMake
+        caps.about = (f?.about ?? false) && caps.search
+        caps.aboutSound = (f?.aboutSound ?? false) && caps.about
         return caps
     }
 
@@ -592,6 +596,23 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     public func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus {
         let req = try makeRequest("GET", "/library/search/post", query: [("key", postKey)], keyed: true, timeout: 20)
         return try await sendJSON(LibrarySearchStatus.self, req)
+    }
+
+    /// `GET /library/about?key=<post key>` (keyed, APP-API-CONTRACT 34.6): what the post is about. Built with the literal
+    /// path (not a generated endpoint helper), so it compiles before `Endpoints.swift` is regenerated. `404
+    /// error.library.not_found` is `CobaltError.api`.
+    public func libraryAbout(postKey: String) async throws -> LibraryAbout {
+        let req = try makeRequest("GET", "/library/about", query: [("key", postKey)], keyed: true, timeout: 20)
+        return try await sendJSON(LibraryAbout.self, req)
+    }
+
+    /// `PATCH /library/about {"key", "tags"}` (keyed): the owner's tags (`null` resets to the server's own). `400
+    /// error.library.bad_request` is `CobaltError.api`.
+    public func setLibraryAboutTags(postKey: String, tags: [String]?) async throws -> LibraryAbout {
+        let req = try makeRequest("PATCH", "/library/about", keyed: true, timeout: 20)
+        var object: [String: Any] = ["key": postKey]
+        object["tags"] = tags.map { $0 as Any } ?? NSNull()
+        return try await sendJSON(LibraryAbout.self, req, body: Self.jsonBody(object))
     }
 
     /// `GET /library/map` (keyed): the embedded posts with their vectors, newest first. Errors as the keyed calls throw

@@ -359,3 +359,157 @@ struct LibrarySearchModelTests {
         await #expect(throws: PipelineFailure.unsupported) { try await off.library.searchStatus(postKey: harbourPost) }
     }
 }
+
+// MARK: - What it's about (APP-API-CONTRACT 34)
+
+struct LibraryAboutTests {
+    private static let full = """
+    {"status":"success","post_key":"fur1","probe":"done",
+     "about":{"sentence":"a fox fursuit in an airplane seat.","tags":["fursuit","furry","airplane"],"edited":true,
+              "sound_tags":["laughter"],"transcript":"is that a fox in first class","language":"en","frames":3,
+              "has_audio":true,"model":"claude-haiku-5-5","written_at":1790000000000},
+     "words":[{"word":"fursuit","score":0.42},{"word":"airplane","score":0.31},{"nope":true}],
+     "neighbours":[{"post_id":"p1","score":0.7},{"post_id":"gone","score":0.5}],
+     "posts":{"p1":{"id":"p1","created_at":1790000000000,"files":[]}},
+     "index":{"post_key":"fur1","state":"indexed","attempts":1,"input":{"title":"Furry in Furst Class?!?!","text":"t"}}}
+    """
+
+    @Test func theWholeBodyDecodes() throws {
+        let a = try LibraryAbout.decode(Data(Self.full.utf8))
+        #expect(a.postKey == "fur1" && a.probe == .done)
+        #expect(a.about?.sentence == "a fox fursuit in an airplane seat." && a.about?.tags == ["fursuit", "furry", "airplane"])
+        #expect(a.about?.edited == true && a.about?.soundTags == ["laughter"] && a.about?.language == "en")
+        #expect(a.about?.transcript == "is that a fox in first class" && a.about?.frames == 3 && a.about?.hasAudio == true)
+        #expect(a.about?.model == "claude-haiku-5-5" && a.about?.writtenAt == Date(timeIntervalSince1970: 1_790_000_000))
+        #expect(a.words == [.init(word: "fursuit", score: 0.42), .init(word: "airplane", score: 0.31)], "a word that does not decode is dropped")
+        #expect(a.neighbours.map(\.postID) == ["p1", "gone"] && a.posts.keys.sorted() == ["p1"])
+        #expect(a.neighbourPosts.map(\.post.id) == ["p1"] && a.neighbourPosts.first?.score == 0.7, "a neighbour with no post is skipped")
+        #expect(a.index?.state == .indexed && a.index?.input?.title == "Furry in Furst Class?!?!")
+    }
+
+    @Test func anOlderServersBodyDecodes() throws {
+        let before = try LibraryAbout.decode(Data(#"{"status":"success","post_key":"k","probe":"pending","about":null,"words":[]}"#.utf8))
+        #expect(before.probe == .pending && before.about == nil && before.words.isEmpty && before.neighbours.isEmpty)
+        #expect(before.posts.isEmpty && before.index == nil)
+        let minimal = try LibraryAbout.decode(Data(#"{"post_key":"k"}"#.utf8))
+        #expect(minimal.probe == .unknown && minimal.about == nil)
+        let future = try LibraryAbout.decode(Data(#"{"post_key":"k","probe":"queued","about":{"tags":"x","frames":"three"}}"#.utf8))
+        #expect(future.probe == .unknown && future.about?.tags == [] && future.about?.frames == 0 && future.about?.edited == false)
+        let none = try LibraryAbout.decode(Data(#"{"post_key":"k","probe":"none"}"#.utf8))
+        #expect(none.probe == LibraryAbout.Probe.none)
+        #expect(throws: (any Error).self) { try LibraryAbout.decode(Data(#"{"probe":"done"}"#.utf8)) }
+    }
+
+    @Test func blankWordsReadAsAbsent() throws {
+        let a = try LibraryAbout.decode(Data(#"{"post_key":"k","about":{"sentence":"  ","transcript":"","language":null,"tags":[]}}"#.utf8))
+        #expect(a.about?.sentence == nil && a.about?.transcript == nil && a.about?.language == nil)
+    }
+
+    @Test func tagsCleanTheWayTheServerKeepsThem() {
+        #expect(LibraryAbout.cleanTag("  Fur  Suit ") == "fur suit")
+        #expect(LibraryAbout.cleanTag("   ") == nil)
+        #expect(LibraryAbout.cleanTag(String(repeating: "a", count: 31)) == nil)
+        #expect(LibraryAbout.cleanTag(String(repeating: "a", count: 30)) != nil)
+        #expect(LibraryAbout.cleanTags(["Cat", "cat", " ", "Dog"]) == ["cat", "dog"])
+        #expect(LibraryAbout.cleanTags((0..<40).map { "t\($0)" }).count == LibraryAbout.maxTags)
+    }
+
+    @Test func theCapabilitiesAreReadAndNeedSearch() throws {
+        func caps(_ features: String) throws -> Capabilities {
+            let json = #"{"server":"cobalt-cloudflare","features":\#(features),"key":"valid"}"#
+            return try #require(HTTPCobaltClient.parseForkCapabilities(Data(json.utf8)))
+        }
+        let on = try caps(#"{"library":true,"search":true,"about":true,"about_sound":true}"#)
+        #expect(on.about && on.aboutSound)
+        let noSound = try caps(#"{"library":true,"search":true,"about":true}"#)
+        #expect(noSound.about && !noSound.aboutSound)
+        let noSearch = try caps(#"{"library":true,"about":true,"about_sound":true}"#)
+        #expect(!noSearch.about && !noSearch.aboutSound, "the description is read through the search")
+        #expect(try !caps(#"{"library":true,"search":true}"#).about)
+        #expect(!Capabilities.unknown.about && !Capabilities.unknown.aboutSound)
+    }
+}
+
+@Suite(.serialized)
+struct LibraryAboutHTTPTests {
+    @Test func theReadIsAKeyedGetByKey() async throws {
+        let server = try await LoopbackServer.start { req in
+            guard req.path == "/library/about" else { return .init(status: 404) }
+            if req.query == "key=gone" {
+                return .json(#"{"status":"error","error":{"code":"error.library.not_found"}}"#, status: 404)
+            }
+            return .json(#"{"status":"success","post_key":"a b","probe":"done","words":[{"word":"cat","score":0.3}]}"#)
+        }
+        defer { server.stop() }
+        let client = HTTPCobaltClient(baseURL: server.base, apiKey: { searchKey })
+        let about = try await client.libraryAbout(postKey: "a b")
+        #expect(server.requests.first?.method == "GET" && server.requests.first?.query == "key=a%20b")
+        #expect(server.requests.first?.headers["authorization"] == "Api-Key \(searchKey)")
+        #expect(about.probe == .done && about.words.map(\.word) == ["cat"])
+        await #expect(throws: CobaltError.api(code: "error.library.not_found", httpStatus: 404)) {
+            try await client.libraryAbout(postKey: "gone")
+        }
+    }
+
+    @Test func theTagsArePatchedAndNilSendsNull() async throws {
+        let server = try await LoopbackServer.start { req in
+            guard req.path == "/library/about", req.method == "PATCH" else { return .init(status: 404) }
+            return .json(#"{"status":"success","post_key":"k","probe":"done","about":{"tags":["cat"],"edited":true}}"#)
+        }
+        defer { server.stop() }
+        let client = HTTPCobaltClient(baseURL: server.base, apiKey: { searchKey })
+        let set = try await client.setLibraryAboutTags(postKey: "k", tags: ["cat"])
+        #expect(set.about?.edited == true && set.about?.tags == ["cat"])
+        _ = try await client.setLibraryAboutTags(postKey: "k", tags: nil)
+        _ = try await client.setLibraryAboutTags(postKey: "k", tags: [])
+        let bodies = try server.requests.map { try #require(try JSONSerialization.jsonObject(with: $0.body) as? [String: Any]) }
+        #expect(bodies[0]["key"] as? String == "k" && bodies[0]["tags"] as? [String] == ["cat"])
+        #expect(bodies[1]["tags"] is NSNull && bodies[1]["key"] as? String == "k", "nil resets: a JSON null, not a missing field")
+        #expect((bodies[2]["tags"] as? [String])?.isEmpty == true, "an empty list clears the tags")
+    }
+}
+
+struct LibraryAboutPreviewTests {
+    /// The preview server on the real clock with no waiting (`timeScale` 0).
+    private var client: PreviewClient {
+        PreviewClient(scenario: .happy, timeScale: 0, clock: SystemClock(), search: .ready)
+    }
+
+    @Test func thePreviewServerKeepsTheOwnersTagsAndResets() async throws {
+        let client = client
+        let key = PreviewData.aboutFursuitKey
+        let first = try await client.libraryAbout(postKey: key)
+        #expect(first.about?.edited == false && first.words.first?.word == "fursuit" && first.neighbours.count == 4)
+        #expect(first.index?.input?.title == "Furry in Furst Class?!?!" && first.neighbourPosts.count == 4)
+        let edited = try await client.setLibraryAboutTags(postKey: key, tags: ["Fox", "fox", "plane"])
+        #expect(edited.about?.edited == true && edited.about?.tags == ["fox", "plane"])
+        let again = try await client.libraryAbout(postKey: key)
+        #expect(again.about?.tags == ["fox", "plane"], "the edit stays")
+        let reset = try await client.setLibraryAboutTags(postKey: key, tags: nil)
+        #expect(reset.about?.edited == false && reset.about?.tags.first == "fursuit")
+        await #expect(throws: CobaltError.api(code: "error.library.not_found", httpStatus: 404)) {
+            try await client.libraryAbout(postKey: "nope")
+        }
+    }
+
+    @Test func everyPreviewStateIsThere() async throws {
+        let client = client
+        let pending = try await client.libraryAbout(postKey: "Dd7P496wolG")
+        #expect(pending.probe == .pending && pending.about == nil && pending.words.isEmpty)
+        let undescribed = try await client.libraryAbout(postKey: "2105432512428445875")
+        #expect(undescribed.probe == .done && undescribed.about == nil)
+        let image = try await client.libraryAbout(postKey: "Dd5JFkMDt4N")
+        #expect(image.probe == LibraryAbout.Probe.none && image.about?.hasAudio == false && image.about?.soundTags.isEmpty == true)
+    }
+}
+
+@MainActor
+struct LibraryAboutModelTests {
+    @Test func aServerWithoutTheFeatureIsUnsupported() async {
+        let rig = SearchRig(.off)
+        await #expect(throws: PipelineFailure.unsupported) { try await rig.library.about(postKey: PreviewData.aboutFursuitKey) }
+        await #expect(throws: PipelineFailure.unsupported) {
+            try await rig.library.setAboutTags(postKey: PreviewData.aboutFursuitKey, tags: ["a"])
+        }
+    }
+}

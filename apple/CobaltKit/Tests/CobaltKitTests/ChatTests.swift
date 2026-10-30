@@ -1508,3 +1508,83 @@ struct ChatConfirmStoreTests {
         #expect(!app.chat.isBusy(thread))
     }
 }
+
+// MARK: - the ranked list (34.6)
+
+private let wireRanked = """
+{"title":"furry videos","query":"furry","within":"lia share 11","hits":[
+ {"post_id":"a","score":0.62,"why":["fursuit","costume"]},{"post_id":"b","score":null,"why":[]},
+ {"post_id":"c"},{"nope":true},{"post_id":"d","score":"high","why":"x"}]}
+"""
+
+struct ChatRankedTests {
+    private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+        try CobaltJSON.decoder().decode(type, from: Data(json.utf8))
+    }
+
+    @Test func aRankedListDecodesLeniently() throws {
+        let r = try decode(ChatRanked.self, wireRanked)
+        #expect(r.title == "furry videos" && r.query == "furry" && r.within == "lia share 11")
+        #expect(r.hits.map(\.postID) == ["a", "b", "c", "d"], "a hit with no post id is dropped")
+        #expect(r.hits[0].score == 0.62 && r.hits[0].why == ["fursuit", "costume"])
+        #expect(r.hits[1].score == nil && r.hits[2].score == nil && r.hits[2].why.isEmpty)
+        #expect(r.hits[3].score == nil && r.hits[3].why.isEmpty, "an odd field reads as absent")
+        #expect(r.topScore == 0.62)
+        let bare = try decode(ChatRanked.self, #"{"title":" ","hits":[]}"#)
+        #expect(bare.title == nil && bare.within == nil && bare.hits.isEmpty && bare.topScore == nil)
+    }
+
+    @Test func aMessageCarriesItAndOlderOnesHaveNone() throws {
+        let m = try decode(ChatMessage.self, #"{"id":"1","role":"assistant","text":"x","ranked":\#(wireRanked),"created_at":1}"#)
+        #expect(m.ranked?.hits.count == 4)
+        let null = try decode(ChatMessage.self, #"{"id":"1","role":"assistant","text":"x","ranked":null,"created_at":1}"#)
+        let absent = try decode(ChatMessage.self, #"{"id":"1","role":"assistant","text":"x","created_at":1}"#)
+        let odd = try decode(ChatMessage.self, #"{"id":"1","role":"assistant","text":"kept","ranked":"nope","created_at":1}"#)
+        #expect(null.ranked == nil && absent.ranked == nil && odd.ranked == nil && odd.text == "kept")
+    }
+
+    @Test func theSSERankedEventParsesWithAndWithoutPosts() {
+        var parser = ChatSSEParser()
+        let events = parser.feed(Array("event: ranked\ndata: {\"ranked\":\(wireRanked)}\n\n".utf8))
+        guard case .ranked(let r, let posts)? = events.first else { Issue.record("\(events)"); return }
+        #expect(r.hits.count == 4 && posts.isEmpty)
+        var withPosts = ChatSSEParser()
+        let post = #"{"id":"a","created_at":1790000000000,"files":[]}"#
+        let more = withPosts.feed(Array("event: ranked\ndata: {\"ranked\":\(wireRanked),\"posts\":{\"a\":\(post)}}\n\n".utf8))
+        guard case .ranked(_, let shown)? = more.first else { Issue.record("\(more)"); return }
+        #expect(shown.map(\.id) == ["a"])
+        var bad = ChatSSEParser()
+        #expect(bad.feed(Array("event: ranked\ndata: {\"ranked\":\"x\"}\n\n".utf8)).isEmpty)
+    }
+
+    @Test func doneCarriesItAndTheEventSetsItOnTheRunningMessage() {
+        var parser = ChatSSEParser()
+        let done = #"{"message":{"id":"102","role":"assistant","text":"x","ranked":\#(wireRanked),"created_at":1},"thread":\#(wireThread)}"#
+        guard case .done(let message, _)? = parser.feed(Array("event: done\ndata: \(done)\n\n".utf8)).first else {
+            Issue.record("no done"); return
+        }
+        #expect(message.ranked?.title == "furry videos")
+
+        let running = ChatMessage(id: "2", role: .assistant, status: .running, createdAt: Date(timeIntervalSince1970: 1))
+        let old = ChatMessage(id: "0", role: .assistant, createdAt: Date(timeIntervalSince1970: 0))
+        var c = ChatThreadContent(thread: ChatThread(id: "t", title: "t", createdAt: Date(), updatedAt: Date()), messages: [old, running])
+        let first = ChatRanked(title: "a", hits: [.init(postID: "p1", score: 0.5)])
+        let post = try! decode(LibraryPost.self, #"{"id":"p1","created_at":1790000000000,"files":[]}"#)
+        c.apply(.ranked(first, posts: [post]))
+        #expect(c.messages[1].ranked == first && c.messages[0].ranked == nil && c.posts["p1"]?.id == "p1")
+        let second = ChatRanked(title: "b", hits: [])
+        c.apply(.ranked(second, posts: []))
+        #expect(c.messages[1].ranked == second, "a later call replaces it")
+        var final = running
+        final.status = .done
+        final.ranked = second
+        c.apply(.done(final, c.thread))
+        #expect(c.messages[1].status == .done && c.messages[1].ranked == second)
+        #expect(!ChatEvent.ranked(first, posts: []).isFinal)
+    }
+
+    @Test func theTrackerIgnoresItAndAStreamedReplyShowsIt() {
+        var tracker = ChatLiveTracker(since: Date(timeIntervalSince1970: 1))
+        #expect(tracker.apply(.ranked(ChatRanked(), posts: [])) == .none)
+    }
+}

@@ -262,8 +262,12 @@ describe("defineOp and the registry", () => {
             "look",
             "show",
             "collage",
+            // section 34.6
+            "rank",
             "links.list",
             "collections.list",
+            "library.about",
+            "library.about.set",
             "queue",
             "library.save",
             "library.title",
@@ -360,7 +364,12 @@ describe("the model's cobalt API", () => {
     it("is generated from the ops: namespaced, with named types, and search only while it is on", () => {
         expect(TOOL_TYPES).toContain("type Post = {");
         expect(TOOL_TYPES).toContain("  library: {\n");
-        expect(TOOL_TYPES).toContain("search(query: string, limit?: number): Promise<(Post & { score: number })[]>;");
+        // section 34.6: search(query, { limit, within }); the old search(query, limit) still parses
+        expect(TOOL_TYPES).toContain("search(query: string, opts?: {\n      limit?: number;");
+        expect(TOOL_TYPES).toContain("within?: string | { collection: string } | { link: string } | { posts: string[] };");
+        expect(TOOL_TYPES).toContain("why: string[]; // up to 3 of its tags or sound tags, closest to the query first");
+        expect(TOOL_TYPES).toContain("about(key: string): Promise<{");
+        expect(TOOL_TYPES).toContain("rank(hits: (string | {");
         expect(TOOL_TYPES).toContain("post(id: string): Promise<Post & { files: PostFile[] }>;");
         expect(TOOL_TYPES).toContain("look(ids: string[]): Promise<number>;");
         expect(TOOL_TYPES).toContain("collage(ids: string[], opts?: { title?: string; query?: string }): Promise<number>;");
