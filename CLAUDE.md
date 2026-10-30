@@ -101,6 +101,10 @@ the files and a real run before anything is called done.
   the fixture unchanged. Ops live in `registry/ops/<area>.ts`; tier `ask` ops pause for a confirm card (DO storage, 15 min).
   After changing an op run `npm run gen` in `deploy/cloudflare/api`: it rewrites `openapi.json`, the contract's route
   index and `apple/CobaltKit/.../API/Generated/Endpoints.swift` (section 33.13); `npm test` fails while they are stale.
+- MCP server (`APP-API-CONTRACT.md` section 34): `POST /mcp` on the API host serves the chat AI's ops as MCP tools
+  (`src/mcp.ts`, `src/registry/ops/mcp.ts`), auth `Bearer <client key>`, each key one MCP "thread" (`chat:<thread>`, same
+  caps). `upload_begin` mints a 15-minute `PUT /mcp/upload/<token>` link for local files. A new chat op appears there too;
+  hide chat-only calls in `MCP_SKIPPED_CALLS`, MCP-only ops use `when: (f) => f.mcp === true`.
 - Workbench (`APP-API-CONTRACT.md` section 33.11): the chat AI's last-resort Linux box (`cobalt.box.run`/`save`), the
   `Workbench` DO (`api/src/workbench*.ts`) on container app `cobalt-api-workbench` (`deploy/cloudflare/workbench/`, basic,
   one instance). No secrets, no own internet: every HTTP(S) request passes the Worker's outbound rule (19.2 + our own zone

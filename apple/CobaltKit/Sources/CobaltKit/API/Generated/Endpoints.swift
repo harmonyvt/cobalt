@@ -505,6 +505,26 @@ enum Endpoints {
     static func mediaDelete(name: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "media.delete", method: "DELETE", path: "/media/\(HTTPCobaltClient.encode(name))", auth: .keyOrService)
     }
+
+    /// `POST /mcp` (op `mcp`, auth open): The MCP server (POST /mcp, section 34).
+    static func mcp() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "mcp", method: "POST", path: "/mcp", auth: .open)
+    }
+
+    /// `GET /mcp` (op `mcp.stream`, auth open): GET /mcp: 405 (no server-sent event stream).
+    static func mcpStream() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "mcp.stream", method: "GET", path: "/mcp", auth: .open)
+    }
+
+    /// `DELETE /mcp` (op `mcp.end`, auth open): DELETE /mcp: 405 (no sessions to end).
+    static func mcpEnd() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "mcp.end", method: "DELETE", path: "/mcp", auth: .open)
+    }
+
+    /// `PUT /mcp/upload/:token` (op `mcp.upload`, auth capability): The bytes of an MCP upload link (PUT /mcp/upload/<token>).
+    static func mcpUpload(token: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "mcp.upload", method: "PUT", path: "/mcp/upload/\(HTTPCobaltClient.encode(token))", auth: .capability)
+    }
 }
 
 // MARK: - Reply types

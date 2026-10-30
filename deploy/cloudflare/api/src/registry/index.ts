@@ -8,6 +8,7 @@ import { LIBRARY_ADMIN_OPS } from "./ops/library-admin";
 import { LIVE_OPS } from "./ops/live";
 import { LIBRARY_WRITE_OPS } from "./ops/library-writes";
 import { MAKE_OPS } from "./ops/make";
+import { MCP_OPS } from "./ops/mcp";
 import { SHARE_OPS } from "./ops/share";
 import { STAGE_OPS } from "./ops/stage";
 import { SYSTEM_OPS } from "./ops/system";
@@ -25,6 +26,7 @@ export const REGISTRY = new Registry([
     ...BOX_OPS,
     ...LIVE_OPS,
     ...SYSTEM_OPS,
+    ...MCP_OPS,
     ...HOST_OPS,
 ]);
 
