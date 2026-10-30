@@ -192,6 +192,7 @@ type Route =
     | { name: "links" }
     | { name: "private"; kind: "items" | "sets"; id: string }
     | { name: "privateRotate"; kind: "items" | "sets"; id: string }
+    | { name: "linkEdit"; id: string }
     | { name: "studioDelete"; id: string }
     | { name: "status" }
     | { name: "hiddenRules" }
@@ -216,6 +217,7 @@ const ALLOWED: Record<Route["name"], string[]> = {
     links: ["GET"],
     private: ["PUT", "DELETE"],
     privateRotate: ["POST"],
+    linkEdit: ["PATCH"],
     studioDelete: ["DELETE"],
     status: ["POST"],
     hiddenRules: ["GET", "POST"],
@@ -236,6 +238,7 @@ export function matchRoute(pathname: string): Route | null {
     if (pathname === "/api/library/hidden/rules") return { name: "hiddenRules" };
     if (pathname === "/api/library/hidden/rules/preview") return { name: "hiddenPreview" };
     let m: RegExpExecArray | null;
+    if ((m = /^\/api\/library\/links\/([0-9]{19})$/.exec(pathname))) return { name: "linkEdit", id: m[1]! };
     if ((m = /^\/api\/library\/hidden\/rules\/([0-9A-Za-z]{16})$/.exec(pathname))) return { name: "hiddenRule", id: m[1]! };
     if ((m = /^\/api\/library\/private\/(items\/[0-9A-Za-z]{16}|sets\/[0-9]{10,24})$/.exec(pathname))) {
         const [kind, id] = m[1]!.split("/") as ["items" | "sets", string];
@@ -323,6 +326,8 @@ export async function handleLibrary(request: Request, env: Env, deps?: Partial<L
                     await callApi(ctx, `/share/private/${route.kind}/${route.id}/rotate`, { method: "POST" }),
                     (b) => ({ status: "success", link: b.link ?? null }),
                 );
+            case "linkEdit":
+                return await editLink(ctx, request, route.id);
             case "studioDelete":
                 return await studioDelete(ctx, route.id);
             case "status":
@@ -862,6 +867,28 @@ async function links(ctx: Ctx): Promise<Response> {
         links: Array.isArray(b.links) ? b.links : [],
         new_links: b.new_links === "private" ? "private" : "public",
     }));
+}
+
+// PATCH /api/library/links/<19 digits> (APP-API-CONTRACT.md section 41.3): relays { items?, title?, expect? } to
+// PATCH /share/sets/<id> and answers its status and body as is. Unlike relayResponse, an error keeps its whole
+// body: 409 error.share.changed carries the current `set`, error.share.not_public its `items`, error.hidden its `ids`.
+async function editLink(ctx: Ctx, request: Request, id: string): Promise<Response> {
+    const body = await readJson(request);
+    if (!body) return err(400, "error.library.bad_request");
+    const res = await callApi(ctx, `/share/sets/${id}`, { method: "PATCH", body });
+    if (!res || res.status === 401 || res.status === 403) return err(502, "error.library.upstream");
+    let out: unknown;
+    try {
+        out = JSON.parse(await res.text());
+    } catch {
+        return err(502, "error.library.upstream");
+    }
+    if (!isObject(out)) return err(502, "error.library.upstream");
+    if (res.status >= 400 || out.status === "error") {
+        const e = out.error;
+        if (!(isObject(e) && typeof e.code === "string")) return err(res.status >= 400 ? res.status : 502, "error.library.upstream");
+    }
+    return json(res.status, out);
 }
 
 // PUT /api/library/private/(items|sets)/<id> turns the private link on, DELETE revokes it. The API does the work

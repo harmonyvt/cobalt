@@ -250,6 +250,7 @@ const ROUTES: [string, string][] = [
     ["DELETE", "/api/library/items/aaaaaaaaaaaaaaaa"],
     ["DELETE", `/api/library/studios/${SID}`],
     ["GET", "/api/library/links"],
+    ["PATCH", `/api/library/links/${SET}`],
     ["PUT", "/api/library/private/items/aaaaaaaaaaaaaaaa"],
     ["DELETE", "/api/library/private/items/aaaaaaaaaaaaaaaa"],
     ["POST", "/api/library/private/items/aaaaaaaaaaaaaaaa/rotate"],
