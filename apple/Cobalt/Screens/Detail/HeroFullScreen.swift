@@ -135,7 +135,7 @@ private struct FullScreenVideo: View {
         .preferredColorScheme(.dark)
         .task {
             AudioPolicy.playback()
-            let item = AVPlayerItem(url: url)
+            let item = KeyedStream.item(url)
             player.replaceCurrentItem(with: item)
             player.isMuted = false
             await item.seek(to: start.isValid ? start : .zero)
