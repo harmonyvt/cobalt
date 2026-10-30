@@ -94,10 +94,12 @@ struct LibraryPeek: View {
 
     private var aspect: CGFloat { CGFloat(MasonryPlan.clampAspect(row.faceAspect)) }
 
-    /// A video's file to loop: this device's copy, else the hosted link, else the public link.
+    /// A video's file to loop: this device's copy, else the hosted link, else the public link, else the private copy
+    /// streamed with the key.
     private var videoURL: URL? {
         guard !face.playsAsWebp, (face.duration ?? 0) > 0 else { return nil }
-        return face.local?.fileURL ?? face.hosted?.url ?? face.publicURL
+        let kept = face.local?.fileURL.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        return kept ?? face.hosted?.url ?? face.publicURL ?? HeroRemote.keyedStream(face.file)
     }
 
     private var webpSource: AnimatedImageView.Source? {

@@ -29,7 +29,8 @@ public enum HeroItems {
     /// split, plays as it is. The composition spans the video track's own time range, loaded from the file (never
     /// an estimate), so the item is as long as the clip's picture.
     public static func pictureOnly(_ url: URL) async -> AVPlayerItem {
-        let asset = AVURLAsset(url: url)
+        // a private library file plays through its keyed stream (KeyedStream); any other URL as it is
+        let asset = KeyedStream.asset(url)
         do {
             guard try await !asset.loadTracks(withMediaType: .audio).isEmpty,
                   let source = try await asset.loadTracks(withMediaType: .video).first else { return AVPlayerItem(asset: asset) }

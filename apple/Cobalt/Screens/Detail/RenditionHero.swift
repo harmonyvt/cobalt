@@ -86,8 +86,8 @@ struct HeroRemote: Equatable {
             return
         }
         if r.isMade || r.isItem {
-            // a made mp4 and a video item: the public file plays muted over the server's poster
-            if let url = r.publicURL ?? r.file?.url {
+            // a made mp4 and a video item: the public file plays muted over the server's poster (a private one streams)
+            if let url = r.publicURL ?? r.file?.url ?? Self.keyedStream(r.file) {
                 playableVideo = url
                 still = serverPoster ?? RemotePoster(url: url, isVideo: true)
             } else {
@@ -105,6 +105,10 @@ struct HeroRemote: Equatable {
         } else if let url = r.hosted?.url ?? r.publicURL, r.hosted?.contentType?.lowercased().hasPrefix("image/") != true {
             playableVideo = url
             still = serverPoster ?? RemotePoster(url: url, isVideo: true)
+        } else if let url = Self.keyedStream(r.file) {
+            // the private copy, not kept on this device: streamed from the server with the key
+            playableVideo = url
+            still = serverPoster
         } else {
             still = serverPoster
         }
@@ -114,6 +118,17 @@ struct HeroRemote: Equatable {
         if still == nil, !r.isWebp, let url = item?.webps.last(where: { $0.publicURL != nil })?.publicURL {
             still = RemotePoster(url: url, isVideo: false)
         }
+    }
+
+    /// The keyed stream of a private library video (KeyedStream): nil for an image, a webp, or no server file.
+    static func keyedStream(_ file: LibraryFile?) -> URL? {
+        guard let file, file.source != .webp, file.source != .emote else { return nil }
+        let type = file.contentType?.lowercased() ?? ""
+        let ext = (file.name as NSString).pathExtension.lowercased()
+        let isVideo = type.hasPrefix("video/")
+            || (type.isEmpty && UTType(filenameExtension: ext)?.conforms(to: .movie) == true)
+        guard isVideo else { return nil }
+        return KeyedStream.url(itemID: file.id, ext: ext.isEmpty ? "mp4" : ext)
     }
 }
 
@@ -393,7 +408,7 @@ private struct RemoteVideo: View {
         if !withSound {
             let resume = player.currentTime()
             let running = player.timeControlStatus != .paused
-            let full = AVPlayerItem(url: url)
+            let full = KeyedStream.item(url)
             player.replaceCurrentItem(with: full)
             watchLoop(of: full, on: player)
             await full.seek(to: resume)

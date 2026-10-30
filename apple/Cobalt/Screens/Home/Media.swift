@@ -452,7 +452,7 @@ private final class LoopHolder {
     func start(url: URL, span: ClosedRange<Double>?) {
         stop()
         AudioPolicy.ambient()
-        let item = AVPlayerItem(url: url)
+        let item = KeyedStream.item(url)
         let queue = AVQueuePlayer()
         queue.isMuted = true
         let lower = span?.lowerBound ?? 0

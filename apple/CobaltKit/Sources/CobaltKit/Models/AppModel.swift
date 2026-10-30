@@ -235,6 +235,8 @@ public final class AppModel {
             jobs: .shared(), tools: SystemMediaTools(), clock: SystemClock(), photos: SystemPhotosSaver(),
             clipboard: SystemClipboard(), intake: SystemFileIntake(), isPreview: false)
         ctx.recordsJobs = true
+        // private videos stream from the server with the current client's key (KeyedStream)
+        KeyedStream.requests = { [unowned ctx] in ctx.client as? any RemoteFileRequests }
         ctx.notifier = SystemNotifier()          // asked on the first run, not here (HIG: ask in context)
         ctx.background.activity = SystemAppActivity()
         ctx.background.grace = SystemBackgroundGrace()
