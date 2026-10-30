@@ -3,7 +3,8 @@
 # The image must be linux/amd64 (Cloudflare Containers).
 FROM node:24-alpine
 
-# ffmpeg from Alpine: libx264 (the encoder), libzscale/zimg (the HDR tone-map), and the gif / png / mjpeg decoders.
+# ffmpeg from Alpine: libx264 (the encoder), libzscale/zimg (the HDR tone-map), and the gif / png / mjpeg / webp decoders
+# (animated webps are turned into APNGs by helper/webp.js, section 39, so the apng demuxer too).
 RUN apk add --no-cache ffmpeg
 
 # Fail the build, not a render, when the ffmpeg in the image lacks something the compiler's graph needs.
@@ -15,6 +16,9 @@ RUN set -e; \
     ffmpeg -hide_banner -decoders 2>/dev/null | grep -qE ' gif '; \
     ffmpeg -hide_banner -decoders 2>/dev/null | grep -qE ' png '; \
     ffmpeg -hide_banner -decoders 2>/dev/null | grep -qE ' mjpeg '; \
+    ffmpeg -hide_banner -decoders 2>/dev/null | grep -qE ' webp '; \
+    ffmpeg -hide_banner -decoders 2>/dev/null | grep -qE ' apng '; \
+    ffmpeg -hide_banner -demuxers 2>/dev/null | grep -qE ' apng '; \
     ffmpeg -hide_banner -filters  2>/dev/null | grep -qE ' (colorchannelmixer|overlay|amix|adelay|atempo|loop|tpad|concat|anullsrc|pan) ' ; \
     ffmpeg -version | head -1
 

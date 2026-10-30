@@ -1700,6 +1700,44 @@
         }
       }
     },
+    "/library/items/{id}/cutout": {
+      "post": {
+        "operationId": "library.cutout",
+        "summary": "Remove a picture's background into a new png (POST /library/items/<id>/cutout); the chat uses make.cutout.",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/library/items/{id}/file": {
       "get": {
         "operationId": "library.file",

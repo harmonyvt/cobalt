@@ -33,7 +33,8 @@ test("exports are the ones 31.3 pins", () => {
     assert.equal(T.EDIT_MAX_INPUT_BYTES, 6 * 1024 ** 3);
     assert.equal(T.EDIT_MAX_OUTPUT_BYTES, 4 * 1024 ** 3);
     assert.deepEqual(T.EDIT_CANVASES, [[1080, 1920], [720, 1280], [1080, 1080], [720, 720], [1920, 1080], [1280, 720]]);
-    assert.deepEqual(T.EDIT_SOURCE_TYPES, ["video/mp4", "video/quicktime", "video/x-m4v", "image/gif", "image/jpeg", "image/png"]);
+    // section 39 adds image/webp (stills, and animated webps that loop like gifs)
+    assert.deepEqual(T.EDIT_SOURCE_TYPES, ["video/mp4", "video/quicktime", "video/x-m4v", "image/gif", "image/jpeg", "image/png", "image/webp"]);
 });
 
 test("timeline.js has no imports (the Worker bundles it, the image has no monorepo)", () => {

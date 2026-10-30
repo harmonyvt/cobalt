@@ -686,3 +686,17 @@ Copy (widget, lowercase): queued `waiting to render` / `1 render ahead` / `N ren
 rendering `rendering`; finishing `saving the video`; done `video ready` with `m:ss · w×h · size`; failed `couldn't render` with
 the reason; cancelled `cancelled`; stale `waiting for capystore…`. Compact island: a film mark and the percent (`next` / `+N`
 while queued); minimal: a progress ring. A tap opens the queue (`cobalt-apple://jobs`).
+
+## 12. Layers, images, emotes and cutouts (addendum, 2026-10-30; server half: `deploy/cloudflare/APP-API-CONTRACT.md` section 39)
+
+Planned, not built yet (mockup https://claude.ai/artifact/VqimMVfpEKT12kxKEkLhqb):
+
+- `EditOverlay.track` (0..7, omitted at 0, same validation as the server); the preview composition gets one video track
+  per layer and the compositor draws every active overlay, low track first.
+- Timeline: lanes L1..L8 under the main track (iPhone shows 3 and "+N more"); drag between lanes; overlap allowed across
+  lanes only.
+- Add sheet: videos / images / emotes tabs (emotes = library files with source `emote`, animated webps via ImageIO).
+- Cutout sheet: auto (Vision `VNGenerateForegroundInstanceMaskRequest`) / white / colour (eyedropper), tolerance,
+  "keep white inside" (= `edges_only`), soften, before/after on a checkerboard; the PNG is uploaded through
+  `POST /library/items/<id>/cutout` with `content-type: image/png`. When Vision can't (Mac without the model, failure)
+  and `features.cutout_auto`, the server makes it.
