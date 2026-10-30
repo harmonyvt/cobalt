@@ -146,6 +146,49 @@ describe("GET /emotes", () => {
         expect(items[0].library_id).toBeNull();
     });
 
+    it("browses a sort without a name, pages, and asks 7TV for the right SortBy", async () => {
+        const { d } = world();
+        const sent: { query: string; variables: Record<string, unknown> }[] = [];
+        const fetchImpl = async (_url: unknown, init?: RequestInit) => {
+            sent.push(JSON.parse(String(init?.body)));
+            return jsonRes({ data: { emotes: { search: { pageCount: 3, items: [emote()] } } } });
+        };
+        const daily = await searchEmotes(d, new URLSearchParams("sort=trending_daily&page=2"), fetchImpl as typeof fetch);
+        expect(daily.status).toBe(200);
+        expect(daily.body).toMatchObject({ sort: "trending_daily", page: 2, has_more: true, items: [{ id: CAT, width: 128, height: 128 }] });
+        expect(sent[0].variables).toEqual({ query: null, sort: { sortBy: "TRENDING_DAILY", order: "DESCENDING" }, page: 2, perPage: 24 });
+
+        const last = await searchEmotes(d, new URLSearchParams("q=cat&sort=top_monthly&page=3"), fetchImpl as typeof fetch);
+        expect(last.body).toMatchObject({ sort: "top_monthly", page: 3, has_more: false });
+        expect(sent[1].variables).toMatchObject({ query: "cat", sort: { sortBy: "TOP_MONTHLY" } });
+
+        // The old search (q only) is still top of all time.
+        const old = await searchEmotes(d, new URLSearchParams("q=cat"), fetchImpl as typeof fetch);
+        expect(old.body).toMatchObject({ sort: "top", page: 1 });
+        expect(sent[2].variables).toMatchObject({ sort: { sortBy: "TOP_ALL_TIME" } });
+
+        for (const bad of ["sort=hot", "sort=top&page=0", "sort=top&page=51", "sort=top&page=1.5", `sort=top&q=${"x".repeat(65)}`]) {
+            expect(await searchEmotes(d, new URLSearchParams(bad), fetchImpl as typeof fetch)).toMatchObject({
+                status: 400,
+                body: { error: { code: "error.emote.query" } },
+            });
+        }
+        expect(sent).toHaveLength(3);
+    });
+
+    it("lists 7TV's global set", async () => {
+        const { d } = world();
+        const sent: { query: string; variables: Record<string, unknown> }[] = [];
+        const fetchImpl = async (_url: unknown, init?: RequestInit) => {
+            sent.push(JSON.parse(String(init?.body)));
+            return jsonRes({ data: { emoteSets: { global: { emotes: { pageCount: 1, items: [{ alias: "catJAM", emote: emote() }] } } } } });
+        };
+        const r = await searchEmotes(d, new URLSearchParams("sort=global"), fetchImpl as typeof fetch);
+        expect(r.body).toMatchObject({ sort: "global", page: 1, has_more: false, items: [{ id: CAT, name: "catJAM" }] });
+        expect(sent[0].query).toContain("global");
+        expect(sent[0].variables).toEqual({ query: null, page: 1, perPage: 24 });
+    });
+
     it("is 502 when 7TV does not answer", async () => {
         const { d } = world();
         const r = await searchEmotes(d, new URLSearchParams("q=cat"), async () => {

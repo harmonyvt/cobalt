@@ -646,6 +646,12 @@ public struct PreviewClient: CobaltClient {
         return [Self.catJAM]
     }
 
+    public func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let hits = q.isEmpty || q.contains("cat") ? [Self.catJAM] : []
+        return EmotePage(items: page == 1 ? hits : [], page: page, hasMore: false)
+    }
+
     public func saveEmote(id: String) async throws -> SavedEmote {
         guard id == Self.catJAM.id else { throw CobaltError.api(code: "error.emote.not_found", httpStatus: 404) }
         return SavedEmote(id: "PrEvIeWemote0001", name: "catJAM", url: Self.catJAM.fileURL, emoteID: id)

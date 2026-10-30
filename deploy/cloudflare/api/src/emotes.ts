@@ -13,9 +13,33 @@ const MAX_BYTES = 15_000_000;
 const EMOTE_ID = /^[0-9A-Za-z]{20,32}$/;
 const PREVIEW_SCALES = [2, 1, 3, 4];
 
-const SEARCH = `query($query: String!, $perPage: Int!) {
-  emotes { search(query: $query, sort: { sortBy: TOP_ALL_TIME, order: DESCENDING }, page: 1, perPage: $perPage) {
-    items { id defaultName deleted flags { animated defaultZeroWidth private } images { url mime size scale width height frameCount } } } } }`;
+// Sort keys (section 20.1) -> 7TV v4 SortBy. "global" is 7TV's global set, not a search.
+export const EMOTE_SORTS = {
+    top: "TOP_ALL_TIME",
+    top_daily: "TOP_DAILY",
+    top_weekly: "TOP_WEEKLY",
+    top_monthly: "TOP_MONTHLY",
+    trending_daily: "TRENDING_DAILY",
+    trending_weekly: "TRENDING_WEEKLY",
+    trending_monthly: "TRENDING_MONTHLY",
+    new: "UPLOAD_DATE",
+    global: null,
+} as const;
+export type EmoteSort = keyof typeof EMOTE_SORTS;
+export const EMOTE_SORT_KEYS = Object.keys(EMOTE_SORTS) as EmoteSort[];
+const PER_PAGE = 24;
+const MAX_PAGE = 50;
+
+const FIELDS = "id defaultName deleted flags { animated defaultZeroWidth private } images { url mime size scale width height frameCount }";
+
+// An empty query (null) is "browse everything" in 7TV's v4 search.
+const SEARCH = `query($query: String, $sort: Sort!, $page: Int!, $perPage: Int!) {
+  emotes { search(query: $query, sort: $sort, page: $page, perPage: $perPage) {
+    pageCount items { ${FIELDS} } } } }`;
+
+const GLOBAL = `query($query: String, $page: Int!, $perPage: Int!) {
+  emoteSets { global { emotes(query: $query, page: $page, perPage: $perPage) {
+    pageCount items { emote { ${FIELDS} } } } } } }`;
 
 const ONE = `query($id: Id!) {
   emotes { emote(id: $id) { id defaultName deleted flags { animated defaultZeroWidth private } images { url mime size scale width height frameCount } } } }`;
@@ -160,15 +184,38 @@ export async function searchEmotes(
     fetchImpl: typeof fetch = fetch,
 ): Promise<StudioReply> {
     const query = (q.get("q") ?? "").trim();
-    if (query.length < 1 || query.length > 64) return err(400, "error.emote.query");
+    const sortRaw = q.get("sort");
+    // No sort: the old search (a name is required, top of all time). With a sort the name is optional.
+    if (sortRaw !== null && !(EMOTE_SORT_KEYS as string[]).includes(sortRaw)) return err(400, "error.emote.query");
+    const sort: EmoteSort = (sortRaw as EmoteSort | null) ?? "top";
+    if (query.length > 64 || (sortRaw === null && query.length < 1)) return err(400, "error.emote.query");
+    const pageRaw = q.get("page");
+    const page = pageRaw === null ? 1 : Number(pageRaw);
+    if (!Number.isInteger(page) || page < 1 || page > MAX_PAGE) return err(400, "error.emote.query");
+
     let data: unknown;
     try {
-        data = await gql(fetchImpl, SEARCH, { query, perPage: 24 });
+        data =
+            sort === "global"
+                ? await gql(fetchImpl, GLOBAL, { query: query || null, page, perPage: PER_PAGE })
+                : await gql(fetchImpl, SEARCH, {
+                      query: query || null,
+                      sort: { sortBy: EMOTE_SORTS[sort], order: "DESCENDING" },
+                      page,
+                      perPage: PER_PAGE,
+                  });
     } catch {
         return err(502, "error.emote.unavailable");
     }
-    const itemsRaw = (data as { emotes?: { search?: { items?: unknown } } })?.emotes?.search?.items;
-    const hits = (Array.isArray(itemsRaw) ? itemsRaw : []).map(readEmote).filter((h): h is EmoteHit => h !== null);
+    type Found = { pageCount?: unknown; items?: unknown };
+    const found: Found | undefined =
+        sort === "global"
+            ? (data as { emoteSets?: { global?: { emotes?: Found } } })?.emoteSets?.global?.emotes
+            : (data as { emotes?: { search?: Found } })?.emotes?.search;
+    const rawItems = Array.isArray(found?.items) ? found.items : [];
+    const itemsRaw = sort === "global" ? rawItems.map((i) => (i as { emote?: unknown })?.emote) : rawItems;
+    const pageCount = typeof found?.pageCount === "number" ? found.pageCount : 0;
+    const hits = itemsRaw.map(readEmote).filter((h): h is EmoteHit => h !== null);
     let saved = new Map<string, { id: string; url: string | null }>();
     try {
         saved = await savedIds(d.db, hits.map((h) => h.id));
@@ -186,11 +233,14 @@ export async function searchEmotes(
             animated: hit.animated,
             preview_url: preview.url,
             file_url: file.url,
+            width: file.width,
+            height: file.height,
             library_id: saved.get(hit.id)?.id ?? null,
             library_url: saved.get(hit.id)?.url ?? null,
         });
     }
-    return { status: 200, body: { items } };
+    const hasMore = rawItems.length > 0 && page < Math.min(pageCount, MAX_PAGE);
+    return { status: 200, body: { items, sort, page, has_more: hasMore } };
 }
 
 export async function saveEmote(

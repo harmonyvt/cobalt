@@ -23,6 +23,34 @@ public struct EmoteHit: Sendable, Equatable, Codable, Identifiable {
     }
 }
 
+/// How `GET /emotes?sort=` orders 7TV (APP-API-CONTRACT section 20.1). `global` is 7TV's global set.
+public enum EmoteSort: String, Sendable, CaseIterable, Codable, Identifiable {
+    case trendingDaily = "trending_daily"
+    case trendingWeekly = "trending_weekly"
+    case trendingMonthly = "trending_monthly"
+    case topDaily = "top_daily"
+    case topWeekly = "top_weekly"
+    case topMonthly = "top_monthly"
+    case top
+    case new
+    case global
+
+    public var id: String { rawValue }
+}
+
+/// One page of `GET /emotes?sort=&page=` (24 a page).
+public struct EmotePage: Sendable, Equatable {
+    public var items: [EmoteHit]
+    public var page: Int
+    public var hasMore: Bool
+
+    public init(items: [EmoteHit], page: Int, hasMore: Bool) {
+        self.items = items
+        self.page = page
+        self.hasMore = hasMore
+    }
+}
+
 /// What `POST /emotes` keeps: the library file id, its public URL, and the 7TV id.
 public struct SavedEmote: Sendable, Equatable, Decodable {
     public var id: String
