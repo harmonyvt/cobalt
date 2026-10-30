@@ -4504,3 +4504,130 @@ gets 404). They are tier `hidden` ops: the chat and MCP reach private links only
 - Every place that hands out a link (copy, share sheet, keyboard, Live Activity, Shortcuts) gives the live one: a
   file's `private_url` when set, else its share link.
 - **Deploy**: migration 0024 (owner), then API and web deploys, then an app release. No secret, no binding.
+
+## 37. Hidden posts and auto-hide rules (addendum, 2026-10-30; owner: "a way to have set up rules for videos that automatically [are] ... not shareable and they're hidden, and I can manually", then "I want to be able to select videos and have them in bulk be hidden. And also just all statuses like public, private, etc. And also agent needs to have the tools. And also the MCP too"; plan `hidden-posts/PLAN.md`, mockup https://claude.ai/artifact/KKkNoJVvx16zwzRVjyVwHg)
+
+A **post** (the `GET /library` post key) can be **hidden**: it leaves the library and can never be shared until it is
+unhidden. Hidden is a post-level state on top of each file's section 16/36 state; a hidden post's files are always
+`off` (not public, no live private link). The owner hides by hand (one post, or many at once with the bulk status
+route 37.4), and **rules** (37.3) hide new saves automatically. The chat AI and the MCP have the same powers (37.6).
+
+### 37.1 Storage (migration `0025_hidden.sql`)
+
+- `media_hidden`: `post_key` (primary key), `state` `hidden` | `exempt` | `held`, `by` (`you` | `rule` | `chat`; who set
+  the state), `rule_id` (the rule that hid it, NULL otherwise), `at` (ms). `hidden` = hidden. `exempt` = the owner (or
+  the chat) unhid it: no rule hides it again (the owner can still hide it by hand). `held` = waiting on an `about`
+  rule (37.3). No row = a normal post.
+- `hidden_rules`: `id` (16 base62), `kind` `site` | `words` | `about` | `upload`, `value` (TEXT, normalized: lower
+  case, trimmed; `''` for `upload`), `enabled` (0|1, default 1), `hits` (posts this rule has hidden, counted when it
+  hides one), `created_at`, `updated_at`. At most 50 rules.
+- Until 0025 is applied: every route below answers `503 error.api.generic`, `GET /library` and every other read behave
+  exactly as before (no post is hidden), and `features.hidden` is false. Check once per isolate (`sqlite_master`), the
+  way 0024's absence is handled.
+
+### 37.2 What "hidden" means (enforced on the server, every path)
+
+- **Hiding** a post (any way): every file of it runs the section 16 OFF when public (public mirror deleted, edge purge)
+  and its live private link (36) is revoked; then the row says `hidden`. Privacy first: if an OFF fails the post is
+  still marked hidden (reads hide it at once) and the answer reports the file under `failed`; a retry finishes it.
+- **Reads that leave hidden posts out**: `GET /library` (unless `hidden=1`, below), `GET /library/search`, the sky map
+  (`library.map`), `GET /studio/recent`, the about/collection search (34), stage pools (30: a hidden file never shows
+  on stream), the roast/caption cron (25) and loops (29) skip them, and the chat/MCP `library.list` /
+  `library.search` / `library.query` / `chat.rank` (37.6). Counts (`counts.posts/files`) leave them out too;
+  `counts.hidden` gives the number of hidden posts.
+- `GET /library?hidden=1` (same paging and `v`): only the hidden posts, newest first. Each post in any `GET /library`
+  answer gains `"hidden": bool` and `"hidden_by": "you"|"rule"|"chat"|null` and `"hidden_rule": <rule id>|null`;
+  `GET /library/items/<id>/...` single-post reads still answer for a hidden post (the app opens it from the album)
+  with `hidden: true`.
+- **Nothing can share it**: making a hidden post's file public (16.2 PATCH visibility on), turning its private link on
+  (36.3 PUT), adding its files to a gallery link (`POST /share/sets`, collection reroll) all answer `409
+  error.hidden` (`{ ids: [...] }` with the hidden file ids for the set route). `POST /studio` with `public: true` for a
+  post that a rule hides at save time simply never publishes (37.3).
+- **Gallery links** (24, 36): a hidden file is treated like a deleted file everywhere a set is read (public page,
+  private page `/p/<key>/<n>` 404, oEmbed, set list `items` entry with `url: null`, `hidden: true`). Unhiding does not
+  make it public, so a public set still leaves it out; a private set shows it again (accepted).
+- **Unhiding**: the row becomes `exempt` (`by` who unhid it). Every file stays `off`; nothing is published again.
+
+### 37.3 Rules
+
+Matched against a post when its save first becomes ready (the place section 13's `public: true` publish runs, BEFORE
+publishing), and on `apply` (backfill). A post whose row is `exempt` or already `hidden` is skipped. Matching:
+
+- `site`: `value` is a host (`instagram.com`) or host + path prefix (`tiktok.com/@name`, `x.com/name`). Matches when
+  the post's source link's host equals the host or ends with `.<host>` (`www.`, `m.`, `vm.` all count; `twitter.com`
+  and `x.com` are the same site) and, when a path is given, the link's path starts with it (case-insensitive, `/`
+  boundary: `x.com/name` does not match `x.com/names`).
+- `words`: `value` (1..60 chars) appears, case-insensitive, in the post's custom title (15), its file name, its roast
+  title (25, when written) or its source link.
+- `about`: `value` (1..40 chars) is one of the post's about tags or sound tags (34, `user_tags` replacing `tags` as
+  everywhere), or a whole word of its sentence or transcript. The words come minutes after the save, so: while at
+  least one enabled `about` rule exists, a save that asked for `public: true` is NOT published at ready; its post row
+  becomes `held`. When the about writer (34.3) finishes that post (or gives it up: probe `none`/`failed`, 3 failed
+  writes, or 60 minutes since ready, checked by the 15-minute cron), the rules run again: a match hides it, otherwise
+  the row is deleted and the section 13 publish runs then. A `held` post is listed normally as `off` and can be shared
+  by hand (sharing it by hand deletes the `held` row: the owner decided).
+- `upload`: the post's source is `upload` (any file uploaded: Photos, Files, share sheet with a file, MCP upload).
+
+The first matching enabled rule (oldest first) is the one recorded. Its `hits` goes up by one.
+
+### 37.4 Routes (keyed `Authorization: Api-Key`, or the web Worker's library service credential like 36.3; no-store, CORS for the web app)
+
+`<rule>` = `{ "id", "kind", "value", "enabled", "hits", "created_at", "updated_at" }`.
+
+- `POST /library/status { "ids": [<file or post ids>, 1..200], "status": "off"|"public"|"private"|"hidden" }` →
+  `200 { status: "success", posts: [{ "id": <the id sent>, "post_key", "status": <new>, "files": [<itemShape>...] }],
+  failed: [{ "id", "error": "<code>" }] }`. Per post, every toggleable file (`visibility_toggle`):
+  - `hidden`: 37.2 hiding (`by` `you`, or `chat` from the chat/MCP).
+  - `off`: unhide if hidden (row → `exempt`), then section 16 OFF and revoke private links.
+  - `public`: unhide if hidden, then section 16 ON (revokes private links, as 36.2).
+  - `private`: unhide if hidden, then 36.3 PUT for each file (a file's own private link; a gallery link is not made).
+  Ids that are unknown or deleted go to `failed` (`error.library.not_found`); a post with no toggleable file to
+  `failed` (`error.private.not_toggleable` for `private`/`public`; `hidden` still works). `400
+  error.library.bad_request` for a bad body. Files are processed with at most 4 in flight.
+- `GET /hidden/rules` → `200 { status, rules: [<rule>...], hidden: <count of hidden posts>, held: <count held> }`.
+- `POST /hidden/rules { kind, value, enabled?, apply?: bool }` → `201 { status, rule, applied: n }`; `apply: true`
+  runs the rule over every saved, not-exempt, not-hidden post and hides the matches (`applied` = how many). `400
+  error.hidden.bad_rule` (unknown kind, empty or too long value, `site` not a host), `409 error.hidden.too_many`.
+- `POST /hidden/rules/preview { kind, value }` → `200 { status, matches: n, sample: [<post_key>...<=6] }` (what
+  `apply` would hide now; nothing changes).
+- `PATCH /hidden/rules/<id> { enabled?, value?, apply? }` → `200 { status, rule, applied }`. `404 error.hidden.not_found`.
+- `DELETE /hidden/rules/<id>` → `200 { status }`. Posts it hid stay hidden.
+- `GET /capabilities`: `features.hidden: true` once 0025 is applied (and `limits.status_ids: 200`).
+
+### 37.5 Discovering the state in clients
+
+The library post gains `hidden`, `hidden_by`, `hidden_rule` (37.2). A file's link mode stays as 36 (`off` / `public`
+/ `private`); a hidden post shows `hidden` instead, and its other modes are greyed with "unhide first".
+
+### 37.6 Chat and MCP (ops in `registry/ops/hidden.ts`; MCP gets them as tools like every chat op)
+
+- `library.status` (`library_status`): `{ ids: string[] (1..50), status: "off"|"public"|"private"|"hidden" }`, the
+  bulk route with `by: "chat"`. Tier: `hidden` and `off` are `free` (they only take things out of view); `public` and
+  `private` are `ask` (confirm card; MCP runs it directly with `destructiveHint`), and `ask` too when any target is
+  hidden (it unhides).
+- `library.hidden` (`library_hidden`): `{ limit?: 1..50, cursor? }`, the hidden posts in the `library.list` shape plus
+  `hidden_by`. Hidden posts are otherwise invisible to `library.list`/`search`/`query`/`map`/`chat.rank`; `library.post`
+  on a hidden post id answers it with `hidden: true` (so the AI can tell why it can't share it).
+- `hidden.rules` (`hidden_rules`): list (free). `hidden.rules.add` (`hidden_rules_add`): `{ kind, value, apply? }`, free
+  without `apply`, `ask` with it. `hidden.rules.update` (`hidden_rules_update`) `{ id, enabled?, value?, apply? }` and
+  `hidden.rules.delete` (`hidden_rules_delete`) `{ id }`: `ask`. `hidden.rules.preview` (`hidden_rules_preview`): free.
+- `links.create`, `links.private`, `library.visibility` on a hidden target answer the `error.hidden` refusal with a
+  hint: "it's hidden; unhide it first with library.status".
+- The existing `library.visibility` op stays (old prompts) and calls the same code.
+
+### 37.7 Clients
+
+- **Library** (iPhone, iPad, Mac, web): a `hidden` filter chip last (black when on). On iPhone/iPad/Mac it is locked
+  with Face ID / Touch ID / the device passcode each time it is opened (`LAContext`, `.deviceOwnerAuthentication`);
+  Settings › hidden › "lock with face id" (on by default, stored on the device). Hidden posts never show elsewhere:
+  all, kinds, search, sky map, shelves, recent links, widgets, keyboard, Photos sync, Spotlight.
+- **Select mode** (library and the hidden album): a `status…` action (menu: hidden, off, public link, private link)
+  applies to every selected post with one `POST /library/status`; confirm for hidden ("their links stop working for
+  good") and for public. In the hidden album the action is `unhide` (→ `off`) plus the same menu.
+- **Post detail**: the link section gets a fourth row `hidden` (37.5); hidden shows "hidden by you / rule <value>" and
+  `unhide`.
+- **Settings › hidden**: rules list (kind label, value, hits, on/off switch, swipe to delete), `add rule…` sheet (kind,
+  value, live preview count from `/hidden/rules/preview`, "also hide what's saved" switch = `apply`), lock switch,
+  `open hidden`.
+- Offline copies of a hidden post stay on the device but are listed only in the hidden album.
+- **Deploy**: migration 0025 (owner), then API and web deploys, then an app release. No secret, no binding.
