@@ -2210,6 +2210,458 @@
         }
       }
     },
+    "/mcp/k/{secret}": {
+      "post": {
+        "operationId": "mcp.link",
+        "summary": "The MCP server through the private link (POST /mcp/k/<secret>, section 35.5).",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "secret",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{32}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "get": {
+        "operationId": "mcp.link.stream",
+        "summary": "GET /mcp/k/<secret>: 405 (no server-sent event stream).",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "secret",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{32}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "open",
+          "runs": "worker",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "mcp.link.end",
+        "summary": "DELETE /mcp/k/<secret>: 405 (no sessions to end).",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "secret",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{32}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "open",
+          "runs": "worker",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/mcp/settings": {
+      "get": {
+        "operationId": "mcp.settings",
+        "summary": "How agents reach the MCP: the mode and the private link's use (GET /mcp/settings).",
+        "tags": [
+          "mcp"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "off",
+                        "public",
+                        "private"
+                      ],
+                      "description": "off: no agent connects; public: /mcp with a client key; private: only the private link"
+                    },
+                    "public_url": {
+                      "type": "string"
+                    },
+                    "link": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "hint": {
+                              "type": "string",
+                              "description": "the link with its secret cut out, ending in its last 4 characters"
+                            },
+                            "tail": {
+                              "type": "string"
+                            },
+                            "made_at": {
+                              "type": "number"
+                            },
+                            "last_used_at": {
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "used_by": {
+                              "description": "the client's name from its last initialize",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "calls_today": {
+                              "type": "number",
+                              "description": "POSTs since 00:00 UTC"
+                            }
+                          },
+                          "required": [
+                            "hint",
+                            "tail",
+                            "made_at",
+                            "last_used_at",
+                            "used_by",
+                            "calls_today"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "public_url",
+                    "link"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "post": {
+        "operationId": "mcp.settings.set",
+        "summary": "Switch how agents reach the MCP; turning the private link on answers it once (POST /mcp/settings).",
+        "tags": [
+          "mcp"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "public",
+                      "private"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "settings": {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "off",
+                            "public",
+                            "private"
+                          ],
+                          "description": "off: no agent connects; public: /mcp with a client key; private: only the private link"
+                        },
+                        "public_url": {
+                          "type": "string"
+                        },
+                        "link": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "hint": {
+                                  "type": "string",
+                                  "description": "the link with its secret cut out, ending in its last 4 characters"
+                                },
+                                "tail": {
+                                  "type": "string"
+                                },
+                                "made_at": {
+                                  "type": "number"
+                                },
+                                "last_used_at": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ]
+                                },
+                                "used_by": {
+                                  "description": "the client's name from its last initialize",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "calls_today": {
+                                  "type": "number",
+                                  "description": "POSTs since 00:00 UTC"
+                                }
+                              },
+                              "required": [
+                                "hint",
+                                "tail",
+                                "made_at",
+                                "last_used_at",
+                                "used_by",
+                                "calls_today"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "public_url",
+                        "link"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "link_url": {
+                      "description": "the new private link, answered only here, once",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "settings"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/mcp/settings/rotate": {
+      "post": {
+        "operationId": "mcp.link.rotate",
+        "summary": "A new private MCP link; the old one stops at once (POST /mcp/settings/rotate).",
+        "tags": [
+          "mcp"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "settings": {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "off",
+                            "public",
+                            "private"
+                          ],
+                          "description": "off: no agent connects; public: /mcp with a client key; private: only the private link"
+                        },
+                        "public_url": {
+                          "type": "string"
+                        },
+                        "link": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "hint": {
+                                  "type": "string",
+                                  "description": "the link with its secret cut out, ending in its last 4 characters"
+                                },
+                                "tail": {
+                                  "type": "string"
+                                },
+                                "made_at": {
+                                  "type": "number"
+                                },
+                                "last_used_at": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ]
+                                },
+                                "used_by": {
+                                  "description": "the client's name from its last initialize",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "calls_today": {
+                                  "type": "number",
+                                  "description": "POSTs since 00:00 UTC"
+                                }
+                              },
+                              "required": [
+                                "hint",
+                                "tail",
+                                "made_at",
+                                "last_used_at",
+                                "used_by",
+                                "calls_today"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "public_url",
+                        "link"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "link_url": {
+                      "description": "the new private link, answered only here, once",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "settings"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/mcp/upload/{token}": {
       "put": {
         "operationId": "mcp.upload",

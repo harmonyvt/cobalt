@@ -30,6 +30,8 @@ struct SettingsScreen: View {
     private var form: some View {
         Form {
             serverSection
+            // made again when a key is pasted or reset, so it asks the server with the new key
+            McpSettingsSection(model: model).id(settings.hasAPIKey)
             makingSection
             SharingSettingsSection(model: model)
             shareSheetSection

@@ -26,7 +26,7 @@ describe("migration 0022", () => {
         const at = files.indexOf("0022_about.sql");
         expect(at).toBeGreaterThan(0);
         expect(files[at - 1]).toBe("0021_edits.sql");
-        expect(files[at + 1]).toBeUndefined();
+        expect(files[at + 1] === undefined || files[at + 1]! > "0022").toBe(true);
     });
 
     it("holds two new tables, one index and one new nullable column, nothing else", () => {

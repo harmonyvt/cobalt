@@ -104,7 +104,8 @@ type RpcReply = { jsonrpc: "2.0"; id: unknown; result?: unknown; error?: { code:
 const rpcError = (id: unknown, code: number, message: string): RpcReply => ({ jsonrpc: "2.0", id, error: { code, message } });
 
 // Who is calling and how to reach the rest of the server. `ctx` is the POST /mcp op's context (its key already checked).
-export type McpCaller = { ctx: OpContext; clientKeyId: string; origin: string; fetch?: typeof fetch };
+// `threadKey` names the MCP thread when it is not the client key's own (every private link shares one, section 35.5).
+export type McpCaller = { ctx: OpContext; clientKeyId: string; threadKey?: string; origin: string; fetch?: typeof fetch };
 
 // One JSON-RPC message in, its reply out (null for a notification).
 export async function mcpMessage(registry: Registry, caller: McpCaller, msg: RpcRequest): Promise<RpcReply | null> {
@@ -159,7 +160,7 @@ const textResult = (value: unknown, isError = false): ToolResult => {
 // Run one tool as the client's MCP thread. Its arguments are the op's input object, checked by the op's own schema.
 async function callTool(op: Op, caller: McpCaller, args: Json): Promise<ToolResult> {
     const collect: ChatCollect = { look: [], show: [], collage: null };
-    const threadId = await mcpThreadId(caller.clientKeyId);
+    const threadId = await mcpThreadId(caller.threadKey ?? caller.clientKeyId);
     // the MCP request itself never reaches the op (no request, url or query of its own, like a chat call)
     const { request: _r, url: _u, query: _q, params: _p, chat: _c, keyId: _k, caller: _w, durableObject: _d, ...base } = caller.ctx;
     const ctx = forCall(base, {
