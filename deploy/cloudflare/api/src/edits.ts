@@ -7,6 +7,7 @@
 // queued in D1 and made into an MP4 by an EditRenderer instance (src/edit-render-core.ts).
 
 import { raceCeiling } from "./ceiling";
+import { hiddenFileIds } from "./hidden-store";
 import { randomBase62 } from "./ids";
 import { readCapped } from "./library";
 import { cleanTitle, type StudioReply } from "./studio";
@@ -694,6 +695,9 @@ async function startRender(d: EditsDeps, request: Request, id: string): Promise<
     const rows = await mediaRows(d.db, timelineItems(p.timeline));
     const checked = checkRows(p.timeline, sourceRowsFor(rows));
     if (!checked.ok) return validationReply(checked);
+    // nothing is made of a hidden post (section 37.2): its clips are refused, named by file id
+    const hidden = await hiddenFileIds(d.db, timelineItems(p.timeline));
+    if (hidden.length > 0) return { status: 409, body: { status: "error", error: { code: "error.hidden" }, ids: hidden } };
     let inputBytes = 0;
     for (const r of rows.values()) inputBytes += r.bytes ?? 0;
     if (inputBytes > EDIT_MAX_INPUT_BYTES) return validationReply({ code: "error.edit.too_large", path: "main" });

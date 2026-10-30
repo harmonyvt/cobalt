@@ -4540,9 +4540,13 @@ route 37.4), and **rules** (37.3) hide new saves automatically. The chat AI and 
   file of it runs the section 16 OFF when public (public mirror deleted, edge purge), its live private link (36) is
   revoked, its loop previews (29, `media_loops` rows and their R2 objects) are deleted, and a save session of it still
   `public_state: "pending"` gets `null` (it will never publish). Privacy first: if an OFF fails the post stays hidden and
-  the answer reports the file under `failed`; a retry finishes it. A public file that cannot be toggled (a legacy
-  host-only copy, 16) cannot be taken off: it is reported under `failed` with `error.library.not_toggleable` and the post
-  is hidden anyway (reads leave it out; its URL keeps working until the owner deletes it).
+  the answer reports the file under `failed`; a retry finishes it. A public file that cannot be toggled (16):
+  - a legacy host copy (`source 'host'`, public bucket) whose save session's original is a live row in the private
+    bucket with its object present is **deleted** (public object first, then the row, the edge cache and the session's
+    `public_url`); the post keeps its original, and nothing fails;
+  - any other (a host copy with no original, or whose original's object is missing; a legacy file that is not a webp)
+    is not safe to delete: it stays, reported under `failed` with `error.library.not_toggleable`, and the post is hidden
+    anyway (reads leave it out, but **its public URL keeps working** until the owner deletes the file).
 - **Reads that leave hidden posts out**: `GET /library` (unless `hidden=1`, below), `GET /library/search`, the sky map
   (`library.map`), `GET /studio/recent`, the about/collection search (34), stage pools (30: a hidden file never shows
   on stream), the roast/caption cron (25) and loops (29) skip them, and the chat/MCP `library.list` /
@@ -4562,6 +4566,16 @@ route 37.4), and **rules** (37.3) hide new saves automatically. The chat AI and 
   private page `/p/<key>/<n>` 404, oEmbed, `GET /share/sets` `items` entry with `url: null` and `hidden: true`; the
   key is absent for a file that is not hidden). Unhiding does not
   make it public, so a public set still leaves it out; a private set shows it again (accepted).
+- **Nothing is made of it**: starting a webp render (`POST /studio/<sid>/render`), a slideshow or still
+  (`/slideshow`), a gallery image (`/gallery-image`) on a hidden post's session, or an editor render
+  (`POST /edits/<id>/render`) with a clip from a hidden post, answers `409 error.hidden` (the editor adds `ids`, the
+  hidden clips' file ids) before anything is queued. The chat/MCP `make.*` calls and `edits.render` refuse the same
+  way before taking a unit of the daily cap, with the hint of 37.6. Backstop for a job that was already running when its
+  post was hidden: a webp render is recorded off (its bytes move to the private bucket, the public object is deleted,
+  the answer's and the render row's `url` are `null`; if that fails the public object is deleted and the row dropped);
+  a slideshow, still or gallery image is recorded private and never made public (section 16's ON refuses a hidden post).
+  An editor render is always a new private post of its own. Reopening a hidden post's file in the studio
+  (`POST /library/items/<id>/studio`) still works; what is made there is refused as above.
 - **Unhiding**: the row becomes `exempt` (`by` who unhid it). Every file stays `off`; nothing is published again.
 
 ### 37.3 Rules
@@ -4650,6 +4664,8 @@ The library post gains `hidden`, `hidden_by`, `hidden_rule` (37.2). A file's lin
   (`hidden_rules_add`): `(kind, value, { apply? })` (always enabled), runs at once without `apply`, asks with it (the MCP marks
   it `destructiveHint` either way). `hidden.rules.update` (`hidden_rules_update`) `{ id, enabled?, value?, apply? }` and
   `hidden.rules.delete` (`hidden_rules_delete`) `{ id }`: `ask`. `hidden.rules.preview` (`hidden_rules_preview`): free.
+- `make.webp`, `make.still`, `make.slideshow`, `make.galleryImage`, `make.trim`, `make.crop`, `edits.render` (and a
+  `jobs.wait` that starts an opened file's make) on a hidden post answer `error.hidden` with the same hint.
 - `links.create`, `links.private`, `library.visibility` (turning a file public) on a hidden target answer the
   `error.hidden` refusal with a hint: "it's hidden; unhide it first with library.status".
 - The owner's route ops (`library.status.route`, `hidden_rules.*`) are tier `hidden`: never chat or MCP tools.

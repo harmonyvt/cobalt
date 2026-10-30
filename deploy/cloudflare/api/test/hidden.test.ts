@@ -500,3 +500,74 @@ describe("without migration 0025", () => {
         expect(await releaseHeld(heldDeps(), { aboutOn: true })).toEqual({ held: 0, hidden: 0, published: 0, waiting: 0 });
     });
 });
+
+describe("nothing is made of a hidden post (37.2)", () => {
+    const render = (sid: string) => w.studio.render(sid, json({ start: 0, length: 2 }));
+
+    it("a render, slideshow or gallery image of a hidden post is refused before it starts", async () => {
+        const a = await publicPost();
+        await status([a.sid], "hidden");
+        const puts = w.media.puts.length;
+        expect(await render(a.sid)).toEqual({ status: 409, body: { status: "error", error: { code: "error.hidden" } } });
+        expect(await w.studio.slideshow(KEY_ID, a.sid, json({ items: [0], seconds: [2], queue: true }))).toEqual({ status: 409, body: { status: "error", error: { code: "error.hidden" } } });
+        expect(await w.studio.galleryImage(KEY_ID, a.sid, json({ layout: "grid2", queue: true }))).toEqual({ status: 409, body: { status: "error", error: { code: "error.hidden" } } });
+        expect(one("SELECT COUNT(*) AS n FROM studio_renders WHERE session_id = ?", a.sid).n).toBe(0);
+        expect(w.media.puts.length).toBe(puts);
+        // unhidden (off), it renders again
+        await status([a.sid], "off");
+        expect((await render(a.sid)).status).toBe(202);
+    });
+
+    it("a render that finishes after its post was hidden is recorded off: no public object, no URL", async () => {
+        const a = await publicPost();
+        const r = await render(a.sid);
+        expect(r.status).toBe(202);
+        await status([a.sid], "hidden");
+        const done = asBody(await w.studio.renderStatus(a.sid, asBody(r).job, 0));
+        expect(done).toMatchObject({ status: "success", url: null });
+        const webps = all("SELECT bucket, visibility, url, r2_key FROM media_items WHERE session_id = ? AND content_type = 'image/webp' AND deleted_at IS NULL", a.sid);
+        expect(webps).toHaveLength(1);
+        expect(webps[0]).toMatchObject({ bucket: "originals", visibility: "private", url: null });
+        expect([...w.media.objects.keys()].filter((k) => k.endsWith(".webp"))).toEqual([]);
+        expect(one("SELECT url FROM studio_renders WHERE id = ?", asBody(r).job).url).toBeNull();
+        // polled again: the same answer
+        expect(asBody(await w.studio.renderStatus(a.sid, asBody(r).job, 0)).url).toBeNull();
+    });
+
+    it("a render of a post that is not hidden is recorded public as before", async () => {
+        const a = await publicPost();
+        const r = await render(a.sid);
+        const done = asBody(await w.studio.renderStatus(a.sid, asBody(r).job, 0));
+        expect(done.url).toMatch(/^https:\/\/media\.capybaraharmony\.com\/[A-Za-z0-9]+\.webp$/);
+    });
+});
+
+describe("a legacy host copy when hiding (37.2)", () => {
+    const hostCopy = (sid: string, id = "HostCopy00000001", name = "HoStCoPy01.mp4") => {
+        w.db.raw
+            .prepare("INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, link, session_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+            .run(id, "public", "host", "media", name, `${MEDIA_BASE}${name}`, "h.mp4", "video/mp4", 10, LINK, sid, 5);
+        return w.media.put(name, new Uint8Array(10).buffer, { httpMetadata: { contentType: "video/mp4", cacheControl: "" }, customMetadata: {} });
+    };
+
+    it("is deleted when the post's original is in the private bucket: nothing fails", async () => {
+        const a = await privatePost();
+        await hostCopy(a.sid);
+        const r = await status([a.sid], "hidden");
+        expect(r.body.failed).toEqual([]);
+        expect(w.media.objects.has("HoStCoPy01.mp4")).toBe(false);
+        expect(one("SELECT deleted_at FROM media_items WHERE id = 'HostCopy00000001'").deleted_at).not.toBeNull();
+        expect(one("SELECT deleted_at FROM media_items WHERE id = ?", a.item.id).deleted_at).toBeNull();
+        expect(w.originals.objects.has(a.item.r2_key)).toBe(true);
+    });
+
+    it("is kept (and reported under failed) when the original's object is missing", async () => {
+        const a = await privatePost();
+        await hostCopy(a.sid);
+        w.originals.objects.delete(a.item.r2_key);
+        const r = await status([a.sid], "hidden");
+        expect(r.body.failed).toEqual([{ id: "HostCopy00000001", error: "error.library.not_toggleable" }]);
+        expect(w.media.objects.has("HoStCoPy01.mp4")).toBe(true);
+        expect(hiddenRow(a.sid).state).toBe("hidden");
+    });
+});

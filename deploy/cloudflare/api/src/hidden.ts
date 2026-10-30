@@ -31,6 +31,7 @@ import {
     itemShape,
     privateUrlsOf,
     publishOriginal,
+    purgeUrls,
     setVisibility,
     toggleable,
     type MediaRow,
@@ -306,11 +307,42 @@ async function dropLoops(d: HiddenDeps, ids: string[]): Promise<void> {
 }
 
 // Turns off every file of a post: section 16 OFF for the public ones, the private link (36) revoked for all.
+// A legacy host copy (section 16: `source 'host'`, the public bucket, never toggleable) of a hidden post is deleted when
+// that is safe: its session's original is a live row in the private bucket and its object is there, so the post keeps its
+// canonical copy. The public object goes first (privacy first), then the row, then the edge cache and the session's
+// public URL. False (the caller reports it under failed) when it is not safe or a step failed.
+async function dropHostCopy(d: HiddenDeps, f: MediaRow): Promise<boolean> {
+    if (!d.vis || f.source !== "host" || f.bucket !== "media" || !f.session_id) return false;
+    try {
+        const o = await d.db
+            .prepare(
+                `SELECT o.r2_key AS r2_key FROM studio_sessions s
+                   JOIN media_items o ON o.deleted_at IS NULL AND o.bucket = 'originals' AND o.r2_key = s.r2_key
+                  WHERE s.id = ?1 AND o.source IN ('saved', 'upload') LIMIT 1`,
+            )
+            .bind(f.session_id)
+            .first<{ r2_key: string }>();
+        if (!o || !(await d.vis.originals.head(o.r2_key))) return false;
+        await d.vis.media.delete(f.r2_key);
+        await d.db.prepare("UPDATE media_items SET deleted_at = ?2 WHERE id = ?1 AND deleted_at IS NULL").bind(f.id, d.now()).run();
+        if (f.url) {
+            await d.db.prepare("UPDATE studio_sessions SET public_state = NULL, public_url = NULL WHERE public_url = ?1").bind(f.url).run();
+            await purgeUrls(d.vis, [f.url]);
+        }
+        return true;
+    } catch (e) {
+        console.error("[hidden] host copy delete failed", f.id, String(e));
+        return false;
+    }
+}
+
 async function allOff(d: HiddenDeps, files: MediaRow[]): Promise<FileFailure[]> {
     const failed: FileFailure[] = [];
     for (const f of files) {
         if (effectiveVisibility(f) === "public") {
-            if (!toggleable(f)) failed.push({ id: f.id, error: "error.library.not_toggleable" });
+            if (!toggleable(f)) {
+                if (!(await dropHostCopy(d, f))) failed.push({ id: f.id, error: "error.library.not_toggleable" });
+            }
             else if (!d.vis) failed.push({ id: f.id, error: "error.api.generic" });
             else {
                 const r = await setVisibility(d.vis, f.id, false, d.keyId);

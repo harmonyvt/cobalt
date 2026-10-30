@@ -46,7 +46,7 @@ import { ABOUT_KICK_MAX, AboutProbeService } from "./about-probe";
 import { publishStudio } from "./publish";
 import { atReady, sessionPostKey, type Gate } from "./hidden";
 import { hiddenRows } from "./hidden-store";
-import { ITEM_COLUMNS, getRow, makePublic, publishOriginal, purgeUrls, sessionItem, effectiveVisibility, type MediaRow, type PurgeFn } from "./visibility";
+import { ITEM_COLUMNS, getRow, makePublic, publishOriginal, purgeUrls, sessionItem, effectiveVisibility, setVisibility, type MediaRow, type PurgeFn } from "./visibility";
 
 export const SID_LENGTH = 22;
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -3044,6 +3044,46 @@ export class StudioService {
     }
 
     // The deps visibility.ts needs; undefined without the public bucket.
+    // Whether this session's post is hidden (section 37.2). A failed check counts as hidden (privacy first).
+    private async sessionHidden(sid: string, link: string | null | undefined): Promise<boolean> {
+        const key = sessionPostKey(sid, link);
+        try {
+            return (await hiddenRows(this.d.db, [key])).get(key)?.state === "hidden";
+        } catch (e) {
+            console.error("[studio] hidden check failed", sid, String(e));
+            return true;
+        }
+    }
+
+    // A make (render, slideshow, still, gallery image) of a hidden post is refused before it starts: 409 error.hidden.
+    private async refuseHidden(sid: string, link: string | null | undefined): Promise<StudioReply | null> {
+        const key = sessionPostKey(sid, link);
+        try {
+            if ((await hiddenRows(this.d.db, [key])).get(key)?.state !== "hidden") return null;
+        } catch {
+            return studioErr(503, "error.api.generic");
+        }
+        return studioErr(409, "error.hidden");
+    }
+
+    // The backstop for a webp render recorded on a post hidden while it ran: the new public file is turned off (its bytes
+    // move to the private bucket, the public object is deleted). If that fails the public object is deleted anyway and the
+    // row is dropped (privacy first). True when the post is hidden.
+    private async offIfHidden(sid: string, link: string | null | undefined, mediaName: string): Promise<boolean> {
+        if (!(await this.sessionHidden(sid, link))) return false;
+        let id: string | null = null;
+        try {
+            id = (await this.d.db.prepare("SELECT id FROM media_items WHERE bucket = 'media' AND r2_key = ?1 AND deleted_at IS NULL LIMIT 1").bind(mediaName).first<{ id: string }>())?.id ?? null;
+            const vis = this.visDeps();
+            if (id && vis && (await setVisibility(vis, id, false, SERVICE_KEY_ID)).status === 200) return true;
+        } catch (e) {
+            console.error("[studio] hidden render off failed", sid, String(e));
+        }
+        await this.d.media?.delete(mediaName).catch((e: unknown) => console.error("[studio] hidden render delete failed", sid, String(e)));
+        if (id) await this.d.db.prepare("UPDATE media_items SET deleted_at = ?2 WHERE id = ?1 AND deleted_at IS NULL").bind(id, this.d.now()).run().catch(() => {});
+        return true;
+    }
+
     private visDeps() {
         if (!this.d.media || !this.d.mediaBaseUrl) return undefined;
         return {
@@ -3458,6 +3498,9 @@ export class StudioService {
         if (row.status !== "ready" || !row.r2_key) {
             return studioErr(409, "error.studio.not_ready");
         }
+        // nothing is made of a hidden post (section 37.2)
+        const hiddenRefusal = await this.refuseHidden(sid, row.link);
+        if (hiddenRefusal) return hiddenRefusal;
 
         let parsed: unknown;
         try {
@@ -3758,6 +3801,9 @@ export class StudioService {
         if ("reply" in owned) return owned.reply;
         const row = owned.row;
         if (this.d.now() > row.expires_at) return studioErr(410, "error.studio.expired");
+        // nothing is made of a hidden post (section 37.2)
+        const hiddenRefusal = await this.refuseHidden(sid, row.link);
+        if (hiddenRefusal) return hiddenRefusal;
         let parsed: unknown;
         try {
             if (new TextEncoder().encode(rawBody).length > (kind === "slideshow" ? MAX_SLIDESHOW_BODY_BYTES : MAX_GALLERY_IMAGE_BODY_BYTES)) return invalid();
@@ -4577,6 +4623,11 @@ export class StudioService {
                     // a webp of one item of a gallery says which (18.13)
                     ...(typeof parseJsonObject(row.plan)?.item_id === "string" ? { made_from: JSON.stringify([parseJsonObject(row.plan)!.item_id]) } : {}),
                 });
+                // a render started before its post was hidden lands off (section 37.2): its public object goes
+                if (await this.offIfHidden(sid, found.row.link, mediaName)) {
+                    await this.d.db.prepare("UPDATE studio_renders SET url = NULL WHERE id = ?1").bind(job).run().catch(() => {});
+                    return { status: 200, body: this.successBody({ ...done, url: null }) };
+                }
             }
             return { status: 200, body: this.successBody(done) };
         }
