@@ -3,8 +3,11 @@
 // /library/map, /queue). The route ops wrap the existing handlers unchanged: same parsing, same bodies, same headers.
 import * as z from "zod";
 import { libraryList } from "../../app-routes";
-import { LIBRARY_MAX_LIMIT, SEARCH_MAX } from "../../chat-tools";
+import { LIBRARY_MAX_LIMIT, loadPosts, RANK_MAX, SEARCH_MAX } from "../../chat-tools";
+import { libraryAbout, libraryAboutSet } from "../../about";
+import { USER_TAGS_MAX } from "../../about-store";
 import { libraryMap, librarySearch } from "../../embed";
+import { WITHIN_POSTS_MAX } from "../../within";
 import { queueSnapshot } from "../../queue";
 import { defineOp, ok, OpError, type OpContext } from "../op";
 import { LibraryIndexShape } from "../shapes";
@@ -44,7 +47,20 @@ const PostFileSchema = z
     .meta({ id: "PostFile" });
 
 const LinkSchema = z.object({ id: z.string(), url: z.string().nullable(), title: z.string().nullable(), created_at: z.string(), post_ids: z.array(z.string()) });
-const CollectionSchema = z.object({ id: z.string(), name: z.string(), link_ids: z.array(z.string()) });
+const CollectionSchema = z.object({
+    id: z.string(),
+    name: z.string(),
+    link_ids: z.array(z.string()),
+    post_ids: z.array(z.string()).describe("every post in its live links (search within it with { within: { collection } })"),
+});
+
+// search's `within` (section 34.6): a collection (id or name; a plain string means one), a gallery link, or posts
+const Within = z.union([
+    z.string().min(1).max(200),
+    z.object({ collection: z.string().min(1).max(200) }),
+    z.object({ link: z.string().min(1).max(64) }),
+    z.object({ posts: z.array(z.string().min(1).max(2048)).min(1).max(WITHIN_POSTS_MAX) }),
+]);
 
 // ids: one id or a list (the tools always took both); anything that is not a string is dropped, as before
 const Ids = z.preprocess(
@@ -92,18 +108,36 @@ export const librarySearchOp = defineOp({
     cors: false,
     input: z.object({
         query: z.string().min(1).max(200),
-        limit: z.number().int().min(1).optional(),
+        limit: z.number().int().min(1).optional().describe(`default 10 (with within: every post in it), max ${SEARCH_MAX}`),
+        within: Within.optional().describe(
+            "only these: { collection: id or name } | { link: id } | { posts: [ids] }; every post in it is scored (a string is a collection)",
+        ),
     }),
-    output: z.array(z.intersection(PostSchema, z.object({ score: z.number() }))),
+    output: z.array(
+        z.intersection(
+            PostSchema,
+            z.object({
+                score: z.number(),
+                why: z.array(z.string()).describe("up to 3 of its tags or sound tags, closest to the query first"),
+                indexed: z.literal(false).optional().describe("no vector yet: scored by its text only"),
+            }),
+        ),
+    ),
     ai: {
         tier: "free",
         only: true,
-        summary: `Meaning search over titles and pictures, best first (default 10, max ${SEARCH_MAX}; every post gets a score, so cut where the scores drop). Throws while the search model is waking up.`,
+        summary: `Meaning search over titles, pictures, what posts are about and what is heard in them, best first (default 10, max ${SEARCH_MAX}; every post gets a score, so cut where the scores drop).\nWith within, every post of that collection, link or list is scored. Throws while the search model is waking up.`,
         aliases: ["search"],
-        params: ["query", "limit"],
+        params: ["query"],
+        options: true,
+        // the old search(query, limit) still works
+        args: ([query, second]) => ({
+            query,
+            ...(typeof second === "number" ? { limit: second } : second && typeof second === "object" && !Array.isArray(second) ? second : {}),
+        }),
         when: (f) => f.search,
     },
-    handler: async (ctx, input) => ok(await tools(ctx).search!(input.query, input.limit)),
+    handler: async (ctx, input) => ok(await tools(ctx).search!(input.query, { limit: input.limit, within: input.within })),
 });
 
 export const libraryPostOp = defineOp({
@@ -204,6 +238,138 @@ export const collectionsListOp = defineOp({
     handler: async (ctx) => ok(await tools(ctx).collections!()),
 });
 
+// cobalt.rank (section 34.6): a scored list under the reply, for "which of these are X" answers.
+export const rankOp = defineOp({
+    name: "chat.rank",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({
+        hits: z
+            .array(
+                z.union([
+                    z.string().min(1),
+                    z.object({
+                        id: z.string().min(1),
+                        score: z.number().optional(),
+                        why: z.array(z.string()).optional().describe("up to 4 short words, e.g. the search hit's why"),
+                    }),
+                ]),
+            )
+            .max(SEARCH_MAX)
+            .describe(`best first, at most ${RANK_MAX} kept`),
+        title: z.string().optional(),
+        query: z.string().optional(),
+        within: z.string().optional().describe('a short label of what was searched, e.g. "lia share 11"'),
+    }),
+    output: z.number(),
+    ai: {
+        tier: "free",
+        only: true,
+        call: "rank",
+        summary:
+            "Show Harmony a scored list under your reply (up to 50 posts, best first: thumbnail, title, the why words, the score), for answers to\n\"which of these / in this collection are X\". One per reply (a later call replaces it). Returns how many were kept.",
+        params: ["hits"],
+        options: true,
+    },
+    handler: async (ctx, input) => ok(await tools(ctx).rank!(input.hits, { title: input.title, query: input.query, within: input.within })),
+});
+
+// ---- "what it's about" (section 34) ----------------------------------------------------------------------------------
+
+const AboutShape = z.object({
+    sentence: z.string().nullable(),
+    tags: z.array(z.string()),
+    edited: z.boolean().describe("Harmony set these tags"),
+    sound_tags: z.array(z.string()),
+    transcript: z.string().nullable(),
+    language: z.string().nullable(),
+    frames: z.number(),
+    has_audio: z.boolean(),
+    model: z.string().nullable(),
+    written_at: z.number().nullable(),
+});
+
+const AboutBody = z.object({
+    post_key: z.string(),
+    probe: z.enum(["pending", "done", "none", "failed"]),
+    about: AboutShape.nullable().describe("null until it is described"),
+    words: z.array(z.object({ word: z.string(), score: z.number() })).describe("the words its vector reads closest to"),
+    neighbours: z.array(z.object({ post_id: z.string(), score: z.number() })).describe("the 4 nearest posts"),
+    posts: z.record(z.string(), z.unknown()).optional().describe("the neighbours' GET /library post shapes (left out for the chat: use post(id))"),
+    index: z.record(z.string(), z.unknown()).describe("the body of GET /library/search/post"),
+});
+
+const aboutDeps = (ctx: OpContext) => ({ db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl, searchEnabled: ctx.embed() !== null, app: ctx.app(), now: ctx.now });
+// the model gets the body without the neighbours' post shapes (it has post() for those)
+const forModel = (body: unknown) => {
+    const { status: _s, posts: _p, ...rest } = (body ?? {}) as Record<string, unknown>;
+    return rest;
+};
+
+// GET /library/about?key=<post key> (34.6): keyed or the library service, no CORS; the chat's cobalt.library.about(id).
+export const libraryAboutOp = defineOp({
+    name: "library.about",
+    route: { method: "GET", path: "/library/about" },
+    auth: "key_or_service",
+    runs: "worker",
+    cors: false,
+    noStore: true,
+    badRequest: "error.library.bad_request",
+    input: z.object({ key: z.string().min(1).max(2048).describe("the post id") }),
+    output: AboutBody,
+    ai: {
+        tier: "free",
+        summary: "What a post is about: its description, tags and sound tags, what is said in it, the words its vector reads closest to, its nearest posts.",
+        params: ["key"],
+        args: ([key]) => ({ key }),
+        result: forModel,
+    },
+    handler: async (ctx, input) => {
+        const r = await libraryAbout(aboutDeps(ctx), input.key);
+        return { status: r.status, body: r.body };
+    },
+});
+
+// PATCH /library/about { key, tags } (34.6): the owner's tags (null: back to the written ones). Keyed only; the chat asks.
+export const libraryAboutSetOp = defineOp({
+    name: "library.about.set",
+    route: { method: "PATCH", path: "/library/about" },
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    noStore: true,
+    badRequest: "error.library.bad_request",
+    input: z.object({
+        key: z.string().min(1).max(2048).describe("the post id"),
+        tags: z
+            .array(z.string())
+            .max(USER_TAGS_MAX)
+            .nullable()
+            .describe(`0..${USER_TAGS_MAX} tags, each 1..30 characters (lowercased); null goes back to the written ones`),
+    }),
+    output: AboutBody,
+    ai: {
+        tier: "ask",
+        summary: "Replace a post's tags with Harmony's own (null goes back to the written ones). Only when Harmony asks.",
+        params: ["key", "tags"],
+        result: forModel,
+        preview: async (ctx, input) => {
+            const [post] = await loadPosts({ db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl }, [input.key]);
+            if (!post) throw new OpError(404, "error.library.not_found", `no post ${JSON.stringify(input.key)} in the library`);
+            const name = post.record.title ? `“${post.record.title.length > 60 ? `${post.record.title.slice(0, 59)}…` : post.record.title}”` : "this post";
+            return {
+                summary: input.tags === null ? `reset the tags of ${name}` : `set the tags of ${name}`,
+                effect: { tags: input.tags },
+            };
+        },
+    },
+    handler: async (ctx, input) => {
+        const r = await libraryAboutSet(aboutDeps(ctx), input.key, input.tags);
+        return { status: r.status, body: r.body };
+    },
+});
+
 // ---- the library read routes ----------------------------------------------------------------------------------------
 
 // These routes read their query themselves (the handlers' own checks and error codes); the schema only names it.
@@ -298,8 +464,11 @@ export const LIBRARY_OPS = [
     lookOp,
     showOp,
     collageOp,
+    rankOp,
     linksListOp,
     collectionsListOp,
+    libraryAboutOp,
+    libraryAboutSetOp,
     libraryIndexOp,
     libraryQueryOp,
     libraryMapOp,

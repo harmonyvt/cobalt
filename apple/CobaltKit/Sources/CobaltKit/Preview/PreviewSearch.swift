@@ -23,6 +23,8 @@ public enum PreviewSearchMode: Sendable, Equatable, CaseIterable {
 /// Every search the preview server took, in order (`q` as sent).
 final class PreviewSearchState: Sendable {
     private let state = Mutex<[String]>([])
+    /// What the preview server holds for `/library/about` (`PreviewAbout.swift`).
+    let about = PreviewAboutState()
 
     var calls: [String] { state.withLock { $0 } }
 
@@ -156,6 +158,8 @@ extension AppModel {
         ctx.client = client
         var caps = ctx.capabilities
         caps.search = mode != .off
+        caps.about = mode != .off
+        caps.aboutSound = mode != .off
         ctx.capabilities = caps
         return AppModel(
             context: ctx, library: LibraryModel(context: ctx, seed: PreviewData.libraryPage(now: clock.now())),

@@ -42,6 +42,7 @@ import {
 import { NOTIFY_MAX_BODY_BYTES, isEmptyLineBody, parseOptIn, type LineOutcome, type MakeWhat, type NotifyHooks, type NotifyRenderEvent } from "./notify";
 import { MAX_POSTER_BYTES, PosterService, POSTER_BATCH, type MediaStore } from "./poster";
 import { LOOP_KICK_MAX, LoopService, type ReadBucket } from "./loops";
+import { ABOUT_KICK_MAX, AboutProbeService } from "./about-probe";
 import { publishStudio } from "./publish";
 import { ITEM_COLUMNS, getRow, makePublic, publishOriginal, purgeUrls, sessionItem, effectiveVisibility, type MediaRow, type PurgeFn } from "./visibility";
 
@@ -715,8 +716,9 @@ export async function repointLead(db: D1Database, sid: string): Promise<void> {
 export interface OriginalsBucket {
     put(
         key: string,
-        // a stream (stored files) or a string (telemetry crash JSON, telemetry.ts)
-        value: ReadableStream | string,
+        // a stream (stored files), a string (telemetry crash JSON, telemetry.ts) or bytes (the about probe's frames and
+        // sound, about-probe.ts)
+        value: ReadableStream | string | Uint8Array,
         options: {
             httpMetadata: { contentType: string };
             customMetadata: Record<string, string>;
@@ -996,6 +998,9 @@ export class StudioService {
     // moving-preview sweeps running (section 29), counted like posterRuns
     private loopRuns = 0;
     private loops?: LoopService;
+    // "what it's about" probes (section 34.2), counted like posterRuns
+    private aboutRuns = 0;
+    private about: AboutProbeService;
 
     // Server-made posters (section 13); undefined when no public bucket is wired.
     private posters?: PosterService;
@@ -1004,6 +1009,19 @@ export class StudioService {
 
     constructor(private d: StudioDeps) {
         this.line = new LineStore(d.storage, d.now);
+        this.about = new AboutProbeService({
+            db: d.db,
+            storage: d.storage,
+            originals: d.originals,
+            mediaRead: d.mediaRead,
+            now: d.now,
+            ensureRunning: d.ensureRunning,
+            callHelper: (path, init, ms) => this.callHelper(path, init, ms),
+            // like a poster: never cuts what waits (its own in-flight count excluded)
+            helperBusy: async () => (await this.held({ ignoreAbout: true })) !== null || (await this.line.size()) > 0,
+            scheduleSweep: () => this.scheduleSweep(),
+            renew: d.renew,
+        });
         if (d.media && d.mediaBaseUrl) {
             this.posters = new PosterService({
                 db: d.db,
@@ -1246,7 +1264,7 @@ export class StudioService {
     // SWEEP_RENDER_MS with no result yet (durable, unlike the in-memory `encodes`, which is still
     // consulted); a poster in flight; a render entry of the line whose upload is under way.
     // null = the helper is free.
-    private async held(opts: { ignorePoster?: boolean; ignoreLoop?: boolean } = {}): Promise<Held | null> {
+    private async held(opts: { ignorePoster?: boolean; ignoreLoop?: boolean; ignoreAbout?: boolean } = {}): Promise<Held | null> {
         const now = this.d.now();
         for (const key of (await this.d.storage.list<unknown>({ prefix: "save:" })).keys()) {
             return { kind: "save", sid: key.slice("save:".length) };
@@ -1268,6 +1286,8 @@ export class StudioService {
         // a gallery link's moving preview being started (its upload into the helper; once the helper took
         // it, its `job:` record above holds the helper). Reported like a poster: background work.
         if (!opts.ignoreLoop && this.loopRuns > 0) return { kind: "poster" };
+        // a "what it's about" probe (section 34.2): background work, reported like a poster
+        if (!opts.ignoreAbout && this.aboutRuns > 0) return { kind: "poster" };
         for (const { entry } of await this.line.list()) {
             if (await this.uploading(entry, now)) {
                 return { kind: "render", sid: entry.sid, job: entry.job ?? undefined, owner: entry.keyId };
@@ -1968,6 +1988,7 @@ export class StudioService {
         const makeJob = make ? mintId(this.d.randomBytes) : null;
 
         await this.posters?.idle(this.d.posterIdleMs);
+        await this.about.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         // Free = the helper is not held and nobody waits ahead (section 17.2). Not free: a client that
         // did not ask to queue gets today's 429 (while anything waits too, so it never jumps the
@@ -3187,6 +3208,18 @@ export class StudioService {
         }
     }
 
+    // POST /about/kick (the 15-minute cron, section 34.2): the rows brought up to date and the probes still to do queued.
+    // Never wakes the container (the sweep does the work). Before migration 0022: 503.
+    async kickAbout(limit?: number): Promise<StudioReply> {
+        try {
+            const r = await this.about.kick(limit ?? ABOUT_KICK_MAX);
+            return { status: 200, body: { status: "success", queued: r.queued, eligible: r.eligible } };
+        } catch (e) {
+            console.error("[studio] about kick failed", String(e));
+            return studioErr(503, "error.api.generic");
+        }
+    }
+
     // POST /posters/kick (the Worker's call: the library read, the cron, the backfill route):
     // queues the posters still missing. Never wakes the container (the sweep does the work).
     async kickPosters(limit?: number): Promise<StudioReply> {
@@ -3253,6 +3286,7 @@ export class StudioService {
         if (bytes > MAX_SOURCE_BYTES) return studioErr(413, "error.studio.too_large");
 
         await this.posters?.idle(this.d.posterIdleMs);
+        await this.about.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         // the free check, the row and the claim are one step (see claimSlot)
         const claim = await this.claimSlot({
@@ -3445,6 +3479,7 @@ export class StudioService {
         const p = check.params;
 
         await this.posters?.idle(this.d.posterIdleMs);
+        await this.about.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         // the helper is held (one job at a time), or somebody waits ahead of this render
         const free = await this.isFree(focused);
@@ -3730,6 +3765,7 @@ export class StudioService {
         if (!built.ok) return studioErr(built.status, built.code);
 
         await this.posters?.idle(this.d.posterIdleMs);
+        await this.about.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         const free = await this.isFree(focused);
         if (!free && !queueFlag) return await this.refuse("error.webp.busy");
@@ -4372,6 +4408,7 @@ export class StudioService {
         if (missing.length === 0) return { status: 200, body: { status: "success", id: sid, queued: false, queue_ahead: null } };
 
         await this.posters?.idle(this.d.posterIdleMs);
+        await this.about.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         const now = this.d.now();
         const extra = { items: missing, itemCount: row.item_count, retry: true };
@@ -4709,6 +4746,19 @@ export class StudioService {
                 pending++;
             }
         }
+        // "what it's about" probes (section 34.2): one at a time, only while nothing else needs the helper
+        try {
+            this.aboutRuns++;
+            const run = this.about.sweep();
+            const done = () => {
+                this.aboutRuns--;
+            };
+            void run.then(done, done);
+            pending += await raceCeiling(run, itemMs, "sweep of about probes");
+        } catch (e) {
+            console.error("[studio] sweep: about probe failed", String(e));
+            pending++;
+        }
         return { pending };
     }
 
@@ -4733,6 +4783,7 @@ export const isStudioRoute = (pathname: string) =>
     pathname === "/library/adopt" ||
     pathname === "/posters/kick" ||
     pathname === "/loops/kick" ||
+    pathname === "/about/kick" ||
     pathname === "/helper/caps";
 
 const toResponse = (r: StudioReply) =>
@@ -4826,6 +4877,14 @@ export async function handleStudioRoute(
         const raw = url.searchParams.get("limit");
         const limit = raw !== null && /^\d{1,4}$/.test(raw) ? Number(raw) : undefined;
         return toResponse(await service.kickLoops(limit, url.searchParams.get("clean") === "1"));
+    }
+
+    // POST /about/kick?limit=N: the 15-minute cron's call (section 34.2). Internal like the posters path.
+    if (request.method === "POST" && p === "/about/kick") {
+        if (!request.headers.get(KEY_ID_HEADER)) return new Response(null, { status: 403 });
+        const raw = url.searchParams.get("limit");
+        const limit = raw !== null && /^\d{1,4}$/.test(raw) ? Number(raw) : undefined;
+        return toResponse(await service.kickAbout(limit));
     }
 
     // POST /library/adopt: the web Worker's service call. The Worker only

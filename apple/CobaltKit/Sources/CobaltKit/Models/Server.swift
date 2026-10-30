@@ -148,6 +148,13 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// same picture, so Discord offers "favourite"), a slideshow webp of one photo. The server sets it only with
     /// `gallery_make`, and so does the app. False when absent: photos have no "animated webp" button.
     public var stillWebp: Bool = false
+    /// `features.about` (APP-API-CONTRACT 34): `GET /library/about` says what a post is about (a sentence, tags, the words its
+    /// vector reads closest to) and `PATCH /library/about` edits the tags; the chat can rank a collection. True exactly
+    /// while search is on and the server has an Anthropic key. The app also needs `search`. False when absent: the
+    /// detail keeps the plain "search index" section.
+    public var about: Bool = false
+    /// `features.about_sound` (34): the descriptions also hear the post's sound (Workers AI transcript). False when absent.
+    public var aboutSound: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

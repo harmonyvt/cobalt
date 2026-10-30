@@ -68,6 +68,10 @@ export interface WorkerEnv {
     // binding the model's code runs in. The runner itself comes in through EdgeDeps (index.ts).
     CHAT_MODEL?: string;
     LOADER?: unknown;
+    // "What it's about" (section 34): the description model (a plain var; the key is ANTHROPIC_API_KEY) and Workers AI,
+    // which transcribes the sound with Whisper (about-writer.ts). Without AI the words are written without the sound.
+    ABOUT_MODEL?: string;
+    AI?: { run(model: string, inputs: Record<string, unknown>): Promise<unknown> };
     // Stage (section 30): https://<stage host>/ (a plain var; the Worker answers that host itself, before the gate) and
     // the three Twitch secrets. Absent or not https: no stage. Missing secrets: canvas and store only.
     STAGE_BASE_URL?: string;

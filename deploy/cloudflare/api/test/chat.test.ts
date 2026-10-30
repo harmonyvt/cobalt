@@ -306,6 +306,89 @@ describe("chat: a reply", () => {
         expect((await send(base, "POST")).status).toBe(404);
     });
 
+    it("attaches a scored list with rank (section 34.6): SSE ranked with the post shapes, done, D1, thread reads; a later call replaces it", async () => {
+        const a = item({ name: "fursuit a.mp4", link: "https://x.com/f/status/1", created_at: 10_000 });
+        const b = item({ name: "fursuit b.mp4", link: "https://x.com/f/status/2", created_at: 10_001 });
+        const c = item({ name: "cat.mp4", link: "https://x.com/f/status/3", created_at: 10_002 });
+        const t = await newThread();
+        script = [
+            () =>
+                code(
+                    "tu_1",
+                    `await cobalt.rank([{ id: ${JSON.stringify(c.link)} }], { title: "first" });\n` +
+                        `return await cobalt.rank([{ id: ${JSON.stringify(a.link)}, score: 0.61234, why: ["fursuit", "  dance  ", "x".repeat(40), "", "a", "b"] }, ${JSON.stringify(b.link)}, { id: "nope", score: 1 }, { id: ${JSON.stringify(a.link)}, score: 0.1 }], { title: "furry ones", query: "fursuit", within: "lia share 11" });`,
+                ),
+            (s) => {
+                expect(JSON.parse(s.messages[s.messages.length - 1].content[0].content[0].text).result).toBe(2);
+                return say("two of them (=^･ω･^=)");
+            },
+        ];
+        const ev = await events(await send(`/chat/threads/${t.id}/messages`, "POST", { text: "which ones in lia share 11 are furry" }));
+        const ranked = {
+            title: "furry ones",
+            query: "fursuit",
+            within: "lia share 11",
+            hits: [
+                { post_id: a.link, score: 0.612, why: ["fursuit", "dance", "x".repeat(30), "a"] },
+                { post_id: b.link, score: null, why: [] },
+            ],
+        };
+        const rankedEvents = ev.filter((e) => e.event === "ranked");
+        expect(rankedEvents).toHaveLength(1); // after the run that set it
+        expect(rankedEvents[0]!.data.ranked).toEqual(ranked);
+        expect(Object.keys(rankedEvents[0]!.data.posts).sort()).toEqual([a.link, b.link].sort());
+        // after the step's end, before done
+        const names = ev.map((e) => e.event);
+        expect(names.indexOf("ranked")).toBeGreaterThan(names.lastIndexOf("step"));
+        const done = ev[ev.length - 1]!.data.message;
+        expect(done.ranked).toEqual(ranked);
+        expect(done.post_ids).toEqual([]);
+        const rowJson = (db.raw.prepare("SELECT ranked FROM chat_messages WHERE id = ?").get(Number(done.id)) as any).ranked;
+        expect(JSON.parse(rowJson)).toEqual(ranked);
+        const read = await jsonOf(await send(`/chat/threads/${t.id}`, "GET"));
+        expect(read.messages[0].ranked).toBeNull();
+        expect(read.messages[1].ranked).toEqual(ranked);
+        expect(Object.keys(read.posts).sort()).toEqual([a.link, b.link].sort());
+    });
+
+    it("rank keeps 50 at most, and a list of nothing known clears it", async () => {
+        const many = Array.from({ length: 60 }, (_, i) => item({ name: `f${i}.mp4`, link: `https://x.com/g/status/${i + 1}`, created_at: 20_000 + i }));
+        const t = await newThread();
+        script = [
+            () => code("tu_1", `const p = await cobalt.library({ limit: 100 });\nreturn await cobalt.rank(p.map((x) => ({ id: x.id, score: 1 })));`),
+            (s) => {
+                expect(JSON.parse(s.messages[s.messages.length - 1].content[0].content[0].text).result).toBe(50);
+                return code("tu_2", `return await cobalt.rank([{ id: "nope" }]);`);
+            },
+            (s) => {
+                expect(JSON.parse(s.messages[s.messages.length - 1].content[0].content[0].text).result).toBe(0);
+                return say("none");
+            },
+        ];
+        const ev = await events(await send(`/chat/threads/${t.id}/messages`, "POST", { text: "rank them" }));
+        const r = ev.filter((e) => e.event === "ranked").map((e) => e.data.ranked);
+        expect(r[0].hits).toHaveLength(50);
+        expect(r[1]).toBeNull();
+        const done = ev[ev.length - 1]!.data.message;
+        expect(done.ranked).toBeNull();
+        expect((db.raw.prepare("SELECT ranked FROM chat_messages WHERE id = ?").get(Number(done.id)) as any).ranked).toBeNull();
+        expect(many).toHaveLength(60);
+    });
+
+    it("a reply that never ranks leaves the ranked column alone (a database before migration 0022 still saves)", async () => {
+        db.raw.exec("ALTER TABLE chat_messages DROP COLUMN ranked");
+        item({ name: "a.mp4" });
+        const t = await newThread();
+        script = [() => code("tu_1", "return 1;"), () => say("ok")];
+        const ev = await events(await send(`/chat/threads/${t.id}/messages`, "POST", { text: "hi" }));
+        const done = ev[ev.length - 1]!;
+        expect(done.event).toBe("done");
+        expect(done.data.message).toMatchObject({ status: "done", text: "ok", ranked: null });
+        expect(ev.some((e) => e.event === "ranked")).toBe(false);
+        const read = await jsonOf(await send(`/chat/threads/${t.id}`, "GET"));
+        expect(read.messages[1]).toMatchObject({ status: "done", ranked: null });
+    });
+
     it("replays the earlier turn, tool calls included, on the next message", async () => {
         item({ name: "a.mp4" });
         const t = await newThread();
@@ -449,7 +532,10 @@ describe("the system prompt", () => {
     it("sends the model to the meaning search first when search is on", () => {
         const p = systemPrompt(Date.UTC(2026, 9, 18), true);
         expect(p).toContain("call cobalt.library.search(query) first");
-        expect(p).toContain("search(query: string, limit?: number)");
+        expect(p).toContain("search(query: string, opts?: {");
+        // section 34.6: searching inside a collection, and ranking the matches
+        expect(p).toContain("cobalt.library.search(X, { within: { collection:");
+        expect(p).toContain("cobalt.rank(hits, { title, query, within })");
         expect(p).toContain("fall back to cobalt.library.list({ query })");
         expect(p).toContain("Today is 2026-10-18");
     });

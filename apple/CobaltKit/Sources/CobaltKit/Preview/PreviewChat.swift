@@ -395,7 +395,7 @@ extension PreviewClient {
         let messages = chatState.messages(id)
         let library = PreviewData.libraryPage(now: startedAt).posts
         var posts: [String: LibraryPost] = [:]
-        for postID in Set(messages.flatMap(\.postIDs)) {
+        for postID in Set(messages.flatMap { $0.postIDs + ($0.ranked?.hits.map(\.postID) ?? []) }) {
             if let post = library.first(where: { $0.id == postID }) { posts[postID] = post }
         }
         return ChatThreadDetail(thread: thread, messages: messages, posts: posts)
@@ -599,6 +599,15 @@ extension PreviewClient {
             reply.collage = PreviewData.collage
             chatState.update(reply.id, in: threadID) { $0.collage = PreviewData.collage }
             emit(.collage(PreviewData.collage))
+            try await pause(0.3)
+        }
+
+        // a message that says "furry" or "rank" also attaches the scored list (34.6) under the text
+        if text.localizedCaseInsensitiveContains("furry") || text.localizedCaseInsensitiveContains("rank") {
+            let ranked = PreviewData.chatRanked(posts: library)
+            reply.ranked = ranked
+            chatState.update(reply.id, in: threadID) { $0.ranked = ranked }
+            emit(.ranked(ranked, posts: library))
             try await pause(0.3)
         }
 

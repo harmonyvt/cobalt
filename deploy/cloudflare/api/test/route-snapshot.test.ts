@@ -91,6 +91,9 @@ export const PATHS: string[] = [
     "/library/search?q=cats",
     "/library/search/post",
     `/library/search/post?id=${ID16}`,
+    // added with "what it's about" (section 34.6): GET (keyed or service) and PATCH (keyed only) /library/about
+    "/library/about",
+    `/library/about?key=${ID16}`,
     "/library/map",
     "/library/search/index",
     "/library/posters/backfill",

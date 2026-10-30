@@ -10,13 +10,19 @@ extension Symbol {
         static let failed = "exclamationmark.triangle.fill"
         static let gaveUp = "xmark.circle.fill"
         static let unknown = "questionmark.circle"
+        // "what it's about" (APP-API-CONTRACT 34)
+        static let removeTag = "xmark"
+        static let addTag = "plus"
+        static let resetTags = "arrow.counterclockwise"
+        static let heard = "waveform"
     }
 }
 
 /// How a post sits in the server's search index (`GET /library/search/post`, APP-API-CONTRACT 21; only with
 /// `features.search`), at the end of the detail: a badge (indexed / waiting to re-index / waiting / failed / gave up),
 /// when it was indexed or is retried, whether the poster went in, and, folded, the exact title and text it is searched
-/// by. Loaded when the detail opens, and again after a rename (`refreshKey`). Read-only.
+/// by. Loaded when the detail opens, and again after a rename (`refreshKey`). Read-only. A server with `features.about`
+/// (APP-API-CONTRACT 34) gets `AboutSection` instead, which keeps all of this folded inside its "what it's searched by".
 struct SearchIndexSection: View {
     let model: AppModel
     /// The post's key (`LibraryPost.id`).
@@ -29,7 +35,16 @@ struct SearchIndexSection: View {
     @State private var phase: Phase = .loading
     @State private var showsInput = false
 
+    @ViewBuilder
     var body: some View {
+        if model.capabilities.about {
+            AboutSection(model: model, postKey: postKey, refreshKey: refreshKey)
+        } else {
+            plain
+        }
+    }
+
+    private var plain: some View {
         Section {
             content
         } header: {
@@ -70,6 +85,32 @@ struct SearchIndexSection: View {
 
     @ViewBuilder
     private func loaded(_ status: LibrarySearchStatus) -> some View {
+        SearchIndexRows(status: status, showsInput: $showsInput)
+    }
+
+    private func load() async {
+        if case .loaded = phase {} else { phase = .loading }
+        do {
+            let status = try await model.library.searchStatus(postKey: postKey)
+            guard !Task.isCancelled else { return }
+            phase = .loaded(status)
+        } catch {
+            guard !Task.isCancelled, !(error is CancellationError) else { return }
+            phase = LibraryModel.searchErrorCode(error) == "error.library.not_found" ? .notFound : .failed
+        }
+    }
+}
+
+/// The index's own rows: the badge with its dates, whether the poster went in, the tries, and, folded, what the post is
+/// searched by (title, text, poster, model). Read-only. Shared by `SearchIndexSection` and the folded group of
+/// `AboutSection`.
+struct SearchIndexRows: View {
+    let status: LibrarySearchStatus
+    @Binding var showsInput: Bool
+    /// The title, text, poster and model are shown in place, not behind their own fold (`AboutSection` folds all of it).
+    var inline = false
+
+    var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { timeline in
             VStack(alignment: .leading, spacing: 4) {
                 SearchIndexBadge(state: status.state)
@@ -91,7 +132,7 @@ struct SearchIndexSection: View {
             .accessibilityElement(children: .combine)
         }
         LabeledContent(Copy.Search.posterIncluded) {
-            Text(posterIncluded(status) ? Copy.Search.yes : Copy.Search.no)
+            Text(posterIncluded ? Copy.Search.yes : Copy.Search.no)
         }
         .font(CobaltType.body)
         if status.attempts > 1 || status.state == .failed || status.state == .gaveUp {
@@ -99,22 +140,31 @@ struct SearchIndexSection: View {
                 .font(CobaltType.body)
         }
         if let input = status.input {
-            DisclosureGroup(isExpanded: $showsInput) {
-                inputRow(Copy.Search.titleLabel, input.title)
-                inputRow(Copy.Search.textLabel, input.text)
-                inputRow(Copy.Search.posterLabel, input.imageURL?.absoluteString)
-                if let model = status.model {
-                    inputRow(Copy.Search.model, status.dims.map { "\(model) · \($0)" } ?? model)
+            if inline {
+                inputRows(input)
+            } else {
+                DisclosureGroup(isExpanded: $showsInput) {
+                    inputRows(input)
+                } label: {
+                    Text(Copy.Search.whatWasEmbedded)
+                        .font(CobaltType.body)
                 }
-            } label: {
-                Text(Copy.Search.whatWasEmbedded)
-                    .font(CobaltType.body)
             }
         }
     }
 
+    @ViewBuilder
+    private func inputRows(_ input: LibrarySearchStatus.Input) -> some View {
+        inputRow(Copy.Search.titleLabel, input.title)
+        inputRow(Copy.Search.textLabel, input.text)
+        inputRow(Copy.Search.posterLabel, input.imageURL?.absoluteString)
+        if let model = status.model {
+            inputRow(Copy.Search.model, status.dims.map { "\(model) · \($0)" } ?? model)
+        }
+    }
+
     /// The vector was made with the poster (else: the poster would go in, for a post not embedded yet).
-    private func posterIncluded(_ status: LibrarySearchStatus) -> Bool {
+    private var posterIncluded: Bool {
         status.hasImage ?? (status.input?.imageURL != nil)
     }
 
@@ -130,18 +180,6 @@ struct SearchIndexSection: View {
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
-    }
-
-    private func load() async {
-        if case .loaded = phase {} else { phase = .loading }
-        do {
-            let status = try await model.library.searchStatus(postKey: postKey)
-            guard !Task.isCancelled else { return }
-            phase = .loaded(status)
-        } catch {
-            guard !Task.isCancelled, !(error is CancellationError) else { return }
-            phase = LibraryModel.searchErrorCode(error) == "error.library.not_found" ? .notFound : .failed
-        }
     }
 }
 

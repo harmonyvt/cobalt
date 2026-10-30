@@ -21,6 +21,7 @@
 // Read at bundle time from upstream's package.json (reading is fine, editing is
 // not); the fork's Worker bundles this one field.
 import { SHARE_SET_MAX } from "./share-sets";
+import { deleteAboutObjects } from "./about-store";
 import { EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_MAX_SECONDS } from "../../editor/helper/timeline.js";
 import { version as apiVersion } from "../../../../api/package.json";
 
@@ -190,6 +191,9 @@ export async function capabilities(
     editor = false,
     // the helper that runs said `discord=1`: it has a Discord bot token and refreshes old attachment links (section 19.6)
     helperDiscord = false,
+    // "what it's about" (section 34): search on and the Anthropic key; `aboutSound`: and the Workers AI binding (Whisper)
+    about = false,
+    aboutSound = false,
 ): Promise<StudioReply> {
     const state = await resolveKeyState(d.db, auth, key, d.now());
     const version: unknown = apiVersion;
@@ -250,6 +254,11 @@ export async function capabilities(
                 // GET /library/search and POST /library/search/index (APP-API-CONTRACT.md section 21): only
                 // while the embedding Space is configured
                 search: search === true,
+                // GET|PATCH /library/about, `within` and `why` on GET /library/search, the words in the vectors
+                // (APP-API-CONTRACT.md section 34): while search is on and the Anthropic key is set; `about_sound` while
+                // the Workers AI binding (Whisper) is also there
+                about: search === true && about === true,
+                about_sound: search === true && about === true && aboutSound === true,
                 // GET /queue: the line, the search index and the posters in one snapshot (APP-API-CONTRACT.md
                 // section 23)
                 queue: true,
@@ -1468,6 +1477,8 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
             deleted.files += 1;
             deleted.bytes += typeof f.bytes === "number" ? f.bytes : 0;
             if (f.poster) posters.add(f.poster);
+            // the "what it's about" frames and sound cut from it (section 34.2), best effort
+            await deleteAboutObjects(d.originals, f.id);
         } catch (e) {
             console.error("[library] post delete file failed", f.id, f.bucket, String(e));
             remaining.push(f.id);
@@ -1502,6 +1513,8 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
         } catch (e) {
             console.error("[library] post delete title failed", post, String(e));
         }
+        // and what it was about (section 34; no table before migration 0022)
+        await d.db.prepare("DELETE FROM media_about WHERE post_key = ?1").bind(post).run().catch(() => {});
     }
 
     if (remaining.length > 0) {
@@ -1601,6 +1614,8 @@ async function removeFile(d: AppDeps, f: FileRow): Promise<{ bytes: number }> {
     await d.db.prepare("UPDATE media_items SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL").bind(d.now(), f.id).run();
     if (f.poster) await releasePoster(d.db, d.media, f.poster);
     if (f.url) await purgeUrls(d, [f.url]);
+    // the "what it's about" frames and sound cut from it (section 34.2); the row moves to the next lead on the next sync
+    await deleteAboutObjects(d.originals, f.id);
     return { bytes: typeof f.bytes === "number" ? f.bytes : 0 };
 }
 

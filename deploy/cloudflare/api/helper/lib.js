@@ -607,6 +607,67 @@ export function posterTime(duration) {
     return +Math.min(duration * POSTER_FRACTION, POSTER_MAX_AT_SECONDS).toFixed(3);
 }
 
+// ---- "what it's about" (APP-API-CONTRACT.md 34.2): three frames and the sound of a stored video ----------------------
+
+/** Longer side of an about frame (never upscaled), the first seconds of sound kept, and the silence line. */
+export const ABOUT_FRAME_SIDE = 768;
+export const ABOUT_AUDIO_SECONDS = 180;
+export const ABOUT_SILENCE_DB = -60;
+/** The frames' places in the clip, and the shortest clip that gets all three. */
+export const ABOUT_FRACTIONS = [0.15, 0.5, 0.85];
+export const ABOUT_MIN_SECONDS = 2;
+
+/**
+ * Where the about frames are taken: 15 %, 50 % and 85 % of the duration; one frame (the middle) for a clip under 2 s,
+ * and one at the start when the duration is not known.
+ * @param {number | null | undefined} duration seconds
+ * @returns {number[]}
+ */
+export function aboutTimes(duration) {
+    if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) return [0];
+    if (duration < ABOUT_MIN_SECONDS) return [+(duration * 0.5).toFixed(3)];
+    return ABOUT_FRACTIONS.map((f) => +(duration * f).toFixed(3));
+}
+
+/**
+ * ffmpeg argv for the about sound: the first ABOUT_AUDIO_SECONDS as mono 16 kHz MP3 at 32 kbit/s (what Whisper reads
+ * well, under 1 MB), measuring its loudness on the way (volumedetect prints mean_volume on stderr).
+ * @param {{input: string, output: string}} j
+ */
+export function buildAboutAudioArgs(j) {
+    return [
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel", "info",
+        "-protocol_whitelist", "file,pipe",
+        "-i", j.input,
+        "-t", String(ABOUT_AUDIO_SECONDS),
+        "-vn", "-sn", "-dn",
+        "-map", "0:a:0",
+        "-ac", "1",
+        "-ar", "16000",
+        "-af", "volumedetect",
+        "-c:a", "libmp3lame",
+        "-b:a", "32k",
+        "-f", "mp3",
+        "-y",
+        j.output,
+    ];
+}
+
+/**
+ * The mean volume volumedetect reported (dB), or null when it said nothing.
+ * @param {string} stderr
+ * @returns {number | null}
+ */
+export function parseMeanVolume(stderr) {
+    const m = /mean_volume:\s*(-?(?:\d+(?:\.\d+)?|inf))\s*dB/i.exec(stderr);
+    if (!m) return null;
+    if (/inf/i.test(m[1])) return -Infinity;
+    const v = Number(m[1]);
+    return Number.isFinite(v) ? v : null;
+}
+
 /** Longer side of the thumb the helper makes for a saved photo (APP-API-CONTRACT 18.7). */
 export const THUMB_MAX_SIDE = 480;
 
