@@ -4,16 +4,19 @@
 // goes through the normal upload path (PUT /studio/upload's own code), typed by its bytes, as the chat's key id.
 import * as z from "zod";
 import { MAX_UPLOAD_BYTES, studioUpload } from "../../app-routes";
-import type { BoxError, BoxRun, BoxStat } from "../../workbench-core";
-import { RUN_DEFAULT_S, RUN_MAX_S } from "../../workbench-core";
+import { ITEM_ID_REGEX } from "../../gate";
+import type { BoxError, BoxRun, BoxStat, BoxWrite } from "../../workbench-core";
+import { BOX_NAME_REGEX, RUN_DEFAULT_S, RUN_MAX_S } from "../../workbench-core";
 import { sniffSave } from "../../workbench-rules";
 import { defineOp, ok, OpError, type OpContext } from "../op";
+import { FILE_SELECT, isSource, type FileRow } from "./make";
 
 // The Workbench object as the ops see it (its RPC methods).
 export type WorkbenchPort = {
     run(thread: string, cmd: string, timeoutS?: number): Promise<BoxRun | BoxError>;
     stat(thread: string, path: string): Promise<BoxStat | BoxError>;
     read(thread: string, path: string): Promise<ReadableStream<Uint8Array> | BoxError>;
+    write(thread: string, name: string, body: ReadableStream<Uint8Array>): Promise<BoxWrite | BoxError>;
 };
 
 export function workbenchPort(ctx: OpContext): WorkbenchPort {
@@ -69,7 +72,7 @@ export const boxRunOp = defineOp({
         tier: "free",
         only: true,
         summary:
-            "LAST RESORT. A bash command in a Linux box with yt-dlp, curl, ffmpeg and python3 (cwd /workspace, public internet over\nhttp/https only). For a site or file the normal tools can't save. It wakes in ~10 s, keeps this thread's files while\nawake, and is wiped when it sleeps (2 min idle). stdout and stderr come back cut to 8 KB each.",
+            "A bash command in a Linux box with ffmpeg, ffprobe, yt-dlp, curl and python3 (cwd /workspace, public internet over\nhttp/https only). Two uses: full ffmpeg editing of library files (box.pull them in, run any ffmpeg command, box.save the\nresult) when the make/edits ops can't do it, and as the LAST RESORT for a site or file the normal tools can't save. It\nwakes in ~10 s, keeps this thread's files while awake, and is wiped when it sleeps (2 min idle). stdout and stderr come\nback cut to 8 KB each (use ffmpeg -hide_banner -loglevel error -y).",
         params: ["cmd"],
         options: true,
         when: (f) => f.box === true,
@@ -152,4 +155,103 @@ export const boxSaveOp = defineOp({
     },
 });
 
-export const BOX_OPS = [boxRunOp, boxSaveOp];
+// ---- box.pull: library files into the box (33.11.1) ------------------------------------------------------------------
+
+// What one pull may copy in (the box has 4 GB of disk, and it is wiped on sleep anyway).
+export const PULL_MAX_BYTES = 1_000_000_000;
+export const PULL_MAX_FILES = 10;
+
+const EXT_BY_TYPE: Record<string, string> = {
+    "video/mp4": "mp4",
+    "video/quicktime": "mov",
+    "video/webm": "webm",
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "image/heic": "heic",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+};
+
+function extOf(f: Pick<FileRow, "content_type" | "r2_key">): string {
+    const t = (f.content_type ?? "").split(";")[0]!.trim().toLowerCase();
+    if (EXT_BY_TYPE[t]) return EXT_BY_TYPE[t]!;
+    const m = /\.([A-Za-z0-9]{1,5})$/.exec(f.r2_key);
+    return m ? m[1]!.toLowerCase() : "bin";
+}
+
+type ReadBucket = { get(key: string): Promise<{ body: ReadableStream<Uint8Array>; size: number } | null> };
+
+function bucketOf(ctx: OpContext, f: FileRow): ReadBucket {
+    if (f.bucket === "originals") return ctx.env.ORIGINALS as unknown as ReadBucket;
+    if (f.bucket === "media") return ctx.env.MEDIA as unknown as ReadBucket;
+    throw new OpError(404, "error.library.not_found", `cobalt.box.pull: file ${f.id} has no stored bytes`);
+}
+
+// A post id -> the files it was saved as (every item of a gallery), else every file of the post; a file id -> that file.
+async function pullFiles(ctx: OpContext, id: string): Promise<FileRow[]> {
+    if (ITEM_ID_REGEX.test(id)) {
+        const f = await ctx.db.prepare(`${FILE_SELECT} WHERE id = ?1`).bind(id).first<FileRow>();
+        if (f && f.post_key !== id) return [f];
+    }
+    const { results } = await ctx.db.prepare(`${FILE_SELECT} WHERE post_key = ?1 ORDER BY item_index, created_at, id`).bind(id).all<FileRow>();
+    if (results.length === 0) throw new OpError(404, "error.library.not_found", `cobalt.box.pull: no post or file with id ${id}`);
+    const sources = results.filter(isSource);
+    return (sources.length > 0 ? sources : results).slice(0, PULL_MAX_FILES);
+}
+
+const PulledSchema = z.object({
+    path: z.string().describe("its name in /workspace"),
+    file_id: z.string(),
+    content_type: z.string().nullable(),
+    bytes: z.number(),
+    seconds: z.number().nullable(),
+    width: z.number().nullable(),
+    height: z.number().nullable(),
+});
+
+export const boxPullOp = defineOp({
+    name: "box.pull",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({
+        id: z.string().min(1).max(64).describe("a post id (every file it was saved as, up to 10) or one file id"),
+        as: z.string().regex(BOX_NAME_REGEX).optional().describe("a file name for a single file (default <file id>.<ext>)"),
+    }),
+    output: z.object({ files: z.array(PulledSchema) }),
+    ai: {
+        tier: "free",
+        only: true,
+        summary: `Copy a library post's files (or one file) into the box's /workspace, to edit with ffmpeg/ffprobe there and put the result back with box.save. Private files too: the box can't send a request body over 64 KB, so they leave it only through box.save. Up to ${PULL_MAX_BYTES / 1_000_000_000} GB a call.`,
+        params: ["id"],
+        options: true,
+        when: (f) => f.box === true,
+    },
+    handler: async (ctx, input) => {
+        const thread = threadOf(ctx);
+        const files = await pullFiles(ctx, input.id);
+        if (input.as && files.length > 1) throw new OpError(400, "error.make.refused", `cobalt.box.pull: "as" names one file, and post ${input.id} has ${files.length}; pull a file id`);
+        const box = workbenchPort(ctx);
+        const out: z.infer<typeof PulledSchema>[] = [];
+        let total = 0;
+        for (const f of files) {
+            const obj = await bucketOf(ctx, f).get(f.r2_key);
+            if (!obj) throw new OpError(404, "error.library.not_found", `cobalt.box.pull: the bytes of file ${f.id} are missing`);
+            total += obj.size;
+            if (total > PULL_MAX_BYTES) {
+                await obj.body.cancel().catch(() => {});
+                throw new OpError(413, "error.library.too_large", `cobalt.box.pull: over ${PULL_MAX_BYTES / 1_000_000_000} GB in one call; pull fewer files`);
+            }
+            const name = input.as ?? `${f.id}.${extOf(f)}`;
+            const w = await box.write(thread, name, obj.body);
+            if (isError(w)) throw new OpError(503, "error.workbench", `cobalt.box.pull: ${w.error}`);
+            if (w.size !== obj.size) throw new OpError(503, "error.workbench", `cobalt.box.pull: ${name} arrived cut (${w.size} of ${obj.size} bytes); try again`);
+            out.push({ path: name, file_id: f.id, content_type: f.content_type, bytes: w.size, seconds: f.duration, width: f.width, height: f.height });
+        }
+        return ok({ files: out });
+    },
+});
+
+export const BOX_OPS = [boxRunOp, boxPullOp, boxSaveOp];
