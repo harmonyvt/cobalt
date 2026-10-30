@@ -49,6 +49,33 @@ private struct VisibilityLibraryHost: View {
     }
 }
 
+/// The detail with the file's private link already on (APP-API-CONTRACT 36.6): the link, copy, opened, key made, rotate.
+@MainActor
+private struct PrivateLinkDetailHost: View {
+    @State private var model = AppModel.previewVisibility(.working)
+    @State private var ready = false
+    let post: String
+
+    var body: some View {
+        Group {
+            if ready, let found = model.library.posts.first(where: { $0.id == post }) {
+                NavigationStack { MediaDetail(model: model, item: model.mediaItem(for: found), initial: nil) }
+            } else {
+                Color.clear
+            }
+        }
+        .task {
+            if let found = model.library.posts.first(where: { $0.id == post }), let video = model.mediaItem(for: found).video {
+                _ = try? await model.setFileLink(video, to: .private)
+            }
+            ready = true
+        }
+    }
+}
+
+#Preview("link · private link on (copy, opened, rotate)") {
+    PrivateLinkDetailHost(post: "Dd55fEyN1Yy")
+}
 #Preview("visibility · public video (switch on, link, copy)") {
     VisibilityDetailHost(post: "Dd55fEyN1Yy")
 }

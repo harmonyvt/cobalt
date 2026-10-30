@@ -197,6 +197,8 @@ public struct PreviewClient: CobaltClient {
     let editorState = PreviewEditorState()
     /// How agents reach the MCP on the "server" (`PreviewMcp.swift`).
     let mcpState = PreviewMcpState()
+    /// The private share links the "server" holds (`PreviewPrivateLinks.swift`).
+    let privateState = PreviewPrivateState()
 
     public var baseURL: URL { PreviewData.base }
 
@@ -664,7 +666,7 @@ public struct PreviewClient: CobaltClient {
         var page = PreviewData.libraryPageV2(now: clock.now())
         page.posts = page.posts.map { post in
             var p = post
-            p.files = post.files.map { visibilityState.applying(to: $0) }
+            p.files = post.files.map { privateState.applying(to: visibilityState.applying(to: $0), now: clock.now()) }
             p.visibility = p.files.first { $0.role == .privateCopy }?.visibility ?? (p.files.contains { $0.isPublic } ? .public : .private)
             return p
         }
@@ -702,7 +704,9 @@ public struct PreviewClient: CobaltClient {
             throw PipelineFailure.server(code: "error.library.not_found")
         }
         guard base.canToggleVisibility else { throw PipelineFailure.unsupported }
-        let file = visibilityState.set(base, public: makePublic)
+        // making a file public revokes its private link (APP-API-CONTRACT 36.2); off keeps it off
+        if makePublic { privateState.revoke(.item, id) }
+        let file = privateState.applying(to: visibilityState.set(base, public: makePublic), now: clock.now())
         return VisibilityChange(file: file, cacheCleared: makePublic ? nil : true)
     }
 

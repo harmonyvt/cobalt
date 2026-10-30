@@ -13,13 +13,26 @@ public struct ShareSet: Sendable, Equatable, Identifiable, Decodable {
     public var title: String?
     public var createdAt: Date
     public var items: [ShareSetItem]
+    /// `private` (APP-API-CONTRACT 36.3): the link has a live private link, so `url` is that one and the public address
+    /// `share…/g/<id>` is a 404. False from a server without private links.
+    public var isPrivate: Bool
+    /// `public_url`: `<share_base_url>g/<id>`, the address while the link is public. Nil from an older server.
+    public var publicURL: URL?
+    /// `link`: the live private link while private (its opens, when its key was made); nil while public.
+    public var link: PrivateLink?
 
-    public init(id: String, url: URL, title: String? = nil, createdAt: Date, items: [ShareSetItem]) {
+    public init(
+        id: String, url: URL, title: String? = nil, createdAt: Date, items: [ShareSetItem],
+        isPrivate: Bool = false, publicURL: URL? = nil, link: PrivateLink? = nil
+    ) {
         self.id = id
         self.url = url
         self.title = title
         self.createdAt = createdAt
         self.items = items
+        self.isPrivate = isPrivate
+        self.publicURL = publicURL
+        self.link = link
     }
 
     /// The title, else "N files".
@@ -31,7 +44,11 @@ public struct ShareSet: Sendable, Equatable, Identifiable, Decodable {
     /// How many of the files are still public (a set whose files all went private stays listed until revoked).
     public var publicItemCount: Int { items.filter(\.isPublic).count }
 
-    enum CodingKeys: String, CodingKey { case id, url, title, createdAt, items }
+    enum CodingKeys: String, CodingKey {
+        case id, url, title, createdAt, items, link
+        case isPrivate = "private"
+        case publicURL = "publicUrl"           // `public_url` after convertFromSnakeCase
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -40,6 +57,30 @@ public struct ShareSet: Sendable, Equatable, Identifiable, Decodable {
         title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? nil
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         items = (try c.decodeIfPresent([Lossy<ShareSetItem>].self, forKey: .items) ?? []).compactMap(\.value)
+        // 36.3, all lenient: a server without private links sends none of these
+        link = (try? c.decodeIfPresent(PrivateLink.self, forKey: .link)) ?? nil
+        isPrivate = ((try? c.decodeIfPresent(Bool.self, forKey: .isPrivate)) ?? nil) ?? (link != nil)
+        publicURL = (try? c.decodeIfPresent(URL.self, forKey: .publicURL)) ?? nil
+    }
+
+    /// The link as it is once its private link is on: `url` is the private one.
+    func makingPrivate(_ link: PrivateLink) -> ShareSet {
+        var s = self
+        if s.publicURL == nil, !s.isPrivate { s.publicURL = s.url }
+        s.isPrivate = true
+        s.link = link
+        s.url = link.url
+        return s
+    }
+
+    /// The link as it is once its private link is revoked: public again at `share…/g/<id>` (`fallback` when the server
+    /// never said its public address).
+    func makingPublic(fallback: URL?) -> ShareSet {
+        var s = self
+        s.isPrivate = false
+        s.link = nil
+        if let pub = s.publicURL ?? fallback { s.url = pub }
+        return s
     }
 }
 
@@ -158,6 +199,28 @@ public enum ShareSetRule {
             if let id = publicFile(of: rendition)?.id { return id }
         }
         return nil
+    }
+
+    /// The library file id that stands for a post in a PRIVATE link (APP-API-CONTRACT 36.3: any live file, public or
+    /// not): `fileID(for:)` when the post has a public file, else the same order over every file the post has (the
+    /// face's, the original's, then the newest other rendition's). Nil for a gallery and a post with no library file.
+    public static func privateFileID(for item: MediaItem) -> String? {
+        if item.kind == .gallery { return nil }
+        if let id = fileID(for: item) { return id }
+        if let id = anyFile(of: item.face)?.id { return id }
+        if let video = item.video, let id = anyFile(of: video)?.id { return id }
+        let others = item.renditions
+            .filter { !$0.isItem }
+            .sorted { $0.createdAt > $1.createdAt }
+        for rendition in others {
+            if let id = anyFile(of: rendition)?.id { return id }
+        }
+        return nil
+    }
+
+    /// The library file of `rendition`, public or not.
+    static func anyFile(of rendition: Rendition) -> LibraryFile? {
+        rendition.file ?? rendition.hosted
     }
 
     /// The library file that makes `rendition` public now, if any.

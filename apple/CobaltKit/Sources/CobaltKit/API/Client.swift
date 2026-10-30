@@ -151,6 +151,28 @@ public protocol CobaltClient: Sendable {
     func shareSets() async throws -> [ShareSet]
     /// `DELETE /share/sets/<id>`: revokes the link at once. An unknown id is `ShareSetError.notFound`.
     func revokeShareSet(id: String) async throws
+    /// `POST /share/sets` `{items, title?, private?}` (APP-API-CONTRACT 36.3): nil `isPrivate` omits the field (the server
+    /// uses `new_links`). Private: the files may be any live files, and the answer is already private. Defaulted below:
+    /// nil and false fall back to `createShareSet(items:title:)`, true is `.unsupported`.
+    func createShareSet(items: [String], title: String?, private isPrivate: Bool?) async throws -> ShareSet
+    // Private share links (APP-API-CONTRACT 36; keyed; only when `features.private_links`). Defaulted below
+    // (`.unsupported`) so older fakes compile. All throw `PrivateLinkError` for the server's refusals.
+    /// `GET /share/private`: every live private link, newest first, and `new_links`.
+    func privateLinks() async throws -> PrivateLinkList
+    /// `PUT /share/private/items|sets/<id>`: turns the private link on (a public file goes off first) and answers it;
+    /// already on answers the same link.
+    func enablePrivateLink(_ kind: PrivateLink.Kind, id: String) async throws -> PrivateLink
+    /// `DELETE /share/private/items|sets/<id>`: the private link stops. A file stays off; a gallery link is public again.
+    func revokePrivateLink(_ kind: PrivateLink.Kind, id: String) async throws
+    /// `POST /share/private/items|sets/<id>/rotate`: a new key, the old one a 404 at once. `.notFound` when none is live.
+    func rotatePrivateLink(_ kind: PrivateLink.Kind, id: String) async throws -> PrivateLink
+    /// `POST /share/private/rotate-all`: every live key rotated in one batch.
+    func rotateAllPrivateLinks() async throws -> PrivateLinkRotation
+    /// `PATCH /share/private/settings {new_links}`: answers the value now stored.
+    func setNewLinks(_ value: NewLinks) async throws -> NewLinks
+    /// `POST /share/collections/<id>/privacy`: the private links of the collection's live gallery links after the change
+    /// (empty after `.makePublic`). Throws `ShareCollectionError` (`.notFound`, `.badRequest`).
+    func setCollectionPrivacy(id: String, _ change: CollectionPrivacy) async throws -> [PrivateLink]
     // Share link collections (APP-API-CONTRACT 26; keyed; only when `features.share_collections`). Defaulted below
     // (`.unsupported`) so older fakes compile. All throw `ShareCollectionError` for the server's refusals.
     /// `GET /share/collections`: the collections, most recently changed first.
@@ -302,6 +324,17 @@ extension CobaltClient {
     public func createShareSet(items: [String], title: String?) async throws -> ShareSet { throw PipelineFailure.unsupported }
     public func shareSets() async throws -> [ShareSet] { throw PipelineFailure.unsupported }
     public func revokeShareSet(id: String) async throws { throw PipelineFailure.unsupported }
+    public func createShareSet(items: [String], title: String?, private isPrivate: Bool?) async throws -> ShareSet {
+        guard isPrivate != true else { throw PipelineFailure.unsupported }
+        return try await createShareSet(items: items, title: title)
+    }
+    public func privateLinks() async throws -> PrivateLinkList { throw PipelineFailure.unsupported }
+    public func enablePrivateLink(_ kind: PrivateLink.Kind, id: String) async throws -> PrivateLink { throw PipelineFailure.unsupported }
+    public func revokePrivateLink(_ kind: PrivateLink.Kind, id: String) async throws { throw PipelineFailure.unsupported }
+    public func rotatePrivateLink(_ kind: PrivateLink.Kind, id: String) async throws -> PrivateLink { throw PipelineFailure.unsupported }
+    public func rotateAllPrivateLinks() async throws -> PrivateLinkRotation { throw PipelineFailure.unsupported }
+    public func setNewLinks(_ value: NewLinks) async throws -> NewLinks { throw PipelineFailure.unsupported }
+    public func setCollectionPrivacy(id: String, _ change: CollectionPrivacy) async throws -> [PrivateLink] { throw PipelineFailure.unsupported }
     public func shareCollections() async throws -> [ShareCollection] { throw PipelineFailure.unsupported }
     public func createShareCollection(name: String, setIDs: [String]) async throws -> ShareCollection { throw PipelineFailure.unsupported }
     public func updateShareCollection(id: String, name: String?, add: [String], remove: [String]) async throws -> ShareCollection { throw PipelineFailure.unsupported }

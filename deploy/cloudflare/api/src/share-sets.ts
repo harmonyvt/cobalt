@@ -5,8 +5,18 @@
 
 import { captionOf, fileOf, setSubject, writeCaption, type Caption, type Captioner, type RoastInput } from "./roast";
 import { ITEM_COLUMNS, effectiveVisibility, type MediaRow } from "./visibility";
-import { escapeHtml } from "./share";
+import { escapeHtml, pageHeaders } from "./share";
 import { loopUrls } from "./loops";
+import {
+    linkInsert,
+    linkShape,
+    liveLinksFor,
+    newLinksSetting,
+    revokeLinkQuietly,
+    setIsPrivate,
+    type PrivateLinkRow,
+} from "./private-links";
+import { privateFileUrl, privatePosterUrl } from "./share-private";
 import type { StudioReply } from "./studio";
 
 // 10 is the most a Discord media gallery shows (section 29; it was 4, the Open Graph image grid's limit).
@@ -33,11 +43,13 @@ export type ShareSetDeps = {
     // Whether Discord's gallery shows a video's moving preview in its place (section 29.1). Absent = on
     // (tests); the Worker passes GALLERY_LOOPS === "1", off by default since 2026-10-20.
     loops?: boolean;
+    // the random bytes of a private link's key (section 36); absent = crypto
+    keyBytes?: (n: number) => Uint8Array;
 };
 
 export const CAPTION_WAIT_MS = 6000;
 
-type SetRow = { id: string; items: string; title: string | null; created_at: number; revoked_at: number | null };
+export type SetRow = { id: string; items: string; title: string | null; created_at: number; revoked_at: number | null };
 
 const withSlash = (u: string) => (u.endsWith("/") ? u : `${u}/`);
 const err = (status: number, code: string, extra: Record<string, unknown> = {}): StudioReply => ({
@@ -68,7 +80,7 @@ export function publicUrlOf(r: MediaRow, mediaBaseUrl: string): string | null {
     return key && PUBLIC_NAME.test(key) ? `${withSlash(mediaBaseUrl)}${key}` : null;
 }
 
-async function rowsById(db: D1Database, ids: string[]): Promise<Map<string, MediaRow>> {
+export async function rowsById(db: D1Database, ids: string[]): Promise<Map<string, MediaRow>> {
     if (ids.length === 0) return new Map();
     const marks = ids.map((_, i) => `?${i + 1}`).join(", ");
     const { results } = await db
@@ -78,7 +90,7 @@ async function rowsById(db: D1Database, ids: string[]): Promise<Map<string, Medi
     return new Map(results.map((r) => [r.id, r]));
 }
 
-type SetItem = {
+export type SetItem = {
     id: string;
     url: string | null;
     content_type: string | null;
@@ -88,7 +100,7 @@ type SetItem = {
     duration: number | null;
 };
 
-const parseItems = (s: string): string[] => {
+export const parseItems = (s: string): string[] => {
     try {
         const v = JSON.parse(s);
         return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
@@ -113,13 +125,44 @@ function itemsOf(ids: string[], rows: Map<string, MediaRow>, mediaBaseUrl: strin
     });
 }
 
-const setShape = (d: ShareSetDeps, s: SetRow, items: SetItem[]) => ({
-    id: s.id,
-    url: `${withSlash(d.shareBaseUrl)}g/${s.id}`,
-    title: s.title,
-    created_at: s.created_at,
-    items,
-});
+// A private gallery link's files (section 36), as its owner sees them: every live file at its address under
+// share.../p/<key>/, whatever its own state (a deleted one is null, as in a public link).
+function privateItemsOf(d: Pick<ShareSetDeps, "mediaBaseUrl" | "shareBaseUrl">, ids: string[], rows: Map<string, MediaRow>, key: string): SetItem[] {
+    return ids.map((id, i) => {
+        const r = rows.get(id);
+        const url = r ? privateFileUrl(d.shareBaseUrl, key, i + 1, r) : null;
+        return {
+            id,
+            url,
+            content_type: r?.content_type ?? null,
+            poster_url: r && r.poster && r.poster.startsWith(withSlash(d.mediaBaseUrl)) ? privatePosterUrl(d.shareBaseUrl, key, i + 1) : null,
+            width: r?.width ?? null,
+            height: r?.height ?? null,
+            duration: r?.duration ?? null,
+        };
+    });
+}
+
+// The set as every client sees it. Section 36: `url` is the link that works now (the private one while private),
+// `public_url` its share.../g/<id>, `link` its live private link or null.
+const setShape = (d: ShareSetDeps, s: SetRow, items: SetItem[], link: PrivateLinkRow | null = null) => {
+    const publicUrl = `${withSlash(d.shareBaseUrl)}g/${s.id}`;
+    const shaped = link ? linkShape(link, d.shareBaseUrl) : null;
+    return {
+        id: s.id,
+        url: shaped ? shaped.url : publicUrl,
+        title: s.title,
+        created_at: s.created_at,
+        items,
+        private: link !== null,
+        public_url: publicUrl,
+        link: shaped,
+    };
+};
+
+// The set's items: through its private link while it has one, else its public files.
+const itemsFor = (d: ShareSetDeps, ids: string[], rows: Map<string, MediaRow>, link: PrivateLinkRow | null | undefined): SetItem[] =>
+    link ? privateItemsOf(d, ids, rows, link.key) : itemsOf(ids, rows, d.mediaBaseUrl);
 
 // Trimmed, no control characters, 1..80 code points; "" / absent = no title; null = invalid.
 function cleanTitle(v: unknown): string | null | undefined {
@@ -140,7 +183,7 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
     } catch {
         return err(400, "error.share.bad_request");
     }
-    const b = body as { items?: unknown; title?: unknown } | null;
+    const b = body as { items?: unknown; title?: unknown; private?: unknown } | null;
     const items = b?.items;
     if (
         !Array.isArray(items) ||
@@ -153,11 +196,15 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
     }
     const title = cleanTitle(b?.title);
     if (title === null) return err(400, "error.share.bad_request");
+    if (b?.private !== undefined && typeof b.private !== "boolean") return err(400, "error.share.bad_request");
     const ids = items as string[];
     try {
+        // section 36: absent = the owner's `new_links` setting
+        const makePrivate = typeof b?.private === "boolean" ? b.private : (await newLinksSetting(d.db)) === "private";
         const rows = await rowsById(d.db, ids);
-        const shaped = itemsOf(ids, rows, d.mediaBaseUrl);
-        const bad = shaped.filter((i) => i.url === null).map((i) => i.id);
+        const publicItems = itemsOf(ids, rows, d.mediaBaseUrl);
+        // a private link may hold files that are not public: only missing or deleted ones are refused
+        const bad = makePrivate ? ids.filter((id) => !rows.has(id)) : publicItems.filter((i) => i.url === null).map((i) => i.id);
         if (bad.length > 0) return err(409, "error.share.not_public", { items: bad });
         const row: SetRow = {
             id: mintSetId(d.randomBytes),
@@ -166,12 +213,21 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
             created_at: d.now(),
             revoked_at: null,
         };
-        await d.db
+        const insert = d.db
             .prepare("INSERT INTO share_sets (id, items, title, key_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
-            .bind(row.id, row.items, row.title, keyId, row.created_at)
-            .run();
+            .bind(row.id, row.items, row.title, keyId, row.created_at);
+        let link: PrivateLinkRow | null = null;
+        if (makePrivate) {
+            // the set and its private link in one batch: never a moment where the new set is public
+            const made = linkInsert(d.db, "set", row.id, row.created_at, d.keyBytes);
+            await d.db.batch([insert, made.stmt]);
+            link = made.row;
+        } else {
+            await insert.run();
+        }
+        const shaped = itemsFor(d, ids, rows, link);
         if (d.captioner) {
-            const input: RoastInput = { files: ids.map((id) => rows.get(id)!).map((r, i) => fileOf(r, shaped[i]!.url)), userTitle: row.title };
+            const input: RoastInput = { files: ids.map((id) => rows.get(id)!).map((r, i) => fileOf(r, publicItems[i]!.url)), userTitle: row.title };
             const wait = d.captionWaitMs ?? CAPTION_WAIT_MS;
             // our own timeout: a slow model must not hold the link (the row is recorded either way)
             await Promise.race([
@@ -182,7 +238,7 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
         if (d.kickLoops && shaped.some((i) => (i.content_type ?? "").startsWith("video/"))) {
             await d.kickLoops().catch(() => {});
         }
-        return { status: 201, body: { status: "success", set: setShape(d, row, shaped) } };
+        return { status: 201, body: { status: "success", set: setShape(d, row, shaped, link) } };
     } catch {
         return err(503, "error.api.generic");
     }
@@ -200,9 +256,13 @@ export async function listShareSets(d: ShareSetDeps): Promise<StudioReply> {
         for (let i = 0; i < all.length; i += 90) {
             for (const [k, v] of await rowsById(d.db, all.slice(i, i + 90))) rows.set(k, v);
         }
+        const links = await liveLinksFor(d.db, "set", results.map((s) => s.id));
         return {
             status: 200,
-            body: { status: "success", sets: results.map((s) => setShape(d, s, itemsOf(parseItems(s.items), rows, d.mediaBaseUrl))) },
+            body: {
+                status: "success",
+                sets: results.map((s) => setShape(d, s, itemsFor(d, parseItems(s.items), rows, links.get(s.id)), links.get(s.id) ?? null)),
+            },
         };
     } catch {
         return err(503, "error.api.generic");
@@ -216,6 +276,8 @@ export async function revokeShareSet(d: ShareSetDeps, id: string): Promise<Studi
         if (row.revoked_at === null) {
             await d.db.prepare("UPDATE share_sets SET revoked_at = ?2 WHERE id = ?1 AND revoked_at IS NULL").bind(id, d.now()).run();
         }
+        // its private link goes with it (section 36); a repeat cleans up one left by a failed call
+        await revokeLinkQuietly(d.db, "set", id, d.now());
         return { status: 200, body: { status: "success" } };
     } catch {
         return err(503, "error.api.generic");
@@ -225,15 +287,23 @@ export async function revokeShareSet(d: ShareSetDeps, id: string): Promise<Studi
 // ---- the share host --------------------------------------------------------------------------------
 
 // `loop_url`: a video's moving preview (section 29), when it has one
-type LiveSet = { set: SetRow; files: (SetItem & { url: string; loop_url?: string | null })[]; caption?: Caption | null };
+export type LiveSet = { set: SetRow; files: (SetItem & { url: string; loop_url?: string | null })[]; caption?: Caption | null };
 
-async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "loops">, id: string): Promise<LiveSet | null> {
+export async function liveSetRow(db: D1Database, id: string): Promise<SetRow | null> {
     if (!SET_ID_REGEX.test(id)) return null;
-    const set = await d.db
-        .prepare("SELECT id, items, title, created_at, revoked_at FROM share_sets WHERE id = ?1 AND revoked_at IS NULL")
-        .bind(id)
-        .first<SetRow>();
+    return (
+        (await db
+            .prepare("SELECT id, items, title, created_at, revoked_at FROM share_sets WHERE id = ?1 AND revoked_at IS NULL")
+            .bind(id)
+            .first<SetRow>()) ?? null
+    );
+}
+
+// A public gallery link's page data: its public files. A link with a live private link (section 36) has none here.
+async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "loops">, id: string): Promise<LiveSet | null> {
+    const set = await liveSetRow(d.db, id);
     if (!set) return null;
+    if (await setIsPrivate(d.db, id)) return null;
     const ids = parseItems(set.items);
     const files = itemsOf(ids, await rowsById(d.db, ids), d.mediaBaseUrl).filter((i): i is SetItem & { url: string } => i.url !== null);
     if (files.length === 0) return null;
@@ -250,6 +320,16 @@ async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "loops">, i
         files: files.map((f) => ({ ...f, loop_url: loops.get(f.id) ?? null })),
         caption: await captionOf(d.db, setSubject(set.id)),
     };
+}
+
+// A private gallery link's page data (section 36): every live file, whatever its own state, at its address under
+// share.../p/<key>/ (files keep their place in the link, so file <n> never changes). No moving previews: they live on
+// the media domain. Null when no file is left.
+export async function privateLiveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "shareBaseUrl">, set: SetRow, key: string): Promise<LiveSet | null> {
+    const ids = parseItems(set.items);
+    const files = privateItemsOf(d, ids, await rowsById(d.db, ids), key).filter((i): i is SetItem & { url: string } => i.url !== null);
+    if (files.length === 0) return null;
+    return { set, files: files.map((f) => ({ ...f, loop_url: null })), caption: await captionOf(d.db, setSubject(set.id)) };
 }
 
 // The roast model input for a live gallery link, or null when none of its files is public any more.
@@ -408,10 +488,8 @@ export function componentEmbed(s: LiveSet, pageUrl: string): string | null {
     return null;
 }
 
-function pageHtml(d: ShareSetDeps, s: LiveSet, discord: boolean): string {
+export function pageHtml(d: Pick<ShareSetDeps, "shareBaseUrl">, s: LiveSet, discord: boolean, pageUrl = `${withSlash(d.shareBaseUrl)}g/${s.set.id}`): string {
     const e = escapeHtml;
-    const share = withSlash(d.shareBaseUrl);
-    const pageUrl = `${share}g/${s.set.id}`;
     const title = titleText(s);
     const meta: string[] = [
         `<meta property="og:site_name" content="capystore">`,
@@ -515,14 +593,6 @@ export async function shareSetRoute(d: ShareSetDeps, request: Request): Promise<
     const html = pageHtml(d, s, discord);
     const mediaOrigin = new URL(withSlash(d.mediaBaseUrl)).origin;
     return new Response(request.method === "HEAD" ? null : html, {
-        headers: {
-            "content-type": "text/html; charset=utf-8",
-            "cache-control": "public, max-age=60",
-            vary: "user-agent",
-            "content-security-policy": `default-src 'none'; img-src ${mediaOrigin}; media-src ${mediaOrigin}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`,
-            "x-content-type-options": "nosniff",
-            "referrer-policy": "no-referrer",
-            "x-robots-tag": "noindex",
-        },
+        headers: pageHeaders(mediaOrigin, "public, max-age=60", { vary: "user-agent" }),
     });
 }

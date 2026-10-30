@@ -100,6 +100,9 @@ final class LibraryController {
     var makingShareLink = false
     /// Bumped when a share link was made and copied: the success haptic.
     var shareLinksMade = 0
+    /// The select panel's `public` / `private` choice for the next gallery link (APP-API-CONTRACT 36.6); nil follows
+    /// settings › sharing (`new_links`).
+    var shareLinkPrivate: Bool?
     /// Bumped when a copy, a save, a visibility switch or a delete lands (success haptic), half lands (warning) or
     /// fails (error).
     var doneTick = 0
@@ -306,10 +309,18 @@ final class LibraryController {
 
     // MARK: gallery share link (APP-API-CONTRACT 24)
 
-    /// The picked posts that are on screen (`rows` order) with the public library file that stands for each, nil when
-    /// the post has no public file. What the select bar's verdict and the button both read, so they cannot disagree.
+    /// The picked posts that are on screen (`rows` order) with the library file that stands for each: the public one,
+    /// or for a private link any file the post has (APP-API-CONTRACT 36.3); nil when there is none. What the select
+    /// bar's verdict and the button both read, so they cannot disagree.
     func shareLinkPicks(_ rows: [LibraryRow]) -> [(row: LibraryRow, fileID: String?)] {
-        pickedRows(rows).map { ($0, ShareSetRule.fileID(for: $0.item)) }
+        let isPrivate = makesPrivateLink
+        return pickedRows(rows).map { ($0, isPrivate ? ShareSetRule.privateFileID(for: $0.item) : ShareSetRule.fileID(for: $0.item)) }
+    }
+
+    /// The next gallery link is private: the panel's choice, else what new links start as. Only while the server has
+    /// private links. A private link may hold files that are not public (APP-API-CONTRACT 36.3).
+    var makesPrivateLink: Bool {
+        model.capabilities.privateLinks && (shareLinkPrivate ?? (model.shareSets.newLinks == .private))
     }
 
     func shareLinkVerdict(_ rows: [LibraryRow]) -> ShareSetVerdict {
@@ -337,10 +348,13 @@ final class LibraryController {
     private func makeLink(_ rows: [LibraryRow], filing target: CollectionTarget?) async -> Bool {
         guard !makingShareLink, shareLinkVerdict(rows) == .ready else { return false }
         let ids = shareLinkPicks(rows).compactMap(\.fileID)
+        let isPrivate = makesPrivateLink
         makingShareLink = true
         defer { makingShareLink = false }
         do {
-            let set = try await model.shareSets.create(items: ids, title: nil)
+            // with private links the choice is always sent, so the link is what the panel showed
+            let set = try await model.shareSets.create(
+                items: ids, title: nil, private: model.capabilities.privateLinks ? isPrivate : nil)
             Pasteboard.copy(set.url.absoluteString)
             if let target {
                 do {
@@ -360,12 +374,12 @@ final class LibraryController {
                     return true
                 }
             } else {
-                showStatus(Copy.Media.copied)
+                showStatus(set.isPrivate ? Copy.PrivateLinks.copiedPrivate : Copy.Media.copied)
             }
             shareLinksMade += 1
             return true
-        } catch ShareSetError.notPublic {
-            showStatus(Copy.Links.makeThesePublic)
+        } catch let ShareSetError.notPublic(refused) {
+            showStatus(isPrivate ? Copy.PrivateLinks.notOnServer(max(1, refused.count)) : Copy.Links.makeThesePublic)
             warnTick += 1
         } catch {
             showStatus(Copy.actionFailed)
@@ -388,16 +402,18 @@ final class LibraryController {
 
     // MARK: the menu's questions
 
-    /// The newest public webp's link.
-    func webpLink(_ item: MediaItem) -> URL? { item.webps.last(where: { $0.publicURL != nil })?.publicURL }
+    /// The newest webp's live link: its private link (APP-API-CONTRACT 36.6), else its public one.
+    func webpLink(_ item: MediaItem) -> URL? {
+        item.webps.last(where: { $0.privateURL != nil || $0.publicURL != nil }).flatMap { $0.privateURL ?? $0.publicURL }
+    }
 
-    /// The hosted video's link.
-    func videoLink(_ item: MediaItem) -> URL? { item.video?.hosted?.url ?? item.video?.publicURL }
+    /// The video's live link: its private link, else the hosted video's.
+    func videoLink(_ item: MediaItem) -> URL? { item.video?.privateURL ?? item.video?.hosted?.url ?? item.video?.publicURL }
 
-    /// The face's public link, else its file on this device.
+    /// The face's live link (its private link, else its public share link), else its file on this device.
     func shareURL(_ item: MediaItem) -> URL? {
         let face = item.face
-        if let url = face.publicURL { return model.capabilities.shareLink(for: url) }
+        if let url = model.capabilities.liveLink(for: face) { return url }
         if let url = face.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url }
         return nil
     }
@@ -408,8 +424,8 @@ final class LibraryController {
     /// A photo or a gallery: what the media holds is its items, not a video.
     func holdsItems(_ item: MediaItem) -> Bool { item.video == nil && !item.items.isEmpty }
 
-    /// `copy photo link`: a single photo's public link.
-    func photoLink(_ item: MediaItem) -> URL? { item.kind == .photo ? item.face.publicURL : nil }
+    /// `copy photo link`: a single photo's live link (its private link, else its public one).
+    func photoLink(_ item: MediaItem) -> URL? { item.kind == .photo ? (item.face.privateURL ?? item.face.publicURL) : nil }
 
     /// `copy all links` is offered for a gallery with at least one public link (items, then what was made).
     func canCopyAllLinks(_ item: MediaItem) -> Bool {

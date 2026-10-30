@@ -285,6 +285,12 @@ extension PreviewClient {
     /// unless 2..4 distinct ids and a title of 1..80 characters (or none), `notPublic(ids)` for the files that are
     /// missing or private, else the new link, first in the list.
     public func createShareSet(items: [String], title: String?) async throws -> ShareSet {
+        try await createShareSet(items: items, title: title, private: nil)
+    }
+
+    /// The same with `private` (APP-API-CONTRACT 36.3): nil follows `new_links`. Private takes any listed file, public
+    /// or not (`notPublic` then names only the missing ones), and the link is private from the start.
+    public func createShareSet(items: [String], title: String?, private isPrivate: Bool?) async throws -> ShareSet {
         shareState.record("POST " + items.joined(separator: ","))
         try await clock.sleep(seconds: 0.4 * timeScale)
         guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
@@ -292,22 +298,25 @@ extension PreviewClient {
         if let cleaned, cleaned.isEmpty || cleaned.count > ShareSetRule.titleLimit { throw ShareSetError.badRequest }
         guard items.count >= ShareSetRule.minimum, items.count <= PreviewData.capabilities(for: scenario).limits.shareSetMax,
               Set(items).count == items.count else { throw ShareSetError.badRequest }
+        let makesPrivate = scenario.hasShareLinks && (isPrivate ?? (privateState.newLinks == .private))
         let posts = try await library(cursor: nil, limit: 100, v2: visibility != .off).posts
         var wire: [ShareSetItem] = []
         var refused: [String] = []
         for id in items {
             guard let post = posts.first(where: { $0.files.contains { $0.id == id } }),
-                  let file = post.files.first(where: { $0.id == id }), file.isPublic, let url = file.url else {
+                  let file = post.files.first(where: { $0.id == id }), makesPrivate || (file.isPublic && file.url != nil) else {
                 refused.append(id)
                 continue
             }
             let isVideo = file.contentType?.lowercased().hasPrefix("video/") == true
             wire.append(ShareSetItem(
-                id: id, url: url, contentType: file.contentType, posterURL: file.posterURL ?? (isVideo ? post.posterURL : nil),
+                id: id, url: file.url, contentType: file.contentType, posterURL: file.posterURL ?? (isVideo ? post.posterURL : nil),
                 width: file.width, height: file.height, duration: file.duration))
         }
         if !refused.isEmpty { throw ShareSetError.notPublic(refused) }
-        return shareState.add(items: wire, title: cleaned, at: clock.now())
+        let made = shareState.add(items: wire, title: cleaned, at: clock.now())
+        if makesPrivate { _ = privateState.enable(.set, made.id, now: clock.now()) }
+        return privateState.applying(to: made, now: clock.now())
     }
 
     /// `GET /share/sets`: newest first; `.shareLinksFail` answers `503`.
@@ -316,7 +325,8 @@ extension PreviewClient {
         try await clock.sleep(seconds: 0.3 * timeScale)
         guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
         guard let sets = shareState.list() else { throw ShareSetError.unavailable }
-        return sets
+        let now = clock.now()
+        return sets.map { privateState.applying(to: $0, now: now) }
     }
 
     /// `DELETE /share/sets/<id>`: the link goes; an id the server does not hold is `.notFound`.
@@ -325,6 +335,7 @@ extension PreviewClient {
         try await clock.sleep(seconds: 0.3 * timeScale)
         guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
         guard shareState.remove(id) else { throw ShareSetError.notFound }
+        privateState.revoke(.set, id)                      // revoking a link revokes its private link too (36.2)
     }
 
     // MARK: collections (APP-API-CONTRACT 26)

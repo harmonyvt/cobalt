@@ -40,6 +40,7 @@ import {
     itemShape,
     makePublic,
     migrateVisibility,
+    privateUrlsOf,
     publishOriginal,
     purgeUrls,
     setVisibility,
@@ -271,6 +272,9 @@ export async function capabilities(
                 // GET|POST /share/groups, PATCH|DELETE /share/groups/<id>: named groups of collections, "sets" in the
                 // app (APP-API-CONTRACT.md section 28), with the share host
                 share_groups: !!d.shareBaseUrl,
+                // /share/private*, share.../p/<key>: private links of files and gallery links (APP-API-CONTRACT.md
+                // section 36), with the share host
+                private_links: !!d.shareBaseUrl,
                 // /chat/threads: threads with Claude about the library, code mode in a sandbox (APP-API-CONTRACT.md
                 // section 27): with the Anthropic key and the Worker Loader binding
                 chat: chat === true,
@@ -1061,6 +1065,9 @@ export async function assemblePosts(
             ...(v3 ? postGalleryFields(fs, ss, original) : {}),
         };
     });
+    // every file's live private link (section 36); null when it has none
+    const priv = await privateUrlsOf(d, files.map((f) => f.id));
+    for (const p of posts) for (const f of p.files as { id: string; private_url?: string | null }[]) f.private_url = priv.get(f.id) ?? null;
     return { posts, files };
 }
 
@@ -1253,6 +1260,8 @@ async function setPostVisibility(d: AppDeps, id: string, want: boolean, keyId: s
     } catch {
         return err(503, "error.api.generic");
     }
+    const priv = await privateUrlsOf(d, items.map((i) => i.id));
+    for (const i of items as { id: string; private_url?: string | null }[]) i.private_url = priv.get(i.id) ?? null;
     if (remaining.length > 0) {
         return { status: 502, body: { status: "error", error: { code: "error.library.partial" }, items, remaining, cache_cleared: cleared } };
     }

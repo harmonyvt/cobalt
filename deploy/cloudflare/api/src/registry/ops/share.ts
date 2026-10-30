@@ -22,6 +22,8 @@ import {
 } from "../../share-collections";
 import { createShareSet, listShareSets, revokeShareSet, SET_ID_REGEX, SHARE_SET_MAX, type ShareSetDeps } from "../../share-sets";
 import type { StudioReply } from "../../studio";
+import { itemOn, type PrivateDeps } from "../../private-actions";
+import { newLinksSetting } from "../../private-links";
 import { effectiveVisibility } from "../../visibility";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
 import { ShareCollectionsListShape } from "../shapes";
@@ -196,6 +198,7 @@ const LinkShape = z
         url: z.string().describe("the share.capybaraharmony.com link to give Harmony"),
         title: z.string().nullable(),
         files: z.number(),
+        private: z.boolean().describe("true: a private link (share.../p/<key>), the only way in while it is live").optional(),
     })
     .meta({ id: "ShareLink" });
 
@@ -253,7 +256,8 @@ type LinkFiles = { files: { id: string; url: string }[]; notPublic: string[]; un
 
 // The public files that stand for each id, in order: a post id (a gallery gives its public items, any other post its
 // lead file when public, else its newest public file) or a file id from cobalt.library.post. Duplicates are dropped.
-export async function linkFiles(ctx: Pick<OpContext, "db" | "mediaBaseUrl">, ids: string[]): Promise<LinkFiles> {
+// `anyState` (a private link, section 36): every live file counts, public or not (`url` is then "" for one that is not).
+export async function linkFiles(ctx: Pick<OpContext, "db" | "mediaBaseUrl">, ids: string[], o: { anyState?: boolean } = {}): Promise<LinkFiles> {
     const { results: direct } = await ctx.db
         .prepare(
             `SELECT m.id AS id, ${POST_KEY_SQL} AS post_key FROM media_items m
@@ -263,13 +267,13 @@ export async function linkFiles(ctx: Pick<OpContext, "db" | "mediaBaseUrl">, ids
         .all<{ id: string; post_key: string }>();
     const postOfFile = new Map(direct.map((r) => [r.id, r.post_key]));
     const posts = new Map((await loadPosts(ctx, [...new Set([...ids, ...postOfFile.values()])])).map((p) => [p.record.id, p]));
-    const isPublic = (r: Row) => effectiveVisibility(r) === "public" && !!r.url;
+    const isPublic = o.anyState ? () => true : (r: Row) => effectiveVisibility(r) === "public" && !!r.url;
     const out: LinkFiles = { files: [], notPublic: [], unknown: [] };
     const seen = new Set<string>();
     const take = (r: Row) => {
         if (seen.has(r.id)) return;
         seen.add(r.id);
-        out.files.push({ id: r.id, url: r.url! });
+        out.files.push({ id: r.id, url: r.url ?? "" });
     };
     for (const id of ids) {
         const post = posts.get(id);
@@ -296,26 +300,39 @@ export async function linkFiles(ctx: Pick<OpContext, "db" | "mediaBaseUrl">, ids
 
 const withSlash = (u: string) => (u.endsWith("/") ? u : `${u}/`);
 
-// One link for these files: a gallery link (2..10 files), or the file's own share page for one file.
+// One link for these files: a gallery link (2..10 files), or the file's own share page for one file. `private`
+// (section 36): a gallery link made private, or one file's private link turned on (the file stops being public).
 export async function makeLink(
     ctx: OpContext,
     fileIds: { id: string; url: string }[],
     title: string | undefined,
-    o: { captions?: boolean } = {},
+    o: { captions?: boolean; private?: boolean } = {},
 ): Promise<z.infer<typeof LinkShape>> {
     const d = shareSetDeps(ctx, o);
     if (!d) throw shareOff();
+    if (fileIds.length === 1 && o.private) {
+        const pd: PrivateDeps = { db: ctx.db, vis: ctx.app(), shareBaseUrl: d.shareBaseUrl, now: ctx.now, keyId: ctx.keyId ?? "service:library" };
+        const body = unwrap<{ link: { url: string } }>(await itemOn(pd, fileIds[0]!.id), {
+            "error.private.not_toggleable": "that file cannot have a private link (only originals and webps can)",
+            "error.private.not_found": "that file is gone",
+        });
+        return { id: null, url: body.link.url, title: null, files: 1, private: true };
+    }
     if (fileIds.length === 1) {
         const name = /\/([A-Za-z0-9]{6,40})\.[A-Za-z0-9]{1,8}$/.exec(fileIds[0]!.url)?.[1];
         if (!name) throw new OpError(409, "error.share.not_public", "that file has no share page");
         return { id: null, url: `${withSlash(d.shareBaseUrl)}${name}`, title: null, files: 1 };
     }
-    const r = await createShareSet(d, bodyRequest("POST", { items: fileIds.map((f) => f.id), ...(title ? { title } : {}) }), ctx.keyId!);
-    const body = unwrap<{ set: { id: string; url: string; title: string | null; items: unknown[] } }>(r, {
-        "error.share.not_public": "some of those files are not public any more",
+    const r = await createShareSet(
+        d,
+        bodyRequest("POST", { items: fileIds.map((f) => f.id), ...(title ? { title } : {}), private: o.private === true }),
+        ctx.keyId!,
+    );
+    const body = unwrap<{ set: { id: string; url: string; title: string | null; items: unknown[]; private?: boolean } }>(r, {
+        "error.share.not_public": o.private ? "some of those files were deleted" : "some of those files are not public any more",
         "error.share.bad_request": `a gallery link holds 2 to ${SHARE_SET_MAX} files and a title of at most 80 characters`,
     });
-    return { id: body.set.id, url: body.set.url, title: body.set.title, files: body.set.items.length };
+    return { id: body.set.id, url: body.set.url, title: body.set.title, files: body.set.items.length, ...(body.set.private ? { private: true } : {}) };
 }
 
 // ---- the chat AI's calls --------------------------------------------------------------------------------------------
@@ -328,18 +345,24 @@ export const linksCreateOp = defineOp({
     input: z.object({
         ids: OneOrMany(z.string().min(1).max(2048)).describe("post ids (or file ids from post())"),
         title: z.string().max(80).optional().describe("shown on the link's preview; leave it out and a caption is written"),
+        private: z
+            .boolean()
+            .optional()
+            .describe("a private link (share.../p/<key>, the public URL a 404): any file may be in it; one file stops being public. Absent: Harmony's setting for new gallery links"),
     }),
     output: LinkShape,
     ai: {
         tier: "free",
         only: true,
-        summary: `Make one share link for these posts and return it: a gallery link (share.capybaraharmony.com/g/<id>, 2 to ${SHARE_SET_MAX} files) or, for a single file, that file's share page.\nA gallery post brings all its public files. Only public files can be shared: a private post throws and is named. Give Harmony the url, never a media URL.`,
+        summary: `Make one share link for these posts and return it: a gallery link (share.capybaraharmony.com/g/<id>, 2 to ${SHARE_SET_MAX} files) or, for a single file, that file's share page.\nA gallery post brings all its public files. Only public files can be shared: a private post throws and is named. Give Harmony the url, never a media URL.\nprivate: true makes a private link instead (share.../p/<key>), which may hold files that are not public; for one file it makes that file not public.`,
         params: ["ids"],
         options: true,
     },
     handler: async (ctx, input) => {
         if (!ctx.shareBaseUrl) throw shareOff();
-        const found = await linkFiles(ctx, input.ids);
+        // absent: a gallery link follows Harmony's new-links setting (section 36); one file stays its public page
+        const wantPrivate = input.private ?? (await newLinksSetting(ctx.db)) === "private";
+        const found = await linkFiles(ctx, input.ids, { anyState: wantPrivate });
         if (found.unknown.length > 0) throw new OpError(404, "error.share.not_found", `no post or file with id ${found.unknown.join(", ")}`);
         if (found.notPublic.length > 0) {
             throw new OpError(409, "error.share.not_public", `not public, so they cannot be shared: ${found.notPublic.join(", ")}. Ask Harmony to make them public first`);
@@ -347,7 +370,10 @@ export const linksCreateOp = defineOp({
         if (found.files.length > SHARE_SET_MAX) {
             throw new OpError(400, "error.share.bad_request", `that is ${found.files.length} files and a link holds at most ${SHARE_SET_MAX}: make several links`);
         }
-        return ok(await makeLink(ctx, found.files, input.title));
+        if (found.files.length === 1 && input.private !== true && !found.files[0]!.url) {
+            throw new OpError(409, "error.share.not_public", `not public, so it has no share page: ${found.files[0]!.id}. Use private: true for a private link`);
+        }
+        return ok(await makeLink(ctx, found.files, input.title, { private: found.files.length === 1 ? input.private === true : wantPrivate }));
     },
 });
 

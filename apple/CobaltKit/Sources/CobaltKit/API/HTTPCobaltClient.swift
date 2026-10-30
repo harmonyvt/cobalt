@@ -201,6 +201,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var shareSets: Bool?
                 var shareCollections: Bool?
                 var shareGroups: Bool?
+                var privateLinks: Bool?
                 var chat: Bool?
                 var stage: Bool?
                 var stageTwitch: Bool?
@@ -283,6 +284,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.shareSets = (f?.shareSets ?? false) && caps.shareBaseURL != nil
         caps.shareCollections = (f?.shareCollections ?? false) && caps.shareSets
         caps.shareGroups = (f?.shareGroups ?? false) && caps.shareCollections
+        caps.privateLinks = (f?.privateLinks ?? false) && caps.shareSets
         caps.chat = f?.chat ?? false
         caps.stage = f?.stage ?? false
         caps.stageTwitch = (f?.stageTwitch ?? false) && caps.stage
@@ -638,9 +640,16 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     /// `409 error.share.not_public` is `ShareSetError.notPublic(ids)` (the ids missing or private), `400
     /// error.share.bad_request` is `.badRequest`, `503` is `.unavailable`.
     public func createShareSet(items: [String], title: String?) async throws -> ShareSet {
+        try await createShareSet(items: items, title: title, private: nil)
+    }
+
+    /// The same with `private` (APP-API-CONTRACT 36.3): nil leaves the field out, so the server uses `new_links`. With
+    /// `true` the files may be any live files (`.notPublic` then names only missing or deleted ids).
+    public func createShareSet(items: [String], title: String?, private isPrivate: Bool?) async throws -> ShareSet {
         let req = try makeRequest("POST", "/share/sets", keyed: true, timeout: 30)
         var body: [String: Any] = ["items": items]
         if let title { body["title"] = title }
+        if let isPrivate { body["private"] = isPrivate }
         let (data, http) = try await send(req, body: Self.jsonBody(body))
         guard (200..<300).contains(http.statusCode) else { throw shareSetError(data, status: http.statusCode) }
         struct Wire: Decodable { var set: ShareSet }

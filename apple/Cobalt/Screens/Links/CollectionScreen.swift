@@ -39,7 +39,7 @@ struct CollectionScreen: View {
         .toolbar {
             if let collection {
                 ToolbarItem(placement: .primaryAction) {
-                    if controller.rerollingIDs.contains(collection.id) {
+                    if controller.rerollingIDs.contains(collection.id) || controller.collectionPrivacyIDs.contains(collection.id) {
                         ProgressView()
                             .controlSize(.small)
                             .accessibilityLabel(Copy.Collections.rerolling)
@@ -60,6 +60,9 @@ struct CollectionScreen: View {
                             controller.rerolling = collection
                         }
                         .disabled(!controller.canReroll(collection))
+                        if controller.privateLinksEnabled {
+                            CollectionPrivacyMenu(collection: collection, controller: controller)
+                        }
                         Divider()
                         Button(Copy.Collections.delete, systemImage: Symbol.collectionDelete, role: .destructive) {
                             controller.deleting = collection

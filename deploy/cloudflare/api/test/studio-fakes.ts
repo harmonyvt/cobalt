@@ -155,12 +155,14 @@ export class MemoryMedia implements MediaBucket, PublishBucket {
         const o = this.objects.get(key);
         return o ? { size: o.data.length } : null;
     }
-    // A fresh body per call, like R2's get()
-    async get(key: string) {
+    // A fresh body per call, like R2's get(); `range` slices it like R2 does
+    async get(key: string, options?: { range?: { offset: number; length?: number } }) {
         const o = this.objects.get(key);
         if (!o) return null;
+        const r = options?.range;
+        const data = r ? o.data.slice(r.offset, r.length === undefined ? undefined : r.offset + r.length) : o.data;
         return {
-            body: new Blob([o.data]).stream() as ReadableStream,
+            body: new Blob([data]).stream() as ReadableStream,
             size: o.data.length,
             httpMetadata: { contentType: o.contentType },
         };

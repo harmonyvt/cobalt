@@ -990,6 +990,8 @@ describe("GET /capabilities", () => {
                 share_sets: false,
                 share_collections: false,
                 share_groups: false,
+                // section 36: with the share host
+                private_links: false,
                 chat: false,
                 // no STAGE_BASE_URL in this world's env (section 30)
                 stage: false,
@@ -1196,6 +1198,8 @@ describe("PUT /studio/upload", () => {
                 visibility_toggle: true,
                 media_name: null,
                 deletable: false,
+                // section 36: no private link
+                private_url: null,
             });
             // no `public` flag: today's behaviour, the answer only carries the two idle fields
             expect(b.public_state).toBeNull();
@@ -1755,6 +1759,7 @@ describe("GET /library (grouped into posts)", () => {
             poster_url: null,
             visibility: "public",
             visibility_toggle: true,
+            private_url: null,
         });
         expect(p.files[2]).toEqual({
             id: "SavedItem0000001",
@@ -1773,6 +1778,7 @@ describe("GET /library (grouped into posts)", () => {
             poster_url: null,
             visibility: "private",
             visibility_toggle: true,
+            private_url: null,
         });
         expect(b.counts).toEqual({ posts: 1, files: 3 });
         expect(b.next).toBeNull();

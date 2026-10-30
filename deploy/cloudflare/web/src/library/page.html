@@ -126,7 +126,9 @@ a { color: inherit; }
 .meter { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; width: 140px; }
 .meter i { display: block; height: 100%; background: var(--secondary); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; }
-.tile { background: var(--button); border-radius: var(--radius); box-shadow: 0 0 0 1px var(--button-stroke) inset; overflow: hidden; display: grid; grid-template-rows: auto 1fr auto; text-align: left; min-width: 0; align-content: start; }
+.tile { background: var(--button); border-radius: var(--radius); box-shadow: 0 0 0 1px var(--button-stroke) inset; overflow: hidden; display: flex; flex-direction: column; text-align: left; min-width: 0; }
+.tile .cap { flex: 1 0 auto; }
+.tile .tact, .tile .confirm { align-self: stretch; margin-top: auto; }
 .thumb-l { display: block; position: relative; aspect-ratio: 16 / 11; background: var(--track); overflow: hidden; color: inherit; text-decoration: none; }
 .thumb-l img, .thumb-l video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; background: var(--track); }
 .ph { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 4px; color: var(--gray); font-size: 11px; text-transform: lowercase; }
@@ -216,6 +218,44 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
 .near button { width: 100%; justify-content: flex-start; min-height: 36px; font-size: 12px; font-weight: 400; gap: 10px; text-align: left; }
 .near button b { font-weight: 600; font-variant-numeric: tabular-nums; flex: none; width: 3.2em; color: var(--blue); }
 .near button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* link control (private share links, APP-API-CONTRACT.md section 36) */
+.lk { display: inline-flex; flex-wrap: wrap; background: var(--page); border-radius: var(--radius); padding: 3px; box-shadow: 0 0 0 1px var(--button-stroke) inset; max-width: 100%; margin: 0; border: 0; min-width: 0; }
+.lk legend { padding: 0; }
+.lkopt { position: relative; display: inline-flex; }
+.lkopt span { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 10px; border-radius: 8px; font-size: 11.5px; font-weight: 500; cursor: pointer; user-select: none; }
+.lkopt:hover span { background: var(--button-hover); }
+.lkopt input:checked + span { background: var(--secondary); color: var(--primary); }
+.lkopt input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 2px; }
+.lkopt input:disabled + span { opacity: .5; cursor: default; }
+@media (pointer: coarse), (max-width: 640px) { .lkopt span { min-height: 44px; } }
+.tile .pl { padding: 0 10px 4px; display: grid; gap: 6px; font-size: 11px; color: var(--gray); }
+.tile .pl .linkbox { padding: 4px 4px 4px 8px; gap: 6px; }
+.tile .pl .linkbox code { flex: 1 1 100px; font-size: 11px; color: var(--secondary); }
+.tile .pl .linkbox button { min-height: 32px; font-size: 11.5px; padding: 0 8px; }
+.badge.key { color: var(--orange); }
+.lkhead { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.lkhead .status { flex: 1 1 200px; }
+.lkwrap { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; align-items: start; }
+.lkwrap.noside { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 860px) { .lkwrap { grid-template-columns: minmax(0, 1fr); } }
+.lkgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+.lcard { background: var(--button); border-radius: var(--radius); box-shadow: 0 0 0 1px var(--button-stroke) inset; overflow: hidden; display: grid; grid-template-rows: auto 1fr; min-width: 0; padding: 0; text-align: left; align-items: stretch; justify-content: stretch; font-weight: 400; }
+.lcard[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--blue) inset; }
+.lcard .thumbs { display: grid; grid-template-columns: repeat(var(--n, 1), minmax(0, 1fr)); gap: 2px; aspect-ratio: 16 / 9; background: var(--track); overflow: hidden; }
+.lcard .thumbs > div { position: relative; min-width: 0; background: var(--track); overflow: hidden; }
+.lcard .thumbs img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.lcard .body { padding: 8px 10px 10px; display: grid; gap: 4px; min-width: 0; align-content: start; }
+.lcard .name { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lcard .url { font-size: 11px; color: var(--gray); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lcard .meta { font-size: 11px; color: var(--gray); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.lkside { background: var(--button); border-radius: var(--radius); box-shadow: 0 0 0 1px var(--button-stroke) inset; padding: 14px; display: grid; gap: 12px; position: sticky; top: 12px; min-width: 0; }
+.lkside h3 { font-size: 13px; overflow-wrap: anywhere; }
+.lkside .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; font-size: 12.5px; margin: 0; }
+.lkside .kv dt { color: var(--gray); }
+.lkside .kv dd { margin: 0; min-width: 0; }
+.lkside .foot { font-size: 11.5px; color: var(--gray); }
+.lkside .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.lkside .confirm { padding: 0; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chips span { font-size: 11px; padding: 2px 9px; border-radius: 99px; box-shadow: 0 0 0 1px var(--input-border) inset; letter-spacing: .03em; }
 @media (pointer: coarse), (max-width: 640px) { .near button { min-height: 44px; } .mapwrap .tools button { min-height: 44px; } }
@@ -268,7 +308,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
     </section>
 
     <section style="display:grid; gap:10px" aria-label="your library">
-      <div class="filters">
+      <div class="filters" id="filtersBar">
         <div class="seg" role="group" aria-label="show" id="filters">
           <button type="button" data-f="all" aria-pressed="true">all</button>
           <button type="button" data-f="public" aria-pressed="false">public links</button>
@@ -277,7 +317,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
         </div>
         <div class="meter-wrap"><span id="usage">&nbsp;</span><div class="meter" id="meter" role="img" aria-label="storage used"><i id="meterFill" style="width:0"></i></div></div>
       </div>
-      <div class="search">
+      <div class="search" id="searchBar">
         <form class="omni" id="searchForm" role="search" autocomplete="off">
           <input id="q" type="search" maxlength="200" enterkeyhint="search" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="search your library" aria-label="search your library" aria-describedby="searchStatus">
           <kbd aria-hidden="true">/</kbd>
@@ -289,6 +329,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
         <div class="seg" role="group" aria-label="view" id="views">
           <button type="button" data-v="grid" aria-pressed="true">grid</button>
           <button type="button" data-v="map" aria-pressed="false">sky map</button>
+          <button type="button" data-v="links" aria-pressed="false">links</button>
         </div>
         <div class="status" id="mapStatus" role="status" aria-live="polite"></div>
       </div>
@@ -297,6 +338,20 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
           <canvas id="map" role="img" aria-label="your library as a sky: posts with similar meaning sit close together"></canvas>
           <div class="tools"><button id="mapReset" type="button">reset view</button></div>
           <div class="maptip" id="mapTip" hidden></div>
+        </div>
+      </div>
+      <div id="linksView" hidden>
+        <div class="lkhead">
+          <div class="seg" role="group" aria-label="show links" id="linkFilters">
+            <button type="button" data-lf="all" aria-pressed="true">all</button>
+            <button type="button" data-lf="public" aria-pressed="false">public</button>
+            <button type="button" data-lf="private" aria-pressed="false">private</button>
+          </div>
+          <div class="status" id="linksStatus" role="status" aria-live="polite"></div>
+        </div>
+        <div class="lkwrap noside" id="linkWrap">
+          <div class="lkgrid" id="linkGrid"></div>
+          <aside class="lkside" id="linkSide" aria-label="selected link" hidden></aside>
         </div>
       </div>
       <div id="gridView">
@@ -441,6 +496,10 @@ var MESSAGES = {
   "error.webp.too_long": "this clip is over 30 s. use \"open in studio\" to pick a part.",
   "error.webp.busy": "another webp is being made right now. try again in a moment.",
   "error.webp.invalid_params": "that clip can't be made into a webp.",
+  "error.private.not_found": "that file or gallery link is gone.",
+  "error.private.not_toggleable": "this file can't have a private link.",
+  "error.private.bad_request": "couldn't change that link.",
+  "error.api.generic": "private links aren't ready on the server yet.",
   "error.search.off": "search isn't set up on the server.",
   "error.search.waking": "search is waking up, try again in a minute.",
   "error.search.failed": "search failed. try again in a moment."
@@ -980,7 +1039,8 @@ function studioThumb(s) {
 // A file is public when the server says so (visibility, the toggle's state); older answers only have kind.
 function isPub(it) { return it.visibility ? it.visibility === "public" : it.kind === "public"; }
 function confirmText(e, act) {
-  if (act === "private") return "make private? the public link stops working.";
+  if (act === "private") return "turn the link off? the public link stops working.";
+  if (act === "rotate") return "rotate the key? the old link stops working right away.";
   if (e.t === "studio") return "close this studio? its webps stay.";
   if (isPub(e)) return "delete for everyone? the link stops working in discord.";
   return "delete this private copy?";
@@ -998,7 +1058,10 @@ function tileFor(e) {
   } else {
     var it = e.it;
     name = it.custom_title || it.name;
-    badge = h("span", { class: "badge " + (isPub(it) ? "pub" : "priv"), text: isPub(it) ? "public" : "private" });
+    var lst = linkState(it);
+    badge = lst === "private"
+      ? h("span", { class: "badge key", text: "private link" })
+      : h("span", { class: "badge " + (isPub(it) ? "pub" : "priv"), text: isPub(it) ? "public" : "private" });
     sub = [it.source ? SOURCES[it.source] || it.source : "", it.link && hostOf(it.link) ? hostOf(it.link) : ""].filter(Boolean).join(" · ");
     meta2 = [it.bytes != null ? fmtBytes(it.bytes) : "", ago(it.created_at)];
   }
@@ -1015,9 +1078,13 @@ function tileFor(e) {
   if (G.confirm === id) {
     tail = h("div", { class: "confirm" },
       h("span", { text: confirmText(e.t === "studio" ? e : e.it, G.confirmAct) }),
-      G.confirmAct === "private"
+      G.confirmAct === "rotate"
         ? h("div", { class: "tact", style: "padding:0" },
-            h("button", { type: "button", "data-ga": "yes", disabled: busy, text: "make private", onclick: function () { G.confirm = null; setVisibility(e.it, false); } }),
+            h("button", { type: "button", "data-ga": "yes", disabled: busy, text: "rotate key", onclick: function () { G.confirm = null; rotateItem(e.it); } }),
+            h("button", { type: "button", "data-ga": "no", text: "keep", onclick: function () { G.confirm = null; renderGrid(); } }))
+      : G.confirmAct === "private"
+        ? h("div", { class: "tact", style: "padding:0" },
+            h("button", { type: "button", "data-ga": "yes", disabled: busy, text: "turn off", onclick: function () { G.confirm = null; setVisibility(e.it, false); } }),
             h("button", { type: "button", "data-ga": "no", text: "keep public", onclick: function () { G.confirm = null; renderGrid(); } }))
         : h("div", { class: "tact", style: "padding:0" },
             h("button", { type: "button", class: "danger", "data-ga": "yes", disabled: busy, text: "delete", onclick: function () { doDelete(e); } }),
@@ -1030,14 +1097,16 @@ function tileFor(e) {
       var t = e.it.content_type || "";
       var pub = isPub(e.it);
       // one tile per original: the switch is where "host as-is" used to be (webps are always public)
-      if (e.it.visibility_toggle) acts.push(visSwitch(e.it, busy));
-      if (pub && e.it.url) copyButtons(e.it.url, "data-ga").forEach(function (b) { acts.push(b); });
+      if (e.it.visibility_toggle) acts.push(linkControl(e.it, busy));
+      if (e.it.private_url) acts.push(h("button", { type: "button", "data-ga": "copy-private", text: "copy private link", onclick: function () { copyText(e.it.private_url); } }));
+      else if (pub && e.it.url) copyButtons(e.it.url, "data-ga").forEach(function (b) { acts.push(b); });
       if (e.it.visibility_toggle && (isVideoType(t) || t === "image/gif")) acts.push(h("button", { type: "button", "data-ga": "studio", disabled: busy, text: "open in studio", onclick: function () { privateToStudio(e.it); } }));
     }
     acts.push(h("button", { type: "button", class: "danger", "data-ga": "del", disabled: busy, text: "delete", onclick: function () { G.confirm = id; G.confirmAct = "delete"; renderGrid(); } }));
     tail = h("div", { class: "tact" }, ...acts);
   }
-  return h("div", { class: "tile", "data-id": id, "data-kind": e.t === "studio" ? "studio" : (isPub(e.it) ? "public" : "private") }, thumb, cap, tail);
+  var priv = e.t === "item" && e.it.private_url && G.confirm !== id ? privateBox(e.it, busy) : null;
+  return h("div", { class: "tile", "data-id": id, "data-kind": e.t === "studio" ? "studio" : (isPub(e.it) ? "public" : "private"), "data-link": e.t === "studio" ? null : linkState(e.it) }, thumb, cap, priv, tail);
 }
 function entries() {
   // search results: tiles in score order, exactly as the server ranked them
@@ -1076,6 +1145,11 @@ function renderGrid() {
   $("moreBtn").disabled = G.loading;
   document.querySelectorAll("#filters button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.f === G.filter)); });
   renderUsage();
+  if (G.focus) {   // a radio the keyboard just changed was redrawn: put focus back on it
+    var fo = document.querySelector('.tile[data-id="' + G.focus.id + '"] input[data-ga="link-' + G.focus.val + '"]');
+    G.focus = null;
+    if (fo) fo.focus();
+  }
   if (M.view === "map") { drawMap(); mapStatusLine(); }
 }
 async function loadPage(reset) {
@@ -1133,16 +1207,54 @@ async function doDelete(e) {
   }
 }
 function reloadStudiosSoon() { setTimeout(function () { if (G.filter === "all" || G.filter === "studio") refreshGrid(); }, 300); }
-// The public/private switch. Turning it on happens at once; turning it off asks first (the link
-// stops working), so the box stays checked until the answer is yes.
-function visSwitch(it, busy) {
-  var on = isPub(it);
-  var box = h("input", { type: "checkbox", role: "switch", "data-ga": "vis", "aria-label": "public", checked: on, disabled: busy });
-  box.addEventListener("change", function () {
-    if (on) { G.confirm = it.id; G.confirmAct = "private"; renderGrid(); }
-    else setVisibility(it, true);
+// A file's link (APP-API-CONTRACT.md section 36.2): off, a public link, or a private link (a key in the URL).
+function linkState(it) { return it.private_url ? "private" : (isPub(it) ? "public" : "off"); }
+var LINK_CHOICES = [["off", "off"], ["public", "public link"], ["private", "private link"]];
+// Three real radio buttons. Leaving public asks first (the link stops working); the box stays on its old
+// choice until the answer is yes, because the grid redraws from state.
+function linkControl(it, busy) {
+  var cur = linkState(it);
+  var name = it.custom_title || it.name;
+  var group = h("fieldset", { class: "lk", "data-ga": "link", "aria-label": "link for " + name });
+  LINK_CHOICES.forEach(function (c) {
+    var input = h("input", { type: "radio", class: "sr", name: "lk-" + it.id, value: c[0], "data-ga": "link-" + c[0], checked: cur === c[0], disabled: busy });
+    input.addEventListener("change", function () { chooseLink(it, c[0]); });
+    group.append(h("label", { class: "lkopt" }, input, h("span", { text: c[1] })));
   });
-  return h("label", { class: "sw" }, box, h("span", { text: "public" }));
+  return group;
+}
+function chooseLink(it, next) {
+  var cur = linkState(it);
+  if (next === cur) return;
+  if (next === "off") {
+    if (cur === "public") { G.confirm = it.id; G.confirmAct = "private"; renderGrid(); }
+    else dropPrivate(it);
+  } else if (next === "public") setVisibility(it, true);
+  else putPrivate(it);
+}
+function privateBox(it, busy) {
+  var pl = it.private_link || {};
+  var facts = [(pl.opened || 0) === 1 ? "opened 1 time" : "opened " + (pl.opened || 0) + " times"];
+  if (pl.created_at) facts.push("key made " + ago(pl.created_at));
+  return h("div", { class: "pl", "data-ga": "private-box" },
+    h("div", { class: "linkbox" },
+      h("code", { text: it.private_url, "data-ga": "private-url" }),
+      h("button", { type: "button", "data-ga": "copy-private-url", "aria-label": "copy private link", text: "copy", onclick: function () { copyText(it.private_url); } })),
+    h("div", { class: "tact", style: "padding:0" },
+      h("span", { text: facts.join(" · "), "data-ga": "private-facts" }),
+      h("button", { type: "button", "data-ga": "rotate", disabled: busy, text: "rotate key…", onclick: function () { G.confirm = it.id; G.confirmAct = "rotate"; renderGrid(); } })));
+}
+// Writes one answered item back into every list that shows it. A file that stopped being private link
+// carries no private_url, whatever the answer left out.
+function applyItem(id, patch) {
+  function f(i) { return i.id === id ? Object.assign({}, i, patch) : i; }
+  G.items = G.items.map(f);
+  S.items = S.items.map(f);
+  G.focus = { id: id, val: patch.private_url ? "private" : (patch.visibility === "public" ? "public" : "off") };
+  // under the public/private chips a file that just switched no longer belongs
+  if ((G.filter === "public" || G.filter === "private") && patch.visibility && patch.visibility !== G.filter) {
+    G.items = G.items.filter(function (i) { return i.id !== id; });
+  }
 }
 async function setVisibility(it, makePublic) {
   G.busy[it.id] = true; renderGrid();
@@ -1150,15 +1262,44 @@ async function setVisibility(it, makePublic) {
     var r = ok(await libPost("/api/library/items/" + it.id + (makePublic ? "/publish" : "/private")));
     delete G.busy[it.id];
     var next = r.item;
-    G.items = G.items.map(function (i) { return i.id === it.id && next ? Object.assign({}, i, next) : i; });
-    S.items = S.items.map(function (i) { return i.id === it.id && next ? Object.assign({}, i, next) : i; });
-    // under the public/private chips a file that just switched no longer belongs
-    if ((G.filter === "public" || G.filter === "private") && next && next.visibility !== G.filter) {
-      G.items = G.items.filter(function (i) { return i.id !== it.id; });
-    }
+    // going public (or off) revokes the private link on the server
+    if (next) applyItem(it.id, Object.assign({}, next, { private_url: next.private_url || null, private_link: null }));
     renderGrid(); reloadUsage();
     if (makePublic && next && next.url) toast("public: link ready", { href: shareUrl(next.url), label: "open" });
-    else toast(makePublic ? "public" : "private");
+    else toast(makePublic ? "public" : "off");
+  } catch (e) { delete G.busy[it.id]; renderGrid(); toast(describe(e).text); }
+}
+function linkPatch(link) { return { visibility: "private", private_url: link.url, private_link: link }; }
+async function putPrivate(it) {
+  G.busy[it.id] = true; renderGrid();
+  try {
+    var r = ok(await lib("/api/library/private/items/" + it.id, { method: "PUT" }));
+    delete G.busy[it.id];
+    if (!r.link || !r.link.url) throw new Fail("error.library.upstream");
+    applyItem(it.id, linkPatch(r.link));
+    renderGrid(); reloadUsage();
+    toast("private link ready", { href: r.link.url, label: "open" });
+  } catch (e) { delete G.busy[it.id]; renderGrid(); toast(describe(e).text); }
+}
+async function dropPrivate(it) {
+  G.busy[it.id] = true; renderGrid();
+  try {
+    ok(await lib("/api/library/private/items/" + it.id, { method: "DELETE" }));
+    delete G.busy[it.id];
+    applyItem(it.id, { visibility: "private", private_url: null, private_link: null });
+    renderGrid(); reloadUsage();
+    toast("off. the private link stopped working");
+  } catch (e) { delete G.busy[it.id]; renderGrid(); toast(describe(e).text); }
+}
+async function rotateItem(it) {
+  G.busy[it.id] = true; renderGrid();
+  try {
+    var r = ok(await libPost("/api/library/private/items/" + it.id + "/rotate"));
+    delete G.busy[it.id];
+    if (!r.link || !r.link.url) throw new Fail("error.library.upstream");
+    applyItem(it.id, linkPatch(r.link));
+    renderGrid();
+    toast("new key. the old link stopped working");
   } catch (e) { delete G.busy[it.id]; renderGrid(); toast(describe(e).text); }
 }
 function privateToStudio(it) {
@@ -1323,6 +1464,7 @@ function openPost(it) {
     ["file", it.custom_title && it.custom_title !== it.name ? it.name : ""],
     ["from", SOURCES[it.source] || it.source || ""],
     ["link", link],
+    ["private link", it.mapOnly || !it.private_url ? "" : h("a", { href: it.private_url, target: "_blank", rel: "noopener", text: it.private_url })],
     ["public", it.mapOnly ? "" : isPub(it) && it.url ? h("a", { href: shareUrl(it.url), target: "_blank", rel: "noopener", text: shareUrl(it.url) }) : (isPub(it) ? "" : "private")],
     ["size", it.bytes != null ? fmtBytes(it.bytes) + (it.duration ? " · " + fmtSecs(it.duration) : "") : ""],
     ["added", it.created_at ? when(it.created_at) : ""],
@@ -1337,6 +1479,146 @@ function openPost(it) {
 $("sheetClose").onclick = function () { var d = $("sheet"); if (d.close) d.close(); else d.removeAttribute("open"); };
 $("sheet").addEventListener("click", function (e) { if (e.target === $("sheet")) $("sheetClose").onclick(); });
 $("sheet").addEventListener("close", function () { P.seq++; P.key = null; E.seq++; E.key = null; });
+
+/* ---------- links: gallery links, public or private (APP-API-CONTRACT.md sections 24 and 36) ---------- */
+var L = { sets: [], priv: [], loaded: false, loading: false, error: "", filter: "all", sel: null, confirm: false, busy: false, seq: 0 };
+// The link as it works now: the set's own `link`, else the private list joined by set id.
+function setLink(s) {
+  if (s.link && s.link.url) return s.link;
+  for (var i = 0; i < L.priv.length; i++) if (L.priv[i].kind === "set" && L.priv[i].target_id === s.id) return L.priv[i];
+  return null;
+}
+function setIsPrivate(s) { return s.private === true || !!setLink(s); }
+function setLiveUrl(s) { var l = setLink(s); return l && l.url ? l.url : s.url; }
+function setTitle(s) { return s.title || (s.items && s.items.length ? s.items.length + " files" : "gallery link"); }
+async function loadLinks() {
+  var seq = ++L.seq;
+  L.loading = true; L.error = "";
+  renderLinks();
+  try {
+    var r = await lib("/api/library/links");
+    if (seq !== L.seq) return;
+    if (r.status !== 200 || !r.body || r.body.status === "error") throw new Fail(errCode(r) || "error.library.upstream");
+    L.sets = r.body.sets || [];
+    L.priv = r.body.links || [];
+    L.loaded = true;
+    if (L.sel && !L.sets.some(function (s) { return s.id === L.sel; })) { L.sel = null; L.confirm = false; }
+  } catch (e) {
+    if (seq !== L.seq) return;
+    if (!e || e.code !== "expired") L.error = describe(e).text;
+  } finally {
+    if (seq === L.seq) { L.loading = false; renderLinks(); }
+  }
+}
+function linkThumbs(s) {
+  var its = (s.items || []).slice(0, 4);
+  var box = h("div", { class: "thumbs", style: "--n:" + Math.max(1, Math.min(its.length, 2)) });
+  its.forEach(function (it) {
+    var src = it.poster_url || (it.url && /^image\//.test(it.content_type || "") ? it.url : "");
+    var cell = h("div");
+    if (src) {
+      var img = h("img", { src: src, alt: "", loading: "lazy", decoding: "async" });
+      img.addEventListener("error", function () { img.remove(); });
+      cell.append(img);
+    }
+    box.append(cell);
+  });
+  if (!its.length) box.append(h("div"));
+  return box;
+}
+function visibleSets() {
+  return L.sets.filter(function (s) {
+    var p = setIsPrivate(s);
+    return L.filter === "all" || (L.filter === "private" ? p : !p);
+  });
+}
+function linkCard(s) {
+  var p = setIsPrivate(s);
+  var n = (s.items || []).length;
+  return h("button", { type: "button", class: "lcard", "data-id": s.id, "data-link": p ? "private" : "public", "aria-pressed": String(L.sel === s.id),
+      onclick: function () { L.sel = s.id; L.confirm = false; renderLinks(); } },
+    linkThumbs(s),
+    h("span", { class: "body" },
+      h("span", { class: "name", text: setTitle(s), title: setTitle(s) }),
+      h("span", { class: "url", text: setLiveUrl(s) }),
+      h("span", { class: "meta" },
+        h("span", { class: "badge " + (p ? "key" : "pub"), text: p ? "private" : "public" }),
+        h("span", { text: n + (n === 1 ? " file" : " files") }),
+        s.created_at ? h("span", { text: ago(s.created_at) }) : null)));
+}
+function renderLinks() {
+  document.querySelectorAll("#linkFilters button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.lf === L.filter)); });
+  var grid = $("linkGrid");
+  grid.textContent = "";
+  var list = visibleSets();
+  list.forEach(function (s) { grid.append(linkCard(s)); });
+  var st = $("linksStatus");
+  st.className = "status" + (L.error ? " bad" : "");
+  st.textContent = "";
+  if (L.loading && !L.loaded) st.append(h("span", { class: "spin", "aria-hidden": "true" }), h("span", { text: "loading your links…" }));
+  else if (L.error) {
+    st.append(h("span", { text: "couldn't load your links. " + L.error }), h("button", { type: "button", text: "try again", onclick: function () { loadLinks(); } }));
+  } else if (!L.sets.length) st.textContent = "no gallery links yet. make one from the app.";
+  else if (!list.length) st.textContent = "no " + L.filter + " links.";
+  else st.textContent = list.length + (list.length === 1 ? " link" : " links");
+  renderSide();
+}
+function renderSide() {
+  var side = $("linkSide");
+  var s = null;
+  for (var i = 0; i < L.sets.length; i++) if (L.sets[i].id === L.sel) s = L.sets[i];
+  $("linkWrap").classList.toggle("noside", !s);
+  side.hidden = !s;
+  side.textContent = "";
+  if (!s) return;
+  var p = setIsPrivate(s);
+  var pl = setLink(s);
+  var busy = L.busy;
+  var group = h("fieldset", { class: "lk", "data-ga": "set-link", "aria-label": "link for " + setTitle(s) });
+  [["public", "public"], ["private", "private"]].forEach(function (c) {
+    var input = h("input", { type: "radio", class: "sr", name: "set-lk", value: c[0], "data-ga": "set-" + c[0], checked: (c[0] === "private") === p, disabled: busy });
+    input.addEventListener("change", function () { setSetPrivate(s, c[0] === "private"); });
+    group.append(h("label", { class: "lkopt" }, input, h("span", { text: c[1] })));
+  });
+  var url = setLiveUrl(s);
+  side.append(
+    h("h3", { text: setTitle(s) }),
+    group,
+    h("div", { class: "linkbox" },
+      h("code", { text: url, "data-ga": "set-url" }),
+      h("button", { type: "button", "data-ga": "set-copy", "aria-label": "copy link", text: "copy", onclick: function () { copyText(url); } }),
+      h("a", { class: "btn", href: url, target: "_blank", rel: "noopener", text: "open" })));
+  if (p && pl) {
+    side.append(h("dl", { class: "kv" },
+      h("dt", { text: "opened" }), h("dd", { text: String(pl.opened || 0), "data-ga": "set-opened" }),
+      h("dt", { text: "key made" }), h("dd", { text: pl.created_at ? ago(pl.created_at) : "", "data-ga": "set-made" })));
+    if (L.confirm) {
+      side.append(h("div", { class: "confirm" },
+        h("span", { text: "rotate the key? the old link stops working right away." }),
+        h("div", { class: "row" },
+          h("button", { type: "button", "data-ga": "set-rotate-yes", disabled: busy, text: "rotate key", onclick: function () { L.confirm = false; rotateSet(s); } }),
+          h("button", { type: "button", "data-ga": "set-rotate-no", text: "keep", onclick: function () { L.confirm = false; renderSide(); } }))));
+    } else {
+      side.append(h("div", { class: "row" }, h("button", { type: "button", "data-ga": "set-rotate", disabled: busy, text: "rotate key…", onclick: function () { L.confirm = true; renderSide(); } })));
+    }
+  }
+  side.append(h("p", { class: "foot", text: "share.capybaraharmony.com/g/" + s.id + " answers not found while this is private." }));
+}
+async function changeSet(call, done) {
+  L.busy = true; renderSide();
+  try { ok(await call()); L.busy = false; await loadLinks(); toast(done); }
+  catch (e) { L.busy = false; renderLinks(); toast(describe(e).text); }
+}
+function setSetPrivate(s, on) {
+  L.confirm = false;
+  return changeSet(function () { return lib("/api/library/private/sets/" + s.id, { method: on ? "PUT" : "DELETE" }); }, on ? "private. the public link stopped working" : "public again");
+}
+function rotateSet(s) {
+  return changeSet(function () { return libPost("/api/library/private/sets/" + s.id + "/rotate"); }, "new key. the old link stopped working");
+}
+document.querySelectorAll("#linkFilters button").forEach(function (b) {
+  b.onclick = function () { L.filter = b.dataset.lf; renderLinks(); };
+});
 
 /* ---------- the map: embeddings laid out in 2D (/api/library/map, APP-API-CONTRACT.md section 21) ---------- */
 // The server hands over each indexed post's vector; the page lays them out with t-SNE (posts with
@@ -1833,7 +2115,11 @@ async function setView(v) {
   M.view = v;
   document.querySelectorAll("#views button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.v === v)); });
   $("mapView").hidden = v !== "map";
-  $("gridView").hidden = v === "map";
+  $("gridView").hidden = v !== "grid";
+  $("linksView").hidden = v !== "links";
+  $("filtersBar").hidden = v === "links";
+  $("searchBar").hidden = v === "links";
+  if (v === "links") { mapStatus("", ""); hideTip(); loadLinks(); return; }
   if (v !== "map") { mapStatus("", ""); hideTip(); return; }
   mapStatusLine();
   drawMap();

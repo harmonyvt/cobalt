@@ -232,10 +232,12 @@ extension AppModel {
 
     // MARK: - Links
 
-    /// Every public link of the post, one a line: the items in order, then what was made. Private files have none.
-    /// Each is its rich link page, or with `direct` the file's own URL.
+    /// Every live link of the post, one a line: the items in order, then what was made. Private files have none; a file
+    /// with a private link gives that one (APP-API-CONTRACT 36.6). Each public one is its rich link page, or with
+    /// `direct` the file's own URL.
     public func copyAllLinks(_ item: MediaItem, direct: Bool = false) -> String {
         (item.items + item.made).compactMap { r in
+            if let key = r.privateURL { return key.absoluteString }
             guard r.isPublic, let url = r.publicURL else { return nil }
             return (direct ? url : capabilities.shareLink(for: url)).absoluteString
         }

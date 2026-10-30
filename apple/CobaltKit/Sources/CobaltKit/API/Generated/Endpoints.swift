@@ -346,6 +346,56 @@ enum Endpoints {
         APIEndpoint(op: "share_groups.delete", method: "DELETE", path: "/share/groups/\(HTTPCobaltClient.encode(id))", auth: .key)
     }
 
+    /// `GET /share/private` (op `share_private.list`, auth key_or_service): Every live private link, newest first, whether new gallery links start private, and the gallery links themselves (the section 24 list, for the web Worker, which GET /share/sets refuses) (GET /share/private).
+    static func sharePrivateList() -> APIEndpoint<SharePrivateListResponse> {
+        APIEndpoint(op: "share_private.list", method: "GET", path: "/share/private", auth: .keyOrService)
+    }
+
+    /// `PUT /share/private/items/:id` (op `share_private.item_on`, auth key_or_service): Turn a file's private link on; a public file is made not public first (PUT /share/private/items/<id>).
+    static func sharePrivateItemOn(id: String) -> APIEndpoint<SharePrivateItemOnResponse> {
+        APIEndpoint(op: "share_private.item_on", method: "PUT", path: "/share/private/items/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
+    }
+
+    /// `DELETE /share/private/items/:id` (op `share_private.item_off`, auth key_or_service): Revoke a file's private link; the file stays not public (DELETE /share/private/items/<id>).
+    static func sharePrivateItemOff(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "share_private.item_off", method: "DELETE", path: "/share/private/items/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
+    }
+
+    /// `POST /share/private/items/:id/rotate` (op `share_private.item_rotate`, auth key_or_service): A new key for a file's private link; the old one is a 404 at once.
+    static func sharePrivateItemRotate(id: String) -> APIEndpoint<SharePrivateItemRotateResponse> {
+        APIEndpoint(op: "share_private.item_rotate", method: "POST", path: "/share/private/items/\(HTTPCobaltClient.encode(id))/rotate", auth: .keyOrService)
+    }
+
+    /// `PUT /share/private/sets/:id` (op `share_private.set_on`, auth key_or_service): Turn a gallery link's private link on; its /g/<id> is a 404 while it is live (PUT /share/private/sets/<id>).
+    static func sharePrivateSetOn(id: String) -> APIEndpoint<SharePrivateSetOnResponse> {
+        APIEndpoint(op: "share_private.set_on", method: "PUT", path: "/share/private/sets/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
+    }
+
+    /// `DELETE /share/private/sets/:id` (op `share_private.set_off`, auth key_or_service): Revoke a gallery link's private link; it is public again (DELETE /share/private/sets/<id>).
+    static func sharePrivateSetOff(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "share_private.set_off", method: "DELETE", path: "/share/private/sets/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
+    }
+
+    /// `POST /share/private/sets/:id/rotate` (op `share_private.set_rotate`, auth key_or_service): A new key for a gallery link's private link; the old one is a 404 at once.
+    static func sharePrivateSetRotate(id: String) -> APIEndpoint<SharePrivateSetRotateResponse> {
+        APIEndpoint(op: "share_private.set_rotate", method: "POST", path: "/share/private/sets/\(HTTPCobaltClient.encode(id))/rotate", auth: .keyOrService)
+    }
+
+    /// `POST /share/private/rotate-all` (op `share_private.rotate_all`, auth key_or_service): Every live private key rotated at once (POST /share/private/rotate-all).
+    static func sharePrivateRotateAll() -> APIEndpoint<SharePrivateRotateAllResponse> {
+        APIEndpoint(op: "share_private.rotate_all", method: "POST", path: "/share/private/rotate-all", auth: .keyOrService)
+    }
+
+    /// `PATCH /share/private/settings` (op `share_private.settings`, auth key_or_service): Whether new gallery links start public or private (PATCH /share/private/settings).
+    static func sharePrivateSettings() -> APIEndpoint<SharePrivateSettingsResponse> {
+        APIEndpoint(op: "share_private.settings", method: "PATCH", path: "/share/private/settings", auth: .keyOrService)
+    }
+
+    /// `POST /share/collections/:id/privacy` (op `share_collections.privacy`, auth key): Every gallery link in a collection made private, public again, or rotated (POST /share/collections/<id>/privacy).
+    static func shareCollectionsPrivacy(id: String) -> APIEndpoint<ShareCollectionsPrivacyResponse> {
+        APIEndpoint(op: "share_collections.privacy", method: "POST", path: "/share/collections/\(HTTPCobaltClient.encode(id))/privacy", auth: .key)
+    }
+
     /// `GET /stage` (op `stage_owner.get`, auth key): GET /stage
     static func stageOwnerGet() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "stage_owner.get", method: "GET", path: "/stage", auth: .key)
@@ -667,6 +717,146 @@ struct ShareCollectionsListResponse: Decodable, Sendable {
     var status: String
     /// most recently changed first
     var collections: [Lossy<ShareCollection>]
+}
+
+struct SharePrivateListResponseLinksItem: Decodable, Sendable {
+    /// item: one file; set: a gallery link
+    var kind: String
+    /// the file's id or the gallery link's id
+    var targetId: String
+    /// share.../p/<key>: the only way in while it is live
+    var url: String
+    /// ms; when this key was made
+    var createdAt: Double
+    /// page opens (GET)
+    var opened: Double
+    var lastOpenedAt: Double?
+}
+
+struct SharePrivateListResponse: Decodable, Sendable {
+    var status: String
+    var links: [SharePrivateListResponseLinksItem]
+    var newLinks: String
+}
+
+struct SharePrivateItemOnResponseLink: Decodable, Sendable {
+    /// item: one file; set: a gallery link
+    var kind: String
+    /// the file's id or the gallery link's id
+    var targetId: String
+    /// share.../p/<key>: the only way in while it is live
+    var url: String
+    /// ms; when this key was made
+    var createdAt: Double
+    /// page opens (GET)
+    var opened: Double
+    var lastOpenedAt: Double?
+}
+
+struct SharePrivateItemOnResponse: Decodable, Sendable {
+    var status: String
+    var link: SharePrivateItemOnResponseLink
+}
+
+struct SharePrivateItemRotateResponseLink: Decodable, Sendable {
+    /// item: one file; set: a gallery link
+    var kind: String
+    /// the file's id or the gallery link's id
+    var targetId: String
+    /// share.../p/<key>: the only way in while it is live
+    var url: String
+    /// ms; when this key was made
+    var createdAt: Double
+    /// page opens (GET)
+    var opened: Double
+    var lastOpenedAt: Double?
+}
+
+struct SharePrivateItemRotateResponse: Decodable, Sendable {
+    var status: String
+    var link: SharePrivateItemRotateResponseLink
+}
+
+struct SharePrivateSetOnResponseLink: Decodable, Sendable {
+    /// item: one file; set: a gallery link
+    var kind: String
+    /// the file's id or the gallery link's id
+    var targetId: String
+    /// share.../p/<key>: the only way in while it is live
+    var url: String
+    /// ms; when this key was made
+    var createdAt: Double
+    /// page opens (GET)
+    var opened: Double
+    var lastOpenedAt: Double?
+}
+
+struct SharePrivateSetOnResponse: Decodable, Sendable {
+    var status: String
+    var link: SharePrivateSetOnResponseLink
+}
+
+struct SharePrivateSetRotateResponseLink: Decodable, Sendable {
+    /// item: one file; set: a gallery link
+    var kind: String
+    /// the file's id or the gallery link's id
+    var targetId: String
+    /// share.../p/<key>: the only way in while it is live
+    var url: String
+    /// ms; when this key was made
+    var createdAt: Double
+    /// page opens (GET)
+    var opened: Double
+    var lastOpenedAt: Double?
+}
+
+struct SharePrivateSetRotateResponse: Decodable, Sendable {
+    var status: String
+    var link: SharePrivateSetRotateResponseLink
+}
+
+struct SharePrivateRotateAllResponseLinksItem: Decodable, Sendable {
+    /// item: one file; set: a gallery link
+    var kind: String
+    /// the file's id or the gallery link's id
+    var targetId: String
+    /// share.../p/<key>: the only way in while it is live
+    var url: String
+    /// ms; when this key was made
+    var createdAt: Double
+    /// page opens (GET)
+    var opened: Double
+    var lastOpenedAt: Double?
+}
+
+struct SharePrivateRotateAllResponse: Decodable, Sendable {
+    var status: String
+    var links: [SharePrivateRotateAllResponseLinksItem]
+    var rotated: Double
+}
+
+struct SharePrivateSettingsResponse: Decodable, Sendable {
+    var status: String
+    var newLinks: String
+}
+
+struct ShareCollectionsPrivacyResponseLinksItem: Decodable, Sendable {
+    /// item: one file; set: a gallery link
+    var kind: String
+    /// the file's id or the gallery link's id
+    var targetId: String
+    /// share.../p/<key>: the only way in while it is live
+    var url: String
+    /// ms; when this key was made
+    var createdAt: Double
+    /// page opens (GET)
+    var opened: Double
+    var lastOpenedAt: Double?
+}
+
+struct ShareCollectionsPrivacyResponse: Decodable, Sendable {
+    var status: String
+    var links: [ShareCollectionsPrivacyResponseLinksItem]
 }
 
 struct McpSettingsResponseLink: Decodable, Sendable {

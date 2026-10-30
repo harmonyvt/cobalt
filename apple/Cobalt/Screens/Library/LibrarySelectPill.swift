@@ -80,8 +80,11 @@ struct LibrarySelectPill: View {
         return VStack(alignment: .leading, spacing: 10) {
             header(count: picks.count)
             if !picks.isEmpty { thumbs(picks) }
+            if makesLinks, model.capabilities.privateLinks {
+                privacyChoice
+            }
             if makesLinks, !picks.isEmpty {
-                Text(Copy.Links.line(for: verdict, count: picks.count))
+                Text(Copy.PrivateLinks.line(for: verdict, count: picks.count, isPrivate: controller.makesPrivateLink))
                     .font(CobaltType.captionSmall)
                     .foregroundStyle(verdict == .ready ? CobaltColor.caption : CobaltColor.text)
                     .contentTransition(.opacity)
@@ -132,6 +135,26 @@ struct LibrarySelectPill: View {
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .motion(Motion.rows, value: picks.map(\.id))
         .motion(Motion.rows, value: verdict)
+    }
+
+    /// `public` / `private` for the link the panel makes (APP-API-CONTRACT 36.6), starting at settings › sharing's
+    /// `new links start`. Private takes files that are not public too.
+    private var privacyChoice: some View {
+        Picker(Copy.PrivateLinks.choice, selection: Binding(
+            get: { controller.makesPrivateLink },
+            set: { controller.shareLinkPrivate = $0 }
+        )) {
+            Label(Copy.PrivateLinks.choicePublic, systemImage: Symbol.PrivateLinks.publicLink).tag(false)
+            Label(Copy.PrivateLinks.choicePrivate, systemImage: Symbol.PrivateLinks.makePrivate).tag(true)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .disabled(controller.makingShareLink)
+        .task {
+            // what new links start as, once per panel
+            if !store.privateLoaded { try? await store.refreshPrivate() }
+        }
     }
 
     private func header(count: Int) -> some View {

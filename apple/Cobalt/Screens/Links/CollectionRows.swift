@@ -95,6 +95,9 @@ struct CollectionMenuItems: View {
         Button(Copy.Collections.rename, systemImage: Symbol.collectionRename) { controller.sheet = .rename(collection) }
         Button(Copy.Collections.reroll, systemImage: Symbol.collectionReroll) { controller.rerolling = collection }
             .disabled(!controller.canReroll(collection))
+        if controller.privateLinksEnabled {
+            CollectionPrivacyMenu(collection: collection, controller: controller)
+        }
         if controller.setsEnabled {
             // which sets hold it: a tick on each, a tap moves it in or out
             Menu(Copy.Sets.sets, systemImage: Symbol.collectionSet) {
@@ -113,6 +116,40 @@ struct CollectionMenuItems: View {
         Button(Copy.Collections.delete, systemImage: Symbol.collectionDelete, role: .destructive) {
             controller.deleting = collection
         }
+    }
+}
+
+/// A collection's `privacy…` (APP-API-CONTRACT 36.6): make every link private (at once), rotate every key and make every
+/// link public (both ask first). In the folder card's long press, the collection screen's menu and on the Mac.
+struct CollectionPrivacyMenu: View {
+    let collection: ShareCollection
+    let controller: LinksController
+    @Environment(\.shell) private var shell
+
+    var body: some View {
+        let store = controller.store
+        let privateCount = store.privateCount(in: collection)
+        let total = store.sets(in: collection).count
+        Menu {
+            if total > 0 {
+                Text(Copy.PrivateLinks.privateOf(privateCount, total))
+            }
+            Button(Copy.PrivateLinks.everyPrivate, systemImage: Symbol.PrivateLinks.makePrivate) {
+                controller.choosePrivacy(.makePrivate, for: collection, shell: shell)
+            }
+            .disabled(privateCount == total)
+            Button(Copy.PrivateLinks.everyRotate, systemImage: Symbol.PrivateLinks.rotate) {
+                controller.choosePrivacy(.rotate, for: collection, shell: shell)
+            }
+            .disabled(privateCount == 0)
+            Button(Copy.PrivateLinks.everyPublic, systemImage: Symbol.PrivateLinks.makePublic, role: .destructive) {
+                controller.choosePrivacy(.makePublic, for: collection, shell: shell)
+            }
+            .disabled(privateCount == 0)
+        } label: {
+            Label(Copy.PrivateLinks.privacy, systemImage: Symbol.PrivateLinks.privacy)
+        }
+        .disabled(!controller.canChangePrivacy(collection))
     }
 }
 

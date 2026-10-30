@@ -108,7 +108,7 @@ struct DetailMenu: View {
 
     private func shareURL(_ r: Rendition) -> URL? {
         if let url = r.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url }
-        return r.publicURL.map(model.capabilities.shareLink(for:))
+        return model.capabilities.liveLink(for: r)
     }
 
     var body: some View {

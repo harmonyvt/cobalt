@@ -28,9 +28,10 @@ struct DetailActions: View {
     private var canMake: Bool { controller.canMakeWebp(item) }
     private var shareURL: URL? {
         if let url = rendition.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url }
-        return rendition.publicURL.map(model.capabilities.shareLink(for:))
+        return model.capabilities.liveLink(for: rendition)
     }
-    private var videoLink: URL? { rendition.hosted?.url ?? rendition.publicURL }
+    /// The video's live link: its private link (APP-API-CONTRACT 36.6), else its public one.
+    private var videoLink: URL? { rendition.privateURL ?? rendition.hosted?.url ?? rendition.publicURL }
     private var canSave: Bool { RenditionPhotos.canSave(rendition) }
     /// The old "public share" button: only on a server without the switch (with it, the switch under the actions
     /// is the one way to make a link).

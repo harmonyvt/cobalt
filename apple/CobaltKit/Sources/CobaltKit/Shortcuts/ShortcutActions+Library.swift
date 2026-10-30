@@ -14,7 +14,9 @@ extension ShortcutSave {
         let parts = Parts(post)
         // The original's public link: a public original (`visibility`, or a legacy hosted copy) that has a url; a
         // gallery has none of its own, its lead item stands in.
-        let publicLink = parts.originals.first { $0.isPublic && $0.url != nil }?.url
+        // a private link is the live one (APP-API-CONTRACT 36.6): the original's public address is a 404 while it is on
+        let publicLink = parts.originals.first { $0.privateURL != nil }?.privateURL
+            ?? parts.originals.first { $0.isPublic && $0.url != nil }?.url
             ?? parts.items.first { $0.isPublic && $0.url != nil }?.url
         let webps = parts.plain.filter { $0.role == .webp && $0.url != nil }.sorted { $0.createdAt > $1.createdAt }
         let service = post.service.flatMap { $0 == "upload" || $0.isEmpty ? nil : $0 }

@@ -82,6 +82,8 @@ final class DetailController {
     var visibilityFailed: [Rendition.ID: String] = [:]
     /// Renditions whose last switch off could not clear the public link from the server's cache.
     var visibilityCacheNote: Set<Rendition.ID> = []
+    /// +1 each time a private link was turned on or rotated and copied (the success haptic; APP-API-CONTRACT 36.6).
+    var privateLinkCopied = 0
     /// Shown on the screen underneath once the whole media is gone (`deleted.`); nil for a removal that
     /// only freed space.
     var exitStatus: String?

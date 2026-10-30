@@ -9,6 +9,7 @@ import { LIVE_OPS } from "./ops/live";
 import { LIBRARY_WRITE_OPS } from "./ops/library-writes";
 import { MAKE_OPS } from "./ops/make";
 import { MCP_OPS } from "./ops/mcp";
+import { PRIVATE_OPS } from "./ops/private";
 import { SHARE_OPS } from "./ops/share";
 import { STAGE_OPS } from "./ops/stage";
 import { SYSTEM_OPS } from "./ops/system";
@@ -22,6 +23,7 @@ export const REGISTRY = new Registry([
     ...CHAT_OPS,
     ...MAKE_OPS,
     ...SHARE_OPS,
+    ...PRIVATE_OPS,
     ...STAGE_OPS,
     ...BOX_OPS,
     ...LIVE_OPS,

@@ -120,7 +120,11 @@ export const toggleable = (r: Pick<MediaRow, "bucket" | "source" | "r2_key">): b
     r.bucket === "originals" ||
     (r.bucket === "media" && (r.source === "webp" || r.source === "studio") && MEDIA_WEBP_NAME.test(r.r2_key));
 
-export const itemShape = (r: MediaRow) => ({
+// Private share links (APP-API-CONTRACT.md section 36): the live private link of a file, from D1 private_links.
+export const SHARE_PRIVATE_BASE = "https://share.capybaraharmony.com/p/";
+export type PrivateLink = { url: string; created_at: number; opened: number; last_opened_at: number | null };
+
+export const itemShape = (r: MediaRow, priv?: PrivateLink | null) => ({
     id: r.id,
     kind: r.kind,
     source: r.source,
@@ -138,6 +142,9 @@ export const itemShape = (r: MediaRow) => ({
     // one tile per file; the switch is on originals and webps (not legacy host rows)
     visibility: visibilityOf(r),
     visibility_toggle: toggleable(r),
+    // the live private link (section 36): the link to hand out while set; `private_link` has its counters
+    private_url: priv?.url ?? null,
+    private_link: priv ?? null,
 });
 
 const json = (status: number, body: unknown, extra: Record<string, string> = {}) =>
@@ -182,6 +189,9 @@ type Route =
     | { name: "itemPrivate"; id: string }
     | { name: "itemStudio"; id: string }
     | { name: "itemDelete"; id: string }
+    | { name: "links" }
+    | { name: "private"; kind: "items" | "sets"; id: string }
+    | { name: "privateRotate"; kind: "items" | "sets"; id: string }
     | { name: "studioDelete"; id: string };
 
 const ALLOWED: Record<Route["name"], string[]> = {
@@ -199,6 +209,9 @@ const ALLOWED: Record<Route["name"], string[]> = {
     itemPrivate: ["POST"],
     itemStudio: ["POST"],
     itemDelete: ["DELETE"],
+    links: ["GET"],
+    private: ["PUT", "DELETE"],
+    privateRotate: ["POST"],
     studioDelete: ["DELETE"],
 };
 
@@ -210,7 +223,16 @@ export function matchRoute(pathname: string): Route | null {
     if (pathname === "/api/library/search") return { name: "search" };
     if (pathname === "/api/library/search/post") return { name: "searchPost" };
     if (pathname === "/api/library/map") return { name: "map" };
+    if (pathname === "/api/library/links") return { name: "links" };
     let m: RegExpExecArray | null;
+    if ((m = /^\/api\/library\/private\/(items\/[0-9A-Za-z]{16}|sets\/[0-9]{10,24})$/.exec(pathname))) {
+        const [kind, id] = m[1]!.split("/") as ["items" | "sets", string];
+        return { name: "private", kind, id };
+    }
+    if ((m = /^\/api\/library\/private\/(items\/[0-9A-Za-z]{16}|sets\/[0-9]{10,24})\/rotate$/.exec(pathname))) {
+        const [kind, id] = m[1]!.split("/") as ["items" | "sets", string];
+        return { name: "privateRotate", kind, id };
+    }
     if ((m = /^\/api\/library\/webp\/([0-9A-Za-z]{16,32})$/.exec(pathname))) return { name: "webp", id: m[1]! };
     if ((m = /^\/api\/library\/studio\/([0-9A-Za-z]{22})$/.exec(pathname))) return { name: "studio", id: m[1]! };
     if ((m = /^\/api\/library\/studio\/([0-9A-Za-z]{22})\/publish$/.exec(pathname))) return { name: "studioPublish", id: m[1]! };
@@ -280,6 +302,15 @@ export async function handleLibrary(request: Request, env: Env, deps?: Partial<L
                 return await itemStudio(ctx, route.id);
             case "itemDelete":
                 return await itemDelete(ctx, route.id);
+            case "links":
+                return await links(ctx);
+            case "private":
+                return await setPrivate(ctx, route.kind, route.id, request.method === "PUT");
+            case "privateRotate":
+                return await relayResponse(
+                    await callApi(ctx, `/share/private/${route.kind}/${route.id}/rotate`, { method: "POST" }),
+                    (b) => ({ status: "success", link: b.link ?? null }),
+                );
             case "studioDelete":
                 return await studioDelete(ctx, route.id);
         }
@@ -445,13 +476,37 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
         }
     }
 
+    // Live private links of these files (migration 0024, section 36). Best effort: without the table the
+    // files simply have none.
+    const privs = new Map<string, PrivateLink>();
+    if (ids.length > 0) {
+        try {
+            const { results } = await DB.prepare(
+                `SELECT target_id, key, created_at, opened, last_opened_at FROM private_links
+                 WHERE kind = 'item' AND revoked_at IS NULL AND target_id IN (${ids.map((_, i) => `?${i + 1}`).join(", ")})`,
+            )
+                .bind(...ids)
+                .all<{ target_id: string; key: string; created_at: number; opened: number | null; last_opened_at: number | null }>();
+            for (const r of results) {
+                privs.set(r.target_id, {
+                    url: SHARE_PRIVATE_BASE + r.key,
+                    created_at: r.created_at,
+                    opened: r.opened ?? 0,
+                    last_opened_at: r.last_opened_at ?? null,
+                });
+            }
+        } catch {
+            // 0024 not applied yet
+        }
+    }
+
     const webOrigin = ctx.env.WEB_ORIGIN.replace(/\/+$/, "");
     return json(200, {
         items: page
             .filter((e) => e.t === "item")
             .map((e) => {
                 const row = (e as Extract<Entry, { t: "item" }>).row;
-                return { ...itemShape(row), custom_title: titles.get(row.id) ?? null, post_key: postKeys.get(row.id) ?? null };
+                return { ...itemShape(row, privs.get(row.id)), custom_title: titles.get(row.id) ?? null, post_key: postKeys.get(row.id) ?? null };
             }),
         studios: page
             .filter((e) => e.t === "studio")
@@ -711,6 +766,27 @@ async function getItem(ctx: Ctx, id: string): Promise<MediaRow | null> {
 async function setVisibility(ctx: Ctx, id: string, isPublic: boolean): Promise<Response> {
     const res = await callApi(ctx, `/library/items/${id}/visibility`, { method: "PATCH", body: { public: isPublic } });
     return relayResponse(res, (b) => ({ status: "success", item: b.item, cache_cleared: b.cache_cleared ?? null }));
+}
+
+// ---------- private share links (APP-API-CONTRACT.md section 36) ----------
+
+// GET /api/library/links: the gallery links and the live private links, one answer for the links view.
+async function links(ctx: Ctx): Promise<Response> {
+    // GET /share/private carries the gallery links too: GET /share/sets refuses the service credential (section 24).
+    const res = await callApi(ctx, "/share/private", { method: "GET" });
+    return relayResponse(res, (b) => ({
+        status: "success",
+        sets: Array.isArray(b.sets) ? b.sets : [],
+        links: Array.isArray(b.links) ? b.links : [],
+        new_links: b.new_links === "private" ? "private" : "public",
+    }));
+}
+
+// PUT /api/library/private/(items|sets)/<id> turns the private link on, DELETE revokes it. The API does the work
+// (a public file is switched off first; a revoked gallery link is public again): this only relays.
+async function setPrivate(ctx: Ctx, kind: "items" | "sets", id: string, on: boolean): Promise<Response> {
+    const res = await callApi(ctx, `/share/private/${kind}/${id}`, { method: on ? "PUT" : "DELETE" });
+    return relayResponse(res, (b) => (on ? { status: "success", link: b.link ?? null } : { status: "success" }));
 }
 
 // ---------- POST /api/library/items/<id>/studio ----------
