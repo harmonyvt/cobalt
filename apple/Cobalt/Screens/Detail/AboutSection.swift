@@ -534,7 +534,7 @@ private struct AboutPreview: View {
     var body: some View {
         NavigationStack {
             Form {
-                ForEach([PreviewData.aboutFursuitKey, "Dd55fEyN1Yy", "Dd7P496wolG", "2105432512428445875", "Dd5JFkMDt4N", "nope"], id: \.self) {
+                ForEach(["PrEvIeWfursuit", "Dd55fEyN1Yy", "Dd7P496wolG", "2105432512428445875", "Dd5JFkMDt4N", "nope"], id: \.self) {
                     AboutSection(model: model, postKey: $0)
                 }
             }

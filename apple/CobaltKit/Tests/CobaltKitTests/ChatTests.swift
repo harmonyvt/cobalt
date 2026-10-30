@@ -1516,6 +1516,8 @@ private let wireRanked = """
  {"post_id":"a","score":0.62,"why":["fursuit","costume"]},{"post_id":"b","score":null,"why":[]},
  {"post_id":"c"},{"nope":true},{"post_id":"d","score":"high","why":"x"}]}
 """
+/// The same list on one line, as an SSE `data:` field needs it.
+private let wireRankedLine = wireRanked.replacingOccurrences(of: "\n", with: "")
 
 struct ChatRankedTests {
     private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
@@ -1545,12 +1547,12 @@ struct ChatRankedTests {
 
     @Test func theSSERankedEventParsesWithAndWithoutPosts() {
         var parser = ChatSSEParser()
-        let events = parser.feed(Array("event: ranked\ndata: {\"ranked\":\(wireRanked)}\n\n".utf8))
+        let events = parser.feed(Array("event: ranked\ndata: {\"ranked\":\(wireRankedLine)}\n\n".utf8))
         guard case .ranked(let r, let posts)? = events.first else { Issue.record("\(events)"); return }
         #expect(r.hits.count == 4 && posts.isEmpty)
         var withPosts = ChatSSEParser()
         let post = #"{"id":"a","created_at":1790000000000,"files":[]}"#
-        let more = withPosts.feed(Array("event: ranked\ndata: {\"ranked\":\(wireRanked),\"posts\":{\"a\":\(post)}}\n\n".utf8))
+        let more = withPosts.feed(Array("event: ranked\ndata: {\"ranked\":\(wireRankedLine),\"posts\":{\"a\":\(post)}}\n\n".utf8))
         guard case .ranked(_, let shown)? = more.first else { Issue.record("\(more)"); return }
         #expect(shown.map(\.id) == ["a"])
         var bad = ChatSSEParser()
@@ -1559,7 +1561,7 @@ struct ChatRankedTests {
 
     @Test func doneCarriesItAndTheEventSetsItOnTheRunningMessage() {
         var parser = ChatSSEParser()
-        let done = #"{"message":{"id":"102","role":"assistant","text":"x","ranked":\#(wireRanked),"created_at":1},"thread":\#(wireThread)}"#
+        let done = #"{"message":{"id":"102","role":"assistant","text":"x","ranked":\#(wireRankedLine),"created_at":1},"thread":\#(wireThread)}"#
         guard case .done(let message, _)? = parser.feed(Array("event: done\ndata: \(done)\n\n".utf8)).first else {
             Issue.record("no done"); return
         }
