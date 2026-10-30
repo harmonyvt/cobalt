@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 /// asks for with the client's keyed request. Any other URL plays as a plain `AVURLAsset`.
 @MainActor
 public enum KeyedStream {
-    public static let scheme = "cobalt-stream"
+    public nonisolated static let scheme = "cobalt-stream"
 
     /// Makes the keyed request for a library file; set by the live app (`AppModel.live`). Nil in previews and tests,
     /// where a stream URL fails to load and the hero keeps its poster.
