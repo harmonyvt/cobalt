@@ -33,7 +33,15 @@ export type BoxProcess = {
     kill(signal?: number): void;
 };
 
-export type BoxExecOptions = { cwd?: string; env?: Record<string, string>; user?: string; signal?: AbortSignal; stdout?: "pipe" | "ignore"; stderr?: "pipe" | "ignore" };
+export type BoxExecOptions = {
+    cwd?: string;
+    env?: Record<string, string>;
+    user?: string;
+    signal?: AbortSignal;
+    stdin?: ReadableStream<Uint8Array>;
+    stdout?: "pipe" | "ignore";
+    stderr?: "pipe" | "ignore";
+};
 
 export type WorkbenchDeps = {
     storage: { get<T>(key: string): Promise<T | undefined>; put(key: string, value: unknown): Promise<void> };
@@ -55,6 +63,10 @@ export type WorkbenchDeps = {
 export type BoxRun = { code: number; stdout: string; stderr: string; timed_out: boolean; ms: number };
 export type BoxStat = { size: number; head: number[] };
 export type BoxError = { error: string };
+export type BoxWrite = { size: number };
+
+// A name box.pull may write in /workspace: one plain file name, no path, no dot files.
+export const BOX_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 const LEDGER_KEY = "workbench:ledger";
 
@@ -189,6 +201,37 @@ export class WorkbenchCore {
             return { error: `the command could not start: ${e instanceof Error ? e.message : String(e)}` };
         } finally {
             clearT(timer);
+            stopKeep();
+            await this.#touch();
+        }
+    }
+
+    // box.pull: bytes from the library into /workspace/<name> (written as <name>.part, then renamed, so a half-written file
+    // never has the name). Returns the size on disk; the op compares it with the size it sent.
+    async write(thread: string, name: string, body: ReadableStream<Uint8Array>): Promise<BoxWrite | BoxError> {
+        if (!BOX_NAME_REGEX.test(name) || name.includes("..")) {
+            await body.cancel().catch(() => {});
+            return { error: `not a plain file name: ${name}` };
+        }
+        const p = await this.#prepare(thread);
+        if (p) {
+            await body.cancel().catch(() => {});
+            return p;
+        }
+        const stopKeep = this.#keepAwake();
+        try {
+            const script = 'f="$1"; cat > "$f.part" && mv -f -- "$f.part" "$f" && stat -L -c %s -- "$f"';
+            const proc = await this.#d.exec(["bash", "-c", script, "box-put", name], { cwd: WORKDIR, env: BOX_ENV, user: BOX_USER, stdin: body });
+            const out = new Clip();
+            const err = new Clip();
+            await Promise.all([drain(proc.stdout, out), drain(proc.stderr, err)]);
+            const code = await proc.exitCode;
+            if (code !== 0) return { error: err.text().trim().slice(0, 300) || `could not write ${name}` };
+            const size = Number(out.text().trim());
+            return Number.isSafeInteger(size) ? { size } : { error: `could not write ${name}` };
+        } catch (e) {
+            return { error: `could not write ${name}: ${e instanceof Error ? e.message : String(e)}` };
+        } finally {
             stopKeep();
             await this.#touch();
         }

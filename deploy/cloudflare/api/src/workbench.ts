@@ -1,6 +1,6 @@
 // The Workbench Durable Object (APP-API-CONTRACT.md section 33.11): the chat AI's Linux box (deploy/cloudflare/workbench:
 // yt-dlp, curl, ffmpeg, python3) for sites the normal tools cannot read. A Container subclass on its own container app
-// (basic, one instance), one object named "main". The decisions live in src/workbench-core.ts and the outbound rule in
+// (standard-1, one instance), one object named "main". The decisions live in src/workbench-core.ts and the outbound rule in
 // src/workbench-rules.ts (no Cloudflare imports, so the tests run them under node); this file wires them to the
 // Containers library. Imported only by src/index.ts, which re-exports it and ContainerProxy.
 //
@@ -9,7 +9,7 @@
 // refuses our own hosts. Other ports and raw TCP have no way out.
 
 import { Container } from "@cloudflare/containers";
-import { WorkbenchCore, type BoxError, type BoxRun, type BoxStat } from "./workbench-core";
+import { WorkbenchCore, type BoxError, type BoxRun, type BoxStat, type BoxWrite } from "./workbench-core";
 import { dailyMinutes, forwardOutbound, SLEEP_MS } from "./workbench-rules";
 
 export interface WorkbenchEnv {
@@ -54,6 +54,10 @@ export class Workbench extends Container<WorkbenchEnv> {
 
     async stat(thread: string, path: string): Promise<BoxStat | BoxError> {
         return this.core.stat(thread, path);
+    }
+
+    async write(thread: string, name: string, body: ReadableStream<Uint8Array>): Promise<BoxWrite | BoxError> {
+        return this.core.write(thread, name, body);
     }
 
     async read(thread: string, path: string): Promise<ReadableStream<Uint8Array> | BoxError> {

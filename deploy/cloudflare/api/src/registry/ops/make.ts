@@ -145,7 +145,7 @@ export const EDIT_ROUTES = [
 
 // ---- the chat AI's side: finding the file -------------------------------------------------------------------------
 
-type FileRow = {
+export type FileRow = {
     id: string;
     name: string | null;
     session_id: string | null;
@@ -165,13 +165,13 @@ type FileRow = {
     post_key: string;
 };
 
-const FILE_SELECT = `SELECT * FROM (SELECT m.id, m.name, m.session_id, m.role, m.item_index, m.content_type, m.bucket, m.kind, m.source,
+export const FILE_SELECT = `SELECT * FROM (SELECT m.id, m.name, m.session_id, m.role, m.item_index, m.content_type, m.bucket, m.kind, m.source,
         m.r2_key, m.url, m.visibility, m.duration, m.width, m.height, m.created_at, ${POST_KEY_SQL} AS post_key
    FROM media_items m WHERE m.deleted_at IS NULL)`;
 
 const typeOf = (f: Pick<FileRow, "content_type">) => itemTypeOf(f.content_type);
 // a file the post was saved as (an item of a gallery, or the original), never something made from it
-const isSource = (f: FileRow) => f.role === "item" || (f.bucket === "originals" && (f.source === "saved" || f.source === "upload") && !f.role);
+export const isSource = (f: FileRow) => f.role === "item" || (f.bucket === "originals" && (f.source === "saved" || f.source === "upload") && !f.role);
 
 const stop = (call: string, message: string) => new OpError(400, "error.make.refused", `cobalt.${call}: ${message}`);
 

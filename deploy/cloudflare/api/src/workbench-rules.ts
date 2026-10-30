@@ -134,12 +134,49 @@ export function checkOutbound(raw: string): OutboundDecision {
 
 // The outbound handler's answer: the request goes out with redirects left to the box (so every hop comes back through
 // this rule), or a 403 the tool in the box prints.
+// A request body the box may send out (33.11.1): enough for a site's own API calls (a login form, a GraphQL query), never
+// a library file box.pull copied in.
+export const OUTBOUND_BODY_MAX = 64 * 1024;
+
+const blocked = (reason: string) =>
+    new Response(`workbench: blocked (${reason})\n`, { status: 403, headers: { "content-type": "text/plain", "x-workbench-blocked": "1" } });
+
+// The body, read up to the cap: null when it is over (the rest is not read).
+async function boundedBody(request: Request): Promise<Uint8Array | null> {
+    const declared = Number(request.headers.get("content-length") ?? "");
+    if (Number.isFinite(declared) && declared > OUTBOUND_BODY_MAX) {
+        await request.body?.cancel().catch(() => {});
+        return null;
+    }
+    const reader = request.body!.getReader();
+    const chunks: Uint8Array[] = [];
+    let n = 0;
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        n += value.length;
+        if (n > OUTBOUND_BODY_MAX) {
+            await reader.cancel().catch(() => {});
+            return null;
+        }
+        chunks.push(value);
+    }
+    const out = new Uint8Array(n);
+    let off = 0;
+    for (const c of chunks) {
+        out.set(c, off);
+        off += c.length;
+    }
+    return out;
+}
+
 export async function forwardOutbound(request: Request, doFetch: (r: Request) => Promise<Response>): Promise<Response> {
     const d = checkOutbound(request.url);
-    if (!d.ok) {
-        return new Response(`workbench: blocked (${d.reason})\n`, { status: 403, headers: { "content-type": "text/plain", "x-workbench-blocked": "1" } });
-    }
-    return doFetch(new Request(request, { redirect: "manual" }));
+    if (!d.ok) return blocked(d.reason);
+    if (!request.body) return doFetch(new Request(request, { redirect: "manual" }));
+    const body = await boundedBody(request);
+    if (!body) return blocked(`a request body over ${OUTBOUND_BODY_MAX / 1024} KB`);
+    return doFetch(new Request(request.url, { method: request.method, headers: request.headers, body, redirect: "manual" }));
 }
 
 // ---- what box.save hands to the library -------------------------------------------------------------------------------
