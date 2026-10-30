@@ -2909,6 +2909,129 @@
         }
       }
     },
+    "/share/collections/{id}/privacy": {
+      "post": {
+        "operationId": "share_collections.privacy",
+        "summary": "Every gallery link in a collection made private, public again, or rotated (POST /share/collections/<id>/privacy).",
+        "tags": [
+          "share_collections"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "private": {
+                    "type": "boolean"
+                  },
+                  "rotate": {
+                    "type": "boolean",
+                    "const": true
+                  }
+                },
+                "additionalProperties": false,
+                "required": []
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "links": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "item",
+                              "set"
+                            ],
+                            "description": "item: one file; set: a gallery link"
+                          },
+                          "target_id": {
+                            "type": "string",
+                            "description": "the file's id or the gallery link's id"
+                          },
+                          "url": {
+                            "type": "string",
+                            "description": "share.../p/<key>: the only way in while it is live"
+                          },
+                          "created_at": {
+                            "type": "number",
+                            "description": "ms; when this key was made"
+                          },
+                          "opened": {
+                            "type": "number",
+                            "description": "page opens (GET)"
+                          },
+                          "last_opened_at": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "target_id",
+                          "url",
+                          "created_at",
+                          "opened",
+                          "last_opened_at"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "links"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/share/collections/{id}/reroll": {
       "post": {
         "operationId": "share_collections.reroll",
@@ -3064,6 +3187,753 @@
           "runs": "worker",
           "cors": true,
           "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/private": {
+      "get": {
+        "operationId": "share_private.list",
+        "summary": "Every live private link, newest first, whether new gallery links start private, and the gallery links themselves (the section 24 list, for the web Worker, which GET /share/sets refuses) (GET /share/private).",
+        "tags": [
+          "share_private"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "links": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "item",
+                              "set"
+                            ],
+                            "description": "item: one file; set: a gallery link"
+                          },
+                          "target_id": {
+                            "type": "string",
+                            "description": "the file's id or the gallery link's id"
+                          },
+                          "url": {
+                            "type": "string",
+                            "description": "share.../p/<key>: the only way in while it is live"
+                          },
+                          "created_at": {
+                            "type": "number",
+                            "description": "ms; when this key was made"
+                          },
+                          "opened": {
+                            "type": "number",
+                            "description": "page opens (GET)"
+                          },
+                          "last_opened_at": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "target_id",
+                          "url",
+                          "created_at",
+                          "opened",
+                          "last_opened_at"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "new_links": {
+                      "type": "string",
+                      "enum": [
+                        "public",
+                        "private"
+                      ]
+                    },
+                    "sets": {
+                      "type": "array",
+                      "items": {}
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "links",
+                    "new_links",
+                    "sets"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/private/items/{id}": {
+      "put": {
+        "operationId": "share_private.item_on",
+        "summary": "Turn a file's private link on; a public file is made not public first (PUT /share/private/items/<id>).",
+        "tags": [
+          "share_private"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "link": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "item",
+                            "set"
+                          ],
+                          "description": "item: one file; set: a gallery link"
+                        },
+                        "target_id": {
+                          "type": "string",
+                          "description": "the file's id or the gallery link's id"
+                        },
+                        "url": {
+                          "type": "string",
+                          "description": "share.../p/<key>: the only way in while it is live"
+                        },
+                        "created_at": {
+                          "type": "number",
+                          "description": "ms; when this key was made"
+                        },
+                        "opened": {
+                          "type": "number",
+                          "description": "page opens (GET)"
+                        },
+                        "last_opened_at": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "target_id",
+                        "url",
+                        "created_at",
+                        "opened",
+                        "last_opened_at"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "link"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "share_private.item_off",
+        "summary": "Revoke a file's private link; the file stays not public (DELETE /share/private/items/<id>).",
+        "tags": [
+          "share_private"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/private/items/{id}/rotate": {
+      "post": {
+        "operationId": "share_private.item_rotate",
+        "summary": "A new key for a file's private link; the old one is a 404 at once.",
+        "tags": [
+          "share_private"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "link": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "item",
+                            "set"
+                          ],
+                          "description": "item: one file; set: a gallery link"
+                        },
+                        "target_id": {
+                          "type": "string",
+                          "description": "the file's id or the gallery link's id"
+                        },
+                        "url": {
+                          "type": "string",
+                          "description": "share.../p/<key>: the only way in while it is live"
+                        },
+                        "created_at": {
+                          "type": "number",
+                          "description": "ms; when this key was made"
+                        },
+                        "opened": {
+                          "type": "number",
+                          "description": "page opens (GET)"
+                        },
+                        "last_opened_at": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "target_id",
+                        "url",
+                        "created_at",
+                        "opened",
+                        "last_opened_at"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "link"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/private/rotate-all": {
+      "post": {
+        "operationId": "share_private.rotate_all",
+        "summary": "Every live private key rotated at once (POST /share/private/rotate-all).",
+        "tags": [
+          "share_private"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "links": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "item",
+                              "set"
+                            ],
+                            "description": "item: one file; set: a gallery link"
+                          },
+                          "target_id": {
+                            "type": "string",
+                            "description": "the file's id or the gallery link's id"
+                          },
+                          "url": {
+                            "type": "string",
+                            "description": "share.../p/<key>: the only way in while it is live"
+                          },
+                          "created_at": {
+                            "type": "number",
+                            "description": "ms; when this key was made"
+                          },
+                          "opened": {
+                            "type": "number",
+                            "description": "page opens (GET)"
+                          },
+                          "last_opened_at": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "target_id",
+                          "url",
+                          "created_at",
+                          "opened",
+                          "last_opened_at"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "rotated": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "links",
+                    "rotated"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/private/sets/{id}": {
+      "put": {
+        "operationId": "share_private.set_on",
+        "summary": "Turn a gallery link's private link on; its /g/<id> is a 404 while it is live (PUT /share/private/sets/<id>).",
+        "tags": [
+          "share_private"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{19}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "link": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "item",
+                            "set"
+                          ],
+                          "description": "item: one file; set: a gallery link"
+                        },
+                        "target_id": {
+                          "type": "string",
+                          "description": "the file's id or the gallery link's id"
+                        },
+                        "url": {
+                          "type": "string",
+                          "description": "share.../p/<key>: the only way in while it is live"
+                        },
+                        "created_at": {
+                          "type": "number",
+                          "description": "ms; when this key was made"
+                        },
+                        "opened": {
+                          "type": "number",
+                          "description": "page opens (GET)"
+                        },
+                        "last_opened_at": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "target_id",
+                        "url",
+                        "created_at",
+                        "opened",
+                        "last_opened_at"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "link"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "share_private.set_off",
+        "summary": "Revoke a gallery link's private link; it is public again (DELETE /share/private/sets/<id>).",
+        "tags": [
+          "share_private"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{19}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/private/sets/{id}/rotate": {
+      "post": {
+        "operationId": "share_private.set_rotate",
+        "summary": "A new key for a gallery link's private link; the old one is a 404 at once.",
+        "tags": [
+          "share_private"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{19}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "link": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "item",
+                            "set"
+                          ],
+                          "description": "item: one file; set: a gallery link"
+                        },
+                        "target_id": {
+                          "type": "string",
+                          "description": "the file's id or the gallery link's id"
+                        },
+                        "url": {
+                          "type": "string",
+                          "description": "share.../p/<key>: the only way in while it is live"
+                        },
+                        "created_at": {
+                          "type": "number",
+                          "description": "ms; when this key was made"
+                        },
+                        "opened": {
+                          "type": "number",
+                          "description": "page opens (GET)"
+                        },
+                        "last_opened_at": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "target_id",
+                        "url",
+                        "created_at",
+                        "opened",
+                        "last_opened_at"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "link"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/share/private/settings": {
+      "patch": {
+        "operationId": "share_private.settings",
+        "summary": "Whether new gallery links start public or private (PATCH /share/private/settings).",
+        "tags": [
+          "share_private"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "new_links": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "private"
+                    ]
+                  }
+                },
+                "required": [
+                  "new_links"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "new_links": {
+                      "type": "string",
+                      "enum": [
+                        "public",
+                        "private"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "new_links"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
           "ai": "hidden"
         }
       }

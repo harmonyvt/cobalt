@@ -248,7 +248,10 @@ struct DetailControls: View {
                 OfflineCopySection(model: c.model, item: c.item, rendition: c.rendition)
             }
         } else {
-            if c.controller.canSwitchVisibility(c.rendition) {
+            if c.model.canChoosePrivateLink(c.rendition) {
+                // off · public link · private link (APP-API-CONTRACT 36.6)
+                FileLinkSection(controller: c.controller, rendition: c.rendition)
+            } else if c.controller.canSwitchVisibility(c.rendition) {
                 VisibilitySection(controller: c.controller, rendition: c.rendition)
             }
             Section {

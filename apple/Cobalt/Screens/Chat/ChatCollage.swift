@@ -202,8 +202,9 @@ struct ChatCollageTile: View {
     /// sit well inside the message list's own lazy stack, so a hundred pictures would otherwise load at once).
     @State private var seen = false
 
-    /// The public link to hand out (its rich page when the server has them); nil when the post has no public file.
-    private var shareURL: URL? { row.item.face.publicURL.map { model.capabilities.shareLink(for: $0) } }
+    /// The link to hand out: its private link (APP-API-CONTRACT 36.6), else its public one (the rich page when the server
+    /// has them); nil when the post has neither.
+    private var shareURL: URL? { model.capabilities.liveLink(for: row.item.face) }
 
     var body: some View {
         let pixels = Int(min(512, max(128, (max(size.width, size.height) * displayScale / 64).rounded(.up) * 64)))

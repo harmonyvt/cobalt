@@ -82,7 +82,7 @@ struct ChatRankedRow: View {
 
     var body: some View {
         let row = LibraryRow(item: model.mediaItem(for: post))
-        let shareURL = row.item.face.publicURL.map { model.capabilities.shareLink(for: $0) }
+        let shareURL = model.capabilities.liveLink(for: row.item.face)
         Button(action: open) {
             HStack(alignment: .center, spacing: 10) {
                 FacePicture(item: row.item, maxPixel: Int(Self.side * displayScale * 2), gradient: FrameGradient.variant(forIndex: index))

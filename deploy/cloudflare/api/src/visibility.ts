@@ -22,6 +22,7 @@ import { SERVICE_KEY_ID, mintItemId, pageLink } from "./library";
 import type { PublishBucket } from "./publish";
 import type { OriginalsBucket, StudioReply } from "./studio";
 import { MEDIA_NAME_LENGTH } from "./webp";
+import { liveLinksFor, privateUrl, revokeLinkQuietly } from "./private-links";
 
 // ---- deps ---------------------------------------------------------------------------------------
 
@@ -38,6 +39,8 @@ export type VisDeps = {
     now: () => number;
     randomBytes?: (n: number) => Uint8Array;
     purge?: PurgeFn;
+    // https://<share host>/ (section 22): answers carry the file's live private link (section 36) while it is set
+    shareBaseUrl?: string;
 };
 
 const withSlash = (u: string) => (u.endsWith("/") ? u : `${u}/`);
@@ -109,8 +112,8 @@ export const webpName = (r: Pick<MediaRow, "bucket" | "source" | "r2_key" | "pub
 };
 
 // One file as every client sees it (the web Worker's itemShape, plus section 16's keys).
-// `url` is the public URL while public, else null.
-export const itemShape = (r: MediaRow) => {
+// `url` is the public URL while public, else null. `private_url` is the file's live private link (section 36).
+export const itemShape = (r: MediaRow, privateLink: string | null = null) => {
     const wn = webpName(r);
     return {
         id: r.id,
@@ -132,8 +135,22 @@ export const itemShape = (r: MediaRow) => {
         visibility_toggle: toggleable(r),
         media_name: wn ?? (r.bucket === "media" ? r.r2_key : null),
         deletable: wn !== null,
+        private_url: privateLink,
     };
 };
+
+// The live private links (section 36) of these files, as URLs by file id; empty while the share host is off or
+// migration 0024 is not applied. Never throws: a list must not fail over its private links.
+export async function privateUrlsOf(d: { db: D1Database; shareBaseUrl?: string }, ids: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!d.shareBaseUrl || ids.length === 0) return out;
+    try {
+        for (const [id, r] of await liveLinksFor(d.db, "item", ids)) out.set(id, privateUrl(d.shareBaseUrl, r.key));
+    } catch (e) {
+        console.error("[private] link lookup failed", String(e));
+    }
+    return out;
+}
 
 export async function getRow(db: D1Database, id: string): Promise<MediaRow | null> {
     return (
@@ -381,6 +398,8 @@ export async function makePublic(d: VisDeps, row: MediaRow, keyId: string = SERV
         if (fresh) await d.media.delete(key).catch(() => {});
         return fail(503, "error.api.generic");
     }
+    // public again by any route: its private link (section 36) is revoked
+    await revokeLinkQuietly(d.db, "item", row.id, d.now());
     await syncSessions(d, row, url);
     await purgeUrls(d, [url]); // clears a cached 404 from an earlier OFF
     return {
@@ -485,7 +504,8 @@ export async function setVisibility(
         return err(503, "error.api.generic");
     }
     if (!fresh) return err(404, "error.library.not_found");
-    return { status: 200, body: { status: "success", item: itemShape(fresh), cache_cleared: cacheCleared } };
+    const priv = (await privateUrlsOf(d, [fresh.id])).get(fresh.id) ?? null;
+    return { status: 200, body: { status: "success", item: itemShape(fresh, priv), cache_cleared: cacheCleared } };
 }
 
 // The legacy "make public" answer (POST /library/items/<id>/publish, POST /studio/<sid>/publish, and

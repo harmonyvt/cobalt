@@ -25,6 +25,13 @@ public final class ShareSetStore {
     /// The collection groups ("sets"), most recently changed first; always empty while the server has no `share_groups`.
     public private(set) var groups: [CollectionGroup] = []
     public private(set) var state: State = .idle
+    /// Every live private link (APP-API-CONTRACT 36), files' and gallery links', newest first; always empty while the
+    /// server has no `private_links`.
+    public private(set) var privateLinks: [PrivateLink] = []
+    /// What a new gallery link starts as (`share_settings.new_links`); `.public` until the server says.
+    public private(set) var newLinks: NewLinks = .public
+    /// `GET /share/private` has answered since the last reset.
+    public private(set) var privateLoaded = false
 
     @ObservationIgnored private let ctx: PipelineContext
     /// Bumped by `reset()`: an answer from the old server arriving later is dropped.
@@ -44,15 +51,20 @@ public final class ShareSetStore {
         let client = ctx.client
         let withCollections = ctx.capabilities.shareCollections
         let withGroups = withCollections && ctx.capabilities.shareGroups
+        let withPrivate = ctx.capabilities.privateLinks
         do {
             async let listedSets = client.shareSets()
             async let listedCollections: [ShareCollection] = withCollections ? client.shareCollections() : []
             async let listedGroups: [CollectionGroup] = withGroups ? client.collectionGroups() : []
+            // the private links never fail the links tab: a server that cannot list them shows the links as they are
+            async let listedPrivate = Self.loadPrivate(client, withPrivate)
             let (newSets, newCollections, newGroups) = try await (listedSets, listedCollections, listedGroups)
+            let newPrivate = await listedPrivate
             guard started == generation else { return }
             sets = newSets.sorted { $0.createdAt > $1.createdAt }
             collections = withCollections ? newCollections.sorted { $0.updatedAt > $1.updatedAt } : []
             groups = withGroups ? newGroups.sorted { $0.updatedAt > $1.updatedAt } : []
+            if let newPrivate { takePrivate(newPrivate) } else if !withPrivate { forgetPrivate() }
             state = .loaded
         } catch {
             guard started == generation else { return }
@@ -61,14 +73,21 @@ public final class ShareSetStore {
     }
 
     /// Makes a link (`POST /share/sets`) and puts it first. Throws `ShareSetError` (`.notPublic(ids)` names the files
-    /// that are private now) or whatever the transport threw; nothing is inserted then.
+    /// that are private now) or whatever the transport threw; nothing is inserted then. `isPrivate` (APP-API-CONTRACT
+    /// 36.3): nil lets the server use `new_links`; true makes it private in the same call (any live files).
     @discardableResult
-    public func create(items: [String], title: String?) async throws -> ShareSet {
+    public func create(items: [String], title: String?, private isPrivate: Bool? = nil) async throws -> ShareSet {
         let started = generation
-        let made = try await ctx.client.createShareSet(items: items, title: title)
+        let made: ShareSet
+        if let isPrivate, ctx.capabilities.privateLinks {
+            made = try await ctx.client.createShareSet(items: items, title: title, private: isPrivate)
+        } else {
+            made = try await ctx.client.createShareSet(items: items, title: title)
+        }
         if started == generation {
             sets.removeAll { $0.id == made.id }
             sets.insert(made, at: 0)
+            if let link = made.link { notePrivate(link) }
         }
         return made
     }
@@ -82,7 +101,192 @@ public final class ShareSetStore {
         } catch ShareSetError.notFound {
             // already gone
         }
-        if started == generation { dropLocally(setIDs: [id]) }
+        if started == generation {
+            dropLocally(setIDs: [id])
+            privateLinks.removeAll { $0.id == PrivateLink.id(.set, id) }     // revoking a link revokes its key too
+        }
+    }
+
+    // MARK: private links (APP-API-CONTRACT 36)
+
+    /// Lists the private links and `new_links` again (`GET /share/private`) without touching the links. Throws what the
+    /// client threw; nothing changes then. Nothing is asked while the server has no `private_links`.
+    public func refreshPrivate() async throws {
+        guard ctx.capabilities.privateLinks else { forgetPrivate(); return }
+        let started = generation
+        let list = try await ctx.client.privateLinks()
+        if started == generation { takePrivate(list) }
+    }
+
+    /// The live private link of a gallery link, if any.
+    public func privateLink(forSet id: String) -> PrivateLink? {
+        privateLinks.first { $0.id == PrivateLink.id(.set, id) } ?? sets.first { $0.id == id }?.link
+    }
+
+    /// The live private link of a library file, if any.
+    public func privateLink(forItem id: String) -> PrivateLink? {
+        privateLinks.first { $0.id == PrivateLink.id(.item, id) }
+    }
+
+    /// How many live private links there are (files and gallery links).
+    public var privateLinkCount: Int { privateLinks.count }
+
+    /// The PUBLIC gallery links that hold this library file: the ones a file going private drops out of (36.2), which
+    /// the app offers to make private too.
+    public func publicSets(containing fileID: String) -> [ShareSet] {
+        sets.filter { !$0.isPrivate && $0.items.contains { $0.id == fileID } }
+    }
+
+    /// Turns a gallery link's private link on (`PUT /share/private/sets/<id>`): its row now carries the private URL.
+    /// `.notFound` means the link is gone, so its row goes; anything else leaves it and is thrown.
+    @discardableResult
+    public func makePrivate(_ setID: String) async throws -> PrivateLink {
+        let started = generation
+        do {
+            let link = try await ctx.client.enablePrivateLink(.set, id: setID)
+            if started == generation { notePrivate(link) }
+            return link
+        } catch PrivateLinkError.notFound {
+            if started == generation { dropLocally(setIDs: [setID]) }
+            throw PrivateLinkError.notFound
+        }
+    }
+
+    /// Revokes a gallery link's private link (`DELETE /share/private/sets/<id>`): it is public again at `share…/g/<id>`.
+    public func makePublic(_ setID: String) async throws {
+        let started = generation
+        try await ctx.client.revokePrivateLink(.set, id: setID)
+        guard started == generation else { return }
+        dropPrivate(.set, setID)
+        // a server that never said the public address: list again so the row shows the one that works
+        if sets.first(where: { $0.id == setID })?.publicURL == nil,
+           let listed = try? await ctx.client.shareSets(), started == generation {
+            sets = listed.sorted { $0.createdAt > $1.createdAt }
+        }
+    }
+
+    /// A new key for a gallery link (`POST /share/private/sets/<id>/rotate`); the old one is a 404 at once. `.notFound`
+    /// (none live) drops the key locally and rethrows.
+    @discardableResult
+    public func rotate(_ setID: String) async throws -> PrivateLink {
+        try await rotate(.set, setID)
+    }
+
+    /// A new key for a file (`POST /share/private/items/<id>/rotate`).
+    @discardableResult
+    public func rotateItem(_ fileID: String) async throws -> PrivateLink {
+        try await rotate(.item, fileID)
+    }
+
+    private func rotate(_ kind: PrivateLink.Kind, _ id: String) async throws -> PrivateLink {
+        let started = generation
+        do {
+            let link = try await ctx.client.rotatePrivateLink(kind, id: id)
+            if started == generation { notePrivate(link) }
+            return link
+        } catch PrivateLinkError.notFound {
+            if started == generation { dropPrivate(kind, id) }
+            throw PrivateLinkError.notFound
+        }
+    }
+
+    /// Every live key rotated in one batch (`POST /share/private/rotate-all`): the links and the gallery link rows carry
+    /// the new keys. Answers how many were rotated.
+    @discardableResult
+    public func rotateAll() async throws -> PrivateLinkRotation {
+        let started = generation
+        let answer = try await ctx.client.rotateAllPrivateLinks()
+        guard started == generation else { return answer }
+        privateLinks = []
+        for link in answer.links { notePrivate(link) }
+        privateLoaded = true
+        return answer
+    }
+
+    /// `PATCH /share/private/settings`: what a new gallery link starts as.
+    public func setNewLinks(_ value: NewLinks) async throws {
+        let started = generation
+        let stored = try await ctx.client.setNewLinks(value)
+        if started == generation { newLinks = stored }
+    }
+
+    /// Every live gallery link of a collection made private, made public or rotated (`POST .../privacy`). Answers the
+    /// private links after the change. `.notFound` drops the collection locally and rethrows.
+    @discardableResult
+    public func setPrivacy(of collectionID: String, _ change: CollectionPrivacy) async throws -> [PrivateLink] {
+        let started = generation
+        let links: [PrivateLink]
+        do {
+            links = try await ctx.client.setCollectionPrivacy(id: collectionID, change)
+        } catch ShareCollectionError.notFound {
+            if started == generation { dropLocally(collectionIDs: [collectionID]) }
+            throw ShareCollectionError.notFound
+        }
+        guard started == generation else { return links }
+        if change == .makePublic, let collection = collection(collectionID) {
+            for id in collection.setIDs { dropPrivate(.set, id) }
+            if sets.contains(where: { collection.setIDs.contains($0.id) && $0.publicURL == nil }),
+               let listed = try? await ctx.client.shareSets(), started == generation {
+                sets = listed.sorted { $0.createdAt > $1.createdAt }
+            }
+        }
+        for link in links { notePrivate(link) }
+        return links
+    }
+
+    /// The private links of a collection's loaded links: how many are private, of how many.
+    public func privateCount(in collection: ShareCollection) -> Int {
+        sets(in: collection).filter(\.isPrivate).count
+    }
+
+    /// A file's private link as the app just learned it (36.6, the detail): kept in the list.
+    func noteItemLink(_ link: PrivateLink) { notePrivate(link) }
+
+    /// A file's private link is gone (revoked, or the file is public again).
+    func dropItemLink(_ fileID: String) { dropPrivate(.item, fileID) }
+
+    nonisolated private static func loadPrivate(_ client: any CobaltClient, _ on: Bool) async -> PrivateLinkList? {
+        guard on else { return nil }
+        return try? await client.privateLinks()
+    }
+
+    private func takePrivate(_ list: PrivateLinkList) {
+        privateLinks = list.links.sorted { $0.createdAt > $1.createdAt }
+        newLinks = list.newLinks
+        privateLoaded = true
+        // a gallery link row follows its live key (the list of sets may be older than this answer)
+        for link in list.links where link.kind == .set {
+            if let i = sets.firstIndex(where: { $0.id == link.targetID }) { sets[i] = sets[i].makingPrivate(link) }
+        }
+    }
+
+    private func forgetPrivate() {
+        privateLinks = []
+        newLinks = .public
+        privateLoaded = false
+    }
+
+    /// A live private link: first in the list (in place of the old key of the same thing), and its gallery link row
+    /// carries it.
+    private func notePrivate(_ link: PrivateLink) {
+        privateLinks.removeAll { $0.id == link.id }
+        privateLinks.insert(link, at: 0)
+        if link.kind == .set, let i = sets.firstIndex(where: { $0.id == link.targetID }) {
+            sets[i] = sets[i].makingPrivate(link)
+        }
+    }
+
+    private func dropPrivate(_ kind: PrivateLink.Kind, _ id: String) {
+        privateLinks.removeAll { $0.id == PrivateLink.id(kind, id) }
+        if kind == .set, let i = sets.firstIndex(where: { $0.id == id }), sets[i].isPrivate {
+            sets[i] = sets[i].makingPublic(fallback: Self.publicAddress(of: id, ctx.capabilities.shareBaseURL))
+        }
+    }
+
+    /// `<share_base_url>g/<id>`, for a server that did not send `public_url`.
+    static func publicAddress(of setID: String, _ base: URL?) -> URL? {
+        guard let base else { return nil }
+        return base.appendingPathComponent("g").appendingPathComponent(setID)
     }
 
     // MARK: collections (APP-API-CONTRACT 26)
@@ -323,6 +527,7 @@ public final class ShareSetStore {
         sets = []
         collections = []
         groups = []
+        forgetPrivate()
         state = .idle
     }
 
@@ -333,6 +538,8 @@ public final class ShareSetStore {
         case ShareCollectionError.unavailable: return "The server can't load collections right now."
         case CollectionGroupError.unavailable: return "The server can't load sets right now."
         case ShareSetError.notFound, ShareSetError.badRequest, ShareSetError.notPublic: return "The server refused the request."
+        case PrivateLinkError.unavailable: return "The server can't make private links right now."
+        case PrivateLinkError.notFound, PrivateLinkError.notToggleable, PrivateLinkError.badRequest: return "The server refused the request."
         case CobaltError.network: return "Can't reach the server."
         case CobaltError.noAPIKey: return "No API key."
         case CobaltError.api(let code, _) where code.hasPrefix("error.api.auth.key."): return "The API key was refused."

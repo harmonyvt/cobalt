@@ -46,7 +46,14 @@ const PostFileSchema = z
     })
     .meta({ id: "PostFile" });
 
-const LinkSchema = z.object({ id: z.string(), url: z.string().nullable(), title: z.string().nullable(), created_at: z.string(), post_ids: z.array(z.string()) });
+const LinkSchema = z.object({
+    id: z.string(),
+    url: z.string().nullable().describe("the URL that works now: share.../p/<key> while private, else share.../g/<id>"),
+    private: z.boolean(),
+    title: z.string().nullable(),
+    created_at: z.string(),
+    post_ids: z.array(z.string()),
+});
 const CollectionSchema = z.object({
     id: z.string(),
     name: z.string(),
@@ -223,7 +230,7 @@ export const linksListOp = defineOp({
     cors: false,
     input: z.object({}),
     output: z.array(LinkSchema),
-    ai: { tier: "free", only: true, summary: "Gallery share links, newest first.", aliases: ["links"] },
+    ai: { tier: "free", only: true, summary: "Gallery share links, newest first, each with the URL that works now (private ones: share.../p/<key>).", aliases: ["links"] },
     handler: async (ctx) => ok(await tools(ctx).links!()),
 });
 

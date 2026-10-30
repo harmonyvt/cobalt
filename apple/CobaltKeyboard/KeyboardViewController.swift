@@ -394,6 +394,12 @@ final class KeyboardViewController: UIInputViewController {
     private func insertLink(_ post: LibraryPost, _ choice: KeyboardChoice?) {
         guard model.busyID == nil else { return }
         let rendition = choice?.rendition ?? KeyboardFace.of(post)
+        // a file with a private link hands out that one (APP-API-CONTRACT 36.6): its public address is a 404
+        if let key = rendition?.privateURL {
+            textDocumentProxy.insertText(key.absoluteString)
+            model.notice = nil
+            return
+        }
         guard let rendition, let url = KeyboardFace.publicLink(of: rendition) else {
             model.notice = .failed(KeyboardWords.noPublicLinks)
             return

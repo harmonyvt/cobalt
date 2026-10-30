@@ -21,6 +21,13 @@ enum CollectionSheetRequest: Identifiable, Equatable {
     }
 }
 
+/// A collection's `privacy…` choice waiting on its confirm.
+struct CollectionPrivacyRequest: Identifiable, Equatable {
+    let collection: ShareCollection
+    let change: CollectionPrivacy
+    var id: String { collection.id }
+}
+
 @MainActor @Observable
 final class LinksController {
     let model: AppModel
@@ -43,6 +50,18 @@ final class LinksController {
     var rerollingIDs: Set<String> = []
     /// The new / rename sheet.
     var sheet: CollectionSheetRequest?
+
+    // private links (APP-API-CONTRACT 36)
+    /// The link the owner chose `make public…` for: the confirm is open on it.
+    var makingPublic: ShareSet?
+    /// The link the owner chose `rotate key…` for: the confirm is open on it.
+    var rotatingKey: ShareSet?
+    /// A collection's `privacy…` choice that asks first (rotate every key, make every link public).
+    var privacyRequest: CollectionPrivacyRequest?
+    /// Links whose private link is changing (dimmed; a second tap does nothing).
+    var privacyIDs: Set<String> = []
+    /// Collections whose `privacy…` change is in flight.
+    var collectionPrivacyIDs: Set<String> = []
 
     init(model: AppModel) {
         self.model = model
@@ -185,6 +204,114 @@ final class LinksController {
         }
     }
 
+    // MARK: private links (APP-API-CONTRACT 36)
+
+    /// Badges and the privacy actions are offered only while the server has private links.
+    var privateLinksEnabled: Bool { model.capabilities.privateLinks }
+
+    /// `make private`: the link's private link goes on and is copied.
+    func makePrivate(_ link: ShareSet, shell: ShellActions) {
+        guard !privacyIDs.contains(link.id) else { return }
+        privacyIDs.insert(link.id)
+        Task {
+            defer { privacyIDs.remove(link.id) }
+            do {
+                let key = try await store.makePrivate(link.id)
+                copied(key.url, id: link.id, status: Copy.PrivateLinks.copiedPrivate, shell: shell)
+            } catch {
+                shell.showStatus(Copy.PrivateLinks.message(for: error))
+                failedToken += 1
+            }
+        }
+    }
+
+    /// `make public…` (after the confirm): the private link stops and the public address opens again.
+    func makePublic(_ link: ShareSet, shell: ShellActions) {
+        guard !privacyIDs.contains(link.id) else { return }
+        privacyIDs.insert(link.id)
+        Task {
+            defer { privacyIDs.remove(link.id) }
+            do {
+                try await store.makePublic(link.id)
+                shell.showStatus(Copy.PrivateLinks.madePublic)
+                doneToken += 1
+            } catch {
+                shell.showStatus(Copy.PrivateLinks.message(for: error))
+                failedToken += 1
+            }
+        }
+    }
+
+    /// `rotate key…` (after the confirm): a new key, copied; the old one stops at once.
+    func rotateKey(_ link: ShareSet, shell: ShellActions) {
+        guard !privacyIDs.contains(link.id) else { return }
+        privacyIDs.insert(link.id)
+        Task {
+            defer { privacyIDs.remove(link.id) }
+            do {
+                let key = try await store.rotate(link.id)
+                copied(key.url, id: link.id, status: Copy.PrivateLinks.copiedNewKey, shell: shell)
+            } catch {
+                shell.showStatus(Copy.PrivateLinks.message(for: error))
+                failedToken += 1
+            }
+        }
+    }
+
+    /// A collection's `privacy…`: every live link made private (no confirm: it can be undone and nothing breaks for
+    /// anyone holding a private link), or, after the confirm, every key rotated or every link made public.
+    func choosePrivacy(_ change: CollectionPrivacy, for collection: ShareCollection, shell: ShellActions) {
+        if change == .makePrivate {
+            setPrivacy(change, of: collection, shell: shell)
+        } else {
+            privacyRequest = CollectionPrivacyRequest(collection: collection, change: change)
+        }
+    }
+
+    func setPrivacy(_ change: CollectionPrivacy, of collection: ShareCollection, shell: ShellActions) {
+        guard !collectionPrivacyIDs.contains(collection.id) else { return }
+        collectionPrivacyIDs.insert(collection.id)
+        let ids = Set(collection.setIDs)
+        privacyIDs.formUnion(ids)
+        Task {
+            defer {
+                collectionPrivacyIDs.remove(collection.id)
+                privacyIDs.subtract(ids)
+            }
+            do {
+                let links = try await store.setPrivacy(of: collection.id, change)
+                switch change {
+                case .makePrivate: shell.showStatus(Copy.PrivateLinks.madeEveryPrivate(links.count))
+                case .rotate: shell.showStatus(Copy.PrivateLinks.rotatedEvery(links.count))
+                case .makePublic: shell.showStatus(Copy.PrivateLinks.madeEveryPublic)
+                }
+                doneToken += 1
+            } catch {
+                shell.showStatus(Copy.Collections.message(for: error))
+                failedToken += 1
+            }
+        }
+    }
+
+    /// Whether the collection's `privacy…` choices are offered: it has loaded links and no change is running on it.
+    func canChangePrivacy(_ collection: ShareCollection) -> Bool {
+        store.linksText(in: collection) != nil && !collectionPrivacyIDs.contains(collection.id)
+    }
+
+    /// A private link that was just made or rotated: on the pasteboard, its row says "copied", the status and the
+    /// success haptic.
+    private func copied(_ url: URL, id: String, status: String, shell: ShellActions) {
+        Pasteboard.copy(url.absoluteString)
+        shell.showStatus(status)
+        copiedToken += 1
+        copiedID = id
+        let token = copiedToken
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if copiedToken == token { copiedID = nil }
+        }
+    }
+
     // MARK: collections
 
     /// Opens the new-collection sheet, with this link ticked when it was opened from a row.
@@ -322,6 +449,36 @@ private struct LinkPresentations: ViewModifier {
             } message: { _ in
                 Text(Copy.Collections.rerollMessage)
             }
+            .confirmationDialog(
+                Copy.PrivateLinks.makePublicTitle, isPresented: makingPublicPresented, titleVisibility: .visible,
+                presenting: controller.makingPublic
+            ) { link in
+                Button(Copy.PrivateLinks.makePublicConfirm, role: .destructive) { controller.makePublic(link, shell: shell) }
+                Button(Copy.Links.keep, role: .cancel) {}
+            } message: { _ in
+                Text(Copy.PrivateLinks.makePublicMessage)
+            }
+            .confirmationDialog(
+                Copy.PrivateLinks.rotateTitle, isPresented: rotatingKeyPresented, titleVisibility: .visible,
+                presenting: controller.rotatingKey
+            ) { link in
+                Button(Copy.PrivateLinks.rotateConfirm, role: .destructive) { controller.rotateKey(link, shell: shell) }
+                Button(Copy.Links.keep, role: .cancel) {}
+            } message: { _ in
+                Text(Copy.PrivateLinks.rotateMessage)
+            }
+            .confirmationDialog(
+                privacyTitle, isPresented: privacyPresented, titleVisibility: .visible,
+                presenting: controller.privacyRequest
+            ) { request in
+                Button(request.change == .rotate ? Copy.PrivateLinks.everyRotateConfirm : Copy.PrivateLinks.everyPublicConfirm,
+                       role: .destructive) {
+                    controller.setPrivacy(request.change, of: request.collection, shell: shell)
+                }
+                Button(Copy.Collections.keep, role: .cancel) {}
+            } message: { request in
+                Text(request.change == .rotate ? Copy.PrivateLinks.everyRotateMessage : Copy.PrivateLinks.everyPublicMessage)
+            }
             .sheet(item: $controller.sheet) { request in
                 CollectionSheet(model: controller.model, request: request)
             }
@@ -332,6 +489,22 @@ private struct LinkPresentations: ViewModifier {
 
     private var revokingPresented: Binding<Bool> {
         Binding(get: { controller.revoking != nil }, set: { if !$0 { controller.revoking = nil } })
+    }
+
+    private var makingPublicPresented: Binding<Bool> {
+        Binding(get: { controller.makingPublic != nil }, set: { if !$0 { controller.makingPublic = nil } })
+    }
+
+    private var rotatingKeyPresented: Binding<Bool> {
+        Binding(get: { controller.rotatingKey != nil }, set: { if !$0 { controller.rotatingKey = nil } })
+    }
+
+    private var privacyPresented: Binding<Bool> {
+        Binding(get: { controller.privacyRequest != nil }, set: { if !$0 { controller.privacyRequest = nil } })
+    }
+
+    private var privacyTitle: String {
+        controller.privacyRequest?.change == .rotate ? Copy.PrivateLinks.everyRotateTitle : Copy.PrivateLinks.everyPublicTitle
     }
 
     private var rerollingPresented: Binding<Bool> {

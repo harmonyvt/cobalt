@@ -56,6 +56,9 @@ public struct LibraryFile: Sendable, Codable, Equatable, Identifiable {
     public var madeFrom: [String] = []
     /// `made_spec`: the spec a made file was made with.
     public var madeSpec: MadeSpec?
+    /// `private_url` (APP-API-CONTRACT 36.3): the file's live private link, `<share_base_url>p/<key>`; nil when it has
+    /// none (and from a server without private links). While set the file is not public.
+    public var privateURL: URL? = nil
 
     /// What a made file is (the key a remake replaces); nil for anything else.
     public var madeKind: MadeKind? { MadeKind(role: galleryRole, spec: madeSpec) }
@@ -84,6 +87,7 @@ extension LibraryFile {
         case canToggleVisibility = "visibilityToggle"   // `visibility_toggle`
         case galleryRole = "role"
         case itemIndex, madeFrom, madeSpec               // `item_index`, `made_from`, `made_spec`
+        case privateURL = "privateUrl"                   // `private_url`
     }
 
     public init(from decoder: Decoder) throws {
@@ -110,6 +114,7 @@ extension LibraryFile {
         itemIndex = (try? c.decodeIfPresent(Int.self, forKey: .itemIndex)) ?? nil
         madeFrom = ((try? c.decodeIfPresent([String].self, forKey: .madeFrom)) ?? nil) ?? []
         madeSpec = ((try? c.decodeIfPresent(JSONValue.self, forKey: .madeSpec)) ?? nil)?.object.flatMap(MadeSpec.init(object:))
+        privateURL = (try? c.decodeIfPresent(URL.self, forKey: .privateURL)) ?? nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -136,6 +141,7 @@ extension LibraryFile {
         if let data = madeSpec?.data, let value = try? JSONDecoder().decode(JSONValue.self, from: data) {
             try c.encode(value, forKey: .madeSpec)
         }
+        try c.encodeIfPresent(privateURL, forKey: .privateURL)
     }
 }
 

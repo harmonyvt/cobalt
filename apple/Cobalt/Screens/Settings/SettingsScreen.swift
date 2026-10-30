@@ -34,6 +34,8 @@ struct SettingsScreen: View {
             McpSettingsSection(model: model).id(settings.hasAPIKey)
             makingSection
             SharingSettingsSection(model: model)
+            // private links (APP-API-CONTRACT 36.6): what new gallery links start as, and rotating every key
+            PrivateLinksSettingsSection(model: model).id(settings.hasAPIKey)
             shareSheetSection
             StorageSettingsSection(model: model)
             PhotosSettingsSection(model: model)

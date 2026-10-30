@@ -17,8 +17,14 @@ struct GalleryVisibilitySection: View {
     private var links: Int { controller.publicLinks(of: item) }
     private var many: Bool { item.detailShape == .gallery || item.made.count > 0 }
 
+    /// One photo with nothing made from it: the post's switch is this file's, so it gets the three-way link
+    /// (APP-API-CONTRACT 36.6) while the server has private links.
+    private var choosesPrivateLink: Bool { !many && controller.model.canChoosePrivateLink(rendition) }
+
     var body: some View {
-        if controller.canSwitchPost(item) {
+        if choosesPrivateLink {
+            FileLinkSection(controller: controller, rendition: rendition)
+        } else if controller.canSwitchPost(item) {
             Section {
                 Toggle(isOn: Binding(get: { isOn }, set: { choose($0) })) {
                     Label(title, systemImage: isOn ? Symbol.Media.isPublic : Symbol.Media.isPrivate)
@@ -42,6 +48,8 @@ struct GalleryVisibilitySection: View {
             }
             .motion(Motion.rows, value: footnote.text)
             .haptic(.error, trigger: controller.visibilityFailed[DetailController.postKey], enabled: haptics) { $0 != nil }
+        } else if controller.model.canChoosePrivateLink(rendition) {
+            FileLinkSection(controller: controller, rendition: rendition)
         } else if controller.canSwitchVisibility(rendition) {
             VisibilitySection(controller: controller, rendition: rendition)
         }

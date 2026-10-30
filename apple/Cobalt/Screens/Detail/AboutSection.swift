@@ -439,7 +439,7 @@ struct AboutNeighbourTile: View {
 
     var body: some View {
         let row = LibraryRow(item: model.mediaItem(for: post))
-        let shareURL = row.item.face.publicURL.map { model.capabilities.shareLink(for: $0) }
+        let shareURL = model.capabilities.liveLink(for: row.item.face)
         Button { open(post) } label: {
             Color.clear
                 .aspectRatio(1, contentMode: .fit)

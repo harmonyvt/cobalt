@@ -25,6 +25,7 @@ const SERVICE_KEY = "7a1d1b0e-3f0c-4a53-8f55-2f1b8a9d0c11";
 const SID = "q3Zk9vT1mW8aLm2xPq8Rt4";
 const SID2 = "Zz9kRt1mW8aLm2xPq8Rt4A";
 const JOB = "Ab12Cd34Ef56Gh78Ij90";
+const SET = "1234567890123456789";
 const MEDIA = "https://media.capybaraharmony.com/";
 
 // The exact header set pinned in LIBRARY-CONTRACT.md (studio CSP plus 'self' API calls and media).
@@ -248,6 +249,13 @@ const ROUTES: [string, string][] = [
     ["POST", "/api/library/items/aaaaaaaaaaaaaaaa/studio"],
     ["DELETE", "/api/library/items/aaaaaaaaaaaaaaaa"],
     ["DELETE", `/api/library/studios/${SID}`],
+    ["GET", "/api/library/links"],
+    ["PUT", "/api/library/private/items/aaaaaaaaaaaaaaaa"],
+    ["DELETE", "/api/library/private/items/aaaaaaaaaaaaaaaa"],
+    ["POST", "/api/library/private/items/aaaaaaaaaaaaaaaa/rotate"],
+    ["PUT", `/api/library/private/sets/${SET}`],
+    ["DELETE", `/api/library/private/sets/${SET}`],
+    ["POST", `/api/library/private/sets/${SET}/rotate`],
 ];
 
 // ---------- routing config ----------
@@ -450,11 +458,11 @@ describe("GET /api/library", () => {
             {
                 id: pub.id, kind: "public", source: "webp", name: "a.webp", url: pub.url, content_type: "image/webp",
                 bytes: 600, width: 480, height: 270, duration: 3.5, link: "https://x.com/a", session_id: SID, created_at: pub.created_at,
-                poster_url: null, custom_title: null, visibility: "public", visibility_toggle: false, post_key: SID,
+                poster_url: null, custom_title: null, visibility: "public", visibility_toggle: false, private_url: null, private_link: null, post_key: SID,
             },
         ]);
         expect(Object.keys(b.items[0]).sort()).toEqual(
-            ["id", "kind", "source", "name", "url", "content_type", "bytes", "width", "height", "duration", "link", "session_id", "created_at", "poster_url", "custom_title", "visibility", "visibility_toggle", "post_key"].sort(),
+            ["id", "kind", "source", "name", "url", "content_type", "bytes", "width", "height", "duration", "link", "session_id", "created_at", "poster_url", "custom_title", "visibility", "visibility_toggle", "private_url", "private_link", "post_key"].sort(),
         );
         expect(b.studios).toEqual([
             {
@@ -1858,12 +1866,12 @@ describe("server-made posters", () => {
         });
 
         // ----- one tile per original: the public / private switch -----
-        it("a tile has a public switch (a checkbox labelled public) where the host button was; the old host-as-is tile action and its copy code are gone", () => {
-            expect(LIBRARY_HTML).toContain('role: "switch"');
-            expect(LIBRARY_HTML).toContain('"data-ga": "vis"');
-            expect(LIBRARY_HTML).toContain('h("span", { text: "public" })');
+        it("a tile has a three-way link control (off, public link, private link) where the public switch was; the old host-as-is tile action is gone", () => {
+            expect(LIBRARY_HTML).toContain('"data-ga": "link-" + c[0]');
+            expect(LIBRARY_HTML).toContain('["private", "private link"]');
             expect(LIBRARY_HTML).toContain('"/api/library/items/" + it.id + (makePublic ? "/publish" : "/private")');
             expect(LIBRARY_HTML).toContain("e.it.visibility_toggle");
+            expect(LIBRARY_HTML).not.toContain("visSwitch");
             expect(LIBRARY_HTML).not.toContain("privateToPublic");
             expect(LIBRARY_HTML).not.toContain('"data-ga": "host"');
         });
@@ -1881,27 +1889,36 @@ describe("server-made posters", () => {
             expect(LIBRARY_HTML).toContain('data-f="private"');
         });
 
-        const sw = html.slice(html.indexOf("function visSwitch(it, busy) {"), html.indexOf("function privateToStudio(it) {"));
+        const sw = html.slice(html.indexOf("// A file's link (APP-API-CONTRACT.md section 36.2)"), html.indexOf("function privateToStudio(it) {"));
         const isPubSrc = html.slice(html.indexOf("function isPub(it) {"), html.indexOf("function tileFor(e) {"));
+        class Fail { code: string; constructor(code: string) { this.code = code; } }
         const makeSwitch = (reply: { status: number; body: any } = { status: 200, body: { status: "success", item: {} } }) => {
-            const log = { posts: [] as string[], renders: 0, usage: 0, toasts: [] as unknown[][] };
+            const log = { posts: [] as string[], calls: [] as string[], renders: 0, usage: 0, toasts: [] as unknown[][], copied: [] as string[] };
             const G: any = { filter: "all", items: [] as any[], confirm: null, confirmAct: "delete", busy: {} };
             const api = new Function(
-                "h", "G", "S", "renderGrid", "reloadUsage", "libPost", "ok", "describe", "toast", "shareUrl",
-                `${isPubSrc}\n${sw}\nreturn { visSwitch, setVisibility, isPub };`,
+                "h", "G", "S", "renderGrid", "reloadUsage", "libPost", "lib", "ok", "describe", "toast", "shareUrl", "ago", "copyText", "Fail",
+                `${isPubSrc}\n${sw}\nreturn { linkControl, chooseLink, privateBox, setVisibility, putPrivate, dropPrivate, rotateItem, linkState, isPub };`,
             )(
                 el, G, { items: [] }, () => { log.renders++; }, () => { log.usage++; },
                 async (path: string) => { log.posts.push(path); return reply; },
+                async (path: string, init: { method: string }) => { log.calls.push(`${init.method} ${path}`); return reply; },
                 (r: any) => { if (r.status >= 200 && r.status < 300 && r.body.status !== "error") return r.body; throw { code: r.body?.error?.code }; },
                 (e: any) => ({ text: e.code, code: e.code }),
                 (...a: unknown[]) => { log.toasts.push(a); },
                 pageShareUrl,
-            ) as { visSwitch(it: any, busy: boolean): El; setVisibility(it: any, on: boolean): Promise<void>; isPub(it: any): boolean };
+                () => "3 d ago",
+                (t: string) => { log.copied.push(t); },
+                Fail,
+            ) as any;
             return { api, G, log };
         };
         const orig = (visibility: string, over: Record<string, unknown> = {}) => ({
-            id: "Orig000000000001", kind: "private", visibility, visibility_toggle: true, name: "clip.mp4", url: visibility === "public" ? `${MEDIA}Mirror0001.mp4` : null, ...over,
+            id: "Orig000000000001", kind: "private", visibility, visibility_toggle: true, name: "clip.mp4", url: visibility === "public" ? `${MEDIA}Mirror0001.mp4` : null, private_url: null, ...over,
         });
+        const PRIV = "https://share.capybaraharmony.com/p/AbCdEfGhIjKlMnOpQrStUv";
+        const privLink = (over: Record<string, unknown> = {}) => ({ kind: "item", target_id: "Orig000000000001", url: PRIV, created_at: NOW - 3 * 86400_000, opened: 4, last_opened_at: null, ...over });
+        const radios = (g: El) => g.kids.map((l) => l.kids[0]!);
+        const tick = () => new Promise((r) => setTimeout(r, 0));
 
         it("isPub reads visibility, and falls back to kind for an answer that has none", () => {
             const { api } = makeSwitch();
@@ -1910,44 +1927,120 @@ describe("server-made posters", () => {
             expect(api.isPub({ kind: "public" })).toBe(true);
             expect(api.isPub({ kind: "private" })).toBe(false);
         });
-        it("the switch is a labelled checkbox reflecting visibility, disabled while busy", () => {
+        it("linkState: a private url wins, else public, else off", () => {
             const { api } = makeSwitch();
-            const on = api.visSwitch(orig("public"), false);
-            expect(on.tag).toBe("label");
-            const [box, label] = on.kids;
-            expect(box!.tag).toBe("input");
-            expect(box!.attrs).toMatchObject({ type: "checkbox", role: "switch", "data-ga": "vis", "aria-label": "public", checked: true, disabled: false });
-            expect(label!.attrs.text).toBe("public");
-            expect(api.visSwitch(orig("private"), false).kids[0]!.attrs.checked).toBe(false);
-            expect(api.visSwitch(orig("private"), true).kids[0]!.attrs.disabled).toBe(true);
+            expect(api.linkState(orig("private", { private_url: PRIV }))).toBe("private");
+            expect(api.linkState(orig("public"))).toBe("public");
+            expect(api.linkState(orig("private"))).toBe("off");
         });
-        it("turning it on posts /publish at once and swaps the returned file into the grid (custom title kept)", async () => {
+        it("the link control is a labelled radio group of off, public link and private link, reflecting the state, disabled while busy", () => {
+            const { api } = makeSwitch();
+            const g = api.linkControl(orig("public"), false) as El;
+            expect(g.tag).toBe("fieldset");
+            expect(g.attrs["aria-label"]).toBe("link for clip.mp4");
+            expect(g.kids.map((l) => l.tag)).toEqual(["label", "label", "label"]);
+            expect(g.kids.map((l) => l.kids[1]!.attrs.text)).toEqual(["off", "public link", "private link"]);
+            expect(radios(g).map((r) => r.attrs.type)).toEqual(["radio", "radio", "radio"]);
+            expect(radios(g).map((r) => r.attrs.checked)).toEqual([false, true, false]);
+            expect(radios(api.linkControl(orig("private"), false)).map((r) => r.attrs.checked)).toEqual([true, false, false]);
+            expect(radios(api.linkControl(orig("private", { private_url: PRIV }), false)).map((r) => r.attrs.checked)).toEqual([false, false, true]);
+            expect(radios(api.linkControl(orig("private"), true)).every((r) => r.attrs.disabled === true)).toBe(true);
+        });
+        it("public link posts /publish at once and swaps the returned file into the grid (custom title kept)", async () => {
             const item = { id: "Orig000000000001", visibility: "public", url: `${MEDIA}Mirror0001.mp4` };
             const { api, G, log } = makeSwitch({ status: 200, body: { status: "success", item, cache_cleared: null } });
             G.items = [{ ...orig("private"), custom_title: "Kyoto" }];
-            api.visSwitch(G.items[0], false).kids[0]!.handlers.change!();
-            await new Promise((r) => setTimeout(r, 0));
+            radios(api.linkControl(G.items[0], false))[1]!.handlers.change!();
+            await tick();
             expect(log.posts).toEqual(["/api/library/items/Orig000000000001/publish"]);
-            expect(G.items[0]).toMatchObject({ visibility: "public", url: item.url, custom_title: "Kyoto" });
+            expect(G.items[0]).toMatchObject({ visibility: "public", url: item.url, custom_title: "Kyoto", private_url: null });
             expect(G.busy).toEqual({});
             expect(log.usage).toBe(1);
             expect(log.toasts[0]).toEqual(["public: link ready", { href: pageShareUrl(item.url), label: "open" }]);
         });
-        it("turning it off asks first (nothing is posted); 'make private' posts /private", async () => {
+        it("public link from a private link drops the private url (the server revoked it)", async () => {
+            const item = { id: "Orig000000000001", visibility: "public", url: `${MEDIA}Mirror0001.mp4`, private_url: null };
+            const { api, G } = makeSwitch({ status: 200, body: { status: "success", item } });
+            G.items = [orig("private", { private_url: PRIV, private_link: privLink() })];
+            radios(api.linkControl(G.items[0], false))[1]!.handlers.change!();
+            await tick();
+            expect(G.items[0]).toMatchObject({ visibility: "public", private_url: null, private_link: null });
+        });
+        it("off from a public link asks first (nothing is posted); 'turn off' posts /private", async () => {
             const item = { id: "Orig000000000001", visibility: "private", url: null };
             const { api, G, log } = makeSwitch({ status: 200, body: { status: "success", item, cache_cleared: true } });
             G.items = [orig("public")];
-            api.visSwitch(G.items[0], false).kids[0]!.handlers.change!();
+            radios(api.linkControl(G.items[0], false))[0]!.handlers.change!();
             expect(log.posts).toEqual([]);
             expect(G.confirm).toBe("Orig000000000001");
             expect(G.confirmAct).toBe("private");
             const text = new Function("isPub", `${isPubSrc.slice(isPubSrc.indexOf("function confirmText"))}\nreturn confirmText;`)(api.isPub) as (e: any, a?: string) => string;
-            expect(text(G.items[0], "private")).toBe("make private? the public link stops working.");
+            expect(text(G.items[0], "private")).toBe("turn the link off? the public link stops working.");
+            expect(text(G.items[0], "rotate")).toBe("rotate the key? the old link stops working right away.");
             expect(text(G.items[0], "delete")).toBe("delete for everyone? the link stops working in discord.");
             expect(text(orig("private"), "delete")).toBe("delete this private copy?");
             await api.setVisibility(G.items[0], false);
             expect(log.posts).toEqual(["/api/library/items/Orig000000000001/private"]);
             expect(G.items[0]).toMatchObject({ visibility: "private", url: null });
+        });
+        it("private link from off or public: PUT /api/library/private/items/<id>, and the file shows the live link", async () => {
+            for (const from of ["private", "public"]) {
+                const { api, G, log } = makeSwitch({ status: 200, body: { status: "success", link: privLink() } });
+                G.items = [orig(from)];
+                radios(api.linkControl(G.items[0], false))[2]!.handlers.change!();
+                await tick();
+                expect(log.calls).toEqual(["PUT /api/library/private/items/Orig000000000001"]);
+                expect(G.items[0]).toMatchObject({ visibility: "private", private_url: PRIV, private_link: { opened: 4 } });
+                expect(G.busy).toEqual({});
+                expect(log.toasts[0]).toEqual(["private link ready", { href: PRIV, label: "open" }]);
+            }
+        });
+        it("off from a private link: DELETE, no confirm, the url is gone and the file stays not public", async () => {
+            const { api, G, log } = makeSwitch({ status: 200, body: { status: "success" } });
+            G.items = [orig("private", { private_url: PRIV, private_link: privLink() })];
+            radios(api.linkControl(G.items[0], false))[0]!.handlers.change!();
+            await tick();
+            expect(G.confirm).toBeNull();
+            expect(log.calls).toEqual(["DELETE /api/library/private/items/Orig000000000001"]);
+            expect(G.items[0]).toMatchObject({ visibility: "private", private_url: null, private_link: null });
+        });
+        it("choosing the state it is already in does nothing", () => {
+            const { api, G, log } = makeSwitch();
+            G.items = [orig("public")];
+            api.chooseLink(G.items[0], "public");
+            expect(log.posts).toEqual([]);
+            expect(log.calls).toEqual([]);
+            expect(G.confirm).toBeNull();
+        });
+        it("the private box shows the url, copy, opened count and key age; rotate key… opens the confirm; rotate posts /rotate and swaps the key in", async () => {
+            const { api, G, log } = makeSwitch({ status: 200, body: { status: "success", link: privLink({ url: PRIV.slice(0, -1) + "Z", opened: 0, created_at: NOW }) } });
+            G.items = [orig("private", { private_url: PRIV, private_link: privLink() })];
+            const box = api.privateBox(G.items[0], false) as El;
+            const flat = (e: El): El[] => [e, ...e.kids.flatMap(flat)];
+            const byGa = (ga: string) => flat(box).find((x) => x.attrs["data-ga"] === ga)!;
+            expect(byGa("private-url").attrs.text).toBe(PRIV);
+            expect(byGa("private-facts").attrs.text).toBe("opened 4 times · key made 3 d ago");
+            (byGa("copy-private-url").attrs.onclick as () => void)();
+            expect(log.copied).toEqual([PRIV]);
+            expect(byGa("rotate").attrs.text).toBe("rotate key…");
+            (byGa("rotate").attrs.onclick as () => void)();
+            expect(G.confirm).toBe("Orig000000000001");
+            expect(G.confirmAct).toBe("rotate");
+            expect(log.posts).toEqual([]);
+            await api.rotateItem(G.items[0]);
+            expect(log.posts).toEqual(["/api/library/private/items/Orig000000000001/rotate"]);
+            expect(G.items[0].private_url).toBe(PRIV.slice(0, -1) + "Z");
+            expect(log.toasts[0]).toEqual(["new key. the old link stopped working"]);
+        });
+        it("a failed private call changes nothing and says why", async () => {
+            for (const code of ["error.private.not_toggleable", "error.private.not_found"]) {
+                const { api, G, log } = makeSwitch({ status: 409, body: { status: "error", error: { code } } });
+                G.items = [orig("private")];
+                await api.putPrivate(G.items[0]);
+                expect(G.items[0]).toMatchObject({ private_url: null });
+                expect(G.busy).toEqual({});
+                expect(log.toasts[0]).toEqual([code]);
+            }
         });
         it("a file that just switched leaves the public/private chip it no longer belongs to", async () => {
             const { api, G } = makeSwitch({ status: 200, body: { status: "success", item: { id: "Orig000000000001", visibility: "private", url: null } } });
@@ -1966,12 +2059,12 @@ describe("server-made posters", () => {
                 expect(log.toasts[0]).toEqual([code]);
             }
         });
-        it("a webp tile gets the same switch; a private (switched) webp has no url, so a placeholder instead of the animation", () => {
+        it("a webp tile gets the same control; a private (switched) webp has no url, so a placeholder instead of the animation", () => {
             const { api } = makeSwitch();
             const pubWebp = { id: "Webp000000000001", kind: "public", source: "webp", visibility: "public", visibility_toggle: true, content_type: "image/webp", name: "a.webp", url: `${MEDIA}AbCdEf1234.webp` };
-            expect(api.visSwitch(pubWebp, false).kids[0]!.attrs.checked).toBe(true);
+            expect(radios(api.linkControl(pubWebp, false)).map((r) => r.attrs.checked)).toEqual([false, true, false]);
             const privWebp = { ...pubWebp, visibility: "private", url: null };
-            expect(api.visSwitch(privWebp, false).kids[0]!.attrs.checked).toBe(false);
+            expect(radios(api.linkControl(privWebp, false)).map((r) => r.attrs.checked)).toEqual([true, false, false]);
             const { itemThumb } = make();
             expect(kidsOf(itemThumb(privWebp))).toEqual(["ph:lock"]); // not an <img src=null>
             expect(kidsOf(itemThumb(pubWebp))).toEqual([`img:${pubWebp.url}`]);
@@ -1980,5 +2073,155 @@ describe("server-made posters", () => {
             expect(LIBRARY_HTML).toContain('"error.library.not_toggleable"');
             expect(LIBRARY_HTML).toContain('"error.api.generic"');
         });
+    });
+});
+
+// ---------- private share links (APP-API-CONTRACT.md section 36) ----------
+
+describe("private share link routes", () => {
+    const ITEM = "aaaaaaaaaaaaaaaa";
+    const KEY = "AbCdEfGhIjKlMnOpQrStUv";
+    const link = (over: Record<string, unknown> = {}) => ({ kind: "item", target_id: ITEM, url: `https://share.capybaraharmony.com/p/${KEY}`, created_at: NOW, opened: 0, last_opened_at: null, ...over });
+
+    it("matchRoute: the link list, and the pinned id shapes for on/off and rotate", () => {
+        expect(matchRoute("/api/library/links")).toEqual({ name: "links" });
+        expect(matchRoute(`/api/library/private/items/${ITEM}`)).toEqual({ name: "private", kind: "items", id: ITEM });
+        expect(matchRoute(`/api/library/private/sets/${SET}`)).toEqual({ name: "private", kind: "sets", id: SET });
+        expect(matchRoute(`/api/library/private/items/${ITEM}/rotate`)).toEqual({ name: "privateRotate", kind: "items", id: ITEM });
+        expect(matchRoute(`/api/library/private/sets/${SET}/rotate`)).toEqual({ name: "privateRotate", kind: "sets", id: SET });
+        for (const bad of ["/api/library/private", "/api/library/private/items/short", `/api/library/private/items/${ITEM}x`, "/api/library/private/sets/abc", "/api/library/private/sets/12345", "/api/library/private/other/" + ITEM, `/api/library/private/items/${ITEM}/other`, `/api/library/links/x`]) {
+            expect(matchRoute(bad)).toBeNull();
+        }
+    });
+    it("wrong methods are 405 with allow", async () => {
+        for (const [method, path, allow] of [
+            ["POST", "/api/library/links", "GET"],
+            ["POST", `/api/library/private/items/${ITEM}`, "PUT, DELETE"],
+            ["GET", `/api/library/private/sets/${SET}`, "PUT, DELETE"],
+            ["PUT", `/api/library/private/items/${ITEM}/rotate`, "POST"],
+        ] as const) {
+            const r = await call(method, path, { body: {} });
+            expect(r.status).toBe(405);
+            expect(r.headers.get("allow")).toBe(allow);
+        }
+        expect(apiCalls).toEqual([]);
+    });
+    it("PUT turns a file's link on through the API and answers the link", async () => {
+        apiReply = () => jsonRes(200, { status: "success", link: link() });
+        const r = await call("PUT", `/api/library/private/items/${ITEM}`);
+        expect(r.status).toBe(200);
+        expect(await json(r)).toEqual({ status: "success", link: link() });
+        expect(apiCalls).toHaveLength(1);
+        expect(apiCalls[0]).toMatchObject({ method: "PUT", url: `${API_BASE}/share/private/items/${ITEM}` });
+        expect(apiCalls[0]!.headers["x-cobalt-service"]).toBe(SERVICE_KEY);
+        for (const h of ["authorization", "cookie", "cf-access-jwt-assertion", "origin"]) expect(apiCalls[0]!.headers[h]).toBeUndefined();
+    });
+    it("PUT on a gallery link, DELETE on both, and the rotates, go to the matching API routes", async () => {
+        apiReply = () => jsonRes(200, { status: "success", link: link({ kind: "set", target_id: SET }) });
+        await call("PUT", `/api/library/private/sets/${SET}`);
+        apiReply = () => jsonRes(200, { status: "success" });
+        const d1 = await call("DELETE", `/api/library/private/items/${ITEM}`);
+        const d2 = await call("DELETE", `/api/library/private/sets/${SET}`);
+        expect(await json(d1)).toEqual({ status: "success" });
+        expect(d2.status).toBe(200);
+        apiReply = () => jsonRes(200, { status: "success", link: link({ url: `https://share.capybaraharmony.com/p/${"Z".repeat(22)}` }) });
+        const r1 = await call("POST", `/api/library/private/items/${ITEM}/rotate`);
+        await call("POST", `/api/library/private/sets/${SET}/rotate`);
+        expect((await json(r1)).link.url).toContain("ZZZZ");
+        expect(apiCalls.map((c) => `${c.method} ${c.url.slice(API_BASE.length)}`)).toEqual([
+            `PUT /share/private/sets/${SET}`,
+            `DELETE /share/private/items/${ITEM}`,
+            `DELETE /share/private/sets/${SET}`,
+            `POST /share/private/items/${ITEM}/rotate`,
+            `POST /share/private/sets/${SET}/rotate`,
+        ]);
+        expect(apiCalls.every((c) => c.body === undefined)).toBe(true);
+    });
+    it("passes the API's error codes and statuses through (404 not_found, 409 not_toggleable, 503)", async () => {
+        for (const [status, code] of [[404, "error.private.not_found"], [409, "error.private.not_toggleable"], [503, "error.api.generic"]] as const) {
+            apiReply = () => jsonRes(status, { status: "error", error: { code } });
+            const r = await call("PUT", `/api/library/private/items/${ITEM}`);
+            expect(r.status).toBe(status);
+            expect(await errorCode(r)).toBe(code);
+        }
+    });
+    it("an upstream 401/403 (wrong service key) is 502, a downed API is 502, a missing key sends nothing", async () => {
+        apiReply = () => jsonRes(403, { status: "error", error: { code: "error.api.unauthorized" } });
+        expect((await call("DELETE", `/api/library/private/items/${ITEM}`)).status).toBe(502);
+        apiThrows = true;
+        expect((await call("POST", `/api/library/private/sets/${SET}/rotate`)).status).toBe(502);
+        apiThrows = false;
+        (env as any).COBALT_API_KEY = "";
+        apiCalls = [];
+        expect((await call("PUT", `/api/library/private/items/${ITEM}`)).status).toBe(502);
+        expect(apiCalls).toEqual([]);
+    });
+    it("GET /api/library/links reads the gallery links and private links from GET /share/private alone", async () => {
+        const sets = [{ id: SET, url: `https://share.capybaraharmony.com/p/${KEY}`, title: "memes", private: true, items: [] }];
+        apiReply = () => jsonRes(200, { status: "success", links: [link({ kind: "set", target_id: SET })], new_links: "private", sets });
+        const r = await call("GET", "/api/library/links");
+        expect(r.status).toBe(200);
+        expect(await json(r)).toEqual({ status: "success", sets, links: [link({ kind: "set", target_id: SET })], new_links: "private" });
+        // GET /share/sets refuses the service credential, so it is never asked
+        expect(apiCalls.map((c) => `${c.method} ${c.url.slice(API_BASE.length)}`)).toEqual(["GET /share/private"]);
+    });
+    it("GET /api/library/links: an older answer without sets is an empty list; a failing list is an error", async () => {
+        apiReply = () => jsonRes(200, { status: "success", links: [] });
+        expect(await json(await call("GET", "/api/library/links"))).toEqual({ status: "success", sets: [], links: [], new_links: "public" });
+        apiReply = () => jsonRes(503, { status: "error", error: { code: "error.api.generic" } });
+        const r = await call("GET", "/api/library/links");
+        expect(r.status).toBe(503);
+        expect(await errorCode(r)).toBe("error.api.generic");
+    });
+    it("GET /api/library: a file with a live private link carries private_url and its counters; a revoked one does not", async () => {
+        const a = seedItem({ kind: "private", source: "saved", name: "a.mp4" });
+        const b = seedItem({ kind: "private", source: "saved", name: "b.mp4" });
+        const c = seedItem({ kind: "private", source: "saved", name: "c.mp4" });
+        const ins = db.raw.prepare("INSERT INTO private_links (key, kind, target_id, created_at, revoked_at, opened, last_opened_at) VALUES (?,?,?,?,?,?,?)");
+        ins.run(KEY, "item", a.id, NOW - 1000, null, 3, NOW - 500);
+        ins.run("Revoked0000000000000a", "item", b.id, NOW - 2000, NOW - 1500, 9, null);
+        ins.run("SetKey00000000000000a", "set", c.id, NOW - 2000, null, 1, null);
+        const items = Object.fromEntries(((await json(await call("GET", "/api/library"))).items as any[]).map((i) => [i.id, i]));
+        expect(items[a.id].private_url).toBe(`https://share.capybaraharmony.com/p/${KEY}`);
+        expect(items[a.id].private_link).toEqual({ url: `https://share.capybaraharmony.com/p/${KEY}`, created_at: NOW - 1000, opened: 3, last_opened_at: NOW - 500 });
+        expect(items[b.id].private_url).toBeNull();
+        expect(items[c.id].private_url).toBeNull();
+    });
+    it("GET /api/library still lists files when private_links is missing (0024 not applied)", async () => {
+        const a = seedItem({ kind: "private", source: "saved", name: "a.mp4" });
+        db.raw.exec("DROP TABLE private_links");
+        const r = await call("GET", "/api/library");
+        expect(r.status).toBe(200);
+        expect((await json(r)).items.find((i: any) => i.id === a.id).private_url).toBeNull();
+    });
+});
+
+describe("embedded page: links view", () => {
+    it("has the links view with the public/private chips, the side panel and its footnote", () => {
+        expect(LIBRARY_HTML).toContain('data-v="links"');
+        expect(LIBRARY_HTML).toContain('id="linkFilters"');
+        for (const f of ["all", "public", "private"]) expect(LIBRARY_HTML).toContain(`data-lf="${f}"`);
+        expect(LIBRARY_HTML).toContain('"/api/library/links"');
+        expect(LIBRARY_HTML).toContain('"/api/library/private/sets/"');
+        expect(LIBRARY_HTML).toContain(" answers not found while this is private.");
+        expect(LIBRARY_HTML).toContain("rotate the key? the old link stops working right away.");
+        expect(LIBRARY_HTML).toContain('"rotate key…"');
+    });
+    const html = readFileSync(new URL("../src/library/page.html", import.meta.url), "utf8");
+    const src = html.slice(html.indexOf("// The link as it works now"), html.indexOf("function linkThumbs(s)"));
+    const lf = new Function("L", `${src}\nreturn { setLink, setIsPrivate, setLiveUrl, setTitle };`) as (L: any) => any;
+    it("a gallery link's live url is its own link, else the private list joined by set id, else its url", () => {
+        const L: any = { sets: [], priv: [{ kind: "set", target_id: "S2", url: "https://share.capybaraharmony.com/p/K2" }, { kind: "item", target_id: "S3", url: "x" }] };
+        const f = lf(L);
+        const s1 = { id: "S1", url: "https://share.capybaraharmony.com/p/K1", private: true, link: { url: "https://share.capybaraharmony.com/p/K1" } };
+        const s2 = { id: "S2", url: "https://share.capybaraharmony.com/g/S2" };
+        const s3 = { id: "S3", url: "https://share.capybaraharmony.com/g/S3", private: false, link: null };
+        expect(f.setLiveUrl(s1)).toBe("https://share.capybaraharmony.com/p/K1");
+        expect(f.setIsPrivate(s2)).toBe(true);
+        expect(f.setLiveUrl(s2)).toBe("https://share.capybaraharmony.com/p/K2");
+        expect(f.setIsPrivate(s3)).toBe(false);
+        expect(f.setLiveUrl(s3)).toBe("https://share.capybaraharmony.com/g/S3");
+        expect(f.setTitle({ id: "x", items: [1, 2, 3] })).toBe("3 files");
+        expect(f.setTitle({ id: "x", title: "memes", items: [] })).toBe("memes");
     });
 });

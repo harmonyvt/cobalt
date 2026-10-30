@@ -33,6 +33,10 @@ export const sharePagesOp = defineOp({
                 captioner: ctx.edge.captioner === undefined ? captionerFrom(ctx.env, ctx.edge.modelFetch) : ctx.edge.captioner,
                 waitUntil: ctx.edge.waitUntil,
                 loops: ctx.env.GALLERY_LOOPS === "1",
+                // private links' files (section 36)
+                originals: ctx.env.ORIGINALS,
+                media: ctx.env.MEDIA,
+                now: ctx.now,
             },
             ctx.request!,
         ),

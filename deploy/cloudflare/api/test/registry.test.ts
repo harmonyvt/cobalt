@@ -292,6 +292,8 @@ describe("defineOp and the registry", () => {
             // T5 (33.9, 33.10)
             "links.create", "links.revoke", "collections.create", "collections.add", "collections.update", "collections.reroll",
             "collections.delete", "sets.list", "sets.create", "sets.add", "sets.update", "sets.delete",
+            // section 36.5
+            "links.private", "links.rotate",
             "stage.get", "stage.set", "stage.store", "stage.pool", "stage.items", "stage.action", "emotes.find", "emotes.save",
             "test.wipe",
             "test.echo",

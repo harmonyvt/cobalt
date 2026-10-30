@@ -9,6 +9,7 @@
 import { POST_KEY_SQL } from "./app-routes";
 import { captionOf, fileOf, itemSubject, writeCaption, type Caption, type Captioner } from "./roast";
 import { shareSetRoute } from "./share-sets";
+import { privateRoute, type ByteBucket } from "./share-private";
 import { ITEM_COLUMNS, effectiveVisibility, extOf, type MediaRow } from "./visibility";
 
 export type ShareDeps = {
@@ -24,6 +25,12 @@ export type ShareDeps = {
     captionWaitMs?: number;
     // gallery links' moving previews in Discord (section 29.1); absent = on
     loops?: boolean;
+    // the buckets a private link's files are streamed from (section 36): `cobalt-originals` and `cobalt-media`.
+    // Absent: /p/<key>/<n>.<ext> is a 404.
+    originals?: ByteBucket;
+    media?: ByteBucket;
+    // the clock a private link's open count reads (absent: Date.now)
+    now?: () => number;
 };
 
 // How long the first page view waits for its caption before answering without it (Discord gives up
@@ -95,7 +102,7 @@ export function shareLinkFrom(env: { MEDIA_BASE_URL: string; SHARE_BASE_URL?: st
     return (url) => shareUrlFor(url, env.MEDIA_BASE_URL, share) ?? url;
 }
 
-type Found = MediaRow & { custom_title: string | null };
+export type Found = MediaRow & { custom_title: string | null };
 
 // The live public row whose public object is `<base>.<ext>` (or exactly `<base>.<ext>` when the link
 // carries the extension). The public object is r2_key for a row in the public bucket, else public_key.
@@ -144,43 +151,16 @@ const fmtDuration = (s: number): string => {
     return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 };
 
-// One page per public file. HEAD gets the same headers.
-export async function sharePage(d: ShareDeps, request: Request): Promise<Response> {
-    if (request.method !== "GET" && request.method !== "HEAD") {
-        return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } });
-    }
-    const url = new URL(request.url);
-    const media = withSlash(d.mediaBaseUrl);
-    if (url.pathname === "/" || url.pathname === "") return NOT_FOUND();
-    // gallery share links (section 24): /g/<id>, the Mastodon status Discord reads, its oEmbed
-    const set = await shareSetRoute({ ...d, now: () => Date.now() }, request);
-    if (set) return set;
-    if (url.pathname === "/robots.txt") {
-        // Link unfurlers fetch pages, they do not crawl; search engines may not index the pages.
-        return new Response("User-agent: *\nDisallow: /\n", { headers: { "content-type": "text/plain" } });
-    }
-    const m = SHARE_PATH.exec(url.pathname);
-    if (!m) return NOT_FOUND();
-
-    let row: Found | null;
-    try {
-        row = await findPublic(d.db, m[1], m[2]?.toLowerCase());
-    } catch {
-        return new Response("try again\n", { status: 503, headers: { "content-type": "text/plain", "retry-after": "5" } });
-    }
-    if (!row) return NOT_FOUND();
-
-    const key = (row.bucket === "media" ? row.r2_key : row.public_key)!;
-    const fileUrl = `${media}${key}`;
-    const pageUrl = `${withSlash(d.shareBaseUrl)}${m[1]}`;
-    const type = (row.content_type || TYPES[extOf(key)] || "application/octet-stream").split(";")[0].trim().toLowerCase();
+// The page of one file: its Open Graph and Twitter card tags and a plain player. `fileUrl`, `poster` and `pageUrl` are
+// where the page says the file, its poster and the page itself are: the media domain for a public file (section 22),
+// share.../p/<key>/ for a private link (section 36).
+export function singlePageHtml(p: { row: Found; type: string; fileUrl: string; poster: string | null; pageUrl: string; caption: Caption | null }): string {
+    const { row, type, fileUrl, poster, pageUrl } = p;
     const isVideo = type.startsWith("video/");
     const isImage = type.startsWith("image/");
-    // a poster only from the public media domain (the column is written by this server, but be strict)
-    const poster = row.poster && row.poster.startsWith(media) ? row.poster : null;
     // a title Harmony set wins; then the roast caption (section 25); then the file name
     const custom = (row.custom_title ?? "").trim() !== "";
-    const caption = custom ? null : await captionNow(d, row, fileUrl);
+    const caption = custom ? null : p.caption;
     const title = custom ? titleOf(row) : (caption?.title ?? titleOf(row));
     const w = row.width && row.width > 0 ? Math.round(row.width) : null;
     const h = row.height && row.height > 0 ? Math.round(row.height) : null;
@@ -236,7 +216,7 @@ export async function sharePage(d: ShareDeps, request: Request): Promise<Respons
           ? `<img src="${e(fileUrl)}" alt="${e(title)}">`
           : `<a href="${e(fileUrl)}">${e(title)}</a>`;
 
-    const html = `<!doctype html>
+    return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -255,16 +235,62 @@ a{color:#ddd}
 <body><main>${body}</main></body>
 </html>
 `;
-    const mediaOrigin = new URL(media).origin;
+}
+
+// The headers of a link page: its files may come only from `fileOrigin` (the media domain, or the share host itself for
+// a private link).
+export const pageHeaders = (fileOrigin: string, cacheControl: string, extra: Record<string, string> = {}): Record<string, string> => ({
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": cacheControl,
+    ...extra,
+    "content-security-policy": `default-src 'none'; img-src ${fileOrigin}; media-src ${fileOrigin}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`,
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "x-robots-tag": "noindex",
+});
+
+// The content type a page reports for a row (its own, else from the key's extension).
+export const typeOf = (row: Pick<MediaRow, "content_type">, key: string): string =>
+    (row.content_type || TYPES[extOf(key)] || "application/octet-stream").split(";")[0]!.trim().toLowerCase();
+
+// One page per public file. HEAD gets the same headers.
+export async function sharePage(d: ShareDeps, request: Request): Promise<Response> {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+        return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } });
+    }
+    const url = new URL(request.url);
+    const media = withSlash(d.mediaBaseUrl);
+    if (url.pathname === "/" || url.pathname === "") return NOT_FOUND();
+    // private links (section 36): /p/<key> and its files
+    if (url.pathname === "/p" || url.pathname.startsWith("/p/")) return privateRoute(d, request);
+    // gallery share links (section 24): /g/<id>, the Mastodon status Discord reads, its oEmbed
+    const set = await shareSetRoute({ ...d, now: () => Date.now() }, request);
+    if (set) return set;
+    if (url.pathname === "/robots.txt") {
+        // Link unfurlers fetch pages, they do not crawl; search engines may not index the pages.
+        return new Response("User-agent: *\nDisallow: /\n", { headers: { "content-type": "text/plain" } });
+    }
+    const m = SHARE_PATH.exec(url.pathname);
+    if (!m) return NOT_FOUND();
+
+    let row: Found | null;
+    try {
+        row = await findPublic(d.db, m[1], m[2]?.toLowerCase());
+    } catch {
+        return new Response("try again\n", { status: 503, headers: { "content-type": "text/plain", "retry-after": "5" } });
+    }
+    if (!row) return NOT_FOUND();
+
+    const key = (row.bucket === "media" ? row.r2_key : row.public_key)!;
+    const fileUrl = `${media}${key}`;
+    const pageUrl = `${withSlash(d.shareBaseUrl)}${m[1]}`;
+    // a poster only from the public media domain (the column is written by this server, but be strict)
+    const poster = row.poster && row.poster.startsWith(media) ? row.poster : null;
+    const custom = (row.custom_title ?? "").trim() !== "";
+    const caption = custom ? null : await captionNow(d, row, fileUrl);
+    const html = singlePageHtml({ row, type: typeOf(row, key), fileUrl, poster, pageUrl, caption });
     return new Response(request.method === "HEAD" ? null : html, {
-        headers: {
-            "content-type": "text/html; charset=utf-8",
-            // short: a file made private stops having a page within a minute
-            "cache-control": "public, max-age=60",
-            "content-security-policy": `default-src 'none'; img-src ${mediaOrigin}; media-src ${mediaOrigin}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`,
-            "x-content-type-options": "nosniff",
-            "referrer-policy": "no-referrer",
-            "x-robots-tag": "noindex",
-        },
+        // short: a file made private stops having a page within a minute
+        headers: pageHeaders(new URL(media).origin, "public, max-age=60"),
     });
 }

@@ -6,6 +6,7 @@ import { whyFor } from "./about";
 import { POST_KEY_SQL } from "./app-routes";
 import { searchPosts, type EmbedClient } from "./embed";
 import { effectiveVisibility } from "./visibility";
+import { liveLinksFor } from "./private-links";
 import { collectionPostIds, resolveWithin, WithinError, WITHIN_POSTS_MAX, type WithinSpec } from "./within";
 
 export const LIBRARY_DEFAULT_LIMIT = 100;
@@ -368,6 +369,8 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
             const postOf = new Map<string, string>();
             for (const p of await all()) for (const f of p.rows) postOf.set(f.id, p.record.id);
             const share = d.shareBaseUrl ? withSlash(d.shareBaseUrl) : null;
+            // section 36: a private link's live URL is its share.../p/<key>
+            const priv = await liveLinksFor(d.db, "set", results.map((s) => s.id));
             return results.map((s) => {
                 let items: string[] = [];
                 try {
@@ -375,9 +378,11 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
                 } catch {
                     /* a bad row lists no posts */
                 }
+                const key = priv.get(s.id)?.key;
                 return {
                     id: s.id,
-                    url: share ? `${share}g/${s.id}` : null,
+                    url: share ? (key ? `${share}p/${key}` : `${share}g/${s.id}`) : null,
+                    private: key !== undefined,
                     title: s.title,
                     created_at: new Date(s.created_at).toISOString(),
                     post_ids: [...new Set(items.map((i) => postOf.get(i)).filter((x): x is string => !!x))],

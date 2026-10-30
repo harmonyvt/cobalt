@@ -22,7 +22,8 @@ export interface PublishBucket {
     ): Promise<{ size: number } | null>;
     delete(key: string): Promise<void>;
     head(key: string): Promise<{ size: number } | null>;
-    get(key: string): Promise<{
+    // `range`: a slice (the share host's private links stream with it, section 36)
+    get(key: string, options?: { range?: { offset: number; length?: number } }): Promise<{
         body: ReadableStream;
         size: number;
         httpMetadata?: { contentType?: string };

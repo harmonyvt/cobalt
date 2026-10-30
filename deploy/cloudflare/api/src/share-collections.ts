@@ -3,6 +3,7 @@
 // collection never revokes its links; a revoked link drops out of every collection.
 
 import { writeCaption, setSubject, type Captioner } from "./roast";
+import { linkInsert, liveLinksFor, revokeStmt } from "./private-links";
 import { mintSetId, setRoastInput } from "./share-sets";
 import type { StudioReply } from "./studio";
 
@@ -224,6 +225,8 @@ export async function rerollCollection(d: CollectionDeps, id: string, keyId: str
         const now = d.now();
         const replaced: Record<string, string> = {};
         const stmts: D1PreparedStatement[] = [];
+        // a private link stays private (section 36): its key is revoked with it and the new link gets a new one
+        const priv = await liveLinksFor(d.db, "set", sets.map((s) => s.id));
         for (const s of sets) {
             const fresh = mintSetId(d.setRandomBytes);
             replaced[s.id] = fresh;
@@ -232,6 +235,7 @@ export async function rerollCollection(d: CollectionDeps, id: string, keyId: str
                 d.db.prepare("UPDATE share_sets SET revoked_at = ?2 WHERE id = ?1 AND revoked_at IS NULL").bind(s.id, now),
                 d.db.prepare("UPDATE share_collection_items SET set_id = ?2 WHERE set_id = ?1").bind(s.id, fresh),
             );
+            if (priv.has(s.id)) stmts.push(revokeStmt(d.db, "set", s.id, now), linkInsert(d.db, "set", fresh, now).stmt);
         }
         stmts.push(d.db.prepare("UPDATE share_collections SET updated_at = ?2 WHERE id = ?1").bind(id, now));
         await d.db.batch(stmts);

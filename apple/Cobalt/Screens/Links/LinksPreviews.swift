@@ -84,6 +84,35 @@ private struct LoadedLinks<Content: View>: View {
         }
     }
 }
+// MARK: private links (APP-API-CONTRACT section 36)
+
+#Preview("links · a private link (badge, opened)", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.happy, tab: .links) { model in
+        LoadedLinks(model: model, prepare: { model in
+            _ = try? await model.shareSets.makePrivate(PreviewData.privateSampleSetID)
+        }) { model in
+            NavigationStack { LinksScreen(model: model) }
+        }
+    }
+}
+#Preview("links · a private link, mac width", traits: .fixedLayout(width: 900, height: 700)) {
+    PreviewHost(.happy, tab: .links) { model in
+        LoadedLinks(model: model, prepare: { model in
+            _ = try? await model.shareSets.makePrivate(PreviewData.privateSampleSetID)
+        }) { model in
+            NavigationStack { LinksScreen(model: model) }
+        }
+    }
+}
+#Preview("collection · every link private", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.happy, tab: .links) { model in
+        LoadedLinks(model: model, prepare: { model in
+            _ = try? await model.shareSets.setPrivacy(of: "PrEvIeWcoll00001", .makePrivate)
+        }) { model in
+            NavigationStack { CollectionScreen(model: model, collectionID: "PrEvIeWcoll00001") }
+        }
+    }
+}
 #Preview("rename collection · sheet", traits: .fixedLayout(width: 390, height: 400)) {
     PreviewHost(.happy, tab: .links) { model in
         LoadedLinks(model: model) { model in

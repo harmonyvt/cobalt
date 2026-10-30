@@ -183,6 +183,16 @@ struct LinkItemRow: View {
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                 Button(Copy.Links.copyLink, systemImage: Symbol.copyLink) { controller.copy(link, shell: shell) }
                     .tint(CobaltColor.focus)
+                if controller.privateLinksEnabled {
+                    // a public link goes private at once (and is copied); a private one gets a new key, after the confirm
+                    if link.isPrivate {
+                        Button(Copy.PrivateLinks.rotateKey, systemImage: Symbol.PrivateLinks.rotate) { controller.rotatingKey = link }
+                    } else {
+                        Button(Copy.PrivateLinks.makePrivate, systemImage: Symbol.PrivateLinks.makePrivate) {
+                            controller.makePrivate(link, shell: shell)
+                        }
+                    }
+                }
             }
             #endif
             .contextMenu { LinkMenu(link: link, collection: collection, controller: controller) }
@@ -201,6 +211,10 @@ struct LinkMenu: View {
     var body: some View {
         Button(Copy.Links.copyLink, systemImage: Symbol.copyLink) { controller.copy(link, shell: shell) }
         ShareLink(item: link.url) { Label(Copy.Links.share, systemImage: Symbol.share) }
+        if controller.privateLinksEnabled {
+            Divider()
+            LinkPrivacyItems(link: link, controller: controller)
+        }
         if controller.collectionsEnabled {
             Divider()
             CollectionMenu(link: link, controller: controller)
@@ -212,6 +226,44 @@ struct LinkMenu: View {
         }
         Divider()
         Button(Copy.Links.revoke, systemImage: Symbol.revokeLink, role: .destructive) { controller.revoking = link }
+    }
+}
+
+/// A link's private-link actions (APP-API-CONTRACT 36.6), in its context menu and the Mac row's lock menu: a public link
+/// can be made private (copied at once); a private one can get a new key or be made public again (both ask first).
+struct LinkPrivacyItems: View {
+    let link: ShareSet
+    let controller: LinksController
+
+    @Environment(\.shell) private var shell
+
+    var body: some View {
+        if link.isPrivate {
+            Button(Copy.PrivateLinks.rotateKey, systemImage: Symbol.PrivateLinks.rotate) { controller.rotatingKey = link }
+            Button(Copy.PrivateLinks.makePublic, systemImage: Symbol.PrivateLinks.makePublic) { controller.makingPublic = link }
+        } else {
+            Button(Copy.PrivateLinks.makePrivate, systemImage: Symbol.PrivateLinks.makePrivate) {
+                controller.makePrivate(link, shell: shell)
+            }
+        }
+    }
+}
+
+/// The `public` / `private` badge of a gallery link (APP-API-CONTRACT 36.6).
+struct LinkPrivacyBadge: View {
+    let isPrivate: Bool
+
+    var body: some View {
+        Label(isPrivate ? Copy.PrivateLinks.badgePrivate : Copy.PrivateLinks.badgePublic,
+              systemImage: isPrivate ? Symbol.PrivateLinks.lock : Symbol.PrivateLinks.publicLink)
+            .labelStyle(CollectionLineLabel())
+            .font(Font.cobalt(10.5, .semibold, relativeTo: .caption2))
+            .foregroundStyle(isPrivate ? CobaltColor.text : CobaltColor.caption)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(CobaltColor.elevated))
+            .fixedSize()
+            .accessibilityLabel(Copy.PrivateLinks.rowA11y(isPrivate: isPrivate))
     }
 }
 
@@ -253,13 +305,15 @@ struct LinkRow: View {
     let controller: LinksController
 
     @Environment(\.shell) private var shell
-    private var busy: Bool { controller.revokingIDs.contains(link.id) }
+    private var busy: Bool { controller.revokingIDs.contains(link.id) || controller.privacyIDs.contains(link.id) }
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
     private var privateCount: Int { link.items.count - link.publicItemCount }
 
     private var note: String? {
+        // a private link serves its files whatever their own state (APP-API-CONTRACT 36.2): no "private now" note
+        if link.isPrivate { return nil }
         if link.publicItemCount == 0 { return Copy.Links.allPrivate }
         if privateCount > 0 { return Copy.Links.privateNow(privateCount) }
         return nil
@@ -279,6 +333,12 @@ struct LinkRow: View {
 
     private var copied: Bool { controller.copiedID == link.id }
 
+    private func rowLabel(_ when: String) -> String {
+        let base = Copy.Links.rowA11y(title: link.displayTitle, files: link.items.count, when: when)
+        guard controller.privateLinksEnabled else { return base }
+        return "\(base), \(Copy.PrivateLinks.rowA11y(isPrivate: link.isPrivate))"
+    }
+
     var body: some View {
         let when = Format.when(link.createdAt, now: Date())
         HStack(alignment: .center, spacing: 12) {
@@ -289,14 +349,23 @@ struct LinkRow: View {
                         .font(CobaltType.bodySemibold)
                         .foregroundStyle(CobaltColor.text)
                         .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
-                    Text("\(Copy.Links.fileCount(link.items.count)) · \(when)")
-                        .font(CobaltType.captionSmall)
-                        .foregroundStyle(CobaltColor.caption)
+                    HStack(spacing: 6) {
+                        if controller.privateLinksEnabled { LinkPrivacyBadge(isPrivate: link.isPrivate) }
+                        Text("\(Copy.Links.fileCount(link.items.count)) · \(when)")
+                            .font(CobaltType.captionSmall)
+                            .foregroundStyle(CobaltColor.caption)
+                    }
                     Text(shortLink)
                         .font(CobaltType.captionSmall)
                         .foregroundStyle(CobaltColor.caption)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    if link.isPrivate, let opened = controller.store.privateLink(forSet: link.id)?.opened {
+                        Text(Copy.PrivateLinks.openedLine(opened))
+                            .font(CobaltType.captionSmall)
+                            .foregroundStyle(CobaltColor.caption)
+                            .monospacedDigit()
+                    }
                     if let note {
                         Text(note)
                             .font(CobaltType.captionSmall)
@@ -311,7 +380,7 @@ struct LinkRow: View {
                     }
                 }
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel(Copy.Links.rowA11y(title: link.displayTitle, files: link.items.count, when: when))
+                .accessibilityLabel(rowLabel(when))
                 Spacer(minLength: 4)
                 buttons
             }
@@ -343,6 +412,18 @@ struct LinkRow: View {
         HStack(spacing: 2) {
             Button(Copy.Links.copyLink, systemImage: Symbol.copyLink) { controller.copy(link, shell: shell) }
             ShareLink(item: link.url) { Label(Copy.Links.share, systemImage: Symbol.share) }
+            if controller.privateLinksEnabled {
+                Menu {
+                    LinkPrivacyItems(link: link, controller: controller)
+                } label: {
+                    Label(Copy.PrivateLinks.privacy,
+                          systemImage: link.isPrivate ? Symbol.PrivateLinks.lock : Symbol.PrivateLinks.makePrivate)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help(Copy.PrivateLinks.privacy)
+            }
             if controller.collectionsEnabled {
                 CollectionMenu(link: link, controller: controller)
                     .menuStyle(.borderlessButton)
