@@ -86,6 +86,8 @@ export type ChatCallContext = {
     // cobalt.jobs.onDone (section 33.14): hand a job to the server, which continues the chat when it ends. Absent: the
     // hook is off (no CHAT_JOBS binding, or a confirmed card's run).
     watchJob?: (job: string, note: string | null) => Promise<void>;
+    // MCP calls only (section 35): the API's public origin and the client key behind the MCP thread
+    mcp?: { origin: string; clientKeyId: string };
 };
 
 export type AiSpec<I> = {
@@ -114,8 +116,9 @@ export type AiSpec<I> = {
     result?: (body: unknown) => unknown;
 };
 
-// search: meaning search is configured; box: the workbench is on (section 33.11)
-export type AiFlags = { search: boolean; box?: boolean };
+// search: meaning search is configured; box: the workbench is on (section 33.11); mcp: the caller is the MCP server
+// (section 35), which also sees the MCP-only ops (`when: (f) => f.mcp === true`)
+export type AiFlags = { search: boolean; box?: boolean; mcp?: boolean };
 
 // The hosts the Worker answers: the API (the default), the share host's link pages (section 22), the stage host
 // (section 30.4), and any other studio.* host (a 404 page while the stage is off or elsewhere).

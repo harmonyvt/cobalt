@@ -142,6 +142,10 @@ export const PATHS: string[] = [
     `/live/chats/${ID16}/state`,
     "/live/chats/bad",
     "/live/other",
+    // added with the MCP server (section 35): the JSON-RPC endpoint and its upload links (a forged one, a malformed one)
+    "/mcp",
+    `/mcp/upload/eyJrIjoia2V5LTEiLCJ0IjoiQUFBQUFBQUFBQUFBQUFBQSIsImUiOjF9.${"A".repeat(43)}`,
+    "/mcp/upload/bad",
     "/nope",
 ];
 

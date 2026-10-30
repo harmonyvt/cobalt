@@ -2144,6 +2144,107 @@
         }
       }
     },
+    "/mcp": {
+      "post": {
+        "operationId": "mcp",
+        "summary": "The MCP server (POST /mcp, section 35).",
+        "tags": [
+          "mcp"
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "open",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "get": {
+        "operationId": "mcp.stream",
+        "summary": "GET /mcp: 405 (no server-sent event stream).",
+        "tags": [
+          "mcp"
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "open",
+          "runs": "worker",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "mcp.end",
+        "summary": "DELETE /mcp: 405 (no sessions to end).",
+        "tags": [
+          "mcp"
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "open",
+          "runs": "worker",
+          "cors": false,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/mcp/upload/{token}": {
+      "put": {
+        "operationId": "mcp.upload",
+        "summary": "The bytes of an MCP upload link (PUT /mcp/upload/<token>).",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/media/{name}": {
       "delete": {
         "operationId": "media.delete",

@@ -168,7 +168,9 @@ export function routeTable(): string {
                 `| ${method} | \`${path}\` | \`${o.name}\` | ${o.auth} | ${yes(o.cors)} | ${yes(o.noStore)} | ${o.runs === "durable_object" ? "DO" : "Worker"} | ${yes(o.raw)} | ${o.ai.tier === "hidden" ? "" : o.ai.tier} |`,
         ),
     ];
-    const chat = REGISTRY.ops.filter((o) => o.ai.tier !== "hidden").map((o) => `\`cobalt.${o.callName}\`${o.ai.tier === "ask" ? " (asks first)" : ""}`);
+    // the MCP-only calls (section 34) are not the chat's: they are listed with the MCP server's tools there
+    const mcpOnly = (o: (typeof REGISTRY.ops)[number]) => !!o.ai.when && !o.ai.when({ search: true, box: true }) && o.ai.when({ search: true, box: true, mcp: true });
+    const chat = REGISTRY.ops.filter((o) => o.ai.tier !== "hidden" && !mcpOnly(o)).map((o) => `\`cobalt.${o.callName}\`${o.ai.tier === "ask" ? " (asks first)" : ""}`);
     return [
         ROUTES_BEGIN,
         "",
