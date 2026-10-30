@@ -2207,7 +2207,7 @@ var EMOTE_SORTS = [
   ["new", "new"], ["global", "global"]
 ];
 var CDN_7TV = "https://cdn.7tv.app/";
-var E = { sort: "trending_weekly", q: "", page: 0, more: false, items: [], seq: 0, ctl: null, loading: false, timer: 0, opened: false, dirty: false, busy: {} };
+var EMO = { sort: "trending_weekly", q: "", page: 0, more: false, items: [], seq: 0, ctl: null, loading: false, timer: 0, opened: false, dirty: false, busy: {} };
 function emoteStatus(kind, text, spinning) {
   var el = $("emoteStatus");
   el.className = "status" + (kind ? " " + kind : "");
@@ -2220,9 +2220,9 @@ function renderEmoteSorts() {
   var box = $("emoteSorts");
   box.textContent = "";
   EMOTE_SORTS.forEach(function (s) {
-    box.append(h("button", { type: "button", text: s[1], "aria-pressed": String(E.sort === s[0]), onclick: function () {
-      if (E.sort === s[0]) return;
-      E.sort = s[0]; renderEmoteSorts(); loadEmotes(true);
+    box.append(h("button", { type: "button", text: s[1], "aria-pressed": String(EMO.sort === s[0]), onclick: function () {
+      if (EMO.sort === s[0]) return;
+      EMO.sort = s[0]; renderEmoteSorts(); loadEmotes(true);
     } }));
   });
 }
@@ -2232,47 +2232,47 @@ function emoteTile(m) {
   var pic = h("button", { class: "pic", type: "button", "aria-label": saved ? m.name + " (saved, copy link)" : "save " + m.name, onclick: function () { saved ? copyText(shareUrl(m.library_url || "") || m.library_url || "") : saveEmote(m); } },
     src ? h("img", { src: src, alt: "", loading: "lazy", decoding: "async" }) : null);
   var ea = h("div", { class: "ea" });
-  if (E.busy[m.id]) ea.append(h("span", { text: "saving…" }));
+  if (EMO.busy[m.id]) ea.append(h("span", { text: "saving…" }));
   else if (saved) {
     ea.append(h("span", { class: "tick", text: "\u2713 saved" }));
     if (m.library_url) ea.append(h("button", { type: "button", onclick: function () { copyText(shareUrl(m.library_url) || m.library_url); }, text: "copy link" }));
   } else ea.append(h("span", { text: m.animated ? "animated" : "tap to save" }));
-  return h("div", { class: "emote" + (E.busy[m.id] ? " saving" : ""), "data-id": m.id }, pic, h("div", { class: "cap", text: m.name || "", title: m.name || "" }), ea);
+  return h("div", { class: "emote" + (EMO.busy[m.id] ? " saving" : ""), "data-id": m.id }, pic, h("div", { class: "cap", text: m.name || "", title: m.name || "" }), ea);
 }
 function renderEmotes() {
   var g = $("emoteGrid");
   g.textContent = "";
-  E.items.forEach(function (m) { g.append(emoteTile(m)); });
-  $("emoteMore").hidden = !E.more;
-  $("emoteMoreBtn").disabled = E.loading;
+  EMO.items.forEach(function (m) { g.append(emoteTile(m)); });
+  $("emoteMore").hidden = !EMO.more;
+  $("emoteMoreBtn").disabled = EMO.loading;
 }
 async function loadEmotes(reset) {
-  if (E.loading && !reset) return;
-  clearTimeout(E.timer);
-  if (E.ctl) E.ctl.abort();
-  var seq = ++E.seq, ctl = new AbortController();
-  E.ctl = ctl;
-  if (reset) { E.items = []; E.page = 0; E.more = false; }
-  var page = E.page + 1;
-  E.loading = true;
+  if (EMO.loading && !reset) return;
+  clearTimeout(EMO.timer);
+  if (EMO.ctl) EMO.ctl.abort();
+  var seq = ++EMO.seq, ctl = new AbortController();
+  EMO.ctl = ctl;
+  if (reset) { EMO.items = []; EMO.page = 0; EMO.more = false; }
+  var page = EMO.page + 1;
+  EMO.loading = true;
   renderEmotes();
   emoteStatus("", reset ? "loading…" : "", true);
-  var url = "/api/library/emotes?sort=" + E.sort + "&page=" + page + (E.q ? "&q=" + encodeURIComponent(E.q) : "");
+  var url = "/api/library/emotes?sort=" + EMO.sort + "&page=" + page + (EMO.q ? "&q=" + encodeURIComponent(EMO.q) : "");
   var r;
   try { r = await lib(url, { signal: ctl.signal }, 30000); }
   catch (e) {
-    if (seq !== E.seq) return;
-    E.loading = false; renderEmotes();
+    if (seq !== EMO.seq) return;
+    EMO.loading = false; renderEmotes();
     var d = describe(e); emoteStatus("bad", d.text, false); return;
   }
-  if (seq !== E.seq) return;
-  E.loading = false;
+  if (seq !== EMO.seq) return;
+  EMO.loading = false;
   var b = r.body;
   if (r.status === 200 && b && Array.isArray(b.items)) {
-    E.items = E.items.concat(b.items);
-    E.page = page; E.more = !!b.has_more && page < 50;
+    EMO.items = EMO.items.concat(b.items);
+    EMO.page = page; EMO.more = !!b.has_more && page < 50;
     renderEmotes();
-    emoteStatus("", E.items.length ? "" : (E.q ? "no emotes match \u201c" + E.q + "\u201d." : "nothing here yet."));
+    emoteStatus("", EMO.items.length ? "" : (EMO.q ? "no emotes match \u201c" + EMO.q + "\u201d." : "nothing here yet."));
     return;
   }
   renderEmotes();
@@ -2280,41 +2280,41 @@ async function loadEmotes(reset) {
   emoteStatus("bad", code === "error.emote.unavailable" ? "7tv did not answer: try again later" : code === "error.emote.query" ? "that search isn't valid." : messageFor(code || "error.library.upstream"));
 }
 async function saveEmote(m) {
-  if (E.busy[m.id]) return;
-  E.busy[m.id] = true; renderEmotes();
+  if (EMO.busy[m.id]) return;
+  EMO.busy[m.id] = true; renderEmotes();
   try {
     var b = ok(await libPost("/api/library/emotes", { id: m.id }));
     m.library_id = b.id || m.library_id || m.id;
     m.library_url = shareUrl(b.url || "") || m.library_url || "";
     toast("saved " + (m.name || "emote"));
-    E.dirty = true;
+    EMO.dirty = true;
     reloadUsage();
   } catch (e) {
     var code = e && e.code;
     toast(code === "error.emote.unavailable" ? "7tv did not answer: try again later" : describe(e).text);
   }
-  delete E.busy[m.id]; renderEmotes();
+  delete EMO.busy[m.id]; renderEmotes();
 }
 function openEmotes() {
-  if (E.opened) return;
-  E.opened = true;
+  if (EMO.opened) return;
+  EMO.opened = true;
   renderEmoteSorts();
   loadEmotes(true);
 }
 $("eq").addEventListener("input", function () {
-  clearTimeout(E.timer);
-  E.timer = setTimeout(function () {
+  clearTimeout(EMO.timer);
+  EMO.timer = setTimeout(function () {
     var q = $("eq").value.trim().replace(/\s+/g, " ");
-    if (q === E.q) return;
-    E.q = q; loadEmotes(true);
+    if (q === EMO.q) return;
+    EMO.q = q; loadEmotes(true);
   }, 250);
 });
 $("eq").addEventListener("keydown", function (e) { if (e.key === "Escape" && $("eq").value) { e.preventDefault(); $("eq").value = ""; $("eq").dispatchEvent(new Event("input")); } });
-$("emoteForm").addEventListener("submit", function (e) { e.preventDefault(); clearTimeout(E.timer); E.q = $("eq").value.trim().replace(/\s+/g, " "); loadEmotes(true); });
+$("emoteForm").addEventListener("submit", function (e) { e.preventDefault(); clearTimeout(EMO.timer); EMO.q = $("eq").value.trim().replace(/\s+/g, " "); loadEmotes(true); });
 $("emoteMoreBtn").onclick = function () { loadEmotes(false); };
 if (typeof IntersectionObserver === "function") {
   new IntersectionObserver(function (es) {
-    if (es[0].isIntersecting && E.more && !E.loading && !$("emoteView").hidden) loadEmotes(false);
+    if (es[0].isIntersecting && EMO.more && !EMO.loading && !$("emoteView").hidden) loadEmotes(false);
   }, { rootMargin: "300px" }).observe($("emoteEnd"));
 }
 async function setView(v) {
@@ -2327,7 +2327,7 @@ async function setView(v) {
   $("filtersBar").hidden = v === "links" || v === "emotes";
   $("searchBar").hidden = v === "links" || v === "emotes";
   if (v === "emotes") { mapStatus("", ""); hideTip(); openEmotes(); return; }
-  if (E.dirty) { E.dirty = false; refreshGrid(); }
+  if (EMO.dirty) { EMO.dirty = false; refreshGrid(); }
   if (v === "links") { mapStatus("", ""); hideTip(); loadLinks(); return; }
   if (v !== "map") { mapStatus("", ""); hideTip(); return; }
   mapStatusLine();
@@ -2407,7 +2407,7 @@ $("map").addEventListener("wheel", function (e) {
 if (typeof ResizeObserver === "function") new ResizeObserver(function () { if (M.view === "map") drawMap(); }).observe($("mapWrap"));
 if (window.matchMedia) {
   var mq = window.matchMedia("(prefers-color-scheme: dark)");
-  var onScheme = function () { SPRITES = {}; M.nebula = null; if (M.view === "map") drawMap(); if (E.key && $("sheet").open) loadEmb(E.key); };
+  var onScheme = function () { SPRITES = {}; M.nebula = null; if (M.view === "map") drawMap(); if (EMO.key && $("sheet").open) loadEmb(EMO.key); };
   if (mq.addEventListener) mq.addEventListener("change", onScheme);
 }
 
