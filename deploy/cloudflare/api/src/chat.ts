@@ -7,6 +7,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { assemblePosts, libraryHide, type AppDeps } from "./app-routes";
+import { hiddenPostKeys } from "./hidden-store";
 import { chatTools, loadPosts, picturesOf, recordsOf, type ChatCollect, type ChatToolDeps, type ChatTools, type Ranked } from "./chat-tools";
 import { chatToolbox, runConfirmed } from "./registry/ai";
 import type { OpBase } from "./registry/context";
@@ -276,7 +277,9 @@ const oneThread = async (db: D1Database, id: string) =>
 async function postsMap(d: ChatDeps, ids: string[]): Promise<Record<string, unknown>> {
     const uniq = [...new Set(ids)];
     if (uniq.length === 0) return {};
-    const live = await loadPosts(d, uniq);
+    // a post hidden since the message was written is left out (section 37.2)
+    const hidden = await hiddenPostKeys(d.db);
+    const live = (await loadPosts(d, uniq)).filter((p) => !hidden.has(p.record.id));
     if (live.length === 0) return {};
     const { posts } = await assemblePosts(
         d.app,

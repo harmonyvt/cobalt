@@ -168,6 +168,29 @@ a { color: inherit; }
 .tile .cap.open:hover .name { text-decoration: underline; }
 .tile .cap.open:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 
+/* hidden posts (APP-API-CONTRACT.md section 37) */
+.seg button[data-f="hidden"][aria-pressed="true"] { background: #000; color: #fff; box-shadow: 0 0 0 1px #fff3 inset; }
+.fx { display: flex; gap: 8px; flex-wrap: wrap; }
+.fx button { min-height: 36px; font-size: 12px; }
+.fx button[aria-pressed="true"], .fx button[aria-expanded="true"] { background: var(--secondary); color: var(--primary); }
+.badge.hid { color: var(--secondary); background: var(--track); }
+.tile.picked { box-shadow: 0 0 0 2px var(--blue); }
+.tile.selecting { cursor: pointer; }
+.tile .pick { position: absolute; top: 8px; left: 8px; width: 22px; height: 22px; border-radius: 50%; background: var(--page); box-shadow: 0 0 0 2px var(--input-border) inset; display: grid; place-items: center; font-size: 13px; line-height: 1; z-index: 1; pointer-events: none; }
+.tile.picked .pick { background: var(--blue); color: #fff; box-shadow: none; }
+.lk.greyed .lkopt span { opacity: .45; }
+.selbar { position: fixed; left: 50%; transform: translateX(-50%); bottom: max(14px, env(safe-area-inset-bottom)); z-index: 4; width: min(640px, calc(100vw - 24px)); display: grid; gap: 8px; background: var(--page); border-radius: 14px; padding: 10px; box-shadow: 0 0 0 1px var(--input-border), 0 10px 40px rgba(0,0,0,.35); }
+.selbar .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.selbar .row .grow { flex: 1 1 auto; font-size: 12.5px; }
+.selbar button { min-height: 40px; font-size: 12px; }
+.rules { display: grid; gap: 10px; background: var(--button); border-radius: var(--radius); padding: 12px; box-shadow: 0 0 0 1px var(--button-stroke) inset; }
+.rules .rrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--button-stroke); }
+.rules .rrow:first-of-type { border-top: 0; }
+.rules .rrow .rv { flex: 1 1 160px; min-width: 0; font-size: 12.5px; }
+.rules .rform { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.rules select, .rules input[type="text"] { background: var(--page); border: 0; border-radius: 8px; min-height: 40px; padding: 0 10px; box-shadow: 0 0 0 1px var(--input-border) inset; font-size: 13px; }
+.rules input[type="text"] { flex: 1 1 180px; min-width: 0; }
+
 /* post details */
 dialog.sheet { width: min(560px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); border: 0; padding: 0; border-radius: 14px; background: var(--page); color: var(--secondary); box-shadow: 0 0 0 1px var(--input-border), 0 18px 60px rgba(0,0,0,.35); }
 dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
@@ -314,9 +337,15 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
           <button type="button" data-f="public" aria-pressed="false">public links</button>
           <button type="button" data-f="private" aria-pressed="false">private</button>
           <button type="button" data-f="studio" aria-pressed="false">studios</button>
+          <button type="button" data-f="hidden" id="hiddenChip" aria-pressed="false" hidden>hidden</button>
+        </div>
+        <div class="fx">
+          <button type="button" id="selToggle" aria-pressed="false" hidden>select</button>
+          <button type="button" id="rulesToggle" aria-expanded="false" aria-controls="rulesPanel" hidden>hidden rules</button>
         </div>
         <div class="meter-wrap"><span id="usage">&nbsp;</span><div class="meter" id="meter" role="img" aria-label="storage used"><i id="meterFill" style="width:0"></i></div></div>
       </div>
+      <section class="rules" id="rulesPanel" aria-label="hidden rules" hidden></section>
       <div class="search" id="searchBar">
         <form class="omni" id="searchForm" role="search" autocomplete="off">
           <input id="q" type="search" maxlength="200" enterkeyhint="search" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="search your library" aria-label="search your library" aria-describedby="searchStatus">
@@ -362,6 +391,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
     </section>
   </main>
 </div>
+<div class="selbar" id="selBar" role="region" aria-label="selected posts" hidden></div>
 <div class="toast" id="toast" role="status" hidden></div>
 <dialog class="sheet" id="sheet" aria-labelledby="sheetTitle">
   <div class="in">
@@ -479,6 +509,11 @@ var MESSAGES = {
   "error.library.incomplete": "the upload didn't finish. try again.",
   "error.library.missing": "the stored file is gone.",
   "error.library.not_found": "that isn't in your library anymore.",
+  "error.hidden": "that's hidden. unhide it first.",
+  "error.hidden.bad_rule": "that rule isn't valid. check the value.",
+  "error.hidden.too_many": "too many rules. delete one first.",
+  "error.hidden.not_found": "that rule is gone.",
+  "error.private.not_toggleable": "that one can't have a link.",
   "error.library.already_public": "that already has a public link.",
   "error.library.not_toggleable": "that file is always public. delete it to remove the link.",
   "error.library.storage": "couldn't update public storage. try again.",
@@ -988,9 +1023,10 @@ var EMPTY = {
   all: "nothing here yet. paste a link or add a file above.",
   "public": "no public links yet.",
   "private": "no private files yet.",
-  studio: "no open studios."
+  studio: "no open studios.",
+  hidden: "nothing is hidden."
 };
-var G = { filter: "all", items: [], studios: [], next: null, usage: null, seq: 0, confirm: null, confirmAct: "delete", busy: {}, loading: false, error: false };
+var G = { sel: null, selConfirm: null, selMenu: false, features: { hidden: false }, filter: "all", items: [], studios: [], next: null, usage: null, seq: 0, confirm: null, confirmAct: "delete", busy: {}, loading: false, error: false };
 
 function placeholder(icon, label) {
   var d = h("div", { class: "ph" });
@@ -1059,7 +1095,9 @@ function tileFor(e) {
     var it = e.it;
     name = it.custom_title || it.name;
     var lst = linkState(it);
-    badge = lst === "private"
+    badge = it.hidden
+      ? h("span", { class: "badge hid", text: "hidden" })
+      : lst === "private"
       ? h("span", { class: "badge key", text: "private link" })
       : h("span", { class: "badge " + (isPub(it) ? "pub" : "priv"), text: isPub(it) ? "public" : "private" });
     sub = [it.source ? SOURCES[it.source] || it.source : "", it.link && hostOf(it.link) ? hostOf(it.link) : ""].filter(Boolean).join(" · ");
@@ -1075,7 +1113,9 @@ function tileFor(e) {
     h("div", { class: "meta" }, badge, h("span", { text: sub })),
     h("div", { class: "meta" }, ...meta2.filter(Boolean).map(function (t) { return h("span", { text: t }); })));
   var tail;
-  if (G.confirm === id) {
+  if (G.sel && e.t === "item") {
+    tail = null;
+  } else if (G.confirm === id) {
     tail = h("div", { class: "confirm" },
       h("span", { text: confirmText(e.t === "studio" ? e : e.it, G.confirmAct) }),
       G.confirmAct === "rotate"
@@ -1097,16 +1137,28 @@ function tileFor(e) {
       var t = e.it.content_type || "";
       var pub = isPub(e.it);
       // one tile per original: the switch is where "host as-is" used to be (webps are always public)
-      if (e.it.visibility_toggle) acts.push(linkControl(e.it, busy));
-      if (e.it.private_url) acts.push(h("button", { type: "button", "data-ga": "copy-private", text: "copy private link", onclick: function () { copyText(e.it.private_url); } }));
+      if (e.it.hidden) {
+        acts.push(hiddenControl(e.it));
+        acts.push(h("button", { type: "button", "data-ga": "unhide", disabled: busy, text: "unhide", onclick: function () { unhidePost(e.it); } }));
+      } else if (e.it.visibility_toggle) acts.push(linkControl(e.it, busy));
+      if (e.it.hidden) { /* no links while hidden */ }
+      else if (e.it.private_url) acts.push(h("button", { type: "button", "data-ga": "copy-private", text: "copy private link", onclick: function () { copyText(e.it.private_url); } }));
       else if (pub && e.it.url) copyButtons(e.it.url, "data-ga").forEach(function (b) { acts.push(b); });
-      if (e.it.visibility_toggle && (isVideoType(t) || t === "image/gif")) acts.push(h("button", { type: "button", "data-ga": "studio", disabled: busy, text: "open in studio", onclick: function () { privateToStudio(e.it); } }));
+      if (!e.it.hidden && e.it.visibility_toggle && (isVideoType(t) || t === "image/gif")) acts.push(h("button", { type: "button", "data-ga": "studio", disabled: busy, text: "open in studio", onclick: function () { privateToStudio(e.it); } }));
     }
     acts.push(h("button", { type: "button", class: "danger", "data-ga": "del", disabled: busy, text: "delete", onclick: function () { G.confirm = id; G.confirmAct = "delete"; renderGrid(); } }));
     tail = h("div", { class: "tact" }, ...acts);
   }
   var priv = e.t === "item" && e.it.private_url && G.confirm !== id ? privateBox(e.it, busy) : null;
-  return h("div", { class: "tile", "data-id": id, "data-kind": e.t === "studio" ? "studio" : (isPub(e.it) ? "public" : "private"), "data-link": e.t === "studio" ? null : linkState(e.it) }, thumb, cap, priv, tail);
+  var selecting = !!G.sel && e.t === "item";
+  var picked = selecting && !!G.sel[id];
+  var tile = h("div", { class: "tile" + (selecting ? " selecting" : "") + (picked ? " picked" : ""), "data-id": id, "data-kind": e.t === "studio" ? "studio" : (isPub(e.it) ? "public" : "private"), "data-link": e.t === "studio" ? null : linkState(e.it), "data-hidden": e.t === "item" && e.it.hidden ? "1" : null, "aria-pressed": selecting ? String(picked) : null, role: selecting ? "button" : null, tabindex: selecting ? "0" : null },
+    selecting ? h("span", { class: "pick", "aria-hidden": "true", text: picked ? "\u2713" : "" }) : null, thumb, cap, priv, tail);
+  if (selecting) {
+    tile.addEventListener("click", function (ev) { ev.preventDefault(); ev.stopPropagation(); toggleSel(id); }, true);
+    tile.addEventListener("keydown", function (ev) { if (ev.key === " " || ev.key === "Enter") { ev.preventDefault(); toggleSel(id); } });
+  }
+  return tile;
 }
 function entries() {
   // search results: tiles in score order, exactly as the server ranked them
@@ -1144,6 +1196,7 @@ function renderGrid() {
   $("more").hidden = S.active || !G.next;
   $("moreBtn").disabled = G.loading;
   document.querySelectorAll("#filters button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.f === G.filter)); });
+  syncHiddenUi();
   renderUsage();
   if (G.focus) {   // a radio the keyboard just changed was redrawn: put focus back on it
     var fo = document.querySelector('.tile[data-id="' + G.focus.id + '"] input[data-ga="link-' + G.focus.val + '"]');
@@ -1166,6 +1219,7 @@ async function loadPage(reset) {
     G.studios = G.studios.concat(r.body.studios || []);
     G.next = r.body.next_before || null;
     G.usage = r.body.usage || G.usage;
+    G.features = { hidden: !!(r.body.features && r.body.features.hidden) };
   } catch (e) {
     if (seq !== G.seq) return;
     G.error = true;
@@ -1182,7 +1236,7 @@ document.querySelectorAll("#filters button").forEach(function (b) {
   b.onclick = function () {
     if (S.active) clearSearch(true);
     if (G.filter === b.dataset.f) { renderGrid(); return; }
-    G.filter = b.dataset.f; G.confirm = null; loadPage(true);
+    G.filter = b.dataset.f; G.confirm = null; G.sel = null; G.selConfirm = null; G.selMenu = false; loadPage(true);
   };
 });
 $("moreBtn").onclick = function () { loadPage(false); };
@@ -1460,12 +1514,19 @@ function openPost(it) {
   var post = $("sheetPost");
   post.textContent = "";
   var link = it.link && /^https?:\/\//i.test(it.link) ? h("a", { href: it.link, target: "_blank", rel: "noopener noreferrer", text: it.link }) : null;
+  var hiddenNode = null;
+  if (it.hidden) {
+    hiddenNode = h("span", {}, document.createTextNode(hiddenLabel(it) + " "),
+      h("button", { type: "button", "data-ga": "unhide-detail", text: "unhide", onclick: function () { unhidePost(it, true); } }));
+  }
   post.append(kv([
+    ["hidden", hiddenNode],
+    ["links", it.hidden ? "off while hidden. unhide first." : ""],
     ["file", it.custom_title && it.custom_title !== it.name ? it.name : ""],
     ["from", SOURCES[it.source] || it.source || ""],
     ["link", link],
-    ["private link", it.mapOnly || !it.private_url ? "" : h("a", { href: it.private_url, target: "_blank", rel: "noopener", text: it.private_url })],
-    ["public", it.mapOnly ? "" : isPub(it) && it.url ? h("a", { href: shareUrl(it.url), target: "_blank", rel: "noopener", text: shareUrl(it.url) }) : (isPub(it) ? "" : "private")],
+    ["private link", it.hidden || it.mapOnly || !it.private_url ? "" : h("a", { href: it.private_url, target: "_blank", rel: "noopener", text: it.private_url })],
+    ["public", it.hidden || it.mapOnly ? "" : isPub(it) && it.url ? h("a", { href: shareUrl(it.url), target: "_blank", rel: "noopener", text: shareUrl(it.url) }) : (isPub(it) ? "" : "private")],
     ["size", it.bytes != null ? fmtBytes(it.bytes) + (it.duration ? " · " + fmtSecs(it.duration) : "") : ""],
     ["added", it.created_at ? when(it.created_at) : ""],
     ["match", S.active && typeof it.score === "number" ? "score " + it.score.toFixed(3) + " for \u201c" + S.q + "\u201d" : ""]
@@ -2287,6 +2348,264 @@ async function loadEmb(key) {
   if (seq !== E.seq) return;
   mapFig.textContent = "";
   mapFig.append(miniMap(idx, sims.map(function (x) { return x[0]; })), h("figcaption", { text: "where it sits in your sky, joined to its closest stars" }));
+}
+
+
+/* ---------- hidden posts, select mode, hidden rules (APP-API-CONTRACT.md section 37) ---------- */
+// Every part of this is only shown when the list answer says features.hidden (migration 0025 applied);
+// an older worker or API simply never sets it, so the page works as before.
+var R = { open: false, rules: [], loaded: false, loading: false, error: "", held: 0, hiddenN: 0, confirmDel: null, busy: false,
+          kind: "site", value: "", apply: false, preview: null, pseq: 0, ptimer: 0 };
+var RULE_KINDS = [["site", "site"], ["words", "words"], ["about", "about"], ["upload", "uploads"]];
+var RULE_MAX = { site: 120, words: 60, about: 40, upload: 0 };
+var RULE_HINT = { site: "instagram.com or tiktok.com/@name", words: "in the title, name or link", about: "an about tag or a word it says", upload: "" };
+function ruleLabel(r) {
+  var k = r.kind === "upload" ? "uploads" : r.kind;
+  return r.kind === "upload" ? "every upload" : k + " · " + r.value;
+}
+function hiddenLabel(it) {
+  if (it.hidden_by === "rule") {
+    var rule = null;
+    for (var i = 0; i < R.rules.length; i++) if (R.rules[i].id === it.hidden_rule) rule = R.rules[i];
+    return "hidden by rule" + (rule ? " " + (rule.kind === "upload" ? "uploads" : rule.value) : "");
+  }
+  return it.hidden_by === "chat" ? "hidden by the chat" : "hidden by you";
+}
+function hiddenControl(it) {
+  var group = h("fieldset", { class: "lk greyed", "data-ga": "link", "aria-label": "link for " + (it.custom_title || it.name) + ": hidden, unhide first", title: "unhide first" });
+  [["hidden", "hidden"], ["off", "off"], ["public", "public link"], ["private", "private link"]].forEach(function (c) {
+    var input = h("input", { type: "radio", class: "sr", name: "lk-" + it.id, value: c[0], "data-ga": "link-" + c[0], checked: c[0] === "hidden", disabled: c[0] !== "hidden" });
+    group.append(h("label", { class: "lkopt" }, input, h("span", { text: c[1] })));
+  });
+  return group;
+}
+// The chip, the select and rules buttons follow the feature flag; the flag also drops out of select mode.
+function syncHiddenUi() {
+  var on = !!G.features.hidden;
+  $("hiddenChip").hidden = !on;
+  $("selToggle").hidden = !on || G.filter === "studio";
+  $("selToggle").setAttribute("aria-pressed", String(!!G.sel));
+  $("selToggle").textContent = G.sel ? "done" : "select";
+  $("rulesToggle").hidden = !on;
+  if (!on) {
+    if (G.sel) { G.sel = null; G.selConfirm = null; G.selMenu = false; }
+    if (R.open) { R.open = false; $("rulesToggle").setAttribute("aria-expanded", "false"); }
+    if (G.filter === "hidden") { G.filter = "all"; }
+  }
+  $("rulesPanel").hidden = !(on && R.open);
+  renderSelBar();
+}
+// 503 from a hidden route: the API has no hidden state yet. Hide the UI for good.
+function hiddenOff() { G.features = { hidden: false }; syncHiddenUi(); if (G.filter === "all") renderGrid(); }
+function selIds() { return G.sel ? Object.keys(G.sel) : []; }
+function toggleSel(id) {
+  if (!G.sel) return;
+  if (G.sel[id]) delete G.sel[id]; else G.sel[id] = true;
+  G.selConfirm = null;
+  renderGrid();
+}
+$("selToggle").onclick = function () {
+  if (G.sel) { G.sel = null; G.selConfirm = null; G.selMenu = false; }
+  else { G.sel = {}; G.confirm = null; G.selMenu = false; G.selConfirm = null; }
+  renderGrid();
+};
+function selVisibleIds() { return entries().filter(function (e) { return e.t === "item"; }).map(function (e) { return e.id; }); }
+var STATUS_CHOICES = [["hidden", "hidden"], ["off", "off"], ["public", "public link"], ["private", "private link"]];
+function selConfirmText(st, n) {
+  var w = n + (n === 1 ? " file" : " files");
+  if (st === "hidden") return "hide " + w + "? their links stop working for good.";
+  return "make " + w + " public? anyone with the link can open them.";
+}
+function renderSelBar() {
+  var bar = $("selBar");
+  bar.textContent = "";
+  if (!G.sel || !G.features.hidden) { bar.hidden = true; return; }
+  bar.hidden = false;
+  var ids = selIds(), n = ids.length, busy = !!G.selBusy;
+  var inHidden = G.filter === "hidden";
+  if (G.selConfirm) {
+    bar.append(h("div", { class: "row" },
+      h("span", { class: "grow", style: "color:var(--red)", "data-ga": "sel-confirm", text: selConfirmText(G.selConfirm, n) }),
+      h("button", { type: "button", class: "danger", "data-ga": "sel-yes", disabled: busy, text: G.selConfirm === "hidden" ? "hide" : "make public", onclick: function () { var st = G.selConfirm; G.selConfirm = null; applyStatus(st); } }),
+      h("button", { type: "button", "data-ga": "sel-no", text: "cancel", onclick: function () { G.selConfirm = null; renderSelBar(); } })));
+    return;
+  }
+  bar.append(h("div", { class: "row" },
+    h("span", { class: "grow", "data-ga": "sel-count", text: n ? n + " selected" : "tap posts to select them" }),
+    h("button", { type: "button", "data-ga": "sel-all", disabled: busy, text: "select all", onclick: function () { selVisibleIds().forEach(function (i) { G.sel[i] = true; }); renderGrid(); } }),
+    inHidden ? h("button", { type: "button", class: "primary", "data-ga": "sel-unhide", disabled: !n || busy, text: "unhide", onclick: function () { applyStatus("off"); } }) : null,
+    h("button", { type: "button", "data-ga": "sel-status", "aria-expanded": String(G.selMenu), disabled: !n || busy, text: "status…", onclick: function () { G.selMenu = !G.selMenu; renderSelBar(); } }),
+    h("button", { type: "button", "data-ga": "sel-cancel", text: "cancel", onclick: function () { G.sel = null; G.selMenu = false; renderGrid(); } })));
+  if (G.selMenu && n) {
+    var row = h("div", { class: "row", role: "group", "aria-label": "set status" });
+    STATUS_CHOICES.forEach(function (c) {
+      row.append(h("button", { type: "button", "data-ga": "sel-set-" + c[0], disabled: busy, text: c[1], onclick: function () {
+        G.selMenu = false;
+        if (c[0] === "hidden" || c[0] === "public") { G.selConfirm = c[0]; renderSelBar(); }
+        else applyStatus(c[0]);
+      } }));
+    });
+    bar.append(row);
+  }
+}
+// POST /library/status takes 1..200 ids per call; a longer selection goes in slices.
+async function postStatus(ids, status) {
+  var failed = [], done = 0;
+  for (var i = 0; i < ids.length; i += 200) {
+    var part = ids.slice(i, i + 200);
+    var b = ok(await libPost("/api/library/status", { ids: part, status: status }));
+    var f = Array.isArray(b.failed) ? b.failed : [];
+    failed = failed.concat(f);
+    done += part.length - f.length;
+  }
+  return { done: done, failed: failed };
+}
+var STATUS_DONE = { hidden: "hidden", off: "off", "public": "public", "private": "private link on" };
+async function applyStatus(status) {
+  var ids = selIds();
+  if (!ids.length) return;
+  G.selBusy = true; renderSelBar();
+  try {
+    var r = await postStatus(ids, status);
+    G.selBusy = false;
+    G.sel = null; G.selMenu = false;
+    toast(r.failed.length ? r.done + " done, " + r.failed.length + " couldn't be changed" : (status === "off" && G.filter === "hidden" ? "unhidden. links are off" : STATUS_DONE[status] || "done"));
+    refreshGrid(); reloadUsage();
+  } catch (e) {
+    G.selBusy = false;
+    if (e && e.code === "error.api.generic") hiddenOff();
+    renderGrid();
+    toast(describe(e).text);
+  }
+}
+async function unhidePost(it, fromSheet) {
+  G.busy[it.id] = true; renderGrid();
+  try {
+    var r = await postStatus([it.id], "off");
+    delete G.busy[it.id];
+    if (r.failed.length) throw new Fail(r.failed[0].error || "error.library.upstream");
+    if (fromSheet) { var d = $("sheet"); if (d.close) d.close(); else d.removeAttribute("open"); }
+    toast("unhidden. links are off");
+    refreshGrid();
+  } catch (e) { delete G.busy[it.id]; renderGrid(); toast(describe(e).text); }
+}
+
+/* the hidden rules panel */
+$("rulesToggle").onclick = function () {
+  R.open = !R.open;
+  $("rulesToggle").setAttribute("aria-expanded", String(R.open));
+  $("rulesPanel").hidden = !R.open;
+  if (R.open) loadRules();
+  renderRules();
+};
+async function loadRules() {
+  R.loading = true; R.error = "";
+  renderRules();
+  try {
+    var r = await lib("/api/library/hidden/rules");
+    if (r.status === 503) { hiddenOff(); return; }
+    var b = ok(r);
+    R.rules = b.rules || []; R.held = b.held || 0; R.hiddenN = b.hidden || 0; R.loaded = true;
+  } catch (e) { if (!e || e.code !== "expired") R.error = describe(e).text; }
+  finally { R.loading = false; renderRules(); }
+}
+function ruleMutation(r) {
+  if (r.status === 503) { hiddenOff(); throw new Fail("error.library.upstream"); }
+  return ok(r);
+}
+async function toggleRule(rule, enabled) {
+  R.busy = true;
+  try {
+    var b = ruleMutation(await lib("/api/library/hidden/rules/" + rule.id, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: enabled }) }));
+    rule.enabled = b.rule ? !!b.rule.enabled : enabled;
+    toast(enabled ? "rule on" : "rule off");
+  } catch (e) { toast(describe(e).text); }
+  R.busy = false; renderRules();
+}
+async function deleteRule(rule) {
+  R.busy = true; R.confirmDel = null;
+  try {
+    ruleMutation(await lib("/api/library/hidden/rules/" + rule.id, { method: "DELETE" }));
+    R.rules = R.rules.filter(function (x) { return x.id !== rule.id; });
+    toast("rule deleted. posts it hid stay hidden");
+  } catch (e) { toast(describe(e).text); }
+  R.busy = false; renderRules();
+}
+async function addRule() {
+  if (R.busy) return;
+  var value = R.kind === "upload" ? "" : R.value.trim();
+  if (R.kind !== "upload" && !value) { toast("type a value first"); return; }
+  R.busy = true; renderRules();
+  try {
+    var b = ruleMutation(await libPost("/api/library/hidden/rules", { kind: R.kind, value: value, apply: R.apply }));
+    var n = b.applied || 0;
+    R.value = ""; R.apply = false; R.preview = null;
+    toast(n ? "rule added. " + n + " hidden" : "rule added");
+    R.busy = false;
+    await loadRules();
+    if (n) refreshGrid();
+  } catch (e) { R.busy = false; renderRules(); toast(describe(e).text); }
+}
+function queuePreview() {
+  clearTimeout(R.ptimer);
+  var seq = ++R.pseq;
+  var value = R.kind === "upload" ? "" : R.value.trim();
+  if (R.kind !== "upload" && !value) { R.preview = null; renderPreviewLine(); return; }
+  R.preview = "loading"; renderPreviewLine();
+  R.ptimer = setTimeout(async function () {
+    try {
+      var b = ruleMutation(await libPost("/api/library/hidden/rules/preview", { kind: R.kind, value: value }));
+      if (seq !== R.pseq) return;
+      R.preview = typeof b.matches === "number" ? b.matches : null;
+    } catch (e) {
+      if (seq !== R.pseq) return;
+      R.preview = e && e.code === "error.hidden.bad_rule" ? "bad" : null;
+    }
+    renderPreviewLine();
+  }, 350);
+}
+function previewText() {
+  if (R.preview === "loading") return "counting…";
+  if (R.preview === "bad") return "that value isn't valid.";
+  if (typeof R.preview === "number") return R.preview === 1 ? "would hide 1 post now" : "would hide " + R.preview + " posts now";
+  return "";
+}
+function renderPreviewLine() { var el = $("rulePreview"); if (el) el.textContent = previewText(); }
+function renderRules() {
+  var box = $("rulesPanel");
+  if (box.hidden) return;
+  box.textContent = "";
+  var sub = R.loaded ? R.hiddenN + " hidden" + (R.held ? " · " + R.held + " waiting on an about rule" : "") : "";
+  box.append(h("div", { class: "row", style: "display:flex;gap:10px;align-items:baseline;flex-wrap:wrap" }, h("h3", { text: "hidden rules" }), h("span", { class: "small muted", text: "new saves that match are hidden and never shared" + (sub ? " · " + sub : "") })));
+  if (R.loading && !R.loaded) box.append(h("div", { class: "small muted", text: "loading…" }));
+  if (R.error) box.append(h("div", { class: "status bad", text: R.error }));
+  if (R.loaded && !R.rules.length) box.append(h("div", { class: "small muted", text: "no rules yet." }));
+  R.rules.forEach(function (rule) {
+    var row = h("div", { class: "rrow", "data-rule": rule.id });
+    var sw = h("label", { class: "sw" });
+    var cb = h("input", { type: "checkbox", "data-ga": "rule-enabled", "aria-label": "rule " + ruleLabel(rule) + " on", checked: !!rule.enabled, disabled: R.busy });
+    cb.addEventListener("change", function () { toggleRule(rule, cb.checked); });
+    sw.append(cb, h("span", { text: rule.enabled ? "on" : "off" }));
+    row.append(h("span", { class: "rv", "data-ga": "rule-label", text: ruleLabel(rule) }),
+      h("span", { class: "small muted", text: (rule.hits || 0) + (rule.hits === 1 ? " hit" : " hits") }), sw);
+    if (R.confirmDel === rule.id) {
+      row.append(h("span", { class: "small", style: "color:var(--red)", text: "delete? posts it hid stay hidden." }),
+        h("button", { type: "button", class: "danger", "data-ga": "rule-delete-yes", disabled: R.busy, text: "delete", onclick: function () { deleteRule(rule); } }),
+        h("button", { type: "button", text: "keep", onclick: function () { R.confirmDel = null; renderRules(); } }));
+    } else row.append(h("button", { type: "button", class: "danger", "data-ga": "rule-delete", disabled: R.busy, text: "delete", onclick: function () { R.confirmDel = rule.id; renderRules(); } }));
+    box.append(row);
+  });
+  var kind = h("select", { "aria-label": "rule kind", "data-ga": "rule-kind" });
+  RULE_KINDS.forEach(function (k) { kind.append(h("option", { value: k[0], text: k[1], selected: R.kind === k[0] })); });
+  kind.addEventListener("change", function () { R.kind = kind.value; R.preview = null; renderRules(); queuePreview(); });
+  var val = h("input", { type: "text", "data-ga": "rule-value", "aria-label": "rule value", maxlength: RULE_MAX[R.kind] || null, placeholder: RULE_HINT[R.kind] || "every file you upload", disabled: R.kind === "upload", value: R.value, autocapitalize: "off", autocorrect: "off", spellcheck: "false" });
+  val.addEventListener("input", function () { R.value = val.value; queuePreview(); });
+  val.addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); addRule(); } });
+  var ap = h("input", { type: "checkbox", "data-ga": "rule-apply", checked: R.apply });
+  ap.addEventListener("change", function () { R.apply = ap.checked; });
+  box.append(
+    h("div", { class: "rform" }, kind, val, h("button", { type: "button", class: "primary", "data-ga": "rule-add", disabled: R.busy, text: "add rule", onclick: addRule })),
+    h("div", { class: "rform" }, h("label", { class: "sw" }, ap, h("span", { text: "also hide what's saved" })), h("span", { class: "small muted", id: "rulePreview", "data-ga": "rule-preview", role: "status", "aria-live": "polite", text: previewText() })));
 }
 
 setPane("link");

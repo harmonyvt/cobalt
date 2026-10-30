@@ -294,6 +294,9 @@ describe("defineOp and the registry", () => {
             "collections.delete", "sets.list", "sets.create", "sets.add", "sets.update", "sets.delete",
             // section 36.5
             "links.private", "links.rotate",
+            // section 37.6
+            "library.status", "library.hidden", "hidden.rules.list", "hidden.rules.add", "hidden.rules.update", "hidden.rules.delete",
+            "hidden.rules.preview",
             "stage.get", "stage.set", "stage.store", "stage.pool", "stage.items", "stage.action", "emotes.find", "emotes.save",
             "test.wipe",
             "test.echo",
@@ -372,7 +375,8 @@ describe("the model's cobalt API", () => {
         expect(TOOL_TYPES).toContain("why: string[]; // up to 3 of its tags or sound tags, closest to the query first");
         expect(TOOL_TYPES).toContain("about(key: string): Promise<{");
         expect(TOOL_TYPES).toContain("rank(hits: (string | {");
-        expect(TOOL_TYPES).toContain("post(id: string): Promise<Post & { files: PostFile[] }>;");
+        // (hidden: section 37.6)
+        expect(TOOL_TYPES).toContain("post(id: string): Promise<Post & {\n      files: PostFile[];\n      hidden?: true; //");
         expect(TOOL_TYPES).toContain("look(ids: string[]): Promise<number>;");
         expect(TOOL_TYPES).toContain("collage(ids: string[], opts?: { title?: string; query?: string }): Promise<number>;");
         expect(TOOL_TYPES).toContain("limit?: number; // default 100, max 1000");

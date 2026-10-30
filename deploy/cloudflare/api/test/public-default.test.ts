@@ -173,7 +173,7 @@ describe("POST /studio with public: true", () => {
         expect(post.poster_url).toMatch(POSTER_URL);
         expect(host.poster_url).toBe(post.poster_url);
         expect(post.files.find((f: any) => f.source === "saved").poster_url).toBe(post.poster_url);
-        expect(b.counts).toEqual({ posts: 1, files: 1 });
+        expect(b.counts).toEqual({ posts: 1, files: 1, hidden: 0 });
         // v=2: one entry, public, with its link
         const v2 = ((await (await w.call("/library?v=2", { headers: auth })).json()) as any).posts[0];
         expect(v2.files).toHaveLength(1);

@@ -396,6 +396,36 @@ enum Endpoints {
         APIEndpoint(op: "share_collections.privacy", method: "POST", path: "/share/collections/\(HTTPCobaltClient.encode(id))/privacy", auth: .key)
     }
 
+    /// `POST /library/status` (op `library.status.route`, auth key_or_service): Many posts (file or post ids) to one status at once: off, public, private (each file's own private link) or hidden (POST /library/status).
+    static func libraryStatusRoute() -> APIEndpoint<LibraryStatusRouteResponse> {
+        APIEndpoint(op: "library.status.route", method: "POST", path: "/library/status", auth: .keyOrService)
+    }
+
+    /// `GET /hidden/rules` (op `hidden_rules.list`, auth key_or_service): The auto-hide rules, oldest first, and how many posts are hidden and held (GET /hidden/rules).
+    static func hiddenRulesList() -> APIEndpoint<HiddenRulesListResponse> {
+        APIEndpoint(op: "hidden_rules.list", method: "GET", path: "/hidden/rules", auth: .keyOrService)
+    }
+
+    /// `POST /hidden/rules` (op `hidden_rules.create`, auth key_or_service): A new auto-hide rule (at most 50); apply also hides what is saved now (POST /hidden/rules).
+    static func hiddenRulesCreate() -> APIEndpoint<HiddenRulesCreateResponse> {
+        APIEndpoint(op: "hidden_rules.create", method: "POST", path: "/hidden/rules", auth: .keyOrService)
+    }
+
+    /// `POST /hidden/rules/preview` (op `hidden_rules.preview`, auth key_or_service): What a rule would hide now, changing nothing (POST /hidden/rules/preview).
+    static func hiddenRulesPreview() -> APIEndpoint<HiddenRulesPreviewResponse> {
+        APIEndpoint(op: "hidden_rules.preview", method: "POST", path: "/hidden/rules/preview", auth: .keyOrService)
+    }
+
+    /// `PATCH /hidden/rules/:id` (op `hidden_rules.update`, auth key_or_service): Turn a rule on or off, change its value, or apply it now (PATCH /hidden/rules/<id>).
+    static func hiddenRulesUpdate(id: String) -> APIEndpoint<HiddenRulesUpdateResponse> {
+        APIEndpoint(op: "hidden_rules.update", method: "PATCH", path: "/hidden/rules/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
+    }
+
+    /// `DELETE /hidden/rules/:id` (op `hidden_rules.delete`, auth key_or_service): Delete a rule; the posts it hid stay hidden (DELETE /hidden/rules/<id>).
+    static func hiddenRulesDelete(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "hidden_rules.delete", method: "DELETE", path: "/hidden/rules/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
+    }
+
     /// `GET /stage` (op `stage_owner.get`, auth key): GET /stage
     static func stageOwnerGet() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "stage_owner.get", method: "GET", path: "/stage", auth: .key)
@@ -857,6 +887,71 @@ struct ShareCollectionsPrivacyResponseLinksItem: Decodable, Sendable {
 struct ShareCollectionsPrivacyResponse: Decodable, Sendable {
     var status: String
     var links: [ShareCollectionsPrivacyResponseLinksItem]
+}
+
+struct LibraryStatusRouteResponsePostsItemFilesItem: Decodable, Sendable {
+    var id: String
+    var visibility: String
+    var privateUrl: String?
+}
+
+struct LibraryStatusRouteResponsePostsItem: Decodable, Sendable {
+    /// the id sent
+    var id: String
+    var postKey: String
+    var status: String
+    var files: [LibraryStatusRouteResponsePostsItemFilesItem]
+}
+
+struct LibraryStatusRouteResponseFailedItem: Decodable, Sendable {
+    var id: String
+    /// an error code
+    var error: String
+}
+
+struct LibraryStatusRouteResponse: Decodable, Sendable {
+    var status: String
+    var posts: [LibraryStatusRouteResponsePostsItem]
+    /// ids (or files) that did not get the status
+    var failed: [LibraryStatusRouteResponseFailedItem]
+}
+
+struct HiddenRule: Decodable, Sendable {
+    var id: String
+    var kind: String
+    /// normalized: lower case, trimmed; '' for upload
+    var value: String
+    var enabled: Bool
+    /// posts this rule has hidden
+    var hits: Int
+    var createdAt: Int
+    var updatedAt: Int
+}
+
+struct HiddenRulesListResponse: Decodable, Sendable {
+    var status: String
+    var rules: [HiddenRule]
+    var hidden: Int
+    var held: Int
+}
+
+struct HiddenRulesCreateResponse: Decodable, Sendable {
+    var status: String
+    var rule: HiddenRule
+    var applied: Int
+}
+
+struct HiddenRulesPreviewResponse: Decodable, Sendable {
+    var status: String
+    var matches: Int
+    /// up to 6 post keys, newest first
+    var sample: [String]
+}
+
+struct HiddenRulesUpdateResponse: Decodable, Sendable {
+    var status: String
+    var rule: HiddenRule
+    var applied: Int
 }
 
 struct McpSettingsResponseLink: Decodable, Sendable {

@@ -252,8 +252,8 @@ describe("old apps (1.0-1.6): GET /library without v keeps showing what it showe
         expect(post.posts.map((p) => p.id).sort()).toEqual(pre.posts.map((p) => p.id).sort());
         expect(byPost(post)).toEqual(byPost(pre));
         expect(post.usage).toEqual(pre.usage);
-        expect(pre.counts).toEqual({ posts: pre.posts.length, files: 92 });
-        expect(post.counts).toEqual({ posts: pre.posts.length, files: 86 });
+        expect(pre.counts).toEqual({ posts: pre.posts.length, files: 92, hidden: 0 });
+        expect(post.counts).toEqual({ posts: pre.posts.length, files: 86, hidden: 0 });
         // the host files old apps see are the retired host rows: same ids, urls, kinds, sources
         for (const p of fx.pairs) {
             const f = post.files.find((x) => x.id === p.host);

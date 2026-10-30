@@ -389,7 +389,8 @@ describe("GET /library: custom_title", () => {
         expect(after.posts.find((p: any) => p.id === SID).title).toBe("instagram_Dd7P496wolG");
         // the rest of the post's shape is as it was
         expect(Object.keys(after.posts[0]).sort()).toEqual(
-            ["created_at", "custom_title", "duration", "files", "height", "id", "link", "poster_url", "public_url", "service", "session", "title", "width"].sort(),
+            // (hidden, hidden_by and hidden_rule: section 37.2)
+            ["created_at", "custom_title", "duration", "files", "height", "hidden", "hidden_by", "hidden_rule", "id", "link", "poster_url", "public_url", "service", "session", "title", "width"].sort(),
         );
     });
 

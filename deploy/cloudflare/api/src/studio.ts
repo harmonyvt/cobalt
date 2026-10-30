@@ -44,6 +44,8 @@ import { MAX_POSTER_BYTES, PosterService, POSTER_BATCH, type MediaStore } from "
 import { LOOP_KICK_MAX, LoopService, type ReadBucket } from "./loops";
 import { ABOUT_KICK_MAX, AboutProbeService } from "./about-probe";
 import { publishStudio } from "./publish";
+import { atReady, sessionPostKey, type Gate } from "./hidden";
+import { hiddenRows } from "./hidden-store";
 import { ITEM_COLUMNS, getRow, makePublic, publishOriginal, purgeUrls, sessionItem, effectiveVisibility, type MediaRow, type PurgeFn } from "./visibility";
 
 export const SID_LENGTH = 22;
@@ -2216,6 +2218,8 @@ export class StudioService {
                 const row = await getSession(this.d.db, sid);
                 // an expired session is gone for the app too; a row of another key never shows
                 if (!row || row.key_id !== keyId || row.expires_at <= now) continue;
+                // nor a hidden post's (section 37.2)
+                if ((await hiddenRows(this.d.db, [sessionPostKey(row.id, row.link)])).get(sessionPostKey(row.id, row.link))?.state === "hidden") continue;
                 sessions.push(
                     sessionBody(
                         row,
@@ -3061,7 +3065,12 @@ export class StudioService {
     private async afterReady(sid: string, wantsPublic: boolean, r2Keys: string[]): Promise<void> {
         try {
             for (const k of r2Keys) await this.posters?.onReady(k);
-            if (!wantsPublic) return;
+            if (!wantsPublic) {
+                // the auto-hide rules (section 37.3) read every new save; one asked to be public runs them in hostPublic,
+                // before it publishes
+                await this.hiddenGate(sid, false).catch((e) => console.error("[studio] hidden rules failed", sid, String(e)));
+                return;
+            }
             await this.d.storage.put(`${PUBLIC_PREFIX}${sid}`, { attempts: 0, at: this.d.now() } satisfies PublicJob);
             await this.scheduleSweep();
             await this.hostPublic(sid);
@@ -3099,6 +3108,16 @@ export class StudioService {
             if (!row || (row.public_state !== "pending" && !unfinished) || row.status !== "ready") {
                 await this.d.storage.delete(key).catch(() => {});
                 return;
+            }
+            // Section 37.3, before anything is published: a rule hides the post (it is never public, not even briefly),
+            // or it waits as `held` for an about rule (the 15-minute cron publishes it then). A D1 failure here leaves
+            // the record for the next sweep: nothing is published unchecked.
+            if (!unfinished) {
+                const gate = await this.hiddenGate(sid, true, row.link);
+                if (gate !== "go") {
+                    await this.d.storage.delete(key).catch(() => {});
+                    return;
+                }
             }
             const rec = (await this.d.storage.get<PublicJob>(key)) ?? { attempts: 0, at: this.d.now() };
             if (!this.d.media || !this.d.mediaBaseUrl) {
@@ -3172,6 +3191,12 @@ export class StudioService {
         } finally {
             this.hosting.delete(sid);
         }
+    }
+
+    // The auto-hide rules for a save that just became ready (section 37.3). Throws on a D1 failure.
+    private async hiddenGate(sid: string, wantsPublic: boolean, link?: string | null): Promise<Gate> {
+        const postKey = sessionPostKey(sid, link === undefined ? (await getSession(this.d.db, sid))?.link : link);
+        return atReady({ db: this.d.db, vis: this.visDeps(), now: this.d.now, keyId: SERVICE_KEY_ID, randomBytes: this.d.randomBytes }, postKey, wantsPublic);
     }
 
     // Every other live item of a gallery goes public too (one mirror per file, section 16). true = all are.

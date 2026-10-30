@@ -17,6 +17,7 @@ import {
     type PrivateLinkRow,
 } from "./private-links";
 import { privateFileUrl, privatePosterUrl } from "./share-private";
+import { hiddenFileIds, notHiddenClause, shareGate } from "./hidden-store";
 import type { StudioReply } from "./studio";
 
 // 10 is the most a Discord media gallery shows (section 29; it was 4, the Open Graph image grid's limit).
@@ -80,11 +81,14 @@ export function publicUrlOf(r: MediaRow, mediaBaseUrl: string): string | null {
     return key && PUBLIC_NAME.test(key) ? `${withSlash(mediaBaseUrl)}${key}` : null;
 }
 
+// The live rows of these files. A file of a hidden post (section 37.2) is left out, so everything that reads a gallery
+// link treats it like a deleted file.
 export async function rowsById(db: D1Database, ids: string[]): Promise<Map<string, MediaRow>> {
     if (ids.length === 0) return new Map();
     const marks = ids.map((_, i) => `?${i + 1}`).join(", ");
+    const cols = ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ");
     const { results } = await db
-        .prepare(`SELECT ${ITEM_COLUMNS} FROM media_items WHERE id IN (${marks}) AND deleted_at IS NULL`)
+        .prepare(`SELECT ${cols} FROM media_items m WHERE m.id IN (${marks}) AND m.deleted_at IS NULL${await notHiddenClause(db)}`)
         .bind(...ids)
         .all<MediaRow>();
     return new Map(results.map((r) => [r.id, r]));
@@ -199,6 +203,9 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
     if (b?.private !== undefined && typeof b.private !== "boolean") return err(400, "error.share.bad_request");
     const ids = items as string[];
     try {
+        // a hidden post's files are never shared (section 37.2); a held one's wait ends here (the owner decided, 37.3)
+        const hidden = await shareGate(d.db, ids);
+        if (hidden.length > 0) return err(409, "error.hidden", { ids: hidden });
         // section 36: absent = the owner's `new_links` setting
         const makePrivate = typeof b?.private === "boolean" ? b.private : (await newLinksSetting(d.db)) === "private";
         const rows = await rowsById(d.db, ids);
@@ -257,11 +264,14 @@ export async function listShareSets(d: ShareSetDeps): Promise<StudioReply> {
             for (const [k, v] of await rowsById(d.db, all.slice(i, i + 90))) rows.set(k, v);
         }
         const links = await liveLinksFor(d.db, "set", results.map((s) => s.id));
+        // a hidden file is listed like a deleted one (url null), and says so (section 37.2)
+        const hidden = new Set(await hiddenFileIds(d.db, all));
+        const mark = (items: SetItem[]) => (hidden.size === 0 ? items : items.map((i) => (hidden.has(i.id) ? { ...i, hidden: true } : i)));
         return {
             status: 200,
             body: {
                 status: "success",
-                sets: results.map((s) => setShape(d, s, itemsFor(d, parseItems(s.items), rows, links.get(s.id)), links.get(s.id) ?? null)),
+                sets: results.map((s) => setShape(d, s, mark(itemsFor(d, parseItems(s.items), rows, links.get(s.id))), links.get(s.id) ?? null)),
             },
         };
     } catch {

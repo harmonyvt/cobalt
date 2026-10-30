@@ -2,6 +2,7 @@
 // area keeps its ops in ops/<area>.ts.
 import { BOX_OPS } from "./ops/box";
 import { CHAT_OPS } from "./ops/chat";
+import { HIDDEN_OPS } from "./ops/hidden";
 import { HOST_OPS } from "./ops/hosts";
 import { LIBRARY_OPS } from "./ops/library";
 import { LIBRARY_ADMIN_OPS } from "./ops/library-admin";
@@ -24,6 +25,7 @@ export const REGISTRY = new Registry([
     ...MAKE_OPS,
     ...SHARE_OPS,
     ...PRIVATE_OPS,
+    ...HIDDEN_OPS,
     ...STAGE_OPS,
     ...BOX_OPS,
     ...LIVE_OPS,

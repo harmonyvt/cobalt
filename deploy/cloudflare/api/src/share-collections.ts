@@ -4,7 +4,8 @@
 
 import { writeCaption, setSubject, type Captioner } from "./roast";
 import { linkInsert, liveLinksFor, revokeStmt } from "./private-links";
-import { mintSetId, setRoastInput } from "./share-sets";
+import { mintSetId, parseItems, setRoastInput } from "./share-sets";
+import { hiddenFileIds } from "./hidden-store";
 import type { StudioReply } from "./studio";
 
 export const COLLECTION_NAME_MAX = 60;
@@ -222,6 +223,9 @@ export async function rerollCollection(d: CollectionDeps, id: string, keyId: str
             .prepare(`SELECT id, items FROM share_sets WHERE id IN (${marks}) AND revoked_at IS NULL`)
             .bind(...old)
             .all<{ id: string; items: string }>();
+        // the new links would share a hidden post's files again: refused (section 37.2)
+        const hidden = await hiddenFileIds(d.db, sets.flatMap((s) => parseItems(s.items)));
+        if (hidden.length > 0) return err(409, "error.hidden", { ids: hidden });
         const now = d.now();
         const replaced: Record<string, string> = {};
         const stmts: D1PreparedStatement[] = [];
