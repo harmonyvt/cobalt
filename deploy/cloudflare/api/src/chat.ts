@@ -12,6 +12,7 @@ import { chatTools, loadPosts, picturesOf, recordsOf, type ChatCollect, type Cha
 import { chatToolbox, runConfirmed } from "./registry/ai";
 import type { OpBase } from "./registry/context";
 import { toolTypes } from "./registry/index";
+import { cardPostIds, postIdsOf, type ToolCall } from "./chat-cards";
 import type { PendingConfirm, PendingPort } from "./registry/pending";
 import type { Registry } from "./registry/registry";
 import type { EmbedClient } from "./embed";
@@ -184,6 +185,8 @@ export type Step = {
     confirm?: ConfirmCard;
     // kind "job" only (status "running" while the server waits for it)
     job?: JobCard;
+    // kind "code": every cobalt.* call of the run, with its card (section 38); absent on older messages
+    calls?: ToolCall[];
 };
 
 const err = (status: number, code: string): StudioReply => ({ status, body: { status: "error", error: { code } } });
@@ -345,8 +348,12 @@ export async function getThread(d: ChatDeps, id: string): Promise<StudioReply> {
             .all<MessageRow>();
         const now = d.now();
         const messages = results.map((r) => messageShape(r, now));
-        // every shown post, and every post of a ranked list (section 34.6)
-        const posts = await postsMap(d, [...messages.flatMap((m) => m.post_ids), ...results.flatMap((r) => rankedIds(r.ranked))]);
+        // every shown post, every post of a ranked list (section 34.6) and every post a tool card names (section 38)
+        const posts = await postsMap(d, [
+            ...messages.flatMap((m) => m.post_ids),
+            ...results.flatMap((r) => rankedIds(r.ranked)),
+            ...messages.flatMap((m) => cardPostIds(m.steps)),
+        ]);
         return { status: 200, body: { status: "success", thread: await threadShape(d.db, t), messages, posts } };
     } catch (e) {
         console.error("[chat] read failed", String(e));
@@ -719,9 +726,9 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
     const workbench = !!d.registry && !!d.base && workbenchOn(d.base.env);
     // the model's `cobalt` for one code run: the registry's tools (namespaced, with the old flat names), else the read
     // tools alone
-    const toolsForRun = () => {
+    const toolsForRun = (onCall?: (call: ToolCall) => void) => {
         const legacy = chatTools(toolDeps, collect);
-        if (!d.registry || !d.base) return { tools: legacy, paused: () => null, waiting: () => [] as { job: string; note: string | null }[] };
+        if (!d.registry || !d.base) return { tools: legacy, paused: () => null, waiting: () => [] as { job: string; note: string | null }[], calls: () => [] as ToolCall[] };
         return chatToolbox(d.registry, d.base, {
             threadId: c.thread.id,
             messageId: String(c.botRow.id),
@@ -731,6 +738,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
             pending: d.pending ?? null,
             jobs: d.jobs ?? null,
             randomBytes: d.randomBytes,
+            ...(onCall ? { onCall } : {}),
         });
     };
     // jobs handed to the server in this reply (section 33.14): the reply ends after the run that handed them over
@@ -801,7 +809,11 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 const collageBefore = collageJson();
                 const rankedBefore = rankedJson();
                 const t0 = Date.now();
-                const box = toolsForRun();
+                // each call shows on the step as it ends (section 38)
+                const box = toolsForRun((call) => {
+                    (step.calls ??= []).push(call);
+                    c.emit("step", { step });
+                });
                 // a run that calls the box may wait on it (a wake, a download, a 120 s command, a save)
                 const long = workbench && /\bbox\b/.test(u.input.code);
                 // and the message is saved every 30 s meanwhile, so the run never looks stale (STALE_MS)
@@ -815,6 +827,9 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 step.error = out.error ?? null;
                 const full = out.error !== undefined ? null : stringify(out.result ?? null);
                 step.result = full === null ? null : clipStr(full, STEP_RESULT_MAX);
+                // the posts the step's cards name (section 38), so their thumbnails draw at once
+                const cardIds = (step.calls ?? []).flatMap((x) => (x.card ? postIdsOf(x.card) : []));
+                if (cardIds.length > 0) c.emit("card_posts", { posts: await postsMap(d, cardIds) });
                 c.emit("step", { step });
                 if (collect.show.length > shownBefore) {
                     const added = collect.show.slice(shownBefore);

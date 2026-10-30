@@ -60,13 +60,16 @@ public struct ChatStep: Sendable, Equatable, Identifiable, Decodable {
     /// Kind `"job"` only (APP-API-CONTRACT 33.14): a job the chat handed to the server, which continues the chat when it
     /// ends. The step runs while the server waits for it.
     public var job: ChatJobCard?
+    /// Kind `"code"`: every `cobalt.*` call of the run, in order, with its card (APP-API-CONTRACT 38); empty on older
+    /// messages.
+    public var calls: [ChatToolCall]
 
     /// The server is still waiting for this step's job: a new reply comes by itself when it ends.
     public var isWaitingJob: Bool { kind == "job" && status == .running }
 
     public init(
         id: String, kind: String = "code", status: Status, code: String = "", logs: [String] = [],
-        result: String? = nil, error: String? = nil, durationMS: Int? = nil, job: ChatJobCard? = nil
+        result: String? = nil, error: String? = nil, durationMS: Int? = nil, job: ChatJobCard? = nil, calls: [ChatToolCall] = []
     ) {
         self.id = id
         self.kind = kind
@@ -77,9 +80,10 @@ public struct ChatStep: Sendable, Equatable, Identifiable, Decodable {
         self.error = error
         self.durationMS = durationMS
         self.job = job
+        self.calls = calls
     }
 
-    enum CodingKeys: String, CodingKey { case id, kind, status, code, logs, result, error, durationMS = "durationMs", job }
+    enum CodingKeys: String, CodingKey { case id, kind, status, code, logs, result, error, durationMS = "durationMs", job, calls }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -92,6 +96,7 @@ public struct ChatStep: Sendable, Equatable, Identifiable, Decodable {
         error = try c.decodeIfPresent(String.self, forKey: .error)
         durationMS = (try? c.decodeIfPresent(Double.self, forKey: .durationMS)).flatMap { $0 }.map { Int($0.rounded()) }
         job = (try? c.decodeIfPresent(ChatJobCard.self, forKey: .job)).flatMap { $0 }
+        calls = c.lossyArray(ChatToolCall.self, .calls)
     }
 }
 
@@ -496,6 +501,8 @@ public enum ChatEvent: Sendable, Equatable {
     case step(ChatStep)
     /// Files the model chose to show: appended to the message's `postIDs`, with their shapes.
     case posts(ids: [String], posts: [LibraryPost])
+    /// The posts a step's tool cards draw (38.3): merged into the thread's map, shown nowhere by themselves.
+    case cardPosts([LibraryPost])
     /// The reply attached a collage (27.5): set on the running message; `done` carries it too.
     case collage(ChatCollage)
     /// The reply attached a scored list (34.6): set on the running message (a later one replaces it); `done` carries it

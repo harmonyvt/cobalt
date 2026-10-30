@@ -49,6 +49,7 @@ public struct ChatThreadContent: Sendable, Equatable {
     /// - `text` is appended to the running message, in order;
     /// - `step` replaces the step with the same id, or is appended;
     /// - `posts` appends the ids the message does not show yet, and merges the shapes;
+    /// - `cardPosts` merges the shapes a step's tool cards draw (38.3);
     /// - `collage` sets the collage of the running message; `ranked` sets its scored list (and merges the shapes);
     /// - `confirm` sets the card on its message (or updates its status after an answer);
     /// - `title` and `done` carry the thread as it is now; `done` replaces the message;
@@ -78,6 +79,8 @@ public struct ChatThreadContent: Sendable, Equatable {
             edit { message in
                 for id in ids where !message.postIDs.contains(id) { message.postIDs.append(id) }
             }
+        case .cardPosts(let shown):
+            for post in shown { posts[post.id] = post }
         case .collage(let collage):
             edit { $0.collage = collage }
         case .ranked(let ranked, let shown):

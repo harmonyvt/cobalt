@@ -5,6 +5,7 @@
 import type { z } from "zod";
 import type { JobsPort } from "../chat-jobs";
 import type { ChatCollect, ChatTools } from "../chat-tools";
+import { cardFor, CALLS_MAX, type ToolCall } from "../chat-cards";
 import { mintCollectionId } from "../share-collections";
 import { forCall, type OpBase } from "./context";
 import { OpError, type AiFlags, type Op, type OpContext } from "./op";
@@ -67,6 +68,8 @@ export type ChatToolboxOpts = {
     // the chat's job watcher (section 33.14); null: cobalt.jobs.onDone only looks
     jobs?: JobsPort | null;
     randomBytes?: (n: number) => Uint8Array;
+    // each call as it ends, with its card (section 38)
+    onCall?: (call: ToolCall) => void;
 };
 
 export type ChatToolbox = {
@@ -75,11 +78,17 @@ export type ChatToolbox = {
     paused(): PendingConfirm | null;
     // the jobs this run handed to the server with cobalt.jobs.onDone
     waiting(): { job: string; note: string | null }[];
+    // the calls of this run, in order (section 38; at most CALLS_MAX)
+    calls(): ToolCall[];
 };
+
+// Ops whose card shows what a call changed: the toolbox reads the project first.
+const READS_BEFORE: Record<string, string> = { "edits.update": "edits.get", "edits.addOverlay": "edits.get" };
 
 export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts): ChatToolbox {
     let paused: PendingConfirm | null = null;
     const waiting: { job: string; note: string | null }[] = [];
+    const calls: ToolCall[] = [];
     const jobs = o.jobs ?? null;
     const watchJob = jobs
         ? async (job: string, note: string | null) => {
@@ -99,6 +108,13 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
             const parsed = op.input.safeParse(argsToInput(op, args));
             if (!parsed.success) throw new Error(zodMessage(op.callName, parsed.error));
             const input = parsed.data;
+            let t0 = Date.now();
+            const record = (call: Omit<ToolCall, "op" | "ms">, ms = Date.now() - t0) => {
+                if (calls.length >= CALLS_MAX) return;
+                const c: ToolCall = { op: op.name, ms, ...call };
+                calls.push(c);
+                o.onCall?.(c);
+            };
             if (op.ai.tier === "ask" && (op.ai.asks ? await op.ai.asks(input, ctx) : true)) {
                 if (!o.pending) throw new Error(`cobalt.${op.callName} needs Harmony's ok, and confirm cards are off on this server`);
                 const card = op.ai.preview ? await op.ai.preview(ctx, input) : { summary: op.ai.summary.split("\n")[0]!, effect: {} };
@@ -115,18 +131,32 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
                 };
                 await o.pending.put(o.threadId, rec);
                 paused = rec;
+                record({ status: "asked" });
                 return { pending_confirm: { id: rec.id, summary: rec.summary, effect: rec.effect } };
             }
+            const reads = READS_BEFORE[op.name];
+            const readOp = reads && calls.length < CALLS_MAX ? registry.op(reads) : undefined;
+            const before = readOp ? await runOp(readOp, ctx, { id: (input as { id?: unknown }).id }).then((p) => (p as { timeline?: unknown } | null)?.timeline, () => undefined) : undefined;
+            t0 = Date.now();
+            let out: unknown;
             try {
-                return await runOp(op, ctx, input);
+                out = await runOp(op, ctx, input);
             } catch (e) {
-                if (e instanceof OpError) throw new Error(e.message === e.code ? `cobalt.${op.callName} failed: ${e.code}` : e.message);
+                const message = e instanceof OpError ? (e.message === e.code ? `cobalt.${op.callName} failed: ${e.code}` : e.message) : e instanceof Error ? e.message : String(e);
+                record({ status: "error", error: message.slice(0, 300) });
+                if (e instanceof OpError) throw new Error(message);
                 throw e;
             }
+            if (calls.length < CALLS_MAX) {
+                const ms = Date.now() - t0;
+                const card = await cardFor(op.name, input, out, { db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl, before });
+                record(card ? { status: "done", card } : { status: "done" }, ms);
+            }
+            return out;
         };
         for (const name of [op.callName, ...(op.ai.aliases ?? [])]) tools[name] = fn;
     }
-    return { tools, paused: () => paused, waiting: () => [...waiting] };
+    return { tools, paused: () => paused, waiting: () => [...waiting], calls: () => [...calls] };
 }
 
 // The op behind a stored card, run with the input it was checked with when the model asked (a confirmed "yes").
