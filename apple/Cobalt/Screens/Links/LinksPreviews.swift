@@ -89,7 +89,7 @@ private struct LoadedLinks<Content: View>: View {
 #Preview("links · a private link (badge, opened)", traits: .fixedLayout(width: 390, height: 844)) {
     PreviewHost(.happy, tab: .links) { model in
         LoadedLinks(model: model, prepare: { model in
-            _ = try? await model.shareSets.makePrivate(PreviewData.privateSampleSetID)
+            _ = try? await model.shareSets.makePrivate("9000000000000000002")  // PreviewData.privateSampleSetID (internal to CobaltKit)
         }) { model in
             NavigationStack { LinksScreen(model: model) }
         }
@@ -98,7 +98,7 @@ private struct LoadedLinks<Content: View>: View {
 #Preview("links · a private link, mac width", traits: .fixedLayout(width: 900, height: 700)) {
     PreviewHost(.happy, tab: .links) { model in
         LoadedLinks(model: model, prepare: { model in
-            _ = try? await model.shareSets.makePrivate(PreviewData.privateSampleSetID)
+            _ = try? await model.shareSets.makePrivate("9000000000000000002")  // PreviewData.privateSampleSetID (internal to CobaltKit)
         }) { model in
             NavigationStack { LinksScreen(model: model) }
         }
