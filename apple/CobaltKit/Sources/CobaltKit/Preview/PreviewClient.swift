@@ -195,6 +195,8 @@ public struct PreviewClient: CobaltClient {
     let stageState = PreviewStageState()
     /// The editor's projects and renders the "server" holds (`Editor/PreviewEditor.swift`).
     let editorState = PreviewEditorState()
+    /// How agents reach the MCP on the "server" (`PreviewMcp.swift`).
+    let mcpState = PreviewMcpState()
 
     public var baseURL: URL { PreviewData.base }
 

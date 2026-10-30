@@ -132,6 +132,16 @@ public protocol CobaltClient: Sendable {
     /// `GET /library/map` (APP-API-CONTRACT 21; keyed): every embedded post with its int8 vector, newest first, for the
     /// sky map. Defaulted below (`.unsupported`) so older fakes compile.
     func libraryMap() async throws -> LibraryMap
+    // How agents reach the MCP (APP-API-CONTRACT 35.5; keyed). Defaulted below (`.unsupported`) so older fakes compile.
+    /// `GET /mcp/settings`: the mode and the live private link's use (never its secret). A server without the route
+    /// is `CobaltError.api(code:httpStatus: 404)`.
+    func mcpSettings() async throws -> McpSettings
+    /// `POST /mcp/settings {mode}`: turning `.private` on answers the new link once (`linkUrl`); leaving it revokes
+    /// the link for good.
+    func setMcpMode(_ mode: McpSettings.Mode) async throws -> McpChange
+    /// `POST /mcp/settings/rotate`: a new private link, the old one stops at once. `409 error.mcp.not_private` outside
+    /// `.private`.
+    func rotateMcpLink() async throws -> McpChange
     // Gallery share links (APP-API-CONTRACT 24; keyed; only when `features.share_sets`). Defaulted below
     // (`.unsupported`) so older fakes compile.
     /// `POST /share/sets` `{items, title?}`: one link for 2..`share_set_max` public library files, in the order given
@@ -286,6 +296,9 @@ extension CobaltClient {
     public func libraryAbout(postKey: String) async throws -> LibraryAbout { throw PipelineFailure.unsupported }
     public func setLibraryAboutTags(postKey: String, tags: [String]?) async throws -> LibraryAbout { throw PipelineFailure.unsupported }
     public func libraryMap() async throws -> LibraryMap { throw PipelineFailure.unsupported }
+    public func mcpSettings() async throws -> McpSettings { throw PipelineFailure.unsupported }
+    public func setMcpMode(_ mode: McpSettings.Mode) async throws -> McpChange { throw PipelineFailure.unsupported }
+    public func rotateMcpLink() async throws -> McpChange { throw PipelineFailure.unsupported }
     public func createShareSet(items: [String], title: String?) async throws -> ShareSet { throw PipelineFailure.unsupported }
     public func shareSets() async throws -> [ShareSet] { throw PipelineFailure.unsupported }
     public func revokeShareSet(id: String) async throws { throw PipelineFailure.unsupported }
