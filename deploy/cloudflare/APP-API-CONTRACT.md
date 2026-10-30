@@ -152,7 +152,7 @@ Response (streams, uploads, file bytes, forwarding). Chat: the op is also a chat
 | ANY | `stage host /*` | `host.stage` | open |  |  | Worker | yes |  |
 | ANY | `studio host /*` | `host.studio` | open |  |  | Worker | yes |  |
 
-The chat AI's calls (62): `cobalt.library.list`, `cobalt.library.search`, `cobalt.library.post`, `cobalt.look`,
+The chat AI's calls (63): `cobalt.library.list`, `cobalt.library.search`, `cobalt.library.post`, `cobalt.look`,
 `cobalt.show`, `cobalt.collage`, `cobalt.rank`, `cobalt.links.list`, `cobalt.collections.list`, `cobalt.library.about`,
 `cobalt.library.about.set` (asks first), `cobalt.queue`, `cobalt.library.save`, `cobalt.library.title`,
 `cobalt.library.visibility` (asks first), `cobalt.library.delete` (asks first), `cobalt.library.deleteFile` (asks
@@ -166,7 +166,8 @@ first), `cobalt.make.webp`, `cobalt.make.still`, `cobalt.make.trim`, `cobalt.mak
 `cobalt.library.hidden`, `cobalt.hidden.rules.list`, `cobalt.hidden.rules.add` (asks first),
 `cobalt.hidden.rules.update` (asks first), `cobalt.hidden.rules.delete` (asks first), `cobalt.hidden.rules.preview`,
 `cobalt.stage.get`, `cobalt.stage.set`, `cobalt.stage.store` (asks first), `cobalt.stage.pool`, `cobalt.stage.items`,
-`cobalt.stage.action`, `cobalt.emotes.find`, `cobalt.emotes.save`, `cobalt.box.run`, `cobalt.box.save`.
+`cobalt.stage.action`, `cobalt.emotes.find`, `cobalt.emotes.save`, `cobalt.box.run`, `cobalt.box.pull`,
+`cobalt.box.save`.
 
 <!-- routes:end -->
 
@@ -4022,7 +4023,7 @@ cannot save. **No new route, no migration, no secret, nothing for the app.** The
 model sees them only while the box is on (`WORKBENCH` bound and `WORKBENCH_DAILY_MINUTES` above 0).
 
 - **Where it runs**: the `Workbench` Durable Object (`src/workbench.ts`, one object, `"main"`) on its own container app
-  `cobalt-api-workbench` (image `deploy/cloudflare/workbench`, `basic`: 1/4 vCPU, 1 GiB, 4 GB disk, `maxInstances: 1`). It is a
+  `cobalt-api-workbench` (image `deploy/cloudflare/workbench`, `standard-1` since 33.11.1: 1/2 vCPU, 4 GiB, 8 GB disk, `maxInstances: 1`). It is a
   Containers-library `Container` with no port: commands go through the container exec API. The decisions are in
   `src/workbench-core.ts`, the rules in `src/workbench-rules.ts` (both node-testable). It does **not** use
   `@cloudflare/sandbox`: since 1.0 that package is only file helpers on top of the same exec API, and it would need
@@ -4064,6 +4065,28 @@ model sees them only while the box is on (`WORKBENCH` bound and `WORKBENCH_DAILY
   at about $0.85 a month.
 - **Deploy** (owner): an API deploy builds and pushes the new image and creates the container app and the Durable Object
   class. No migration, no secret.
+
+### 33.11.1 FFmpeg editing on the box: `cobalt.box.pull`
+
+The chat AI and the MCP server (35) get every ffmpeg operation for editing, not only the fixed make/edits ops, by running
+ffmpeg on the workbench box against library files. **Nothing for the app, no route, no migration, no secret.** The same
+three ops are the tools on both sides (`box_run`, `box_pull`, `box_save` over MCP).
+
+- **`cobalt.box.pull(id, { as? })`**: `id` is a post id (the files it was saved as, every item of a gallery, up to 10;
+  a post with none of those gives all its files) or one file id (any file, made ones too). Each file streams from R2
+  (`cobalt-originals` or `cobalt-media` by the row's bucket) into `/workspace/<file id>.<ext>` (ext from the content type,
+  else the key), or `/workspace/<as>` for a single file (`as` matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`). Written as
+  `<name>.part` and renamed; a size that differs from R2's is an error. At most **1 GB** a call. Returns
+  `{ files: [{ path, file_id, content_type, bytes, seconds, width, height }] }`. Private files are allowed.
+- **Outbound body cap**: because private bytes can now be in the box, a request from the box with a body over **64 KB**
+  (declared or streamed) is refused with `workbench: blocked (a request body over 64 KB)`. Sites' own API calls (forms,
+  GraphQL) still fit. The only way a file leaves is `box.save`, into the library.
+- **Flow**: `box.pull` -> `box.run("ffmpeg -hide_banner -loglevel error -y -i <in> ... out.mp4")` -> `box.save("out.mp4")`.
+  `box.save`'s types stay jpg, png, webp, gif, heic, mp4, mov (100 MB).
+- **Size**: the box moved from `basic` to `standard-1` for ffmpeg (about $0.08 an awake hour; the 60-minute daily cap
+  bounds it at about $2.50 a month). The 120 s per command and 240 s per code run limits are unchanged, so the prompt asks
+  for short outputs, scaled-down inputs and `-preset veryfast`.
+- **Prompt**: the workbench paragraph now names both uses (editing beyond the make/edits calls; last resort for saving).
 
 ### 33.12 Every route is an op (T7)
 

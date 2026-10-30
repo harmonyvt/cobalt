@@ -105,8 +105,8 @@ the files and a real run before anything is called done.
   (`src/mcp.ts`, `src/registry/ops/mcp.ts`), auth `Bearer <client key>`, each key one MCP "thread" (`chat:<thread>`, same
   caps). `upload_begin` mints a 15-minute `PUT /mcp/upload/<token>` link for local files. A new chat op appears there too;
   hide chat-only calls in `MCP_SKIPPED_CALLS`, MCP-only ops use `when: (f) => f.mcp === true`.
-- Workbench (`APP-API-CONTRACT.md` section 33.11): the chat AI's last-resort Linux box (`cobalt.box.run`/`save`), the
-  `Workbench` DO (`api/src/workbench*.ts`) on container app `cobalt-api-workbench` (`deploy/cloudflare/workbench/`, basic,
+- Workbench (`APP-API-CONTRACT.md` section 33.11, ffmpeg editing 33.11.1): the chat AI and MCP Linux box (`cobalt.box.run`/`pull`/`save`), the
+  `Workbench` DO (`api/src/workbench*.ts`) on container app `cobalt-api-workbench` (`deploy/cloudflare/workbench/`, standard-1,
   one instance). No secrets, no own internet: every HTTP(S) request passes the Worker's outbound rule (19.2 + our own zone
   refused). Wiped on sleep (2 min) and between threads; `WORKBENCH_DAILY_MINUTES` caps awake time (default 60, 0 = off).
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`

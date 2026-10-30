@@ -27,6 +27,7 @@ import {
     markActive,
     markAsleep,
     markAwake,
+    OUTBOUND_BODY_MAX,
     sniffSave,
     usedMs,
     workbenchOn,
@@ -103,6 +104,31 @@ describe("the outbound rule", () => {
         expect(sent[0]!.redirect).toBe("manual");
         expect(sent[0]!.method).toBe("POST");
         expect(await sent[0]!.text()).toBe("hi");
+    });
+});
+
+describe("the outbound body cap", () => {
+    it("sends small bodies and refuses one over 64 KB, declared or streamed", async () => {
+        const sent: Request[] = [];
+        const fetcher = async (r: Request) => {
+            sent.push(r);
+            return new Response("ok");
+        };
+        const small = await forwardOutbound(new Request("https://example.com/api", { method: "POST", body: "x".repeat(OUTBOUND_BODY_MAX) }), fetcher);
+        expect(small.status).toBe(200);
+        expect((await sent[0]!.text()).length).toBe(OUTBOUND_BODY_MAX);
+        const big = await forwardOutbound(new Request("https://example.com/up", { method: "PUT", body: new Uint8Array(OUTBOUND_BODY_MAX + 1) }), fetcher);
+        expect(big.status).toBe(403);
+        expect(await big.text()).toContain("a request body over 64 KB");
+        const stream = new ReadableStream<Uint8Array>({
+            start(c) {
+                for (let i = 0; i < 5; i++) c.enqueue(new Uint8Array(20_000));
+                c.close();
+            },
+        });
+        const chunked = await forwardOutbound(new Request("https://example.com/up", { method: "POST", body: stream, duplex: "half" } as RequestInit), fetcher);
+        expect(chunked.status).toBe(403);
+        expect(sent).toHaveLength(1);
     });
 });
 
@@ -194,9 +220,10 @@ function stubContainer(cap = 60): Box {
         const child = spawn(argv[0]!, argv.slice(1), {
             cwd: o.cwd === "/workspace" ? root : o.cwd,
             env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: "C.UTF-8" },
-            stdio: ["ignore", o.stdout === "ignore" ? "ignore" : "pipe", o.stderr === "ignore" ? "ignore" : "pipe"],
+            stdio: [o.stdin ? "pipe" : "ignore", o.stdout === "ignore" ? "ignore" : "pipe", o.stderr === "ignore" ? "ignore" : "pipe"],
         });
         child.on("error", () => {});
+        if (o.stdin) void Readable.fromWeb(o.stdin as any).pipe(child.stdin!);
         const exitCode = new Promise<number>((res) => child.on("close", (c, sig) => res(c ?? (sig ? 137 : -1))));
         o.signal?.addEventListener("abort", () => child.kill("SIGKILL"));
         return {
@@ -264,6 +291,16 @@ describe("the box", () => {
         expect(slow).toMatchObject({ code: 124, timed_out: true, stdout: "started\n" });
         expect(slow.stderr).toContain("killed after 1 s");
     }, 20_000);
+
+    it("writes a pulled file under a plain name only, whole or not at all", async () => {
+        const b = newBox();
+        const body = new Blob([new Uint8Array(70_000).fill(5)]).stream();
+        expect(await b.core.write("t1", "Abc123.mp4", body)).toEqual({ size: 70_000 });
+        expect(((await b.core.run("t1", "ls; wc -c < Abc123.mp4")) as any).stdout).toBe("Abc123.mp4\n70000\n");
+        for (const bad of ["../x", "a/b", ".hidden", "", "x".repeat(200)]) {
+            expect(await b.core.write("t1", bad, new Blob(["x"]).stream())).toEqual({ error: `not a plain file name: ${bad}` });
+        }
+    });
 
     it("keeps a thread's files while awake and wipes the box before another thread gets it", async () => {
         const b = newBox();
@@ -379,7 +416,12 @@ const namespace = () => ({
     idFromName: (name: string) => ({ name }),
     get: (id: { name: string }) => {
         expect(id.name).toBe("main");
-        return { run: box.core.run.bind(box.core), stat: box.core.stat.bind(box.core), read: box.core.read.bind(box.core) };
+        return {
+            run: box.core.run.bind(box.core),
+            stat: box.core.stat.bind(box.core),
+            read: box.core.read.bind(box.core),
+            write: box.core.write.bind(box.core),
+        };
     },
 });
 
@@ -475,6 +517,46 @@ describe("cobalt.box in a chat reply", () => {
         expect(script).toEqual([]);
         expect(runOpts).toEqual([null, { timeoutMs: CODE_TIMEOUT_BOX_MS }]);
         expect(db.raw.prepare("SELECT COUNT(*) AS n FROM media_items").get()).toEqual({ n: 0 });
+    });
+
+    it("pulls a private library file into the box for ffmpeg and saves the result back", async () => {
+        const t = await newThread();
+        const src = new Uint8Array([...bytes(0, 0, 0, 0x18, "ftypisom", 0, 0, 2, 0, "isomiso2"), ...new Uint8Array(3000).fill(9)]);
+        await originals.put("uploads/SrcVideo00000001.mp4", new Blob([src]).stream(), { httpMetadata: { contentType: "video/mp4" }, customMetadata: {} });
+        db.raw
+            .prepare(
+                `INSERT INTO media_items (id, kind, source, bucket, r2_key, name, content_type, bytes, width, height, duration, key_id, created_at, visibility)
+                 VALUES ('SrcVideo00000001','upload','upload','originals','uploads/SrcVideo00000001.mp4','a.mp4','video/mp4',?,1280,720,4.5,'key-1',1000,'private')`,
+            )
+            .run(src.length);
+        script = [
+            (s) => {
+                expect(s.system).toContain("cobalt.box.pull(id)");
+                return code(
+                    "tu_1",
+                    `const p = await cobalt.box.pull("SrcVideo00000001");
+                     const r = await cobalt.box.run("cp " + p.files[0].path + " out.mp4 && wc -c < out.mp4");
+                     let named; try { await cobalt.box.pull("SrcVideo00000001", { as: "../x" }); } catch (e) { named = e.message; }
+                     let missing; try { await cobalt.box.pull("Nope000000000000"); } catch (e) { missing = e.message; }
+                     const s = await cobalt.box.save("out.mp4");
+                     return { p, r: r.stdout, named, missing, s };`,
+                );
+            },
+            (s) => {
+                const r = lastResult(s).result;
+                expect(r.p).toEqual({
+                    files: [{ path: "SrcVideo00000001.mp4", file_id: "SrcVideo00000001", content_type: "video/mp4", bytes: src.length, seconds: 4.5, width: 1280, height: 720 }],
+                });
+                expect(r.r).toBe(`${src.length}\n`);
+                expect(r.named).toMatch(/^cobalt\.box\.pull: as: /);
+                expect(r.missing).toBe("cobalt.box.pull: no post or file with id Nope000000000000");
+                expect(r.s).toMatchObject({ kind: "video", bytes: src.length });
+                return say("done");
+            },
+        ];
+        await reply(t, "reverse it");
+        expect(script).toEqual([]);
+        expect(db.raw.prepare("SELECT COUNT(*) AS n FROM media_items WHERE source = 'upload'").get()).toEqual({ n: 2 });
     });
 
     it("does not exist for the model while the box is off", async () => {
