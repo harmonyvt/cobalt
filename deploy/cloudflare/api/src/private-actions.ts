@@ -22,6 +22,7 @@ import {
     type PrivateLinkRow,
 } from "./private-links";
 import { liveSetRow } from "./share-sets";
+import { shareGate } from "./hidden-store";
 import type { StudioReply } from "./studio";
 import { getRow, setVisibility, toggleable, type VisDeps } from "./visibility";
 
@@ -81,6 +82,8 @@ export function itemOn(d: PrivateDeps, id: string): Promise<StudioReply> {
         const row = await getRow(d.db, id);
         if (!row) return err(404, "error.private.not_found");
         if (!toggleable(row)) return err(409, "error.private.not_toggleable");
+        // a hidden post is never shared (section 37.2); turning a held one's link on by hand ends its wait (37.3)
+        if ((await shareGate(d.db, [row.id])).length > 0) return err(409, "error.hidden");
         const off = await setVisibility(d.vis, row.id, false, d.keyId);
         if (off.status !== 200) {
             const code = (off.body as { error?: { code?: string } }).error?.code ?? "error.api.generic";

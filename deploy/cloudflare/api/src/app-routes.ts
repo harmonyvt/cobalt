@@ -26,6 +26,9 @@ import { EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_MAX_SECONDS } from "../../edito
 import { version as apiVersion } from "../../../../api/package.json";
 
 import { LINE_MAX, LINE_WAIT_MS, parseQueryFlag } from "./line";
+import { POST_KEY_SQL } from "./post-key";
+import { atReady, STATUS_IDS_MAX, type Gate } from "./hidden";
+import { fileIsHidden, hiddenCount, hiddenReady, hiddenRows, NOT_HIDDEN_SQL, ONLY_HIDDEN_SQL } from "./hidden-store";
 import { lookupKey } from "./keys";
 import { SERVICE_KEY_ID, mintItemId, readCapped, releasePoster } from "./library";
 import { POSTER_COOLDOWN_MS, posterEligible } from "./poster";
@@ -275,6 +278,9 @@ export async function capabilities(
                 // /share/private*, share.../p/<key>: private links of files and gallery links (APP-API-CONTRACT.md
                 // section 36), with the share host
                 private_links: !!d.shareBaseUrl,
+                // POST /library/status, /hidden/rules*, `hidden=1` and the `hidden` fields of GET /library: hidden posts
+                // and auto-hide rules (APP-API-CONTRACT.md section 37), once migration 0025 is applied
+                hidden: await hiddenReady(d.db),
                 // /chat/threads: threads with Claude about the library, code mode in a sandbox (APP-API-CONTRACT.md
                 // section 27): with the Anthropic key and the Worker Loader binding
                 chat: chat === true,
@@ -309,6 +315,8 @@ export async function capabilities(
                 edit_max_projects: EDIT_MAX_PROJECTS,
                 // clips accept `pitch` (section 31.16); an older server answers bad_request to the key
                 edit_pitch: true,
+                // the most ids one POST /library/status takes (section 37.4)
+                status_ids: STATUS_IDS_MAX,
             },
             media_base_url: withSlash(d.mediaBaseUrl),
             // the rich link page of a public file https://media.../<name>.<ext> is <share_base_url><name>
@@ -528,6 +536,20 @@ export async function studioUpload(
         }
     }
 
+    // The auto-hide rules (section 37.3) read an upload at once: an `upload` rule hides it before anything can make it
+    // public, and a public upload may wait (`held`) for an about rule. A D1 failure: nothing is published from here
+    // (a video's session runs the rules again before it publishes).
+    let gate: Gate | "error" = "go";
+    if (row) {
+        try {
+            gate = await atReady({ db: d.db, vis: d, shareBaseUrl: d.shareBaseUrl, now: d.now, keyId, randomBytes: d.randomBytes }, id, wantsPublic);
+        } catch (e) {
+            console.error("[upload] hidden rules failed", String(e));
+            gate = "error";
+        }
+        if (gate === "hidden") row = (await getItem(d.db, id).catch(() => null)) ?? row;
+    }
+
     // A video (or gif) continues into a studio session through the same adopt
     // path as a pasted link's session. Images stop here (the app offers to host
     // them as they are, route 5c).
@@ -543,8 +565,8 @@ export async function studioUpload(
                 content_type: type,
                 bytes: size,
                 item_id: id,
-                // the Durable Object hosts the original when the session is ready
-                ...(wantsPublic ? { public: true } : {}),
+                // the Durable Object hosts the original when the session is ready (after the rules, section 37.3)
+                ...(wantsPublic && gate !== "hidden" ? { public: true } : {}),
                 ...(wantsQueue ? { queue: true } : {}),
             });
             const b = a.body as {
@@ -580,7 +602,13 @@ export async function studioUpload(
     // /library/items/<id>/publish, since nothing else will do it.
     let publicState: "pending" | "ready" | "failed" | null = null;
     let publicUrl: string | null = null;
-    if (wantsPublic) {
+    if (wantsPublic && gate === "hidden") {
+        // a rule hid it: never public (section 37.3)
+        publicState = null;
+    } else if (wantsPublic && (gate === "held" || gate === "error") && !sid) {
+        // waiting on an about rule: the 15-minute cron publishes it (or hides it) later
+        publicState = gate === "held" ? "pending" : "failed";
+    } else if (wantsPublic) {
         if (sid) {
             publicState = "pending";
         } else if (row) {
@@ -621,14 +649,8 @@ export async function studioUpload(
 
 // ---- 5a. GET /library -----------------------------------------------------------------------
 
-// One card per post: the owner's COALESCE(session_id, link, id), refined so an
-// upload and the renders made from it (whose session's link is "upload:<item id>")
-// land in one card. Since migration 0009 (section 18.1) a row that names its post (`post_key`: a
-// gallery item, a slideshow, a crop or an export) says so first; rows older than that have NULL.
-export const POST_KEY_SQL = `COALESCE(
-    m.post_key,
-    (SELECT substr(s.link, 8) FROM studio_sessions s WHERE s.id = m.session_id AND s.link LIKE 'upload:%'),
-    m.session_id, m.link, m.id)`;
+// One card per post (POST_KEY_SQL, src/post-key.ts).
+export { POST_KEY_SQL };
 
 // The lead item of a gallery (section 18.1): its first video, else its first item. Rows only (no session).
 const LEAD_ITEM_SQL = `COALESCE(
@@ -874,14 +896,20 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
     // of a gallery post; without it a gallery is its lead item and its webps, nothing made.
     const v3 = q.get("v") === "3";
     const v2 = v3 || q.get("v") === "2";
-    const hide = libraryHide(v2, v3);
+    // `hidden=1` (section 37.2): only the hidden posts, same paging; without it they are left out
+    const onlyHidden = q.get("hidden") === "1";
+    if (q.has("hidden") && !onlyHidden && q.get("hidden") !== "0") return bad();
 
     try {
+        const ready = await hiddenReady(db);
+        const base = libraryHide(v2, v3);
+        const hide = base + (ready ? NOT_HIDDEN_SQL : "");
+        const pageHide = onlyHidden ? base + (ready ? ONLY_HIDDEN_SQL : " AND 0") : hide;
         // 1. the page of posts: newest file first, ties broken by the post key
         const { results: keys } = await db
             .prepare(
                 `WITH f AS (SELECT m.created_at AS created_at, ${POST_KEY_SQL} AS post_key
-                            FROM media_items m WHERE m.deleted_at IS NULL${hide})
+                            FROM media_items m WHERE m.deleted_at IS NULL${pageHide})
                  SELECT post_key, MAX(created_at) AS latest FROM f GROUP BY post_key
                  HAVING MAX(created_at) < ?1 OR (MAX(created_at) = ?1 AND post_key < ?2)
                  ORDER BY latest DESC, post_key DESC LIMIT ?3`,
@@ -891,7 +919,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
         const more = keys.length > limit;
         const page = keys.slice(0, limit);
 
-        const { posts, files } = await assemblePosts(d, page, { v2, v3, hide, now });
+        const { posts, files } = await assemblePosts(d, page, { v2, v3, hide: pageHide, now });
 
         // A page showing originals that still have no poster (and were not tried in the last
         // day) asks the Durable Object to queue them (section 13); it only writes records, the
@@ -934,7 +962,8 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
             body: {
                 status: "success",
                 posts,
-                counts: { posts: nPosts?.n ?? 0, files: nFiles?.n ?? 0 },
+                // the library without its hidden posts; `hidden`: how many posts are hidden (section 37.2)
+                counts: { posts: nPosts?.n ?? 0, files: nFiles?.n ?? 0, hidden: await hiddenCount(db) },
                 usage,
                 next: more && last ? encodeCursor(last.latest, last.post_key) : null,
             },
@@ -1068,6 +1097,15 @@ export async function assemblePosts(
     // every file's live private link (section 36); null when it has none
     const priv = await privateUrlsOf(d, files.map((f) => f.id));
     for (const p of posts) for (const f of p.files as { id: string; private_url?: string | null }[]) f.private_url = priv.get(f.id) ?? null;
+    // section 37.2: whether the post is hidden, and by whom (a held or exempt post is not hidden)
+    const hiddenOf = await hiddenRows(db, page.map((k) => k.post_key));
+    for (const p of posts as Record<string, unknown>[]) {
+        const h = hiddenOf.get(p.id as string);
+        const on = h?.state === "hidden";
+        p.hidden = on;
+        p.hidden_by = on ? h!.by : null;
+        p.hidden_rule = on ? h!.rule_id : null;
+    }
     return { posts, files };
 }
 
@@ -1198,6 +1236,14 @@ export async function libraryVisibility(
         }
     }
     if (want === null || scope === null) return err(400, "error.library.bad_request");
+    // a hidden post's files are never public (section 37.2)
+    if (want) {
+        try {
+            if (await fileIsHidden(d.db, id)) return err(409, "error.hidden");
+        } catch {
+            return err(503, "error.api.generic");
+        }
+    }
     if (scope === "post") return setPostVisibility(d, id, want, keyId);
     return setVisibility(d, id, want, keyId);
 }

@@ -22,6 +22,7 @@ import {
     type PrivateDeps,
 } from "../../private-actions";
 import { COLLECTION_ID_REGEX } from "../../share-collections";
+import { HIDDEN_HINT } from "../../hidden";
 import { listShareSets, liveSetRow, SET_ID_REGEX } from "../../share-sets";
 import type { StudioReply } from "../../studio";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
@@ -230,6 +231,7 @@ const PrivateOut = z.object({
 const PRIVATE_MESSAGES: Record<string, string> = {
     "error.private.not_toggleable": "that file cannot have a private link (only originals and webps can)",
     "error.private.not_found": "no such live file or gallery link",
+    "error.hidden": HIDDEN_HINT,
 };
 
 export const linksPrivateOp = defineOp({

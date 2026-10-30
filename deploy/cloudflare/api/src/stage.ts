@@ -9,6 +9,7 @@
 // "studio" already means the save/trim session everywhere else, so this is `stage` in code, routes and
 // tables; only the host (studio.capybaraharmony.com) and the app's tab say "studio".
 
+import { notHiddenClause } from "./hidden-store";
 import { POST_KEY_SQL } from "./app-routes";
 import { searchPosts, type EmbedClient, type SearchOutcome } from "./embed";
 import { randomBase62 } from "./ids";
@@ -441,7 +442,7 @@ type FileHit = { row: MediaRow; kind: "image" | "video" };
 async function publicFiles(d: StageDeps, ids: string[]): Promise<FileHit[]> {
     if (ids.length === 0) return [];
     const { results } = await d.db
-        .prepare(`SELECT ${MEDIA_COLS} FROM json_each(?1) j JOIN media_items m ON m.id = j.value WHERE m.deleted_at IS NULL ORDER BY j.key`)
+        .prepare(`SELECT ${MEDIA_COLS} FROM json_each(?1) j JOIN media_items m ON m.id = j.value WHERE m.deleted_at IS NULL${await notHiddenClause(d.db)} ORDER BY j.key`)
         .bind(JSON.stringify(ids))
         .all<MediaRow>();
     return keepPublic(d, results);
@@ -474,7 +475,7 @@ export async function canvasItems(d: StageDeps, ids: string[]): Promise<Item[]> 
                     (SELECT c.title FROM media_captions c WHERE c.subject = 'item:' || m.id) AS caption,
                     (SELECT k.code FROM stage_codes k WHERE k.item_id = m.id) AS code
                FROM json_each(?1) j JOIN media_items m ON m.id = j.value
-              WHERE m.deleted_at IS NULL ORDER BY j.key`,
+              WHERE m.deleted_at IS NULL${await notHiddenClause(d.db)} ORDER BY j.key`,
         )
         .bind(JSON.stringify(ids))
         .all<DecoratedRow>();
@@ -568,7 +569,7 @@ export async function resolvePool(d: StageDeps, spec: PoolSpec, searchMs: number
         const { results } = await d.db
             .prepare(
                 `SELECT ${MEDIA_COLS} FROM media_items m
-                  WHERE m.deleted_at IS NULL AND ${visSql("m.")} = 'public'
+                  WHERE m.deleted_at IS NULL AND ${visSql("m.")} = 'public'${await notHiddenClause(d.db)}
                     AND (m.content_type IS NULL OR m.content_type LIKE 'image/%' OR m.content_type LIKE 'video/%')
                   ORDER BY m.created_at DESC, m.id DESC LIMIT ${POOL_MAX * 2}`,
             )
@@ -608,7 +609,7 @@ export async function resolvePool(d: StageDeps, spec: PoolSpec, searchMs: number
     if (hits.length === 0) return { ids: [] };
     const { results } = await d.db
         .prepare(
-            `SELECT * FROM (SELECT ${MEDIA_COLS}, m.item_index AS item_index, ${POST_KEY_SQL} AS post_key FROM media_items m WHERE m.deleted_at IS NULL)
+            `SELECT * FROM (SELECT ${MEDIA_COLS}, m.item_index AS item_index, ${POST_KEY_SQL} AS post_key FROM media_items m WHERE m.deleted_at IS NULL${await notHiddenClause(d.db)})
               WHERE post_key IN (SELECT value FROM json_each(?1))`,
         )
         .bind(JSON.stringify(hits.map((h) => h.post_key)))

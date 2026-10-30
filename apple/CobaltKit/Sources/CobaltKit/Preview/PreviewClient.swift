@@ -199,6 +199,8 @@ public struct PreviewClient: CobaltClient {
     let mcpState = PreviewMcpState()
     /// The private share links the "server" holds (`PreviewPrivateLinks.swift`).
     let privateState = PreviewPrivateState()
+    /// The hidden posts and auto-hide rules the "server" holds (`PreviewHidden.swift`).
+    let hiddenState = PreviewHiddenState()
 
     public var baseURL: URL { PreviewData.base }
 
@@ -228,6 +230,9 @@ public struct PreviewClient: CobaltClient {
                             collections: empty ? [] : PreviewData.shareCollections(now: now),
                             groups: empty ? [] : PreviewData.collectionGroups(now: now),
                             listFails: scenario == .shareLinksFail)
+        }
+        if scenario.hasHiddenSeed {
+            hiddenState.seed(hidden: PreviewData.hiddenPosts(now: now), rules: PreviewData.hiddenRules(now: now))
         }
         if scenario.hasStage {
             stageState.seed(scenario, now: now)
@@ -687,6 +692,18 @@ public struct PreviewClient: CobaltClient {
         if scenario.hasEditor {
             page.posts = editorState.libraryPosts(now: clock.now(), timeScale: timeScale, scenario: scenario) + page.posts
         }
+        // hidden posts are in no list but the album (APP-API-CONTRACT 37.2); a post the owner unhid is back, with the status it was given
+        let hiddenIDs = Set(hiddenState.hidden.map(\.id))
+        let gone = page.posts.filter { hiddenIDs.contains($0.id) }
+        if !gone.isEmpty || !hiddenState.released.isEmpty {
+            page.posts.removeAll { hiddenIDs.contains($0.id) }
+            let back = hiddenState.released.filter { r in !page.posts.contains { $0.id == r.id } }
+            page.posts = (page.posts + back).sorted { $0.createdAt > $1.createdAt }
+            page.postCount = max(0, page.postCount - gone.count + back.count)
+            page.fileCount = max(0, page.fileCount - gone.reduce(0) { $0 + $1.files.count } + back.reduce(0) { $0 + $1.files.count })
+        }
+        page.posts = page.posts.map { hiddenState.applying(to: $0, links: privateState, now: clock.now()) }
+        page.hiddenCount = hiddenState.count
         return page
     }
 

@@ -13,6 +13,7 @@
 // Like posters: a kick writes records and arms the sweep; the sweep starts one job at a time and only
 // while the helper is free; nothing runs after a response. A row that failed is tried again after a day.
 
+import { hiddenFileIds } from "./hidden-store";
 import { randomBase62 } from "./ids";
 import { publicUrlOf } from "./share-sets";
 import { ITEM_COLUMNS, type MediaRow } from "./visibility";
@@ -134,7 +135,10 @@ export class LoopService {
         const { results: sets } = await this.d.db
             .prepare(`SELECT items FROM share_sets WHERE revoked_at IS NULL ORDER BY created_at DESC LIMIT ${LOOP_SETS_MAX}`)
             .all<{ items: string }>();
-        const ids = [...new Set(sets.flatMap((s) => parseIds(s.items)))];
+        // a hidden post's videos get no preview (section 37.2)
+        const all = [...new Set(sets.flatMap((s) => parseIds(s.items)))];
+        const hidden = new Set(await hiddenFileIds(this.d.db, all));
+        const ids = all.filter((i) => !hidden.has(i));
         const rows = await this.rows(ids);
         const done = new Map<string, { url: string | null; tried_at: number | null }>();
         for (let i = 0; i < ids.length; i += 90) {

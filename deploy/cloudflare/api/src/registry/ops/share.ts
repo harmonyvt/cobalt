@@ -24,6 +24,7 @@ import { createShareSet, listShareSets, revokeShareSet, SET_ID_REGEX, SHARE_SET_
 import type { StudioReply } from "../../studio";
 import { itemOn, type PrivateDeps } from "../../private-actions";
 import { newLinksSetting } from "../../private-links";
+import { HIDDEN_HINT, hiddenTargets } from "../../hidden";
 import { effectiveVisibility } from "../../visibility";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
 import { ShareCollectionsListShape } from "../shapes";
@@ -315,6 +316,7 @@ export async function makeLink(
         const body = unwrap<{ link: { url: string } }>(await itemOn(pd, fileIds[0]!.id), {
             "error.private.not_toggleable": "that file cannot have a private link (only originals and webps can)",
             "error.private.not_found": "that file is gone",
+            "error.hidden": HIDDEN_HINT,
         });
         return { id: null, url: body.link.url, title: null, files: 1, private: true };
     }
@@ -330,6 +332,7 @@ export async function makeLink(
     );
     const body = unwrap<{ set: { id: string; url: string; title: string | null; items: unknown[]; private?: boolean } }>(r, {
         "error.share.not_public": o.private ? "some of those files were deleted" : "some of those files are not public any more",
+        "error.hidden": HIDDEN_HINT,
         "error.share.bad_request": `a gallery link holds 2 to ${SHARE_SET_MAX} files and a title of at most 80 characters`,
     });
     return { id: body.set.id, url: body.set.url, title: body.set.title, files: body.set.items.length, ...(body.set.private ? { private: true } : {}) };
@@ -362,6 +365,9 @@ export const linksCreateOp = defineOp({
         if (!ctx.shareBaseUrl) throw shareOff();
         // absent: a gallery link follows Harmony's new-links setting (section 36); one file stays its public page
         const wantPrivate = input.private ?? (await newLinksSetting(ctx.db)) === "private";
+        // a hidden post is never shared (section 37.6)
+        const hidden = await hiddenTargets(ctx.db, input.ids);
+        if (hidden.length > 0) throw new OpError(409, "error.hidden", `${hidden.join(", ")}: ${HIDDEN_HINT}`);
         const found = await linkFiles(ctx, input.ids, { anyState: wantPrivate });
         if (found.unknown.length > 0) throw new OpError(404, "error.share.not_found", `no post or file with id ${found.unknown.join(", ")}`);
         if (found.notPublic.length > 0) {

@@ -29,8 +29,17 @@ extension LibraryModel {
     }
 
     /// A post by id: the loaded one, else one a search returned (for a detail opened from a result past the loaded pages).
+    /// Never a hidden post: outside the hidden album nothing resolves one (APP-API-CONTRACT 37.7); the album's own screens
+    /// use `hiddenPost(id:)`.
     public func post(id: String) -> LibraryPost? {
-        posts.first { $0.id == id } ?? searchResults?.first { $0.id == id } ?? searchKnown[id]
+        let found = posts.first { $0.id == id } ?? searchResults?.first { $0.id == id } ?? searchKnown[id]
+        guard let found, !found.hidden, !hiddenPosts.contains(where: { $0.id == id }), !ctx.settings.hiddenIndex.contains(post: id) else { return nil }
+        return found
+    }
+
+    /// A post of the hidden album by id (nil for any other post).
+    public func hiddenPost(id: String) -> LibraryPost? {
+        hiddenPosts.first { $0.id == id }
     }
 
     /// `query` changed: drop the last answer (it was for other words), cancel what is in flight, and start the pause.
@@ -64,7 +73,7 @@ extension LibraryModel {
         do {
             let result = try await ctx.librarySearch(query: q, limit: Self.searchLimit)
             guard !Task.isCancelled, q == trimmedQuery else { return }
-            let posts = result.posts
+            let posts = result.posts.filter { !$0.hidden && !recentlyHidden.contains($0.id) }     // hidden posts show in no search (37.2)
             searchResults = posts
             searchScores = Dictionary(result.hits.map { ($0.id, $0.score) }, uniquingKeysWith: { first, _ in first })
             for post in posts { searchKnown[post.id] = post }

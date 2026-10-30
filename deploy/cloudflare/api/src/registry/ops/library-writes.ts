@@ -21,6 +21,7 @@ import { loadPosts } from "../../chat-tools";
 import { ITEM_ID_REGEX, STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "../../gate";
 import { KEY_ID_HEADER } from "../../headers";
 import { publishStudio } from "../../publish";
+import { HIDDEN_HINT, hiddenTargets } from "../../hidden";
 import { bodyLink, describeBody, logRequest, normalizeUrlField } from "../../request-log";
 import { studioErr } from "../../studio";
 import { studioStatus } from "../../studio-edge";
@@ -489,6 +490,11 @@ export const libraryVisibilityOp = defineOp({
     handler: async (ctx, input) => {
         chatOnly(ctx);
         const want = input.public;
+        // a hidden post is never made public (section 37.6)
+        if (want) {
+            const hidden = await hiddenTargets(ctx.db, input.ids);
+            if (hidden.length > 0) throw new OpError(409, "error.hidden", `${hidden.join(", ")}: ${HIDDEN_HINT}`);
+        }
         let changed = 0;
         const out: { id: string; links: string[] }[] = [];
         for (const p of await somePosts(ctx, input.ids)) {

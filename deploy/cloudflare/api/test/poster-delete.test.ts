@@ -220,6 +220,9 @@ describe("a poster can not be deleted by hand, and nothing on a lifetime path or
                 "edit-render-core.ts:media.delete(",
                 "edit-render-core.ts:originals.delete(",
                 "emotes.ts:media.delete(", // a saved emote whose library row was not written
+                // section 37.2: hiding a post deletes its videos' moving previews, only ever a media_loops r2_key (a .webp
+                // the preview job made, never a poster or a mirror)
+                "hidden.ts:media.delete(",
                 "library.ts:media.delete(", // releasePoster
                 "poster.ts:media.delete(", // an orphan guard / a failed put of a poster
                 "studio.ts:originals.delete(", // a save marked lost meanwhile

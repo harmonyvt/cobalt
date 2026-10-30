@@ -192,7 +192,11 @@ type Route =
     | { name: "links" }
     | { name: "private"; kind: "items" | "sets"; id: string }
     | { name: "privateRotate"; kind: "items" | "sets"; id: string }
-    | { name: "studioDelete"; id: string };
+    | { name: "studioDelete"; id: string }
+    | { name: "status" }
+    | { name: "hiddenRules" }
+    | { name: "hiddenPreview" }
+    | { name: "hiddenRule"; id: string };
 
 const ALLOWED: Record<Route["name"], string[]> = {
     page: ["GET", "HEAD"],
@@ -213,6 +217,10 @@ const ALLOWED: Record<Route["name"], string[]> = {
     private: ["PUT", "DELETE"],
     privateRotate: ["POST"],
     studioDelete: ["DELETE"],
+    status: ["POST"],
+    hiddenRules: ["GET", "POST"],
+    hiddenPreview: ["POST"],
+    hiddenRule: ["PATCH", "DELETE"],
 };
 
 export function matchRoute(pathname: string): Route | null {
@@ -224,7 +232,11 @@ export function matchRoute(pathname: string): Route | null {
     if (pathname === "/api/library/search/post") return { name: "searchPost" };
     if (pathname === "/api/library/map") return { name: "map" };
     if (pathname === "/api/library/links") return { name: "links" };
+    if (pathname === "/api/library/status") return { name: "status" };
+    if (pathname === "/api/library/hidden/rules") return { name: "hiddenRules" };
+    if (pathname === "/api/library/hidden/rules/preview") return { name: "hiddenPreview" };
     let m: RegExpExecArray | null;
+    if ((m = /^\/api\/library\/hidden\/rules\/([0-9A-Za-z]{16})$/.exec(pathname))) return { name: "hiddenRule", id: m[1]! };
     if ((m = /^\/api\/library\/private\/(items\/[0-9A-Za-z]{16}|sets\/[0-9]{10,24})$/.exec(pathname))) {
         const [kind, id] = m[1]!.split("/") as ["items" | "sets", string];
         return { name: "private", kind, id };
@@ -313,6 +325,18 @@ export async function handleLibrary(request: Request, env: Env, deps?: Partial<L
                 );
             case "studioDelete":
                 return await studioDelete(ctx, route.id);
+            case "status":
+                return await relayBody(ctx, request, "/library/status", "POST");
+            case "hiddenRules":
+                return request.method === "GET"
+                    ? relayResponse(await callApi(ctx, "/hidden/rules", { method: "GET" }), (b) => b)
+                    : await relayBody(ctx, request, "/hidden/rules", "POST");
+            case "hiddenPreview":
+                return await relayBody(ctx, request, "/hidden/rules/preview", "POST");
+            case "hiddenRule":
+                return request.method === "DELETE"
+                    ? relayResponse(await callApi(ctx, `/hidden/rules/${route.id}`, { method: "DELETE" }), (b) => b)
+                    : await relayBody(ctx, request, `/hidden/rules/${route.id}`, "PATCH");
         }
     } catch {
         return err(500, "error.library.server");
@@ -358,8 +382,20 @@ type StudioRow = {
     expires_at: number;
 };
 
-const FILTERS = ["all", "public", "private", "studio"];
+const FILTERS = ["all", "public", "private", "studio", "hidden"];
 
+// ---------- hidden posts (APP-API-CONTRACT.md section 37) ----------
+
+// Migration 0025 puts media_hidden in D1. Without it nothing is hidden and the page shows no hidden UI.
+// Looked up per request (one sqlite_master read); the answer's `features.hidden` tells the page.
+async function hiddenTable(ctx: Ctx): Promise<boolean> {
+    try {
+        const r = await ctx.env.DB.prepare("SELECT 1 AS one FROM sqlite_master WHERE type = 'table' AND name = 'media_hidden'").first<{ one: number }>();
+        return !!r;
+    } catch {
+        return false;
+    }
+}
 async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
     const filter = q.get("filter") ?? "all";
     if (!FILTERS.includes(filter)) return err(400, "error.library.bad_request");
@@ -376,6 +412,7 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
         before = n;
     }
     const { DB } = ctx.env;
+    const hiddenOn = await hiddenTable(ctx);
 
     type Entry =
         | { t: "item"; created_at: number; id: string; row: MediaRow }
@@ -384,10 +421,16 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
 
     if (filter !== "studio") {
         // public/private filter on the file's visibility (the toggle), not on kind
-        const vis = filter === "all" ? null : filter;
+        // hidden posts (section 37) leave every view but `hidden`; without media_hidden nothing is hidden
+        const vis = filter === "all" || filter === "hidden" ? null : filter;
+        const hiddenClause = hiddenOn
+            ? `AND (${POST_KEY_SQL} IN (SELECT post_key FROM media_hidden WHERE state = 'hidden')) = ${filter === "hidden" ? 1 : 0}`
+            : filter === "hidden"
+              ? "AND 0"
+              : "";
         const { results } = await DB.prepare(
-            `SELECT ${ITEM_COLUMNS} FROM media_items
-             WHERE deleted_at IS NULL AND created_at < ?1 AND (?2 IS NULL OR ${VISIBILITY_SQL} = ?2)
+            `SELECT ${ITEM_COLUMNS} FROM media_items m
+             WHERE deleted_at IS NULL AND created_at < ?1 AND (?2 IS NULL OR ${VISIBILITY_SQL} = ?2) ${hiddenClause}
              ORDER BY created_at DESC, id DESC LIMIT ?3`,
         )
             .bind(before, vis, limit + 1)
@@ -476,6 +519,27 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
         }
     }
 
+    // Hidden state of these posts (migration 0025, section 37). Best effort, like the lookups above.
+    const hiddenInfo = new Map<string, { by: string | null; rule: string | null }>();
+    let hiddenCount: number | null = null;
+    if (hiddenOn) {
+        try {
+            const keys = [...new Set(postKeys.values())];
+            if (keys.length > 0) {
+                const { results } = await DB.prepare(
+                    `SELECT post_key, by, rule_id FROM media_hidden WHERE state = 'hidden' AND post_key IN (${keys.map((_, i) => `?${i + 1}`).join(", ")})`,
+                )
+                    .bind(...keys)
+                    .all<{ post_key: string; by: string | null; rule_id: string | null }>();
+                for (const r of results) hiddenInfo.set(r.post_key, { by: r.by ?? null, rule: r.rule_id ?? null });
+            }
+            const c = await DB.prepare("SELECT COUNT(*) AS n FROM media_hidden WHERE state = 'hidden'").first<{ n: number }>();
+            hiddenCount = c?.n ?? 0;
+        } catch (e) {
+            console.error("[library] hidden lookup failed", String(e));
+        }
+    }
+
     // Live private links of these files (migration 0024, section 36). Best effort: without the table the
     // files simply have none.
     const privs = new Map<string, PrivateLink>();
@@ -506,7 +570,16 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
             .filter((e) => e.t === "item")
             .map((e) => {
                 const row = (e as Extract<Entry, { t: "item" }>).row;
-                return { ...itemShape(row, privs.get(row.id)), custom_title: titles.get(row.id) ?? null, post_key: postKeys.get(row.id) ?? null };
+                const pk = postKeys.get(row.id) ?? null;
+                const hid = pk ? hiddenInfo.get(pk) : undefined;
+                const base = { ...itemShape(row, privs.get(row.id)), custom_title: titles.get(row.id) ?? null, post_key: pk };
+                if (!hiddenOn) return base;
+                return {
+                    ...base,
+                    hidden: !!hid,
+                    hidden_by: hid ? (hid.by === "rule" || hid.by === "chat" ? hid.by : "you") : null,
+                    hidden_rule: hid?.rule ?? null,
+                };
             }),
         studios: page
             .filter((e) => e.t === "studio")
@@ -526,6 +599,7 @@ async function list(ctx: Ctx, q: URLSearchParams): Promise<Response> {
                 };
             }),
         usage,
+        ...(hiddenOn ? { features: { hidden: true }, hidden_count: hiddenCount } : {}),
         next_before: more && page.length ? page[page.length - 1]!.created_at : null,
     });
 }
@@ -584,6 +658,14 @@ async function relayGet(ctx: Ctx, path: string, q: URLSearchParams, job: boolean
     }
     const res = await callApi(ctx, wait ? `${path}?wait=${wait}` : path, { method: "GET" });
     return relayResponse(res, job ? jobAlias : (b) => b);
+}
+
+// Relays the page's JSON body (an object) to an API route as is; the API checks its fields.
+async function relayBody(ctx: Ctx, request: Request, path: string, method: string): Promise<Response> {
+    const body = await readJson(request);
+    if (!body) return err(400, "error.library.bad_request");
+    const res = await callApi(ctx, path, { method, body });
+    return relayResponse(res, (b) => b);
 }
 
 async function relayPost(ctx: Ctx, path: string, body: unknown, map: (b: Record<string, unknown>) => Record<string, unknown>): Promise<Response> {

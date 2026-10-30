@@ -25,34 +25,51 @@ struct GalleryVisibilitySection: View {
         if choosesPrivateLink {
             FileLinkSection(controller: controller, rendition: rendition)
         } else if controller.canSwitchPost(item) {
-            Section {
-                Toggle(isOn: Binding(get: { isOn }, set: { choose($0) })) {
-                    Label(title, systemImage: isOn ? Symbol.Media.isPublic : Symbol.Media.isPrivate)
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .disabled(changing || controller.isDeleting)
-                .confirmationDialog(Copy.Media.makePrivateTitle, isPresented: $asking, titleVisibility: .visible) {
-                    Button(Copy.Media.makePrivate, role: .destructive) {
-                        Task { await controller.setPostPublic(false, for: item) }
-                    }
-                    Button(Copy.Media.keepPublic, role: .cancel) {}
-                } message: {
-                    Text(Copy.Media.makePrivateMessage)
-                }
-                .accessibilityHint(footnote.text)
-            } footer: {
-                Text(footnote.text)
-                    .font(CobaltType.captionSmall)
-                    .foregroundStyle(footnote.isProblem ? CobaltColor.errorText : Color.secondary)
-                    .lineSpacing(2)
+            if let post = hideablePost, post.hidden {
+                // a hidden post has no switch: who hid it, and unhide (APP-API-CONTRACT 37.5)
+                HiddenPostSection(controller: controller, post: post)
+            } else {
+                postSwitch
+                if let post = hideablePost { HiddenPostSection(controller: controller, post: post) }
             }
-            .motion(Motion.rows, value: footnote.text)
-            .haptic(.error, trigger: controller.visibilityFailed[DetailController.postKey], enabled: haptics) { $0 != nil }
         } else if controller.model.canChoosePrivateLink(rendition) {
             FileLinkSection(controller: controller, rendition: rendition)
         } else if controller.canSwitchVisibility(rendition) {
             VisibilitySection(controller: controller, rendition: rendition)
         }
+    }
+
+    /// The library post, when the server has hidden posts and lists it.
+    private var hideablePost: LibraryPost? {
+        guard controller.model.capabilities.hidden, let post = item.post else { return nil }
+        return post
+    }
+
+    @ViewBuilder
+    private var postSwitch: some View {
+        Section {
+            Toggle(isOn: Binding(get: { isOn }, set: { choose($0) })) {
+                Label(title, systemImage: isOn ? Symbol.Media.isPublic : Symbol.Media.isPrivate)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .disabled(changing || controller.isDeleting)
+            .confirmationDialog(Copy.Media.makePrivateTitle, isPresented: $asking, titleVisibility: .visible) {
+                Button(Copy.Media.makePrivate, role: .destructive) {
+                    Task { await controller.setPostPublic(false, for: item) }
+                }
+                Button(Copy.Media.keepPublic, role: .cancel) {}
+            } message: {
+                Text(Copy.Media.makePrivateMessage)
+            }
+            .accessibilityHint(footnote.text)
+        } footer: {
+            Text(footnote.text)
+                .font(CobaltType.captionSmall)
+                .foregroundStyle(footnote.isProblem ? CobaltColor.errorText : Color.secondary)
+                .lineSpacing(2)
+        }
+        .motion(Motion.rows, value: footnote.text)
+        .haptic(.error, trigger: controller.visibilityFailed[DetailController.postKey], enabled: haptics) { $0 != nil }
     }
 
     /// `public · 12 links` for a gallery; `public link` for one photo.

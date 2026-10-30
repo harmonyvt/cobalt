@@ -510,7 +510,7 @@ describe("webps are switchable (owner, 2026-10-05)", () => {
         const old = await listAll(w);
         expect(old.files.find((x) => x.id === id)).toBeUndefined();
         expect(old.posts).toHaveLength(0);
-        expect(old.counts).toEqual({ posts: 0, files: 0 });
+        expect(old.counts).toEqual({ posts: 0, files: 0, hidden: 0 });
         // public again: back in both
         await patchVisibility(w, id, { public: true });
         const back = await listAll(w);

@@ -3,6 +3,7 @@
 // and the soft delete. The Worker, the Durable Object's services and the real
 // SQL (node:sqlite on the real migrations) run together; the helper and R2 are
 // the fakes from studio-fakes.ts.
+import { STATUS_IDS_MAX } from "../src/hidden";
 import { dispatch as decide } from "./dispatch";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -992,6 +993,8 @@ describe("GET /capabilities", () => {
                 share_groups: false,
                 // section 36: with the share host
                 private_links: false,
+                // section 37: migration 0025 is applied in the tests
+                hidden: true,
                 chat: false,
                 // no STAGE_BASE_URL in this world's env (section 30)
                 stage: false,
@@ -1013,6 +1016,7 @@ describe("GET /capabilities", () => {
                 edit_max_clips: 50,
                 edit_max_projects: 200,
                 edit_pitch: true,
+                status_ids: 200,
             },
             media_base_url: "https://media.capybaraharmony.com/",
             share_base_url: null,
@@ -1042,6 +1046,7 @@ describe("GET /capabilities", () => {
             edit_max_clips: 50,
             edit_max_projects: 200,
             edit_pitch: true,
+            status_ids: STATUS_IDS_MAX,
         });
     });
     it("a valid key: key valid with its name, and the use is stamped like on any keyed call", async () => {
@@ -1780,7 +1785,7 @@ describe("GET /library (grouped into posts)", () => {
             visibility_toggle: true,
             private_url: null,
         });
-        expect(b.counts).toEqual({ posts: 1, files: 3 });
+        expect(b.counts).toEqual({ posts: 1, files: 3, hidden: 0 });
         expect(b.next).toBeNull();
     });
 
@@ -1820,7 +1825,7 @@ describe("GET /library (grouped into posts)", () => {
             session: null,
         });
         expect(b.posts[0].files.map((f: any) => f.id)).toEqual(["WebpItem00000002", "WebpItem00000001"]);
-        expect(b.counts).toEqual({ posts: 1, files: 2 });
+        expect(b.counts).toEqual({ posts: 1, files: 2, hidden: 0 });
     });
 
     it("an upload and the webps made from its adopted session are ONE post (keyed by the upload's item id)", async () => {
@@ -1843,7 +1848,7 @@ describe("GET /library (grouped into posts)", () => {
             session: { id: S2, status: "ready", source_url: `${API}/studio/${S2}/source` },
         });
         expect(p.files.map((f: any) => f.id)).toEqual(["RenderOfUpload01", "HostOfUpload0001", U]);
-        expect(b.counts).toEqual({ posts: 1, files: 3 });
+        expect(b.counts).toEqual({ posts: 1, files: 3, hidden: 0 });
     });
 
     it("an upload that was never opened in a studio is a post of its own, service null (no session, no link)", async () => {
@@ -1857,7 +1862,7 @@ describe("GET /library (grouped into posts)", () => {
         item({ id: "HostImg00000001", source: "host", r2_key: "Img0123456.png", name: "a.png", content_type: "image/png", created_at: T + 60 });
         const b = await body();
         expect(ids(b)).toEqual(["HostImg00000001", U]);
-        expect(b.counts).toEqual({ posts: 2, files: 2 });
+        expect(b.counts).toEqual({ posts: 2, files: 2, hidden: 0 });
     });
 
     it("deleted rows are excluded everywhere: files, counts, usage, and a post with nothing left disappears", async () => {
@@ -1868,7 +1873,7 @@ describe("GET /library (grouped into posts)", () => {
         expect(ids(b)).toEqual([SID]);
         expect(b.posts[0].files.map((f: any) => f.id)).not.toContain("GoneRender00001");
         expect(b.posts[0].created_at).toBe(T + 3000); // the deleted newest file does not bump the post
-        expect(b.counts).toEqual({ posts: 1, files: 3 });
+        expect(b.counts).toEqual({ posts: 1, files: 3, hidden: 0 });
         expect(b.usage.public_bytes + b.usage.private_bytes).toBe(4500000 + 4331778 + 4331778);
     });
 
@@ -1929,13 +1934,13 @@ describe("GET /library (grouped into posts)", () => {
         item({ kind: "private", source: "upload", bucket: "originals", r2_key: "uploads/PrivOne000000000.png", created_at: T + 99, bytes: 1000 });
         const b = await body("?limit=2");
         expect(b.posts).toHaveLength(2);
-        expect(b.counts).toEqual({ posts: 6, files: 6 });
+        expect(b.counts).toEqual({ posts: 6, files: 6, hidden: 0 });
         expect(b.usage).toEqual({ public_bytes: 50, private_bytes: 1000 });
         expect(b.next).not.toBeNull();
     });
 
     it("an empty library: no posts, zero counts, next null", async () => {
-        expect(await body()).toEqual({ status: "success", posts: [], counts: { posts: 0, files: 0 }, usage: { public_bytes: 0, private_bytes: 0 }, next: null });
+        expect(await body()).toEqual({ status: "success", posts: [], counts: { posts: 0, files: 0, hidden: 0 }, usage: { public_bytes: 0, private_bytes: 0 }, next: null });
     });
 
     describe("pagination", () => {
@@ -2788,11 +2793,11 @@ describe("DELETE /library/items/<id>/post (APP-API-CONTRACT.md section 12)", () 
         seedPostB();
         const before = (await (await w.call("/library", { headers: auth })).json()) as any;
         expect(before.posts.map((p: any) => p.id).sort()).toEqual([SID, SIDB].sort());
-        expect(before.counts).toEqual({ posts: 2, files: 6 });
+        expect(before.counts).toEqual({ posts: 2, files: 6, hidden: 0 });
         expect((await del(R1)).status).toBe(200);
         const after = (await (await w.call("/library", { headers: auth })).json()) as any;
         expect(after.posts.map((p: any) => p.id)).toEqual([SIDB]);
-        expect(after.counts).toEqual({ posts: 1, files: 2 });
+        expect(after.counts).toEqual({ posts: 1, files: 2, hidden: 0 });
     });
 
     it("idempotent: a second call, and a call anchored on an already deleted row, are 200 with zeros", async () => {

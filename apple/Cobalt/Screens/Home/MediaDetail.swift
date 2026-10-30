@@ -14,6 +14,8 @@ struct MediaDetail: View {
     let model: AppModel
     private let localID: String?
     private let postID: String?
+    /// Opened on a hidden post (from the hidden album): the only detail that may resolve one (APP-API-CONTRACT 37.7).
+    private let fromAlbum: Bool
     /// False in `#Preview`s that hand over a media the model does not hold: the snapshot is the media.
     private let live: Bool
 
@@ -54,6 +56,7 @@ struct MediaDetail: View {
         self.model = model
         self.localID = item.local?.id
         self.postID = item.post?.id
+        self.fromAlbum = item.post?.hidden == true
         self.live = live
         _lastShown = State(initialValue: item)
         _renaming = State(initialValue: preset?.renaming ?? false)
@@ -76,7 +79,8 @@ struct MediaDetail: View {
     private var resolved: MediaItem? {
         guard live else { return lastShown }
         // the loaded post, else the one a library search returned (past the loaded pages)
-        let post = postID.flatMap { id in model.library.post(id: id) }
+        // a hidden post resolves only for a detail the album opened (the library closes it when the album does)
+        let post = postID.flatMap { id in model.library.post(id: id) ?? (fromAlbum ? model.library.hiddenPost(id: id) : nil) }
         let local = localID.flatMap { model.store.media(id: $0) }
         if let post {
             return model.mediaItem(for: post, preferring: local)

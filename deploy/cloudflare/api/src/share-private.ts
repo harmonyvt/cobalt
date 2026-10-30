@@ -8,6 +8,7 @@ import { linkByKey, noteOpened, type PrivateLinkRow } from "./private-links";
 import { captionOf, itemSubject } from "./roast";
 import { pageHeaders, singlePageHtml, typeOf, type Found, type ShareDeps } from "./share";
 import { liveSetRow, pageHtml, parseItems, privateLiveSet, rowsById } from "./share-sets";
+import { notHiddenClause } from "./hidden-store";
 import { parseRange } from "./studio";
 import { ITEM_COLUMNS, effectiveVisibility, extOf, type MediaRow } from "./visibility";
 
@@ -38,7 +39,7 @@ async function privateItem(db: D1Database, id: string): Promise<Found | null> {
     const row = await db
         .prepare(
             `SELECT ${cols}, (SELECT t.title FROM media_titles t WHERE t.post_key = ${POST_KEY_SQL}) AS custom_title
-               FROM media_items m WHERE m.id = ?1 AND m.deleted_at IS NULL`,
+               FROM media_items m WHERE m.id = ?1 AND m.deleted_at IS NULL${await notHiddenClause(db)}`,
         )
         .bind(id)
         .first<Found>();

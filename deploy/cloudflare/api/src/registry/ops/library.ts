@@ -153,7 +153,13 @@ export const libraryPostOp = defineOp({
     runs: "worker",
     cors: false,
     input: z.object({ id: z.string().min(1) }),
-    output: z.intersection(PostSchema, z.object({ files: z.array(PostFileSchema) })),
+    output: z.intersection(
+        PostSchema,
+        z.object({
+            files: z.array(PostFileSchema),
+            hidden: z.literal(true).optional().describe("a hidden post: it cannot be shared until library.status unhides it"),
+        }),
+    ),
     ai: {
         tier: "free",
         only: true,

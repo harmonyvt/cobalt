@@ -256,6 +256,12 @@ const ROUTES: [string, string][] = [
     ["PUT", `/api/library/private/sets/${SET}`],
     ["DELETE", `/api/library/private/sets/${SET}`],
     ["POST", `/api/library/private/sets/${SET}/rotate`],
+    ["POST", "/api/library/status"],
+    ["GET", "/api/library/hidden/rules"],
+    ["POST", "/api/library/hidden/rules"],
+    ["POST", "/api/library/hidden/rules/preview"],
+    ["PATCH", "/api/library/hidden/rules/aaaaaaaaaaaaaaaa"],
+    ["DELETE", "/api/library/hidden/rules/aaaaaaaaaaaaaaaa"],
 ];
 
 // ---------- routing config ----------
@@ -453,6 +459,9 @@ describe("GET /api/library", () => {
         expect(r.status).toBe(200);
         expect(r.headers.get("cache-control")).toBe("no-store");
         const b = await json(r);
+        // features / hidden_count / hidden* only exist once migration 0025 is applied (section 37)
+        delete b.features; delete b.hidden_count;
+        for (const i of b.items) { delete i.hidden; delete i.hidden_by; delete i.hidden_rule; }
         expect(Object.keys(b).sort()).toEqual(["items", "next_before", "studios", "usage"]);
         expect(b.items).toEqual([
             {
@@ -2223,5 +2232,140 @@ describe("embedded page: links view", () => {
         expect(f.setLiveUrl(s3)).toBe("https://share.capybaraharmony.com/g/S3");
         expect(f.setTitle({ id: "x", items: [1, 2, 3] })).toBe("3 files");
         expect(f.setTitle({ id: "x", title: "memes", items: [] })).toBe("memes");
+    });
+});
+
+
+// ---------- hidden posts (APP-API-CONTRACT.md section 37) ----------
+
+describe("hidden posts and rules", () => {
+    const RID = "AbCdEfGhIjKlMnOp";
+    const mkTable = () =>
+        db.raw.exec("CREATE TABLE IF NOT EXISTS media_hidden (post_key TEXT PRIMARY KEY, state TEXT NOT NULL, by TEXT NOT NULL, rule_id TEXT, at INTEGER NOT NULL)");
+    const hide = (post_key: string, over: Record<string, unknown> = {}) =>
+        db.raw.prepare("INSERT INTO media_hidden (post_key, state, by, rule_id, at) VALUES (?,?,?,?,?)").run(post_key, String(over.state ?? "hidden"), String(over.by ?? "you"), (over.rule_id as string | null | undefined) ?? null, NOW);
+
+    it("matchRoute knows the new routes and the pinned rule id shape", () => {
+        expect(matchRoute("/api/library/status")).toEqual({ name: "status" });
+        expect(matchRoute("/api/library/hidden/rules")).toEqual({ name: "hiddenRules" });
+        expect(matchRoute("/api/library/hidden/rules/preview")).toEqual({ name: "hiddenPreview" });
+        expect(matchRoute(`/api/library/hidden/rules/${RID}`)).toEqual({ name: "hiddenRule", id: RID });
+        for (const bad of ["/api/library/hidden", "/api/library/hidden/rules/short", `/api/library/hidden/rules/${RID}x`, "/api/library/status/x"]) expect(matchRoute(bad)).toBeNull();
+    });
+    it("wrong methods are 405 with allow", async () => {
+        for (const [method, path, allow] of [
+            ["GET", "/api/library/status", "POST"],
+            ["PUT", "/api/library/hidden/rules", "GET, POST"],
+            ["GET", "/api/library/hidden/rules/preview", "POST"],
+            ["POST", `/api/library/hidden/rules/${RID}`, "PATCH, DELETE"],
+        ] as const) {
+            const r = await call(method, path, { body: {} });
+            expect(r.status).toBe(405);
+            expect(r.headers.get("allow")).toBe(allow);
+        }
+        expect(apiCalls).toEqual([]);
+    });
+    it("POST /api/library/status relays the body to POST /library/status with the service credential", async () => {
+        const answer = { status: "success", posts: [{ id: "a", post_key: "k", status: "hidden", files: [] }], failed: [{ id: "b", error: "error.library.not_found" }] };
+        apiReply = () => jsonRes(200, answer);
+        const r = await call("POST", "/api/library/status", { body: { ids: ["a", "b"], status: "hidden" } });
+        expect(r.status).toBe(200);
+        expect(await json(r)).toEqual(answer);
+        expect(apiCalls).toHaveLength(1);
+        expect(apiCalls[0]).toMatchObject({ method: "POST", url: `${API_BASE}/library/status`, body: { ids: ["a", "b"], status: "hidden" } });
+        expect(apiCalls[0]!.headers["x-cobalt-service"]).toBe(SERVICE_KEY);
+        for (const h of ["authorization", "cookie", "cf-access-jwt-assertion", "origin"]) expect(apiCalls[0]!.headers[h]).toBeUndefined();
+    });
+    it("the rules routes go to /hidden/rules (list, add, preview, patch, delete)", async () => {
+        apiReply = () => jsonRes(200, { status: "success", rules: [], hidden: 2, held: 0 });
+        expect(await json(await call("GET", "/api/library/hidden/rules"))).toEqual({ status: "success", rules: [], hidden: 2, held: 0 });
+        apiReply = () => jsonRes(201, { status: "success", rule: { id: RID }, applied: 3 });
+        const add = await call("POST", "/api/library/hidden/rules", { body: { kind: "site", value: "x.com", apply: true } });
+        expect(add.status).toBe(201);
+        apiReply = () => jsonRes(200, { status: "success", matches: 4, sample: [] });
+        expect((await json(await call("POST", "/api/library/hidden/rules/preview", { body: { kind: "words", value: "cat" } }))).matches).toBe(4);
+        apiReply = () => jsonRes(200, { status: "success", rule: { id: RID, enabled: false }, applied: 0 });
+        await call("PATCH", `/api/library/hidden/rules/${RID}`, { body: { enabled: false } });
+        apiReply = () => jsonRes(200, { status: "success" });
+        await call("DELETE", `/api/library/hidden/rules/${RID}`);
+        expect(apiCalls.map((c) => [c.method, c.url.slice(API_BASE.length), c.body])).toEqual([
+            ["GET", "/hidden/rules", undefined],
+            ["POST", "/hidden/rules", { kind: "site", value: "x.com", apply: true }],
+            ["POST", "/hidden/rules/preview", { kind: "words", value: "cat" }],
+            ["PATCH", `/hidden/rules/${RID}`, { enabled: false }],
+            ["DELETE", `/hidden/rules/${RID}`, undefined],
+        ]);
+        for (const c of apiCalls) expect(c.headers["x-cobalt-service"]).toBe(SERVICE_KEY);
+    });
+    it("API errors keep their status and code (503 means no hidden state yet)", async () => {
+        apiReply = () => jsonRes(503, { status: "error", error: { code: "error.api.generic" } });
+        const r = await call("GET", "/api/library/hidden/rules");
+        expect(r.status).toBe(503);
+        expect(await errorCode(r)).toBe("error.api.generic");
+        apiReply = () => jsonRes(400, { status: "error", error: { code: "error.hidden.bad_rule" } });
+        const b = await call("POST", "/api/library/hidden/rules", { body: { kind: "nope", value: "" } });
+        expect(b.status).toBe(400);
+        expect(await errorCode(b)).toBe("error.hidden.bad_rule");
+        apiReply = () => jsonRes(404, { status: "error", error: { code: "error.hidden.not_found" } });
+        expect((await call("DELETE", `/api/library/hidden/rules/${RID}`)).status).toBe(404);
+    });
+    it("a body that is not a JSON object is 400 and never reaches the API", async () => {
+        for (const o of [{ raw: "[1]", contentType: "application/json" }, { raw: "x", contentType: "text/plain" }, { raw: "{", contentType: "application/json" }]) {
+            const headers = { "content-type": o.contentType };
+            const r = await call("POST", "/api/library/status", { raw: o.raw, headers, contentType: null });
+            expect(r.status).toBe(400);
+        }
+        expect(apiCalls).toEqual([]);
+    });
+
+    describe("GET /api/library with media_hidden (migration 0025)", () => {
+        it("hidden posts leave all/public/private and show under filter=hidden with their state", async () => {
+            mkTable();
+            const a = seedItem({ kind: "public", name: "seen", link: "https://x.com/a/1" });
+            const b = seedItem({ kind: "private", source: "upload", name: "secret", link: "https://x.com/b/1" });
+            const c = seedItem({ kind: "public", name: "ruled", link: "https://x.com/c/1" });
+            hide(b.link!, { by: "you" });
+            hide(c.link!, { by: "rule", rule_id: RID });
+            hide("https://x.com/zzz", { state: "exempt" });
+            const get = async (f: string) => json(await call("GET", `/api/library?filter=${f}`));
+            for (const f of ["all", "public", "private"]) {
+                const r = await get(f);
+                expect(r.items.map((i: any) => i.id)).toEqual(f === "private" ? [] : [a.id]);
+                expect(r.features).toEqual({ hidden: true });
+                expect(r.hidden_count).toBe(2);
+            }
+            const h = await get("hidden");
+            expect(h.items.map((i: any) => [i.id, i.hidden, i.hidden_by, i.hidden_rule])).toEqual([[b.id, true, "you", null], [c.id, true, "rule", RID]]);
+            expect(h.studios).toEqual([]);
+            const all = await get("all");
+            expect(all.items[0]).toMatchObject({ id: a.id, hidden: false, hidden_by: null, hidden_rule: null });
+        });
+        it("without the table nothing is hidden, the page gets no features flag, and filter=hidden is empty", async () => {
+            db.raw.exec("DROP TABLE IF EXISTS media_hidden");
+            const a = seedItem({ kind: "public" });
+            const all = await json(await call("GET", "/api/library"));
+            expect(all.items.map((i: any) => i.id)).toEqual([a.id]);
+            expect(all.features).toBeUndefined();
+            expect(all.items[0].hidden).toBeUndefined();
+            const h = await json(await call("GET", "/api/library?filter=hidden"));
+            expect(h.items).toEqual([]);
+        });
+        it("rejects an unknown filter still", async () => {
+            expect((await call("GET", "/api/library?filter=nope")).status).toBe(400);
+        });
+    });
+
+    describe("embedded page", () => {
+        it("has the hidden chip last, select mode, the status calls and the rules panel", () => {
+            expect(LIBRARY_HTML).toContain('data-f="hidden"');
+            expect(LIBRARY_HTML.indexOf('data-f="hidden" id=')).toBeGreaterThan(LIBRARY_HTML.indexOf('data-f="studio"'));
+            expect(LIBRARY_HTML).toContain('id="selBar"');
+            expect(LIBRARY_HTML).toContain('"/api/library/status"');
+            expect(LIBRARY_HTML).toContain('"/api/library/hidden/rules"');
+            expect(LIBRARY_HTML).toContain('"/api/library/hidden/rules/preview"');
+            expect(LIBRARY_HTML).toContain("their links stop working for good.");
+            expect(LIBRARY_HTML).toContain("also hide what's saved");
+            expect(LIBRARY_HTML).toContain("G.features.hidden");
+        });
     });
 });

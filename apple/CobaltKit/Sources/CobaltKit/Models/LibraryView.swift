@@ -237,8 +237,14 @@ extension AppModel {
     /// first in score order (the loaded copy of each when there is one), then the name matches it did not return, in
     /// `sort` order; `show` and the kind chip still apply.
     public var libraryRows: [LibraryRow] {
-        if let results = library.activeSearchResults { return searchRows(results) }
-        var rows = library.posts.map { LibraryRow(item: mediaItem(for: $0)) }
+        // The hidden chip shows the album (name search only: the server's search never lists a hidden post); every other
+        // view leaves hidden posts out, whatever list they came in (APP-API-CONTRACT 37.2).
+        // The album is served only while the server still has `features.hidden`.
+        let album = library.showingHidden && capabilities.hidden
+        if !album, let results = library.activeSearchResults { return searchRows(results) }
+        let known = hiddenIndex
+        let source = album ? library.hiddenPosts : library.posts.filter { !$0.hidden && !known.contains(post: $0.id) }
+        var rows = source.map { LibraryRow(item: mediaItem(for: $0)) }
         if library.show != .everything { rows = rows.filter { $0.passes(library.show) } }
         rows = rows.filter { library.kindFilter.passes(kind: $0.kind, emote: $0.emote, hasWebp: $0.hasWebp) }
         let query = library.trimmedQuery
@@ -252,6 +258,8 @@ extension AppModel {
 
     /// `libraryRows` while the server's results are in.
     private func searchRows(_ results: [LibraryPost]) -> [LibraryRow] {
+        let known = hiddenIndex
+        let results = results.filter { !$0.hidden && !known.contains(post: $0.id) }
         let loaded = Dictionary(library.posts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let show = library.show
         let kind = library.kindFilter
@@ -267,7 +275,7 @@ extension AppModel {
         let folded = library.trimmedQuery.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
         let sort = library.sort
         let extra = library.posts
-            .filter { !seen.contains($0.id) }
+            .filter { !seen.contains($0.id) && !$0.hidden && !known.contains(post: $0.id) }
             .map { LibraryRow(item: mediaItem(for: $0)) }
             .filter { keeps($0) && $0.matches(folded: folded) }
             .sorted { LibraryRow.areInIncreasingOrder($0, $1, by: sort) }

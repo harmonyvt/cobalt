@@ -692,3 +692,47 @@ describe("cobalt.jobs.onDone: the server continues the chat when a job ends", ()
         expect(await thrown(cobalt("jobs.onDone", "nope"))).toMatch(/is not a job id/);
     });
 });
+
+describe("a hidden post (section 37.2)", () => {
+    const hide = (postKey: string) => db.raw.prepare("INSERT INTO media_hidden (post_key, state, by, rule_id, at) VALUES (?, 'hidden', 'you', NULL, 1)").run(postKey);
+
+    it("every make of it is refused before anything starts, with the unhide hint, and no unit is taken", async () => {
+        hide(SID);
+        hide(GSID);
+        hide(PSID);
+        for (const [call, ...args] of [
+            ["make.webp", "VideoFile0000001", { start: 0, end: 2 }],
+            ["make.webp", GSID, { start: 0, end: 2 }],
+            ["make.still", "PhotoFile0000001", { seconds: 3 }],
+            ["make.slideshow", GSID],
+            ["make.galleryImage", GSID],
+            ["make.trim", "VideoFile0000001", { start: 0, end: 2 }],
+        ] as [string, ...unknown[]][]) {
+            const msg = await thrown(cobalt(call, ...args));
+            expect(msg, call).toMatch(/hidden; unhide it first with library\.status/);
+        }
+        expect(doCalls).toEqual([]);
+        expect(rendersUsed()).toBe(0);
+    });
+
+    it("edits.render refuses a project with a clip of a hidden post (the route answers 409 with the file ids)", async () => {
+        const p = await cobalt("edits.create", {
+            version: 1,
+            canvas: { w: 1080, h: 1920, fps: 30 },
+            main: [{ id: "a", item: "VideoFile0000001", in: 0, out: 3, speed: 1, fit: "fill", volume: 1, muted: false }],
+            overlay: [],
+        });
+        hide(SID);
+        expect(await thrown(cobalt("edits.render", p.id))).toMatch(/^cobalt\.edits\.render: VideoFile0000001: it's hidden; unhide it first with library\.status$/);
+        expect(rendersUsed()).toBe(0);
+        expect(db.raw.prepare("SELECT COUNT(*) AS n FROM edit_renders").get()).toEqual({ n: 0 });
+        const r = await handleRequest(
+            new Request(`${API}/edits/${p.id}/render`, { method: "POST", headers: { authorization: `Api-Key ${CLIENT}`, "content-type": "application/json" }, body: JSON.stringify({ revision: 1 }) }),
+            env,
+            { fetch: async () => new Response(null, { status: 500 }) } as any,
+            { now: () => clock, sleep: async () => {} } as any,
+        );
+        expect(r.status).toBe(409);
+        expect(await r.json()).toEqual({ status: "error", error: { code: "error.hidden" }, ids: ["VideoFile0000001"] });
+    });
+});

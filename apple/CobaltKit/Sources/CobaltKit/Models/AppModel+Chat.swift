@@ -7,7 +7,8 @@ extension AppModel {
     /// the transport's error; nothing opens then.
     public func askAbout(_ posts: [LibraryPost]) async throws {
         guard capabilities.chat else { throw ChatError.off }
-        let shown = Array(posts.prefix(ChatRule.attachmentLimit))
+        // a hidden post is never attached: the chat could make files from it and share them
+        let shown = Array(posts.filter { !$0.hidden && !hiddenIndex.contains(post: $0.id) }.prefix(ChatRule.attachmentLimit))
         guard !shown.isEmpty else { throw ChatError.badRequest }
         try await chat.startThread(with: shown.map(\.id), posts: shown)
         queueShown = false                 // a sheet over the shell would hide the tab

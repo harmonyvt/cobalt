@@ -7,6 +7,7 @@
 // model: new gallery links get theirs at creation (bounded wait), everything else from the
 // 15-minute cron backfill. Off unless ANTHROPIC_API_KEY is set.
 
+import { notHiddenClause } from "./hidden-store";
 import Anthropic from "@anthropic-ai/sdk";
 import { POST_KEY_SQL } from "./app-routes";
 import type { ModelFetch } from "./model-fetch";
@@ -343,7 +344,7 @@ export async function backfillCaptions(d: BackfillDeps): Promise<BackfillResult>
             .prepare(
                 `SELECT ${cols}, (SELECT t.title FROM media_titles t WHERE t.post_key = ${POST_KEY_SQL}) AS custom_title
                    FROM media_items m LEFT JOIN media_captions c ON c.subject = 'item:' || m.id
-                  WHERE m.deleted_at IS NULL AND ${visSql("m.")} = 'public'
+                  WHERE m.deleted_at IS NULL AND ${visSql("m.")} = 'public'${await notHiddenClause(d.db)}
                     AND (c.subject IS NULL OR (c.title IS NULL AND c.attempts < ?1 AND c.created_at < ?2) OR (c.title IS NOT NULL AND c.model IS NOT ?4 AND (c.model IS NOT ?5 OR c.title LIKE '%...%' OR c.title LIKE '%nya%')))
                   ORDER BY m.created_at DESC LIMIT ?3`,
             )

@@ -244,6 +244,25 @@ public protocol CobaltClient: Sendable {
     func connectStageTwitch() async throws -> URL
     /// `DELETE /stage/twitch`: the EventSub subscription, the rewards on Twitch and the connection go; the stage as it is now.
     func disconnectStageTwitch() async throws -> StageSettings
+    // Hidden posts and auto-hide rules (APP-API-CONTRACT 37; keyed; only when `features.hidden`). Defaulted below
+    // (`.unsupported`) so older fakes compile. The server's refusals (`error.hidden.bad_rule`, `error.hidden.too_many`,
+    // `error.hidden.not_found`, `error.library.bad_request`) are `CobaltError.api(code:httpStatus:)`.
+    /// `POST /library/status {ids, status}`: one request for 1...`limits.statusIds` file or post ids (chunking is the
+    /// caller's job). The posts that took the status, and the ids that did not (`failed`).
+    func setStatus(ids: [String], status: PostStatus) async throws -> StatusChange
+    /// `GET /library?hidden=1` (with `v=3`; a server with hidden posts has galleries): only the hidden posts, newest
+    /// first, with `hiddenCount`. `postCount` / `fileCount` are those of the library without them.
+    func hiddenLibrary(cursor: String?, limit: Int) async throws -> LibraryPage
+    /// `GET /hidden/rules`.
+    func hiddenRules() async throws -> HiddenRules
+    /// `POST /hidden/rules {kind, value, apply}`: the new rule (always enabled) and how many saved posts `apply` hid.
+    func createHiddenRule(kind: HiddenRuleKind, value: String, apply: Bool) async throws -> (rule: HideRule, applied: Int)
+    /// `POST /hidden/rules/preview {kind, value}`: what the rule would hide now; nothing changes.
+    func previewHiddenRule(kind: HiddenRuleKind, value: String) async throws -> HiddenRulePreview
+    /// `PATCH /hidden/rules/<id> {enabled?, value?, apply?}` (nil fields are left out).
+    func updateHiddenRule(id: String, enabled: Bool?, value: String?, apply: Bool) async throws -> (rule: HideRule, applied: Int)
+    /// `DELETE /hidden/rules/<id>`: the posts it hid stay hidden.
+    func deleteHiddenRule(id: String) async throws
 }
 
 extension CobaltClient {
@@ -369,6 +388,17 @@ extension CobaltClient {
     }
     public func connectStageTwitch() async throws -> URL { throw PipelineFailure.unsupported }
     public func disconnectStageTwitch() async throws -> StageSettings { throw PipelineFailure.unsupported }
+    public func setStatus(ids: [String], status: PostStatus) async throws -> StatusChange { throw PipelineFailure.unsupported }
+    public func hiddenLibrary(cursor: String?, limit: Int) async throws -> LibraryPage { throw PipelineFailure.unsupported }
+    public func hiddenRules() async throws -> HiddenRules { throw PipelineFailure.unsupported }
+    public func createHiddenRule(kind: HiddenRuleKind, value: String, apply: Bool) async throws -> (rule: HideRule, applied: Int) {
+        throw PipelineFailure.unsupported
+    }
+    public func previewHiddenRule(kind: HiddenRuleKind, value: String) async throws -> HiddenRulePreview { throw PipelineFailure.unsupported }
+    public func updateHiddenRule(id: String, enabled: Bool?, value: String?, apply: Bool) async throws -> (rule: HideRule, applied: Int) {
+        throw PipelineFailure.unsupported
+    }
+    public func deleteHiddenRule(id: String) async throws { throw PipelineFailure.unsupported }
     /// Likewise: a client that predates titles says the server cannot do it.
     public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult { throw PipelineFailure.unsupported }
 }

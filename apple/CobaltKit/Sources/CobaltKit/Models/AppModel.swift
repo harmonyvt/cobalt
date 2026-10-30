@@ -71,6 +71,11 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// rendering, queued to done in about 20 s. `.editorRenderFails`: a render ends `error.edit.render_failed` at 60 %.
     /// `.editorConflict`: the first save answers `409`. `.editorFail`: `GET /edits` always fails (`503`).
     case editorEmpty, editorRendering, editorRenderFails, editorConflict, editorFail
+    /// Hidden posts (APP-API-CONTRACT 37; `PreviewHidden.swift`): `.happy` data on a server with `features.hidden`, six hidden
+    /// posts (hidden by you, by a rule, by the chat) and three auto-hide rules (upload, `instagram.com/close.friends.acct`,
+    /// "selfie" off). `.happy` has the same six posts and rules; every other server with private links has the feature and
+    /// starts with none.
+    case hidden
 }
 
 public struct ServerSummary: Sendable, Equatable {
@@ -94,6 +99,8 @@ public final class AppModel {
     public let chat: ChatStore
     /// Stage, the studio tab (APP-API-CONTRACT 30). Idle until `load()`.
     public let stage: StageStore
+    /// The auto-hide rules (APP-API-CONTRACT 37; settings › hidden). Idle until `load()`.
+    public let hiddenRules: HiddenRulesModel
     /// The video editor (APP-API-CONTRACT 31): the projects, this key's renders and the open project. Idle until `refresh()`.
     public let editor: EditorStore
     /// The library as a sky map (APP-API-CONTRACT 21, `GET /library/map`). Idle until `load()`.
@@ -188,6 +195,7 @@ public final class AppModel {
         self.stage = StageStore(context: context)
         self.editor = EditorStore(context: context)
         self.skyMap = SkyMapModel(context: context)
+        self.hiddenRules = HiddenRulesModel(context: context, library: library)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
         let jobQueue = JobQueue(
@@ -319,6 +327,7 @@ public final class AppModel {
             savePull: SavePull.preview(.init(available: MacFolder.platformHasFolder)),
             makeClient: { _ in client })
         if scenario == .offline { model.seedOfflinePreviewStates() }
+        if scenario.hasHiddenSeed { model.library.seedHidden(PreviewData.hiddenPosts(now: clock.now())) }
         return model
     }
 
@@ -346,6 +355,8 @@ public final class AppModel {
         // Offline: keep what we knew about this server (the circles must not vanish on a bad train).
         if fresh.kind == .unreachable, [.fork, .legacyFork, .plainCobalt].contains(previous.kind) { fresh = previous }
         apply(fresh)
+        // the device's memory of what is hidden is read true once the server is known (and again when the count moved)
+        if fresh.hidden { Task { await library.syncHiddenIndex() } }
         Telemetry.log(.info, .net, "server checked", data: ["kind": .string(fresh.kind.rawValue), "telemetry": .bool(fresh.telemetry), "key": .string(fresh.key.rawValue)])
         telemetry?.uploadSoon()
     }
@@ -358,6 +369,7 @@ public final class AppModel {
         if selectedTab == .links, !caps.shareSets, caps.kind != .unreachable { selectedTab = .save }
         if selectedTab == .chat, !caps.chat, caps.kind != .unreachable { selectedTab = .save }
         if selectedTab == .stage, !caps.stage, caps.kind != .unreachable { selectedTab = .save }
+        if !caps.hidden, library.showingHidden { library.showingHidden = false }       // `features.hidden` went: the album closes
         liveManager?.capabilitiesChanged()
         unifiedQueue.capabilitiesChanged()            // `features.queue` came or went: poll, or stop
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
@@ -398,6 +410,7 @@ public final class AppModel {
         stage.reset()
         editor.reset()
         skyMap.reset()
+        hiddenRules.reset()
     }
 
     // MARK: - Links, handoffs

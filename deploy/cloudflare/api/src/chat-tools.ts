@@ -7,6 +7,7 @@ import { POST_KEY_SQL } from "./app-routes";
 import { searchPosts, type EmbedClient } from "./embed";
 import { effectiveVisibility } from "./visibility";
 import { liveLinksFor } from "./private-links";
+import { hiddenPostKeys } from "./hidden-store";
 import { collectionPostIds, resolveWithin, WithinError, WITHIN_POSTS_MAX, type WithinSpec } from "./within";
 
 export const LIBRARY_DEFAULT_LIMIT = 100;
@@ -212,7 +213,14 @@ export type ChatTools = Record<string, (...args: any[]) => Promise<unknown>>;
 
 export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
     let cache: Promise<Post[]> | null = null;
-    const all = () => (cache ??= loadPosts(d));
+    let hiddenCache: Promise<Set<string>> | null = null;
+    // hidden posts (section 37.6) are invisible to every call but post(id), which answers them with hidden: true
+    const hiddenKeys = () => (hiddenCache ??= hiddenPostKeys(d.db));
+    const everything = () => (cache ??= loadPosts(d));
+    const all = async () => {
+        const [posts, hidden] = await Promise.all([everything(), hiddenKeys()]);
+        return hidden.size === 0 ? posts : posts.filter((p) => !hidden.has(p.record.id));
+    };
     const known = async (ids: string[]) => {
         const set = new Set((await all()).map((p) => p.record.id));
         return ids.filter((i) => set.has(i));
@@ -282,11 +290,12 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
         },
         async post(id: unknown) {
             if (typeof id !== "string") throw new Error("post(id) needs a post id string");
-            const p = (await all()).find((x) => x.record.id === id);
+            const p = (await everything()).find((x) => x.record.id === id);
             if (!p) throw new Error(`no post with id ${id}`);
             const share = d.shareBaseUrl ? withSlash(d.shareBaseUrl) : null;
             return {
                 ...p.record,
+                ...((await hiddenKeys()).has(p.record.id) ? { hidden: true } : {}),
                 files: p.rows.map((f) => {
                     const pub = isPublic(f);
                     const name = pub ? (/\/([A-Za-z0-9]{6,40})\.[A-Za-z0-9]{1,8}$/.exec(f.url!)?.[1] ?? null) : null;
@@ -394,6 +403,7 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
                 .prepare("SELECT id, name FROM share_collections ORDER BY updated_at DESC, id DESC LIMIT 100")
                 .all<{ id: string; name: string }>();
             if (cols.length === 0) return [];
+            const hidden = await hiddenKeys();
             const { results: items } = await d.db
                 .prepare(
                     `SELECT i.collection_id, i.set_id FROM share_collection_items i JOIN share_sets s ON s.id = i.set_id
@@ -407,7 +417,7 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
                     id: c.id,
                     name: c.name,
                     link_ids: items.filter((i) => i.collection_id === c.id).map((i) => i.set_id),
-                    post_ids: [...(await collectionPostIds(d.db, c.id))],
+                    post_ids: [...(await collectionPostIds(d.db, c.id))].filter((k) => !hidden.has(k)),
                 });
             }
             return out;

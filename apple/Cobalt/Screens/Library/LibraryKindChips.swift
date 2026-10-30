@@ -6,6 +6,10 @@ import SwiftUI
 /// the same state the `kind` list of the sort and show menu sets (`LibraryModel.kindFilter`). Only on a server that has
 /// photos and galleries (`features.gallery`).
 ///
+/// The `hidden` chip is last, only on a server that has hidden posts (`capabilities.hidden`, APP-API-CONTRACT 37.7), and
+/// black when on. It is the hidden album's switch (`LibraryModel.showingHidden`), not a case of `LibraryKindFilter`: the
+/// kind chips are off while it is on, and a kind chip turns it off.
+///
 /// A view of its own: it counts the loaded posts, and a download tick or a scroll in the tiles must not redo that.
 struct LibraryKindChips: View {
     let model: AppModel
@@ -18,13 +22,15 @@ struct LibraryKindChips: View {
 
     /// `nil` while the library is not all here: a count of the first page would grow as the owner scrolls.
     private var counts: [LibraryKindFilter: Int]? {
-        guard !library.hasMore else { return nil }
+        // in the album the chips count the album's posts (the filter applies there too)
+        let album = library.showingHidden
+        guard !(album ? library.hiddenHasMore : library.hasMore) else { return nil }
         var out: [LibraryKindFilter: Int] = [:]
         func add(_ kind: MediaKind, hasWebp: Bool) {
             out[.all, default: 0] += 1
             for chip in LibraryKindFilter.chips(kind: kind, hasWebp: hasWebp) { out[chip, default: 0] += 1 }
         }
-        for post in library.posts {
+        for post in (album ? library.hiddenPosts : library.posts) {
             if post.isEmote { out[.emotes, default: 0] += 1 }
             else {
                 let item = model.mediaItem(for: post)
@@ -42,9 +48,12 @@ struct LibraryKindChips: View {
         let counts = counts
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(LibraryKindFilter.allCases, id: \.self) { kind in
-                    chip(kind, count: counts.map { $0[kind] ?? 0 })
+                if model.capabilities.gallery {
+                    ForEach(LibraryKindFilter.allCases, id: \.self) { kind in
+                        chip(kind, count: counts.map { $0[kind] ?? 0 })
+                    }
                 }
+                if model.capabilities.hidden { hiddenChip }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -54,12 +63,15 @@ struct LibraryKindChips: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Library2.kindFilter)
         .haptic(.selection, trigger: model.library.kindFilter)
+        .haptic(.selection, trigger: model.library.showingHidden)
     }
 
     private func chip(_ kind: LibraryKindFilter, count: Int?) -> some View {
         @Bindable var library = model.library
-        let selected = library.kindFilter == kind
+        // off while the hidden album is open: the album is its own chip
+        let selected = !library.showingHidden && library.kindFilter == kind
         return Button {
+            library.showingHidden = false
             library.kindFilter = kind
         } label: {
             Text(Copy.Library2.chip(kind, count: count))
@@ -83,6 +95,39 @@ struct LibraryKindChips: View {
         }
         .accessibilityLabel(Copy.Library2.name(kind))
         .accessibilityValue(count.map { "\($0)" } ?? "")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    // MARK: hidden
+
+    /// How many posts are hidden, once the library has said (a count read before the first page would be a 0 that lies).
+    private var hiddenCount: Int? {
+        library.posts.isEmpty && (library.isLoading || library.loadingAll != nil) ? nil : library.hiddenCount
+    }
+
+    /// Black fill, white text when on (in the dark theme a thin light ring keeps the black chip on the dark bar).
+    private var hiddenChip: some View {
+        @Bindable var library = model.library
+        let selected = library.showingHidden
+        return Button {
+            library.showingHidden.toggle()
+        } label: {
+            Text(Copy.HiddenAlbum.chip(count: hiddenCount))
+                .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
+                .monospacedDigit()
+                .foregroundStyle(selected ? Color.white : Color.primary)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 12)
+                .frame(minHeight: 30)
+                .background(Capsule().fill(selected ? Color.black : CobaltColor.elevated))
+                .overlay(Capsule().strokeBorder(Color.white.opacity(selected ? 0.28 : 0), lineWidth: 1))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Copy.HiddenAlbum.chipName)
+        .accessibilityValue(hiddenCount.map { "\($0)" } ?? "")
+        .accessibilityHint(Copy.HiddenAlbum.chipHint)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

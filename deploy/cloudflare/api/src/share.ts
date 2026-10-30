@@ -6,6 +6,7 @@
 // deleted or unknown name is a 404 that says nothing about which. Runs in the Worker (D1 only), the
 // container is never involved. Free of Cloudflare imports so it runs under plain node in the tests.
 
+import { notHiddenClause } from "./hidden-store";
 import { POST_KEY_SQL } from "./app-routes";
 import { captionOf, fileOf, itemSubject, writeCaption, type Caption, type Captioner } from "./roast";
 import { shareSetRoute } from "./share-sets";
@@ -117,7 +118,7 @@ async function findPublic(db: D1Database, base: string, ext: string | undefined)
         .prepare(
             `SELECT ${cols}, (SELECT t.title FROM media_titles t WHERE t.post_key = ${POST_KEY_SQL}) AS custom_title
                FROM media_items m
-              WHERE m.deleted_at IS NULL
+              WHERE m.deleted_at IS NULL${await notHiddenClause(db)}
                 AND ((m.bucket = 'media' AND m.r2_key >= ?1 AND m.r2_key ${op} ?2)
                   OR (m.bucket = 'originals' AND m.public_key >= ?1 AND m.public_key ${op} ?2))
               ORDER BY m.created_at DESC

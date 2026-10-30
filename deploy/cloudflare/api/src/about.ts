@@ -6,6 +6,7 @@
 import { STARTER_TERMS } from "./about-terms";
 import { aboutRowOf, cleanTag, effectiveTags, parseList, postLeads, probeable, runAll, USER_TAGS_MAX, type AboutRow } from "./about-store";
 import { assemblePosts, libraryHide, type AppDeps } from "./app-routes";
+import { hiddenPostKeys } from "./hidden-store";
 import {
     EMBED_CALL_MS,
     EMBED_DIMS,
@@ -166,6 +167,8 @@ export async function libraryAbout(d: AboutDeps, key: string): Promise<StudioRep
             if (v && v.length === EMBED_DIMS) {
                 words = nearestWords(v, await termVectors(d.db));
                 const live = await livePostTimes(d.db);
+                // a hidden post is nobody's neighbour (section 37.2)
+                for (const k of await hiddenPostKeys(d.db)) live.delete(k);
                 const near: { post_id: string; raw: number }[] = [];
                 for (const r of results) {
                     if (r.post_key === key || !live.has(r.post_key)) continue;

@@ -209,7 +209,8 @@ struct HomeScreen: View {
     /// planet under it; a media that gets another webp leaves its slot and springs back into the newest one).
     private var orbitMedia: [StoredMedia] {
         let cap = CurrentOrbitGeometry.maxItems - (focusReserved ? 1 : 0)
-        var real = model.store.latestMedia(CurrentOrbitGeometry.maxItems)
+        // hidden posts' offline copies are listed only in the hidden album (APP-API-CONTRACT 37.7)
+        var real = Array(model.visibleStoredMedia.prefix(CurrentOrbitGeometry.maxItems))
         if focusReserved || stage == .capsule { real = real.filter { !isRunMedia($0) } }
         #if DEBUG
         // `-previewOrbitCount 30` stretches the preview data to that many planets (design review), with

@@ -23,6 +23,7 @@ import type { PublishBucket } from "./publish";
 import type { OriginalsBucket, StudioReply } from "./studio";
 import { MEDIA_NAME_LENGTH } from "./webp";
 import { liveLinksFor, privateUrl, revokeLinkQuietly } from "./private-links";
+import { shareGate } from "./hidden-store";
 
 // ---- deps ---------------------------------------------------------------------------------------
 
@@ -359,6 +360,14 @@ async function syncSessions(d: VisDeps, row: Pick<MediaRow, "source" | "r2_key">
 
 // ON: the mirror exists at public_key (the same name every time) before the row says public.
 export async function makePublic(d: VisDeps, row: MediaRow, keyId: string = SERVICE_KEY_ID): Promise<Step> {
+    // a hidden post's files are never public, by any route (section 37.2); making a held one public by hand ends its
+    // wait for an about rule (37.3)
+    try {
+        if ((await shareGate(d.db, [row.id])).length > 0) return fail(409, "error.hidden");
+    } catch (e) {
+        console.error("[visibility] hidden check failed", row.id, String(e));
+        return fail(503, "error.api.generic");
+    }
     // a webp that never left the public bucket is already public
     if (row.bucket === "media") return { ok: true, row };
 

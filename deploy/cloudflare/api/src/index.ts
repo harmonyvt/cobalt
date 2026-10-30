@@ -10,6 +10,8 @@ import { handleStudioRoute, isStudioRoute, StudioService } from "./studio";
 import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
 import { purgeFrom } from "./visibility";
+import { releaseHeld } from "./hidden";
+import { shareBaseFrom } from "./deps";
 import { shareLinkFrom } from "./share";
 import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
 import { backfillCaptions, captionerFrom } from "./roast";
@@ -481,6 +483,23 @@ export default {
                 } catch (e) {
                     console.error("[about] words failed", e instanceof Error ? e.name : "error");
                 }
+            }
+            // Hidden posts (section 37.3): saves held for an about rule are hidden or published once their words are
+            // written (at once while "what it's about" is off; at the latest an hour after they were held). D1 and R2.
+            try {
+                const r = await releaseHeld(
+                    {
+                        db: env.DB,
+                        vis: { db: env.DB, originals: env.ORIGINALS, media: env.MEDIA, mediaBaseUrl: env.MEDIA_BASE_URL, now: () => Date.now(), purge: purgeFrom(env) },
+                        shareBaseUrl: shareBaseFrom(env),
+                        now: () => Date.now(),
+                        keyId: "cron:hidden",
+                    },
+                    { aboutOn: !!describer },
+                );
+                if (r.hidden || r.published) console.log("[hidden] held", JSON.stringify(r));
+            } catch (e) {
+                console.error("[hidden] held failed", e instanceof Error ? e.name : "error");
             }
             if (!client) return;
             // Keep the Space awake: a free Space sleeps after 48 h without traffic, a sleeping one answers the

@@ -764,6 +764,355 @@
         }
       }
     },
+    "/hidden/rules": {
+      "get": {
+        "operationId": "hidden_rules.list",
+        "summary": "The auto-hide rules, oldest first, and how many posts are hidden and held (GET /hidden/rules).",
+        "tags": [
+          "hidden_rules"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "rules": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/HiddenRule"
+                      }
+                    },
+                    "hidden": {
+                      "type": "integer"
+                    },
+                    "held": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "rules",
+                    "hidden",
+                    "held"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "post": {
+        "operationId": "hidden_rules.create",
+        "summary": "A new auto-hide rule (at most 50); apply also hides what is saved now (POST /hidden/rules).",
+        "tags": [
+          "hidden_rules"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "site",
+                      "words",
+                      "about",
+                      "upload"
+                    ]
+                  },
+                  "value": {
+                    "type": "string",
+                    "maxLength": 400
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "apply": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "rule": {
+                      "$ref": "#/components/schemas/HiddenRule"
+                    },
+                    "applied": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "rule",
+                    "applied"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/hidden/rules/preview": {
+      "post": {
+        "operationId": "hidden_rules.preview",
+        "summary": "What a rule would hide now, changing nothing (POST /hidden/rules/preview).",
+        "tags": [
+          "hidden_rules"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "site",
+                      "words",
+                      "about",
+                      "upload"
+                    ]
+                  },
+                  "value": {
+                    "type": "string",
+                    "maxLength": 400
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "matches": {
+                      "type": "integer"
+                    },
+                    "sample": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "up to 6 post keys, newest first"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "matches",
+                    "sample"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/hidden/rules/{id}": {
+      "patch": {
+        "operationId": "hidden_rules.update",
+        "summary": "Turn a rule on or off, change its value, or apply it now (PATCH /hidden/rules/<id>).",
+        "tags": [
+          "hidden_rules"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "value": {
+                    "type": "string",
+                    "maxLength": 400
+                  },
+                  "apply": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "rule": {
+                      "$ref": "#/components/schemas/HiddenRule"
+                    },
+                    "applied": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "rule",
+                    "applied"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "hidden_rules.delete",
+        "summary": "Delete a rule; the posts it hid stay hidden (DELETE /hidden/rules/<id>).",
+        "tags": [
+          "hidden_rules"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/library": {
       "get": {
         "operationId": "library.index",
@@ -1780,6 +2129,165 @@
           "cors": false,
           "no_store": true,
           "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/status": {
+      "post": {
+        "operationId": "library.status.route",
+        "summary": "Many posts (file or post ids) to one status at once: off, public, private (each file's own private link) or hidden (POST /library/status).",
+        "tags": [
+          "library"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    }
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "public",
+                      "private",
+                      "hidden"
+                    ]
+                  }
+                },
+                "required": [
+                  "ids",
+                  "status"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "posts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "the id sent"
+                          },
+                          "post_key": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "off",
+                              "public",
+                              "private",
+                              "hidden"
+                            ]
+                          },
+                          "files": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "visibility": {
+                                  "type": "string"
+                                },
+                                "private_url": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "visibility",
+                                "private_url"
+                              ],
+                              "additionalProperties": {}
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "post_key",
+                          "status",
+                          "files"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "failed": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "error": {
+                            "type": "string",
+                            "description": "an error code"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "error"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "ids (or files) that did not get the status"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "posts",
+                    "failed"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
           "ai": "hidden"
         }
       }
@@ -5017,6 +5525,50 @@
   },
   "components": {
     "schemas": {
+      "HiddenRule": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "site",
+              "words",
+              "about",
+              "upload"
+            ]
+          },
+          "value": {
+            "type": "string",
+            "description": "normalized: lower case, trimmed; '' for upload"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "hits": {
+            "type": "integer",
+            "description": "posts this rule has hidden"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "value",
+          "enabled",
+          "hits",
+          "created_at",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
       "LibraryPost": {
         "type": "object",
         "properties": {

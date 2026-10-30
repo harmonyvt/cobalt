@@ -10,17 +10,21 @@ import SwiftUI
 /// private…, rename, then `delete everything…` last and destructive. What the media cannot
 /// do is not shown (plain cobalt has no links; a media with nothing on the server cannot be deleted
 /// there). `delete everything…` asks the CONTRACT-MEDIA 1.12 confirm, and is off while this device runs
-/// something for the media.
+/// something for the media. With `features.hidden`, `hide…` (it asks first) sits before it, and `unhide` in the hidden
+/// album, which also leaves out the switches of a link a hidden post cannot have (APP-API-CONTRACT 37.7).
 struct LibraryMenuItems: View {
     let row: LibraryRow
     let controller: LibraryController
     /// Asks the confirm of "remove offline copy": the tile, the list and the table hold the dialog (a menu cannot).
     /// Without it (a preview) the copy goes at once, unless it is the only one.
     var askRemove: ((MediaItem) -> Void)?
+    /// The table's selection when this row is part of it: `hide…` and `unhide` act on all of them.
+    var selected: [LibraryRow] = []
 
-    init(row: LibraryRow, controller: LibraryController, askRemove: ((MediaItem) -> Void)? = nil) {
+    init(row: LibraryRow, controller: LibraryController, selected: [LibraryRow] = [], askRemove: ((MediaItem) -> Void)? = nil) {
         self.row = row
         self.controller = controller
+        self.selected = selected
         self.askRemove = askRemove
     }
 
@@ -72,7 +76,7 @@ struct LibraryMenuItems: View {
         OfflineMenuItems(item: item, controller: controller, askRemove: askRemove)
         ShowInFilesButton(model: controller.model, item: item)
         ShowInFinderButton(model: controller.model, item: item)
-        if controller.canSwitchVisibility(item) {
+        if controller.canSwitchVisibility(item), !row.isHidden {
             if row.isPublic {
                 Button(Copy.Library2.makePrivate, systemImage: Symbol.Library.makePrivate) { controller.makingPrivate = item }
             } else {
@@ -80,6 +84,20 @@ struct LibraryMenuItems: View {
             }
         }
         Button(Copy.Library2.rename, systemImage: Symbol.Library.rename) { controller.renaming = item }
+        if controller.model.capabilities.hidden {
+            let targets = controller.statusTargets(row, also: selected)
+            if row.isHidden {
+                Button(Copy.HiddenAlbum.menuUnhide, systemImage: Symbol.HiddenAlbum.unhide) {
+                    controller.chooseStatus(.off, posts: targets)
+                }
+                .disabled(controller.changingStatus)
+            } else {
+                Button(Copy.HiddenAlbum.menuHide, systemImage: Symbol.HiddenAlbum.hidden) {
+                    controller.chooseStatus(.hidden, posts: targets)
+                }
+                .disabled(controller.changingStatus)
+            }
+        }
         if controller.canDelete(item) {
             Divider()
             Button(Copy.Library2.deleteEverything, systemImage: Symbol.Library.deleteEverything, role: .destructive) {

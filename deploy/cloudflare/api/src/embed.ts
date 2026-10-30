@@ -15,6 +15,7 @@
 import { whyFor } from "./about";
 import { aboutWordsOf, pickLead } from "./about-store";
 import { assemblePosts, libraryHide, POST_KEY_SQL, type AppDeps } from "./app-routes";
+import { hiddenPostKeys } from "./hidden-store";
 import type { StudioReply } from "./studio";
 import { resolveWithin, withinFromQuery, WithinError, type Within } from "./within";
 
@@ -732,7 +733,9 @@ export async function searchPosts(
         qv = null;
     }
 
-    const inputs = await postInputs(d.db, d.mediaBaseUrl);
+    // hidden posts (section 37.2) are never search results; they stay indexed for when they are unhidden
+    const hidden = await hiddenPostKeys(d.db);
+    const inputs = (await postInputs(d.db, d.mediaBaseUrl)).filter((p) => !hidden.has(p.post_key));
     const { results: rows } = await d.db
         .prepare("SELECT post_key, vector, input_hash FROM media_embeddings WHERE model = ? AND dims = ? AND vector IS NOT NULL")
         .bind(EMBED_MODEL, EMBED_DIMS)
@@ -950,7 +953,9 @@ export function quantizeVector(v: ArrayLike<number>): string {
 
 export async function libraryMap(d: { db: D1Database; mediaBaseUrl: string; searchEnabled: boolean }): Promise<StudioReply> {
     try {
-        const inputs = await postInputs(d.db, d.mediaBaseUrl);
+        // the sky map leaves hidden posts out (section 37.2)
+        const hidden = await hiddenPostKeys(d.db);
+        const inputs = (await postInputs(d.db, d.mediaBaseUrl)).filter((p) => !hidden.has(p.post_key));
         const { results: rows } = await d.db
             .prepare("SELECT post_key, vector FROM media_embeddings WHERE model = ? AND dims = ? AND vector IS NOT NULL")
             .bind(EMBED_MODEL, EMBED_DIMS)

@@ -115,6 +115,7 @@ enum PreviewData {
             caps.shareCollections = true
             caps.shareGroups = true
             caps.privateLinks = true
+            caps.hidden = true                    // the server that has private links has migration 0025 (APP-API-CONTRACT 37)
             caps.limits.shareSetMax = 4
         }
         if scenario.hasChat && caps.kind == .fork {
@@ -189,7 +190,7 @@ enum PreviewData {
     /// media with three webps and a webp-only media, newest first like the index.
     static func seeds(for scenario: PreviewScenario, now: Date) -> [StoredVideo] {
         switch scenario {
-        case .happy, .renditions, .renditionsLegacy, .shareLinksEmpty, .shareLinksFail:
+        case .happy, .renditions, .renditionsLegacy, .shareLinksEmpty, .shareLinksFail, .hidden:
             return (orbit(now: now) + renditionSeeds(now: now)).sorted { $0.createdAt > $1.createdAt }
         case .offline:
             return PreviewOffline.seeds(now: now)

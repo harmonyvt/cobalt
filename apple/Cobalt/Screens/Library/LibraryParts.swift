@@ -347,9 +347,13 @@ struct LibraryRowBadges: View {
                     .fixedSize()
             }
             OfflineBadge(item: row.item, model: model, style: .row)
-            Image(systemName: row.isPublic ? Symbol.Library.isPublic : Symbol.Library.isPrivate)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+            if let by = row.hiddenBy {
+                HiddenByBadge(by: by)
+            } else {
+                Image(systemName: row.isPublic ? Symbol.Library.isPublic : Symbol.Library.isPrivate)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
         }
         .accessibilityHidden(true)
     }

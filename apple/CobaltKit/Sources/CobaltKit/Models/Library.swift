@@ -227,6 +227,13 @@ public struct LibraryPost: Sendable, Codable, Equatable, Identifiable {
     public var itemCount: Int?
     /// `items_failed` (v=3): indices of the items the save could not fetch.
     public var itemsFailed: [Int] = []
+    /// `hidden` (APP-API-CONTRACT 37.2): the post is hidden, so it is in no list but the hidden album and its files are
+    /// all off. False when absent (an older server, a post nobody hid).
+    public var hidden: Bool = false
+    /// `hidden_by`: who hid it. Nil when it is not hidden, and for a word this build does not know.
+    public var hiddenBy: HiddenBy?
+    /// `hidden_rule`: the id of the rule that hid it (`hiddenBy == .rule`).
+    public var hiddenRule: String?
 
     /// `LinkInfo(link).ref`
     public var ref: String? { link.flatMap { LinkInfo($0)?.ref } }
@@ -250,6 +257,7 @@ extension LibraryPost {
         case id, service, link, title, duration, width, height, createdAt, session, files
         case customTitle, visibility
         case kind, itemCount, itemsFailed      // `kind`, `item_count`, `items_failed`
+        case hidden, hiddenBy, hiddenRule      // `hidden`, `hidden_by`, `hidden_rule` (37.2)
         case posterURL = "posterUrl"           // `poster_url` after convertFromSnakeCase
     }
 
@@ -272,6 +280,9 @@ extension LibraryPost {
         kind = (try? c.decodeIfPresent(MediaKind.self, forKey: .kind)) ?? nil
         itemCount = (try? c.decodeIfPresent(Int.self, forKey: .itemCount)) ?? nil
         itemsFailed = ((try? c.decodeIfPresent([Int].self, forKey: .itemsFailed)) ?? nil) ?? []
+        hidden = ((try? c.decodeIfPresent(Bool.self, forKey: .hidden)) ?? nil) ?? false
+        hiddenBy = (try? c.decodeIfPresent(HiddenBy.self, forKey: .hiddenBy)) ?? nil      // a word we do not know reads as unsaid
+        hiddenRule = (try? c.decodeIfPresent(String.self, forKey: .hiddenRule)) ?? nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -292,6 +303,9 @@ extension LibraryPost {
         try c.encodeIfPresent(kind, forKey: .kind)
         try c.encodeIfPresent(itemCount, forKey: .itemCount)
         if !itemsFailed.isEmpty { try c.encode(itemsFailed, forKey: .itemsFailed) }
+        if hidden { try c.encode(true, forKey: .hidden) }
+        try c.encodeIfPresent(hiddenBy, forKey: .hiddenBy)
+        try c.encodeIfPresent(hiddenRule, forKey: .hiddenRule)
     }
 }
 
@@ -302,4 +316,10 @@ public struct LibraryPage: Sendable, Equatable {
     public var publicBytes: Int64
     public var privateBytes: Int64
     public var next: String?
+    /// `counts.hidden` (37.2): how many posts are hidden. 0 from a server that does not say. A page of hidden posts
+    /// (`hiddenLibrary`) carries it too; its `postCount` / `fileCount` stay those of the library without them.
+    public var hiddenCount: Int = 0
 }
+
+/// Who hid a post (`hidden_by`, 37.1): the owner by hand, an auto-hide rule, or the chat / MCP.
+public enum HiddenBy: String, Sendable, Codable, Equatable { case you, rule, chat }

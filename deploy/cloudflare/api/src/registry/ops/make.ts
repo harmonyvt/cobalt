@@ -11,6 +11,8 @@ import { EDIT_PROJECT_ID_REGEX, EDIT_RENDER_ID_REGEX, ITEM_ID_REGEX, STUDIO_JOB_
 import { KEY_ID_HEADER } from "../../headers";
 import { getSession, itemTypeOf, STILL_ADOPT_TYPES, type SessionRow } from "../../studio";
 import { studioStatus } from "../../studio-edge";
+import { HIDDEN_HINT, sessionPostKey } from "../../hidden";
+import { hiddenRows } from "../../hidden-store";
 import { effectiveVisibility } from "../../visibility";
 import { budgetPort, dailyCap } from "../budget";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
@@ -176,7 +178,19 @@ export const isSource = (f: FileRow) => f.role === "item" || (f.bucket === "orig
 const stop = (call: string, message: string) => new OpError(400, "error.make.refused", `cobalt.${call}: ${message}`);
 
 // A post id or a file id -> the file a make reads: the file itself, or the post's first source file of the wanted type.
+// Nothing is made of a hidden post (section 37.2): the refusal the model reads, with the way out.
+const hiddenStop = (call: string, what: string) => new OpError(409, "error.hidden", `cobalt.${call}: ${what}: ${HIDDEN_HINT}`);
+async function refuseHiddenPost(ctx: OpContext, call: string, postKey: string | null | undefined): Promise<void> {
+    if (postKey && (await hiddenRows(ctx.db, [postKey])).get(postKey)?.state === "hidden") throw hiddenStop(call, postKey);
+}
+
 async function fileFor(ctx: OpContext, call: string, id: string, want: "video" | "photo"): Promise<FileRow> {
+    const f = await fileForAny(ctx, call, id, want);
+    await refuseHiddenPost(ctx, call, f.post_key);
+    return f;
+}
+
+async function fileForAny(ctx: OpContext, call: string, id: string, want: "video" | "photo"): Promise<FileRow> {
     const ok = (f: FileRow) => (want === "video" ? typeOf(f) !== "photo" : typeOf(f) === "photo");
     const label = want === "video" ? "a video or gif" : "a photo";
     if (ITEM_ID_REGEX.test(id)) {
@@ -272,6 +286,8 @@ const refundRender = (ctx: OpContext, call: string) => budgetPort(ctx.container)
 // Start a studio make (render, slideshow, gallery image) on an open session. The keyed ones run as the session's owner:
 // the chat is Harmony's own, and the Durable Object only lets the key that made a session add to it.
 async function startStudio(ctx: OpContext, call: string, sid: string, plan: Plan): Promise<Job> {
+    const session = await getSession(ctx.db, sid);
+    await refuseHiddenPost(ctx, call, session ? sessionPostKey(sid, session.link) : null);
     await takeRender(ctx, call);
     let res: Response;
     try {
@@ -291,6 +307,7 @@ async function startStudio(ctx: OpContext, call: string, sid: string, plan: Plan
     if (res.status !== 202 || typeof b?.job !== "string") {
         await refundRender(ctx, call);
         const code = typeof b?.error?.code === "string" ? b.error.code : "error.api.generic";
+        if (code === "error.hidden") throw hiddenStop(call, sid);
         throw new OpError(res.status, code, `cobalt.${call} failed: ${code}`);
     }
     return { job: `studio:${sid}:${b.job}`, status: b.queued === true ? "queued" : "running", queue_ahead: typeof b.queue_ahead === "number" ? b.queue_ahead : null };
@@ -659,6 +676,7 @@ async function renderProject(ctx: OpContext, call: string, projectId: string, ta
             await refundRender(ctx, call);
             if (reply.status === 200 && r.render) return { job: `edit:${r.render.id}`, status: r.render.status === "queued" ? "queued" : "running" };
             const code = typeof r?.error?.code === "string" ? r.error.code : "error.api.generic";
+            if (code === "error.hidden") throw hiddenStop(call, Array.isArray(r.ids) ? r.ids.join(", ") : projectId);
             const where = typeof r?.path === "string" && r.path ? ` at ${r.path}` : "";
             throw new OpError(reply.status, code, `cobalt.${call}: ${code}${where}`);
         }
