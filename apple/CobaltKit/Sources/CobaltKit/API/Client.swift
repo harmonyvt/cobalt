@@ -122,6 +122,13 @@ public protocol CobaltClient: Sendable {
     func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult
     /// `GET /library/search/post?key=` (keyed; only when `features.search`): how one post sits in the search index.
     func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus
+    /// `GET /library/about?key=` (APP-API-CONTRACT 34; keyed; only when `features.about`): the post's sentence, tags,
+    /// sound, the words its vector reads closest to and its nearest posts. `404 error.library.not_found` is
+    /// `CobaltError.api`. Defaulted below (`.unsupported`) so older fakes compile.
+    func libraryAbout(postKey: String) async throws -> LibraryAbout
+    /// `PATCH /library/about {key, tags}` (keyed): replaces the owner's tags (nil goes back to the server's own) and
+    /// answers the `GET` body. Defaulted below (`.unsupported`).
+    func setLibraryAboutTags(postKey: String, tags: [String]?) async throws -> LibraryAbout
     /// `GET /library/map` (APP-API-CONTRACT 21; keyed): every embedded post with its int8 vector, newest first, for the
     /// sky map. Defaulted below (`.unsupported`) so older fakes compile.
     func libraryMap() async throws -> LibraryMap
@@ -276,6 +283,8 @@ extension CobaltClient {
         throw PipelineFailure.unsupported
     }
     public func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus { throw PipelineFailure.unsupported }
+    public func libraryAbout(postKey: String) async throws -> LibraryAbout { throw PipelineFailure.unsupported }
+    public func setLibraryAboutTags(postKey: String, tags: [String]?) async throws -> LibraryAbout { throw PipelineFailure.unsupported }
     public func libraryMap() async throws -> LibraryMap { throw PipelineFailure.unsupported }
     public func createShareSet(items: [String], title: String?) async throws -> ShareSet { throw PipelineFailure.unsupported }
     public func shareSets() async throws -> [ShareSet] { throw PipelineFailure.unsupported }

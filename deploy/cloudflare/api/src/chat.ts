@@ -7,7 +7,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { assemblePosts, libraryHide, type AppDeps } from "./app-routes";
-import { chatTools, loadPosts, picturesOf, recordsOf, type ChatCollect, type ChatToolDeps, type ChatTools } from "./chat-tools";
+import { chatTools, loadPosts, picturesOf, recordsOf, type ChatCollect, type ChatToolDeps, type ChatTools, type Ranked } from "./chat-tools";
 import { chatToolbox, runConfirmed } from "./registry/ai";
 import type { OpBase } from "./registry/context";
 import { toolTypes } from "./registry/index";
@@ -143,6 +143,8 @@ type MessageRow = {
     text: string;
     post_ids: string;
     collage?: string | null;
+    // section 34.6 (migration 0022): cobalt.rank's scored list
+    ranked?: string | null;
     steps: string;
     api: string | null;
     status: string;
@@ -212,6 +214,19 @@ const collageShape = (s: string | null) => {
     return c && Array.isArray(c.ids) && c.ids.length > 0 ? { title: c.title ?? null, query: c.query ?? null, total: c.ids.length } : null;
 };
 
+// cobalt.rank's list (section 34.6), as the app reads it: null when there is none.
+const rankedShape = (s: string | null | undefined) => {
+    const r = parse<Ranked | null>(s ?? null, null);
+    if (!r || !Array.isArray(r.hits) || r.hits.length === 0) return null;
+    return {
+        title: r.title ?? null,
+        query: r.query ?? null,
+        within: r.within ?? null,
+        hits: r.hits.map((h) => ({ post_id: h.post_id, score: typeof h.score === "number" ? h.score : null, why: Array.isArray(h.why) ? h.why : [] })),
+    };
+};
+const rankedIds = (s: string | null | undefined) => rankedShape(s)?.hits.map((h) => h.post_id) ?? [];
+
 // The message's confirm card (its last confirm step), with a card nobody answered in time shown as expired.
 const confirmOf = (steps: Step[], now: number): ConfirmCard | null => {
     const c = [...steps].reverse().find((s) => s.kind === "confirm" && s.confirm)?.confirm ?? null;
@@ -227,6 +242,7 @@ const messageShape = (r: MessageRow, now: number) => {
         text: r.text,
         post_ids: parse<string[]>(r.post_ids, []),
         collage: collageShape(r.collage ?? null),
+        ranked: rankedShape(r.ranked),
         confirm: confirmOf(steps, now),
         steps,
         status: stale ? "error" : r.status,
@@ -326,7 +342,8 @@ export async function getThread(d: ChatDeps, id: string): Promise<StudioReply> {
             .all<MessageRow>();
         const now = d.now();
         const messages = results.map((r) => messageShape(r, now));
-        const posts = await postsMap(d, messages.flatMap((m) => m.post_ids));
+        // every shown post, and every post of a ranked list (section 34.6)
+        const posts = await postsMap(d, [...messages.flatMap((m) => m.post_ids), ...results.flatMap((r) => rankedIds(r.ranked))]);
         return { status: 200, body: { status: "success", thread: await threadShape(d.db, t), messages, posts } };
     } catch (e) {
         console.error("[chat] read failed", String(e));
@@ -410,7 +427,9 @@ export async function deleteThread(d: Pick<ChatDeps, "db">, id: string): Promise
 
 // How to find things: meaning search first when the Space is configured (owner: "the chat should use the embedding
 // search when available"), plain name matching otherwise.
-const FINDING_WITH_SEARCH = `Finding things: for anything about what files show or are about (a topic, a person, an animal, a game, a mood, "the clip where..."), call cobalt.library.search(query) first. It ranks the whole library by meaning, from titles and pictures, so it finds things whose names say nothing (most names are just "instagram_<code>"). Write the query as a short description of the content, try a second wording if the first finds nothing good, and check the best hits with look() when it matters. Use cobalt.library.list({ query }) only for exact words in a name, link or caption, and cobalt.library.list({ since, until, source, kind }) for dates, sites and counts. If search throws because it is waking up, fall back to cobalt.library.list({ query }) and tell Harmony the search was still waking up.`;
+const FINDING_WITH_SEARCH = `Finding things: for anything about what files show or are about (a topic, a person, an animal, a game, a mood, "the clip where..."), call cobalt.library.search(query) first. It ranks the whole library by meaning, from titles, pictures, a written description of each post and what is heard in it, so it finds things whose names say nothing (most names are just "instagram_<code>"). Write the query as a short description of the content, try a second wording if the first finds nothing good, and check the best hits with look() when it matters. Use cobalt.library.list({ query }) only for exact words in a name, link or caption, and cobalt.library.list({ since, until, source, kind }) for dates, sites and counts. If search throws because it is waking up, fall back to cobalt.library.list({ query }) and tell Harmony the search was still waking up.
+
+Inside a collection, a gallery link or a set of posts ("which of these are X", "the furry ones in Lia Share 11"): call cobalt.library.search(X, { within: { collection: "<its name or id>" } }) (or { link: id }, or { posts: ids }). It scores every post in it, so cut where the scores drop, look() at the borderline posters before you answer, and put the matches in cobalt.rank(hits, { title, query, within }) instead of show(): Harmony sees them as a scored list. Each hit's why lists the tags that matched. cobalt.library.about(id) says what one post is about: its description, tags, what is heard in it and the words it reads closest to.`;
 const FINDING_WITHOUT_SEARCH = `Finding things: search by meaning is off on this server, so use cobalt.library.list({ query }) for words in names, links and captions, cobalt.library.list({ since, until, source, kind }) for dates, sites and counts, and cobalt.look() to check what files actually show.`;
 
 // The library writes (APP-API-CONTRACT.md 33.7): only what Harmony asked for.
@@ -649,16 +668,42 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
     const api: any[] = [];
     // a continuation's opening user turn is saved with its reply, so the thread replays
     const lead: any[] = c.userRow ? [] : [{ role: "user", content: c.text }];
+    // ranked stays undefined until cobalt.rank is called: only then is the message's `ranked` column (migration 0022) written
     const collect: ChatCollect = { look: [], show: [], collage: null };
     const toolDeps: ChatToolDeps = { db: d.db, mediaBaseUrl: d.mediaBaseUrl, shareBaseUrl: d.shareBaseUrl, embed: d.embed };
     let lastSave = now();
     let paused: PendingConfirm | null = null;
     const collageJson = () => (collect.collage ? JSON.stringify(collect.collage) : null);
-    const row = (status: string, error: string | null) => ({ ...c.botRow, text, post_ids: JSON.stringify(collect.show), collage: collageJson(), steps: JSON.stringify(steps), status, error, updated_at: now() });
+    const rankedJson = () => (collect.ranked ? JSON.stringify(collect.ranked) : null);
+    const row = (status: string, error: string | null) => ({
+        ...c.botRow,
+        text,
+        post_ids: JSON.stringify(collect.show),
+        collage: collageJson(),
+        ranked: rankedJson(),
+        steps: JSON.stringify(steps),
+        status,
+        error,
+        updated_at: now(),
+    });
     const save = async (status: string, error: string | null) => {
+        const ranked = collect.ranked !== undefined;
         await d.db
-            .prepare("UPDATE chat_messages SET text = ?2, post_ids = ?3, steps = ?4, api = ?5, status = ?6, error = ?7, updated_at = ?8, collage = ?9 WHERE id = ?1")
-            .bind(c.botRow.id, text, JSON.stringify(collect.show), JSON.stringify(steps), status === "running" ? null : JSON.stringify([...lead, ...api]), status, error, now(), collageJson())
+            .prepare(
+                `UPDATE chat_messages SET text = ?2, post_ids = ?3, steps = ?4, api = ?5, status = ?6, error = ?7, updated_at = ?8, collage = ?9${ranked ? ", ranked = ?10" : ""} WHERE id = ?1`,
+            )
+            .bind(
+                c.botRow.id,
+                text,
+                JSON.stringify(collect.show),
+                JSON.stringify(steps),
+                status === "running" ? null : JSON.stringify([...lead, ...api]),
+                status,
+                error,
+                now(),
+                collageJson(),
+                ...(ranked ? [rankedJson()] : []),
+            )
             .run();
     };
     const progress = async () => {
@@ -751,6 +796,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 c.emit("step", { step });
                 const shownBefore = collect.show.length;
                 const collageBefore = collageJson();
+                const rankedBefore = rankedJson();
                 const t0 = Date.now();
                 const box = toolsForRun();
                 // a run that calls the box may wait on it (a wake, a download, a 120 s command, a save)
@@ -772,6 +818,11 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                     c.emit("posts", { post_ids: added, posts: await postsMap(d, added) });
                 }
                 if (collageJson() !== collageBefore) c.emit("collage", { collage: collageShape(collageJson()) });
+                // cobalt.rank's list (section 34.6), with the post shapes its rows draw
+                if (rankedJson() !== rankedBefore) {
+                    const ranked = rankedShape(rankedJson());
+                    c.emit("ranked", { ranked, posts: await postsMap(d, ranked?.hits.map((h) => h.post_id) ?? []) });
+                }
                 // an `ask` call stopped the run: the card goes on this message (section 33.5)
                 const card = box.paused();
                 if (card) {

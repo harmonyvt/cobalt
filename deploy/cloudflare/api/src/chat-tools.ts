@@ -2,9 +2,11 @@
 // plain async functions over D1. Read-only: `look` and `show` only collect ids for the reply. Free of
 // Cloudflare imports so the tests run them under node.
 
+import { whyFor } from "./about";
 import { POST_KEY_SQL } from "./app-routes";
 import { searchPosts, type EmbedClient } from "./embed";
 import { effectiveVisibility } from "./visibility";
+import { collectionPostIds, resolveWithin, WithinError, WITHIN_POSTS_MAX, type WithinSpec } from "./within";
 
 export const LIBRARY_DEFAULT_LIMIT = 100;
 export const LIBRARY_MAX_LIMIT = 1000;
@@ -12,6 +14,10 @@ export const SEARCH_MAX = 500;
 export const COLLAGE_MAX = 500;
 export const LOOK_MAX = 4;
 export const SHOW_MAX = 12;
+// cobalt.rank (section 34.6)
+export const RANK_MAX = 50;
+export const RANK_WHY_MAX = 4;
+export const RANK_WHY_CHARS = 30;
 
 export type ChatToolDeps = {
     db: D1Database;
@@ -168,7 +174,38 @@ const idList = (v: unknown): string[] => {
 
 // What one reply's tool calls collected: pictures to look at, files to show.
 // collage: one big result set for the reply (section 27.5); a later call replaces it.
-export type ChatCollect = { look: string[]; show: string[]; collage?: { title: string | null; query: string | null; ids: string[] } | null };
+// ranked: one scored list for the reply (section 34.6, cobalt.rank); a later call replaces it. undefined: never set in
+// this reply (the message's column is left alone).
+export type RankedHit = { post_id: string; score: number | null; why: string[] };
+export type Ranked = { title: string | null; query: string | null; within: string | null; hits: RankedHit[] };
+export type ChatCollect = {
+    look: string[];
+    show: string[];
+    collage?: { title: string | null; query: string | null; ids: string[] } | null;
+    ranked?: Ranked | null;
+};
+
+// search(query, limit) or search(query, { within, limit }); a string `within` is a collection id or name.
+function searchArgs(second: unknown): { limit: unknown; within: WithinSpec | null } {
+    if (second === undefined || second === null || typeof second === "number" || typeof second === "string") return { limit: second, within: null };
+    if (typeof second !== "object" || Array.isArray(second)) throw new Error("search(query, opts): opts must be { within?, limit? }");
+    const o = second as { limit?: unknown; within?: unknown };
+    const w = o.within;
+    if (w === undefined || w === null) return { limit: o.limit, within: null };
+    if (typeof w === "string") return { limit: o.limit, within: { collection: w } };
+    if (typeof w === "object" && !Array.isArray(w)) {
+        const x = w as Record<string, unknown>;
+        const keys = ["collection", "link", "posts"].filter((k) => x[k] !== undefined);
+        if (keys.length === 1) {
+            if (typeof x.collection === "string" && x.collection) return { limit: o.limit, within: { collection: x.collection } };
+            if (typeof x.link === "string" && x.link) return { limit: o.limit, within: { link: x.link } };
+            if (Array.isArray(x.posts) && x.posts.length <= WITHIN_POSTS_MAX && x.posts.every((p) => typeof p === "string" && p.length > 0 && p.length <= 2048)) {
+                return { limit: o.limit, within: { posts: x.posts as string[] } };
+            }
+        }
+    }
+    throw new Error(`within must be { collection: id or name } or { link: id } or { posts: [ids] } (at most ${WITHIN_POSTS_MAX})`);
+}
 
 export type ChatTools = Record<string, (...args: any[]) => Promise<unknown>>;
 
@@ -205,10 +242,27 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
                 .slice(0, limit)
                 .map((p) => p.record);
         },
-        async search(query: unknown, limit?: unknown) {
+        async search(query: unknown, second?: unknown) {
             if (typeof query !== "string") throw new Error("search(query) needs a string");
-            const n = clampLimit(limit, 10, SEARCH_MAX);
-            const r = await searchPosts({ db: d.db, client: d.embed, mediaBaseUrl: d.mediaBaseUrl }, query, n);
+            const { limit, within: spec } = searchArgs(second);
+            // within a set every post is scored: the default is all of them (section 34.6)
+            const n = clampLimit(limit, spec ? SEARCH_MAX : 10, SEARCH_MAX);
+            let within: Set<string> | undefined;
+            if (spec) {
+                try {
+                    within = (await resolveWithin(d.db, spec)).postKeys;
+                } catch (e) {
+                    if (e instanceof WithinError) {
+                        throw new Error(
+                            e.code === "error.collection.not_found"
+                                ? `no collection ${JSON.stringify((spec as { collection: string }).collection)} (see collections())`
+                                : `no live gallery link ${JSON.stringify((spec as { link: string }).link)} (see links())`,
+                        );
+                    }
+                    throw e;
+                }
+            }
+            const r = await searchPosts({ db: d.db, client: d.embed, mediaBaseUrl: d.mediaBaseUrl }, query, n, within ? { within } : {});
             if (!r.ok) {
                 throw new Error(
                     r.code === "error.search.waking" ? "search is waking up, try again in a minute or use library({ query })" :
@@ -217,9 +271,12 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
                 );
             }
             const posts = new Map((await all()).map((p) => [p.record.id, p.record]));
+            const why = await whyFor(d.db, r.queryVector, query.trim(), r.hits.map((h) => h.post_key));
             return r.hits.flatMap((h) => {
                 const rec = posts.get(h.post_key);
-                return rec ? [{ ...rec, score: Math.round(h.score * 1000) / 1000 }] : [];
+                return rec
+                    ? [{ ...rec, score: Math.round(h.score * 1000) / 1000, why: why.get(h.post_key) ?? [], ...(h.indexed ? {} : { indexed: false }) }]
+                    : [];
             });
         },
         async post(id: unknown) {
@@ -271,6 +328,38 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
             collect.collage = ok.length > 0 ? { title: line(o.title, 80), query: line(o.query, 200), ids: ok } : null;
             return ok.length;
         },
+        // cobalt.rank(hits, { title, query, within }) (section 34.6): a scored list under the reply; a later call replaces it.
+        async rank(hits: unknown, opts?: unknown) {
+            const list = Array.isArray(hits) ? hits : [];
+            const seen = new Set<string>();
+            const wanted: { id: string; score: number | null; why: string[] }[] = [];
+            const line = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max) : "") || null;
+            for (const h of list) {
+                const id = typeof h === "string" ? h : h && typeof h === "object" ? (h as { id?: unknown }).id : undefined;
+                if (typeof id !== "string" || id.length === 0 || id.length > 2048 || seen.has(id)) continue;
+                seen.add(id);
+                const raw = h && typeof h === "object" ? (h as { score?: unknown; why?: unknown }) : {};
+                const score = typeof raw.score === "number" && Number.isFinite(raw.score) ? Math.round(raw.score * 1000) / 1000 : null;
+                const why = (Array.isArray(raw.why) ? raw.why : [])
+                    .map((w) => line(w, RANK_WHY_CHARS))
+                    .filter((w): w is string => !!w)
+                    .slice(0, RANK_WHY_MAX);
+                wanted.push({ id, score, why });
+            }
+            const live = new Set(await known(wanted.map((w) => w.id)));
+            const kept = wanted.filter((w) => live.has(w.id)).slice(0, RANK_MAX);
+            const o = opts && typeof opts === "object" ? (opts as Record<string, unknown>) : {};
+            collect.ranked =
+                kept.length > 0
+                    ? {
+                          title: line(o.title, 80),
+                          query: line(o.query, 200),
+                          within: line(o.within, 80),
+                          hits: kept.map((k) => ({ post_id: k.id, score: k.score, why: k.why })),
+                      }
+                    : null;
+            return kept.length;
+        },
         async links() {
             const { results } = await d.db
                 .prepare("SELECT id, items, title, created_at FROM share_sets WHERE revoked_at IS NULL ORDER BY created_at DESC LIMIT 200")
@@ -306,7 +395,17 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
                       WHERE s.revoked_at IS NULL ORDER BY i.added_at DESC`,
                 )
                 .all<{ collection_id: string; set_id: string }>();
-            return cols.map((c) => ({ id: c.id, name: c.name, link_ids: items.filter((i) => i.collection_id === c.id).map((i) => i.set_id) }));
+            const out = [];
+            for (const c of cols) {
+                // the posts of its live links' files (section 34.6), the ids search(q, { within }) and post() take
+                out.push({
+                    id: c.id,
+                    name: c.name,
+                    link_ids: items.filter((i) => i.collection_id === c.id).map((i) => i.set_id),
+                    post_ids: [...(await collectionPostIds(d.db, c.id))],
+                });
+            }
+            return out;
         },
     };
 }

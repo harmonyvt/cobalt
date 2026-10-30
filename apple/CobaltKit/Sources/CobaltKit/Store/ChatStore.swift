@@ -49,7 +49,7 @@ public struct ChatThreadContent: Sendable, Equatable {
     /// - `text` is appended to the running message, in order;
     /// - `step` replaces the step with the same id, or is appended;
     /// - `posts` appends the ids the message does not show yet, and merges the shapes;
-    /// - `collage` sets the collage of the running message;
+    /// - `collage` sets the collage of the running message; `ranked` sets its scored list (and merges the shapes);
     /// - `confirm` sets the card on its message (or updates its status after an answer);
     /// - `title` and `done` carry the thread as it is now; `done` replaces the message;
     /// - `error` marks the message failed (with the saved one when the server sent it).
@@ -80,6 +80,9 @@ public struct ChatThreadContent: Sendable, Equatable {
             }
         case .collage(let collage):
             edit { $0.collage = collage }
+        case .ranked(let ranked, let shown):
+            for post in shown { posts[post.id] = post }
+            edit { $0.ranked = ranked }
         case .title(let renamed):
             thread = renamed
         case .confirm(let messageID, let card):
@@ -694,10 +697,14 @@ public final class ChatStore {
             // a later collage of the same reply replaces the earlier one: start the pages over
             if let message = contents[id]?.messages.last(where: { $0.role == .assistant }) { collagePages[message.id] = nil }
         case .title(let thread): put(thread)
-        case .done(_, let thread):
+        case .done(let message, let thread):
             put(thread)
             pruneCollagePages(of: id)
             watchJobs(id)
+            // the ranked list names posts the stream may not have shipped: read the thread for their shapes
+            if let ranked = message.ranked, let have = contents[id]?.posts, ranked.hits.contains(where: { have[$0.postID] == nil }) {
+                Task { await load(id) }
+            }
         default: break
         }
     }

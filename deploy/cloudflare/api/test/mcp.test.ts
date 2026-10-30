@@ -1,4 +1,4 @@
-// The capystore MCP server (APP-API-CONTRACT.md section 34): POST /mcp speaks JSON-RPC with the chat's own tools, and
+// The capystore MCP server (APP-API-CONTRACT.md section 35): POST /mcp speaks JSON-RPC with the chat's own tools, and
 // upload_begin + PUT /mcp/upload/<token> put a local file into the library. The Worker, the registry, the real handlers
 // and the real SQL on node:sqlite run together; the Durable Object is a fake.
 import { beforeEach, describe, expect, it } from "vitest";

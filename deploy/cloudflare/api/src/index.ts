@@ -13,6 +13,8 @@ import { purgeFrom } from "./visibility";
 import { shareLinkFrom } from "./share";
 import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
 import { backfillCaptions, captionerFrom } from "./roast";
+import { ABOUT_RUN_BUDGET_MS, describerFrom, whisperFrom, writeAbouts } from "./about-writer";
+import { indexTerms } from "./about";
 import { setRoastInput } from "./share-sets";
 import { embedFrom, handleRequest, type WorkerEnv } from "./worker";
 import { loaderRunner } from "./chat-loader";
@@ -127,6 +129,7 @@ export class CobaltContainer extends Container<Env> {
                     path.startsWith("/jobs/upload") ||
                     path.startsWith("/probe") ||
                     path.startsWith("/poster") ||
+                    path.startsWith("/about") ||
                     (path.startsWith("/fetch/") && path.endsWith("/file"));
                 const timeout = bulk ? 300_000 : path.endsWith("/file") ? 60_000 : 15_000;
                 return this.containerFetch(
@@ -390,6 +393,8 @@ const SEARCH_CRON = "*/15 * * * *";
 const ROAST_RUN_BUDGET_MS = 90_000;
 // The cron's wake-up GET to the search Space (a boot takes about 20 s).
 const SPACE_WAKE_MS = 60_000;
+// The word list's vectors after the indexer (APP-API-CONTRACT.md section 34.5), inside the indexer's share of the run.
+const TERMS_RUN_BUDGET_MS = 45_000;
 
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -447,23 +452,63 @@ export default {
                 }
             }
             const client = embedFrom(env);
+            // "What it's about" (section 34): with search on and the Anthropic key. The kick brings the rows up to date and
+            // queues the probes in the Durable Object (records only: the container wakes only for the sweep's jobs); the
+            // writer then describes what the probes made, for up to ABOUT_RUN_BUDGET_MS. Before migration 0022 both just log.
+            const describer = client ? describerFrom(env, env.MODEL_RELAY ? relayFetch(env.MODEL_RELAY as any) : undefined) : null;
+            if (describer) {
+                try {
+                    const res = await getContainer(env.COBALT, "main").fetch(
+                        new Request("https://do.internal/about/kick?limit=25", { method: "POST", headers: { [KEY_ID_HEADER]: "cron:about" } }),
+                    );
+                    const body = await res.text().catch(() => "");
+                    if (!res.ok || !body.includes('"queued":0')) console.log("[about] kick", res.status, body.slice(0, 200));
+                } catch (e) {
+                    console.error("[about] kick failed", e instanceof Error ? e.name : "error");
+                }
+                try {
+                    const r = await writeAbouts({
+                        db: env.DB,
+                        originals: env.ORIGINALS,
+                        media: env.MEDIA,
+                        mediaBaseUrl: env.MEDIA_BASE_URL,
+                        describer,
+                        transcriber: whisperFrom(env.AI),
+                        now: () => Date.now(),
+                        budgetMs: ABOUT_RUN_BUDGET_MS,
+                    });
+                    if (r.written || r.failed) console.log("[about] words", JSON.stringify(r));
+                } catch (e) {
+                    console.error("[about] words failed", e instanceof Error ? e.name : "error");
+                }
+            }
             if (!client) return;
             // Keep the Space awake: a free Space sleeps after 48 h without traffic, a sleeping one answers the
             // indexer's POSTs at once without waking, and a search would then wait while it boots. A GET every
             // run is traffic (and wakes it if it slept anyway). Under a second when it is up.
             if (client.wake && !(await client.wake(SPACE_WAKE_MS))) console.log("[search] space did not answer its wake-up");
+            let indexed = 0;
             try {
                 const r = await drainIndexer({
                     db: env.DB,
                     client,
                     mediaBaseUrl: env.MEDIA_BASE_URL,
                     now: () => Date.now(),
-                    budgetMs: SEARCH_RUN_BUDGET_MS,
+                    // the run must end inside the 15 minutes: the words' and the word list's time comes out of it
+                    budgetMs: SEARCH_RUN_BUDGET_MS - TERMS_RUN_BUDGET_MS - (describer ? ABOUT_RUN_BUDGET_MS : 0),
                     trigger: "cron",
                 });
                 if (r.indexed || r.failed || r.removed || r.unavailable) console.log("[search] index", JSON.stringify(r));
+                indexed = r.indexed;
             } catch (e) {
                 console.error("[search] index failed", e instanceof Error ? e.name : "error");
+            }
+            // The word list (section 34.5): new terms embedded in query mode, and every term's average after posts moved.
+            try {
+                const t = await indexTerms({ db: env.DB, client, now: () => Date.now(), budgetMs: TERMS_RUN_BUDGET_MS, refreshMeans: indexed > 0 });
+                if (t.added || t.embedded || t.unavailable) console.log("[about] terms", JSON.stringify(t));
+            } catch (e) {
+                console.error("[about] terms failed", e instanceof Error ? e.name : "error");
             }
             return;
         }

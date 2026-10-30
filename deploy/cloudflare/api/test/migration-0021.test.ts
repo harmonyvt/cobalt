@@ -26,7 +26,7 @@ describe("migration 0021", () => {
         const at = files.indexOf("0021_edits.sql");
         expect(at).toBeGreaterThan(0);
         expect(files[at - 1]).toBe("0020_stage_sound_all.sql");
-        expect(files[at + 1]).toBeUndefined();
+        expect(files[at + 1]).toBe("0022_about.sql");
     });
 
     it("holds only CREATE TABLE and CREATE INDEX: two tables, three indexes, nothing existing touched", () => {

@@ -153,6 +153,9 @@ struct ChatMessageView: View {
                 ChatCollageView(
                     model: model, threadID: content.thread.id, messageID: message.id, collage: collage, tier: tier, open: open)
             }
+            if let ranked = message.ranked, !ranked.hits.isEmpty {
+                ChatRankedView(model: model, ranked: ranked, posts: content.posts, open: open)
+            }
             if let card = message.confirm {
                 ChatConfirmCard(card: card, answering: answering) { answer(card, $0) }
             }

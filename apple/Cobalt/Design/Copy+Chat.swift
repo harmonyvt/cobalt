@@ -122,6 +122,16 @@ extension Copy {
         static func collageA11y(title: String, count: Int) -> String { "\(title), \(collageCount(count))" }
         static func collageShown(_ shown: Int, of total: Int) -> String { "showing \(shown) of \(total)" }
 
+        // MARK: a ranked list (APP-API-CONTRACT 34.6)
+
+        static let rankedResults = "ranked"
+        static func rankedCount(_ count: Int) -> String { "\(count) ranked" }
+        static func rankedWithin(_ label: String) -> String { "within \(label)" }
+        static func rankedA11y(title: String, count: Int) -> String { "\(title), \(rankedCount(count))" }
+        static func rankedRowA11y(_ title: String, score: Double?) -> String {
+            score.map { "\(title), score \(String(format: "%.2f", $0))" } ?? title
+        }
+
         // MARK: a failed reply
 
         static let replyFailed = "the reply failed · try again"

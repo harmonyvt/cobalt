@@ -91,6 +91,9 @@ export const PATHS: string[] = [
     "/library/search?q=cats",
     "/library/search/post",
     `/library/search/post?id=${ID16}`,
+    // added with "what it's about" (section 34.6): GET (keyed or service) and PATCH (keyed only) /library/about
+    "/library/about",
+    `/library/about?key=${ID16}`,
     "/library/map",
     "/library/search/index",
     "/library/posters/backfill",
@@ -139,7 +142,7 @@ export const PATHS: string[] = [
     `/live/chats/${ID16}/state`,
     "/live/chats/bad",
     "/live/other",
-    // added with the MCP server (section 34): the JSON-RPC endpoint and its upload links (a forged one, a malformed one)
+    // added with the MCP server (section 35): the JSON-RPC endpoint and its upload links (a forged one, a malformed one)
     "/mcp",
     `/mcp/upload/eyJrIjoia2V5LTEiLCJ0IjoiQUFBQUFBQUFBQUFBQUFBQSIsImUiOjF9.${"A".repeat(43)}`,
     "/mcp/upload/bad",

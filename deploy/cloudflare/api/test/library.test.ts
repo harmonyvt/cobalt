@@ -982,6 +982,9 @@ describe("GET /capabilities", () => {
                 still_webp: false,
                 // no embedding Space in this world's env (section 21)
                 search: false,
+                // section 34: needs search and the Anthropic key (and Workers AI for the sound)
+                about: false,
+                about_sound: false,
                 queue: true,
                 // no share host in this world's env (section 24)
                 share_sets: false,

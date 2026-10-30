@@ -190,6 +190,75 @@ public struct ChatCollagePage: Sendable, Equatable, Decodable {
     }
 }
 
+// MARK: - a ranked list
+
+/// The scored list a reply attaches under its text (APP-API-CONTRACT 34.6, `cobalt.rank`): up to 50 posts, best first, each
+/// with the search score and up to 4 words of why. Every field is optional on the wire so an older or newer server decodes.
+public struct ChatRanked: Sendable, Equatable, Decodable {
+    public struct Hit: Sendable, Equatable, Identifiable, Decodable {
+        public var postID: String
+        /// The search score (a cosine, plus the plain-text bonus); nil when the model gave none.
+        public var score: Double?
+        /// The post's own tags or sound tags closest to the query; empty when it has no words yet.
+        public var why: [String]
+        public var id: String { postID }
+
+        public init(postID: String, score: Double? = nil, why: [String] = []) {
+            self.postID = postID
+            self.score = score
+            self.why = why
+        }
+
+        enum CodingKeys: String, CodingKey { case postID = "postId", score, why }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            if let s = try? c.decode(String.self, forKey: .postID) {
+                postID = s
+            } else {
+                postID = String(try c.decode(Int64.self, forKey: .postID))
+            }
+            score = (try? c.decodeIfPresent(Double.self, forKey: .score)) ?? nil
+            why = ((try? c.decodeIfPresent([String].self, forKey: .why)) ?? nil) ?? []
+        }
+    }
+
+    /// "furry videos"; nil when the model gave none.
+    public var title: String?
+    /// The words searched; nil when the model gave none.
+    public var query: String?
+    /// What the search was limited to, "lia share 11"; nil when it was the whole library.
+    public var within: String?
+    public var hits: [Hit]
+
+    public init(title: String? = nil, query: String? = nil, within: String? = nil, hits: [Hit] = []) {
+        self.title = title
+        self.query = query
+        self.within = within
+        self.hits = hits
+    }
+
+    enum CodingKeys: String, CodingKey { case title, query, within, hits }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = Self.clean((try? c.decodeIfPresent(String.self, forKey: .title)) ?? nil)
+        query = Self.clean((try? c.decodeIfPresent(String.self, forKey: .query)) ?? nil)
+        within = Self.clean((try? c.decodeIfPresent(String.self, forKey: .within)) ?? nil)
+        hits = ((try? c.decodeIfPresent([Lossy<Hit>].self, forKey: .hits)) ?? nil)?.compactMap(\.value) ?? []
+    }
+
+    /// The highest score in the list, for the bars (nil when no hit has one).
+    public var topScore: Double? { hits.compactMap(\.score).max() }
+
+    /// An empty or blank string is the same as none.
+    private static func clean(_ raw: String?) -> String? {
+        guard let text = raw else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 // MARK: - a confirm card
 
 /// What a confirm card says will happen (APP-API-CONTRACT 33.7): every field is optional and the card shows what is there.
@@ -321,11 +390,14 @@ public struct ChatMessage: Sendable, Equatable, Identifiable, Decodable {
     public var collage: ChatCollage?
     /// The confirm card the reply stopped on (33.5); nil when it asked nothing.
     public var confirm: ChatConfirm?
+    /// The scored list the reply attached (34.6); nil when it has none (always nil on a user message).
+    public var ranked: ChatRanked?
     public var createdAt: Date
 
     public init(
         id: String, role: Role, text: String = "", postIDs: [String] = [], steps: [ChatStep] = [],
-        status: Status = .done, error: String? = nil, collage: ChatCollage? = nil, confirm: ChatConfirm? = nil, createdAt: Date
+        status: Status = .done, error: String? = nil, collage: ChatCollage? = nil, confirm: ChatConfirm? = nil,
+        ranked: ChatRanked? = nil, createdAt: Date
     ) {
         self.id = id
         self.role = role
@@ -336,6 +408,7 @@ public struct ChatMessage: Sendable, Equatable, Identifiable, Decodable {
         self.error = error
         self.collage = collage
         self.confirm = confirm
+        self.ranked = ranked
         self.createdAt = createdAt
     }
 
@@ -343,7 +416,7 @@ public struct ChatMessage: Sendable, Equatable, Identifiable, Decodable {
     public var isLocal: Bool { id.hasPrefix(ChatMessage.localPrefix) }
     static let localPrefix = "local-"
 
-    enum CodingKeys: String, CodingKey { case id, role, text, postIDs = "postIds", steps, status, error, collage, confirm, createdAt }
+    enum CodingKeys: String, CodingKey { case id, role, text, postIDs = "postIds", steps, status, error, collage, confirm, ranked, createdAt }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -365,6 +438,7 @@ public struct ChatMessage: Sendable, Equatable, Identifiable, Decodable {
         error = try c.decodeIfPresent(String.self, forKey: .error)
         collage = (try? c.decodeIfPresent(ChatCollage.self, forKey: .collage)) ?? nil
         confirm = (try? c.decodeIfPresent(ChatConfirm.self, forKey: .confirm)) ?? nil
+        ranked = (try? c.decodeIfPresent(ChatRanked.self, forKey: .ranked)) ?? nil
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date(timeIntervalSince1970: 0)
     }
 }
@@ -424,6 +498,9 @@ public enum ChatEvent: Sendable, Equatable {
     case posts(ids: [String], posts: [LibraryPost])
     /// The reply attached a collage (27.5): set on the running message; `done` carries it too.
     case collage(ChatCollage)
+    /// The reply attached a scored list (34.6): set on the running message (a later one replaces it); `done` carries it
+    /// too. `posts` are the shapes the event came with, if any (the thread read has them all).
+    case ranked(ChatRanked, posts: [LibraryPost])
     /// The model renamed the thread (after the first reply only).
     case title(ChatThread)
     /// A confirm card (33.5): set on the message `messageID` (nil: the running assistant message), or its new status

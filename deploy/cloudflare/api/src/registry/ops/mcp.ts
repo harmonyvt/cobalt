@@ -1,4 +1,4 @@
-// The MCP server's routes and its one MCP-only call (APP-API-CONTRACT.md section 34). The protocol and the tool mapping
+// The MCP server's routes and its one MCP-only call (APP-API-CONTRACT.md section 35). The protocol and the tool mapping
 // live in src/mcp.ts; the tools themselves are the chat's ops.
 //  - POST /mcp: JSON-RPC over Streamable HTTP (stateless, JSON answers). The client key comes as `Api-Key <uuid>` or
 //    `Bearer <uuid>`; a browser origin other than the web app's is refused.
@@ -32,7 +32,7 @@ export const mcpOp = defineOp({
     raw: true,
     input: NoInput,
     http: none,
-    ai: { tier: "hidden", summary: "The MCP server (POST /mcp, section 34)." },
+    ai: { tier: "hidden", summary: "The MCP server (POST /mcp, section 35)." },
     handler: async (ctx) => {
         const request = ctx.request!;
         // DNS rebinding: a browser page may only call it from the web app's origin

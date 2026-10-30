@@ -1,4 +1,4 @@
-// The capystore MCP server (APP-API-CONTRACT.md section 34): the chat AI's tools, served to any MCP client (Claude Code,
+// The capystore MCP server (APP-API-CONTRACT.md section 35): the chat AI's tools, served to any MCP client (Claude Code,
 // Claude Desktop, other agents) over Streamable HTTP at POST /mcp on the API host. The tools ARE the op registry's chat
 // calls (src/registry/): same ops, same zod checks, same handlers, same daily caps, so the MCP and the chat never drift.
 //

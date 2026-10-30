@@ -105,6 +105,19 @@ extension LibraryModel {
         return try await ctx.client.librarySearchStatus(postKey: postKey)
     }
 
+    /// `GET /library/about` for the detail's "what it's about" section (only when `features.about`, which needs search).
+    public func about(postKey: String) async throws -> LibraryAbout {
+        guard ctx.capabilities.about else { throw PipelineFailure.unsupported }
+        return try await ctx.client.libraryAbout(postKey: postKey)
+    }
+
+    /// `PATCH /library/about`: the owner's tags for the post (cleaned and capped as the server keeps them); nil goes back
+    /// to the server's own. Answers the post's about as it is now.
+    public func setAboutTags(postKey: String, tags: [String]?) async throws -> LibraryAbout {
+        guard ctx.capabilities.about else { throw PipelineFailure.unsupported }
+        return try await ctx.client.setLibraryAboutTags(postKey: postKey, tags: tags.map(LibraryAbout.cleanTags))
+    }
+
     /// Files the server confirmed gone leave the search's copies too; a post left with none goes.
     func forgetSearched(files ids: Set<String>) {
         guard !ids.isEmpty else { return }
