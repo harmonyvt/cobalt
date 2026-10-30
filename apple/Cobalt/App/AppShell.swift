@@ -60,6 +60,8 @@ struct AppShell: View {
     /// What a screen that has just popped left to say ("deleted."), drawn over the shell for a moment.
     @State private var status: String?
     @State private var statusToken = 0
+    /// A status line with an action ("link updated" · "undo"); it takes the place of `status` while it shows.
+    @State private var note: StatusNote?
     #if DEBUG
     /// `-previewDetail N`: opens the Nth stored media's detail over the shell (simulator evidence).
     @State private var debugDetail: MediaItem?
@@ -95,12 +97,20 @@ struct AppShell: View {
             .modifier(AlertsPromptPresenter(model: model, blocked: titleSheet != nil || review != nil))
             #endif
             .overlay(alignment: .bottom) {
-                if let status {
+                if let note {
+                    StatusToast(text: note.text, detail: note.detail, actionTitle: note.actionTitle) {
+                        let action = note.action
+                        self.note = nil
+                        action?()
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                } else if let status {
                     StatusToast(text: status)
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
             .animation(Motion.card, value: status)
+            .animation(Motion.card, value: note)
             // files, web links and text on the whole window (CONTRACT-PARALLEL 4.6): a drop is a paste
             .dropDestination(for: PastedContent.self) { items, _ in
                 handle(items, via: .drop, dropped: true)
@@ -412,6 +422,7 @@ struct AppShell: View {
                 Task { await model.makeWebp(for: item) }
             },
             showStatus: { text in showStatus(text) },
+            showNote: { note in showNote(note) },
             openSettings: {
                 #if os(macOS)
                 openSettings()
@@ -427,11 +438,25 @@ struct AppShell: View {
     private func showStatus(_ text: String) {
         statusToken += 1
         let token = statusToken
+        note = nil
         status = text
         AccessibilityNotification.Announcement(text).post()
         Task {
             try? await Task.sleep(for: .seconds(text.count > 40 ? 6 : 2.4))
             if statusToken == token { status = nil }
+        }
+    }
+
+    /// A line with an action, over the shell for five seconds (a plain status after it replaces it).
+    private func showNote(_ next: StatusNote) {
+        statusToken += 1
+        let token = statusToken
+        status = nil
+        note = next
+        AccessibilityNotification.Announcement([next.text, next.detail].compactMap { $0 }.joined(separator: " ")).post()
+        Task {
+            try? await Task.sleep(for: .seconds(5))
+            if statusToken == token { note = nil }
         }
     }
 

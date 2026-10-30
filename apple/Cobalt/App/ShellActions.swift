@@ -21,9 +21,23 @@ struct ShellActions {
     var makeWebp: @MainActor (MediaItem) -> Void = { _ in }
     /// A short line on the screen underneath once a detail has popped ("deleted."); the shell draws it.
     var showStatus: @MainActor (String) -> Void = { _ in }
+    /// The same line with a second, smaller line and one action ("link updated" · "undo"); it stays a little longer.
+    var showNote: @MainActor (StatusNote) -> Void = { _ in }
     var openSettings: @MainActor () -> Void = {}
     /// Re-reads the server (settings changed the server or the key).
     var recheckServer: @MainActor () -> Void = {}
+}
+
+/// A status line with an action (APP-API-CONTRACT 41.4: "link updated" with "undo", "added to <title>" with "open"):
+/// the shell draws it like `showStatus` with a button, for a few seconds.
+struct StatusNote: Identifiable, Equatable {
+    let id = UUID()
+    let text: String
+    var detail: String?
+    var actionTitle: String?
+    var action: (@MainActor () -> Void)?
+
+    static func == (a: StatusNote, b: StatusNote) -> Bool { a.id == b.id }
 }
 
 /// "trim a new webp" (a post's detail, a library card, ⌘T, a media's "another webp") means the owner wants the trim: when the run it

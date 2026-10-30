@@ -115,6 +115,7 @@ enum PreviewData {
             caps.shareCollections = true
             caps.shareGroups = true
             caps.privateLinks = true
+            caps.shareSetEdit = true              // the same share host edits links (APP-API-CONTRACT 41)
             caps.hidden = true                    // the server that has private links has migration 0025 (APP-API-CONTRACT 37)
             caps.limits.shareSetMax = 4
         }

@@ -132,6 +132,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// exactly with `share_sets`, and so does the app: false whenever `shareSets` is false. False when absent: the
     /// detail keeps the public/private switch and the links tab has no badges.
     public var privateLinks: Bool = false
+    /// `features.share_set_edit` (APP-API-CONTRACT 41): a gallery link's files can be added, taken out and moved, and its
+    /// title changed, after it was made (`PATCH /share/sets/<id>`). The server sets it exactly with `share_sets`, and so
+    /// does the app: false whenever `shareSets` is false. False when absent: a link card opens nothing.
+    public var shareSetEdit: Bool = false
     /// `features.chat` (APP-API-CONTRACT 27): threads with Claude about the library (`/chat/threads`). True exactly while
     /// the server has an Anthropic key and the sandbox loader. False when absent: no chat tab.
     public var chat: Bool = false
