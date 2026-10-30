@@ -33,7 +33,7 @@ export const LIBRARY_CSP =
     "default-src 'self'; base-uri 'none'; " +
     "connect-src 'self' https://api.capybaraharmony.com; " +
     "media-src 'self' https://media.capybaraharmony.com blob:; " +
-    "img-src 'self' data: blob: https://media.capybaraharmony.com; " +
+    "img-src 'self' data: blob: https://media.capybaraharmony.com https://cdn.7tv.app; " +
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
 
@@ -181,6 +181,7 @@ type Route =
     | { name: "upload" }
     | { name: "search" }
     | { name: "searchPost" }
+    | { name: "emotes" }
     | { name: "map" }
     | { name: "webp"; id: string }
     | { name: "studio"; id: string }
@@ -205,6 +206,7 @@ const ALLOWED: Record<Route["name"], string[]> = {
     upload: ["PUT"],
     search: ["GET"],
     searchPost: ["GET"],
+    emotes: ["GET", "POST"],
     map: ["GET"],
     webp: ["GET"],
     studio: ["GET"],
@@ -230,6 +232,7 @@ export function matchRoute(pathname: string): Route | null {
     if (pathname === "/api/library/upload") return { name: "upload" };
     if (pathname === "/api/library/search") return { name: "search" };
     if (pathname === "/api/library/search/post") return { name: "searchPost" };
+    if (pathname === "/api/library/emotes") return { name: "emotes" };
     if (pathname === "/api/library/map") return { name: "map" };
     if (pathname === "/api/library/links") return { name: "links" };
     if (pathname === "/api/library/status") return { name: "status" };
@@ -298,6 +301,8 @@ export async function handleLibrary(request: Request, env: Env, deps?: Partial<L
                 return await search(ctx, searchParams);
             case "searchPost":
                 return await searchPost(ctx, searchParams);
+            case "emotes":
+                return request.method === "POST" ? await emoteSave(ctx, request) : await emoteList(ctx, searchParams);
             case "map":
                 return relayResponse(await callApi(ctx, "/library/map", { method: "GET" }), (b) => b);
             case "webp":
@@ -753,6 +758,41 @@ async function searchPost(ctx: Ctx, q: URLSearchParams): Promise<Response> {
     // eslint-disable-next-line no-control-regex
     if (!key || key.length > MAX_POST_KEY_CHARS || /[\u0000-\u001f\u007f]/.test(key)) return err(400, "error.library.bad_request");
     const res = await callApi(ctx, `/library/search/post?${new URLSearchParams({ key })}`, { method: "GET" });
+    return relayResponse(res, (b) => b);
+}
+
+// ---------- GET/POST /api/library/emotes (APP-API-CONTRACT.md section 20) ----------
+
+const EMOTE_SORTS = ["top", "top_daily", "top_weekly", "top_monthly", "trending_daily", "trending_weekly", "trending_monthly", "new", "global"];
+const MAX_EMOTE_QUERY = 64;
+const MAX_EMOTE_PAGE = 50;
+
+// GET /api/library/emotes?q=<0..64 chars>&sort=<EMOTE_SORTS>&page=<1..50>: the API's GET /emotes answered as is.
+// With a sort q may be empty (browse); without one q is required (the API's old search).
+async function emoteList(ctx: Ctx, q: URLSearchParams): Promise<Response> {
+    const text = (q.get("q") ?? "").trim().replace(/\s+/g, " ");
+    if (text.length > MAX_EMOTE_QUERY) return err(400, "error.library.bad_request");
+    const sort = q.get("sort");
+    if (sort !== null && !EMOTE_SORTS.includes(sort)) return err(400, "error.library.bad_request");
+    if (sort === null && !text) return err(400, "error.library.bad_request");
+    const out = new URLSearchParams();
+    if (text) out.set("q", text);
+    if (sort !== null) out.set("sort", sort);
+    if (q.has("page")) {
+        const n = intParam(q.get("page"));
+        if (n === null || n < 1 || n > MAX_EMOTE_PAGE) return err(400, "error.library.bad_request");
+        out.set("page", String(n));
+    }
+    const qs = out.toString();
+    const res = await callApi(ctx, qs ? `/emotes?${qs}` : "/emotes", { method: "GET" });
+    return relayResponse(res, (b) => b);
+}
+
+// POST /api/library/emotes { id }: saves the emote into the library (201 new, 200 already saved).
+async function emoteSave(ctx: Ctx, request: Request): Promise<Response> {
+    const body = await readJson(request);
+    if (!body || typeof body.id !== "string" || !/^[0-9A-Za-z]{20,32}$/.test(body.id)) return err(400, "error.library.bad_request");
+    const res = await callApi(ctx, "/emotes", { method: "POST", body: { id: body.id } });
     return relayResponse(res, (b) => b);
 }
 
