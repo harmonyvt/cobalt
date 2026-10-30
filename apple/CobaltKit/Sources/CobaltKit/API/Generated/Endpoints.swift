@@ -521,6 +521,11 @@ enum Endpoints {
         APIEndpoint(op: "mcp", method: "POST", path: "/mcp", auth: .open)
     }
 
+    /// `POST /mcp/k/:secret` (op `mcp.link`, auth capability): The MCP server through the private link (POST /mcp/k/<secret>, section 35.5).
+    static func mcpLink(secret: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "mcp.link", method: "POST", path: "/mcp/k/\(HTTPCobaltClient.encode(secret))", auth: .capability)
+    }
+
     /// `GET /mcp` (op `mcp.stream`, auth open): GET /mcp: 405 (no server-sent event stream).
     static func mcpStream() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "mcp.stream", method: "GET", path: "/mcp", auth: .open)
@@ -531,9 +536,34 @@ enum Endpoints {
         APIEndpoint(op: "mcp.end", method: "DELETE", path: "/mcp", auth: .open)
     }
 
+    /// `GET /mcp/k/:secret` (op `mcp.link.stream`, auth open): GET /mcp/k/<secret>: 405 (no server-sent event stream).
+    static func mcpLinkStream(secret: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "mcp.link.stream", method: "GET", path: "/mcp/k/\(HTTPCobaltClient.encode(secret))", auth: .open)
+    }
+
+    /// `DELETE /mcp/k/:secret` (op `mcp.link.end`, auth open): DELETE /mcp/k/<secret>: 405 (no sessions to end).
+    static func mcpLinkEnd(secret: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "mcp.link.end", method: "DELETE", path: "/mcp/k/\(HTTPCobaltClient.encode(secret))", auth: .open)
+    }
+
     /// `PUT /mcp/upload/:token` (op `mcp.upload`, auth capability): The bytes of an MCP upload link (PUT /mcp/upload/<token>).
     static func mcpUpload(token: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "mcp.upload", method: "PUT", path: "/mcp/upload/\(HTTPCobaltClient.encode(token))", auth: .capability)
+    }
+
+    /// `GET /mcp/settings` (op `mcp.settings`, auth key_or_service): How agents reach the MCP: the mode and the private link's use (GET /mcp/settings).
+    static func mcpSettings() -> APIEndpoint<McpSettingsResponse> {
+        APIEndpoint(op: "mcp.settings", method: "GET", path: "/mcp/settings", auth: .keyOrService)
+    }
+
+    /// `POST /mcp/settings` (op `mcp.settings.set`, auth key_or_service): Switch how agents reach the MCP; turning the private link on answers it once (POST /mcp/settings).
+    static func mcpSettingsSet() -> APIEndpoint<McpSettingsSetResponse> {
+        APIEndpoint(op: "mcp.settings.set", method: "POST", path: "/mcp/settings", auth: .keyOrService)
+    }
+
+    /// `POST /mcp/settings/rotate` (op `mcp.link.rotate`, auth key_or_service): A new private MCP link; the old one stops at once (POST /mcp/settings/rotate).
+    static func mcpLinkRotate() -> APIEndpoint<McpLinkRotateResponse> {
+        APIEndpoint(op: "mcp.link.rotate", method: "POST", path: "/mcp/settings/rotate", auth: .keyOrService)
     }
 }
 
@@ -637,4 +667,73 @@ struct ShareCollectionsListResponse: Decodable, Sendable {
     var status: String
     /// most recently changed first
     var collections: [Lossy<ShareCollection>]
+}
+
+struct McpSettingsResponseLink: Decodable, Sendable {
+    /// the link with its secret cut out, ending in its last 4 characters
+    var hint: String
+    var tail: String
+    var madeAt: Double
+    var lastUsedAt: Double?
+    /// the client's name from its last initialize
+    var usedBy: String?
+    /// POSTs since 00:00 UTC
+    var callsToday: Double
+}
+
+struct McpSettingsResponse: Decodable, Sendable {
+    /// off: no agent connects; public: /mcp with a client key; private: only the private link
+    var mode: String
+    var publicUrl: String
+    var link: McpSettingsResponseLink?
+}
+
+struct McpSettingsSetResponseSettingsLink: Decodable, Sendable {
+    /// the link with its secret cut out, ending in its last 4 characters
+    var hint: String
+    var tail: String
+    var madeAt: Double
+    var lastUsedAt: Double?
+    /// the client's name from its last initialize
+    var usedBy: String?
+    /// POSTs since 00:00 UTC
+    var callsToday: Double
+}
+
+struct McpSettingsSetResponseSettings: Decodable, Sendable {
+    /// off: no agent connects; public: /mcp with a client key; private: only the private link
+    var mode: String
+    var publicUrl: String
+    var link: McpSettingsSetResponseSettingsLink?
+}
+
+struct McpSettingsSetResponse: Decodable, Sendable {
+    var settings: McpSettingsSetResponseSettings
+    /// the new private link, answered only here, once
+    var linkUrl: String?
+}
+
+struct McpLinkRotateResponseSettingsLink: Decodable, Sendable {
+    /// the link with its secret cut out, ending in its last 4 characters
+    var hint: String
+    var tail: String
+    var madeAt: Double
+    var lastUsedAt: Double?
+    /// the client's name from its last initialize
+    var usedBy: String?
+    /// POSTs since 00:00 UTC
+    var callsToday: Double
+}
+
+struct McpLinkRotateResponseSettings: Decodable, Sendable {
+    /// off: no agent connects; public: /mcp with a client key; private: only the private link
+    var mode: String
+    var publicUrl: String
+    var link: McpLinkRotateResponseSettingsLink?
+}
+
+struct McpLinkRotateResponse: Decodable, Sendable {
+    var settings: McpLinkRotateResponseSettings
+    /// the new private link, answered only here, once
+    var linkUrl: String?
 }

@@ -7,6 +7,7 @@
     import SettingsToggle from "$components/buttons/SettingsToggle.svelte";
     import SettingsCategory from "$components/settings/SettingsCategory.svelte";
     import ApiKeys from "$components/settings/ApiKeys.svelte";
+    import McpLink from "$components/settings/McpLink.svelte";
 </script>
 
 <SettingsCategory
@@ -35,6 +36,8 @@
 </SettingsCategory>
 
 <ApiKeys />
+
+<McpLink />
 
 <SettingsCategory
     sectionId="access-key"
