@@ -4712,6 +4712,76 @@ The library post gains `hidden`, `hidden_by`, `hidden_rule` (37.2). A file's lin
 - Offline copies of a hidden post stay on the device but are listed only in the hidden album.
 - **Deploy**: migration 0025 (owner), then API and web deploys, then an app release. No secret, no binding.
 
+## 38. Rich tool cards in chat (addendum, 2026-10-30; owner: "I should be able to see images, editors and emotes the agent uses all in rich ui including edit timeline and we can further add more rich ui for the tooling the agents get please"; plan `tool-cards/PLAN.md`, mockup https://claude.ai/artifact/4ZgrUg4a6EuwZro4PvomxS)
+
+A chat code step (27.1) used to show only its code, logs and result. Now every `cobalt.*` call the run makes is recorded on
+the step, and the calls with something to see carry a card the app draws under the step. Additive: no migration, no route,
+no secret; MCP (35) is unchanged; older apps ignore the new field and event. The chat lives only in the apps (the web
+library has no chat), so only the apps draw cards.
+
+### 38.1 The calls
+
+`Step.calls?: ToolCall[]` (kind `code` only; absent on older messages), in call order, at most 40 per step, saved inside
+`chat_messages.steps`:
+
+```
+ToolCall = { op: string;            // the op name, "library.search"
+             ms: number;            // how long the call took
+             status: "done" | "error" | "asked";   // asked: an ask-tier call that put up a confirm card (33.5)
+             error?: string;        // status error: the line the model got (cut to 300 characters)
+             card?: ToolCard }      // only for calls with something to see
+```
+
+The chat toolbox (`registry/ai.ts`) records each call after it ends; cards are built by `src/chat-cards.ts` from the op's
+checked input and its result and never reach the model. `edits.update` (and `edits.addOverlay`, section 39) first read the
+project so the card can mark the clips the call added. A card that cannot be built is left out (a chip only).
+
+### 38.2 The cards
+
+Every card has `type`. Lists are cut (8 hits, 24 emotes, 12 posts, 60 clips per track; box stdout keeps its last 1,500
+characters, stderr 800, the command 600). Posts are named by id only; 38.3 ships their shapes.
+
+| type | from | fields |
+|---|---|---|
+| `search` | library.search, library.list | `query`, `within` (a collection name, link id or "N posts"; null), `total`, `hits: {post_id, score|null}[]` |
+| `look` | look | `post_ids` |
+| `emotes` | emotes.find, emotes.save | `query|null`, `sort|null` (section 20.1's `top_weekly`, `trending_daily`...), `saved`, `emotes: {id, name, animated, url (https), library_id|null}[]`; accepts the old bare array and 20.1's `{sort, page, has_more, items}` |
+| `edit` | edits.get, edits.create, edits.update, edits.addOverlay | `project_id`, `title`, `revision`, `duration`, `width`, `height` (the canvas), `change: created|updated|viewed`, `tracks: {name: "main"|"overlay", index, clips: EditClip[]}[]` (main first, then one per overlay layer by `track`, lowest first), `render: {status, progress, post_id}|null` |
+| `job` | make.*, edits.render, jobs.wait, jobs.onDone | `op`, `job`, `status`, `progress`, `error`, `post_id`, `kind`, `seconds`, `width`, `height`, `bytes`, `share_url`, `watching`, `project_id` (make.trim/crop) |
+| `box` | box.run | `cmd`, `code`, `timed_out`, `stdout`, `stderr` |
+| `files` | box.pull (`direction: "in"`), box.save (`"out"`) | `files: {name, bytes}[]`, `post_id` (the pulled id / the new post) |
+| `link` | links.create, links.rotate, links.private | `id|null`, `url`, `title`, `files`, `private` |
+| `collection` | collections.create/add/update, sets.create/add/update | `of: "collection"|"set"`, `id`, `name`, `count` (links / collections), `change: created|added|updated` |
+| `saved` | library.save | `post_ids`, `title`, `status` |
+| `facts` | library.title, library.visibility, library.about.set | `title`, `rows: [name, value][]`, `post_ids` |
+
+`EditClip = { id, item, post_id|null (the file's post, for its thumbnail), kind: video|photo|gif|webp|emote|cutout|null
+(from the library file: source emote, a name with "cutout", else its content type; null when the file is gone), title,
+picture (a public picture: an emote's or image's own URL, else a poster; null), at, length (seconds on the output
+timeline; main clips back to back, length = (out - in) / speed), in, out, speed, pitch|null, is_new }`.
+`is_new` is true only when the card saw the timeline before the call and the clip id was not in it.
+
+Any other op: a chip only. A new op gets a card by adding a case to `cardFor` (`src/chat-cards.ts`).
+
+### 38.3 Thumbnails
+
+- Stream: just before a code step's final `step` event, `event: card_posts`, `data: { posts: { <id>: <post> } }` with the
+  `GET /library?v=3` shapes of every post the step's cards name (hidden posts left out, 37.2). The app merges them into the
+  thread's map; they are not shown posts (`post_ids` is unchanged). Each call also re-sends its step (`step` event) as it
+  ends, so chips appear while the run goes on.
+- `GET /chat/threads/<id>`: `posts` also holds every post the messages' cards name.
+
+### 38.4 App (apple/)
+
+- `ChatStep.calls: [ChatToolCall]`, `ChatToolCard` (lossy: an odd call, card or list element is dropped; an unknown card
+  type is a chip only), `ChatEvent.cardPosts`. `ChatStep.cards` folds cards of the same thing (a job's later state, a link,
+  a collection, an edit; a plain look at an edit never hides the card that showed what changed).
+- Under each code step: chips (op, time; red when failed, amber "asks first"), then the cards: search (thumbnails with score
+  bars), looked at, 7TV emotes playing (`EmotePicture`, a tap names one), edit (ruler, main + overlay rows, pictures dashed,
+  speed badge, added clips ringed violet, tap a clip for its times, drag the red playhead, "open in editor"), job (progress,
+  then the made post), box (terminal, exit code, show all), files, share link (copy, open), collection/set, saved, facts.
+- Previews: the canned reply's step carries one of every card (`PreviewData.chatToolCalls`).
+
 ## 39. Editor layers, webp/emote sources and cutouts (addendum, 2026-10-30; owner: "put images and convert images to remove any white bg or colour bg ... and then have the option to place it over a video I can stack multiple and also I want to be able to overlay multiple videos can we also expand our like agent and mcp tools too please"; plan `editor-layers/PLAN.md`, mockup https://claude.ai/artifact/VqimMVfpEKT12kxKEkLhqb)
 
 Section 31's timeline gets **layers**: overlays sit on up to 8 tracks, so pictures, cutouts, 7TV emotes and videos can

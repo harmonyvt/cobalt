@@ -138,6 +138,10 @@ struct ChatMessageView: View {
             // a confirm step is drawn as the card below, not as a code row
             ForEach(message.steps.filter { $0.kind != "confirm" }) { step in
                 ChatStepRow(step: step)
+                // what the step's calls did, as cards (APP-API-CONTRACT 38)
+                ForEach(step.cards) { entry in
+                    ChatToolCardView(model: model, card: entry.card, posts: content.posts, open: open)
+                }
             }
             if !message.text.isEmpty {
                 ChatMarkdownText(markdown: message.text)
@@ -339,6 +343,25 @@ struct ChatStepRow: View {
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            disclosure
+            // every cobalt call of the step, open or closed (APP-API-CONTRACT 38)
+            if !step.calls.isEmpty {
+                ChatCallTrail(calls: step.calls)
+                    .padding(.top, 2)
+                    .padding(.bottom, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .animation(Motion.card, value: expanded)
+        .animation(Motion.card, value: step.calls.count)
+        .accessibilityValue(Copy.Chat.stepA11y(title, expanded: expanded))
+    }
+
+    private var disclosure: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 10) {
                 if !step.code.isEmpty { section(Copy.Chat.code, step.code) }
@@ -367,11 +390,6 @@ struct ChatStepRow: View {
         }
         // the system chevron ignored `.tint` (the app's monochrome accent won), so the style draws its own
         .disclosureGroupStyle(ChatStepDisclosureStyle())
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .animation(Motion.card, value: expanded)
-        .accessibilityValue(Copy.Chat.stepA11y(title, expanded: expanded))
     }
 
     private func section(_ name: String, _ text: String, isError: Bool = false) -> some View {

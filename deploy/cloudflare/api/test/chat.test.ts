@@ -219,13 +219,22 @@ describe("chat: a reply", () => {
         const names = ev.map((e) => e.event);
         expect(names[0]).toBe("user");
         expect(names[1]).toBe("assistant");
-        expect(names.filter((x) => x === "step")).toHaveLength(2);
+        // the step starts, shows each cobalt call as it ends (section 38), then ends
+        expect(names.filter((x) => x === "step")).toHaveLength(4);
+        // the search card's posts come just before the step ends, so its thumbnails draw at once
+        expect(names.indexOf("card_posts")).toBe(names.lastIndexOf("step") - 1);
+        expect(Object.keys(ev.find((e) => e.event === "card_posts")!.data.posts)).toEqual([cat.link]);
         expect(names.slice(-2)).toEqual(["title", "done"]);
         const text = ev.filter((e) => e.event === "text").map((e) => e.data.delta).join("");
         expect(text).toBe("Digging.\n\nFound the cat 🐈");
         const steps = ev.filter((e) => e.event === "step").map((e) => e.data.step);
         expect(steps[0]).toMatchObject({ id: "tu_1", status: "running", kind: "code" });
-        expect(steps[1]).toMatchObject({ id: "tu_1", status: "done", logs: ["1"], result: '["cat falls off couch.mp4"]' });
+        expect(steps[1]).toMatchObject({ id: "tu_1", status: "running", calls: [{ op: "library.list", status: "done" }] });
+        expect(steps[3]).toMatchObject({ id: "tu_1", status: "done", logs: ["1"], result: '["cat falls off couch.mp4"]' });
+        expect(steps[3].calls.map((c: any) => [c.op, c.status, c.card?.type ?? null])).toEqual([
+            ["library.list", "done", "search"],
+            ["show", "done", null],
+        ]);
         const posts = ev.find((e) => e.event === "posts")!.data;
         expect(posts.post_ids).toEqual([cat.link]); // a saved link's post id is its link
         expect(Object.keys(posts.posts)).toEqual([cat.link]);
@@ -240,6 +249,7 @@ describe("chat: a reply", () => {
         const read = await jsonOf(await send(`/chat/threads/${t.id}`, "GET"));
         expect(read.messages.map((m: any) => [m.role, m.status])).toEqual([["user", "done"], ["assistant", "done"]]);
         expect(read.messages[1].steps).toHaveLength(1);
+        expect(read.messages[1].steps[0].calls).toHaveLength(2);
         expect(read.posts[cat.link].id).toBe(cat.link);
         expect(read.thread.title).toBe("tiktok cat hunt");
     });

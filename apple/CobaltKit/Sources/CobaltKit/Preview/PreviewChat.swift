@@ -103,6 +103,56 @@ extension PreviewData {
     /// A post a sample message shows that the library no longer has (the "removed" tile).
     static let chatGonePostID = "PrEvIeWgone000001"
 
+    /// Every kind of tool card (APP-API-CONTRACT 38), drawn from the preview library: a search, a look, trending 7TV
+    /// emotes, an edit with an emote and a cutout on overlay layers, a render, a box command, a box save, a share link and
+    /// a collection. The canned reply's code step carries them.
+    static func chatToolCalls(now: Date) -> [ChatToolCall] {
+        let ids = Array(libraryPage(now: now).posts.prefix(4).map(\.id))
+        guard ids.count == 4 else { return [] }
+        func emote(_ id: String, _ name: String) -> ChatToolCard.Emotes.Emote {
+            .init(id: id, name: name, url: URL(string: "https://cdn.7tv.app/emote/\(id)/2x.webp")!)
+        }
+        let emotes = [
+            emote("01F6MQ33FG000FFJ97ZB8MWV52", "catJAM"), emote("01F6ME9FRG0005TFYTWP1H8R42", "catJam"),
+            emote("01GDGFJEWG000BMR7QE2FQC25Z", "catJAM"), emote("01FSJ3RPM00000JPZ36BHMF681", "catJAM"),
+            emote("01FBFM0TZR0006C5E1Y5NP9ZTA", "catJAM"), emote("01G3NZ2G0G000E830Z7JV4DWB2", "catJAM"),
+        ]
+        let edit = ChatToolCard.Edit(
+            projectID: "PrEvIeWedit00001", title: "harbour then the timer", revision: 4, duration: 34.4, width: 720, height: 1280,
+            change: .updated,
+            tracks: [
+                .init(isMain: true, clips: [
+                    .init(id: "m1", postID: ids[0], title: "the harbour clip", at: 0, length: 18, sourceIn: 0, sourceOut: 18),
+                    .init(id: "m2", postID: ids[1], title: "the timer one", at: 18, length: 16.4, sourceIn: 4, sourceOut: 24.5, speed: 1.25, pitch: 3),
+                ]),
+                .init(isMain: false, index: 0, clips: [
+                    .init(id: "o1", kind: .emote, title: "catJAM", picture: emotes[0].url, at: 3, length: 6, sourceOut: 6, isNew: true),
+                ]),
+                .init(isMain: false, index: 1, clips: [
+                    .init(id: "o2", postID: ids[2], kind: .cutout, title: "capy cutout", at: 20, length: 9, sourceOut: 9),
+                ]),
+            ])
+        return [
+            ChatToolCall(op: "library.search", ms: 640, card: .search(.init(
+                query: "harbour dog", total: 38, hits: zip(ids, [0.62, 0.58, 0.51, 0.44]).map { .init(postID: $0, score: $1) }))),
+            ChatToolCall(op: "look", ms: 12, card: .look(postIDs: Array(ids.prefix(3)))),
+            ChatToolCall(op: "emotes.find", ms: 410, card: .emotes(.init(query: "catJAM", sort: "trending_weekly", emotes: emotes))),
+            ChatToolCall(op: "box.run", ms: 6_200, card: .box(.init(
+                cmd: #"ffmpeg -hide_banner -loglevel error -y -i capy.png -vf "colorkey=0xFFFFFF:0.18:0.05" out/capy_cutout.png"#,
+                code: 0, stdout: "capy_cutout.png  412 KB"))),
+            ChatToolCall(op: "box.save", ms: 900, card: .files(.init(isIn: false, files: [.init(name: "capy_cutout.png", bytes: 412_000)], postID: ids[2]))),
+            ChatToolCall(op: "edits.update", ms: 80, card: .edit(edit)),
+            ChatToolCall(op: "edits.render", ms: 300, card: .job(.init(
+                op: "edits.render", job: "PrEvIeWjob000001", status: "done", progress: 1, postID: ids[3], kind: "video", seconds: 34.4,
+                width: 720, height: 1280, bytes: 10_400_000))),
+            ChatToolCall(op: "stage.get", ms: 30, status: .error, error: "cobalt.stage.get: the studio is off"),
+            ChatToolCall(op: "links.create", ms: 220, card: .link(.init(
+                id: "3301894276177155739", url: URL(string: "https://share.capybaraharmony.com/g/3301894276177155739")!,
+                title: "harbour + catJAM", files: 3))),
+            ChatToolCall(op: "collections.add", ms: 90, card: .collection(.init(id: "PrEvIeWcoll00001", name: "Lia Share 12", count: 11, change: .added))),
+        ]
+    }
+
     /// The three sample threads, newest first, with their messages.
     static func chatSeed(now: Date) -> (threads: [ChatThread], messages: [String: [ChatMessage]]) {
         func t(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
@@ -149,7 +199,13 @@ extension PreviewData {
                 id: "102", role: .assistant, text: reply1, postIDs: shown,
                 steps: [ChatStep(
                     id: "toolu_01", status: .done, code: code1, logs: ["12 posts yesterday", "3 funny ones"],
-                    result: result1, durationMS: 820)],
+                    result: result1, durationMS: 820,
+                    calls: [
+                        ChatToolCall(op: "library.list", ms: 40, card: .search(.init(query: "newest", total: 12, hits: shown.map { .init(postID: $0) }))),
+                        ChatToolCall(op: "library.search", ms: 610, card: .search(.init(
+                            query: "funny", total: 10, hits: zip(shown, [0.62, 0.58, 0.51]).map { .init(postID: $0, score: $1) }))),
+                        ChatToolCall(op: "show", ms: 3),
+                    ])],
                 createdAt: t(39)),
             ChatMessage(id: "103", role: .user, text: "which one is the longest?", createdAt: t(13)),
             ChatMessage(
@@ -395,7 +451,8 @@ extension PreviewClient {
         let messages = chatState.messages(id)
         let library = PreviewData.libraryPage(now: startedAt).posts
         var posts: [String: LibraryPost] = [:]
-        for postID in Set(messages.flatMap { $0.postIDs + ($0.ranked?.hits.map(\.postID) ?? []) }) {
+        let cardIDs = messages.flatMap { $0.steps.flatMap { $0.calls.compactMap(\.card).flatMap(\.postIDs) } }
+        for postID in Set(messages.flatMap { $0.postIDs + ($0.ranked?.hits.map(\.postID) ?? []) } + cardIDs) {
             if let post = library.first(where: { $0.id == postID }) { posts[postID] = post }
         }
         return ChatThreadDetail(thread: thread, messages: messages, posts: posts)
@@ -562,8 +619,11 @@ extension PreviewClient {
         step.logs = ["found 12, showing 3"]
         step.result = #"[{"id":"Dd55fEyN1Yy","score":0.62},{"id":"Dd7P496wolG","score":0.58},{"id":"2105435404002562056","score":0.51}]"#
         step.durationMS = 820
+        step.calls = PreviewData.chatToolCalls(now: startedAt)
         reply.steps = [step]
         chatState.update(reply.id, in: threadID) { $0.steps = [step] }
+        let cardIDs = Set(step.calls.compactMap(\.card).flatMap(\.postIDs))
+        emit(.cardPosts(library.filter { cardIDs.contains($0.id) }))
         emit(.step(step))
         try await pause(0.3)
 
