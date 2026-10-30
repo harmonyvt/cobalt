@@ -365,7 +365,7 @@ export const linksCreateOp = defineOp({
         const found = await linkFiles(ctx, input.ids, { anyState: wantPrivate });
         if (found.unknown.length > 0) throw new OpError(404, "error.share.not_found", `no post or file with id ${found.unknown.join(", ")}`);
         if (found.notPublic.length > 0) {
-            throw new OpError(409, "error.share.not_public", `not public, so they cannot be shared: ${found.notPublic.join(", ")}. Ask Harmony to make them public first`);
+            throw new OpError(409, "error.share.not_public", `not public, so a public link cannot hold them: ${found.notPublic.join(", ")}. Use private: true for a private link (share.../p/<key>), which may hold them, or ask Harmony to make them public`);
         }
         if (found.files.length > SHARE_SET_MAX) {
             throw new OpError(400, "error.share.bad_request", `that is ${found.files.length} files and a link holds at most ${SHARE_SET_MAX}: make several links`);
