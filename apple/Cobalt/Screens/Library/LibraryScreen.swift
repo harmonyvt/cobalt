@@ -58,6 +58,10 @@ enum LibraryPhase: Equatable {
     case noMatch(String)
     /// A kind chip with nothing behind it (`no galleries kept on this iphone yet.`), with a way back to everything.
     case emptyKind(LibraryKindFilter, kept: Bool)
+    /// The hidden album, before the owner passes the lock: the locked card, no rows.
+    case locked
+    /// The hidden album with nothing in it.
+    case emptyHidden
 }
 
 private struct LibraryContent: View {
@@ -67,11 +71,13 @@ private struct LibraryContent: View {
 
     @Environment(\.shell) private var shell
     @Environment(\.hapticsEnabled) private var haptics
+    @Environment(\.scenePhase) private var scenePhase
     @Namespace private var zoomSpace
     /// File URLs for the system share sheet. Assigned only once they are ready; the sheet clears this when it finishes.
     @State private var filesToShare: [URL] = []
     #if DEBUG
     @Environment(\.libraryDebugRows) private var debugRows
+    @Environment(\.hiddenPreviewUnlocked) private var previewUnlocked
     #endif
 
     private var library: LibraryModel { model.library }
@@ -79,7 +85,8 @@ private struct LibraryContent: View {
     /// The posts on screen: the library's rows (kind, search, show and sort applied), then the share chips' filter.
     private var rows: [LibraryRow] {
         let filter = shareFilter
-        guard filter != .all else { return unfilteredRows }
+        // the share chips are not in the album: nothing hidden is in a link
+        guard filter != .all, !library.showingHidden else { return unfilteredRows }
         let index = shareIndex
         var setCollections: Set<String> = []
         if case .set(let id) = filter { setCollections = Set(model.shareSets.group(id)?.collectionIDs ?? []) }
@@ -102,6 +109,9 @@ private struct LibraryContent: View {
             return LibraryDebug.merged(model.libraryRows, with: debugRows, query: library.query, kind: library.kindFilter, sort: library.sort)
         }
         #endif
+        // the album is open in the chip but not unlocked (or the server stopped offering it): no rows at all, whatever the
+        // model holds
+        if library.showingHidden, !controller.albumOpen { return [] }
         return model.libraryRows
     }
 
@@ -124,6 +134,8 @@ private struct LibraryContent: View {
             }
         }
         #endif
+        if controller.hiddenLocked { return .locked }
+        if library.showingHidden, model.capabilities.hidden { return albumPhase(rows) }
         if !rows.isEmpty { return .rows }
         if library.failure != nil, library.posts.isEmpty { return .failed }
         if library.isLoading || library.loadingAll != nil { return .loading }
@@ -137,7 +149,24 @@ private struct LibraryContent: View {
         return .empty
     }
 
+    /// The open album's phase: its rows, its first page coming, why it failed, or nothing.
+    private func albumPhase(_ rows: [LibraryRow]) -> LibraryPhase {
+        if !rows.isEmpty { return .rows }
+        if library.hiddenFailure != nil, library.hiddenPosts.isEmpty { return .failed }
+        if controller.albumPending || library.hiddenLoading || library.loadingAll != nil { return .loading }
+        let query = library.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty { return .noMatch(query) }
+        if model.capabilities.gallery, library.kindFilter != .all {
+            return .emptyKind(library.kindFilter, kept: library.show == .offline)
+        }
+        return .emptyHidden
+    }
+
     private var footer: LibraryFooter {
+        if library.showingHidden {
+            if library.hiddenFailure != nil, !library.hiddenPosts.isEmpty { return .failed }
+            return library.hiddenHasMore ? .loading : .none
+        }
         if library.failure != nil, !library.posts.isEmpty { return .failed }
         return library.hasMore ? .loading : .none
     }
@@ -168,19 +197,24 @@ private struct LibraryContent: View {
             .navigationSubtitle(
                 controller.selecting
                     ? Copy.Library2.selected(pickedCount)
-                    : Copy.libraryCounts(posts: library.postCount, files: library.fileCount))
+                    : library.showingHidden
+                        ? (controller.hiddenLocked ? Copy.HiddenAlbum.chipName : Copy.HiddenAlbum.note(library.hiddenCount))
+                        : Copy.libraryCounts(posts: library.postCount, files: library.fileCount))
             .searchable(
                 text: $library.query, placement: searchPlacement,
                 prompt: model.capabilities.search ? Copy.Search.prompt : Copy.Library2.searchPrompt)
             .toolbar { toolbar }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    if model.capabilities.gallery {
+                    if model.capabilities.gallery || model.capabilities.hidden {
                         LibraryKindChips(
                             model: model, extra: debugExtra,
                             pickAll: { kind, share in pickKind(kind, thenShare: share) })
                     }
-                    if model.capabilities.shareSets, !model.shareSets.sets.isEmpty {
+                    if controller.albumOpen {
+                        HiddenAlbumNote(count: library.hiddenCount)
+                    }
+                    if model.capabilities.shareSets, !model.shareSets.sets.isEmpty, !library.showingHidden {
                         LibraryShareChips(
                             model: model, rows: unfilteredRows, index: shareIndex, filter: $controller.shareFilter)
                     }
@@ -209,6 +243,7 @@ private struct LibraryContent: View {
             }
             .motion(Motion.card, value: controller.peek?.id)
             .haptic(.impact(weight: .light), trigger: controller.peek?.id, enabled: haptics) { $0 != nil }
+            .statusConfirm(controller: controller)
             .modifier(LibraryInspector(model: model, controller: controller, enabled: tier != .compact))
             .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: tier == .compact))
             .modifier(LibrarySkyMapPresenter(model: model, controller: controller))
@@ -263,14 +298,33 @@ private struct LibraryContent: View {
             .haptic(.warning, trigger: controller.warnTick, enabled: haptics)
             .haptic(.error, trigger: controller.failTick, enabled: haptics)
             .onAppear { controller.showStatus = { shell.showStatus($0) } }
-            .task(id: library.needsWholeLibrary) {
-                if library.needsWholeLibrary { await library.loadAll() }
+            // 0 nothing to load, 1 the whole library (or album), 2 the same but the album is still locked: wait
+            .task(id: library.needsWholeLibrary ? (controller.hiddenLocked ? 2 : 1) : 0) {
+                if library.needsWholeLibrary, !controller.hiddenLocked { await library.loadAll() }
             }
+            // the album: locked at every open, its first page once the owner is in
+            .onChange(of: library.showingHidden, initial: true) { _, open in
+                if open, !model.capabilities.hidden { library.showingHidden = false; return }
+                controller.hiddenAlbumChanged(open: open)
+                #if DEBUG
+                if open, previewUnlocked { controller.hiddenUnlocked = true }
+                #endif
+            }
+            .task(id: controller.albumOpen) { await controller.loadAlbum() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background { controller.relockHidden() } else if phase == .active { controller.promptIfNeeded() }
+            }
+            .onChange(of: model.selectedTab) { _, tab in
+                if tab == .library { controller.promptIfNeeded() } else { controller.relockHidden() }
+            }
+            .onDisappear { if model.selectedTab != .library { controller.relockHidden() } }
             .onChange(of: library.expandedPostID, initial: true) { _, id in
                 guard let id else { return }
                 library.expandedPostID = nil
                 Task { await reveal(id) }
             }
+            // a post that became hidden leaves the detail and the sheets; the app switcher's cover goes outermost
+            .modifier(LibraryHiddenWatchers(model: model, controller: controller))
     }
 
     @ViewBuilder
@@ -291,6 +345,8 @@ private struct LibraryContent: View {
             }
         case .loading where library.viewMode == .mosaic:
             LibraryMosaic(rows: [], controller: controller, tier: tier, footer: .none, skeleton: true)
+        case .locked:
+            HiddenLockedCard(controller: controller)
         default:
             LibraryPlaceholder(phase: phase, controller: controller)
         }
@@ -306,7 +362,7 @@ private struct LibraryContent: View {
 
     /// The shelves over the mosaic: while not selecting or searching (iPhone, iPad and Mac alike).
     private var shelves: LibraryShelves? {
-        guard !controller.selecting, LibraryShelves.hasContent(model),
+        guard !controller.selecting, !library.showingHidden, LibraryShelves.hasContent(model),
               library.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         return LibraryShelves(model: model, controller: controller)
@@ -397,6 +453,7 @@ private struct LibraryContent: View {
 
     /// A kind chip's long press: the chip's posts ticked in one go, and shared at once for `share all`.
     private func pickKind(_ kind: LibraryKindFilter, thenShare share: Bool) {
+        model.library.showingHidden = false     // a kind chip is the library's, not the album's
         model.library.kindFilter = kind
         withAnimation(Motion.rows) { controller.pickOnly(rows) }
         if share { Task { await sharePicked() } }
@@ -514,6 +571,7 @@ private struct LibraryPush: ViewModifier {
     @ViewBuilder
     private func detail(_ target: OpenedMedia) -> some View {
         let screen = MediaDetail(model: model, item: target.item, initial: target.initial)
+            .hiddenCover(controller)
         #if os(iOS)
         screen.navigationTransition(.zoom(sourceID: target.item.post?.id ?? target.item.id, in: zoom))
         #else
@@ -536,6 +594,7 @@ private struct LibraryInspector: ViewModifier {
                     NavigationStack {
                         MediaDetail(model: model, item: item, initial: item.face.id)
                     }
+                    .hiddenCover(controller)
                     .id(controller.selection)
                 } else {
                     Text(Copy.Library2.pickSomething)
@@ -585,11 +644,13 @@ private struct LibraryPlaceholder: View {
                     }
                     .padding(.horizontal, 24)
                     .padding(.vertical, 56)
+                case .emptyHidden:
+                    HiddenAlbumEmpty()
                 case .failed:
                     LibraryProblem(state: .failed) { Task { await controller.refresh() } }
                 case .loading:
                     LibraryProblem(state: .loading) {}
-                case .empty, .rows:
+                case .empty, .rows, .locked:
                     LibraryProblem(state: .empty) {}
                 }
             }

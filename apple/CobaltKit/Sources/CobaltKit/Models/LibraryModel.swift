@@ -18,6 +18,24 @@ public final class LibraryModel {
     /// entry exists exactly while the request runs, so the detail can disable the switch and say "making the link…".
     public internal(set) var visibilityInFlight: Set<String> = []
 
+    // MARK: - Hidden posts (APP-API-CONTRACT 37; `LibraryModel+Hidden.swift`)
+
+    /// The hidden chip is on: the library shows the hidden album (`hiddenPosts`) instead of `posts`. Not persisted: the
+    /// album is locked each time it opens, so it starts closed.
+    public var showingHidden: Bool = false
+    /// The hidden album's loaded pages, most recently hidden first. Hidden posts are in no other list.
+    public internal(set) var hiddenPosts: [LibraryPost] = []
+    /// How many posts are hidden on the server (`counts.hidden` of every page, kept honest by `setStatus`).
+    public internal(set) var hiddenCount: Int = 0
+    public internal(set) var hiddenLoading: Bool = false
+    public internal(set) var hiddenFailure: PipelineFailure?
+    /// Bumped whenever the device's memory of what is hidden changed (a post hidden or unhidden, a sync): the screens close
+    /// a detail that holds a post that just became hidden.
+    public internal(set) var hiddenVersion: Int = 0
+    public internal(set) var hiddenHasMore: Bool = false
+    /// A `setStatus` request is on its way: the status menu can disable itself and say "working…".
+    public internal(set) var statusInFlight: Bool = false
+
     // MARK: - View state (CONTRACT-LIBRARY2 decisions 10, 14; persisted per device except `query`)
 
     /// `mosaic` or `table`; remembered ("library.view"), `mosaic` by default.
@@ -67,9 +85,33 @@ public final class LibraryModel {
     @ObservationIgnored var searchTask: Task<Void, Never>?
     /// The server answered `error.search.off`: no more server searches until `reset()` (a server or key change).
     @ObservationIgnored var searchOffByServer = false
+    /// The hidden album's next page.
+    @ObservationIgnored var hiddenCursor: String?
+    /// `hiddenCount` when the album's first page was last read (nil: never): a different count means it moved.
+    @ObservationIgnored var hiddenSyncedCount: Int?
+    /// Posts this device just hid. A page that was already on its way when they were hidden still lists them: it must not
+    /// put them back. Emptied by the first page that was asked for after the last status change.
+    @ObservationIgnored var recentlyHidden: Set<String> = []
+    /// Posts this device just unhid: a hidden page that was already on its way still lists them and must not put them back.
+    @ObservationIgnored var recentlyUnhidden: Set<String> = []
+    /// Bumped when a status change starts and ends, so a page can tell it began before one.
+    @ObservationIgnored var statusEpoch = 0
+    /// Bumped by every change to the set of hidden posts this device makes itself (a status change, a delete from the
+    /// album): a whole-album read that began before one is stale and is dropped (`syncHiddenIndex`).
+    @ObservationIgnored var hiddenEpoch = 0
+    /// When the whole album was last read (nil: not since launch or the last server change).
+    @ObservationIgnored var hiddenSyncedAt: Date?
+    /// Tests: runs after the pages of a whole-album read came in, before the answer is kept.
+    @ObservationIgnored var afterHiddenRead: (@MainActor () async -> Void)?
+    /// The whole-album read the last refresh started.
+    @ObservationIgnored var hiddenSyncTask: Task<Void, Never>?
+    /// A whole-album read (`syncHiddenIndex`) is running.
+    @ObservationIgnored var hiddenSyncing = false
 
     static let pageSize = 20
     static let wholePageSize = 50
+    /// The most hidden posts one whole-album read collects; past it the device's memory only grows.
+    static let syncCap = 2000
 
     /// `defaults`: where the view state is remembered. The app's settings defaults unless injected (tests
     /// pass a fresh suite).
@@ -89,17 +131,25 @@ public final class LibraryModel {
         expandedPostID = nil; loadingAll = nil; localTitles = [:]
         searchTask?.cancel(); searchTask = nil; searchOffByServer = false
         searchResults = nil; searchScores = [:]; searchState = .idle; searchKnown = [:]
+        showingHidden = false; hiddenPosts = []; hiddenCount = 0; hiddenLoading = false; hiddenFailure = nil
+        hiddenHasMore = false; hiddenCursor = nil; hiddenSyncedCount = nil; hiddenSyncedAt = nil; recentlyHidden = []
+        recentlyUnhidden = []; statusInFlight = false; hiddenEpoch += 1; hiddenVersion += 1
+        ctx.settings.hiddenIndex = HiddenIndex()             // another server: nothing is known about what it hides
     }
 
     func apply(_ page: LibraryPage, replacing: Bool) {
+        // A post the server calls hidden (or this device just hid) is in no list but the hidden album, whatever page it
+        // came on (APP-API-CONTRACT 37.2).
+        let listed = page.posts.filter { !$0.hidden && !recentlyHidden.contains($0.id) }
         if replacing {
-            posts = page.posts
+            posts = listed
         } else {
             let known = Set(posts.map(\.id))
-            posts += page.posts.filter { !known.contains($0.id) }
+            posts += listed.filter { !known.contains($0.id) }
         }
         postCount = page.postCount
         fileCount = page.fileCount
+        if !statusInFlight { hiddenCount = page.hiddenCount }
         cursor = page.next
         hasMore = page.next != nil
         didApply(page: page)
@@ -131,9 +181,13 @@ public final class LibraryModel {
         do {
             let client = ctx.client
             if ctx.capabilities.titles { await ctx.titles.flush(client: client) }       // titles that failed to send, before the page reads them
+            let epoch = statusEpoch
             let page = try await ctx.libraryPage(cursor: nil, limit: Self.pageSize)
             apply(page, replacing: true)
+            if epoch == statusEpoch, !statusInFlight { recentlyHidden = []; recentlyUnhidden = [] }       // asked after the last change: it is the truth
             failure = nil
+            // quiet, and not waited for: the refresh is done when the library page is
+            hiddenSyncTask = Task { [weak self] in await self?.syncHiddenIndex() }
         } catch {
             if let f = pipelineFailure(from: error, during: .saving) { failure = f }
         }
@@ -157,6 +211,7 @@ public final class LibraryModel {
     /// Everything on device: pages of 50 until the server has no more or `cap` posts are in. A quiet
     /// `loadingAll` reports the count while it runs. A failure stops it and lands in `failure`.
     public func loadAll(cap: Int = 1000) async {
+        if showingHidden { return await loadAllHidden(cap: cap) }       // the album's own pages
         await settle()
         guard !isLoading else { return }
         guard posts.isEmpty || hasMore else { return }
@@ -220,6 +275,7 @@ public final class LibraryModel {
     /// The library's current copy of a file (a value a view holds may be older).
     func file(id: String) -> LibraryFile? {
         for post in posts { if let file = post.files.first(where: { $0.id == id }) { return file } }
+        for post in hiddenPosts { if let file = post.files.first(where: { $0.id == id }) { return file } }
         return nil
     }
 
@@ -234,6 +290,11 @@ public final class LibraryModel {
                 posts[index].visibility = files.first { $0.role == .privateCopy }?.visibility
                     ?? (files.contains { $0.isPublic } ? .public : .private)
             }
+            return
+        }
+        for index in hiddenPosts.indices {
+            guard let at = hiddenPosts[index].files.firstIndex(where: { $0.id == file.id }) else { continue }
+            hiddenPosts[index].files[at] = file
             return
         }
     }
@@ -300,6 +361,7 @@ public final class LibraryModel {
             throw pipelineFailure(from: error, during: .saving, limits: ctx.capabilities.limits) ?? error
         }
         forgetSearched(files: [file.id])
+        dropHidden(files: [file.id])
         guard let index = posts.firstIndex(where: { $0.files.contains { $0.id == file.id } }) else { return }
         posts[index].files.removeAll { $0.id == file.id }
         fileCount = max(0, fileCount - 1)
@@ -315,6 +377,7 @@ public final class LibraryModel {
     func drop(files ids: Set<String>) {
         guard !ids.isEmpty else { return }
         forgetSearched(files: ids)
+        dropHidden(files: ids)
         for index in posts.indices.reversed() {
             let before = posts[index].files.count
             posts[index].files.removeAll { ids.contains($0.id) }
@@ -332,6 +395,7 @@ public final class LibraryModel {
     /// A whole post is gone on the server.
     func drop(post id: String) {
         forgetSearched(posts: [id])
+        dropHidden(post: id)
         guard let index = posts.firstIndex(where: { $0.id == id }) else { return }
         fileCount = max(0, fileCount - posts[index].files.count)
         postCount = max(0, postCount - 1)

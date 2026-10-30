@@ -549,6 +549,7 @@ public final class SavePull {
     private func evaluate(_ post: LibraryPost, _ w: Walk, stopLine: Date) -> PostResult {
         let env = w.env, store = w.store, ledger = w.ledger, enabledAt = w.enabledAt
         var result = PostResult()
+        guard !post.hidden else { return result }                 // a hidden post is never pulled (APP-API-CONTRACT 37.2)
         let known = ledger.read()
         let local = store.media.first { MediaItem.joins($0, post) }
         guard let item = MediaItem.merge(local: local, post: post) else { return result }

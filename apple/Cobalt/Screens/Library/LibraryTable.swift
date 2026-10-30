@@ -163,7 +163,7 @@ struct LibraryTable: View {
         }
         .contextMenu(forSelectionType: String.self) { ids in
             if !controller.selecting, let id = ids.first, let row = rows.first(where: { $0.id == id }) {
-                LibraryMenuItems(row: row, controller: controller) { removing = $0 }
+                LibraryMenuItems(row: row, controller: controller, selected: rows.filter { ids.contains($0.id) }) { removing = $0 }
             }
         } primaryAction: { ids in
             guard let id = ids.first else { return }
@@ -175,7 +175,7 @@ struct LibraryTable: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            LibraryFooterView(state: footer) { Task { await library.loadMore() } }
+            LibraryFooterView(state: footer) { controller.loadMoreAgain() }
         }
         .offlineRemoveConfirm($removing, model: controller.model)
         .refreshable { controller.pullToRefresh() }
@@ -298,7 +298,7 @@ struct LibraryList: View {
                         .onAppear { if lastIDs.contains(row.id) { controller.loadMoreIfNeeded() } }
                     }
                 } footer: {
-                    LibraryFooterView(state: footer) { Task { await controller.library.loadMore() } }
+                    LibraryFooterView(state: footer) { controller.loadMoreAgain() }
                 }
             }
             #if os(iOS)

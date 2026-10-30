@@ -139,7 +139,7 @@ enum PasteIntake {
             if let have = out[k], have <= date { return }
             out[k] = date
         }
-        for media in model.store.media { note(media.link, media.original?.createdAt ?? media.latestAt) }
+        for media in model.visibleStoredMedia { note(media.link, media.original?.createdAt ?? media.latestAt) }
         for post in model.library.posts { note(post.link, post.createdAt) }
         return out
     }

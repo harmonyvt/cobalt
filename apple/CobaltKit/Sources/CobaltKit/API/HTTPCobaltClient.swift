@@ -211,6 +211,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var stillWebp: Bool?
                 var about: Bool?
                 var aboutSound: Bool?
+                var hidden: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -220,6 +221,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var shareSetMax: Int?
                 var editMaxSeconds: Double?; var editMaxClips: Int?; var editMaxProjects: Int?
                 var editPitch: Bool?
+                var statusIds: Int?
             }
             var server: String?
             var cobalt: Cobalt?
@@ -249,6 +251,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
             limits.editMaxClips = l.editMaxClips ?? limits.editMaxClips
             limits.editMaxProjects = l.editMaxProjects ?? limits.editMaxProjects
             limits.editPitch = l.editPitch ?? limits.editPitch
+            limits.statusIds = min(200, max(1, l.statusIds ?? limits.statusIds))
         }
         let f = w.features
         var caps = Capabilities(
@@ -294,6 +297,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.stillWebp = (f?.stillWebp ?? false) && caps.galleryMake
         caps.about = (f?.about ?? false) && caps.search
         caps.aboutSound = (f?.aboutSound ?? false) && caps.about
+        caps.hidden = f?.hidden ?? false
         return caps
     }
 
@@ -541,17 +545,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     }
 
     private func library(cursor: String?, limit: Int, version: Int?) async throws -> LibraryPage {
-        var query = [("limit", String(max(1, min(50, limit))))]
-        if let cursor { query.append(("cursor", cursor)) }
-        if let version { query.append(("v", String(version))) }
-        // the generated endpoint and reply type (Generated/Endpoints.swift)
-        let wire = try await send(Endpoints.libraryIndex(), query: query)
-        let posts = wire.posts.compactMap(\.value)
-        return LibraryPage(
-            posts: posts, postCount: wire.counts?.posts ?? posts.count,
-            fileCount: wire.counts?.files ?? posts.reduce(0) { $0 + $1.files.count },
-            publicBytes: Int64(wire.usage?.publicBytes ?? 0), privateBytes: Int64(wire.usage?.privateBytes ?? 0),
-            next: wire.next)
+        // the generated endpoint (Generated/Endpoints.swift); the reply is read by `LibraryPageWire`, which also has `counts.hidden`
+        try await libraryPage(cursor: cursor, limit: limit, version: version, hidden: false)
     }
 
     /// `PATCH /library/items/<id>/visibility` (keyed): 200 → the file as it is now and `cache_cleared`;

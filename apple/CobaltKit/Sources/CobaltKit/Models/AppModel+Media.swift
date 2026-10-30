@@ -122,6 +122,7 @@ extension AppModel {
     /// it is on disk, else the open session, else the library item reopened (5 days). Generalises
     /// `trimNewWebp(from:)`, which stays.
     public func makeWebp(for item: MediaItem) async {
+        guard !isHiddenPost(item) else { return }          // nothing is made from a hidden post: it could end up public
         var item = item
         // A media the device has but the library has not been loaded for yet: its post is where the
         // private copy (the reopen) lives.

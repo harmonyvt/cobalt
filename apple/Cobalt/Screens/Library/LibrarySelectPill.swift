@@ -7,6 +7,10 @@ import SwiftUI
 /// `collection` (make the link and file it, picked in `CollectionPickerSheet`), `edit` and `share` (the files). While the panel is up, taps on tiles pick them;
 /// otherwise they open, as always. It sits in the library's bottom safe area, so on the iPhone it is above the tab bar,
 /// and the same panel is the Mac's and the iPad's.
+///
+/// With `features.hidden` the row ends with `status…` (a menu: hidden, off, public link, private link; one request for
+/// every pick, APP-API-CONTRACT 37.7). In the hidden album the row is `unhide` and `status…` only: nothing hidden can be
+/// shared, filed or edited.
 struct LibrarySelectPill: View {
     let model: AppModel
     let controller: LibraryController
@@ -23,6 +27,8 @@ struct LibrarySelectPill: View {
     private var store: ShareSetStore { model.shareSets }
     private var makesLinks: Bool { model.capabilities.shareSets }
     private var files: Bool { makesLinks && model.capabilities.shareCollections }
+    private var inAlbum: Bool { model.library.showingHidden }
+    private var offersStatus: Bool { model.capabilities.hidden }
 
     var body: some View {
         Group {
@@ -80,17 +86,17 @@ struct LibrarySelectPill: View {
         return VStack(alignment: .leading, spacing: 10) {
             header(count: picks.count)
             if !picks.isEmpty { thumbs(picks) }
-            if makesLinks, model.capabilities.privateLinks {
+            if !inAlbum, makesLinks, model.capabilities.privateLinks {
                 privacyChoice
             }
-            if makesLinks, !picks.isEmpty {
+            if !inAlbum, makesLinks, !picks.isEmpty {
                 Text(Copy.PrivateLinks.line(for: verdict, count: picks.count, isPrivate: controller.makesPrivateLink))
                     .font(CobaltType.captionSmall)
                     .foregroundStyle(verdict == .ready ? CobaltColor.caption : CobaltColor.text)
                     .contentTransition(.opacity)
                     .padding(.horizontal, 4)
             }
-            if let editNote, !picks.isEmpty {
+            if let editNote, !picks.isEmpty, !inAlbum {
                 Text(editNote)
                     .font(CobaltType.captionSmall)
                     .foregroundStyle(CobaltColor.caption)
@@ -99,35 +105,12 @@ struct LibrarySelectPill: View {
             // icons only, one equal slot each, so the row always fits the panel (it pushed the panel off an iPhone's
             // edges); all one capsule, each tinted for what it does (SelectActionStyle)
             HStack(spacing: 8) {
-                if makesLinks {
-                    Button(action: makeLink) {
-                        if controller.makingShareLink {
-                            ProgressView().controlSize(.small).tint(CobaltColor.onText)
-                        } else {
-                            Label(Copy.Links.make, systemImage: Symbol.link)
-                        }
-                    }
-                    .buttonStyle(.selectAction(.link))
-                    .disabled(!ready)
-                    .help(Copy.Links.make)
-                    .accessibilityLabel(controller.makingShareLink ? Copy.Links.making : Copy.Links.make)
-                    .accessibilityHint(Copy.Links.makeA11yHint)
+                if inAlbum {
+                    unhideButton(picks)
+                } else {
+                    shareActions(picks, ready: ready)
                 }
-                if files {
-                    Button { pickingCollection = true } label: {
-                        Label(Copy.Library2.collection, systemImage: Symbol.Library.collectionFile)
-                    }
-                    .buttonStyle(.selectAction(.collection))
-                    .disabled(!ready)
-                    .help(Copy.Library2.collection)
-                    .accessibilityLabel(Copy.Library2.collection)
-                }
-                if model.editor.isAvailable { EditPicksButton(model: model, picks: picks, note: $editNote) }
-                Button(action: share) { Label(Copy.Library2.share, systemImage: Symbol.Library.share) }
-                    .buttonStyle(.selectAction(.share))
-                    .disabled(controller.preparingShare || picks.isEmpty)
-                    .help(Copy.Library2.share)
-                    .accessibilityLabel(Copy.Library2.share)
+                if offersStatus { statusMenu(picks) }
             }
         }
         .padding(12)
@@ -135,6 +118,79 @@ struct LibrarySelectPill: View {
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .motion(Motion.rows, value: picks.map(\.id))
         .motion(Motion.rows, value: verdict)
+    }
+
+    /// `unhide` (the album's main action): the picks go back to the library as `off`, with no link.
+    private func unhideButton(_ picks: [LibraryRow]) -> some View {
+        Button {
+            controller.chooseStatus(.off, posts: controller.pickedPosts(rows))
+        } label: {
+            Label(Copy.HiddenAlbum.unhide, systemImage: Symbol.HiddenAlbum.unhide)
+        }
+        .buttonStyle(.selectAction(.link))
+        .disabled(picks.isEmpty || busy)
+        .help(Copy.HiddenAlbum.unhide)
+        .accessibilityLabel(Copy.HiddenAlbum.unhide)
+        .accessibilityHint(Copy.HiddenAlbum.unhideHint)
+    }
+
+    /// `status…`: hidden, off, public link, private link for every pick at once.
+    private func statusMenu(_ picks: [LibraryRow]) -> some View {
+        Menu {
+            StatusMenuItems(model: model) { controller.chooseStatus($0, posts: controller.pickedPosts(rows)) }
+        } label: {
+            if busy {
+                ProgressView().controlSize(.small)
+            } else {
+                Label(Copy.HiddenAlbum.status, systemImage: Symbol.HiddenAlbum.status)
+            }
+        }
+        .menuIndicator(.hidden)
+        #if os(macOS)
+        .menuStyle(.button)
+        #endif
+        .buttonStyle(.selectAction(.status))
+        .disabled(picks.isEmpty || busy)
+        .help(Copy.HiddenAlbum.status)
+        .accessibilityLabel(Copy.HiddenAlbum.status)
+        .accessibilityHint(Copy.HiddenAlbum.statusHint)
+    }
+
+    /// A status change is on its way: the buttons wait.
+    private var busy: Bool { controller.changingStatus || model.library.statusInFlight }
+
+    /// The row of a normal library: make link, collection, edit, share.
+    @ViewBuilder
+    private func shareActions(_ picks: [LibraryRow], ready: Bool) -> some View {
+        if makesLinks {
+            Button(action: makeLink) {
+                if controller.makingShareLink {
+                    ProgressView().controlSize(.small).tint(CobaltColor.onText)
+                } else {
+                    Label(Copy.Links.make, systemImage: Symbol.link)
+                }
+            }
+            .buttonStyle(.selectAction(.link))
+            .disabled(!ready)
+            .help(Copy.Links.make)
+            .accessibilityLabel(controller.makingShareLink ? Copy.Links.making : Copy.Links.make)
+            .accessibilityHint(Copy.Links.makeA11yHint)
+        }
+        if files {
+            Button { pickingCollection = true } label: {
+                Label(Copy.Library2.collection, systemImage: Symbol.Library.collectionFile)
+            }
+            .buttonStyle(.selectAction(.collection))
+            .disabled(!ready)
+            .help(Copy.Library2.collection)
+            .accessibilityLabel(Copy.Library2.collection)
+        }
+        if model.editor.isAvailable { EditPicksButton(model: model, picks: picks, note: $editNote) }
+        Button(action: share) { Label(Copy.Library2.share, systemImage: Symbol.Library.share) }
+            .buttonStyle(.selectAction(.share))
+            .disabled(controller.preparingShare || picks.isEmpty)
+            .help(Copy.Library2.share)
+            .accessibilityLabel(Copy.Library2.share)
     }
 
     /// `public` / `private` for the link the panel makes (APP-API-CONTRACT 36.6), starting at settings › sharing's

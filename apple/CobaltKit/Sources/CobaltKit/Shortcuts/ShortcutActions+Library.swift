@@ -140,7 +140,7 @@ extension ShortcutActions {
             let page: LibraryPage
             do { page = try await ctx.libraryPage(cursor: cursor, limit: 20) }
             catch { throw Self.shortcutError(error, during: .saving, caps: ctx.capabilities) }
-            posts += page.posts
+            posts += page.posts.filter { !$0.hidden }         // a hidden post is in no Shortcuts answer (APP-API-CONTRACT 37.2)
             if enough(posts) { break }
             guard let next = page.next else { break }
             cursor = next

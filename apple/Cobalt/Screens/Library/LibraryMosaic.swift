@@ -135,7 +135,7 @@ struct LibraryMosaic: View {
                         .padding(.top, Self.topInset)
                         .frame(maxHeight: .infinity, alignment: .top)
                     }
-                if !skeleton { LibraryFooterView(state: footer) { Task { await controller.library.loadMore() } } }
+                if !skeleton { LibraryFooterView(state: footer) { controller.loadMoreAgain() } }
                 Color.clear.frame(height: 24)
             }
         }

@@ -69,7 +69,7 @@ extension AppModel {
     /// Whether `rendition` is a photo the server can turn into an animated webp of itself (APP-API-CONTRACT 18.14): a photo
     /// of a gallery or a single photo, which the library lists (the server makes it from its stored original).
     public func canMakeAnimatedWebp(of rendition: Rendition, in item: MediaItem) -> Bool {
-        guard capabilities.stillWebp, capabilities.studio, let file = rendition.file,
+        guard !isHiddenPost(item), capabilities.stillWebp, capabilities.studio, let file = rendition.file,
               Self.animatedWebpTypes.contains(file.contentType?.lowercased() ?? "")
         else { return false }
         switch rendition.kind {
@@ -149,7 +149,7 @@ extension AppModel {
     /// has neither a copy here nor a library row to fetch it from.
     @discardableResult
     public func makeWebp(for item: MediaItem, itemIndex index: Int) -> Bool {
-        guard capabilities.gallery, capabilities.studio,
+        guard !isHiddenPost(item), capabilities.gallery, capabilities.studio,
               let rendition = item.items.first(where: { $0.itemIndex == index }), rendition.itemType != .photo,
               let sid = item.post?.session?.id ?? item.post?.id ?? item.local?.sessionIDs.first
         else { return false }

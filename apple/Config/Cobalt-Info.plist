@@ -46,6 +46,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSFaceIDUsageDescription</key>
+	<string>capystore asks for face id before showing hidden posts.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>capystore saves videos you choose to your photos.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

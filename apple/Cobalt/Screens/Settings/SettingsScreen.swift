@@ -36,6 +36,8 @@ struct SettingsScreen: View {
             SharingSettingsSection(model: model)
             // private links (APP-API-CONTRACT 36.6): what new gallery links start as, and rotating every key
             PrivateLinksSettingsSection(model: model).id(settings.hasAPIKey)
+            // hidden posts and auto-hide rules (APP-API-CONTRACT 37.7)
+            HiddenSettingsSection(model: model).id(settings.hasAPIKey)
             shareSheetSection
             StorageSettingsSection(model: model)
             PhotosSettingsSection(model: model)

@@ -201,6 +201,7 @@ public final class Settings {
 
     @ObservationIgnored let defaults: UserDefaults
     @ObservationIgnored let keychain: Keychain
+    @ObservationIgnored private var hiddenIndexCache: HiddenIndex?
     nonisolated static let keyAccount = "api-key"
     /// The server the stored key was pasted for ("host" or "host:port"). A key with no record here
     /// (saved by an earlier build) belongs to `defaultServer`: that is the only server it was ever
@@ -347,6 +348,37 @@ public final class Settings {
             return defaults.object(forKey: "photosAlbumSync") as? Bool ?? false
         }
         set { withMutation(keyPath: \.photosAlbumSync) { defaults.set(newValue, forKey: "photosAlbumSync") } }
+    }
+
+    /// "lock with face id" (APP-API-CONTRACT 37.7): opening the hidden album asks for Face ID / Touch ID / the device
+    /// passcode each time. On by default; an install that never touched the switch has no value and reads on. Stored on
+    /// this device only ("hidden.lock", app-group defaults).
+    public var hiddenLock: Bool {
+        get {
+            access(keyPath: \.hiddenLock)
+            return defaults.object(forKey: "hidden.lock") as? Bool ?? true
+        }
+        set { withMutation(keyPath: \.hiddenLock) { defaults.set(newValue, forKey: "hidden.lock") } }
+    }
+
+    /// The hidden posts this device knows of (`HiddenIndex`, APP-API-CONTRACT 37.7), kept in the app-group defaults
+    /// ("hidden.index") so the device lists can leave a hidden post's offline copy out before any network answered.
+    /// Cleared on a server change (`LibraryModel.reset`).
+    public var hiddenIndex: HiddenIndex {
+        get {
+            access(keyPath: \.hiddenIndex)
+            if let cached = hiddenIndexCache { return cached }
+            let loaded = defaults.data(forKey: "hidden.index").flatMap { try? JSONDecoder().decode(HiddenIndex.self, from: $0) } ?? HiddenIndex()
+            hiddenIndexCache = loaded
+            return loaded
+        }
+        set {
+            withMutation(keyPath: \.hiddenIndex) {
+                hiddenIndexCache = newValue
+                if newValue.isEmpty { defaults.removeObject(forKey: "hidden.index") }
+                else if let data = try? JSONEncoder().encode(newValue) { defaults.set(data, forKey: "hidden.index") }
+            }
+        }
     }
 
     /// "include webps": on by default (PhotoKit keeps them as stills; the settings footnote says so). Turned

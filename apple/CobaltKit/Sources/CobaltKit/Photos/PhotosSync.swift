@@ -579,7 +579,18 @@ public final class PhotosSync {
     private func eligibleVideos() -> [StoredVideo] {
         guard let engine else { return [] }
         let webps = engine.settings.photosSyncWebps
-        return engine.store.videos.filter { Self.isEligible($0, includeWebps: webps) }
+        // a hidden post's files never go to Photos (APP-API-CONTRACT 37.7): the device's memory of what is hidden decides,
+        // so it holds at launch and offline too
+        let hidden = Self.hiddenVideoIDs(index: engine.settings.hiddenIndex, store: engine.store)
+        return engine.store.videos.filter { Self.isEligible($0, includeWebps: webps) && !hidden.contains($0.id) }
+    }
+
+    /// The stored files that belong to a hidden post: every file of a media that joins one, and any file whose own keys do.
+    static func hiddenVideoIDs(index: HiddenIndex, store: OfflineStore) -> Set<String> {
+        guard !index.isEmpty else { return [] }
+        var ids = Set(store.media.filter { index.matches($0) }.flatMap(\.renditions).map(\.id))
+        for video in store.videos where index.matches(video) { ids.insert(video.id) }
+        return ids
     }
 
     /// Eligible and not settled yet, oldest first.

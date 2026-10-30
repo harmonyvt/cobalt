@@ -546,6 +546,8 @@ final class KeyboardGalleryModel {
         var next = reset ? [] : posts
         var added = 0
         for post in page.posts where seen.insert(post.id).inserted {
+            // a hidden post never shows in the keyboard (APP-API-CONTRACT 37.7); the server leaves them out, this is the guard
+            if post.hidden { continue }
             next.append(post)
             added += 1
         }

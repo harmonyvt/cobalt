@@ -137,7 +137,7 @@ final class DetailController {
     /// A way to make a webp from this media: the library's post (reopened when its session expired), or a
     /// session this device still holds.
     func canMakeWebp(_ item: MediaItem) -> Bool {
-        guard model.capabilities.studio else { return false }
+        guard model.capabilities.studio, !model.isHiddenPost(item) else { return false }
         if let post = item.post { return post.session != nil || post.link != nil }
         return item.local?.original?.sessionID != nil || !(item.local?.sessionIDs.isEmpty ?? true)
     }

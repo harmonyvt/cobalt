@@ -69,6 +69,7 @@ struct LibraryTile: View, Equatable {
     /// The meta line, whether the link is public, and (when it is true) that the picture did not load.
     private var accessibilityValue: String {
         var parts = [LibraryRowCopy.meta(row, now: Date()), row.isPublic ? Copy.Library2.publicBadgeA11y : Copy.Library2.privateBadgeA11y]
+        if let by = row.hiddenBy { parts.append(Copy.HiddenAlbum.byA11y(by)) }
         if let offline = OfflineMark(item: row.item, model: controller.model).spoken { parts.append(offline) }
         if let shared = Copy.Library2.sharedA11y(share) { parts.append(shared) }
         if failed { parts.append(Copy.Library2.pictureFailed) }
@@ -153,7 +154,10 @@ struct LibraryTile: View, Equatable {
                 // collection). A shared post that is public needs no globe beside it (the link says so), which keeps
                 // a 3-column iPhone tile clear of the type badge.
                 let showsShared = share.isShared && !narrow
-                if !(showsShared && row.isPublic) {
+                if let by = row.hiddenBy {
+                    // the hidden album: every file is off, so the lock says nothing; who hid the post does
+                    HiddenByBadge(by: by)
+                } else if !(showsShared && row.isPublic) {
                     Image(systemName: row.isPublic ? Symbol.Library.isPublic : Symbol.Library.isPrivate)
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(CobaltColor.badgeInk)

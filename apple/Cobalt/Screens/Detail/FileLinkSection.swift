@@ -19,6 +19,9 @@ struct FileLinkSection: View {
         case rotate
         case off
         case toPublic
+        /// Hide the post (APP-API-CONTRACT 37); `links` are the public gallery links it leaves.
+        case hide(links: Int)
+        case unhide
 
         var id: String {
             switch self {
@@ -26,6 +29,21 @@ struct FileLinkSection: View {
             case .rotate: return "rotate"
             case .off: return "off"
             case .toPublic: return "toPublic"
+            case .hide: return "hide"
+            case .unhide: return "unhide"
+            }
+        }
+    }
+
+    /// The four rows: the three links and `hidden`.
+    private enum Choice: Hashable {
+        case off, `public`, `private`, hidden
+
+        init(_ link: FileLink) {
+            switch link {
+            case .off: self = .off
+            case .public: self = .public
+            case .private: self = .private
             }
         }
     }
@@ -37,25 +55,48 @@ struct FileLinkSection: View {
 
     private var model: AppModel { controller.model }
     private var store: ShareSetStore { model.shareSets }
-    private var changing: Bool { model.isChangingVisibility(rendition) }
+    private var changing: Bool { model.isChangingVisibility(rendition) || model.library.statusInFlight }
     private var current: FileLink { model.fileLink(of: rendition) }
+    /// The library post this file is in (a hidden one is in the album); nil when the library does not list it.
+    private var post: LibraryPost? {
+        let ids = Set([rendition.file?.id, rendition.hosted?.id].compactMap { $0 })
+        guard !ids.isEmpty else { return nil }
+        let holds: (LibraryPost) -> Bool = { $0.files.contains { ids.contains($0.id) } }
+        return model.library.posts.first(where: holds) ?? model.library.hiddenPosts.first(where: holds)
+    }
+    /// The server has hidden posts and the library lists this one: the `hidden` row is offered.
+    private var canHide: Bool { model.capabilities.hidden && post != nil }
+    private var isHidden: Bool { canHide && post?.hidden == true }
     private var privateURL: URL? { model.privateURL(of: rendition) }
 
     var body: some View {
         Section {
-            Picker(selection: Binding(get: { current }, set: { choose($0) })) {
-                choiceRow(Copy.PrivateLinks.off, Copy.PrivateLinks.offDetail, Symbol.PrivateLinks.off).tag(FileLink.off)
-                choiceRow(Copy.PrivateLinks.publicLink, Copy.PrivateLinks.publicDetail, Symbol.PrivateLinks.publicLink)
-                    .tag(FileLink.public)
-                choiceRow(Copy.PrivateLinks.privateLink, Copy.PrivateLinks.privateDetail, Symbol.PrivateLinks.privateLink)
-                    .tag(FileLink.private)
-            } label: {
-                Text(Copy.PrivateLinks.section)
+            if isHidden {
+                hiddenRows
+            } else {
+                Picker(selection: Binding(get: { Choice(current) }, set: { choose($0) })) {
+                    choiceRow(Copy.PrivateLinks.off, Copy.PrivateLinks.offDetail, Symbol.PrivateLinks.off).tag(Choice.off)
+                    choiceRow(Copy.PrivateLinks.publicLink, Copy.PrivateLinks.publicDetail, Symbol.PrivateLinks.publicLink)
+                        .tag(Choice.public)
+                    choiceRow(Copy.PrivateLinks.privateLink, Copy.PrivateLinks.privateDetail, Symbol.PrivateLinks.privateLink)
+                        .tag(Choice.private)
+                    if canHide {
+                        choiceRow(Copy.Hidden.row, Copy.Hidden.rowDetail, Symbol.HiddenRules.hidden).tag(Choice.hidden)
+                    }
+                } label: {
+                    Text(Copy.PrivateLinks.section)
+                }
+                .pickerStyle(.inline)
+                .disabled(changing || controller.isDeleting)
             }
-            .pickerStyle(.inline)
-            .disabled(changing || controller.isDeleting)
 
-            if current == .private, let url = privateURL {
+            if isHidden, let post {
+                HiddenByRow(model: model, post: post)
+                Button(Copy.Hidden.unhide, systemImage: Symbol.HiddenRules.unhide) { ask(.unhide) }
+                    .disabled(changing || controller.isDeleting)
+            }
+
+            if !isHidden, current == .private, let url = privateURL {
                 LabeledContent {
                     Text(Self.display(url))
                         .font(Font.cobalt(12))
@@ -86,6 +127,7 @@ struct FileLinkSection: View {
                 .lineSpacing(2)
         }
         .motion(Motion.rows, value: current)
+        .motion(Motion.rows, value: isHidden)
         .motion(Motion.rows, value: footnote.text)
         .confirmationDialog(
             title(asking), isPresented: askingShown, titleVisibility: .visible, presenting: asking
@@ -110,6 +152,35 @@ struct FileLinkSection: View {
         }
     }
 
+    /// A hidden post: `hidden` is the one checked row, the others are greyed with "unhide first" (a tap asks to unhide).
+    @ViewBuilder
+    private var hiddenRows: some View {
+        hiddenRow(Copy.PrivateLinks.off, Copy.Hidden.unhideFirst, Symbol.PrivateLinks.off, on: false)
+        hiddenRow(Copy.PrivateLinks.publicLink, Copy.Hidden.unhideFirst, Symbol.PrivateLinks.publicLink, on: false)
+        hiddenRow(Copy.PrivateLinks.privateLink, Copy.Hidden.unhideFirst, Symbol.PrivateLinks.privateLink, on: false)
+        hiddenRow(Copy.Hidden.row, Copy.Hidden.rowDetail, Symbol.HiddenRules.hidden, on: true)
+    }
+
+    private func hiddenRow(_ title: String, _ detail: String, _ symbol: String, on: Bool) -> some View {
+        Button {
+            if !on { ask(.unhide) }
+        } label: {
+            HStack {
+                choiceRow(title, detail, symbol)
+                Spacer(minLength: 8)
+                if on {
+                    Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(Color.accentColor)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(on ? Color.primary : Color.secondary)
+        .disabled(changing || controller.isDeleting)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(on ? [.isSelected] : [])
+    }
+
     private func fact(_ title: String, _ symbol: String, _ value: String) -> some View {
         LabeledContent {
             Text(value).font(Font.cobalt(12.5)).foregroundStyle(.secondary).lineLimit(1).monospacedDigit()
@@ -121,8 +192,19 @@ struct FileLinkSection: View {
 
     // MARK: choosing
 
-    private func choose(_ want: FileLink) {
-        guard want != current, !changing else { return }
+    private func choose(_ choice: Choice) {
+        guard !changing else { return }
+        let want: FileLink
+        switch choice {
+        case .hidden:
+            let links = model.publicSets(containing: rendition).count
+            ask(.hide(links: links))
+            return
+        case .off: want = .off
+        case .public: want = .public
+        case .private: want = .private
+        }
+        guard want != current else { return }
         switch want {
         case .private:
             let links = model.publicSets(containing: rendition).map(\.id)
@@ -153,6 +235,8 @@ struct FileLinkSection: View {
         case .rotate: return Copy.PrivateLinks.rotateTitle
         case .off: return Copy.PrivateLinks.offTitle
         case .toPublic: return Copy.PrivateLinks.toPublicTitle
+        case .hide: return Copy.Hidden.hideTitle
+        case .unhide: return Copy.Hidden.unhideTitle
         case nil: return ""
         }
     }
@@ -164,6 +248,8 @@ struct FileLinkSection: View {
         case .rotate: return Copy.PrivateLinks.rotateMessage
         case .off: return Copy.PrivateLinks.offMessage
         case .toPublic: return Copy.PrivateLinks.toPublicMessage
+        case .hide(let links): return links > 0 ? Copy.Hidden.hideMessage(inLinks: links) : Copy.Hidden.hideMessage
+        case .unhide: return Copy.Hidden.unhideMessage
         }
     }
 
@@ -195,6 +281,12 @@ struct FileLinkSection: View {
                 Task { await controller.setFileLink(rendition, to: .public) }
             }
             Button(Copy.PrivateLinks.cancel, role: .cancel) {}
+        case .hide:
+            Button(Copy.Hidden.hideConfirm, role: .destructive) { setStatus(.hidden) }
+            Button(Copy.Hidden.cancel, role: .cancel) {}
+        case .unhide:
+            Button(Copy.Hidden.unhide) { setStatus(.off) }
+            Button(Copy.Hidden.cancel, role: .cancel) {}
         }
     }
 
@@ -219,6 +311,16 @@ struct FileLinkSection: View {
         }
     }
 
+    /// Hides the post, or brings it back as only you (APP-API-CONTRACT 37): the library moves it between its list and
+    /// the album once the server answers; a refusal is words under the section.
+    private func setStatus(_ status: PostStatus) {
+        guard let post, !changing else { return }
+        Task {
+            let result = await controller.setPostStatus(status, post: post, key: rendition.id)
+            if result.changed { shell.showStatus(result.words(for: status)) }
+        }
+    }
+
     /// The links (for the public gallery links the file is in) and the private links' numbers, once per detail.
     private func loadLinks() async {
         guard model.capabilities.privateLinks else { return }
@@ -235,6 +337,7 @@ struct FileLinkSection: View {
     private var footnote: (text: String, isProblem: Bool) {
         if changing { return (Copy.PrivateLinks.working, false) }
         if let failed = controller.visibilityFailed[rendition.id] { return (failed, true) }
+        if isHidden { return (Copy.Hidden.note, false) }
         switch current {
         case .private: return (Copy.PrivateLinks.footnote, false)
         case .public: return (Copy.Media.publicOn, false)

@@ -30,6 +30,9 @@ public struct Capabilities: Sendable, Codable, Equatable {
         /// `limits.edit_pitch` (APP-API-CONTRACT 31.16): the server knows a clip's `pitch`. False when absent: the app hides the
         /// pitch control and never sends a non-zero pitch (an older server refuses the key).
         public var editPitch: Bool = false
+        /// `limits.status_ids` (APP-API-CONTRACT 37.4): the most ids one `POST /library/status` takes. 200 when absent;
+        /// kept within 1...200.
+        public var statusIds: Int = 200
 
         public static let fork = Limits(
             maxWebpSeconds: 10, minWebpSeconds: 0.5, webpWidths: [320, 480], renderFPS: 15,
@@ -160,6 +163,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     public var about: Bool = false
     /// `features.about_sound` (34): the descriptions also hear the post's sound (Workers AI transcript). False when absent.
     public var aboutSound: Bool = false
+    /// `features.hidden` (APP-API-CONTRACT 37): posts can be hidden (`POST /library/status`, `GET /library?hidden=1`) and
+    /// auto-hide rules exist (`/hidden/rules`). True once the server's migration 0025 is applied. False when absent: no
+    /// hidden chip, no status menu, no rules in settings.
+    public var hidden: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

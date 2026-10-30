@@ -14,7 +14,7 @@ extension PreviewScenario {
     /// The preview server has `features.chat`.
     var hasChat: Bool {
         switch self {
-        case .happy, .renditions, .chatEmpty, .chatFail, .chatReplyFails, .chatConfirm: return true
+        case .happy, .renditions, .chatEmpty, .chatFail, .chatReplyFails, .chatConfirm, .hidden: return true
         default: return false
         }
     }

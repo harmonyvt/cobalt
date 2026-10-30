@@ -131,9 +131,16 @@ final class PipelineContext {
 
     /// One page of `GET /library` in the newest shape the server speaks: `v=3` with `features.gallery` (a gallery's items
     /// and made files, each post's `kind`), else `v=2` with `features.visibility`, else the plain one.
+    ///
+    /// A post the server calls hidden (`hidden: true`, APP-API-CONTRACT 37.2) never leaves here: the library, the offline pull,
+    /// the Shortcuts actions and the gallery lookups all read their pages through this, and none lists a hidden post. (The server
+    /// leaves them out of this route already; this is the second lock.)
     func libraryPage(cursor: String?, limit: Int) async throws -> LibraryPage {
-        if capabilities.gallery { return try await client.library(cursor: cursor, limit: limit, v3: true) }
-        return try await client.library(cursor: cursor, limit: limit, v2: capabilities.visibility)
+        var page: LibraryPage
+        if capabilities.gallery { page = try await client.library(cursor: cursor, limit: limit, v3: true) }
+        else { page = try await client.library(cursor: cursor, limit: limit, v2: capabilities.visibility) }
+        if page.posts.contains(where: \.hidden) { page.posts.removeAll { $0.hidden } }
+        return page
     }
 
     /// `GET /library/search` with the posts in the same shape `libraryPage` asks for.

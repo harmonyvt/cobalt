@@ -27,7 +27,7 @@ struct DetailMenu: View {
     }
 
     /// With chat on the server, a media that has a library post can start a thread (APP-API-CONTRACT 27.4).
-    private var showsAskAbout: Bool { model.capabilities.chat && item.post != nil }
+    private var showsAskAbout: Bool { model.capabilities.chat && item.post != nil && !model.isHiddenPost(item) }
 
     /// Some of the media is kept offline and the rest can still be fetched (nothing runs for it right now).
     private var showsKeepEverything: Bool {

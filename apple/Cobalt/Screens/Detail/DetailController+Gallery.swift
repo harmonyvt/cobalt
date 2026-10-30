@@ -240,7 +240,7 @@ extension DetailController {
     /// The server can make a webp of this item: the post's session is open (or this device holds the session), and the
     /// item's file is here or on the server.
     func canMakeWebp(ofItem r: Rendition, in item: MediaItem) -> Bool {
-        guard model.capabilities.gallery, model.capabilities.studio, r.isMotionItem else { return false }
+        guard !model.isHiddenPost(item), model.capabilities.gallery, model.capabilities.studio, r.isMotionItem else { return false }
         guard r.local?.fileURL != nil || r.file != nil else { return false }
         if let session = item.post?.session { return session.status == .ready && session.expiresAt > Date() }
         return item.post != nil || item.local?.sessionIDs.first != nil
@@ -281,7 +281,7 @@ extension DetailController {
     enum MakeAvailability: Equatable { case ready, serverCant, expired, needsTwo }
 
     func makeAvailability(_ item: MediaItem) -> MakeAvailability {
-        guard model.capabilities.gallery, model.capabilities.galleryMake else { return .serverCant }
+        guard model.capabilities.gallery, model.capabilities.galleryMake, !model.isHiddenPost(item) else { return .serverCant }
         guard item.items.count >= 2 else { return .needsTwo }
         if let session = item.post?.session {
             return session.status == .ready && session.expiresAt > Date() ? .ready : .expired

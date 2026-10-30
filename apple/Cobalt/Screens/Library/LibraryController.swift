@@ -19,8 +19,9 @@ struct LibraryReveal: Equatable {
 }
 
 extension LibraryRow {
-    /// Whether select mode can tick it. Galleries are not shared, so they cannot be ticked.
-    var shareable: Bool { kind != .gallery }
+    /// Whether select mode can tick it. Galleries are not shared, so they cannot be ticked, except in the hidden album
+    /// (a hidden post is a post whatever it holds, and the album offers `unhide` and `status…`, never a share).
+    var shareable: Bool { kind != .gallery || item.post?.hidden == true }
 }
 
 /// One row of the card shown while ticked posts are being copied for the share sheet.
@@ -123,6 +124,26 @@ final class LibraryController {
     /// The sky map (`SkyMap/LibrarySkyMapHook.swift`) is open.
     var showingSkyMap = false
 
+    // The hidden album (APP-API-CONTRACT 37.7; `LibraryController+Hidden.swift`). All in memory: nothing here is stored.
+    /// The owner passed the lock for this visit to the album. Dropped by `relockHidden()`.
+    var hiddenUnlocked = false
+    /// The system sheet (Face ID, Touch ID, passcode) is up.
+    var unlocking = false
+    /// The last try failed (not cancelled): the locked card says so.
+    var lockFailed = false
+    /// What the system will ask, for the locked card's button.
+    var lockMethod: Copy.HiddenAlbum.LockMethod = .passcode
+    /// The album was opened and its first page has not come back yet: a spinner, not `nothing hidden`.
+    var albumPending = false
+    /// A `status…` choice waiting on its confirm (hide, make public).
+    var asking: StatusAsk?
+    /// A `status…` change is on its way (the pill's buttons wait).
+    var changingStatus = false
+    /// Bumped whenever the lock is dropped: a sheet that answers after that is ignored.
+    @ObservationIgnored var lockEpoch = 0
+    /// The system sheet was already asked for in this lock, so a return from the sheet does not ask again.
+    @ObservationIgnored var lockPrompted = false
+
     /// True on the phone layout (a push); false where the detail is an inspector.
     @ObservationIgnored var compact = true
     /// Set once the owner (or the width, the first time) has decided the inspector's state.
@@ -171,8 +192,10 @@ final class LibraryController {
     }
 
     /// The media the inspector shows: the loaded post whatever the filter says (else the post a search returned).
+    /// A hidden post resolves only in the open (unlocked) album; everywhere else it is nil (APP-API-CONTRACT 37.7).
     var selectedItem: MediaItem? {
-        guard let id = selection, let post = library.post(id: id) else { return nil }
+        guard let id = selection else { return nil }
+        guard let post = (albumOpen ? library.hiddenPost(id: id) : nil) ?? library.post(id: id) else { return nil }
         return model.mediaItem(for: post)
     }
 
@@ -444,6 +467,7 @@ final class LibraryController {
     /// `make from this post…`: a gallery of 2+ items on a server that makes things.
     func canMakeFromPost(_ item: MediaItem) -> Bool {
         item.kind == .gallery && item.itemCount >= 2 && model.capabilities.gallery && model.capabilities.galleryMake
+            && !model.isHiddenPost(item)       // nothing is made from a hidden post: it could end up public
     }
 
     /// "make public" / "make private…": the server takes the switch for this media's video (the same switch the
@@ -574,6 +598,7 @@ final class LibraryController {
 
     /// `make from this post…`: the combine sheet on this gallery.
     func makeFromPost(_ item: MediaItem) {
+        guard !model.isHiddenPost(item) else { return }
         combining = item
     }
 
@@ -617,10 +642,24 @@ final class LibraryController {
     /// The next page near the end of the list (the whole-library modes already load everything).
     func loadMoreIfNeeded() {
         guard !library.needsWholeLibrary else { return }
-        Task { await library.loadMore() }
+        loadMoreAgain()
+    }
+
+    /// The footer's `try again`, and the next page near the end: the album's pages while it is open.
+    func loadMoreAgain() {
+        if library.showingHidden {
+            Task { await library.loadMoreHidden() }
+        } else {
+            Task { await library.loadMore() }
+        }
     }
 
     func refresh() async {
+        if library.showingHidden {
+            if library.needsWholeLibrary { await library.loadAll() } else { await library.loadHidden() }
+            reload += 1
+            return
+        }
         await library.refresh()
         if library.needsWholeLibrary { await library.loadAll() }
         reload += 1
