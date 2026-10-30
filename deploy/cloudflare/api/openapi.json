@@ -4531,6 +4531,41 @@
           "input": "read by the handler",
           "ai": "hidden"
         }
+      },
+      "patch": {
+        "operationId": "share_sets.update",
+        "summary": "PATCH /share/sets/:id",
+        "tags": [
+          "share_sets"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{19}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
       }
     },
     "/stage": {

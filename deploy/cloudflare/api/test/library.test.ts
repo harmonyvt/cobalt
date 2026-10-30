@@ -993,6 +993,7 @@ describe("GET /capabilities", () => {
                 share_groups: false,
                 // section 36: with the share host
                 private_links: false,
+                share_set_edit: false,
                 // section 37: migration 0025 is applied in the tests
                 hidden: true,
                 chat: false,
