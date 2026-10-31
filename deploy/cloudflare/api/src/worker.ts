@@ -9,6 +9,7 @@ import { decide, isStudioPath } from "./gate";
 import { SERVICE_HEADER, stripInternalHeaders } from "./headers";
 import type { PublishBucket } from "./publish";
 import { serviceAuthorized } from "./service-auth";
+import { countryOf } from "./keys";
 import { handleOp, opBase, REGISTRY, type Registry } from "./registry/index";
 import type { RouteHost } from "./registry/op";
 import type { OriginalsBucket } from "./studio";
@@ -181,7 +182,7 @@ async function handleInner(
 
     // Every route is an op (section 33.12).
     const registry = stageEdge.registry ?? REGISTRY;
-    const byOp = await handleOp(registry, opBase(env, container, edge, registry, stageEdge), { request, url, service: isService, allowOrigin });
+    const byOp = await handleOp(registry, opBase(env, container, edge, registry, stageEdge), { request, url, service: isService, allowOrigin, country: countryOf(incoming) });
     if (byOp) return byOp;
 
     // What no op takes: preflights, and a bodyless 404 for everything else.

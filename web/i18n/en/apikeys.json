@@ -1,6 +1,6 @@
 {
-    "title": "api keys",
-    "description": "keys let apps and scripts use your cobalt. this browser needs one too, or downloads won't work.",
+    "title": "keys for tools",
+    "description": "for things that can't sign in: claude code's mcp, shortcuts, scripts. this browser signs itself in, so it does not need one.",
 
     "loading": "loading your keys...",
     "unavailable": "key management is only available on the deployed site.",

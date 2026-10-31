@@ -281,3 +281,30 @@ describe("routing", () => {
         expect(assetCalls).toEqual(["/", "/settings/instances", "/api/keysx", "/api"]);
     });
 });
+
+// Section 42: device sessions share the api_keys table (kind = 'session'); /api/keys only ever sees kind = 'key'.
+describe("device sessions are not keys (section 42)", () => {
+    const seedSession = (id: string, revoked: number | null = null) =>
+        db.raw
+            .prepare(
+                "INSERT INTO api_keys (id, name, key_hash, prefix, created_at, last_used_at, kind, device, platform, email, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, 'session', ?, 'ios', ?, ?, ?)",
+            )
+            .run(id, "phone", "h-" + id, "abcd1234", NOW + 5000, NOW + 5000, "phone", OWNER, NOW + 10_000_000, revoked);
+    it("GET leaves sessions out", async () => {
+        const a = await json(await create("tool"));
+        seedSession(crypto.randomUUID());
+        expect((await json(await call("GET", "/api/keys"))).keys.map((k: { id: string }) => k.id)).toEqual([a.id]);
+    });
+    it("sessions do not count against the key cap", async () => {
+        for (let i = 0; i < 60; i++) seedSession(crypto.randomUUID());
+        for (let i = 0; i < MAX_KEYS; i++) expect((await create(`k${i}`)).status).toBe(201);
+        expect((await create("one too many")).status).toBe(409);
+    });
+    it("DELETE never revokes a session: 404, the row untouched", async () => {
+        const id = crypto.randomUUID();
+        seedSession(id);
+        const r = await call("DELETE", `/api/keys/${id}`);
+        expect(r.status).toBe(404);
+        expect(db.raw.prepare("SELECT revoked_at FROM api_keys WHERE id = ?").get(id)).toEqual({ revoked_at: null });
+    });
+});

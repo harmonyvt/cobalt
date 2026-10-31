@@ -112,6 +112,12 @@ the files and a real run before anything is called done.
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.
+- Accounts (`APP-API-CONTRACT.md` section 42): Cloudflare Access does the login; each device holds a session, an
+  `api_keys` row with `kind = 'session'` (migration 0026) sent exactly like a client key, 90-day sliding expiry in
+  `lookupKey`, at most 50. Apps: web Worker `GET /api/auth/app` (one-time code in D1 `auth_handoffs`, PKCE, 302 to
+  `cobalt-apple://signed-in`), then the API's `POST /auth/exchange`; the web app mints its own via `POST /api/auth/web`.
+  Owner routes `/auth/*` in `registry/ops/auth.ts`; `/api/keys` only sees `kind = 'key'` ("keys for tools"). Minting SQL is
+  duplicated in `{api,web}/src/sessions.ts`, pinned by `web/test/sessions.test.ts`.
 - Runtime lessons (all hit live): `pipeTo()` between streams is not implemented in the
   Workers runtime (copy with a reader/writer loop); AbortSignal timeouts on containerFetch
   are not honoured inside the DO (race your own timeout); work after a DO response does not

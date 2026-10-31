@@ -30,6 +30,8 @@ struct SettingsScreen: View {
     private var form: some View {
         Form {
             serverSection
+            // accounts (APP-API-CONTRACT 42.6): replaces the api key row on a server with `features.accounts`
+            AccountSettingsSection(model: model)
             // made again when a key is pasted or reset, so it asks the server with the new key
             McpSettingsSection(model: model).id(settings.hasAPIKey)
             makingSection
@@ -93,19 +95,22 @@ struct SettingsScreen: View {
                     Label(Copy.serverFeaturesTitle, systemImage: Symbol.quality)
                 }
             }
-            row(Copy.apiKey, Symbol.key) {
-                HStack(spacing: 8) {
-                    if !settings.hasAPIKey {
-                        value(Copy.noKey)
-                    } else if summary.key == .invalid {
-                        Text(Copy.keyRevoked).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
-                    } else {
-                        value(summary.keyName.map { Copy.keyLine(name: $0) } ?? Copy.keySet).lineLimit(1).minimumScaleFactor(0.8)
+            // a server with accounts signs in instead (settings › account below); the paste stays for every other server
+            if !model.capabilities.accounts {
+                row(Copy.apiKey, Symbol.key) {
+                    HStack(spacing: 8) {
+                        if !settings.hasAPIKey {
+                            value(Copy.noKey)
+                        } else if summary.key == .invalid {
+                            Text(Copy.keyRevoked).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
+                        } else {
+                            value(summary.keyName.map { Copy.keyLine(name: $0) } ?? Copy.keySet).lineLimit(1).minimumScaleFactor(0.8)
+                        }
+                        Button { pasteKey() } label: {
+                            Label(settings.hasAPIKey ? Copy.pasteNewKey : Copy.pasteKey, systemImage: Symbol.paste)
+                        }
+                        .buttonStyle(.cobaltIcon(.small))
                     }
-                    Button { pasteKey() } label: {
-                        Label(settings.hasAPIKey ? Copy.pasteNewKey : Copy.pasteKey, systemImage: Symbol.paste)
-                    }
-                    .buttonStyle(.cobaltIcon(.small))
                 }
             }
             if let keyError { problem(keyError) }
@@ -113,7 +118,7 @@ struct SettingsScreen: View {
         } header: {
             header(Copy.groupServer)
         } footer: {
-            footer(Copy.keyFootnote)
+            if !model.capabilities.accounts { footer(Copy.keyFootnote) }
         }
     }
 
@@ -266,6 +271,9 @@ private struct SettingsRowLabelStyle: LabelStyle {
 #if DEBUG
 #Preview("settings · happy") {
     PreviewHost(.happy, tab: .settings) { SettingsScreen(model: $0) }
+}
+#Preview("settings · signed out (accounts)") {
+    PreviewHost(.signedOut, tab: .settings) { SettingsScreen(model: $0) }
 }
 #Preview("settings · revoked key") {
     PreviewHost(.revokedKey, tab: .settings) { SettingsScreen(model: $0) }

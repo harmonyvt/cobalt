@@ -201,6 +201,8 @@ public struct PreviewClient: CobaltClient {
     let privateState = PreviewPrivateState()
     /// The hidden posts and auto-hide rules the "server" holds (`PreviewHidden.swift`).
     let hiddenState = PreviewHiddenState()
+    /// The devices, keys and sign-in of the "server" (`PreviewAccount.swift`).
+    let accountState = PreviewAccountState()
 
     public var baseURL: URL { PreviewData.base }
 
@@ -237,6 +239,9 @@ public struct PreviewClient: CobaltClient {
         if scenario.hasStage {
             stageState.seed(scenario, now: now)
         }
+        if scenario.hasAccounts {
+            accountState.seed(scenario, now: now)
+        }
         if scenario.hasEditor {
             editorState.seed(scenario, now: now, timeScale: scale)
         }
@@ -263,11 +268,25 @@ public struct PreviewClient: CobaltClient {
         caps.line = lineMode.hasLine
         caps.queue = queueFeature && caps.kind == .fork
         caps.search = searchMode != .off && caps.kind == .fork
+        if scenario.startsSignedOut {
+            // refused until a preview sheet signs in (APP-API-CONTRACT 42.2)
+            if accountState.signedIn { caps.key = .valid; caps.keyName = Self.previewDeviceName }
+            else { caps.key = scenario == .firstLaunch ? .missing : .invalid; caps.keyName = nil }
+        }
         return caps
+    }
+
+    static var previewDeviceName: String {
+        #if os(macOS)
+        return "mac studio"
+        #else
+        return "harmony's iphone"
+        #endif
     }
 
     public func resolve(_ link: URL) async throws -> CobaltResult {
         server.recordLineCall("POST /")
+        if let refusal = accountRefusal() { throw refusal }
         switch scenario {
         case .revokedKey:
             throw CobaltError.api(code: "error.api.auth.key.invalid", httpStatus: 401)

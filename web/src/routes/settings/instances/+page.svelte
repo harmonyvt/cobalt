@@ -6,6 +6,7 @@
     import SettingsInput from "$components/settings/SettingsInput.svelte";
     import SettingsToggle from "$components/buttons/SettingsToggle.svelte";
     import SettingsCategory from "$components/settings/SettingsCategory.svelte";
+    import AccountSettings from "$components/settings/AccountSettings.svelte";
     import ApiKeys from "$components/settings/ApiKeys.svelte";
     import McpLink from "$components/settings/McpLink.svelte";
 </script>
@@ -34,6 +35,8 @@
         {$t("settings.processing.enable_custom.description")}
     </div>
 </SettingsCategory>
+
+<AccountSettings />
 
 <ApiKeys />
 

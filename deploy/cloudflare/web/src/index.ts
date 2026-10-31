@@ -1,3 +1,4 @@
+import { handleAuth } from "./auth";
 import { handleKeys, type Env } from "./keys";
 import { handleLibrary } from "./library";
 import { handleLogs } from "./logs";
@@ -6,7 +7,7 @@ import { handleStudio } from "./studio";
 
 export type { Env };
 
-// `assets.runWorkerFirst` routes only /api/keys(/*), /api/mcp(/*), /studio(/*), /library(/*),
+// `assets.runWorkerFirst` routes only /api/keys(/*), /api/auth(/*), /api/mcp(/*), /studio(/*), /library(/*),
 // /api/library(/*), /logs and /api/logs(/*) here; every other request is answered by the static assets
 // without invoking this Worker.
 // The fallthrough below is a safety net in case that routing is ever widened.
@@ -15,6 +16,9 @@ export default {
         const { pathname } = new URL(request.url);
         if (pathname === "/api/keys" || pathname.startsWith("/api/keys/")) {
             return handleKeys(request, env);
+        }
+        if (pathname === "/api/auth" || pathname.startsWith("/api/auth/")) {
+            return handleAuth(request, env);
         }
         if (pathname === "/api/mcp" || pathname.startsWith("/api/mcp/")) {
             return handleMcp(request, env);

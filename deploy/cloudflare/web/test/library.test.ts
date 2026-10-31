@@ -273,7 +273,7 @@ describe("routing config", () => {
     it("runs the Worker first for the library page and API, and keeps the rest", () => {
         const rwf = (config as any).worker.assets.runWorkerFirst as string[];
         expect(rwf).toEqual(expect.arrayContaining(["/library", "/library/*", "/api/library", "/api/library/*", "/api/keys", "/api/keys/*", "/studio", "/studio/*"]));
-        expect(rwf).toHaveLength(13); // keys 2, mcp 2 (mcp.test.ts), studio 2, library 4, logs 3 (logs.test.ts)
+        expect(rwf).toHaveLength(15); // keys 2, auth 2 (auth.test.ts), mcp 2 (mcp.test.ts), studio 2, library 4, logs 3 (logs.test.ts)
     });
     it("binds the buckets, the API service and the internal key", () => {
         const e = (config as any).worker.env;
