@@ -75,7 +75,7 @@ export interface WorkerEnv {
     // "What it's about" (section 34): the description model (a plain var; the key is ANTHROPIC_API_KEY) and Workers AI,
     // which transcribes the sound with Whisper (about-writer.ts). Without AI the words are written without the sound.
     ABOUT_MODEL?: string;
-    // Timed transcripts (section 47.1): the speech model, "whisper" (default) or "assemblyai".
+    // Timed transcripts (section 47.1): the speech model, "assemblyai" (default) or "whisper".
     TRANSCRIBE_MODEL?: string;
     AI?: { run(model: string, inputs: Record<string, unknown>): Promise<unknown> };
     // Stage (section 30): https://<stage host>/ (a plain var; the Worker answers that host itself, before the gate) and

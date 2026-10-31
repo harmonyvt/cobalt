@@ -204,12 +204,12 @@ export function assemblyFrom(ai: AiRunner | undefined | null): Transcriber | nul
     };
 }
 
-// The speech model named by TRANSCRIBE_MODEL: "whisper" (default, cheapest) or "assemblyai" (most accurate). Switching
+// The speech model named by TRANSCRIBE_MODEL: "assemblyai" (default, most accurate) or "whisper" (cheapest). Switching
 // hears every post again on the next cron runs, since a transcript remembers the model that heard it.
 export function transcriberFrom(ai: AiRunner | undefined | null, name?: string | null): Transcriber | null {
     const n = (name ?? "").trim().toLowerCase();
-    if (n === "assemblyai" || n === ASSEMBLY_MODEL) return assemblyFrom(ai);
-    return whisperFrom(ai);
+    if (n === "whisper" || n === WHISPER_MODEL) return whisperFrom(ai);
+    return assemblyFrom(ai);
 }
 
 // ---- the cron's run -------------------------------------------------------------------------------------------------

@@ -496,7 +496,7 @@ describe("GET /library/transcript (47.3)", () => {
 });
 
 describe("the speech model switch (47.1)", () => {
-    it("TRANSCRIBE_MODEL picks Whisper by default and AssemblyAI on request", async () => {
+    it("TRANSCRIBE_MODEL picks AssemblyAI by default and Whisper on request", async () => {
         const calls: { model: string; inputs: Record<string, unknown> }[] = [];
         const ai = {
             run: async (model: string, inputs: Record<string, unknown>) => {
@@ -515,7 +515,7 @@ describe("the speech model switch (47.1)", () => {
                 };
             },
         };
-        expect(transcriberFrom(ai, undefined)!.model).toBe("@cf/openai/whisper-large-v3-turbo");
+        expect(transcriberFrom(ai, undefined)!.model).toBe(ASSEMBLY_MODEL);
         expect(transcriberFrom(ai, " Whisper ")!.model).toBe("@cf/openai/whisper-large-v3-turbo");
         expect(transcriberFrom(undefined, "assemblyai")).toBeNull();
         const t = transcriberFrom(ai, "AssemblyAI")!;

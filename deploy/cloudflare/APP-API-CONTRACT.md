@@ -5316,10 +5316,11 @@ meaning), and a vector per stretch of speech. Section numbers 45 and 46 (and mig
 - Lines (`linesOf`): words in order, times never running backwards, rounded to 0.01 s. A new line starts at each segment,
   after a pause of 1.2 s or more, after a sentence end once the line holds 24 characters, or before the line would pass
   84 characters or 6 s. At most 800 lines and 6,000 words a post.
-- The speech model is the plain var `TRANSCRIBE_MODEL`: `whisper` (default, above, $0.0005 a minute) or `assemblyai`
-  (Workers AI `assemblyai/universal-3.5-pro`, about $0.0035 a minute, more accurate; the MP3 goes as a `data:` URI in
+- The speech model is the plain var `TRANSCRIBE_MODEL`: `assemblyai` (the default and the deployed value; Workers AI
+  `assemblyai/universal-3.5-pro`, about $0.0035 a minute, most accurate; the MP3 goes as a `data:` URI in
   `audio_url`, `language_detection` on; `words: [{ text, start, end }]` in milliseconds, one segment per `utterances` entry
-  when present: `segmentsOfAssembly`). A transcript remembers its model, so changing the var hears every post again.
+  when present: `segmentsOfAssembly`) or `whisper` (above, about $0.0005 a minute). The writer's `media_about.transcript`
+  comes from the same model. A transcript remembers its model, so changing the var hears every post again.
 - The probe's sound (34.2) is now the first **600 s** (helper `ABOUT_AUDIO_SECONDS`, 2.4 MB of MP3 at most; the Durable
   Object accepts up to 3 MB). Posts probed before keep their first 180 s until they are probed again.
 
