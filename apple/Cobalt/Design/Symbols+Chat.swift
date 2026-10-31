@@ -64,3 +64,16 @@ extension Symbol {
     /// "make video" (APP-API-CONTRACT 45): the thread's menu, a message's menu, a chat video's queue row.
     static let chatVideo = "film"
 }
+
+extension Symbol {
+    /// A reply's activity row: done, still going, something failed.
+    static let chatActivityDone = "checkmark"
+    static let chatActivityFailed = "exclamationmark"
+    /// The composer's attach button and a picked tile in the attach sheet.
+    static let chatAttach = "plus"
+    static let chatPicked = "checkmark.circle.fill"
+    static let chatUnpicked = "circle"
+    /// A reply's actions.
+    static let chatCopyReply = "doc.on.doc"
+    static let chatAskAgain = "arrow.clockwise"
+}

@@ -71,6 +71,8 @@ struct ChatThreadScreen: View {
         .navigationTitle(title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        // on iPhone a thread gets the whole screen, like Messages: the composer sits where the tab bar was
+        .toolbar(tier == .compact ? .hidden : .automatic, for: .tabBar)
         #endif
         .toolbar {
             #if os(iOS)
@@ -126,6 +128,31 @@ struct ChatThreadScreen: View {
     /// Follow growth now: on while the owner hasn't scrolled away and something is still adding to the list.
     private var keepsToBottom: Bool { following && (busy || Date.now < settleUntil) }
 
+    /// Which reply started which helper: the agents card of a `started` call names them. A helper no card names (an
+    /// older thread) sits on the newest reply.
+    private func helperMap(_ content: ChatThreadContent) -> [String: [ChatAgent]] {
+        let list = store.agents(of: threadID).agents
+        guard !list.isEmpty, !readOnly else { return [:] }
+        var startedIn: [String: String] = [:]
+        for message in content.messages where message.role == .assistant {
+            for call in message.steps.flatMap(\.calls) {
+                guard case .agents(let card) = call.card, card.change == .started else { continue }
+                for row in card.agents where startedIn[row.id] == nil { startedIn[row.id] = message.id }
+            }
+        }
+        let newest = content.messages.last { $0.role == .assistant }?.id
+        var out: [String: [ChatAgent]] = [:]
+        for agent in list {
+            if let id = startedIn[agent.id] ?? newest { out[id, default: []].append(agent) }
+        }
+        return out
+    }
+
+    private func askedHelpers() -> Set<String> {
+        let list = store.agents(of: threadID)
+        return Set(list.agents.map(\.id).filter { list.hasAsked($0) })
+    }
+
     private func messages(_ content: ChatThreadContent) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -134,12 +161,16 @@ struct ChatThreadScreen: View {
                         ChatHelperMail(mail: store.agents(of: parent).mail(with: threadID))
                     }
                     if content.messages.isEmpty, !readOnly { emptyHint }
+                    let helpers = helperMap(content)
+                    let asked = askedHelpers()
                     ForEach(content.messages) { message in
                         ChatMessageView(
                             model: model, message: message, content: content, tier: tier, open: open,
                             retry: { send($0, attaching: false) }, canRetry: !busy,
                             answer: { answer($0, yes: $1) },
                             answering: message.confirm.map { store.answeringConfirms.contains($0.id) } ?? false,
+                            helpers: helpers[message.id] ?? [], askedHelpers: helpers[message.id] == nil ? [] : asked,
+                            isLast: message.id == content.messages.last?.id,
                             canMakeVideo: canMakeVideo && !busy,
                             makeVideo: { controller.video = ChatVideoRequest(threadID: threadID, from: $0) })
                             .equatable()

@@ -5201,8 +5201,8 @@ message's `posts` map.
 - **`GET /chat/threads/<id>/agents`** (keyed, web CORS, no-store): `{ agents: Agent[], mail: AgentMail[] }` (the last 50
   messages between the thread and its sub-agents, oldest first). 404 `error.chat.not_found` for an unknown thread; before
   the migration, empty lists.
-- The thread screen shows a **helpers** strip under the header while the thread has sub-agents: one chip each (name,
-  status dot, `activity` while running), refreshed every 3 s while any is `queued` or `running` (and after each reply's
+- The thread screen shows the **helpers** as chips at the top of the reply that started them (the `agents` card of its
+  `started` call; a helper no card names sits on the newest reply): one chip each (name, status dot, `activity` while running), refreshed every 3 s while any is `queued` or `running` (and after each reply's
   `done` event), at most every 30 s otherwise. Tapping a chip opens the sub-agent's thread read-only (no composer), with its
   task as the first bubble and a footer for its status; the mail with the parent is listed at the top of that sheet.
 - The `agents` card draws the rows with the same chips; `sent` shows an arrow line "to <name>: <text>"; `inbox` the

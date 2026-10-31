@@ -130,6 +130,11 @@ struct ChatMessageView: View, Equatable {
     var answer: (ChatConfirm, Bool) -> Void = { _, _ in }
     /// The card's answer is on its way.
     var answering = false
+    /// The helpers this reply started (APP-API-CONTRACT 43.6), live from the thread's agent list.
+    var helpers: [ChatAgent] = []
+    var askedHelpers: Set<String> = []
+    /// The thread's newest message: a finished reply there gets its copy / ask-again icons.
+    var isLast = false
     /// "make video from here" is offered (APP-API-CONTRACT 45: `features.chat_video`, no reply running).
     var canMakeVideo = false
     /// "make video from here": this message's id.
@@ -141,6 +146,7 @@ struct ChatMessageView: View, Equatable {
     /// skips its body (closures are the screen's own and do the same thing every pass, so they are not compared).
     nonisolated static func == (a: Self, b: Self) -> Bool {
         guard a.message == b.message, a.tier == b.tier, a.canRetry == b.canRetry, a.answering == b.answering,
+              a.helpers == b.helpers, a.askedHelpers == b.askedHelpers, a.isLast == b.isLast,
               a.canMakeVideo == b.canMakeVideo,
               a.content.thread.id == b.content.thread.id, a.content.posts == b.content.posts else { return false }
         // only a failed reply shows (and retries) the words it answered
@@ -180,14 +186,13 @@ struct ChatMessageView: View, Equatable {
     // MARK: Claude
 
     private var reply: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // a confirm step is drawn as the card below, not as a code row
-            ForEach(message.steps.filter { $0.kind != "confirm" }) { step in
-                ChatStepRow(step: step)
-                // what the step's calls did, as cards (APP-API-CONTRACT 38)
-                ForEach(step.cards) { entry in
-                    ChatToolCardView(model: model, card: entry.card, posts: content.posts, open: open)
-                }
+        // a confirm step is drawn as the card below, not in the activity row
+        let steps = message.steps.filter { $0.kind != "confirm" }
+        return VStack(alignment: .leading, spacing: 10) {
+            if !helpers.isEmpty { ChatReplyHelpers(helpers: helpers, asked: askedHelpers) }
+            // every step, chip and tool card folded into one line (APP-API-CONTRACT 38, chat-ui mockup)
+            if !steps.isEmpty {
+                ChatActivityView(model: model, steps: steps, posts: content.posts, open: open)
             }
             if !message.text.isEmpty {
                 ChatMarkdownText(markdown: message.text)
@@ -198,7 +203,10 @@ struct ChatMessageView: View, Equatable {
                 ChatWorkingDots()
             }
             if !message.postIDs.isEmpty {
-                ChatPostStrip(model: model, ids: message.postIDs, posts: content.posts, side: 104, showsTitles: true, open: open)
+                // the posts the reply picked lead: tall tiles with their titles
+                ChatPostStrip(
+                    model: model, ids: message.postIDs, posts: content.posts, side: 118, showsTitles: true, height: 150,
+                    open: open)
             }
             if let collage = message.collage {
                 ChatCollageView(
@@ -211,10 +219,35 @@ struct ChatMessageView: View, Equatable {
                 ChatConfirmCard(card: card, answering: answering) { answer(card, $0) }
             }
             if message.status == .error { failure }
+            if isLast, message.status == .done, !message.text.isEmpty { actions }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Chat.messageA11y(role: .assistant, text: message.text))
+    }
+
+    /// Under the newest finished reply: copy its words, ask the same thing again.
+    private var actions: some View {
+        let prompt = content.prompt(before: message)
+        return HStack(spacing: 2) {
+            Button {
+                Pasteboard.copy(message.text)
+                shell.showStatus(Copy.Media.copied)
+            } label: {
+                Label(Copy.ChatActivity.copy, systemImage: Symbol.chatCopyReply)
+            }
+            .buttonStyle(.cobaltIcon(.small))
+            if let prompt {
+                Button {
+                    retry(prompt.text)
+                } label: {
+                    Label(Copy.ChatActivity.again, systemImage: Symbol.chatAskAgain)
+                }
+                .buttonStyle(.cobaltIcon(.small))
+                .disabled(!canRetry)
+            }
+        }
+        .padding(.leading, -5)
     }
 
     private var failure: some View {
@@ -377,6 +410,8 @@ struct ChatWorkingDots: View {
 /// shows the code, what it logged, what it returned and its error, in monospace.
 struct ChatStepRow: View {
     let step: ChatStep
+    /// Inside a reply's open activity trail: no box of its own.
+    var flat = false
 
     @State private var expanded = false
 
@@ -407,9 +442,11 @@ struct ChatStepRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, flat ? 0 : 12)
+        .padding(.vertical, flat ? 0 : 4)
+        .background {
+            if !flat { RoundedRectangle(cornerRadius: 10, style: .continuous).fill(CobaltColor.surface) }
+        }
         .animation(Motion.card, value: expanded)
         .animation(Motion.card, value: step.calls.count)
         .accessibilityValue(Copy.Chat.stepA11y(title, expanded: expanded))
@@ -472,6 +509,8 @@ struct ChatPostStrip: View {
     let posts: [String: LibraryPost]
     let side: CGFloat
     let showsTitles: Bool
+    /// Taller than wide (a reply's picks); nil is square.
+    var height: CGFloat? = nil
     let open: (LibraryPost) -> Void
 
     var body: some View {
@@ -479,9 +518,9 @@ struct ChatPostStrip: View {
             HStack(alignment: .top, spacing: side > 60 ? 8 : 4) {
                 ForEach(Array(ids.enumerated()), id: \.offset) { _, id in
                     if let post = posts[id] {
-                        ChatPostTile(model: model, post: post, side: side, showsTitle: showsTitles) { open(post) }
+                        ChatPostTile(model: model, post: post, side: side, showsTitle: showsTitles, height: height) { open(post) }
                     } else {
-                        ChatRemovedTile(side: side, showsTitle: showsTitles)
+                        ChatRemovedTile(side: side, showsTitle: showsTitles, height: height)
                     }
                 }
             }
@@ -498,16 +537,17 @@ struct ChatPostTile: View {
     let post: LibraryPost
     let side: CGFloat
     let showsTitle: Bool
+    var height: CGFloat? = nil
     let action: () -> Void
 
     var body: some View {
         let row = LibraryRow(item: model.mediaItem(for: post))
         Button(action: action) {
             VStack(alignment: .leading, spacing: 5) {
-                FacePicture(item: row.item, maxPixel: Int(side * 3), gradient: 0)
-                    .frame(width: side, height: side)
+                FacePicture(item: row.item, maxPixel: Int(max(side, height ?? side) * 3), gradient: 0)
+                    .frame(width: side, height: height ?? side)
                     .overlay(alignment: .bottomLeading) { badge(row) }
-                    .clipShape(RoundedRectangle(cornerRadius: side > 60 ? 10 : 6, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: height != nil ? 14 : side > 60 ? 10 : 6, style: .continuous))
                 if showsTitle {
                     LibraryTitleText(row: row, size: 10.5, weight: .regular)
                         .frame(width: side, alignment: .leading)
@@ -538,6 +578,7 @@ struct ChatPostTile: View {
 struct ChatRemovedTile: View {
     let side: CGFloat
     let showsTitle: Bool
+    var height: CGFloat? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -548,7 +589,7 @@ struct ChatRemovedTile: View {
                         .font(.system(size: side * 0.28))
                         .foregroundStyle(CobaltColor.caption)
                 }
-                .frame(width: side, height: side)
+                .frame(width: side, height: height ?? side)
             if showsTitle {
                 Text(Copy.Chat.removed)
                     .font(Font.cobalt(10.5))

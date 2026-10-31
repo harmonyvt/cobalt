@@ -1117,10 +1117,14 @@ query and errors, debounce and cancel, fallback, waking retry, off, clearing, a 
 - Thread list: newest first, title, preview, date; "new chat"; swipe or context menu rename and delete (confirm); empty, loading
   and failed states; pull to refresh (Mac ⌘N new chat, ⌘R refresh).
 - Thread: bottom-anchored list that follows the reply until the owner scrolls up; user bubbles right, replies full width as Markdown;
-  code steps collapsed ("ran code · 0.8 s", "running code…", "code failed"); shown files as a strip of thumbnails (a missing post is a
-  "removed" tile). A tap opens the post: iPhone pushes the detail inside the chat stack; iPad and Mac switch to the library tab and
+  a reply's code steps, call chips and tool cards fold into one activity row ("3 searches, 1 edit" over "3 posts looked at · 14 s",
+  the first posts it found stacked at the end; while running, the call it is on: "library.about…"), a tap opens the trail with each
+  step flat (its code behind "ran code · 0.8 s") and its cards drawn flat on a rail; the posts a reply picked as tall tiles
+  (118×150) with titles (a missing post is a "removed" tile); the newest finished reply gets copy / ask again icons. On iPhone the
+  thread hides the tab bar. A tap opens the post: iPhone pushes the detail inside the chat stack; iPad and Mac switch to the library tab and
   reveal it (`AppModel.revealInLibrary`). A failed reply gets "the reply failed · try again" (re-sends the same text).
-- Composer: attachment chips, 1..4000 characters, send off while empty or a reply is on its way; Mac Return sends (shift-Return is a
+- Composer: one floating glass pill (+ attach, the field, send; the list fades out under it); + opens a sheet of the loaded library
+  (filter by title) to pick posts; attachment chips, 1..4000 characters, send off while empty or a reply is on its way; Mac Return sends (shift-Return is a
   new line), ⌘Return sends from an iPad keyboard.
 - "ask about this": in the library post menu and the detail's more menu (only with `features.chat` and a post); makes a thread with the
   post on its draft, opens the chat tab on it with the keyboard up.

@@ -155,18 +155,23 @@ struct ChatToolCardView: View {
     let model: AppModel
     let card: ChatToolCard
     let posts: [String: LibraryPost]
+    /// Inside a reply's open activity trail: no box, a dot in the kind's colour instead of the badge, strips cut at the
+    /// trail's edge.
+    var flat = false
     let open: (LibraryPost) -> Void
+
+    private var bleed: CGFloat { flat ? 0 : Self.pad }
 
     var body: some View {
         Group {
             switch card {
             case .search(let s):
                 cardFrame(.search, Copy.ChatCards.searched, Copy.ChatCards.searchSub(query: s.query, within: s.within, total: s.total)) {
-                    ChatCardPosts(model: model, ids: s.hits.map(\.postID), posts: posts, side: 64, scores: s.hits.map(\.score), top: s.topScore, bleed: Self.pad, open: open)
+                    ChatCardPosts(model: model, ids: s.hits.map(\.postID), posts: posts, side: 64, scores: s.hits.map(\.score), top: s.topScore, bleed: bleed, open: open)
                 }
             case .look(let ids):
                 cardFrame(.look, Copy.ChatCards.lookedAt, Copy.ChatCards.pictures(ids.count)) {
-                    ChatCardPosts(model: model, ids: ids, posts: posts, side: 48, bleed: Self.pad, open: open)
+                    ChatCardPosts(model: model, ids: ids, posts: posts, side: 48, bleed: bleed, open: open)
                 }
             case .emotes(let e):
                 cardFrame(.emotes, e.saved ? Copy.ChatCards.emoteSaved : Copy.ChatCards.emotes, Copy.ChatCards.emotesSub(e)) {
@@ -195,12 +200,12 @@ struct ChatToolCardView: View {
                 cardFrame(.folder, "\(Copy.ChatCards.folderChange(c)) \(Copy.ChatCards.folder(c))", nil) { ChatFolderBody(folder: c) }
             case .saved(let s):
                 cardFrame(.saved, Copy.ChatCards.saved, Copy.ChatCards.saveStatus(s.status) ?? s.title) {
-                    ChatCardPosts(model: model, ids: s.postIDs, posts: posts, side: 64, bleed: Self.pad, open: open)
+                    ChatCardPosts(model: model, ids: s.postIDs, posts: posts, side: 64, bleed: bleed, open: open)
                 }
             case .facts(let f):
                 cardFrame(.saved, f.title, f.rows.map { "\($0.name): \($0.value)" }.joined(separator: " · ")) {
                     if !f.postIDs.isEmpty {
-                        ChatCardPosts(model: model, ids: f.postIDs, posts: posts, side: 44, bleed: Self.pad, open: open)
+                        ChatCardPosts(model: model, ids: f.postIDs, posts: posts, side: 44, bleed: bleed, open: open)
                     }
                 }
             case .agents(let a):
@@ -217,12 +222,20 @@ struct ChatToolCardView: View {
     private func cardFrame<Content: View>(_ tone: ChatCardTone, _ title: String, _ sub: String?, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: tone.symbol)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(tone.color)
-                    .frame(width: 22, height: 22)
-                    .background(tone.color.opacity(0.16), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .accessibilityHidden(true)
+                if flat {
+                    Circle()
+                        .fill(tone.color)
+                        .frame(width: 7, height: 7)
+                        .frame(width: 14)
+                        .accessibilityHidden(true)
+                } else {
+                    Image(systemName: tone.symbol)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(tone.color)
+                        .frame(width: 22, height: 22)
+                        .background(tone.color.opacity(0.16), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .accessibilityHidden(true)
+                }
                 Text(title).font(Font.cobalt(12, .semibold)).foregroundStyle(CobaltColor.text)
                 if let sub, !sub.isEmpty {
                     Text(sub).font(Font.cobalt(12)).foregroundStyle(CobaltColor.caption).lineLimit(1).truncationMode(.tail)
@@ -231,11 +244,16 @@ struct ChatToolCardView: View {
             }
             .accessibilityElement(children: .combine)
             content()
+                .padding(.leading, flat ? 22 : 0)
         }
-        .padding(Self.pad)
+        .padding(flat ? 0 : Self.pad)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(CobaltColor.row, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(CobaltColor.hairline, lineWidth: 1))
+        .background {
+            if !flat { RoundedRectangle(cornerRadius: 14, style: .continuous).fill(CobaltColor.row) }
+        }
+        .overlay {
+            if !flat { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(CobaltColor.hairline, lineWidth: 1) }
+        }
         .accessibilityElement(children: .contain)
     }
 }

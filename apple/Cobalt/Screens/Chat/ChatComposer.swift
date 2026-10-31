@@ -15,6 +15,8 @@ struct ChatComposer: View {
     var focus: FocusState<Bool>.Binding
     let send: (String) -> Void
 
+    @State private var attaching = false
+
     private var store: ChatStore { model.chat }
     private var draft: ChatDraft { store.draft(threadID) }
     private var cleaned: String? { ChatRule.cleanMessage(draft.text) }
@@ -22,8 +24,9 @@ struct ChatComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if !draft.postIDs.isEmpty { chips.padding(.top, 6) }
-            HStack(alignment: .bottom, spacing: 8) {
+            if !draft.postIDs.isEmpty { chips.padding(.top, 6).padding(.horizontal, 8) }
+            HStack(alignment: .bottom, spacing: 4) {
+                attachButton
                 field
                 sendButton
             }
@@ -37,11 +40,10 @@ struct ChatComposer: View {
         }
         // the send button's 44-point hit area sets the row's height; the field matches it (below) so one line of text sits
         // level with the button instead of at the bottom of a taller row with a gap above it
-        .padding(.leading, 14)
-        .padding(.trailing, 4)
+        .padding(.horizontal, 4)
         .padding(.vertical, 4)
-        .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(CobaltColor.hairline, lineWidth: 1))
+        // one floating glass pill, like the tab bar it replaces in a thread
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
@@ -76,6 +78,19 @@ struct ChatComposer: View {
         Binding(
             get: { store.draft(threadID).text },
             set: { store.setDraftText(TitleText.capped($0, limit: ChatRule.messageLimit), for: threadID) })
+    }
+
+    private var attachButton: some View {
+        Button { attaching = true } label: {
+            Label(Copy.ChatActivity.attach, systemImage: Symbol.chatAttach)
+        }
+        .buttonStyle(.cobaltIcon(.small))
+        .disabled(draft.postIDs.count >= ChatRule.attachmentLimit)
+        .sheet(isPresented: $attaching) {
+            ChatAttachSheet(model: model, already: draft.postIDs) { ids in
+                store.attach(ids, to: threadID)
+            }
+        }
     }
 
     private var sendButton: some View {
