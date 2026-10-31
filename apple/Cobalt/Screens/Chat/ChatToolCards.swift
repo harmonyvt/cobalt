@@ -60,7 +60,7 @@ private struct ChatCallChip: View {
 
 /// A colour per kind of card, shared by the chip's square and the card's badge.
 enum ChatCardTone {
-    case search, look, emotes, edit, job, box, link, folder, saved, other
+    case search, look, emotes, edit, job, box, link, folder, saved, agents, other
 
     static func of(_ call: ChatToolCall) -> ChatCardTone {
         if let card = call.card { return of(card) }
@@ -72,6 +72,7 @@ enum ChatCardTone {
         if op.hasPrefix("box.") { return .box }
         if op.hasPrefix("links.") { return .link }
         if op.hasPrefix("collections.") || op.hasPrefix("sets.") { return .folder }
+        if op.hasPrefix("agents.") { return .agents }
         return .other
     }
 
@@ -86,6 +87,7 @@ enum ChatCardTone {
         case .link: .link
         case .collection: .folder
         case .saved, .facts: .saved
+        case .agents: .agents
         }
     }
 
@@ -97,6 +99,7 @@ enum ChatCardTone {
         case .job, .folder: CobaltColor.collection
         case .box: CobaltColor.caption
         case .saved: CobaltColor.success
+        case .agents: Color(light: 0xc2410c, dark: 0xffb38a)
         case .other: CobaltColor.border
         }
     }
@@ -112,6 +115,7 @@ enum ChatCardTone {
         case .link: "link"
         case .folder: "folder"
         case .saved: "checkmark"
+        case .agents: Symbol.chatHelpers
         case .other: "circle"
         }
     }
@@ -172,6 +176,10 @@ struct ChatToolCardView: View {
                         ChatCardPosts(model: model, ids: f.postIDs, posts: posts, side: 44, open: open)
                     }
                 }
+            case .agents(let a):
+                cardFrame(.agents, Copy.ChatCards.agentsTitle(a), Copy.ChatCards.agentsSub(a)) {
+                    ChatAgentsBody(model: model, card: a, posts: posts, open: open)
+                }
             }
         }
     }
@@ -199,6 +207,77 @@ struct ChatToolCardView: View {
         .background(CobaltColor.row, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(CobaltColor.hairline, lineWidth: 1))
         .accessibilityElement(children: .contain)
+    }
+}
+
+// MARK: - helpers
+
+/// Sub-agents (43.5): their rows as the strip's chips (a tap opens the helper's thread), each with its task and, once
+/// done, its report and the posts it showed; `sent` as an arrow line "to <name>: <text>"; `inbox` the messages read.
+private struct ChatAgentsBody: View {
+    let model: AppModel
+    let card: ChatToolCard.Agents
+    let posts: [String: LibraryPost]
+    let open: (LibraryPost) -> Void
+
+    @Environment(\.openChatHelper) private var openHelper
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            if card.change == .sent, let message = card.message {
+                ChatMailLine(outgoing: true, label: Copy.Chat.helperTo(message.to), text: message.text)
+            }
+            if card.change == .inbox {
+                ForEach(Array(card.mail.enumerated()), id: \.offset) { _, mail in
+                    ChatMailLine(outgoing: false, label: Copy.Chat.helperFrom(mail.from), text: mail.text)
+                }
+            }
+            ForEach(Array(card.agents.enumerated()), id: \.offset) { _, row in
+                ChatAgentRowView(model: model, row: row, posts: posts, open: open, openHelper: openHelper)
+            }
+        }
+    }
+}
+
+private struct ChatAgentRowView: View {
+    let model: AppModel
+    let row: ChatToolCard.Agents.Row
+    let posts: [String: LibraryPost]
+    let open: (LibraryPost) -> Void
+    let openHelper: (@MainActor (String) -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            chip
+            if !row.task.isEmpty {
+                Text(row.task)
+                    .font(CobaltType.badge)
+                    .foregroundStyle(CobaltColor.caption)
+                    .lineLimit(2)
+            }
+            if let result = row.result, !result.isEmpty {
+                Text(result)
+                    .font(Font.cobalt(12))
+                    .foregroundStyle(CobaltColor.text)
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+            }
+            if !row.postIDs.isEmpty {
+                ChatCardPosts(model: model, ids: row.postIDs, posts: posts, side: 44, open: open)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var chip: some View {
+        let face = ChatHelperChip(name: row.name, status: row.status, activity: row.activity)
+        if let openHelper, !row.id.isEmpty {
+            Button { openHelper(row.id) } label: { face }
+                .buttonStyle(.plain)
+                .accessibilityHint(Copy.Chat.helperOpenHint)
+        } else {
+            face
+        }
     }
 }
 

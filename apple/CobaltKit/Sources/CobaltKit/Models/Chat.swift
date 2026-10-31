@@ -457,20 +457,24 @@ public struct ChatThreadDetail: Sendable, Equatable, Decodable {
     public var messages: [ChatMessage]
     /// Keyed by the post's own id.
     public var posts: [String: LibraryPost]
+    /// Set when the thread is a sub-agent's own (APP-API-CONTRACT 43.1): only its parent writes to it.
+    public var agent: ChatAgentRef?
 
-    public init(thread: ChatThread, messages: [ChatMessage], posts: [String: LibraryPost] = [:]) {
+    public init(thread: ChatThread, messages: [ChatMessage], posts: [String: LibraryPost] = [:], agent: ChatAgentRef? = nil) {
         self.thread = thread
         self.messages = messages
         self.posts = posts
+        self.agent = agent
     }
 
-    enum CodingKeys: String, CodingKey { case thread, messages, posts }
+    enum CodingKeys: String, CodingKey { case thread, messages, posts, agent }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         thread = try c.decode(ChatThread.self, forKey: .thread)
         messages = (try c.decodeIfPresent([Lossy<ChatMessage>].self, forKey: .messages) ?? []).compactMap(\.value)
         posts = Self.decodePosts(from: c)
+        agent = c.lenient(ChatAgentRef.self, .agent)
     }
 
     /// The `posts` map. A post that does not decode is dropped, never the thread; entries are keyed by the post's own id

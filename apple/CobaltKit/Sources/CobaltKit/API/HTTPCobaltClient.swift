@@ -1011,6 +1011,17 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         return page
     }
 
+    /// `GET /chat/threads/<id>/agents` (keyed, 43.6): the thread's sub-agents and their mail with it.
+    public func chatAgents(threadID: String) async throws -> ChatAgentList {
+        let req = try makeRequest(Endpoints.chatAgents(id: threadID), timeout: 20)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw chatError(data, status: http.statusCode) }
+        guard let list = try? CobaltJSON.decoder().decode(ChatAgentList.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return list
+    }
+
     private func chatThreadAnswer(_ data: Data, _ http: HTTPURLResponse) throws -> ChatThread {
         guard (200..<300).contains(http.statusCode) else { throw chatError(data, status: http.statusCode) }
         struct Wire: Decodable { var thread: ChatThread }

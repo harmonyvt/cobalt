@@ -46,4 +46,12 @@ extension Symbol {
     static let chatConfirmDone = "checkmark.circle"
     /// A confirm card answered no, or one that timed out.
     static let chatConfirmKept = "xmark.circle"
+    /// Helpers (sub-agents, APP-API-CONTRACT 43.6): the strip under a thread's header and the agents card.
+    static let chatHelpers = "person.2"
+    /// A helper's status dot (pulses while it works).
+    static let chatHelperDot = "circle.fill"
+    /// A message to a helper (or from a helper to the chat).
+    static let chatHelperSent = "arrow.turn.up.right"
+    /// A message received.
+    static let chatHelperReceived = "arrow.turn.down.left"
 }

@@ -400,7 +400,7 @@ struct AppAndLibraryTests {
                 await h.driveToSettled()
                 if case .gallery = p.state {} else { Issue.record("\(scenario): \(p.state)") }
                 #expect(p.galleryRun?.isSaved == true, "\(scenario)")
-            case .happy, .coldStart, .shortClip, .legacyFork, .emptyOrbit, .renditions, .renditionsLegacy, .renameFails, .offline, .shareLinksEmpty, .shareLinksFail, .chatEmpty, .chatFail, .chatReplyFails, .chatConfirm, .skyMap, .stageNotConnected, .stageFail,
+            case .happy, .coldStart, .shortClip, .legacyFork, .emptyOrbit, .renditions, .renditionsLegacy, .renameFails, .offline, .shareLinksEmpty, .shareLinksFail, .chatEmpty, .chatFail, .chatReplyFails, .chatConfirm, .chatAgents, .skyMap, .stageNotConnected, .stageFail,
                  .editorEmpty, .editorRendering, .editorRenderFails, .editorConflict, .editorFail, .hidden, .moveOver:
                 p.start(link: URL(string: pastedLink)!)
                 await h.driveToSettled()

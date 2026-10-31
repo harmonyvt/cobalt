@@ -55,6 +55,8 @@ public enum ChatToolCard: Sendable, Equatable, Decodable {
     case collection(Folder)
     case saved(Saved)
     case facts(Facts)
+    /// `agents.*`, and `jobs.wait` / `jobs.onDone` on an agent's job (43.5).
+    case agents(Agents)
 
     // MARK: the shapes
 
@@ -511,6 +513,101 @@ public enum ChatToolCard: Sendable, Equatable, Decodable {
         }
     }
 
+    /// Sub-agents (43.5): the ones a call started, listed, looked at, stopped or waits on, a message sent, mail read.
+    public struct Agents: Sendable, Equatable, Decodable {
+        public enum Change: String, Sendable, Equatable { case started, listed, viewed, stopped, sent, inbox, waiting }
+
+        /// One agent, cut short (task ≤ 200, result ≤ 300, ≤ 12 posts).
+        public struct Row: Sendable, Equatable, Decodable, Identifiable {
+            public var id: String
+            public var name: String
+            public var status: ChatAgent.Status
+            public var task: String
+            public var activity: String?
+            public var result: String?
+            public var postIDs: [String]
+            /// Handed to `jobs.onDone`: the chat carries on when it ends.
+            public var watching: Bool
+
+            public init(
+                id: String, name: String, status: ChatAgent.Status, task: String = "", activity: String? = nil, result: String? = nil,
+                postIDs: [String] = [], watching: Bool = false
+            ) {
+                self.id = id
+                self.name = name
+                self.status = status
+                self.task = task
+                self.activity = activity
+                self.result = result
+                self.postIDs = postIDs
+                self.watching = watching
+            }
+
+            enum CodingKeys: String, CodingKey { case id, name, status, task, activity, result, postIDs = "postIds", watching }
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                id = c.lenient(String.self, .id) ?? ""
+                name = c.lenient(String.self, .name) ?? ""
+                guard !id.isEmpty || !name.isEmpty else {
+                    throw DecodingError.dataCorruptedError(forKey: .id, in: c, debugDescription: "an agent row needs an id or a name")
+                }
+                status = ChatAgent.Status(wire: c.lenient(String.self, .status))
+                task = c.lenient(String.self, .task) ?? ""
+                activity = c.lenient(String.self, .activity)
+                result = c.lenient(String.self, .result)
+                postIDs = c.lossyArray(String.self, .postIDs)
+                watching = c.lenient(Bool.self, .watching) ?? false
+            }
+        }
+
+        /// `sent`: who to (the agent's name, or "parent") and what.
+        public struct Message: Sendable, Equatable, Decodable {
+            public var to: String
+            public var text: String
+            public init(to: String, text: String) { self.to = to; self.text = text }
+            enum CodingKeys: String, CodingKey { case to, text }
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                to = c.lenient(String.self, .to) ?? ""
+                text = c.lenient(String.self, .text) ?? ""
+            }
+        }
+
+        /// `inbox`: one message read.
+        public struct Mail: Sendable, Equatable, Decodable {
+            public var from: String
+            public var text: String
+            public init(from: String, text: String) { self.from = from; self.text = text }
+            enum CodingKeys: String, CodingKey { case from, text }
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                self.from = c.lenient(String.self, .from) ?? ""
+                text = c.lenient(String.self, .text) ?? ""
+            }
+        }
+
+        public var change: Change
+        public var agents: [Row]
+        public var message: Message?
+        public var mail: [Mail]
+
+        public init(change: Change, agents: [Row] = [], message: Message? = nil, mail: [Mail] = []) {
+            self.change = change
+            self.agents = agents
+            self.message = message
+            self.mail = mail
+        }
+
+        enum CodingKeys: String, CodingKey { case change, agents, message, mail }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            change = c.lenient(String.self, .change).flatMap(Change.init(rawValue:)) ?? .listed
+            agents = c.lossyArray(Row.self, .agents)
+            message = c.lenient(Message.self, .message)
+            mail = c.lossyArray(Mail.self, .mail)
+        }
+    }
+
     // MARK: decoding
 
     enum TypeKey: String, CodingKey { case type, postIDs = "postIds" }
@@ -529,6 +626,7 @@ public enum ChatToolCard: Sendable, Equatable, Decodable {
         case "collection": self = .collection(try Folder(from: decoder))
         case "saved": self = .saved(try Saved(from: decoder))
         case "facts": self = .facts(try Facts(from: decoder))
+        case "agents": self = .agents(try Agents(from: decoder))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown card \(other)")
         }
@@ -545,6 +643,7 @@ public enum ChatToolCard: Sendable, Equatable, Decodable {
         case .files(let f): return [f.postID].compactMap { $0 }
         case .saved(let s): return s.postIDs
         case .facts(let f): return f.postIDs
+        case .agents(let a): return a.agents.flatMap(\.postIDs)
         case .box, .link, .collection: return []
         }
     }
@@ -586,6 +685,11 @@ extension ChatToolCard {
         case .edit(let e): return "edit:\(e.projectID)"
         case .link(let l): return "link:\(l.url.absoluteString)"
         case .collection(let c): return "\(c.isSet ? "set" : "collection"):\(c.id)"
+        // one agent started, looked at, stopped or waited on: its later state replaces the earlier
+        case .agents(let a):
+            guard a.agents.count == 1, let row = a.agents.first, !row.id.isEmpty,
+                  [.started, .viewed, .stopped, .waiting].contains(a.change) else { return nil }
+            return "agent:\(row.id)"
         default: return nil
         }
     }

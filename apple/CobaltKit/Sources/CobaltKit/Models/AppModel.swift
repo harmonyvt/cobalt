@@ -57,6 +57,9 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// The sample threads plus a fifth, "tidy up the timer clips", whose last reply waits on a confirm card (33.5): "delete 3"
     /// deletes and the reply goes on, "cancel" keeps them.
     case chatConfirm
+    /// The sample threads plus a sixth, "what's in lia share 11 and 12", whose chat started two helpers (APP-API-CONTRACT 43):
+    /// one still running, one done with its report, a few messages between them and the chat, and an agents card.
+    case chatAgents
     /// The library's sky map (APP-API-CONTRACT 21, `PreviewSkyMap.swift`): a server with `features.search` whose
     /// `GET /library/map` hands over about 150 mock posts in eight clusters (cats, minecraft, anime, cooking, coffee, the
     /// harbour, guitar, skate). `.happy` and `.renditions` serve the same map but do not advertise `features.search`.

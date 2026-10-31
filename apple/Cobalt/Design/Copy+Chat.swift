@@ -184,6 +184,47 @@ extension Copy {
         }
         static let confirmGone = "that ask is gone · nothing changed"
 
+        // MARK: helpers (sub-agents, APP-API-CONTRACT 43.6)
+
+        static let helpers = "helpers"
+        static let helper = "helper"
+        static func helperStatus(_ status: ChatAgent.Status) -> String {
+            switch status {
+            case .queued, .unknown: return "waiting"
+            case .running: return "working"
+            case .done: return "done"
+            case .stopped: return "stopped"
+            case .error: return "didn't finish"
+            }
+        }
+        /// A chip's second word: the call it is on while it works, else its status.
+        static func helperState(_ status: ChatAgent.Status, activity: String?) -> String {
+            if status == .running, let activity, !activity.isEmpty { return activity }
+            return helperStatus(status)
+        }
+        /// A helper sent the chat a message it has not read yet.
+        static let helperAsked = "asked"
+        /// The wire's "parent" is the chat itself.
+        static func helperName(_ raw: String) -> String { raw == ChatAgentMail.parent ? "the chat" : raw }
+        static func helperTo(_ name: String) -> String { "to \(helperName(name))" }
+        static func helperFrom(_ name: String) -> String { "from \(helperName(name))" }
+        static let helperReadOnly = "this helper works for the chat, you can't write here"
+        static let helperMail = "messages with the chat"
+        static let helperClose = "close"
+        static let helperOpenHint = "opens what this helper did"
+        /// The footer of a helper's thread: its status, with the call it is on or why it stopped.
+        static func helperFooter(_ status: ChatAgent.Status, activity: String?, error: String?) -> String {
+            switch status {
+            case .running: return activity.map { "working · \($0)" } ?? "working"
+            case .error: return error.map { "didn't finish · \($0)" } ?? "didn't finish"
+            default: return helperStatus(status)
+            }
+        }
+        static func helperA11y(name: String, status: ChatAgent.Status, activity: String?, asked: Bool) -> String {
+            let state = helperState(status, activity: activity)
+            return asked ? "\(name), \(state), \(helperAsked)" : "\(name), \(state)"
+        }
+
         // MARK: refusals
 
         static let busy = "wait for the reply to finish"
