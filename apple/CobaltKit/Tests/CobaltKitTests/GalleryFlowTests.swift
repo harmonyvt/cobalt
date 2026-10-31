@@ -335,6 +335,40 @@ struct GalleryPipelineTests {
         await #expect(throws: PipelineFailure.server(code: "error.library.last_item")) { try await app.deleteItems([9], of: item) }
     }
 
+    @Test func theSelectPanelsTrashDeletesOnlyTheTickedFiles() async throws {
+        let h = await savedGallery(.galleryInstagram)
+        let app = h.app
+        let p = h.pipeline
+        await p.make(webpPlan(Array(0..<10)))
+        await h.drive(until: { !(p.galleryRun?.make.isActive ?? true) })
+        let sid = try #require(p.sessionID)
+        await app.library.refresh()
+        var item = app.mediaItem(for: try #require(app.library.posts.first { $0.id == sid }))
+        var pick = DeletePick(item: item)
+        #expect(pick.plan == .everything && pick.canChoose)
+        #expect(pick.choosable.count == 11, "10 items and the slideshow")
+        // untick everything but photo 3 and the slideshow
+        let made = try #require(item.made.first)
+        for r in pick.choosable where r.itemIndex != 2 && r.id != made.id { pick.toggle(r.id) }
+        #expect(pick.plan == .files(items: [2], made: [made.id], webps: []))
+        #expect(pick.fileCount == 2)
+        try await driven(h) { try await app.delete(pick) }
+        await app.library.refresh()
+        item = app.mediaItem(for: try #require(app.library.posts.first { $0.id == sid }))
+        #expect(item.items.compactMap(\.itemIndex) == [0, 1, 3, 4, 5, 6, 7, 8, 9])
+        #expect(item.made.isEmpty)
+        // ticking every file again is everything
+        var all = DeletePick(item: item)
+        all.toggle(item.items[0].id)
+        #expect(all.plan == .files(items: Array(item.items.compactMap(\.itemIndex).dropFirst()), made: [], webps: []))
+        all.toggle(item.items[0].id)
+        #expect(all.plan == .everything)
+        // nothing ticked keeps the post
+        var none = DeletePick(item: item)
+        none.toggleEverything()
+        #expect(none.plan == .nothing)
+    }
+
     @Test func deletingAMadeFileLeavesTheItems() async throws {
         let h = await savedGallery(.galleryInstagram)
         let app = h.app
