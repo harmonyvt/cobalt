@@ -111,10 +111,14 @@ struct NamesDraftTests {
 
     @Test func alsoCalledIsNormalizedAndKeptApart() {
         var draft = SearchNameDraft(name: "Lia", meaning: "cat girl")
-        #expect(draft.addAlias("  Lia   Chan "))
-        #expect(!draft.addAlias("lia chan"), "already there")
-        #expect(!draft.addAlias(" LIA "), "the name itself")
-        #expect(!draft.addAlias("   "))
+        let added = draft.addAlias("  Lia   Chan ")
+        #expect(added)
+        let again = draft.addAlias("lia chan")
+        #expect(!again, "already there")
+        let name = draft.addAlias(" LIA ")
+        #expect(!name, "the name itself")
+        let blank = draft.addAlias("   ")
+        #expect(!blank)
         #expect(draft.aliases == ["lia chan"])
         for n in 0..<10 { draft.addAlias("word \(n)") }
         #expect(draft.aliases.count == TaughtName.maxAliases)
@@ -371,8 +375,10 @@ struct NamesModelTests {
 
         // a tap in who's in marks the post, and save writes it
         let key = try #require(editor.notCarrying.first?.postKey ?? editor.carrying.last?.postKey)
+        let before = editor.draft.mark(of: key)
         editor.cycle(key)
-        #expect(editor.draft.mark(of: key) == .yes || editor.draft.mark(of: key) == .no)
+        let next: NameMark? = switch before { case nil: .yes; case .yes?: .no; case .no?: nil }
+        #expect(editor.draft.mark(of: key) == next)
         async let saving = editor.save()
         await rig.run(for: 1)
         #expect(await saving)
