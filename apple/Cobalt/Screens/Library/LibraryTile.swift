@@ -14,7 +14,8 @@ private struct TilePress: ButtonStyle {
 /// the length bottom left on a video face tall enough to hold it) and a one-line title on a soft dark scrim.
 /// A webp face moves while the budget lets it. A tile whose picture failed keeps its frame, badges and caption
 /// with a glyph, and still opens. Tap opens, unless the library is selecting: then it ticks this post, a hold shows
-/// its media full size (`LibraryPeek`), and the context menu is not offered.
+/// its media full size (`LibraryPeek`), and the context menu is not offered. Shift-click and ⌘-click (Mac, iPad with
+/// a keyboard) start selecting and tick a run or this one post (`LibraryController.click`).
 ///
 /// `Equatable` on what it draws, so a new page of tiles (or a refresh that changed nothing) re-evaluates none of
 /// the tiles already there.
@@ -79,22 +80,14 @@ struct LibraryTile: View, Equatable {
 
     var body: some View {
         Button {
-            if selecting {
-                // the touch that ended a hold-to-peek is not a tick
-                if controller.takeSwallowedTap() { return }
-                withAnimation(Motion.rows) { controller.togglePick(row) }
-            } else {
-                #if os(macOS)
-                // ⌘-click starts picking with this post, as in Finder
-                if NSEvent.modifierFlags.contains(.command), row.shareable {
-                    withAnimation(Motion.rows) {
-                        controller.beginSelecting()
-                        controller.togglePick(row)
-                    }
-                    return
-                }
-                #endif
+            // the touch that ended a hold-to-peek is not a tick
+            if selecting, controller.takeSwallowedTap() { return }
+            // shift-click ticks a run, ⌘-click ticks this one (either starts select mode), as in Finder
+            let click = LibraryController.Click.current(controller)
+            if click == .plain, !selecting {
                 controller.open(row)
+            } else {
+                withAnimation(Motion.rows) { controller.click(row, click) }
             }
         } label: { tile }
             .buttonStyle(TilePress())

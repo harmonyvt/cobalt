@@ -282,6 +282,11 @@ private struct LibraryContent: View {
             #endif
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { controller.decideInspector(width: $0) }
             .onChange(of: tier, initial: true) { controller.compact = tier == .compact }
+            // what a shift-click range runs through, and (iPad) the keys held for it
+            .onChange(of: rows, initial: true) { controller.shownRows = rows }
+            #if os(iOS)
+            .onModifierKeysChanged(mask: [.shift, .command]) { _, keys in controller.heldKeys = keys }
+            #endif
             .background { GalleryFileShare(fileURLs: $filesToShare) }
             // centred over a light scrim: at the bottom it sat under the floating tab bar
             .overlay {

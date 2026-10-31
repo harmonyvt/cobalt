@@ -89,6 +89,12 @@ final class LibraryController {
     private(set) var picked: Set<String> = []
     /// The same posts in the order they were ticked: the pill's row of thumbnails and the link's order.
     private(set) var pickOrder: [String] = []
+    /// Where a shift-click range starts: the post last ticked by a plain click or a ⌘-click (Finder's anchor).
+    @ObservationIgnored private var pickAnchor: String?
+    /// The posts on screen in their order (the screen keeps it current): what a shift-click range runs through.
+    @ObservationIgnored var shownRows: [LibraryRow] = []
+    /// The modifier keys held down right now on the iPad (a hardware keyboard); the Mac reads `NSEvent`.
+    @ObservationIgnored var heldKeys: EventModifiers = []
     /// The share chips: every post, not shared, shared, or one collection's.
     var shareFilter: LibraryShareFilter = .all
     /// The post a hold is showing full size (media only), while the finger stays down.
@@ -217,6 +223,7 @@ final class LibraryController {
 
     func endSelecting() {
         selecting = false
+        pickAnchor = nil
         setPicks([])
         peek = nil
     }
@@ -229,7 +236,72 @@ final class LibraryController {
     /// Ticks or unticks one post. A gallery cannot be ticked: galleries are not shared.
     func togglePick(_ row: LibraryRow) {
         guard row.shareable else { return }
+        pickAnchor = row.id
         if picked.contains(row.id) { unpick(row.id) } else { setPicks(pickOrder + [row.id]) }
+    }
+
+    /// What a click on a post does, by the keys held (Finder's rules): shift ticks the run from the last tick to
+    /// here, ⌘ ticks or unticks this one; either starts select mode. Plain: tick while selecting, else open.
+    enum Click {
+        case plain, toggle, range
+
+        /// The keys held right now: `NSEvent` on the Mac, `heldKeys` on the iPad.
+        @MainActor static func current(_ controller: LibraryController) -> Click {
+            #if os(macOS)
+            let flags = NSEvent.modifierFlags
+            if flags.contains(.shift) { return .range }
+            if flags.contains(.command) { return .toggle }
+            #else
+            if controller.heldKeys.contains(.shift) { return .range }
+            if controller.heldKeys.contains(.command) { return .toggle }
+            #endif
+            return .plain
+        }
+    }
+
+    /// A click or tap on a tile or a row. True when it ticked (or started select mode) rather than opened.
+    @discardableResult
+    func click(_ row: LibraryRow, _ click: Click) -> Bool {
+        switch click {
+        case .plain:
+            guard selecting else {
+                open(row)
+                return false
+            }
+            togglePick(row)
+        case .toggle:
+            guard row.shareable else { return openUnlessSelecting(row) }
+            selecting = true
+            togglePick(row)
+        case .range:
+            guard row.shareable else { return openUnlessSelecting(row) }
+            selecting = true
+            pickRange(to: row)
+        }
+        return true
+    }
+
+    /// A modified click on a gallery (it cannot be ticked): opens it, as a plain click would, unless selecting.
+    private func openUnlessSelecting(_ row: LibraryRow) -> Bool {
+        if !selecting { open(row) }
+        return false
+    }
+
+    /// Ticks every post on screen from the anchor (else the last tick on screen) through `row`, keeping the ticks
+    /// already there. With neither on screen it ticks `row` alone, which becomes the anchor.
+    private func pickRange(to row: LibraryRow) {
+        let ids = shownRows.map(\.id)
+        let from = pickAnchor.flatMap { ids.contains($0) ? $0 : nil } ?? pickOrder.last(where: ids.contains)
+        guard let from, let start = ids.firstIndex(of: from), let end = ids.firstIndex(of: row.id) else {
+            if !picked.contains(row.id) { togglePick(row) } else { pickAnchor = row.id }
+            return
+        }
+        let run = start <= end ? shownRows[start...end] : shownRows[end...start]
+        // in click order: from the anchor towards the post clicked
+        let ordered = start <= end ? Array(run) : Array(run.reversed())
+        let added = ordered.filter { $0.shareable && !picked.contains($0.id) }.map(\.id)
+        if pickAnchor == nil { pickAnchor = from }
+        setPicks(pickOrder + added)
     }
 
     /// Unticks one post (the pill's thumbnail).
