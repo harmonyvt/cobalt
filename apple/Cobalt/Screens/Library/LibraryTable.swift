@@ -178,7 +178,7 @@ struct LibraryTable: View {
         .onChange(of: controller.selection) { old, new in
             let click = LibraryController.Click.current(controller)
             guard click != .plain, let id = new ?? old, let row = rows.first(where: { $0.id == id }) else { return }
-            withAnimation(Motion.rows) { _ = controller.click(row, click) }
+            withAnimation(Motion.rows) { controller.click(row, click) }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .safeAreaInset(edge: .bottom, spacing: 0) {

@@ -259,32 +259,20 @@ final class LibraryController {
         }
     }
 
-    /// A click or tap on a tile or a row. True when it ticked (or started select mode) rather than opened.
-    @discardableResult
-    func click(_ row: LibraryRow, _ click: Click) -> Bool {
+    /// A click or tap on a tile or a row: ticks (starting select mode for shift and ⌘) or opens.
+    func click(_ row: LibraryRow, _ click: Click) {
         switch click {
         case .plain:
-            guard selecting else {
-                open(row)
-                return false
+            if selecting { togglePick(row) } else { open(row) }
+        case .toggle, .range:
+            // a gallery cannot be ticked: a modified click opens it, as a plain one would, unless selecting
+            guard row.shareable else {
+                if !selecting { open(row) }
+                return
             }
-            togglePick(row)
-        case .toggle:
-            guard row.shareable else { return openUnlessSelecting(row) }
             selecting = true
-            togglePick(row)
-        case .range:
-            guard row.shareable else { return openUnlessSelecting(row) }
-            selecting = true
-            pickRange(to: row)
+            if click == .range { pickRange(to: row) } else { togglePick(row) }
         }
-        return true
-    }
-
-    /// A modified click on a gallery (it cannot be ticked): opens it, as a plain click would, unless selecting.
-    private func openUnlessSelecting(_ row: LibraryRow) -> Bool {
-        if !selecting { open(row) }
-        return false
     }
 
     /// Ticks every post on screen from the anchor (else the last tick on screen) through `row`, keeping the ticks
