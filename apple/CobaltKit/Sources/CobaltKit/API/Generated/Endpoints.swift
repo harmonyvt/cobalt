@@ -211,6 +211,26 @@ enum Endpoints {
         APIEndpoint(op: "chat.confirm", method: "POST", path: "/chat/threads/\(HTTPCobaltClient.encode(id))/confirm/\(HTTPCobaltClient.encode(cid))", auth: .key)
     }
 
+    /// `GET /chat/threads/:id/share` (op `chat_share.get`, auth key): A chat's live shared page, or null (GET /chat/threads/<id>/share).
+    static func chatShareGet(id: String) -> APIEndpoint<ChatShareGetResponse> {
+        APIEndpoint(op: "chat_share.get", method: "GET", path: "/chat/threads/\(HTTPCobaltClient.encode(id))/share", auth: .key)
+    }
+
+    /// `PUT /chat/threads/:id/share` (op `chat_share.put`, auth key): Share a chat as a web page (201, up to its latest message), or change the live share's settings; upto "latest" brings in the messages written since (PUT /chat/threads/<id>/share).
+    static func chatSharePut(id: String) -> APIEndpoint<ChatSharePutResponse> {
+        APIEndpoint(op: "chat_share.put", method: "PUT", path: "/chat/threads/\(HTTPCobaltClient.encode(id))/share", auth: .key)
+    }
+
+    /// `POST /chat/threads/:id/share/rotate` (op `chat_share.rotate`, auth key): A new key for a chat's shared page; the old link is a 404 at once.
+    static func chatShareRotate(id: String) -> APIEndpoint<ChatShareRotateResponse> {
+        APIEndpoint(op: "chat_share.rotate", method: "POST", path: "/chat/threads/\(HTTPCobaltClient.encode(id))/share/rotate", auth: .key)
+    }
+
+    /// `DELETE /chat/threads/:id/share` (op `chat_share.delete`, auth key): Stop sharing a chat: its link is a 404 at once.
+    static func chatShareDelete(id: String) -> APIEndpoint<ChatShareDeleteResponse> {
+        APIEndpoint(op: "chat_share.delete", method: "DELETE", path: "/chat/threads/\(HTTPCobaltClient.encode(id))/share", auth: .key)
+    }
+
     /// `POST /studio/:sid/render` (op `studio.render`, auth capability): A webp render of one video (POST /studio/<sid>/render).
     static func studioRender(sid: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "studio.render", method: "POST", path: "/studio/\(HTTPCobaltClient.encode(sid))/render", auth: .capability)
@@ -801,6 +821,100 @@ struct LibraryIndexResponse: Decodable, Sendable {
     var usage: LibraryIndexResponseUsage?
     /// the cursor of the next page, null on the last
     var next: String?
+}
+
+struct ChatShareGetResponseShare: Decodable, Sendable {
+    /// share.../c/<key>: the only way in while it is live
+    var url: String
+    var threadId: String
+    /// the last message on the page
+    var uptoId: String
+    /// ms; when that message was written
+    var uptoAt: Double?
+    /// messages on the page
+    var messages: Double
+    /// messages written after the page's last one (an update brings them in)
+    var behind: Double
+    /// videos and pictures the link streams
+    var files: Double
+    /// the chat's videos and pictures play on the page
+    var media: Bool
+    /// the model's code is on the page, folded
+    var code: Bool
+    var createdAt: Double
+    var updatedAt: Double
+    /// page opens (GET)
+    var opened: Double
+    var lastOpenedAt: Double?
+}
+
+struct ChatShareGetResponse: Decodable, Sendable {
+    var status: String
+    var share: ChatShareGetResponseShare?
+}
+
+struct ChatSharePutResponseShare: Decodable, Sendable {
+    /// share.../c/<key>: the only way in while it is live
+    var url: String
+    var threadId: String
+    /// the last message on the page
+    var uptoId: String
+    /// ms; when that message was written
+    var uptoAt: Double?
+    /// messages on the page
+    var messages: Double
+    /// messages written after the page's last one (an update brings them in)
+    var behind: Double
+    /// videos and pictures the link streams
+    var files: Double
+    /// the chat's videos and pictures play on the page
+    var media: Bool
+    /// the model's code is on the page, folded
+    var code: Bool
+    var createdAt: Double
+    var updatedAt: Double
+    /// page opens (GET)
+    var opened: Double
+    var lastOpenedAt: Double?
+}
+
+struct ChatSharePutResponse: Decodable, Sendable {
+    var status: String
+    var share: ChatSharePutResponseShare
+}
+
+struct ChatShareRotateResponseShare: Decodable, Sendable {
+    /// share.../c/<key>: the only way in while it is live
+    var url: String
+    var threadId: String
+    /// the last message on the page
+    var uptoId: String
+    /// ms; when that message was written
+    var uptoAt: Double?
+    /// messages on the page
+    var messages: Double
+    /// messages written after the page's last one (an update brings them in)
+    var behind: Double
+    /// videos and pictures the link streams
+    var files: Double
+    /// the chat's videos and pictures play on the page
+    var media: Bool
+    /// the model's code is on the page, folded
+    var code: Bool
+    var createdAt: Double
+    var updatedAt: Double
+    /// page opens (GET)
+    var opened: Double
+    var lastOpenedAt: Double?
+}
+
+struct ChatShareRotateResponse: Decodable, Sendable {
+    var status: String
+    var share: ChatShareRotateResponseShare
+}
+
+struct ChatShareDeleteResponse: Decodable, Sendable {
+    var status: String
 }
 
 struct Agent: Decodable, Sendable {

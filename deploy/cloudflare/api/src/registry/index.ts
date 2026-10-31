@@ -4,6 +4,7 @@ import { AGENT_OPS } from "./ops/agents";
 import { AUTH_OPS } from "./ops/auth";
 import { BOX_OPS } from "./ops/box";
 import { CHAT_OPS } from "./ops/chat";
+import { CHAT_SHARE_OPS } from "./ops/chat-share";
 import { EDITOR_OPS } from "./ops/editor";
 import { FRAME_OPS } from "./ops/frames";
 import { HIDDEN_OPS } from "./ops/hidden";
@@ -27,6 +28,7 @@ export const REGISTRY = new Registry([
     ...LIBRARY_WRITE_OPS,
     ...LIBRARY_ADMIN_OPS,
     ...CHAT_OPS,
+    ...CHAT_SHARE_OPS,
     ...MAKE_OPS,
     ...AGENT_OPS,
     ...EDITOR_OPS,

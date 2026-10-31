@@ -34,6 +34,13 @@ extension Symbol {
     static let chatDetach = "xmark.circle.fill"
     /// Rename a thread.
     static let chatRename = "pencil"
+    /// Share a thread as a web page (46), and the share sheet's actions.
+    static let chatShare = "globe"
+    static let chatShareCopy = "doc.on.doc"
+    static let chatShareOpen = "safari"
+    static let chatShareRotate = "arrow.triangle.2.circlepath"
+    static let chatShareStop = "xmark.circle"
+    static let chatShareUpdate = "arrow.clockwise"
     /// Delete a thread.
     static let chatDelete = "trash"
     /// Jump to the newest message.

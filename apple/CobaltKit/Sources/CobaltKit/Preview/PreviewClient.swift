@@ -191,6 +191,8 @@ public struct PreviewClient: CobaltClient {
     let shareState = PreviewShareState()
     /// The chat threads the "server" holds (`PreviewChat.swift`).
     let chatState = PreviewChatState()
+    /// The chats shared as web pages (`PreviewChatShare.swift`).
+    let chatShareState = PreviewChatShareState()
     /// The stage the "server" holds (`PreviewStage.swift`).
     let stageState = PreviewStageState()
     /// The editor's projects and renders the "server" holds (`Editor/PreviewEditor.swift`).

@@ -85,6 +85,10 @@ export const PATHS: string[] = [
     `/chat/threads/${ID16}/agents`,
     `/chat/threads/${ID16}/messages/5/collage?offset=0&limit=500`,
     `/chat/threads/${ID16}/other`,
+    // added with shared chats (section 46)
+    `/chat/threads/${ID16}/share`,
+    `/chat/threads/${ID16}/share/rotate`,
+    "/chat/threads/bad/share",
     "/chat/threads/bad",
     // added with the registry (section 33.5): the confirm answer, and the Durable Object's internal store, never public
     `/chat/threads/${ID16}/confirm/${ID16}`,
@@ -206,6 +210,10 @@ const HOST_CASES: { host: string; path: string }[] = [
     // section 36: a private link's page and file (unknown keys: 404)
     { host: SHARE, path: "/p/AbCdEfGh1234567890ZzYy" },
     { host: SHARE, path: "/p/AbCdEfGh1234567890ZzYy/1.mp4" },
+    // section 46: a shared chat's page, JSON and file (unknown keys: 404)
+    { host: SHARE, path: "/c/AbCdEfGh1234567890ZzYy" },
+    { host: SHARE, path: "/c/AbCdEfGh1234567890ZzYy/chat.json" },
+    { host: SHARE, path: "/c/AbCdEfGh1234567890ZzYy/1.mp4" },
     { host: STAGE, path: "/live/abc" },
     { host: STAGE, path: "/store" },
     { host: STAGE, path: "/library" },

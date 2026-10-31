@@ -14,6 +14,7 @@ import { chatToolbox, runConfirmed } from "./registry/ai";
 import type { OpBase } from "./registry/context";
 import { toolTypes } from "./registry/index";
 import { cardPostIds, postIdsOf, type ToolCall } from "./chat-cards";
+import { revokeSharesOf } from "./chat-share";
 import type { PendingConfirm, PendingPort } from "./registry/pending";
 import type { Registry } from "./registry/registry";
 import type { EmbedClient } from "./embed";
@@ -473,8 +474,9 @@ export async function deleteThread(d: Pick<ChatDeps, "db">, id: string): Promise
             d.db.prepare("DELETE FROM chat_messages WHERE thread_id = ?1").bind(id),
             d.db.prepare("DELETE FROM chat_threads WHERE id = ?1").bind(id),
         ]);
-        // its sub-agents go with it
+        // its sub-agents go with it, and its shared page (section 46)
         await dropAllAgents(d.db, id);
+        await revokeSharesOf(d.db, id, Date.now());
         return { status: 200, body: { status: "success" } };
     } catch {
         return err(503, "error.api.generic");

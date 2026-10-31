@@ -241,6 +241,9 @@ public final class ChatStore {
     public private(set) var loadStates: [String: LoadState] = [:]
     /// Threads with a reply on its way from this device (streaming or being followed).
     public private(set) var sendingIDs: Set<String> = []
+    /// Each thread's shared web page as last read (46): a missing key is not read yet, `.some(nil)` is not shared.
+    /// Written by `ChatStore+Share.swift`.
+    public internal(set) var shares: [String: ChatShare?] = [:]
     /// Confirm cards whose answer is on its way (33.5): their buttons wait.
     public private(set) var answeringConfirms: Set<String> = []
     /// What is typed and attached per thread.
@@ -278,7 +281,7 @@ public final class ChatStore {
     public static let collagePageSize = ChatRule.collagePage
     @ObservationIgnored private var collageTokens = 0
 
-    @ObservationIgnored private let ctx: PipelineContext
+    @ObservationIgnored let ctx: PipelineContext
     /// Bumped by `reset()`: an answer from the old server arriving later is dropped.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var followers: [String: Task<Void, Never>] = [:]
