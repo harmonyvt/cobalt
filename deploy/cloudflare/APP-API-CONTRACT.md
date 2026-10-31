@@ -2517,6 +2517,41 @@ Keyed. The Worker only: it calls 7TV and writes D1 + the public media bucket. Th
 
 No migration. Deploy the API Worker only. The app decodes each library file on its own, so an old build drops a file whose `source` is `emote` and can show an empty post. Ship the app that accepts the word before relying on a saved emote.
 
+### 20.1 Top, trending, new and the global set (addendum, 2026-10-30; owner: "I cannot search by top global or filter by weekly daily popular")
+
+`GET /emotes` also takes `sort` and `page`. With no `sort` the route is exactly as above (a name is required, top of all
+time), so old clients are unchanged.
+
+- `sort`: `top` (most used of all time), `top_daily`, `top_weekly`, `top_monthly` (most used over that window),
+  `trending_daily`, `trending_weekly`, `trending_monthly` (rising fastest), `new` (newest uploads), `global` (7TV's global
+  emote set). Anything else is 400 `error.emote.query`.
+- With a `sort`, `q` is optional (0..64 trimmed characters): empty browses the whole list, a name narrows it.
+- `page`: 1..50, default 1, 24 a page. Anything else is 400 `error.emote.query`.
+- 7TV calls (checked live 2026-10-30): the sorts are v4 `emotes.search(query, sort: { sortBy, order: DESCENDING })` with
+  `sortBy` `TOP_ALL_TIME`, `TOP_DAILY`, `TOP_WEEKLY`, `TOP_MONTHLY`, `TRENDING_DAILY`, `TRENDING_WEEKLY`,
+  `TRENDING_MONTHLY`, `UPLOAD_DATE`, and a null query browses; `global` is v4 `emoteSets.global.emotes(query, page,
+  perPage)`. The same filters as above (no zero-width, private or deleted emotes; files on `cdn.7tv.app`) apply, so a page
+  can hold fewer than 24.
+
+200 (every answer of the route now carries the paging keys):
+
+```
+{ "items": [ { "id", "name", "animated", "preview_url", "file_url", "width", "height", "library_id", "library_url" } ],
+  "sort": "trending_weekly", "page": 1, "has_more": true }
+```
+
+`width` and `height` are `file_url`'s size. `has_more` is true while 7TV has another page (capped at page 50).
+
+The chat AI and MCP: `cobalt.emotes.find({ query?, sort?, page? })` (section 33.10) answers this body. A saved emote is a
+library image (`source: "emote"`, webp, often animated), so anything that takes a library image file takes it.
+
+Clients: the app's emote card (the 7tv circle) has chips `saved` · trending today/this week/this month · top today/this
+week/this month/all time · new · global; `saved` is the old card (saved emotes, typing searches top of all time), a list
+chip loads at once and typing narrows it, and the next page loads at the last tile. The web library has an emotes view with
+the same chips (default trending this week) through the web Worker's `/api/library/emotes`.
+
+No migration. Deploy the API Worker before the web Worker and the app.
+
 ## 21. Library search (addendum, built 2026-10-17; owner: "have a cloudflare worker embed our media for searching", hosted on a private Hugging Face Space, `capybaraharmony/cobalt-embed`)
 
 One vector per library post, made by Google's EmbeddingGemma 2 (text and image encoders) on a private Hugging Face Space (`deploy/huggingface/embed`, its README has the Space contract), stored in D1 `media_embeddings` (migration `0010_search.sql`) and searched by the API Worker (`src/embed.ts`). A post is embedded from `title: <custom title, else the lead file's name> | text: <its file names · the link's host and path>` plus its poster when the poster is on `media.capybaraharmony.com`, so a query finds a post by the words in it or by what its poster shows. Vectors are 256 numbers (Matryoshka truncation, L2-normalized).
@@ -4014,7 +4049,8 @@ The chat AI's calls (the app calls the stage "studio"; the model is told so):
   links tab. Private picks are left out and named in `not_public`.
 - `cobalt.stage.items({ offset?, limit? })` (`GET /stage/pool`), `cobalt.stage.action(type, { item_id? })`
   (`POST /stage/action`), free.
-- `cobalt.emotes.find(query)` (`GET /emotes`) and `cobalt.emotes.save(id)` (`POST /emotes`), free.
+- `cobalt.emotes.find({ query?, sort?, page? })` (`GET /emotes`, section 20.1; a query, a sort or both; `sort` defaults to
+  `top`) → `{ sort, page, has_more, items }`, and `cobalt.emotes.save(id)` (`POST /emotes`), free. Both are MCP tools too.
 
 ### 33.11 The workbench box: `cobalt.box.run` and `cobalt.box.save` (T6)
 

@@ -562,6 +562,15 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         return try await sendJSON(EmoteListWire.self, req).items
     }
 
+    public func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage {
+        var params: [(String, String)] = [("sort", sort.rawValue), ("page", String(page))]
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !q.isEmpty { params.insert(("q", q), at: 0) }
+        let req = try makeRequest("GET", "/emotes", query: params, keyed: true)
+        let wire = try await sendJSON(EmotePageWire.self, req)
+        return EmotePage(items: wire.items, page: wire.page ?? page, hasMore: wire.hasMore ?? false)
+    }
+
     public func saveEmote(id: String) async throws -> SavedEmote {
         let req = try makeRequest("POST", "/emotes", keyed: true)
         return try await sendJSON(SavedEmote.self, req, body: Self.jsonBody(["id": id]))
@@ -1383,6 +1392,12 @@ private struct VisibilityWire: Decodable {
 
 private struct EmoteListWire: Decodable {
     var items: [EmoteHit]
+}
+
+private struct EmotePageWire: Decodable {
+    var items: [EmoteHit]
+    var page: Int?
+    var hasMore: Bool?
 }
 
 // MARK: - Delegates

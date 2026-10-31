@@ -65,7 +65,7 @@ exactly like /api/keys (same verifier), POST/PUT/DELETE also require Origin = we
 JSON responses, `cache-control: no-store`.
 - `GET /library` → the library page (self-contained HTML like the studio page; same CSP
   approach: connect-src 'self' https://api.capybaraharmony.com; img-src/media-src also allow
-  https://media.capybaraharmony.com and blob:/data:). Add "/library", "/library/*",
+  https://media.capybaraharmony.com and blob:/data:; img-src also allows https://cdn.7tv.app for emote previews). Add "/library", "/library/*",
   "/api/library", "/api/library/*" to runWorkerFirst.
 - `GET /api/library?filter=all|public|private|studio&before=<ms>&limit=<=100` →
   `{ "items": [ { "id", "kind", "source", "name", "url", "content_type", "bytes", "width",
@@ -153,6 +153,13 @@ migration `0008_visibility.sql` applied before this Worker is deployed; the data
   /api/library item> + post_key + score], index: { posts, pending } }`, best post first. The API's errors keep their
   status and code (400 `error.library.bad_request`, 503 `error.search.off` / `error.search.waking` / `error.api.generic`,
   502 `error.search.failed`); upstream 401/403 → 502 `error.library.upstream`.
+- `GET /api/library/emotes?q=<0..64 chars>&sort=top|top_daily|top_weekly|top_monthly|trending_daily|trending_weekly|trending_monthly|new|global&page=<1..50>`
+  → the API's `GET /emotes` (APP-API-CONTRACT.md section 20) answered as is; with a sort q may be empty, without one q is required;
+  anything else → 400 `error.library.bad_request`. `POST /api/library/emotes` `{ "id" }` → API `POST /emotes` (201 saved, 200 already
+  saved; Origin checked). Errors keep the API's status and code (`error.emote.query`, `error.emote.unavailable` 502).
+- Page: an "emotes" view next to grid / sky map / links: search box (250 ms debounce, stale requests aborted), sort chips (default
+  trending this week), a grid of previews from cdn.7tv.app, "more" button or infinite scroll on `has_more`. Tapping an emote saves it
+  (a tick once `library_id` is set, "copy link" copies `library_url`); the grid refreshes when the user returns to it.
 - `GET /api/library/search/post?key=<post_key>` → the API's `GET /library/search/post` answered as is (404 passes through).
 - `GET /api/library` items gain `post_key` (the API's post-key rule; null when the lookup fails).
 - Page: a search box above the grid (`/` focuses, Esc clears, 300 ms debounce or Enter); results replace the grid in score

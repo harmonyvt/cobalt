@@ -114,6 +114,8 @@ public protocol CobaltClient: Sendable {
     func library(cursor: String?, limit: Int, v3: Bool) async throws -> LibraryPage
     /// `GET /emotes?q=` (APP-API-CONTRACT section 20). Stores nothing.
     func searchEmotes(query: String) async throws -> [EmoteHit]
+    /// `GET /emotes?q=&sort=&page=` (section 20.1): browse a sort, with or without a name.
+    func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage
     /// `POST /emotes` `{id}`. The first save is new; the same id again is the same file.
     func saveEmote(id: String) async throws -> SavedEmote
     /// `GET /library/search?q=&limit=&v=` (APP-API-CONTRACT 21; keyed; only when `features.search`): the posts best
@@ -329,6 +331,9 @@ extension CobaltClient {
     /// A client that predates the route says the server cannot do it.
     public func deletePost(anchor itemID: String) async throws -> PostDeleteResult { throw PipelineFailure.unsupported }
     public func searchEmotes(query: String) async throws -> [EmoteHit] { throw PipelineFailure.unsupported }
+    public func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage {
+        throw PipelineFailure.unsupported
+    }
     public func saveEmote(id: String) async throws -> SavedEmote { throw PipelineFailure.unsupported }
     public func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult {
         throw PipelineFailure.unsupported

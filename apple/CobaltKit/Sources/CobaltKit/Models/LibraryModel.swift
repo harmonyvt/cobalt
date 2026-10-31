@@ -339,6 +339,11 @@ public final class LibraryModel {
         try await ctx.client.searchEmotes(query: query)
     }
 
+    /// `GET /emotes?sort=&page=`: top, trending, new or the global set, with or without a name. Nothing is stored.
+    public func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage {
+        try await ctx.client.browseEmotes(query: query, sort: sort, page: page)
+    }
+
     /// `POST /emotes`, then the library is read again so the new file is in `posts`.
     public func saveEmote(id: String) async throws -> SavedEmote {
         let saved = try await ctx.client.saveEmote(id: id)

@@ -1,14 +1,21 @@
 import CobaltKit
 import SwiftUI
 
-/// The card the 7tv circle opens into. An empty field is the emotes already saved.
-/// Typing asks our API. A tap saves, or removes our copy. Nothing is copied from here.
+/// The card the 7tv circle opens into. The chips pick what shows: `saved` (the emotes already saved; typing there
+/// searches 7TV's top of all time, as before) or a 7TV list (trending or top by day, week, month, all time, new, the
+/// global set), which typing narrows by name (APP-API-CONTRACT 20.1). A tap saves, or removes our copy. Nothing is
+/// copied from here.
 struct EmoteSearchCard: View {
     let model: AppModel
     let close: () -> Void
 
     @State private var query = ""
+    /// Nil is `saved`.
+    @State private var sort: EmoteSort?
     @State private var hits: [EmoteHit] = []
+    @State private var page = 1
+    @State private var hasMore = false
+    @State private var loadingMore = false
     @State private var searching = false
     @State private var missed = false
     @State private var failed = false
@@ -33,6 +40,12 @@ struct EmoteSearchCard: View {
         !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// 7TV results show (not the saved emotes): a list chip, or a name typed under `saved`.
+    private var showingHits: Bool { sort != nil || typing }
+
+    /// What `search()` depends on: a new chip or new text starts over at page 1.
+    private struct Ask: Equatable { var query: String; var sort: EmoteSort? }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
@@ -47,10 +60,11 @@ struct EmoteSearchCard: View {
                 if searching { ProgressView().controlSize(.small) }
                 CloseButton { close() }
             }
+            sortChips
             caption
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 12)], spacing: 12) {
-                    if typing {
+                    if showingHits {
                         ForEach(hits) { hit in
                             tile(
                                 id: hit.id,
@@ -59,6 +73,9 @@ struct EmoteSearchCard: View {
                                 animated: hit.animated,
                                 mark: hit.libraryID != nil,
                                 action: { Task { await tap(hit) } })
+                            .onAppear {
+                                if hit.id == hits.last?.id { Task { await more() } }
+                            }
                         }
                     } else {
                         ForEach(saved) { file in
@@ -78,11 +95,15 @@ struct EmoteSearchCard: View {
                         }
                     }
                 }
+                if loadingMore {
+                    ProgressView().controlSize(.small).padding(.vertical, 8)
+                }
             }
             .frame(maxHeight: 280)
         }
         .task { await model.library.refresh() }
-        .task(id: query) { await search() }
+        .task(id: Ask(query: query, sort: sort)) { await search() }
+        .haptic(.selection, trigger: sort, enabled: haptics)
         .confirmationDialog(
             removing.map { Copy.emoteRemoveTitle($0.name) } ?? "", isPresented: removingPresented, titleVisibility: .visible,
             presenting: removing
@@ -105,9 +126,9 @@ struct EmoteSearchCard: View {
     private var caption: some View {
         if failed {
             Text(Copy.emoteSearchDown).font(Font.cobalt(12)).foregroundStyle(CobaltColor.errorText)
-        } else if typing && missed && !searching {
-            Text(Copy.emoteSearchMiss).font(Font.cobalt(12)).foregroundStyle(CobaltColor.caption)
-        } else if !typing && saved.isEmpty {
+        } else if showingHits && missed && !searching {
+            Text(typing ? Copy.emoteSearchMiss : Copy.emoteBrowseMiss).font(Font.cobalt(12)).foregroundStyle(CobaltColor.caption)
+        } else if !showingHits && saved.isEmpty {
             Text(Copy.emoteSearchEmpty).font(Font.cobalt(12)).foregroundStyle(CobaltColor.caption)
         }
     }
@@ -151,23 +172,65 @@ struct EmoteSearchCard: View {
         .accessibilityHint(mark ? Copy.emoteSavedHint : Copy.emoteSaveHint)
     }
 
+    private var sortChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                chip(Copy.emoteSaved, selected: sort == nil) { sort = nil }
+                ForEach(EmoteSort.allCases) { option in
+                    chip(Copy.emoteSort(option), selected: sort == option) { sort = option }
+                }
+            }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Copy.emoteSortsA11y)
+    }
+
+    private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
+                .foregroundStyle(selected ? CobaltColor.onText : Color.primary)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 12)
+                .frame(minHeight: 30)
+                .background(Capsule().fill(selected ? CobaltColor.text : CobaltColor.elevated))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
     private func search() async {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         token += 1
         let mine = token
         failed = false
         missed = false
-        guard !q.isEmpty else {
+        loadingMore = false
+        page = 1
+        hasMore = false
+        guard sort != nil || !q.isEmpty else {
             hits = []
             searching = false
             return
         }
-        try? await Task.sleep(for: .milliseconds(300))
+        // a chip tap loads at once; typing waits for a pause
+        if !q.isEmpty { try? await Task.sleep(for: .milliseconds(300)) }
         guard mine == token, !Task.isCancelled else { return }
         searching = true
         defer { if mine == token { searching = false } }
         do {
-            let found = try await model.library.searchEmotes(query: q)
+            let found: [EmoteHit]
+            if let sort {
+                let first = try await model.library.browseEmotes(query: q, sort: sort, page: 1)
+                found = first.items
+                guard mine == token else { return }
+                hasMore = first.hasMore
+            } else {
+                found = try await model.library.searchEmotes(query: q)
+            }
             guard mine == token else { return }
             hits = found
             missed = found.isEmpty
@@ -176,6 +239,26 @@ struct EmoteSearchCard: View {
             guard mine == token else { return }
             hits = []
             failed = true
+        }
+    }
+
+    /// The next page of a list chip, when the last tile shows.
+    private func more() async {
+        guard let sort, hasMore, !loadingMore, !searching else { return }
+        let mine = token
+        let next = page + 1
+        loadingMore = true
+        defer { if mine == token { loadingMore = false } }
+        do {
+            let found = try await model.library.browseEmotes(query: query.trimmingCharacters(in: .whitespacesAndNewlines), sort: sort, page: next)
+            guard mine == token else { return }
+            let seen = Set(hits.map(\.id))
+            hits += found.items.filter { !seen.contains($0.id) }
+            page = next
+            hasMore = found.hasMore
+        } catch {
+            guard mine == token else { return }
+            hasMore = false
         }
     }
 

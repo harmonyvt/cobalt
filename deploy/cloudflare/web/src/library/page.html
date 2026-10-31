@@ -168,6 +168,22 @@ a { color: inherit; }
 .tile .cap.open:hover .name { text-decoration: underline; }
 .tile .cap.open:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 
+/* 7tv emotes */
+.emotes { display: grid; gap: 10px; }
+.emotes .chips { gap: 4px; }
+.emotes .chips button { min-height: 32px; font-size: 12px; padding: 0 10px; }
+@media (pointer: coarse), (max-width: 640px) { .emotes .chips button { min-height: 44px; } }
+.egrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
+.emote { background: var(--button); border-radius: var(--radius); box-shadow: 0 0 0 1px var(--button-stroke) inset; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.emote .pic { display: grid; place-items: center; aspect-ratio: 1; background: var(--track); border-radius: 0; box-shadow: none; padding: 8px; min-height: 0; cursor: pointer; }
+.emote .pic img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.emote .pic:disabled { cursor: default; opacity: 1; }
+.emote .cap { padding: 6px 8px 2px; font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.emote .ea { display: flex; gap: 6px; align-items: center; padding: 2px 8px 8px; font-size: 11px; color: var(--gray); min-height: 30px; }
+.emote .ea button { font-size: 11px; min-height: 28px; padding: 0 8px; }
+.emote .tick { color: var(--green); }
+.emote.saving .pic { opacity: .5; }
+
 /* hidden posts (APP-API-CONTRACT.md section 37) */
 .seg button[data-f="hidden"][aria-pressed="true"] { background: #000; color: #fff; box-shadow: 0 0 0 1px #fff3 inset; }
 .fx { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -359,6 +375,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
           <button type="button" data-v="grid" aria-pressed="true">grid</button>
           <button type="button" data-v="map" aria-pressed="false">sky map</button>
           <button type="button" data-v="links" aria-pressed="false">links</button>
+          <button type="button" data-v="emotes" aria-pressed="false">emotes</button>
         </div>
         <div class="status" id="mapStatus" role="status" aria-live="polite"></div>
       </div>
@@ -382,6 +399,16 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
           <div class="lkgrid" id="linkGrid"></div>
           <aside class="lkside" id="linkSide" aria-label="selected link" hidden></aside>
         </div>
+      </div>
+      <div id="emoteView" class="emotes" hidden>
+        <form class="omni" id="emoteForm" role="search" autocomplete="off">
+          <input id="eq" type="search" maxlength="64" enterkeyhint="search" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="search 7tv emotes" aria-label="search 7tv emotes">
+        </form>
+        <div class="seg chips" role="group" aria-label="sort emotes" id="emoteSorts"></div>
+        <div class="status" id="emoteStatus" role="status" aria-live="polite"></div>
+        <div class="egrid" id="emoteGrid"></div>
+        <div class="more" id="emoteMore" hidden><button id="emoteMoreBtn" type="button">more</button></div>
+        <div id="emoteEnd" style="height:1px"></div>
       </div>
       <div id="gridView">
         <div class="grid" id="grid"></div>
@@ -558,6 +585,7 @@ $("reload").onclick = function () { location.reload(); };
 async function lib(path, init, timeoutMs) {
   var ctl = new AbortController();
   var timer = setTimeout(function () { ctl.abort(); }, timeoutMs || 40000);
+  if (init && init.signal) init.signal.addEventListener("abort", function () { ctl.abort(); });
   var res;
   try {
     res = await fetch(path, Object.assign({}, init || {}, { signal: ctl.signal, redirect: "manual", cache: "no-store", credentials: "same-origin" }));
@@ -2172,14 +2200,134 @@ function mapStatusLine() {
   if (M.data.posts.length > n) line += " · newest " + n + " shown";
   mapStatus("", line);
 }
+/* ---------- 7tv emotes (APP-API-CONTRACT.md section 20, relayed by /api/library/emotes) ---------- */
+var EMOTE_SORTS = [
+  ["trending_daily", "trending today"], ["trending_weekly", "trending this week"], ["trending_monthly", "trending this month"],
+  ["top_daily", "top today"], ["top_weekly", "top this week"], ["top_monthly", "top this month"], ["top", "top all time"],
+  ["new", "new"], ["global", "global"]
+];
+var CDN_7TV = "https://cdn.7tv.app/";
+var EMO = { sort: "trending_weekly", q: "", page: 0, more: false, items: [], seq: 0, ctl: null, loading: false, timer: 0, opened: false, dirty: false, busy: {} };
+function emoteStatus(kind, text, spinning) {
+  var el = $("emoteStatus");
+  el.className = "status" + (kind ? " " + kind : "");
+  el.textContent = "";
+  if (!text) return;
+  if (spinning) el.append(h("span", { class: "spin", "aria-hidden": "true" }));
+  el.append(h("span", { text: text }));
+}
+function renderEmoteSorts() {
+  var box = $("emoteSorts");
+  box.textContent = "";
+  EMOTE_SORTS.forEach(function (s) {
+    box.append(h("button", { type: "button", text: s[1], "aria-pressed": String(EMO.sort === s[0]), onclick: function () {
+      if (EMO.sort === s[0]) return;
+      EMO.sort = s[0]; renderEmoteSorts(); loadEmotes(true);
+    } }));
+  });
+}
+function emoteTile(m) {
+  var saved = !!m.library_id;
+  var src = typeof m.preview_url === "string" && m.preview_url.indexOf(CDN_7TV) === 0 ? m.preview_url : "";
+  var pic = h("button", { class: "pic", type: "button", "aria-label": saved ? m.name + " (saved, copy link)" : "save " + m.name, onclick: function () { saved ? copyText(shareUrl(m.library_url || "") || m.library_url || "") : saveEmote(m); } },
+    src ? h("img", { src: src, alt: "", loading: "lazy", decoding: "async" }) : null);
+  var ea = h("div", { class: "ea" });
+  if (EMO.busy[m.id]) ea.append(h("span", { text: "saving…" }));
+  else if (saved) {
+    ea.append(h("span", { class: "tick", text: "\u2713 saved" }));
+    if (m.library_url) ea.append(h("button", { type: "button", onclick: function () { copyText(shareUrl(m.library_url) || m.library_url); }, text: "copy link" }));
+  } else ea.append(h("span", { text: m.animated ? "animated" : "tap to save" }));
+  return h("div", { class: "emote" + (EMO.busy[m.id] ? " saving" : ""), "data-id": m.id }, pic, h("div", { class: "cap", text: m.name || "", title: m.name || "" }), ea);
+}
+function renderEmotes() {
+  var g = $("emoteGrid");
+  g.textContent = "";
+  EMO.items.forEach(function (m) { g.append(emoteTile(m)); });
+  $("emoteMore").hidden = !EMO.more;
+  $("emoteMoreBtn").disabled = EMO.loading;
+}
+async function loadEmotes(reset) {
+  if (EMO.loading && !reset) return;
+  clearTimeout(EMO.timer);
+  if (EMO.ctl) EMO.ctl.abort();
+  var seq = ++EMO.seq, ctl = new AbortController();
+  EMO.ctl = ctl;
+  if (reset) { EMO.items = []; EMO.page = 0; EMO.more = false; }
+  var page = EMO.page + 1;
+  EMO.loading = true;
+  renderEmotes();
+  emoteStatus("", reset ? "loading…" : "", true);
+  var url = "/api/library/emotes?sort=" + EMO.sort + "&page=" + page + (EMO.q ? "&q=" + encodeURIComponent(EMO.q) : "");
+  var r;
+  try { r = await lib(url, { signal: ctl.signal }, 30000); }
+  catch (e) {
+    if (seq !== EMO.seq) return;
+    EMO.loading = false; renderEmotes();
+    var d = describe(e); emoteStatus("bad", d.text, false); return;
+  }
+  if (seq !== EMO.seq) return;
+  EMO.loading = false;
+  var b = r.body;
+  if (r.status === 200 && b && Array.isArray(b.items)) {
+    EMO.items = EMO.items.concat(b.items);
+    EMO.page = page; EMO.more = !!b.has_more && page < 50;
+    renderEmotes();
+    emoteStatus("", EMO.items.length ? "" : (EMO.q ? "no emotes match \u201c" + EMO.q + "\u201d." : "nothing here yet."));
+    return;
+  }
+  renderEmotes();
+  var code = errCode(r);
+  emoteStatus("bad", code === "error.emote.unavailable" ? "7tv did not answer: try again later" : code === "error.emote.query" ? "that search isn't valid." : messageFor(code || "error.library.upstream"));
+}
+async function saveEmote(m) {
+  if (EMO.busy[m.id]) return;
+  EMO.busy[m.id] = true; renderEmotes();
+  try {
+    var b = ok(await libPost("/api/library/emotes", { id: m.id }));
+    m.library_id = b.id || m.library_id || m.id;
+    m.library_url = shareUrl(b.url || "") || m.library_url || "";
+    toast("saved " + (m.name || "emote"));
+    EMO.dirty = true;
+    reloadUsage();
+  } catch (e) {
+    var code = e && e.code;
+    toast(code === "error.emote.unavailable" ? "7tv did not answer: try again later" : describe(e).text);
+  }
+  delete EMO.busy[m.id]; renderEmotes();
+}
+function openEmotes() {
+  if (EMO.opened) return;
+  EMO.opened = true;
+  renderEmoteSorts();
+  loadEmotes(true);
+}
+$("eq").addEventListener("input", function () {
+  clearTimeout(EMO.timer);
+  EMO.timer = setTimeout(function () {
+    var q = $("eq").value.trim().replace(/\s+/g, " ");
+    if (q === EMO.q) return;
+    EMO.q = q; loadEmotes(true);
+  }, 250);
+});
+$("eq").addEventListener("keydown", function (e) { if (e.key === "Escape" && $("eq").value) { e.preventDefault(); $("eq").value = ""; $("eq").dispatchEvent(new Event("input")); } });
+$("emoteForm").addEventListener("submit", function (e) { e.preventDefault(); clearTimeout(EMO.timer); EMO.q = $("eq").value.trim().replace(/\s+/g, " "); loadEmotes(true); });
+$("emoteMoreBtn").onclick = function () { loadEmotes(false); };
+if (typeof IntersectionObserver === "function") {
+  new IntersectionObserver(function (es) {
+    if (es[0].isIntersecting && EMO.more && !EMO.loading && !$("emoteView").hidden) loadEmotes(false);
+  }, { rootMargin: "300px" }).observe($("emoteEnd"));
+}
 async function setView(v) {
   M.view = v;
   document.querySelectorAll("#views button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.v === v)); });
   $("mapView").hidden = v !== "map";
   $("gridView").hidden = v !== "grid";
   $("linksView").hidden = v !== "links";
-  $("filtersBar").hidden = v === "links";
-  $("searchBar").hidden = v === "links";
+  $("emoteView").hidden = v !== "emotes";
+  $("filtersBar").hidden = v === "links" || v === "emotes";
+  $("searchBar").hidden = v === "links" || v === "emotes";
+  if (v === "emotes") { mapStatus("", ""); hideTip(); openEmotes(); return; }
+  if (EMO.dirty) { EMO.dirty = false; refreshGrid(); }
   if (v === "links") { mapStatus("", ""); hideTip(); loadLinks(); return; }
   if (v !== "map") { mapStatus("", ""); hideTip(); return; }
   mapStatusLine();
@@ -2259,7 +2407,7 @@ $("map").addEventListener("wheel", function (e) {
 if (typeof ResizeObserver === "function") new ResizeObserver(function () { if (M.view === "map") drawMap(); }).observe($("mapWrap"));
 if (window.matchMedia) {
   var mq = window.matchMedia("(prefers-color-scheme: dark)");
-  var onScheme = function () { SPRITES = {}; M.nebula = null; if (M.view === "map") drawMap(); if (E.key && $("sheet").open) loadEmb(E.key); };
+  var onScheme = function () { SPRITES = {}; M.nebula = null; if (M.view === "map") drawMap(); if (EMO.key && $("sheet").open) loadEmb(EMO.key); };
   if (mq.addEventListener) mq.addEventListener("change", onScheme);
 }
 
