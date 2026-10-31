@@ -31,6 +31,11 @@ enum Endpoints {
         APIEndpoint(op: "library.about.set", method: "PATCH", path: "/library/about", auth: .key)
     }
 
+    /// `GET /library/transcript` (op `library.transcript`, auth key_or_service): What is said in a video, line by line with times in seconds (from/to: only that part). state says why there are no lines.
+    static func libraryTranscript() -> APIEndpoint<LibraryTranscriptResponse> {
+        APIEndpoint(op: "library.transcript", method: "GET", path: "/library/transcript", auth: .keyOrService)
+    }
+
     /// `GET /library` (op `library.index`, auth key_or_service): The app's library pages (GET /library).
     static func libraryIndex() -> APIEndpoint<LibraryIndexResponse> {
         APIEndpoint(op: "library.index", method: "GET", path: "/library", auth: .keyOrService)
@@ -777,6 +782,32 @@ struct LibraryAboutSetResponse: Decodable, Sendable {
     var words: [LibraryAboutSetResponseWordsItem]
     /// the 4 nearest posts
     var neighbours: [LibraryAboutSetResponseNeighboursItem]
+}
+
+struct TranscriptWord: Decodable, Sendable {
+    var text: String
+    var start: Double
+    var end: Double
+}
+
+struct TranscriptLine: Decodable, Sendable {
+    /// seconds from the start of the clip
+    var start: Double
+    var end: Double
+    var text: String
+    /// each word's own time (left out for the chat AI)
+    var words: [TranscriptWord]?
+}
+
+struct LibraryTranscriptResponse: Decodable, Sendable {
+    var postKey: String
+    /// done: lines below; no_speech: heard, nothing said; pending: not heard yet; no_sound: nothing to hear; failed; off: no Whisper
+    var state: String
+    var language: String?
+    var model: String?
+    var updatedAt: Double?
+    /// subtitle lines, in order (the first 10 minutes of the sound)
+    var lines: [TranscriptLine]
 }
 
 /// over the whole library, not the page

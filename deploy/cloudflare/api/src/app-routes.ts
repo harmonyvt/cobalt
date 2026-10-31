@@ -265,6 +265,9 @@ export async function capabilities(
                 // the Workers AI binding (Whisper) is also there
                 about: search === true && about === true,
                 about_sound: search === true && about === true && aboutSound === true,
+                // GET /library/transcript, `said` on GET /library/search (APP-API-CONTRACT.md section 47): the subtitles and
+                // the "said at" lines, exactly while the sound is heard (about_sound)
+                transcripts: search === true && about === true && aboutSound === true,
                 // GET /queue: the line, the search index and the posters in one snapshot (APP-API-CONTRACT.md
                 // section 23)
                 queue: true,

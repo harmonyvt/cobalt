@@ -17,6 +17,7 @@ import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
 import { backfillCaptions, captionerFrom } from "./roast";
 import { ABOUT_RUN_BUDGET_MS, describerFrom, whisperFrom, writeAbouts } from "./about-writer";
 import { indexTerms } from "./about";
+import { indexMoments, MOMENTS_RUN_BUDGET_MS, timeTranscripts, TRANSCRIPT_RUN_BUDGET_MS } from "./transcripts";
 import { setRoastInput } from "./share-sets";
 import { embedFrom, handleRequest, type WorkerEnv } from "./worker";
 import { loaderRunner } from "./chat-loader";
@@ -469,6 +470,17 @@ export default {
                 } catch (e) {
                     console.error("[about] kick failed", e instanceof Error ? e.name : "error");
                 }
+                // Timed transcripts (section 47): the probes' sound heard with the time of every word (and every post heard
+                // before this section heard again), before the writer, which then reuses the words.
+                const transcriber = whisperFrom(env.AI);
+                if (transcriber) {
+                    try {
+                        const r = await timeTranscripts({ db: env.DB, originals: env.ORIGINALS, transcriber, now: () => Date.now(), budgetMs: TRANSCRIPT_RUN_BUDGET_MS });
+                        if (r.heard || r.failed || r.removed) console.log("[transcript] heard", JSON.stringify(r));
+                    } catch (e) {
+                        console.error("[transcript] pass failed", e instanceof Error ? e.message.slice(0, 200) : "error");
+                    }
+                }
                 try {
                     const r = await writeAbouts({
                         db: env.DB,
@@ -476,7 +488,7 @@ export default {
                         media: env.MEDIA,
                         mediaBaseUrl: env.MEDIA_BASE_URL,
                         describer,
-                        transcriber: whisperFrom(env.AI),
+                        transcriber,
                         now: () => Date.now(),
                         budgetMs: ABOUT_RUN_BUDGET_MS,
                     });
@@ -515,13 +527,20 @@ export default {
                     mediaBaseUrl: env.MEDIA_BASE_URL,
                     now: () => Date.now(),
                     // the run must end inside the 15 minutes: the words' and the word list's time comes out of it
-                    budgetMs: SEARCH_RUN_BUDGET_MS - TERMS_RUN_BUDGET_MS - (describer ? ABOUT_RUN_BUDGET_MS : 0),
+                    budgetMs: SEARCH_RUN_BUDGET_MS - TERMS_RUN_BUDGET_MS - MOMENTS_RUN_BUDGET_MS - (describer ? ABOUT_RUN_BUDGET_MS + TRANSCRIPT_RUN_BUDGET_MS : 0),
                     trigger: "cron",
                 });
                 if (r.indexed || r.failed || r.removed || r.unavailable) console.log("[search] index", JSON.stringify(r));
                 indexed = r.indexed;
             } catch (e) {
                 console.error("[search] index failed", e instanceof Error ? e.name : "error");
+            }
+            // Moments (section 47.4): a vector for each stretch of speech, so a search finds the moment.
+            try {
+                const m = await indexMoments({ db: env.DB, client, now: () => Date.now(), budgetMs: MOMENTS_RUN_BUDGET_MS });
+                if (m.embedded || m.removed || m.unavailable) console.log("[moments] index", JSON.stringify(m));
+            } catch (e) {
+                console.error("[moments] index failed", e instanceof Error ? e.message.slice(0, 200) : "error");
             }
             // The word list (section 34.5): new terms embedded in query mode, and every term's average after posts moved.
             try {

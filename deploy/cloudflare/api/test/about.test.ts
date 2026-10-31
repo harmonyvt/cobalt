@@ -376,6 +376,7 @@ class FakeHaiku implements Describer {
     }
 }
 class FakeWhisper implements Transcriber {
+    model = "fake-whisper";
     seen: Uint8Array[] = [];
     fail = false;
     text: string | null = "hey look at him go";
@@ -543,11 +544,12 @@ describe("the writer (34.3)", () => {
                 return { text: "  hello\nthere ", transcription_info: { language: "en" } };
             },
         })!;
-        expect(await t.transcribe(Uint8Array.from([1, 2, 3]))).toEqual({ text: "hello there", language: "en" });
+        expect(await t.transcribe(Uint8Array.from([1, 2, 3]))).toEqual({ text: "hello there", language: "en", lines: [] });
+        expect(t.model).toBe("@cf/openai/whisper-large-v3-turbo");
         expect(calls[0]).toEqual({ model: "@cf/openai/whisper-large-v3-turbo", inputs: { audio: "AQID", task: "transcribe", vad_filter: true } });
         expect(whisperFrom(undefined)).toBeNull();
         const empty = whisperFrom({ run: async () => ({ text: "   " }) })!;
-        expect(await empty.transcribe(new Uint8Array(1))).toEqual({ text: null, language: null });
+        expect(await empty.transcribe(new Uint8Array(1))).toEqual({ text: null, language: null, lines: [] });
         const bad = whisperFrom({ run: async () => ({ nope: 1 }) })!;
         await expect(bad.transcribe(new Uint8Array(1))).rejects.toThrow();
     });

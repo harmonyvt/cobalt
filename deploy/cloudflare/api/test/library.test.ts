@@ -990,6 +990,7 @@ describe("GET /capabilities", () => {
                 // section 34: needs search and the Anthropic key (and Workers AI for the sound)
                 about: false,
                 about_sound: false,
+                transcripts: false,
                 queue: true,
                 // no share host in this world's env (section 24)
                 share_sets: false,

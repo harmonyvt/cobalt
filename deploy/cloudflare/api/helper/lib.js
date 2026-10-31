@@ -611,7 +611,7 @@ export function posterTime(duration) {
 
 /** Longer side of an about frame (never upscaled), the first seconds of sound kept, and the silence line. */
 export const ABOUT_FRAME_SIDE = 768;
-export const ABOUT_AUDIO_SECONDS = 180;
+export const ABOUT_AUDIO_SECONDS = 600;
 export const ABOUT_SILENCE_DB = -60;
 /** The frames' places in the clip, and the shortest clip that gets all three. */
 export const ABOUT_FRACTIONS = [0.15, 0.5, 0.85];
@@ -631,7 +631,7 @@ export function aboutTimes(duration) {
 
 /**
  * ffmpeg argv for the about sound: the first ABOUT_AUDIO_SECONDS as mono 16 kHz MP3 at 32 kbit/s (what Whisper reads
- * well, under 1 MB), measuring its loudness on the way (volumedetect prints mean_volume on stderr).
+ * well, 2.4 MB at most), measuring its loudness on the way (volumedetect prints mean_volume on stderr).
  * @param {{input: string, output: string}} j
  */
 export function buildAboutAudioArgs(j) {

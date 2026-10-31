@@ -23,6 +23,7 @@ import {
 } from "./about-store";
 import type { ModelFetch } from "./model-fetch";
 import { stripEmoji } from "./roast";
+import { heardTranscript, hearOne, linesOf, segmentsOf, transcriptModel, type Line } from "./transcripts";
 
 // The writer's share of each 15-minute run.
 export const ABOUT_RUN_BUDGET_MS = 120_000;
@@ -142,8 +143,8 @@ export function describerFrom(
 
 // ---- the transcriber (Whisper on Workers AI) ------------------------------------------------------------------------
 
-export type Transcript = { text: string | null; language: string | null };
-export type Transcriber = { transcribe(mp3: Uint8Array): Promise<Transcript> };
+export type Transcript = { text: string | null; language: string | null; lines?: Line[] };
+export type Transcriber = { model: string; transcribe(mp3: Uint8Array): Promise<Transcript> };
 export type AiRunner = { run(model: string, inputs: Record<string, unknown>): Promise<unknown> };
 
 export function toBase64(bytes: Uint8Array): string {
@@ -153,10 +154,12 @@ export function toBase64(bytes: Uint8Array): string {
 }
 
 // Workers AI's whisper-large-v3-turbo takes the audio as base64 (`audio`) and answers `{ text, transcription_info:
-// { language } }`. An empty text is "no speech".
+// { language }, segments: [{ start, end, text, words: [{ word, start, end }] }], vtt }`. An empty text is "no speech".
+// The segments become timed subtitle lines (section 47, transcripts.ts).
 export function whisperFrom(ai: AiRunner | undefined | null): Transcriber | null {
     if (!ai || typeof ai.run !== "function") return null;
     return {
+        model: WHISPER_MODEL,
         async transcribe(mp3) {
             const r = (await ai.run(WHISPER_MODEL, { audio: toBase64(mp3), task: "transcribe", vad_filter: true })) as {
                 text?: unknown;
@@ -166,7 +169,12 @@ export function whisperFrom(ai: AiRunner | undefined | null): Transcriber | null
             // eslint-disable-next-line no-control-regex
             const text = r.text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
             const lang = r.transcription_info?.language;
-            return { text: text ? Array.from(text).slice(0, TRANSCRIPT_MAX).join("") : null, language: typeof lang === "string" && lang ? lang.slice(0, 16) : null };
+            const lines = text ? linesOf(segmentsOf(r)) : [];
+            return {
+                text: text ? Array.from(text).slice(0, TRANSCRIPT_MAX).join("") : null,
+                language: typeof lang === "string" && lang ? lang.slice(0, 16) : null,
+                lines,
+            };
         },
     };
 }
@@ -299,16 +307,17 @@ async function writeOne(d: AboutWriterDeps, p: Planned, out: AboutWriteResult): 
         transcript = null;
         language = null;
     } else if (d.transcriber) {
-        const o = await d.originals.get(audioKey(row.item_id)).catch(() => null);
-        if (o) {
-            try {
-                const t = await d.transcriber.transcribe(await bytesOf(o));
+        // heard already by the listening pass (section 47): its words, without a second Whisper call
+        const heard = await heardTranscript(d.db, row, transcriptModel(d.transcriber.model)).catch(() => null);
+        if (heard) {
+            transcript = heard.text ? Array.from(heard.text).slice(0, TRANSCRIPT_MAX).join("") : null;
+            language = heard.text ? heard.language : null;
+        } else {
+            const t = await hearOneSafe(d, row);
+            if (t) {
                 transcript = t.text;
                 language = t.language;
                 out.transcribed++;
-            } catch (e) {
-                // Whisper failing: the words are written without it (an earlier transcript is kept)
-                console.error("[about] transcript failed", row.post_key, e instanceof Error ? e.message.slice(0, 200) : "error");
             }
         }
     }
@@ -341,4 +350,27 @@ async function writeOne(d: AboutWriterDeps, p: Planned, out: AboutWriteResult): 
         .bind(row.post_key, text.sentence, JSON.stringify(text.tags), JSON.stringify(text.sound_tags), transcript, language, d.describer.model, p.hash, now)
         .run();
     out.written++;
+}
+
+// Whisper through the listening pass's own path (the timed transcript is stored too); before migration 0030 the plain
+// transcript only. Null when Whisper failed or the sound is missing: the words are written without it (an earlier
+// transcript is kept).
+async function hearOneSafe(d: AboutWriterDeps, row: AboutRow): Promise<{ text: string | null; language: string | null } | null> {
+    try {
+        return await hearOne(d.db, d.originals, d.transcriber!, row, d.now);
+    } catch (e) {
+        if (!/no such table/i.test(String(e))) {
+            console.error("[about] transcript failed", row.post_key, e instanceof Error ? e.message.slice(0, 200) : "error");
+            return null;
+        }
+    }
+    const o = await d.originals.get(audioKey(row.item_id)).catch(() => null);
+    if (!o) return null;
+    try {
+        const t = await d.transcriber!.transcribe(await bytesOf(o));
+        return { text: t.text, language: t.language };
+    } catch (e) {
+        console.error("[about] transcript failed", row.post_key, e instanceof Error ? e.message.slice(0, 200) : "error");
+        return null;
+    }
 }

@@ -268,6 +268,7 @@ describe("defineOp and the registry", () => {
             "collections.list",
             "library.about",
             "library.about.set",
+            "library.transcript",
             "queue",
             "library.save",
             "library.title",
