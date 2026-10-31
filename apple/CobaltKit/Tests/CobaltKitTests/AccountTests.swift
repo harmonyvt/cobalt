@@ -7,7 +7,7 @@ import Testing
 
 struct AccountAuthTests {
     @Test func challengeMatchesTheRFC7636Vector() {
-        #expect(AccountAuth.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk") == "E9Melhoa2OwvFrEMTJguCHaoeKt8ZvMvm6NxSxkIbBM")
+        #expect(AccountAuth.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk") == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
     }
 
     @Test func verifierIs43Base64urlCharactersAndFresh() {
@@ -26,7 +26,7 @@ struct AccountAuthTests {
     }
 
     @Test func startURLCarriesTheThreeValuesEncoded() throws {
-        let url = try #require(AccountAuth.startURL(platform: "ios", device: "harmony's iphone+1", challenge: "E9Melhoa2OwvFrEMTJguCHaoeKt8ZvMvm6NxSxkIbBM"))
+        let url = try #require(AccountAuth.startURL(platform: "ios", device: "harmony's iphone+1", challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"))
         #expect(url.scheme == "https")
         #expect(url.host() == "cobalt.capybaraharmony.com")
         #expect(url.path() == "/api/auth/app")
@@ -34,7 +34,7 @@ struct AccountAuthTests {
         let items = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
         #expect(items.first { $0.name == "platform" }?.value == "ios")
         #expect(items.first { $0.name == "device" }?.value == "harmony's iphone+1")
-        #expect(items.first { $0.name == "challenge" }?.value == "E9Melhoa2OwvFrEMTJguCHaoeKt8ZvMvm6NxSxkIbBM")
+        #expect(items.first { $0.name == "challenge" }?.value == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
     }
 
     @Test func callbackGivesItsCodeAndNothingElseDoes() {
