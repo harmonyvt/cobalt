@@ -403,6 +403,7 @@ private struct LibraryContent: View {
             LibrarySortMenu(library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery)
             #if os(macOS)
             Button(Copy.Library2.refresh, systemImage: Symbol.Library.refresh) { Task { await controller.refresh() } }
+                .labelStyle(.iconOnly)
                 .keyboardShortcut("r", modifiers: .command)
                 .help(Copy.Library2.refresh)
             #endif
@@ -420,6 +421,7 @@ private struct LibraryContent: View {
                 Button(Copy.Library2.toggleDetail, systemImage: Symbol.Library.inspector) {
                     controller.inspectorOpen.toggle()
                 }
+                .labelStyle(.iconOnly)
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .help(Copy.Library2.toggleDetail)
             }

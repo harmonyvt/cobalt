@@ -102,11 +102,16 @@ struct CombineProgress: View {
                 .foregroundStyle(CobaltColor.errorText)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.updatesFrequently)
-            ButtonRow {
-                Button(Copy.tryAgain, systemImage: Symbol.Gallery.retry) { combine.retry() }
-                    .buttonStyle(.cobaltPrimary())
-                Button(Copy.Combine.changeSettings) { combine.backToEditing() }
-                    .buttonStyle(.cobaltSecondary())
+            // "try again" keeps its word; back to the settings is an icon beside it
+            GlassEffectContainer(spacing: 10) {
+                HStack(spacing: 10) {
+                    Button { combine.backToEditing() } label: {
+                        Label(Copy.Combine.changeSettings, systemImage: Symbol.backToTrim)
+                    }
+                    .buttonStyle(.cobaltIcon())
+                    Button(Copy.tryAgain, systemImage: Symbol.Gallery.retry) { combine.retry() }
+                        .buttonStyle(.cobaltPrimary())
+                }
             }
         }
         .padding(.vertical, 4)

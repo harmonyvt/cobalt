@@ -43,10 +43,15 @@ struct CollectionSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(isCreate ? Copy.Collections.newTitle : Copy.Collections.renameTitle)
-                .font(Font.cobalt(16, .semibold, relativeTo: .headline))
-                .foregroundStyle(CobaltColor.text)
-                .accessibilityAddTraits(.isHeader)
+            HStack(alignment: .top, spacing: 12) {
+                Text(isCreate ? Copy.Collections.newTitle : Copy.Collections.renameTitle)
+                    .font(Font.cobalt(16, .semibold, relativeTo: .headline))
+                    .foregroundStyle(CobaltColor.text)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                CloseButton(cancels: true) { dismiss() }    // cancel is the sheet's close, top right
+                    .disabled(saving)
+            }
             field
             if isCreate { checklist }
             if let problem {
@@ -175,16 +180,10 @@ struct CollectionSheet: View {
     // MARK: the buttons
 
     private var buttons: some View {
-        HStack(spacing: 8) {
-            Button(Copy.Collections.cancel) { dismiss() }
-                .buttonStyle(.cobaltSecondary())
-                .keyboardShortcut(.cancelAction)
-                .disabled(saving)
-            Button(Copy.Collections.save) { save() }
-                .buttonStyle(.cobaltPrimary())
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canSave)
-        }
+        Button(Copy.Collections.save) { save() }
+            .buttonStyle(.cobaltPrimary())
+            .keyboardShortcut(.defaultAction)
+            .disabled(!canSave)
     }
 
     private func save() {

@@ -67,16 +67,13 @@ struct LinkPickerSheet: View {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .top) {
             Text(Copy.LinkEdit.pickLinkTitle(picks.count))
                 .font(Font.cobalt(16, .semibold, relativeTo: .headline))
                 .foregroundStyle(CobaltColor.text)
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
-            Button(Copy.cancel) { dismiss() }
-                .font(CobaltType.captionSmall)
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                .keyboardShortcut(.cancelAction)
+            CloseButton(cancels: true) { dismiss() }
         }
     }
 }

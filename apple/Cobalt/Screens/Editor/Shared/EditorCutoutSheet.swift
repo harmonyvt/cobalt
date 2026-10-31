@@ -75,9 +75,7 @@ struct EditorCutoutSheet: View {
                 .foregroundStyle(CobaltColor.text)
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
-            Button(Copy.Editor.cancel, action: close)
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                .keyboardShortcut(.cancelAction)
+            CloseButton(cancels: true, action: close)
         }
     }
 
@@ -300,19 +298,20 @@ struct EditorOverlayLayerRows: View {
         VStack(alignment: .leading, spacing: 10) {
             if session.overlayTrackLimit > 1 {
                 EditorSection(Copy.Editor.layer, trailing: Copy.Editor.layerName(overlay.track)) {
-                    HStack(spacing: 8) {
+                    IconRow(spacing: 8, alignment: .leading) {
                         layerButton(Symbol.Editor.layerDown, Copy.Editor.layerDown, enabled: overlay.track > 0) {
                             session.setOverlayTrack(id: overlay.id, overlay.track - 1)
                         }
                         layerButton(Symbol.Editor.layerUp, Copy.Editor.layerUp, enabled: overlay.track + 1 < session.overlayTrackLimit) {
                             session.setOverlayTrack(id: overlay.id, overlay.track + 1)
                         }
-                        Spacer(minLength: 0)
                     }
                 }
             }
             if session.canCutout, let kind = source?.kind, kind == .photo || kind == .gif {
-                EditorInspectorButton(title: Copy.Editor.removeBackground, symbol: Symbol.Editor.cutout, action: removeBackground)
+                IconRow(alignment: .leading) {
+                    EditorInspectorButton(title: Copy.Editor.removeBackground, symbol: Symbol.Editor.cutout, action: removeBackground)
+                }
             }
         }
         .haptic(.error, trigger: refused)
@@ -323,18 +322,8 @@ struct EditorOverlayLayerRows: View {
             if !move() { refused += 1 }
         } label: {
             Label(label, systemImage: symbol)
-                .labelStyle(.iconOnly)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(CobaltColor.text)
-                .frame(width: 34, height: 30)
-                .background(EditorColor.field, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .frame(minWidth: Metrics.hit, minHeight: Platform.isMac ? 30 : Metrics.hit)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.cobaltIcon(.small))
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.4)
-        .help(label)
-        .accessibilityLabel(label)
     }
 }

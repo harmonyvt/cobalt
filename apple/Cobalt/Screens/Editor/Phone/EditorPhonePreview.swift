@@ -104,13 +104,12 @@ struct EditorPhoneTransport: View {
 
     private var playButton: some View {
         Button { session.togglePlay() } label: {
-            Image(systemName: session.isPlaying ? Symbol.Editor.pause : Symbol.Editor.play)
-                .font(.system(size: 15, weight: .semibold))
-                .frame(width: 32, height: 24)
+            Label(
+                session.isPlaying ? Copy.Editor.pause : Copy.Editor.play,
+                systemImage: session.isPlaying ? Symbol.Editor.pause : Symbol.Editor.play)
         }
-        .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
+        .buttonStyle(.cobaltIcon(.small, prominent: true))
         .disabled(!session.isPlayerReady)
-        .accessibilityLabel(session.isPlaying ? Copy.Editor.pause : Copy.Editor.play)
     }
 
     @ViewBuilder

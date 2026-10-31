@@ -204,8 +204,9 @@ struct ChatThreadScreen: View {
                 Button(Copy.Chat.delete, systemImage: Symbol.chatDelete, role: .destructive) { controller.deleting = thread }
             } label: {
                 Label(Copy.Chat.menu, systemImage: Symbol.chatMenu)
+                    .labelStyle(.iconOnly)
             }
-            .accessibilityLabel(Copy.Chat.menu)
+            .iconName(Copy.Chat.menu)
         }
     }
 

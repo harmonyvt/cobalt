@@ -214,9 +214,11 @@ struct CollectionSetChips: View {
                         .font(CobaltType.captionSmall)
                         .foregroundStyle(CobaltColor.collectionSet)
                     Spacer(minLength: 8)
-                    Button(Copy.Sets.copyAll, systemImage: Symbol.collectionCopyAll) { controller.copyAll(set, shell: shell) }
-                        .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                        .disabled(store.linksText(in: set) == nil)
+                    Button { controller.copyAll(set, shell: shell) } label: {
+                        Label(Copy.Sets.copyAll, systemImage: Symbol.collectionCopyAll)
+                    }
+                    .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.collectionSet))
+                    .disabled(store.linksText(in: set) == nil)
                     Menu {
                         items(set)
                     } label: {
@@ -227,6 +229,7 @@ struct CollectionSetChips: View {
                     }
                     .menuIndicator(.hidden)
                     .buttonStyle(.borderless)
+                    .iconName(Copy.Sets.menu)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)

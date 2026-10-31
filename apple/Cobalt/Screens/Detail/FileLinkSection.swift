@@ -91,34 +91,44 @@ struct FileLinkSection: View {
             }
 
             if isHidden, let post {
-                HiddenByRow(model: model, post: post)
-                Button(Copy.Hidden.unhide, systemImage: Symbol.HiddenRules.unhide) { ask(.unhide) }
+                HStack(spacing: 10) {
+                    HiddenByRow(model: model, post: post)
+                    Button { ask(.unhide) } label: {
+                        Label(Copy.Hidden.unhide, systemImage: Symbol.HiddenRules.unhide)
+                    }
+                    .buttonStyle(.cobaltIcon(.small))
                     .disabled(changing || controller.isDeleting)
+                }
             }
 
             if !isHidden, current == .private, let url = privateURL {
                 LabeledContent {
-                    Text(Self.display(url))
-                        .font(Font.cobalt(12))
-                        .foregroundStyle(CobaltColor.linkBlue)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
+                    HStack(spacing: 8) {
+                        Text(Self.display(url))
+                            .font(Font.cobalt(12))
+                            .foregroundStyle(CobaltColor.linkBlue)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                        Button { copy(url, status: Copy.Media.copied) } label: {
+                            Label(Copy.PrivateLinks.copy, systemImage: copied ? Symbol.PrivateLinks.copied : Symbol.PrivateLinks.copy)
+                        }
+                        .buttonStyle(.cobaltIcon(.small, state: copied ? .done : .idle))
+                        .symbolBounce(on: copied)
+                        .accessibilityValue(Text(copied ? Copy.PrivateLinks.copied : ""))
+                        Button(role: .destructive) { ask(.rotate) } label: {
+                            Label(Copy.PrivateLinks.rotate, systemImage: Symbol.PrivateLinks.rotate)
+                        }
+                        .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.errorText))
+                        .disabled(changing)
+                    }
                 } label: {
                     Label(Copy.PrivateLinks.link, systemImage: Symbol.PrivateLinks.lock)
                 }
-                Button(copied ? Copy.PrivateLinks.copied : Copy.PrivateLinks.copy,
-                       systemImage: copied ? Symbol.PrivateLinks.copied : Symbol.PrivateLinks.copy) {
-                    copy(url, status: Copy.Media.copied)
-                }
-                .symbolBounce(on: copied)
                 if let link = model.privateLink(of: rendition) {
                     fact(Copy.PrivateLinks.opened, Symbol.PrivateLinks.opened, Copy.PrivateLinks.openedCount(link.opened))
                     fact(Copy.PrivateLinks.keyMade, Symbol.PrivateLinks.made, Self.when(link.createdAt))
                 }
-                Button(Copy.PrivateLinks.rotate, systemImage: Symbol.PrivateLinks.rotate, role: .destructive) { ask(.rotate) }
-                    .foregroundStyle(CobaltColor.errorText)
-                    .disabled(changing)
             }
         } footer: {
             Text(footnote.text)

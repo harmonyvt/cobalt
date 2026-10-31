@@ -41,8 +41,12 @@ struct LibraryShareChips: View {
         ScrollViewReader { proxy in
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                chip(.notShared, title: Copy.Library2.notShared, count: counts.notShared, symbol: nil, tint: nil)
-                chip(.shared, title: Copy.Library2.sharedChip, count: counts.shared, symbol: Symbol.link, tint: CobaltColor.sharedInk)
+                chip(
+                    .notShared, title: Copy.Library2.notShared, count: counts.notShared, symbol: Symbol.Library.notShared,
+                    tint: nil, iconOnly: true)
+                chip(
+                    .shared, title: Copy.Library2.sharedChip, count: counts.shared, symbol: Symbol.link,
+                    tint: CobaltColor.sharedInk, iconOnly: true)
                 if model.capabilities.shareGroups {
                     ForEach(store.groups) { set in
                         chip(
@@ -102,7 +106,11 @@ struct LibraryShareChips: View {
         return out
     }
 
-    private func chip(_ value: LibraryShareFilter, title: String, count: Int, symbol: String?, tint: Color?) -> some View {
+    /// `iconOnly`: `not shared` and `shared` show their icon and count (icon-first controls), the title is their name; a
+    /// set's or a collection's chip keeps its name, which is the owner's words, not a control's.
+    private func chip(
+        _ value: LibraryShareFilter, title: String, count: Int, symbol: String?, tint: Color?, iconOnly: Bool = false
+    ) -> some View {
         let selected = filter == value
         return Button {
             filter = selected ? .all : value
@@ -110,10 +118,10 @@ struct LibraryShareChips: View {
             HStack(spacing: 5) {
                 if let symbol {
                     Image(systemName: symbol)
-                        .symbolVariant(value == .shared || symbol == Symbol.collectionSet ? .none : .fill)
+                        .symbolVariant(value == .shared || value == .notShared || symbol == Symbol.collectionSet ? .none : .fill)
                         .font(.system(size: 10, weight: .bold))
                 }
-                Text(Copy.Library2.shareChip(title, count: count))
+                Text(iconOnly ? "\(count)" : Copy.Library2.shareChip(title, count: count))
                     .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
                     .monospacedDigit()
                     .lineLimit(1)
@@ -127,6 +135,7 @@ struct LibraryShareChips: View {
         }
         .buttonStyle(.plain)
         .id(value)
+        .help(title)
         .accessibilityLabel(title)
         .accessibilityValue("\(count)")
         .accessibilityAddTraits(selected ? .isSelected : [])

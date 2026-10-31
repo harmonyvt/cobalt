@@ -42,8 +42,8 @@ struct RenderButton: View {
 }
 
 /// The popover (Mac, iPad) and the iPhone's sheet content: before a render, the confirm card (`renderTitle`, the summary,
-/// `renderNote`, `render` / `cancel`, disabled with the first problem's words or `renderOffline`); once one runs, its progress
-/// and `cancel render`; if the edit changed since it started, `renderingOlder`.
+/// `renderNote`, `render`, the close in the top-right corner, disabled with the first problem's words or `renderOffline`); once one
+/// runs, its progress, `done` and a `cancel render` icon (its confirmation keeps its words); if the edit changed since it started, `renderingOlder`.
 struct EditorRenderCard: View {
     let model: AppModel
     let session: EditSession
@@ -80,9 +80,13 @@ struct EditorRenderCard: View {
 
     @ViewBuilder
     private var confirm: some View {
-        Text(Copy.Editor.renderTitle)
-            .font(CobaltType.bodySemibold)
-            .foregroundStyle(CobaltColor.text)
+        HStack(alignment: .top, spacing: 8) {
+            Text(Copy.Editor.renderTitle)
+                .font(CobaltType.bodySemibold)
+                .foregroundStyle(CobaltColor.text)
+            Spacer(minLength: 0)
+            CloseButton(cancels: true) { close() }      // cancel is the popover's close, top right
+        }
         let canvas = session.timeline.canvas
         Text(Copy.Editor.renderSummary(w: canvas.w, h: canvas.h, fps: canvas.fps, duration: Copy.Editor.clock(session.timing.seconds)))
             .font(CobaltType.caption)
@@ -98,15 +102,10 @@ struct EditorRenderCard: View {
                 .foregroundStyle(CobaltColor.errorText)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        ButtonRow {
-            Button(Copy.Editor.render, systemImage: Symbol.Editor.render) { start() }
-                .buttonStyle(.cobaltPrimary(compact: true))
-                .disabled(blocker != nil || starting)
-                .keyboardShortcut(.defaultAction)
-            Button(Copy.Editor.cancel) { close() }
-                .buttonStyle(.cobaltSecondary(compact: true))
-                .keyboardShortcut(.cancelAction)
-        }
+        Button(Copy.Editor.render, systemImage: Symbol.Editor.render) { start() }
+            .buttonStyle(.cobaltPrimary(compact: true))
+            .disabled(blocker != nil || starting)
+            .keyboardShortcut(.defaultAction)
     }
 
     private func start() {
@@ -159,9 +158,11 @@ struct EditorRenderCard: View {
                     .buttonStyle(.cobaltPrimary(compact: true))
             }
         } else {
-            ButtonRow {
-                Button(Copy.Editor.cancelRender, role: .destructive) { confirmingCancel = true }
-                    .buttonStyle(.cobaltSecondary(compact: true))
+            HStack(spacing: 8) {
+                Button(role: .destructive) { confirmingCancel = true } label: {
+                    Label(Copy.Editor.cancelRender, systemImage: Symbol.stop)
+                }
+                .buttonStyle(.cobaltIcon(.small))
                 Button(Copy.Editor.done) { close() }
                     .buttonStyle(.cobaltPrimary(compact: true))
             }

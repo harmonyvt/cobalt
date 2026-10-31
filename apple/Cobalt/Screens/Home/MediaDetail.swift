@@ -31,6 +31,16 @@ struct MediaDetail: View {
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
+    @Environment(\.sheetClose) private var sheetClose
+
+    /// Shown in a Mac sheet (its presenter set `sheetClose`): the menu goes in the sheet's top-right corner.
+    private var inMacSheet: Bool {
+        #if os(macOS)
+        return sheetClose != nil
+        #else
+        return false
+        #endif
+    }
 
     /// The tabbed detail's entry point (CONTRACT-MEDIA 4.2): one media, opening on the rendition `initial` names
     /// (`Rendition.ID`; nil = the face).
@@ -160,14 +170,12 @@ struct MediaDetail: View {
                 .sharedBackgroundVisibility(.hidden)
             }
             #endif
-            if !gone {
-                ToolbarItem(placement: .primaryAction) {
-                    DetailMenu(
-                        controller: controller, item: item, rendition: selected,
-                        openInLibrary: { openInLibrary(item) }, askAbout: { askAbout(item) }, rename: { renaming = true })
-                }
+            // a Mac sheet draws toolbar items at the bottom: there the menu sits in the sheet's top-right corner instead
+            if !gone, !inMacSheet {
+                ToolbarItem(placement: .primaryAction) { menu(item, selected) }
             }
         }
+        .sheetCorner { if !gone, inMacSheet { menu(item, selected) } }
         .detailDialogs(controller: controller, item: item) { ask in run(ask, item) }
         .makeSheet(controller: controller, item: item, model: model)
         .renameAlert(item: item, isPresented: $renaming, model: model) { controller.notice = $0 }
@@ -211,6 +219,12 @@ struct MediaDetail: View {
     // MARK: actions
 
     /// `rename` (`pencil`): the title menu's one item; the `more` menu has the same one, first.
+    private func menu(_ item: MediaItem, _ selected: Rendition) -> some View {
+        DetailMenu(
+            controller: controller, item: item, rendition: selected,
+            openInLibrary: { openInLibrary(item) }, askAbout: { askAbout(item) }, rename: { renaming = true })
+    }
+
     private var renameButton: some View {
         Button(Copy.Library2.rename, systemImage: Symbol.Library.rename) { renaming = true }
     }

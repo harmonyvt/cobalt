@@ -36,13 +36,8 @@ struct HiddenRulesScreen: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .toolbar {
-            if closes {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(Copy.Hidden.done) { dismiss() }
-                }
-            }
-        }
+        .sheetCorner()
+        .environment(\.sheetClose, closes ? SheetCloseAction { dismiss() } : nil)
         .task { await rules.load() }
         .sheet(isPresented: $adding) {
             AddHiddenRuleSheet(model: model) { text in
@@ -70,19 +65,30 @@ struct HiddenRulesScreen: View {
                 row(rule)
             }
             if let failure = rules.failure {
-                Text(Copy.failure(failure)).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
-                if rules.rules.isEmpty {
-                    Button(Copy.Hidden.retry, systemImage: Symbol.HiddenRules.retry) { Task { await rules.load() } }
+                HStack(spacing: 8) {
+                    Text(Copy.failure(failure)).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if rules.rules.isEmpty {
+                        Button { Task { await rules.load() } } label: {
+                            Label(Copy.Hidden.retry, systemImage: Symbol.HiddenRules.retry)
+                        }
+                        .buttonStyle(.cobaltIcon(.small))
+                    }
                 }
             }
-            Button(Copy.Hidden.addRule, systemImage: Symbol.HiddenRules.add) { adding = true }
             if let notice {
                 Label(notice, systemImage: "checkmark")
                     .font(Font.cobalt(12.5)).foregroundStyle(.secondary)
                     .transition(.opacity)
             }
         } header: {
-            Text(Copy.Hidden.rulesGroup).font(CobaltType.caption).textCase(nil)
+            // "add rule" is a small icon at the group's trailing edge
+            HStack(spacing: 8) {
+                Text(Copy.Hidden.rulesGroup).font(CobaltType.caption).textCase(nil)
+                Spacer(minLength: 0)
+                Button { adding = true } label: { Label(Copy.Hidden.addRule, systemImage: Symbol.HiddenRules.add) }
+                    .buttonStyle(.cobaltIcon(.small))
+            }
         } footer: {
             Text(Copy.Hidden.rulesFooter).font(CobaltType.captionSmall).lineSpacing(2)
         }

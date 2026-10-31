@@ -299,14 +299,15 @@ struct LinkHeader: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 4)
-            Button(copied ? Copy.Media.copied : Copy.LinkEdit.copyShare) { controller.copy(link, shell: shell) }
-                .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
-                .accessibilityLabel(copied ? Copy.Media.copied : Copy.Links.copyLink)
-            ShareLink(item: link.url) {
-                Label(Copy.Links.share, systemImage: Symbol.share).labelStyle(.iconOnly)
+            IconRow(spacing: 8, alignment: .trailing) {
+                Button { controller.copy(link, shell: shell) } label: {
+                    Label(Copy.Links.copyLink, systemImage: copied ? Symbol.Library.copied : Symbol.copyLink)
+                }
+                .buttonStyle(.cobaltIcon(.small, prominent: true, state: copied ? .done : .idle))
+                ShareLink(item: link.url) { Label(Copy.Links.share, systemImage: Symbol.share) }
+                    .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.linkBlue))
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(CobaltColor.text)
+            .fixedSize()
         }
     }
 }
@@ -428,8 +429,8 @@ struct LinkSaveBar: View {
                     .foregroundStyle(CobaltColor.errorText)
             }
             HStack(spacing: 10) {
-                Button(Copy.LinkEdit.cancel, action: cancel)
-                    .buttonStyle(.cobaltSecondary())
+                Button(action: cancel) { Label(Copy.LinkEdit.cancel, systemImage: Symbol.close) }
+                    .buttonStyle(.cobaltIcon())
                 Button(saving ? Copy.LinkEdit.saving : Copy.LinkEdit.save, action: save)
                     .buttonStyle(.cobaltPrimary())
                     .disabled(!draft.canSave || saving)

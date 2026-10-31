@@ -2,8 +2,8 @@
 import CobaltKit
 import SwiftUI
 
-/// The clip sheet, the approved "iPhone A crop + speed + trim" board (apple/CONTRACT-EDITOR.md 4.5): `cancel` · `surf · clip 2`
-/// · `done`; the clip's frame at the top with the crop frame on it; and below, `crop`, `speed` and `trim`. Opened from `trim`,
+/// The clip sheet, the approved "iPhone A crop + speed + trim" board (apple/CONTRACT-EDITOR.md 4.5): `surf · clip 2` ·
+/// `done` · the close (cancel) top right; the clip's frame at the top with the crop frame on it; and below, `crop`, `speed` and `trim`. Opened from `trim`,
 /// `crop` or `speed` it scrolls to that section. Changes reach the preview as they are made; `cancel` puts the clip back as it
 /// was when the sheet opened.
 struct EditorPhoneClipSheet: View {
@@ -44,17 +44,16 @@ struct EditorPhoneClipSheet: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Button(Copy.Editor.cancel) { cancel() }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
             Text(title)
                 .font(Font.cobalt(12.5, .semibold, relativeTo: .subheadline))
                 .foregroundStyle(CobaltColor.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityAddTraits(.isHeader)
             Button(Copy.Editor.done) { dismiss() }
                 .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
+            CloseButton(cancels: true) { cancel() }     // cancel is the sheet's close, top right
         }
         .padding(.horizontal, Metrics.gutter)
         .padding(.top, 14)
@@ -104,9 +103,11 @@ struct EditorPhoneClipSheet: View {
                         speedSection(clip).id(EditorPhoneClipSection.speed.rawValue)
                         if pitchEnabled { pitchSection(clip) }
                         trimSection(clip).id(EditorPhoneClipSection.trim.rawValue)
-                        EditorInspectorButton(title: Copy.Editor.deleteClip, symbol: Symbol.Editor.delete, destructive: true) {
-                            session.remove(.main(clip.id))
-                            dismiss()
+                        IconRow(alignment: .leading) {
+                            EditorInspectorButton(title: Copy.Editor.deleteClip, symbol: Symbol.Editor.delete, destructive: true) {
+                                session.remove(.main(clip.id))
+                                dismiss()
+                            }
                         }
                     }
                 }

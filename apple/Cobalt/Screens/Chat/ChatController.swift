@@ -132,10 +132,15 @@ struct ChatRenameSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(Copy.Chat.renameTitle)
-                .font(Font.cobalt(16, .semibold, relativeTo: .headline))
-                .foregroundStyle(CobaltColor.text)
-                .accessibilityAddTraits(.isHeader)
+            HStack(alignment: .top, spacing: 12) {
+                Text(Copy.Chat.renameTitle)
+                    .font(Font.cobalt(16, .semibold, relativeTo: .headline))
+                    .foregroundStyle(CobaltColor.text)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                CloseButton(cancels: true) { dismiss() }    // cancel is the sheet's close, top right
+                    .disabled(saving)
+            }
             field
             if let problem {
                 Text(problem)
@@ -143,16 +148,10 @@ struct ChatRenameSheet: View {
                     .foregroundStyle(CobaltColor.errorText)
                     .accessibilityAddTraits(.updatesFrequently)
             }
-            HStack(spacing: 8) {
-                Button(Copy.Chat.cancel) { dismiss() }
-                    .buttonStyle(.cobaltSecondary())
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(saving)
-                Button(Copy.Chat.save) { save() }
-                    .buttonStyle(.cobaltPrimary())
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canSave)
-            }
+            Button(Copy.Chat.save) { save() }
+                .buttonStyle(.cobaltPrimary())
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canSave)
         }
         .padding(.horizontal, 16)
         .padding(.top, 20)

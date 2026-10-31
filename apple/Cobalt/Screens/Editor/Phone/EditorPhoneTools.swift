@@ -2,7 +2,8 @@
 import CobaltKit
 import SwiftUI
 
-/// The tool tray (apple/CONTRACT-EDITOR.md 4.4): `trim` `split` `crop` `speed` `overlay` `volume`, icon over label, 56 pt.
+/// The tool tray (apple/CONTRACT-EDITOR.md 4.4): `trim` `split` `crop` `speed` `overlay` `volume`, icons (hold one
+/// for its name), 56 pt.
 /// `trim`, `crop` and `speed` open the clip sheet on that section; `split` cuts at the playhead; `overlay` opens the overlay
 /// sheet (or the add sheet in overlay mode when none is selected); `volume` opens the small volume sheet. A tool that needs a
 /// main clip takes the one under the playhead when nothing is selected.
@@ -27,6 +28,16 @@ struct EditorPhoneToolTray: View {
     }
 
     var body: some View {
+        GlassEffectContainer(spacing: 6) { tools }
+            .padding(.horizontal, 6)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+            .modifier(EditorPhoneSplitHaptic(tick: splitTick))
+            .background { EditorPlayheadSpotReader(session: session) { spot = $0 } }
+            .accessibilityElement(children: .contain)
+    }
+
+    private var tools: some View {
         HStack(spacing: 0) {
             ToolButton(title: Copy.Editor.toolTrim, symbol: Symbol.Editor.trim, enabled: hasClip) { openClip(.trim) }
             ToolButton(title: Copy.Editor.toolSplit, symbol: Symbol.Editor.split, enabled: splitReady, hint: Copy.Editor.nothingToSplit) { split() }
@@ -37,12 +48,6 @@ struct EditorPhoneToolTray: View {
                 openVolume()
             }
         }
-        .padding(.horizontal, 6)
-        .padding(.top, 8)
-        .padding(.bottom, 2)
-        .modifier(EditorPhoneSplitHaptic(tick: splitTick))
-        .background { EditorPlayheadSpotReader(session: session) { spot = $0 } }
-        .accessibilityElement(children: .contain)
     }
 
     // MARK: actions
@@ -85,8 +90,8 @@ struct EditorPhoneToolTray: View {
     }
 }
 
-/// One tool: the icon over its word, 56 pt tall. A tool that cannot be used is dimmed; one with a `hint` (split) still
-/// answers a tap with that line.
+/// One tool: a `.cobaltIcon()` circle whose word shows on a long press (and comes back beside it at accessibility text sizes).
+/// A tool that cannot be used is dimmed; one with a `hint` (split) stays tappable, dimmed, and answers a tap with that line.
 private struct ToolButton: View {
     let title: String
     let symbol: String
@@ -95,25 +100,13 @@ private struct ToolButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
-                Image(systemName: symbol)
-                    .font(.system(size: 19, weight: .regular))
-                    .frame(height: 22)
-                Text(title)
-                    .font(Font.cobalt(10.5, .regular, relativeTo: .caption2))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            .foregroundStyle(CobaltColor.text)
+        Button(action: action) { Label(title, systemImage: symbol) }
+            .buttonStyle(.cobaltIcon())
+            .disabled(!enabled && hint == nil)
+            // the style dims a disabled button itself; a tool kept tappable for its hint is dimmed here
+            .opacity(!enabled && hint != nil ? 0.45 : 1)
             .frame(maxWidth: .infinity, minHeight: 56)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .opacity(enabled ? 1 : 0.4)
-        .disabled(!enabled && hint == nil)
-        .accessibilityLabel(title)
-        .accessibilityHint(enabled ? "" : (hint ?? ""))
+            .accessibilityHint(enabled ? "" : (hint ?? ""))
     }
 }
 

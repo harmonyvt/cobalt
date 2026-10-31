@@ -42,6 +42,7 @@ struct ChatScreen: View {
                 #endif
                 ToolbarItem(placement: .primaryAction) {
                     Button(Copy.Chat.newChat, systemImage: Symbol.chatNew) { controller.newChat(shell: shell) }
+                        .labelStyle(.iconOnly)
                         .disabled(controller.making)
                         #if os(macOS)
                         .keyboardShortcut("n", modifiers: .command)
@@ -51,6 +52,7 @@ struct ChatScreen: View {
                 #if os(macOS)
                 ToolbarItem(placement: .primaryAction) {
                     Button(Copy.Chat.refresh, systemImage: Symbol.retry) { Task { await store.refresh() } }
+                        .labelStyle(.iconOnly)
                         .disabled(store.state == .loading)
                         .keyboardShortcut("r", modifiers: .command)
                         .help(Copy.Chat.refresh)

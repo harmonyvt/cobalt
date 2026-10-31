@@ -14,6 +14,8 @@ extension Copy {
         static let rename = "rename"
         static let delete = "delete set"
         static let copyAll = "copy all links"
+        /// The name of a set bar's menu icon (held, hovered, read by VoiceOver).
+        static let menu = "set"
         static let sets = "sets"                                              // a collection's menu: which sets hold it
         static func newWith(_ collection: String) -> String { "new set with \(collection)" }
         static func deleteTitle(_ name: String) -> String { "delete \(name)?" }

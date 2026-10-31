@@ -162,17 +162,9 @@ struct JobTray: View {
                     .scrollIndicators(.hidden)
                     .frame(maxHeight: 440)
                     .fixedSize(horizontal: false, vertical: true)
-                    Button(action: openQueue) {
-                        Label(Copy.Queue.openQueueA11y, systemImage: Symbol.queue)
-                            .font(Font.cobalt(11, .medium, relativeTo: .caption2))
-                            .foregroundStyle(CobaltColor.text)
-                            .padding(.horizontal, 14)
-                            .frame(height: 32)
-                            .glassEffect(.regular.interactive(), in: Capsule())
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .transition(.opacity)
+                    Button(action: openQueue) { Label(Copy.Queue.openQueueA11y, systemImage: Symbol.queue) }
+                        .buttonStyle(.cobaltIcon(.small))
+                        .transition(.opacity)
                 }
             }
             noteView(message)

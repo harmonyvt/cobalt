@@ -3,7 +3,8 @@ import SwiftUI
 
 /// Select, by the thumb (the S3 board on the library canvas): a white `select` pill floats over the bottom of the
 /// library. Tapped, it grows into one panel that holds all of select: how many are picked, the picks as a row of
-/// thumbnails in the order they were tapped (tap one to take it out, hold one to see it), then icon buttons for `make link`,
+/// thumbnails in the order they were tapped (tap one to take it out, hold one to see it), then icon circles (icon-first
+/// controls; hold one to name it) for `make link`,
 /// `collection` (make the link and file it, picked in `CollectionPickerSheet`), `edit` and `share` (the files). While the panel is up, taps on tiles pick them;
 /// otherwise they open, as always. It sits in the library's bottom safe area, so on the iPhone it is above the tab bar,
 /// and the same panel is the Mac's and the iPad's.
@@ -94,24 +95,14 @@ struct LibrarySelectPill: View {
 
     // MARK: the pill
 
+    /// `select` as one solid circle (icon-first controls): its name shows on a hold, and VoiceOver reads it.
     private var startButton: some View {
         Button(action: toggle) {
-            HStack(spacing: 8) {
-                Image(systemName: Symbol.Gallery.unticked)
-                    .font(.system(size: 15, weight: .semibold))
-                Text(Copy.Library2.select)
-                    .font(CobaltType.bodySemibold)
-            }
-            .foregroundStyle(CobaltColor.onText)
-            .padding(.horizontal, 22)
-            .frame(minHeight: 48)
-            .background(CobaltColor.text, in: Capsule())
-            .contentShape(Capsule())
-            .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
+            Label(Copy.Library2.select, systemImage: Symbol.Library.select)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.cobaltIcon(prominent: true))
+        .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
         .disabled(!rows.contains(where: \.shareable))
-        .accessibilityLabel(Copy.Library2.select)
         #if os(macOS)
         .keyboardShortcut("s", modifiers: [.command, .shift])
         #endif
@@ -142,9 +133,9 @@ struct LibrarySelectPill: View {
                     .foregroundStyle(CobaltColor.caption)
                     .padding(.horizontal, 4)
             }
-            // icons only, one equal slot each, so the row always fits the panel (it pushed the panel off an iPhone's
-            // edges); all one capsule, each tinted for what it does (SelectActionStyle)
-            HStack(spacing: 8) {
+            // icon-first controls: one circle per action, each in its select-panel colour (the colours of
+            // SelectActionStyle), `make link` the one solid circle; holding one names it
+            IconRow(spacing: 6) {
                 if inAlbum {
                     unhideButton(picks)
                 } else {
@@ -167,10 +158,8 @@ struct LibrarySelectPill: View {
         } label: {
             Label(Copy.HiddenAlbum.unhide, systemImage: Symbol.HiddenAlbum.unhide)
         }
-        .buttonStyle(.selectAction(.link))
+        .buttonStyle(.cobaltIcon(prominent: true))
         .disabled(picks.isEmpty || busy)
-        .help(Copy.HiddenAlbum.unhide)
-        .accessibilityLabel(Copy.HiddenAlbum.unhide)
         .accessibilityHint(Copy.HiddenAlbum.unhideHint)
     }
 
@@ -190,11 +179,16 @@ struct LibrarySelectPill: View {
         .menuStyle(.button)
         #endif
         .buttonStyle(.selectAction(.status))
+        // a menu, not a `.cobaltIcon()` button: the select style drawn as a circle beside the icon buttons
+        .frame(width: Self.slot, height: Self.slot)
         .disabled(picks.isEmpty || busy)
         .help(Copy.HiddenAlbum.status)
         .accessibilityLabel(Copy.HiddenAlbum.status)
         .accessibilityHint(Copy.HiddenAlbum.statusHint)
     }
+
+    /// One circle of the action row: the `.cobaltIcon()` diameter, for the controls that are not icon buttons.
+    private static let slot: CGFloat = 50
 
     /// A status change is on its way: the buttons wait.
     private var busy: Bool { controller.changingStatus || model.library.statusInFlight }
@@ -204,47 +198,36 @@ struct LibrarySelectPill: View {
     private func shareActions(_ picks: [LibraryRow], ready: Bool) -> some View {
         if makesLinks {
             Button(action: makeLink) {
-                if controller.makingShareLink {
-                    ProgressView().controlSize(.small).tint(CobaltColor.onText)
-                } else {
-                    Label(Copy.Links.make, systemImage: Symbol.link)
-                }
+                Label(Copy.Links.make, systemImage: Symbol.link)
             }
-            .buttonStyle(.selectAction(.link))
+            .buttonStyle(.cobaltIcon(prominent: true, state: controller.makingShareLink ? .working : .idle))
             .disabled(!ready)
-            .help(Copy.Links.make)
-            .accessibilityLabel(controller.makingShareLink ? Copy.Links.making : Copy.Links.make)
+            .accessibilityValue(Text(controller.makingShareLink ? Copy.Links.making : ""))
             .accessibilityHint(Copy.Links.makeA11yHint)
         }
         if files {
             Button { pickingCollection = true } label: {
                 Label(Copy.Library2.collection, systemImage: Symbol.Library.collectionFile)
             }
-            .buttonStyle(.selectAction(.collection))
+            .buttonStyle(.cobaltIcon(tint: CobaltColor.collection))
             .disabled(!ready)
-            .help(Copy.Library2.collection)
-            .accessibilityLabel(Copy.Library2.collection)
         }
         if addsToLinks {
             Button { pickingLink = true } label: {
-                if addingToLink {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Label(Copy.LinkEdit.addToLink, systemImage: Symbol.LinkEdit.addToLink)
-                }
+                Label(Copy.LinkEdit.addToLink, systemImage: Symbol.LinkEdit.addToLink)
             }
-            .buttonStyle(.selectAction(.addLink))
+            .buttonStyle(.cobaltIcon(tint: CobaltColor.focus, state: addingToLink ? .working : .idle))
             .disabled(picks.isEmpty || store.sets.isEmpty || addingToLink)
-            .help(Copy.LinkEdit.addToLink)
-            .accessibilityLabel(Copy.LinkEdit.addToLink)
             .accessibilityHint(Copy.LinkEdit.addToLinkHint)
         }
-        if model.editor.isAvailable { EditPicksButton(model: model, picks: picks, note: $editNote) }
+        if model.editor.isAvailable {
+            // the editor's own button (Screens/Editor), held to one circle of the row
+            EditPicksButton(model: model, picks: picks, note: $editNote)
+                .frame(width: Self.slot, height: Self.slot)
+        }
         Button(action: share) { Label(Copy.Library2.share, systemImage: Symbol.Library.share) }
-            .buttonStyle(.selectAction(.share))
+            .buttonStyle(.cobaltIcon(tint: CobaltColor.linkBlue, state: controller.preparingShare ? .working : .idle))
             .disabled(controller.preparingShare || picks.isEmpty)
-            .help(Copy.Library2.share)
-            .accessibilityLabel(Copy.Library2.share)
     }
 
     /// `public` / `private` for the link the panel makes (APP-API-CONTRACT 36.6), starting at settings › sharing's
@@ -271,30 +254,28 @@ struct LibrarySelectPill: View {
         let shareable = rows.filter(\.shareable)
         let allPicked = !shareable.isEmpty && shareable.allSatisfy { controller.picked.contains($0.id) }
         return HStack(spacing: 8) {
+            Button(action: toggle) {
+                Label(Copy.Library2.stopSelecting, systemImage: Symbol.close)
+            }
+            .buttonStyle(.cobaltIcon(.small))
+            #if os(macOS)
+            .keyboardShortcut(.cancelAction)
+            #endif
             Text(Copy.Library2.pickedCount(count))
                 .font(CobaltType.bodySemibold)
                 .foregroundStyle(CobaltColor.text)
                 .contentTransition(.numericText())
             Spacer(minLength: 8)
-            Button(allPicked ? Copy.Library2.noneShort : Copy.Library2.all) {
+            Button {
                 withAnimation(Motion.rows) { controller.toggleAll(rows) }
+            } label: {
+                Label(
+                    allPicked ? Copy.Library2.selectNone : Copy.Library2.selectAll,
+                    systemImage: allPicked ? Symbol.Library.selectNone : Symbol.Library.selectAll
+                )
             }
-            .font(CobaltType.captionSmall)
-            .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+            .buttonStyle(.cobaltIcon(.small))
             .disabled(shareable.isEmpty)
-            .accessibilityLabel(allPicked ? Copy.Library2.selectNone : Copy.Library2.selectAll)
-            Button(action: toggle) {
-                Image(systemName: Symbol.close)
-                    .font(.system(size: 13, weight: .bold))
-                    .frame(width: 34, height: 34)
-                    .background(CobaltColor.elevated, in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Copy.Library2.stopSelecting)
-            #if os(macOS)
-            .keyboardShortcut(.cancelAction)
-            #endif
         }
     }
 

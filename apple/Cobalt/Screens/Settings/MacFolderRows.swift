@@ -85,22 +85,24 @@ struct MacFolderRows: View {
         }
     }
 
+    /// Small icons under the folder row (their names show on hover).
     private var actionsRow: some View {
-        HStack(spacing: 8) {
-            Spacer(minLength: 0)
-            Button(Copy.Folder.choose, systemImage: Symbol.Folder.choose, action: chooseFolder)
-            Button(Copy.Folder.showInFinder, systemImage: Symbol.showInFinder) {
+        IconRow(spacing: 8, alignment: .trailing) {
+            Button(action: chooseFolder) { Label(Copy.Folder.choose, systemImage: Symbol.Folder.choose) }
+                .buttonStyle(.cobaltIcon(.small))
+            Button {
                 Task { await folder.reveal() }
+            } label: {
+                Label(Copy.Folder.showInFinder, systemImage: Symbol.showInFinder)
             }
+            .buttonStyle(.cobaltIcon(.small))
             .disabled(status.problem == .unreachable)
             .help(status.problem == .unreachable ? Copy.Folder.notConnected(path: status.path) : "")
             if !status.isDefault {
-                Button(Copy.Folder.useDefault, systemImage: Symbol.Folder.reset, action: resetToDefault)
+                Button(action: resetToDefault) { Label(Copy.Folder.useDefault, systemImage: Symbol.Folder.reset) }
+                    .buttonStyle(.cobaltIcon(.small))
             }
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .labelStyle(.titleOnly)
         .disabled(status.moving != nil)
     }
 

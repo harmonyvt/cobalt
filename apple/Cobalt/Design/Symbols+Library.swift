@@ -1,3 +1,4 @@
+import CobaltKit
 import SwiftUI
 
 /// SF Symbols for the library's mosaic and table (CONTRACT-LIBRARY2 section 7; all exist on macOS 26). A nested
@@ -42,5 +43,20 @@ extension Symbol {
         static let typeVideo = "film"
         static let typeWebp = "sparkles"
         static let typePhoto = "photo"
+        /// The kind chips' icons (icon-first controls: the chip shows its icon and count, the word is its name).
+        static func kind(_ kind: LibraryKindFilter) -> String {
+            switch kind {
+            case .all: return "square.grid.2x2"
+            case .videos: return "film"
+            case .photos: return "photo"
+            case .galleries: return "photo.stack"
+            case .webps: return "sparkles"
+            case .emotes: return "face.smiling"
+            }
+        }
+        /// The `not shared` share chip: in no link yet.
+        static let notShared = "circle.dashed"
+        /// The select-mode switch's icon (off; on is `Symbol.Gallery.ticked`).
+        static let select = "checkmark.circle"
     }
 }

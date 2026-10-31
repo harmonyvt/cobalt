@@ -314,11 +314,11 @@ struct JobCard: View {
                 Button(action: onRetry) {
                     Label(TrayCopy.tryAgain, systemImage: Symbol.retry)
                 }
-                .buttonStyle(TrayPillStyle())
+                .buttonStyle(.cobaltIcon(.small))
                 .accessibilityLabel(TrayCopy.retryA11y(f.title))
             }
-            Button(TrayCopy.dismiss, action: onDismiss)
-                .buttonStyle(TrayPillStyle())
+            Button(action: onDismiss) { Label(TrayCopy.dismiss, systemImage: Symbol.close) }
+                .buttonStyle(.cobaltIcon(.small))
                 .accessibilityLabel(TrayCopy.dismissA11y(f.title))
         }
         .padding(.top, 2)
@@ -392,7 +392,7 @@ private struct TrayLinkStyle: ButtonStyle {
     }
 }
 
-/// "try again" / "dismiss" under a failed card.
+/// "open" under a failed card ("try again" and "dismiss" beside it are icons).
 private struct TrayPillStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

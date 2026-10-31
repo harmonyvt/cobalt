@@ -180,12 +180,7 @@ private struct LinkPickerHeader: View {
     let cancel: () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Button(Copy.LinkEdit.cancel, action: cancel)
-                .font(CobaltType.captionSmall)
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                .keyboardShortcut(.cancelAction)
-            Spacer(minLength: 8)
+        HStack(alignment: .center, spacing: 8) {
             Text(Copy.LinkEdit.pickerTitle)
                 .font(Font.cobalt(16, .semibold, relativeTo: .headline))
                 .foregroundStyle(CobaltColor.text)
@@ -196,6 +191,7 @@ private struct LinkPickerHeader: View {
                 .foregroundStyle(CobaltColor.caption)
                 .monospacedDigit()
                 .contentTransition(.numericText())
+            CloseButton(cancels: true, action: cancel)  // cancel is the sheet's close, top right
         }
     }
 }

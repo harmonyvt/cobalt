@@ -20,8 +20,14 @@ struct PrivateLinksSettingsSection: View {
         if model.capabilities.privateLinks && model.settings.hasAPIKey {
             Section {
                 if loadFailed && !store.privateLoaded {
-                    Text(Copy.PrivateLinks.loadFailed).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
-                    Button(Copy.PrivateLinks.retry, systemImage: Symbol.PrivateLinks.rotate) { Task { await reload() } }
+                    HStack(spacing: 8) {
+                        Text(Copy.PrivateLinks.loadFailed).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button { Task { await reload() } } label: {
+                            Label(Copy.PrivateLinks.retry, systemImage: Symbol.PrivateLinks.rotate)
+                        }
+                        .buttonStyle(.cobaltIcon(.small))
+                    }
                 } else {
                     Picker(selection: Binding(get: { store.newLinks }, set: { choose($0) })) {
                         Label(Copy.PrivateLinks.choicePublic, systemImage: Symbol.PrivateLinks.publicLink).tag(NewLinks.public)
@@ -30,20 +36,27 @@ struct PrivateLinksSettingsSection: View {
                         Label(Copy.PrivateLinks.newLinksStart, systemImage: Symbol.PrivateLinks.newLinks)
                     }
                     .disabled(working || !store.privateLoaded)
+                    // the row keeps its words; "rotate all" is a small red icon beside the count (it still asks first)
                     LabeledContent {
-                        if store.privateLoaded {
-                            Text("\(store.privateLinkCount)").font(Font.cobalt(12.5)).foregroundStyle(.secondary).monospacedDigit()
-                        } else {
-                            ProgressView().controlSize(.small)
+                        HStack(spacing: 8) {
+                            Group {
+                                if store.privateLoaded {
+                                    Text("\(store.privateLinkCount)").font(Font.cobalt(12.5)).foregroundStyle(.secondary).monospacedDigit()
+                                } else {
+                                    ProgressView().controlSize(.small)
+                                }
+                            }
+                            .accessibilityLabel(Copy.PrivateLinks.privateCount)
+                            .accessibilityValue(store.privateLoaded ? "\(store.privateLinkCount)" : "")
+                            Button(role: .destructive) { asking = true } label: {
+                                Label(Copy.PrivateLinks.rotateAll, systemImage: Symbol.PrivateLinks.rotate)
+                            }
+                            .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.errorText, state: working ? .working : .idle))
+                            .disabled(working || store.privateLinkCount == 0)
                         }
                     } label: {
                         Label(Copy.PrivateLinks.privateCount, systemImage: Symbol.PrivateLinks.lock)
                     }
-                    .accessibilityElement(children: .combine)
-                    Button(working ? Copy.PrivateLinks.working : Copy.PrivateLinks.rotateAll,
-                           systemImage: Symbol.PrivateLinks.rotate, role: .destructive) { asking = true }
-                        .foregroundStyle(CobaltColor.errorText)
-                        .disabled(working || store.privateLinkCount == 0)
                 }
                 if let actionError {
                     Text(actionError).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)

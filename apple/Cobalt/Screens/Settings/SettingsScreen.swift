@@ -62,7 +62,17 @@ struct SettingsScreen: View {
 
     private var serverSection: some View {
         Section {
-            row(Copy.api, Symbol.api) { value(summary.host) }
+            // the row keeps its words; paste and reset are small icons beside the value
+            row(Copy.api, Symbol.api) {
+                HStack(spacing: 8) {
+                    value(summary.host)
+                    Button { pasteServer() } label: { Label(Copy.pasteServerURL, systemImage: Symbol.paste) }
+                        .buttonStyle(.cobaltIcon(.small))
+                    Button(role: .destructive) { resetServer() } label: { Label(Copy.reset, systemImage: Symbol.reset) }
+                        .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.errorText))
+                        .disabled(settings.serverURL == CobaltKit.Settings.defaultServer)
+                }
+            }
             row(Copy.thisServer, Symbol.server) { value(Copy.serverKind(summary, checking: model.isCheckingServer)) }
             if summary.kind != .unreachable, summary.kind != .notCobalt {
                 DisclosureGroup(isExpanded: $featuresOpen) {
@@ -84,19 +94,21 @@ struct SettingsScreen: View {
                 }
             }
             row(Copy.apiKey, Symbol.key) {
-                if !settings.hasAPIKey {
-                    value(Copy.noKey)
-                } else if summary.key == .invalid {
-                    Text(Copy.keyRevoked).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
-                } else {
-                    value(summary.keyName.map { Copy.keyLine(name: $0) } ?? Copy.keySet).lineLimit(1).minimumScaleFactor(0.8)
+                HStack(spacing: 8) {
+                    if !settings.hasAPIKey {
+                        value(Copy.noKey)
+                    } else if summary.key == .invalid {
+                        Text(Copy.keyRevoked).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
+                    } else {
+                        value(summary.keyName.map { Copy.keyLine(name: $0) } ?? Copy.keySet).lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    Button { pasteKey() } label: {
+                        Label(settings.hasAPIKey ? Copy.pasteNewKey : Copy.pasteKey, systemImage: Symbol.paste)
+                    }
+                    .buttonStyle(.cobaltIcon(.small))
                 }
             }
-            Button(settings.hasAPIKey ? Copy.pasteNewKey : Copy.pasteKey, systemImage: Symbol.paste) { pasteKey() }
             if let keyError { problem(keyError) }
-            Button(Copy.pasteServerURL, systemImage: Symbol.paste) { pasteServer() }
-            Button(Copy.reset, systemImage: Symbol.reset, role: .destructive) { resetServer() }
-                .disabled(settings.serverURL == CobaltKit.Settings.defaultServer)
             if let serverError { problem(serverError) }
         } header: {
             header(Copy.groupServer)

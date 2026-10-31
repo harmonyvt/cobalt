@@ -69,13 +69,14 @@ struct PickerContent: View {
             .aspectRatio(1, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: Metrics.radius, style: .continuous))
             .accessibilityHidden(true)
-            ButtonRow {
-                Button(Copy.save, systemImage: Symbol.savePhotos) { pipeline.choose(item, .save) }
-                    .buttonStyle(.cobaltPrimary())
+            // the sheet's one word is "save all"; each cell has icons: save (the filled one) and webp
+            IconRow {
+                Button { pipeline.choose(item, .save) } label: { Label(Copy.save, systemImage: Symbol.savePhotos) }
+                    .buttonStyle(.cobaltIcon(prominent: true))
                     .accessibilityLabel("\(Copy.save) \(Copy.badge(item.type)) \(item.id + 1)")
                 if webpAvailable && item.canWebp {
-                    Button(Copy.webp, systemImage: Symbol.makeWebp) { pipeline.choose(item, .webp) }
-                        .buttonStyle(.cobaltSecondary())
+                    Button { pipeline.choose(item, .webp) } label: { Label(Copy.webp, systemImage: Symbol.makeWebp) }
+                        .buttonStyle(.cobaltIcon())
                         .accessibilityLabel("\(Copy.webp) \(Copy.badge(item.type)) \(item.id + 1)")
                 }
             }

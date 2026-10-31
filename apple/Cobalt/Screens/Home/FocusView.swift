@@ -875,8 +875,8 @@ struct FocusLayer: View {
         VStack(spacing: Self.gap) {
             if let failure, !isRendering {
                 InlineStatus(message: failure.message) {
-                    Button(Copy.tryAgain, systemImage: Symbol.retry, action: failure.retry)
-                        .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                    Button(action: failure.retry) { Label(Copy.tryAgain, systemImage: Symbol.retry) }
+                        .buttonStyle(.cobaltIcon(.small))
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -930,7 +930,21 @@ struct FocusLayer: View {
     private var showsPublicShare: Bool { isFork && pipeline.canHostOriginal }
 
     private enum Choice: Hashable {
-        case copyWebp, copyVideo, convert, anotherWebp, crop, publicShare, savePhotos, share, close
+        case copyWebp, copyVideo, copyDirect, convert, anotherWebp, crop, publicShare, savePhotos, share, close
+    }
+
+    /// The link the prominent "copy share" button copies when the file has a share page: its "copy direct" twin is
+    /// the first icon under it.
+    private var directPair: (url: URL, webp: Bool)? {
+        switch primaryChoice {
+        case .copyWebp?:
+            if let url = pipeline.webpResult?.url, hasLinkPair(url) { return (url, true) }
+        case .copyVideo?:
+            if let url = pipeline.hostedOriginalURL, hasLinkPair(url) { return (url, false) }
+        default:
+            break
+        }
+        return nil
     }
 
     private var isWorking: Bool { isRendering || isHosting }
@@ -963,6 +977,7 @@ struct FocusLayer: View {
     private var secondaryChoices: [Choice] {
         let primary = primaryChoice
         var out: [Choice] = []
+        if directPair != nil { out.append(.copyDirect) }
         if canConvert, primary != .convert { out.append(hasWebp ? .anotherWebp : .convert) }
         // a clip that fits a webp has no trim stage: its crop button sits with the choices (longer clips
         // have it in the trim panel)
@@ -974,25 +989,26 @@ struct FocusLayer: View {
         return out
     }
 
-    /// The primary button full width, then the secondary row under it. A secondary label is never
-    /// wrapped: when the words do not fit side by side (the largest text sizes, narrow windows, four
-    /// choices) the row falls back to two per line, then to one per line.
+    /// The primary button full width (the screen's one word), then the secondary choices as a row of icon circles
+    /// under it (their names show on a long press, hover on the Mac). At the accessibility text sizes the icons get
+    /// their words back, and the row falls back to three per line, then to one per line.
     private var choices: some View {
         let items = secondaryChoices
         return GlassEffectContainer(spacing: Self.gap) {
             VStack(spacing: Self.gap) {
                 if let primary = primaryChoice { primaryButton(primary).appear(lifted) }
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: Self.gap) { ForEach(items, id: \.self) { secondaryButton($0, .stacked) } }
-                    VStack(spacing: Self.gap) {
-                        ForEach(Array(stride(from: 0, to: items.count, by: 2)), id: \.self) { i in
-                            HStack(spacing: Self.gap) {
-                                ForEach(Array(items[i..<min(i + 2, items.count)]), id: \.self) { secondaryButton($0, .stacked) }
+                    HStack(spacing: 10) { ForEach(items, id: \.self) { secondaryButton($0) } }
+                    VStack(spacing: 10) {
+                        ForEach(Array(stride(from: 0, to: items.count, by: 3)), id: \.self) { i in
+                            HStack(spacing: 10) {
+                                ForEach(Array(items[i..<min(i + 3, items.count)]), id: \.self) { secondaryButton($0) }
                             }
                         }
                     }
-                    VStack(spacing: Self.gap) { ForEach(items, id: \.self) { secondaryButton($0, .inline) } }
+                    VStack(spacing: 10) { ForEach(items, id: \.self) { secondaryButton($0) } }
                 }
+                .frame(maxWidth: .infinity)
             }
         }
         // on the wide tiers the rows do not stretch across the whole column
@@ -1010,7 +1026,11 @@ struct FocusLayer: View {
         switch choice {
         case .copyWebp:
             if let url = pipeline.webpResult?.url, hasLinkPair(url) {
-                CopyLinkPair(copied: copiedWebp ? .share : copiedWebpDirect ? .direct : nil) { copyWebp(url, $0) }
+                // "copy direct" is the first icon under it (`directPair`)
+                PrimaryChoice(title: copiedWebp ? Copy.copied : Copy.LinkPair.copyShare, symbol: LinkForm.share.symbol, done: copiedWebp) {
+                    copyWebp(url, .share)
+                }
+                .accessibilityLabel(copiedWebp ? Copy.copied : Copy.LinkPair.shareA11y)
             } else {
                 PrimaryChoice(title: copiedWebp ? Copy.copied : Copy.copyWebpLink, symbol: Symbol.copyLink, done: copiedWebp) {
                     pipeline.copyResultLink()
@@ -1019,7 +1039,10 @@ struct FocusLayer: View {
             }
         case .copyVideo:
             if let url = pipeline.hostedOriginalURL, hasLinkPair(url) {
-                CopyLinkPair(copied: copiedLink ? .share : copiedLinkDirect ? .direct : nil) { copyVideo(url, $0) }
+                PrimaryChoice(title: copiedLink ? Copy.copied : Copy.LinkPair.copyShare, symbol: LinkForm.share.symbol, done: copiedLink) {
+                    copyVideo(url, .share)
+                }
+                .accessibilityLabel(copiedLink ? Copy.copied : Copy.LinkPair.shareA11y)
             } else {
                 PrimaryChoice(title: copiedLink ? Copy.copied : Copy.copyVideoLink, symbol: Symbol.copyLink, done: copiedLink) {
                     if let url = pipeline.hostedOriginalURL { Pasteboard.copy(pipeline.shareLink(for: url).absoluteString) }
@@ -1035,49 +1058,64 @@ struct FocusLayer: View {
                 title: photos.title, symbol: Symbol.savePhotos, doneSymbol: photos.doneSymbol,
                 done: photos.done, working: pipeline.photos == .working, inert: photos.placed
             ) { pipeline.saveToPhotos() }
-        case .convert, .anotherWebp, .crop, .share, .close:
+        case .convert, .anotherWebp, .copyDirect, .crop, .share, .close:
             PrimaryChoice(title: choice == .anotherWebp ? Copy.anotherWebp : Copy.convertToWebp, symbol: Symbol.convert) { convert() }
         }
     }
 
     @ViewBuilder
-    private func secondaryButton(_ choice: Choice, _ layout: ChoiceLayout) -> some View {
+    private func secondaryButton(_ choice: Choice) -> some View {
         switch choice {
-        case .convert, .anotherWebp:
-            ChoiceButton(title: choice == .convert ? Copy.convertToWebp : Copy.anotherWebp, symbol: Symbol.convert, layout: layout) {
-                convert()
+        case .copyDirect:
+            if let pair = directPair {
+                let copied = pair.webp ? copiedWebpDirect : copiedLinkDirect
+                Button {
+                    if pair.webp { copyWebp(pair.url, .direct) } else { copyVideo(pair.url, .direct) }
+                } label: {
+                    Label(Copy.LinkPair.copyDirectLink, systemImage: copied ? Symbol.checkmark : LinkForm.direct.symbol)
+                }
+                .buttonStyle(.cobaltIcon(state: copied ? .done : .idle))
+                .symbolBounce(on: copied)
+                .accessibilityLabel(copied ? Copy.copied : Copy.LinkPair.directA11y)
+                .appear(lifted)
             }
+        case .convert, .anotherWebp:
+            Button { convert() } label: {
+                Label(choice == .convert ? Copy.convertToWebp : Copy.anotherWebp, systemImage: Symbol.convert)
+            }
+            .buttonStyle(.cobaltIcon())
             .appear(lifted)
         case .crop:
-            ChoiceButton(title: cropBadge ?? CropCopy.crop, symbol: CropCopy.symbol, layout: layout) { openCrop() }
-                .accessibilityLabel(cropBadge ?? CropCopy.crop)
+            Button { openCrop() } label: { Label(cropBadge ?? CropCopy.crop, systemImage: CropCopy.symbol) }
+                .buttonStyle(.cobaltIcon())
                 .accessibilityHint(CropCopy.cropA11yHint)
                 .appear(lifted)
         case .publicShare:
-            ChoiceButton(title: Copy.publicShare, symbol: Symbol.publicShare, layout: layout) { pipeline.hostOriginal() }
+            Button { pipeline.hostOriginal() } label: { Label(Copy.publicShare, systemImage: Symbol.publicShare) }
+                .buttonStyle(.cobaltIcon())
                 .accessibilityHint(Copy.hostOriginal)
                 .appear(lifted)
         case .savePhotos:
             let photos = photosButton
-            ChoiceButton(
-                title: photos.title,
-                symbol: photos.done ? photos.doneSymbol : Symbol.savePhotos,
-                working: pipeline.photos == .working, inert: photos.placed, layout: layout
-            ) {
-                pipeline.saveToPhotos()
+            Button { pipeline.saveToPhotos() } label: {
+                Label(photos.title, systemImage: photos.done ? photos.doneSymbol : Symbol.savePhotos)
             }
+            .buttonStyle(.cobaltIcon(state: photos.done ? .done : (pipeline.photos == .working ? .working : .idle)))
             .symbolBounce(on: photos.done)
+            // "in your cobalt album": a statement, not an action
+            .allowsHitTesting(!photos.placed)
+            .accessibilityRemoveTraits(photos.placed ? .isButton : [])
             .appear(lifted)
         case .share:
             // plain cobalt: no public hosting, so the system share sheet for the file on this device
             if let file = localVideo?.fileURL {
-                ShareLink(item: file) { ChoiceLabel(title: Copy.share, symbol: Symbol.share, layout: layout) }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .capsule)
+                ShareLink(item: file) { Label(Copy.share, systemImage: Symbol.share) }
+                    .buttonStyle(.cobaltIcon())
                     .appear(lifted)
             }
         case .close:
-            ChoiceButton(title: Copy.close, symbol: Symbol.close, layout: layout, action: close)
+            Button(action: close) { Label(Copy.close, systemImage: Symbol.close) }
+                .buttonStyle(.cobaltIcon())
                 .appear(lifted)
         case .copyWebp, .copyVideo:
             EmptyView()
@@ -1124,8 +1162,8 @@ struct FocusLayer: View {
                 // A webp that is only queued on the server can be taken back (CONTRACT-PARALLEL 3.4); one that is
                 // being made cannot be stopped, so there is no button for it: closing leaves it going alongside.
                 if canCancelQueuedWebp, let id = model.queue.focusedID {
-                    Button(Copy.cancel, systemImage: Symbol.close) { Task { await model.queue.cancel(id) } }
-                        .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                    Button { Task { await model.queue.cancel(id) } } label: { Label(Copy.cancel, systemImage: Symbol.close) }
+                        .buttonStyle(.cobaltIcon(.small))
                         .accessibilityLabel(TrayCopy.cancelWebpA11y)
                         .transition(.opacity)
                 }
@@ -1175,13 +1213,14 @@ private struct TrimPanel: View {
                 .font(CobaltType.caption)
                 .foregroundStyle(CobaltColor.caption)
                 .fixedSize(horizontal: false, vertical: true)
+            // "make webp" keeps its word; crop and cancel are icons beside it
             let makeWebp = Button(Copy.makeWebp, systemImage: Symbol.makeWebp) { pipeline.makeWebp() }
                 .buttonStyle(.cobaltPrimary())
-            let crop = Button(CropCopy.crop, systemImage: CropCopy.symbol) { onCrop() }
-                .buttonStyle(.cobaltSecondary(fullWidth: true, compact: true))
+            let crop = Button { onCrop() } label: { Label(CropCopy.crop, systemImage: CropCopy.symbol) }
+                .buttonStyle(.cobaltIcon())
                 .accessibilityHint(CropCopy.cropA11yHint)
-            let cancel = Button(Copy.cancelTrim, systemImage: Symbol.close) { onCancel() }
-                .buttonStyle(.cobaltSecondary(fullWidth: true, compact: true))
+            let cancel = Button { onCancel() } label: { Label(Copy.cancelTrim, systemImage: Symbol.close) }
+                .buttonStyle(.cobaltIcon())
             GlassEffectContainer(spacing: 10) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 10) { makeWebp; if canCrop { crop }; cancel }
@@ -1732,72 +1771,10 @@ private struct FocusVideoView: View {
 
 // MARK: choices and results
 
-/// An icon over its word (`stacked`), or beside it (`inline`, the fallback when the words do not fit
-/// side by side). The word is one line, always: it sets the choice's width instead of wrapping.
-private enum ChoiceLayout { case stacked, inline }
-
-/// The compact secondary choice: a glass capsule, 52 pt tall in both layouts so a row is even.
-private struct ChoiceLabel: View {
-    let title: String
-    let symbol: String
-    var working = false
-    var layout: ChoiceLayout = .stacked
-
-    private var word: some View {
-        Text(title)
-            .font(Font.cobalt(11.5, .medium, relativeTo: .caption))
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private var icon: some View {
-        Image(systemName: symbol)
-            .font(.system(size: layout == .stacked ? 19 : 17, weight: .medium))
-            .frame(height: 22)
-            .symbolEffect(.pulse, isActive: working)
-    }
-
-    var body: some View {
-        Group {
-            switch layout {
-            case .stacked:
-                VStack(spacing: 3) { icon; word }
-            case .inline:
-                HStack(spacing: 8) { icon; word }
-            }
-        }
-        .foregroundStyle(CobaltColor.text)
-        .padding(.horizontal, layout == .stacked ? 8 : 14)
-        .frame(maxWidth: .infinity, minHeight: 52)
-        .contentShape(.capsule)
-    }
-}
-
 private extension View {
     /// Fades one control in with the lift. Applied per control, not to the stack that holds them: an
     /// opacity over a group of glass panes renders the whole group as one faded layer.
     func appear(_ on: Bool) -> some View { opacity(on ? 1 : 0) }
-}
-
-private struct ChoiceButton: View {
-    let title: String
-    let symbol: String
-    var working = false
-    /// A statement, not an action ("in your cobalt album"): drawn like a done button, never tappable.
-    var inert = false
-    var layout: ChoiceLayout = .stacked
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            ChoiceLabel(title: title, symbol: symbol, working: working, layout: layout)
-        }
-        .buttonStyle(.plain)
-        .disabled(working)
-        .glassEffect(inert ? .regular : .regular.interactive(), in: .capsule)
-        .allowsHitTesting(!inert)
-        .accessibilityRemoveTraits(inert ? .isButton : [])
-    }
 }
 
 /// THE prominent button: the system's `.glassProminent` (cobalt's monochrome tint), full width. It turns
@@ -1828,20 +1805,8 @@ private struct PrimaryChoice: View {
     }
 }
 
-/// A round glass button inside the info card. On the Mac a glass button over the glass card washes out,
-/// so it takes the platform's bordered circle (as `CobaltButtonStyle.secondary` does).
-private struct RowIconButton: ViewModifier {
-    func body(content: Content) -> some View {
-        #if os(macOS)
-        content.buttonStyle(.bordered).buttonBorderShape(.circle)
-        #else
-        content.buttonStyle(.glass).buttonBorderShape(.circle)
-        #endif
-    }
-}
-
-/// A link row inside the info card: where it lives, and two icon-only glass buttons (44 pt targets,
-/// labelled for VoiceOver): copy (bounces to a checkmark) and the system share sheet.
+/// A link row inside the info card: where it lives, and small icon circles (named on a long press, labelled for
+/// VoiceOver): copy (turns green with a checkmark), copy direct, and the system share sheet.
 private struct ResultRow: View {
     enum Kind { case webp, link }
     let kind: Kind
@@ -1879,38 +1844,25 @@ private struct ResultRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
-            GlassEffectContainer(spacing: 8) {
-                HStack(spacing: 8) {
-                    Button(action: onCopy) {
-                        Image(systemName: copied ? Symbol.checkmark : Symbol.copyLink)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(copied ? CobaltColor.success : CobaltColor.text)
-                            .frame(width: Metrics.hit - 12, height: Metrics.hit - 12)
-                    }
-                    .modifier(RowIconButton())
-                    .symbolBounce(on: copied)
-                    .accessibilityLabel(copied ? Copy.copied : copyLabel)
-                    if let onCopyDirect {
-                        Button(action: onCopyDirect) {
-                            Image(systemName: copiedDirect ? Symbol.checkmark : Symbol.LinkPair.direct)
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(copiedDirect ? CobaltColor.success : CobaltColor.text)
-                                .frame(width: Metrics.hit - 12, height: Metrics.hit - 12)
-                        }
-                        .modifier(RowIconButton())
-                        .symbolBounce(on: copiedDirect)
-                        .accessibilityLabel(copiedDirect ? Copy.copied : Copy.LinkPair.copyDirectLink)
-                    }
-                    ShareLink(item: url) {
-                        Image(systemName: Symbol.share)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(CobaltColor.text)
-                            .frame(width: Metrics.hit - 12, height: Metrics.hit - 12)
-                    }
-                    .modifier(RowIconButton())
-                    .accessibilityLabel(shareLabel)
+            IconRow(spacing: 8, alignment: .trailing) {
+                Button(action: onCopy) {
+                    Label(copyLabel, systemImage: copied ? Symbol.checkmark : Symbol.copyLink)
                 }
+                .buttonStyle(.cobaltIcon(.small, state: copied ? .done : .idle))
+                .symbolBounce(on: copied)
+                .accessibilityLabel(copied ? Copy.copied : copyLabel)
+                if let onCopyDirect {
+                    Button(action: onCopyDirect) {
+                        Label(Copy.LinkPair.copyDirectLink, systemImage: copiedDirect ? Symbol.checkmark : Symbol.LinkPair.direct)
+                    }
+                    .buttonStyle(.cobaltIcon(.small, state: copiedDirect ? .done : .idle))
+                    .symbolBounce(on: copiedDirect)
+                    .accessibilityLabel(copiedDirect ? Copy.copied : Copy.LinkPair.copyDirectLink)
+                }
+                ShareLink(item: url) { Label(shareLabel, systemImage: Symbol.share) }
+                    .buttonStyle(.cobaltIcon(.small))
             }
+            .fixedSize()
         }
         .padding(.leading, 14)
         .padding(.trailing, 8)

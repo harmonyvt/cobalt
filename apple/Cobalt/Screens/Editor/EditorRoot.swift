@@ -159,13 +159,10 @@ struct EditorOpeningView: View {
                     .font(CobaltType.caption)
                     .foregroundStyle(CobaltColor.caption)
                     .multilineTextAlignment(.center)
-                ButtonRow {
-                    Button(Copy.Editor.tryAgain, systemImage: Symbol.Editor.retry) { Task { await launcher.retry(model: model) } }
-                        .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
-                    Button(Copy.Editor.close, systemImage: Symbol.Editor.close) { launcher.dismiss() }
-                        .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                }
-                .frame(maxWidth: 360)
+                // `close` is in the bar's top-right corner
+                Button(Copy.Editor.tryAgain, systemImage: Symbol.Editor.retry) { Task { await launcher.retry(model: model) } }
+                    .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
+                    .frame(maxWidth: 360)
             }
             .padding(24)
         default:
@@ -183,17 +180,22 @@ struct EditorOpeningView: View {
         HStack {
             RoundedRectangle(cornerRadius: 5).fill(EditorColor.field).frame(width: 140, height: 14)
             Spacer()
-            #if os(iOS)
-            if case .opening = launcher.state {
-                Button(Copy.Editor.close, systemImage: Symbol.Editor.close) { launcher.dismiss() }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+            if showsClose {
+                CloseButton(cancels: true) { launcher.dismiss() }
             }
-            #endif
         }
         .padding(.horizontal, 14)
         .frame(height: 48)
         .background(EditorColor.bar)
+    }
+
+    /// The close, top right: always once it failed; while it opens only on iOS (the Mac window has its own red button).
+    private var showsClose: Bool {
+        switch launcher.state {
+        case .failed: return true
+        case .opening: return !Platform.isMac
+        case .idle: return false
+        }
     }
 
     private var skeletonTimeline: some View {

@@ -1,8 +1,8 @@
 import CobaltKit
 import SwiftUI
 
-/// The top bar (apple/CONTRACT-EDITOR.md 4.3, 48 pt): the title (click to rename), the save line, undo and redo, the tools
-/// `select` `blade` `crop`, the canvas and quality menus, and `render`.
+/// The top bar (apple/CONTRACT-EDITOR.md 4.3, 48 pt): the title (click to rename), the save line, then icons (undo and redo,
+/// the tools select / blade / crop, the canvas and quality menus) and the bar's one word, `render`.
 struct EditorTopBar: View {
     let model: AppModel
     let session: EditSession
@@ -66,54 +66,33 @@ struct EditorTopBar: View {
 
     private var undoRedo: some View {
         HStack(spacing: 4) {
-            barButton(Symbol.Editor.undo, Copy.Editor.undo, help: "\(Copy.Editor.undo) · ⌘Z", enabled: session.canUndo) { session.undo() }
+            Button { session.undo() } label: { Label(Copy.Editor.undo, systemImage: Symbol.Editor.undo) }
+                .buttonStyle(.cobaltIcon(.small))
+                .disabled(!session.canUndo)
                 .keyboardShortcut("z", modifiers: .command)
-            barButton(Symbol.Editor.redo, Copy.Editor.redo, help: "\(Copy.Editor.redo) · ⇧⌘Z", enabled: session.canRedo) { session.redo() }
+            Button { session.redo() } label: { Label(Copy.Editor.redo, systemImage: Symbol.Editor.redo) }
+                .buttonStyle(.cobaltIcon(.small))
+                .disabled(!session.canRedo)
                 .keyboardShortcut("z", modifiers: [.command, .shift])
         }
-    }
-
-    private func barButton(_ symbol: String, _ label: String, help: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .frame(width: Platform.isMac ? 30 : 40, height: Platform.isMac ? 30 : 40)
-                .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(CobaltColor.text)
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.45)
-        .help(help)
-        .accessibilityLabel(label)
     }
 
     // MARK: tools
 
     private var tools: some View {
         HStack(spacing: 4) {
-            toolButton(.select, Copy.Editor.toolSelect, key: "V")
-            toolButton(.blade, Copy.Editor.toolBlade, key: "B")
-            toolButton(.crop, Copy.Editor.toolCrop, key: "C")
+            toolButton(.select, Copy.Editor.toolSelect, symbol: Symbol.Editor.toolSelect)
+            toolButton(.blade, Copy.Editor.toolBlade, symbol: Symbol.Editor.toolBlade)
+            toolButton(.crop, Copy.Editor.toolCrop, symbol: Symbol.Editor.toolCrop)
         }
     }
 
-    private func toolButton(_ tool: EditSession.Tool, _ title: String, key: String) -> some View {
+    /// The tool in use is the filled circle of the row (the keys V, B, C still pick them: EditorKeyboard).
+    private func toolButton(_ tool: EditSession.Tool, _ title: String, symbol: String) -> some View {
         let on = session.tool == tool
-        return Button { session.tool = tool } label: {
-            Text(title)
-                .font(Font.cobalt(12, .regular, relativeTo: .caption))
-                .foregroundStyle(on ? CobaltColor.onText : CobaltColor.text)
-                .padding(.horizontal, 11)
-                .frame(minHeight: Platform.isMac ? 30 : 40)
-                .background(on ? CobaltColor.text : CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .help("\(title) · \(key)")
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(on ? .isSelected : [])
+        return Button { session.tool = tool } label: { Label(title, systemImage: symbol) }
+            .buttonStyle(.cobaltIcon(.small, prominent: on))
+            .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     // MARK: canvas and quality
@@ -126,13 +105,12 @@ struct EditorTopBar: View {
                 }
             }
         } label: {
-            menuLabel(session.timeline.canvas.shape.rawValue)
+            menuIcon(Copy.Editor.canvas, Symbol.Editor.canvas)
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .help(Copy.Editor.canvas)
-        .accessibilityLabel(Copy.Editor.canvas)
+        .iconName(Copy.Editor.canvas)
         .accessibilityValue(session.timeline.canvas.shape.rawValue)
     }
 
@@ -148,24 +126,25 @@ struct EditorTopBar: View {
                 }
             }
         } label: {
-            menuLabel(session.qualityLine)
+            menuIcon(Copy.Editor.quality, Symbol.Editor.quality)
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .help(Copy.Editor.quality)
-        .accessibilityLabel(Copy.Editor.quality)
+        .iconName(Copy.Editor.quality)
         .accessibilityValue(session.qualityLine)
     }
 
-    private func menuLabel(_ text: String) -> some View {
-        Text(text)
-            .font(Font.cobalt(12, .regular, relativeTo: .caption))
+    /// A menu's trigger drawn like a small `.cobaltIcon()` circle (menus can't take that button style); its items keep words.
+    private func menuIcon(_ name: String, _ symbol: String) -> some View {
+        Label(name, systemImage: symbol)
+            .labelStyle(.iconOnly)
+            .font(.system(size: 15, weight: .medium))
             .foregroundStyle(CobaltColor.text)
-            .padding(.horizontal, 11)
-            .frame(minHeight: Platform.isMac ? 30 : 40)
-            .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .frame(width: 34, height: 34)
+            .contentShape(.circle)
+            .glassEffect(.regular.interactive(), in: .circle)
+            .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
     }
 
     private struct Quality {

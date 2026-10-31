@@ -83,11 +83,10 @@ struct AddHiddenRuleSheet: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+            // close sits top right (CloseButton keeps escape); the add button stays the sheet's confirm
+            .sheetCorner()
+            .sheetClose { dismiss() }
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(Copy.Hidden.cancel) { dismiss() }
-                        .keyboardShortcut(.cancelAction)
-                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(working ? Copy.Hidden.adding : Copy.Hidden.add) { Task { await add() } }
                         .disabled(!canAdd)

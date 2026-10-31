@@ -155,7 +155,7 @@ struct EditorPhoneConflictBanner: View {
     }
 }
 
-/// The line under the transport when something stops a render: a file that would not come (`try again`), a deleted file
+/// The line under the transport when something stops a render: a file that would not come (a `try again` icon), a deleted file
 /// (`removeMissing`). Silent when all is well.
 struct EditorPhoneProblemStrip: View {
     let session: EditSession
@@ -167,9 +167,8 @@ struct EditorPhoneProblemStrip: View {
                     .accessibilityHidden(true)
                 Text(Copy.Editor.sourceFailed)
                 Spacer(minLength: 8)
-                Button(Copy.Editor.tryAgain) { retryAll() }
-                    .foregroundStyle(CobaltColor.linkBlue)
-                    .frame(minHeight: Metrics.hit)
+                Button { retryAll() } label: { Label(Copy.Editor.tryAgain, systemImage: Symbol.Editor.retry) }
+                    .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.linkBlue))
             }
             .font(CobaltType.captionSmall)
             .foregroundStyle(CobaltColor.errorText)

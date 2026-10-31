@@ -51,8 +51,9 @@ struct StageSpotlightBar: View {
         return spotlight.item.title
     }
 
+    /// Icons only (their names show on a long press, hover on the Mac): the bar has no worded action.
     private var buttons: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), spacing: 8)], spacing: 8) {
+        IconRow(spacing: 10) {
             sound
             pin
             skip
@@ -66,72 +67,67 @@ struct StageSpotlightBar: View {
     }
 
     private var sound: some View {
-        Button(stage.sound ? Copy.Stage.soundOn : Copy.Stage.muted, systemImage: stage.sound ? Symbol.soundOn : Symbol.soundOff) {
+        Button {
             controller.setSound(!stage.sound, shell: shell)
+        } label: {
+            Label(stage.sound ? Copy.Stage.soundOn : Copy.Stage.muted, systemImage: stage.sound ? Symbol.soundOn : Symbol.soundOff)
         }
-        .buttonStyle(.cobaltSecondary(compact: true))
+        .buttonStyle(.cobaltIcon(state: controller.isBusy("sound") ? .working : .idle))
         .disabled(controller.isBusy("sound"))
         .accessibilityHint(Copy.Stage.soundA11yHint)
     }
 
     private var pin: some View {
-        Button(pinned ? Copy.Stage.pinned : Copy.Stage.pin, systemImage: pinned ? Symbol.stagePinned : Symbol.stagePin) {
+        Button {
             controller.togglePin(pinned: pinned, shell: shell)
+        } label: {
+            Label(pinned ? Copy.Stage.pinned : Copy.Stage.pin, systemImage: pinned ? Symbol.stagePinned : Symbol.stagePin)
         }
-        .buttonStyle(.cobaltSecondary(compact: true))
+        .buttonStyle(.cobaltIcon(prominent: pinned))
         .disabled(!stage.onAir || stage.spotlight == nil || busy)
     }
 
     private var skip: some View {
-        Button(Copy.Stage.skip, systemImage: Symbol.stageSkip) { controller.perform(.skip, shell: shell) }
-            .buttonStyle(.cobaltSecondary(compact: true))
+        Button { controller.perform(.skip, shell: shell) } label: { Label(Copy.Stage.skip, systemImage: Symbol.stageSkip) }
+            .buttonStyle(.cobaltIcon())
             .disabled(!stage.onAir || stage.spotlight == nil || busy)
     }
 
     private var pick: some View {
-        Button(Copy.Stage.pick, systemImage: Symbol.stagePick) { controller.pickShown = true }
-            .buttonStyle(.cobaltSecondary(compact: true))
+        Button { controller.pickShown = true } label: { Label(Copy.Stage.pick, systemImage: Symbol.stagePick) }
+            .buttonStyle(.cobaltIcon())
             .disabled(!stage.onAir || busy)
     }
 }
 
-/// A menu that looks like the secondary buttons beside it (a `Menu` takes the system button styles, not `CobaltButtonStyle`).
+/// A menu drawn like the `.cobaltIcon()` circles beside it (a `Menu` takes the menu and button styles, not a
+/// `PrimitiveButtonStyle`): its symbol in a glass circle, its name for VoiceOver and the Mac's hover. The items keep words.
 struct StageMenuButton<Items: View>: View {
     let title: String
     let systemImage: String
     @ViewBuilder let items: () -> Items
+
+    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         Menu {
             items()
         } label: {
             Label(title, systemImage: systemImage)
-                .labelStyle(.titleAndIcon)
-                .font(CobaltType.buttonSmall)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .frame(maxWidth: .infinity, minHeight: minHeight)
+                .labelStyle(.iconOnly)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(CobaltColor.text)
+                .frame(width: 50, height: 50)
+                .contentShape(.circle)
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .modifier(StageMenuButtonStyle())
-    }
-
-    private var minHeight: CGFloat? {
-        #if os(iOS)
-        return Metrics.hit
-        #else
-        return nil
-        #endif
-    }
-}
-
-private struct StageMenuButtonStyle: ViewModifier {
-    func body(content: Content) -> some View {
-        #if os(macOS)
-        content.buttonStyle(.bordered).controlSize(.small)
-        #else
-        content.buttonStyle(.glass).buttonBorderShape(.capsule).controlSize(.regular)
-        #endif
+        .fixedSize()
+        .glassEffect(isEnabled ? .regular.interactive() : .regular, in: .circle)
+        .opacity(isEnabled ? 1 : 0.45)
+        .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
+        .iconName(title)
     }
 }
 
@@ -155,9 +151,8 @@ struct StagePickSheet: View {
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { CloseButton(cancels: true) { dismiss() } }
-                }
+                .sheetCorner()
+                .sheetClose { dismiss() }
         }
         .task { await store.loadPool() }
         #if os(macOS)
@@ -223,8 +218,8 @@ struct StagePickSheet: View {
         case .loading:
             ProgressView().frame(maxWidth: .infinity)
         case .failed:
-            Button(Copy.Stage.retry, systemImage: Symbol.retry) { Task { await store.loadMorePool() } }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+            Button { Task { await store.loadMorePool() } } label: { Label(Copy.Stage.retry, systemImage: Symbol.retry) }
+                .buttonStyle(.cobaltIcon(.small))
                 .frame(maxWidth: .infinity)
         case .idle, .loaded:
             if store.poolHasMore {

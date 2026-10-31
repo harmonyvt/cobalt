@@ -96,17 +96,23 @@ struct StageTwitchCard: View {
     }
 
     private func buttons(_ twitch: StageTwitch) -> some View {
-        ButtonRow {
-            if twitch.status == .reconnect {
-                Button(Copy.Stage.reconnect, systemImage: Symbol.stageConnect) {
-                    controller.connectTwitch(using: webAuthentication, shell: shell)
+        // "reconnect" keeps its word when it is needed; disconnect is an icon (it still asks first)
+        GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                if twitch.status == .reconnect {
+                    Button(Copy.Stage.reconnect, systemImage: Symbol.stageConnect) {
+                        controller.connectTwitch(using: webAuthentication, shell: shell)
+                    }
+                    .buttonStyle(.cobaltPrimary(compact: true))
+                    .disabled(controller.connecting || !model.capabilities.stageTwitch)
                 }
-                .buttonStyle(.cobaltPrimary(compact: true))
-                .disabled(controller.connecting || !model.capabilities.stageTwitch)
-            }
-            Button(Copy.Stage.disconnect, systemImage: Symbol.stageDisconnect) { controller.confirmingDisconnect = true }
-                .buttonStyle(.cobaltSecondary(compact: true))
+                Button { controller.confirmingDisconnect = true } label: {
+                    Label(Copy.Stage.disconnect, systemImage: Symbol.stageDisconnect)
+                }
+                .buttonStyle(.cobaltIcon(state: controller.isBusy("twitch") ? .working : .idle))
                 .disabled(controller.isBusy("twitch"))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

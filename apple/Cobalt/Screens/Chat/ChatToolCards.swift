@@ -35,10 +35,13 @@ private struct ChatCallChip: View {
     }
 
     var body: some View {
+        let tone = ChatCardTone.of(call)
         HStack(spacing: 5) {
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(ChatCardTone.of(call).color)
-                .frame(width: 7, height: 7)
+            // what ran, as its icon (search, look, link, edit, job, box, emotes…), in the kind's colour
+            Image(systemName: tone.symbol)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(tone.color)
+                .accessibilityHidden(true)
             Text(Copy.ChatCards.chip(call.op))
                 .foregroundStyle(ink)
             Text(call.status == .asked ? Copy.ChatCards.asked : Copy.ChatCards.ms(call.ms))
@@ -413,10 +416,12 @@ private struct ChatEditTimeline: View {
                     ChatPostTile(model: model, post: post, side: 40, showsTitle: false) { open(post) }
                 }
                 Spacer(minLength: 0)
-                Button(Copy.ChatCards.openEditor) {
+                Button {
                     Task { await EditorLauncher.shared.open(edit.projectID, model: model) }
+                } label: {
+                    Label(Copy.ChatCards.openEditor, systemImage: Symbol.Editor.edit)
                 }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.collectionSet))
             }
         }
         .animation(Motion.card, value: selected)
@@ -577,10 +582,12 @@ private struct ChatJobBody: View {
                 }
             }
             if let project = job.projectID {
-                Button(Copy.ChatCards.openEditor) {
+                Button {
                     Task { await EditorLauncher.shared.open(project, model: model) }
+                } label: {
+                    Label(Copy.ChatCards.openEditor, systemImage: Symbol.Editor.edit)
                 }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.collectionSet))
             }
         }
     }
@@ -612,9 +619,12 @@ private struct ChatBoxBody: View {
                     .foregroundStyle(box.succeeded ? CobaltColor.success : CobaltColor.errorText)
                 Spacer(minLength: 0)
                 if !box.stdout.isEmpty || !box.stderr.isEmpty || box.cmd.count > 120 {
-                    Button(expanded ? Copy.ChatCards.showLess : Copy.ChatCards.showAll) { expanded.toggle() }
-                        .font(CobaltType.badge)
-                        .buttonStyle(.borderless)
+                    Button { expanded.toggle() } label: {
+                        Label(
+                            expanded ? Copy.ChatCards.showLess : Copy.ChatCards.showAll,
+                            systemImage: expanded ? Symbol.chatShowLess : Symbol.chatShowAll)
+                    }
+                    .buttonStyle(.cobaltIcon(.small))
                 }
             }
         }
@@ -628,6 +638,9 @@ private struct ChatLinkBody: View {
     let link: ChatToolCard.Link
     @Environment(\.shell) private var shell
     @Environment(\.openURL) private var openURL
+    /// The copy icon shows its green tick for a moment after a copy.
+    @State private var copied = false
+    @State private var copiedReset: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -644,15 +657,27 @@ private struct ChatLinkBody: View {
                     .lineLimit(2)
                     .textSelection(.enabled)
             }
-            HStack(spacing: 6) {
-                Button(Copy.ChatCards.copy) {
+            IconRow(spacing: 8, alignment: .leading) {
+                Button {
                     Pasteboard.copy(link.url.absoluteString)
                     shell.showStatus(Copy.ChatCards.copied)
+                    copied = true
+                    copiedReset?.cancel()
+                    copiedReset = Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(1.6))
+                        guard !Task.isCancelled else { return }
+                        copied = false
+                    }
+                } label: {
+                    Label(Copy.ChatCards.copyLink, systemImage: copied ? Symbol.Library.copied : Symbol.copyLink)
                 }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                Button(Copy.ChatCards.open) { openURL(link.url) }
-                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                .buttonStyle(.cobaltIcon(.small, state: copied ? .done : .idle))
+                Button { openURL(link.url) } label: {
+                    Label(Copy.ChatCards.openLink, systemImage: Symbol.web)
+                }
+                .buttonStyle(.cobaltIcon(.small))
             }
         }
+        .onDisappear { copiedReset?.cancel() }
     }
 }

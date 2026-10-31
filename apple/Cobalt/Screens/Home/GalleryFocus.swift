@@ -442,14 +442,14 @@ struct GalleryInfoCard: View {
         case .partial(let message, let retry):
             VStack(alignment: .leading, spacing: 8) {
                 InlineStatus(message: message)
-                Button(retry, systemImage: Symbol.Gallery.retry, action: retryItems)
-                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                Button(action: retryItems) { Label(retry, systemImage: Symbol.Gallery.retry) }
+                    .buttonStyle(.cobaltIcon(.small))
             }
         case .failed(let message):
             VStack(alignment: .leading, spacing: 8) {
                 InlineStatus(message: message)
-                Button(Copy.tryAgain, systemImage: Symbol.retry, action: tryAgain)
-                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                Button(action: tryAgain) { Label(Copy.tryAgain, systemImage: Symbol.retry) }
+                    .buttonStyle(.cobaltIcon(.small))
             }
         case .makeWaiting(let text):
             HStack(spacing: 8) {
@@ -476,8 +476,8 @@ struct GalleryInfoCard: View {
         case .makeFailed(let message):
             VStack(alignment: .leading, spacing: 8) {
                 InlineStatus(message: message)
-                Button(Copy.tryAgain, systemImage: Symbol.retry, action: makeAgain)
-                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                Button(action: makeAgain) { Label(Copy.tryAgain, systemImage: Symbol.retry) }
+                    .buttonStyle(.cobaltIcon(.small))
             }
         }
     }
@@ -615,19 +615,26 @@ struct GalleryControls: View {
         // `open` is there from the start (the row does not jump when the first item lands), disabled until the media is
         // saved on this device; with nothing kept here (keep new saves offline is off) it has nowhere to open and goes.
         let ready = facts.isSaved && facts.canOpen
-        return ButtonRow {
-            if facts.canOpen || !facts.isSaved {
-                if ready {
-                    Button(Copy.Jobs.open, systemImage: "arrow.up.forward.square", action: open)
-                        .buttonStyle(.cobaltPrimary())
+        // "open" keeps its word and "done" is an icon beside it; with no "open", "done" is the word
+        let showsOpen = facts.canOpen || !facts.isSaved
+        return GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                if showsOpen {
+                    if ready {
+                        Button(Copy.Jobs.open, systemImage: "arrow.up.forward.square", action: open)
+                            .buttonStyle(.cobaltPrimary())
+                    } else {
+                        Button(Copy.Jobs.open, systemImage: "arrow.up.forward.square", action: open)
+                            .buttonStyle(.cobaltSecondary())
+                            .disabled(true)
+                    }
+                    Button(action: done) { Label(GalleryFocusCopy.done, systemImage: Symbol.checkmark) }
+                        .buttonStyle(.cobaltIcon())
                 } else {
-                    Button(Copy.Jobs.open, systemImage: "arrow.up.forward.square", action: open)
-                        .buttonStyle(.cobaltSecondary())
-                        .disabled(true)
+                    Button(GalleryFocusCopy.done, systemImage: Symbol.checkmark, action: done)
+                        .buttonStyle(.cobaltPrimary())
                 }
             }
-            Button(GalleryFocusCopy.done, systemImage: Symbol.checkmark, action: done)
-                .buttonStyle(.cobaltSecondary())
         }
     }
 }

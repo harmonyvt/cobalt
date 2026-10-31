@@ -62,7 +62,7 @@ struct CollectionPickerSheet: View {
     // MARK: the top
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(Copy.Library2.pickCollectionTitle)
                     .font(Font.cobalt(16, .semibold, relativeTo: .headline))
@@ -73,10 +73,7 @@ struct CollectionPickerSheet: View {
                     .foregroundStyle(CobaltColor.caption)
             }
             Spacer(minLength: 8)
-            Button(Copy.cancel) { dismiss() }
-                .font(CobaltType.captionSmall)
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                .keyboardShortcut(.cancelAction)
+            CloseButton(cancels: true) { dismiss() }
         }
     }
 
@@ -98,12 +95,10 @@ struct CollectionPickerSheet: View {
                 .onSubmit(createNew)
                 .accessibilityLabel(Copy.Library2.newCollectionTitle)
             Button(action: createNew) {
-                Label(Copy.Library2.create, systemImage: Symbol.Library.collectionFile).labelStyle(.iconOnly)
+                Label(Copy.Library2.create, systemImage: Symbol.Library.collectionFile)
             }
-            .buttonStyle(.selectAction(.collection))
-            .frame(width: 56)
+            .buttonStyle(.cobaltIcon(tint: CobaltColor.collection, prominent: true))
             .disabled(cleaned == nil)
-            .accessibilityLabel(Copy.Library2.create)
         }
         .padding(8)
         .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
