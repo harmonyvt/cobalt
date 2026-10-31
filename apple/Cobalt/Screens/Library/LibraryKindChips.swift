@@ -19,7 +19,7 @@ struct LibraryKindChips: View, Equatable {
     /// Synthetic rows a preview adds (DEBUG); empty in the app.
     var extra: [LibraryRow] = []
     /// A chip's long press: tick every post of that kind (`false`), or tick them and share (`true`). Nil offers neither.
-    var pickAll: ((LibraryKindFilter, Bool) -> Void)?
+    var pickAll: (@MainActor (LibraryKindFilter, Bool) -> Void)?
 
     nonisolated static func == (a: LibraryKindChips, b: LibraryKindChips) -> Bool {
         a.model === b.model && a.extra == b.extra && (a.pickAll == nil) == (b.pickAll == nil)
