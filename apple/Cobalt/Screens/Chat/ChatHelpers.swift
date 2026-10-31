@@ -1,8 +1,8 @@
 import CobaltKit
 import SwiftUI
 
-// Helpers (APP-API-CONTRACT section 43.6): the sub-agents a chat started. While a thread has any, a strip under its header
-// shows one chip each (name, status dot, the call it is on while it works); a tap opens the helper's own thread in a sheet,
+// Helpers (APP-API-CONTRACT section 43.6): the sub-agents a chat started. The reply that started them shows one chip each
+// at its top (name, status dot, the call it is on while it works); a tap opens the helper's own thread in a sheet,
 // read-only: its mail with the chat on top, its task as the first bubble, its replies, and a footer with its status
 // instead of the composer. The agents card (ChatToolCards.swift) draws its rows with the same chip.
 
@@ -99,44 +99,34 @@ struct ChatMailLine: View {
     }
 }
 
-// MARK: - the strip
+// MARK: - on the reply that started them
 
-/// Under a thread's header while it has helpers: a chip each, tap to open.
-struct ChatHelperStrip: View {
-    let list: ChatAgentList
-    let open: (String) -> Void
+/// At the top of the reply that started them: a chip per helper with its live status; a tap opens its thread.
+struct ChatReplyHelpers: View {
+    let helpers: [ChatAgent]
+    /// Helpers that sent the chat a message not read yet.
+    var asked: Set<String> = []
+
+    @Environment(\.openChatHelper) private var openHelper
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: Symbol.chatHelpers)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(CobaltColor.caption)
-                .accessibilityHidden(true)
-            Text(Copy.Chat.helpers)
-                .font(CobaltType.badge)
-                .foregroundStyle(CobaltColor.caption)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(list.agents) { agent in
-                        Button { open(agent.id) } label: {
-                            ChatHelperChip(
-                                name: agent.name, status: agent.status, activity: agent.activity, asked: list.hasAsked(agent.id))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityHint(Copy.Chat.helperOpenHint)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(helpers) { agent in
+                    let chip = ChatHelperChip(name: agent.name, status: agent.status, activity: agent.activity, asked: asked.contains(agent.id))
+                    if let openHelper {
+                        Button { openHelper(agent.id) } label: { chip }
+                            .buttonStyle(.plain)
+                            .accessibilityHint(Copy.Chat.helperOpenHint)
+                    } else {
+                        chip
                     }
                 }
-                .padding(.vertical, 7)
             }
-            .scrollClipDisabled()
         }
-        .padding(.horizontal, 16)
-        .frame(maxWidth: 760)
-        .frame(maxWidth: .infinity)
-        .background(.bar)
-        .motion(Motion.card, value: list)
+        .motion(Motion.card, value: helpers)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(Copy.Chat.helpers)
+        .accessibilityLabel(Copy.ChatActivity.helpersA11y)
     }
 }
 
@@ -149,7 +139,6 @@ struct ChatHelperChrome: ViewModifier {
 
     @State private var opened: ChatRoute?
 
-    private var store: ChatStore { model.chat }
 
     private var openHelper: (@MainActor (String) -> Void)? {
         guard shows else { return nil }
@@ -159,11 +148,6 @@ struct ChatHelperChrome: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if shows, !store.agents(of: threadID).isEmpty {
-                    ChatHelperStrip(list: store.agents(of: threadID)) { opened = ChatRoute(id: $0) }
-                }
-            }
             .environment(\.openChatHelper, openHelper)
             .sheet(item: $opened) { route in
                 ChatHelperSheet(model: model, agentID: route.id, parentID: threadID)
