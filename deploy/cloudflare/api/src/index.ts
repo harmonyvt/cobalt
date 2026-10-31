@@ -15,7 +15,7 @@ import { shareBaseFrom } from "./deps";
 import { shareLinkFrom } from "./share";
 import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
 import { backfillCaptions, captionerFrom } from "./roast";
-import { ABOUT_RUN_BUDGET_MS, describerFrom, whisperFrom, writeAbouts } from "./about-writer";
+import { ABOUT_RUN_BUDGET_MS, describerFrom, transcriberFrom, writeAbouts } from "./about-writer";
 import { indexTerms } from "./about";
 import { indexMoments, MOMENTS_RUN_BUDGET_MS, timeTranscripts, TRANSCRIPT_RUN_BUDGET_MS } from "./transcripts";
 import { setRoastInput } from "./share-sets";
@@ -472,7 +472,7 @@ export default {
                 }
                 // Timed transcripts (section 47): the probes' sound heard with the time of every word (and every post heard
                 // before this section heard again), before the writer, which then reuses the words.
-                const transcriber = whisperFrom(env.AI);
+                const transcriber = transcriberFrom(env.AI, env.TRANSCRIBE_MODEL);
                 if (transcriber) {
                     try {
                         const r = await timeTranscripts({ db: env.DB, originals: env.ORIGINALS, transcriber, now: () => Date.now(), budgetMs: TRANSCRIPT_RUN_BUDGET_MS });

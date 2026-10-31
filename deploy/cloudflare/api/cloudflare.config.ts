@@ -161,6 +161,9 @@ export default defineConfig({
 			// sound with Whisper (@cf/openai/whisper-large-v3-turbo). Without AI the words are written without the sound.
 			ABOUT_MODEL: bindings.text("claude-haiku-5-5"),
 			AI: bindings.ai(),
+			// Timed transcripts (APP-API-CONTRACT.md 47.1): the speech model. "whisper" (Whisper turbo, cheapest) or
+			// "assemblyai" (AssemblyAI Universal, most accurate, about 7x the price). Changing it hears every post again.
+			TRANSCRIBE_MODEL: bindings.text("whisper"),
 			// How many files the chat AI may start making per thread per day (webps, slideshows, editor renders;
 			// APP-API-CONTRACT.md section 33.8). Editor renders run on a standard-4 container, so each costs real money.
 			CHAT_DAILY_RENDERS: bindings.text("10"),

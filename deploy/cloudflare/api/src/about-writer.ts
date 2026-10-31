@@ -23,7 +23,7 @@ import {
 } from "./about-store";
 import type { ModelFetch } from "./model-fetch";
 import { stripEmoji } from "./roast";
-import { heardTranscript, hearOne, linesOf, segmentsOf, transcriptModel, type Line } from "./transcripts";
+import { heardTranscript, hearOne, linesOf, segmentsOf, segmentsOfAssembly, transcriptModel, type Line } from "./transcripts";
 
 // The writer's share of each 15-minute run.
 export const ABOUT_RUN_BUDGET_MS = 120_000;
@@ -33,6 +33,8 @@ export const ABOUT_STYLE = "v1-plain";
 // A picture read from R2 for a still (no public copy, no poster) is sent only under this size.
 export const ABOUT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 export const WHISPER_MODEL = "@cf/openai/whisper-large-v3-turbo";
+// AssemblyAI Universal on Workers AI: more accurate, about 7x Whisper's price (TRANSCRIBE_MODEL, section 47.1).
+export const ASSEMBLY_MODEL = "assemblyai/universal-3.5-pro";
 
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
@@ -153,6 +155,18 @@ export function toBase64(bytes: Uint8Array): string {
     return btoa(bin);
 }
 
+const cleanHeard = (s: string) =>
+    // eslint-disable-next-line no-control-regex
+    s.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+
+function heardFrom(text: string, lang: unknown, lines: Line[]): Transcript {
+    return {
+        text: text ? Array.from(text).slice(0, TRANSCRIPT_MAX).join("") : null,
+        language: typeof lang === "string" && lang ? lang.slice(0, 16) : null,
+        lines: text ? lines : [],
+    };
+}
+
 // Workers AI's whisper-large-v3-turbo takes the audio as base64 (`audio`) and answers `{ text, transcription_info:
 // { language }, segments: [{ start, end, text, words: [{ word, start, end }] }], vtt }`. An empty text is "no speech".
 // The segments become timed subtitle lines (section 47, transcripts.ts).
@@ -166,17 +180,36 @@ export function whisperFrom(ai: AiRunner | undefined | null): Transcriber | null
                 transcription_info?: { language?: unknown };
             } | null;
             if (!r || typeof r.text !== "string") throw new Error("bad whisper answer");
-            // eslint-disable-next-line no-control-regex
-            const text = r.text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
-            const lang = r.transcription_info?.language;
-            const lines = text ? linesOf(segmentsOf(r)) : [];
-            return {
-                text: text ? Array.from(text).slice(0, TRANSCRIPT_MAX).join("") : null,
-                language: typeof lang === "string" && lang ? lang.slice(0, 16) : null,
-                lines,
-            };
+            const text = cleanHeard(r.text);
+            return heardFrom(text, r.transcription_info?.language, text ? linesOf(segmentsOf(r)) : []);
         },
     };
+}
+
+// AssemblyAI Universal takes the audio as a data URI (`audio_url`) and answers `{ text, language_code, words: [{ text,
+// start, end }] }` with times in milliseconds.
+export function assemblyFrom(ai: AiRunner | undefined | null): Transcriber | null {
+    if (!ai || typeof ai.run !== "function") return null;
+    return {
+        model: ASSEMBLY_MODEL,
+        async transcribe(mp3) {
+            const r = (await ai.run(ASSEMBLY_MODEL, { audio_url: `data:audio/mpeg;base64,${toBase64(mp3)}`, language_detection: true })) as {
+                text?: unknown;
+                language_code?: unknown;
+            } | null;
+            if (!r || (typeof r.text !== "string" && r.text !== null)) throw new Error("bad assemblyai answer");
+            const text = cleanHeard(typeof r.text === "string" ? r.text : "");
+            return heardFrom(text, r.language_code, text ? linesOf(segmentsOfAssembly(r)) : []);
+        },
+    };
+}
+
+// The speech model named by TRANSCRIBE_MODEL: "whisper" (default, cheapest) or "assemblyai" (most accurate). Switching
+// hears every post again on the next cron runs, since a transcript remembers the model that heard it.
+export function transcriberFrom(ai: AiRunner | undefined | null, name?: string | null): Transcriber | null {
+    const n = (name ?? "").trim().toLowerCase();
+    if (n === "assemblyai" || n === ASSEMBLY_MODEL) return assemblyFrom(ai);
+    return whisperFrom(ai);
 }
 
 // ---- the cron's run -------------------------------------------------------------------------------------------------

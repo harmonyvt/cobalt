@@ -3,7 +3,7 @@
 // the about writer reuses what it heard; moments get vectors; search says where the query was said ("words") or which
 // moment matched ("meaning"); GET /library/transcript and its chat call. Whisper and the Space are fakes.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { whisperFrom, writeAbouts, type Describer, type Transcriber, type Transcript } from "../src/about-writer";
+import { ASSEMBLY_MODEL, transcriberFrom, whisperFrom, writeAbouts, type Describer, type Transcriber, type Transcript } from "../src/about-writer";
 import { capabilities, type AppDeps } from "../src/app-routes";
 import { EMBED_DIMS, EMBED_MODEL, librarySearch, normalize, runIndexer, type EmbedClient, type EmbedInput } from "../src/embed";
 import { hashKey } from "../src/keys";
@@ -492,5 +492,61 @@ describe("GET /library/transcript (47.3)", () => {
             ((await capabilities(w.d, "missing", undefined, false, false, false, false, false, false, true, false, false, false, false, false, about, sound)).body as any).features;
         expect((await caps(true, true)).transcripts).toBe(true);
         expect((await caps(true, false)).transcripts).toBe(false);
+    });
+});
+
+describe("the speech model switch (47.1)", () => {
+    it("TRANSCRIBE_MODEL picks Whisper by default and AssemblyAI on request", async () => {
+        const calls: { model: string; inputs: Record<string, unknown> }[] = [];
+        const ai = {
+            run: async (model: string, inputs: Record<string, unknown>) => {
+                calls.push({ model, inputs });
+                return {
+                    text: "Hi there. Bring the tail",
+                    language_code: "en",
+                    words: [
+                        { text: "Hi", start: 100, end: 300, confidence: 0.9 },
+                        { text: "there.", start: 320, end: 700 },
+                        { text: "Bring", start: 2500, end: 2800 },
+                        { bad: 1 },
+                        { text: "the", start: 2810, end: 2900 },
+                        { text: "tail", start: 2910, end: 3300 },
+                    ],
+                };
+            },
+        };
+        expect(transcriberFrom(ai, undefined)!.model).toBe("@cf/openai/whisper-large-v3-turbo");
+        expect(transcriberFrom(ai, " Whisper ")!.model).toBe("@cf/openai/whisper-large-v3-turbo");
+        expect(transcriberFrom(undefined, "assemblyai")).toBeNull();
+        const t = transcriberFrom(ai, "AssemblyAI")!;
+        expect(t.model).toBe(ASSEMBLY_MODEL);
+        const heard = await t.transcribe(Uint8Array.from([1, 2, 3]));
+        expect(calls[0]).toEqual({ model: ASSEMBLY_MODEL, inputs: { audio_url: "data:audio/mpeg;base64,AQID", language_detection: true } });
+        expect(heard.text).toBe("Hi there. Bring the tail");
+        expect(heard.language).toBe("en");
+        expect(heard.lines).toEqual([
+            { s: 0.1, e: 0.7, t: "Hi there.", w: [{ t: "Hi", s: 0.1, e: 0.3 }, { t: "there.", s: 0.32, e: 0.7 }] },
+            { s: 2.5, e: 3.3, t: "Bring the tail", w: [{ t: "Bring", s: 2.5, e: 2.8 }, { t: "the", s: 2.81, e: 2.9 }, { t: "tail", s: 2.91, e: 3.3 }] },
+        ]);
+        const quiet = transcriberFrom({ run: async () => ({ text: "", words: [] }) }, "assemblyai")!;
+        expect(await quiet.transcribe(new Uint8Array(1))).toEqual({ text: null, language: null, lines: [] });
+        const bad = transcriberFrom({ run: async () => ({ nope: 1 }) }, "assemblyai")!;
+        await expect(bad.transcribe(new Uint8Array(1))).rejects.toThrow();
+    });
+
+    it("AssemblyAI utterances start their own lines", async () => {
+        const t = transcriberFrom(
+            {
+                run: async () => ({
+                    text: "yes no",
+                    utterances: [
+                        { speaker: "A", words: [{ text: "yes", start: 0, end: 400 }] },
+                        { speaker: "B", words: [{ text: "no", start: 450, end: 800 }] },
+                    ],
+                }),
+            },
+            "assemblyai",
+        )!;
+        expect((await t.transcribe(new Uint8Array(1))).lines!.map((l) => l.t)).toEqual(["yes", "no"]);
     });
 });

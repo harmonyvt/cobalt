@@ -93,6 +93,32 @@ export function segmentsOf(answer: unknown): Segment[] {
     return out;
 }
 
+// AssemblyAI Universal (Workers AI `assemblyai/universal-3.5-pro`): `words: [{ text, start, end }]` in milliseconds and
+// `utterances` (same words) when speakers are labelled. Each utterance is a segment; without them, one segment of all words.
+export function segmentsOfAssembly(answer: unknown): Segment[] {
+    const r = (answer ?? {}) as { words?: unknown; utterances?: unknown };
+    const wordsOf = (list: unknown): Word[] => {
+        const out: Word[] = [];
+        if (!Array.isArray(list)) return out;
+        for (const w of list) {
+            const ww = (w ?? {}) as { text?: unknown; start?: unknown; end?: unknown };
+            const t = typeof ww.text === "string" ? cleanText(ww.text) : "";
+            const s = num(ww.start);
+            const e = num(ww.end);
+            if (!t || s === null || e === null) continue;
+            out.push({ t, s: s / 1000, e: Math.max(s, e) / 1000 });
+        }
+        return out;
+    };
+    const seg = (words: Word[]): Segment => ({ start: words[0]!.s, end: words[words.length - 1]!.e, text: words.map((w) => w.t).join(" "), words });
+    if (Array.isArray(r.utterances) && r.utterances.length > 0) {
+        const out = r.utterances.map((u) => wordsOf((u as { words?: unknown } | null)?.words)).filter((w) => w.length > 0).map(seg);
+        if (out.length > 0) return out;
+    }
+    const all = wordsOf(r.words);
+    return all.length > 0 ? [seg(all)] : [];
+}
+
 // A segment without word times: its words spread over the segment by their length.
 function spreadWords(sg: Segment): Word[] {
     const parts = sg.text.split(" ").filter(Boolean);
