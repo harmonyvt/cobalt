@@ -13,24 +13,33 @@ extension Copy {
         static let clearField = "clear search"
         static let searching = "searching…"
         static func results(_ n: Int) -> String { n == 1 ? "1 result" : "\(n) results" }
-        static func stillIndexing(_ n: Int) -> String { n == 1 ? "still indexing 1 post" : "still indexing \(n) posts" }
-        /// "12 results · still indexing 3 posts"; the count alone when the index is complete.
-        static func resultsLine(count: Int, pending: Int) -> String {
-            pending > 0 ? "\(results(count)) · \(stillIndexing(pending))" : results(count)
-        }
+        /// The fainter half of the results line: " · 3 still indexing".
+        static func stillIndexing(_ n: Int) -> String { " · \(n) still indexing" }
         static let waking = "search is waking up…"
-        static let failed = "couldn't search by meaning. showing name matches."
-        static let off = "search by meaning is off on this server. showing name matches."
+        static let failed = "name matches only"
+        static let failedNote = " · search didn't answer"
+        static let off = "name matches only"
+        static let offNote = " · search by meaning is off"
 
-        /// The text of the line for `state`; nil draws no line.
+        /// The line for `state`, in two parts: the answer (`line`) and a fainter note after it (`note`). Nil draws no line.
         static func line(_ state: LibrarySearchState) -> String? {
             switch state {
             case .idle: return nil
             case .searching: return searching
-            case .results(let count, let pending): return resultsLine(count: count, pending: pending)
+            case .results(let count, _): return results(count)
             case .waking: return waking
             case .off: return off
             case .failed: return failed
+            }
+        }
+
+        /// The fainter part after `line`: how many posts the index has still to take, or why only names match.
+        static func note(_ state: LibrarySearchState) -> String? {
+            switch state {
+            case .results(_, let pending) where pending > 0: return stillIndexing(pending)
+            case .off: return offNote
+            case .failed: return failedNote
+            default: return nil
             }
         }
 

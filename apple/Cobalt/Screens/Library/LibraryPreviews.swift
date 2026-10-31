@@ -132,7 +132,7 @@ private struct SkeletonPreview: View {
     List { Section { LibraryProblem(state: .failed) {} } }
 }
 #Preview("loading the whole library", traits: .fixedLayout(width: 390, height: 120)) {
-    LibraryLoadingLine(loaded: 60, total: 140)
+    LibraryActivityBar(fraction: 60.0 / 140, label: Copy.Library2.loadingAll(60, of: 140))
 }
 #Preview("plain cobalt (no library tab)", traits: .fixedLayout(width: 390, height: 844)) {
     PreviewHost(.plainCobalt, tab: .library) { model in

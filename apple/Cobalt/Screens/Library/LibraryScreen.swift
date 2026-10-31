@@ -75,6 +75,9 @@ private struct LibraryContent: View {
     @Namespace private var zoomSpace
     /// File URLs for the system share sheet. Assigned only once they are ready; the sheet clears this when it finishes.
     @State private var filesToShare: [URL] = []
+    /// The last rows a search showed, kept on screen (dimmed) while the next words are still being searched, so each
+    /// keystroke does not flash the tiles away to grey and back.
+    @State private var heldRows: [LibraryRow] = []
     #if DEBUG
     @Environment(\.libraryDebugRows) private var debugRows
     @Environment(\.hiddenPreviewUnlocked) private var previewUnlocked
@@ -214,9 +217,14 @@ private struct LibraryContent: View {
         let shareIndex = self.shareIndex
         let rows = self.rows(from: unfiltered, index: shareIndex)
         let phase = phase(rows)
+        let holding = holdsRows(phase)
         // Ticks a search, a filter or a delete took off screen are neither counted nor shared.
         let pickedCount = controller.selecting ? controller.pickedRows(rows).count : 0
-        content(rows: rows, phase: phase, shareIndex: shareIndex)
+        content(rows: holding ? heldRows : rows, phase: holding ? .rows : phase, shareIndex: shareIndex, held: holding)
+            .onChange(of: phase == .rows ? rows.map(\.id) : []) { _, ids in
+                if !ids.isEmpty { heldRows = rows }
+            }
+            .onChange(of: library.showingHidden) { heldRows = [] }
             .navigationTitle(Copy.library)
             #if os(iOS)
             // An inline title: the large title grew and shrank with the scroll (and with a pull to refresh) while the
@@ -252,8 +260,7 @@ private struct LibraryContent: View {
                         LibraryShareChips(
                             model: model, rows: unfiltered, index: shareIndex, filter: $controller.shareFilter)
                     }
-                    loadingAllLine
-                    LibrarySearchLine(state: library.searchState)
+                    LibraryStatusLine(state: library.searchState)
                     if model.capabilities.transcripts {
                         // results said in their video: a tap opens the post playing from that moment (APP-API-CONTRACT 47.5)
                         LibrarySaidStrip(library: library) { post, said in
@@ -263,7 +270,11 @@ private struct LibraryContent: View {
                         }
                     }
                 }
+                // one hairline along the bar's bottom edge says "working": the whole library paging in (with its
+                // progress), or the server still searching. The status line above it keeps only the answer.
+                .overlay(alignment: .bottom) { activityBar }
                 .motion(Motion.rows, value: library.searchState)
+                .motion(Motion.fade, value: library.loadingAll == nil)
                 // folds away with the scroll and comes back on the way up (`LibraryTopBar.swift`)
                 .modifier(LibraryBarFoldEffect(fold: controller.fold))
             }
@@ -376,31 +387,41 @@ private struct LibraryContent: View {
             .modifier(LibraryHiddenWatchers(model: model, controller: controller))
     }
 
-    private func content(rows: [LibraryRow], phase: LibraryPhase, shareIndex: ShareSetIndex) -> some View {
+    private func content(rows: [LibraryRow], phase: LibraryPhase, shareIndex: ShareSetIndex, held: Bool) -> some View {
         phaseContent(rows: rows, phase: phase, shareIndex: shareIndex)
+            // the last search's tiles while the next one is out: dimmed, and not tappable (they may not match any more)
+            // (only the dim animates: the tiles themselves change in place as they always did)
+            .animation(Motion.fade) { $0.opacity(held ? 0.4 : 1) }
+            .allowsHitTesting(!held)
             // a different scroll view (or none): the top bar opens again
             .onChange(of: phase) { controller.fold.reset() }
             .onChange(of: library.viewMode) { controller.fold.reset() }
     }
 
+    /// Whether the last search's rows stay on screen in place of the loading tiles: only while words are in the field and
+    /// the server (or the whole-library paging) is still working on them, and only once there were rows to keep.
+    private func holdsRows(_ phase: LibraryPhase) -> Bool {
+        guard phase == .loading, !heldRows.isEmpty, !library.posts.isEmpty, !library.showingHidden else { return false }
+        guard !library.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return library.searchState == .searching || library.searchState == .waking || library.loadingAll != nil
+    }
+
     @ViewBuilder
     private func phaseContent(rows: [LibraryRow], phase: LibraryPhase, shareIndex: ShareSetIndex) -> some View {
         switch phase {
+        // The tiles and the grey loading tiles are one mosaic (one scroll view) on purpose: swapping scroll views under
+        // the top bar while typing took the keyboard away from the search field at every "searching…".
+        case .rows where library.viewMode == .mosaic, .loading where library.viewMode == .mosaic:
+            let loading = phase == .loading
+            LibraryMosaic(
+                rows: loading ? [] : rows, controller: controller, tier: tier, footer: loading ? .none : footer,
+                skeleton: loading, zoom: zoomSpace, shareIndex: shareIndex, shelves: loading ? nil : shelves)
         case .rows:
-            switch library.viewMode {
-            case .mosaic:
-                LibraryMosaic(
-                    rows: rows, controller: controller, tier: tier, footer: footer, skeleton: false, zoom: zoomSpace,
-                    shareIndex: shareIndex, shelves: shelves)
-            case .table:
-                if tier == .compact {
-                    LibraryList(rows: rows, controller: controller, footer: footer, zoom: zoomSpace, shareIndex: shareIndex)
-                } else {
-                    LibraryTable(rows: rows, controller: controller, footer: footer, shareIndex: shareIndex)
-                }
+            if tier == .compact {
+                LibraryList(rows: rows, controller: controller, footer: footer, zoom: zoomSpace, shareIndex: shareIndex)
+            } else {
+                LibraryTable(rows: rows, controller: controller, footer: footer, shareIndex: shareIndex)
             }
-        case .loading where library.viewMode == .mosaic:
-            LibraryMosaic(rows: [], controller: controller, tier: tier, footer: .none, skeleton: true)
         case .locked:
             HiddenLockedCard(controller: controller)
         default:
@@ -537,10 +558,16 @@ private struct LibraryContent: View {
     }
     #endif
 
+    /// The top bar's working hairline: the whole library's pages (a real fraction), else a sweep while the server searches.
     @ViewBuilder
-    private var loadingAllLine: some View {
+    private var activityBar: some View {
+        let searching = library.searchState == .searching || library.searchState == .waking
         if let progress = library.loadingAll {
-            LibraryLoadingLine(loaded: progress.loaded, total: progress.total)
+            LibraryActivityBar(
+                fraction: Double(progress.loaded) / Double(max(progress.total, 1)),
+                label: Copy.Library2.loadingAll(progress.loaded, of: progress.total))
+        } else if searching, !library.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            LibraryActivityBar(fraction: nil, label: Copy.Search.searching)
         }
     }
 
@@ -574,25 +601,27 @@ private struct LibraryContent: View {
     }
 }
 
-/// The line under the search field while the server searches (APP-API-CONTRACT 21): `searching…`, `12 results · still
-/// indexing 3 posts`, `search is waking up…`, or why only name matches show. Nothing while there is no server search.
-struct LibrarySearchLine: View {
+/// The quiet line under the search field (APP-API-CONTRACT 21): `searching…`, then `12 results` (with a fainter
+/// `· 3 still indexing`), `search is waking up…`, or why only name matches show. Nothing while there is no server search.
+/// No spinner: the hairline along the bar's bottom (`LibraryActivityBar`) says the app is working.
+struct LibraryStatusLine: View {
     let state: LibrarySearchState
 
     var body: some View {
         if let text = Copy.Search.line(state) {
-            HStack(spacing: 6) {
-                if state == .searching || state == .waking {
-                    ProgressView().controlSize(.mini)
-                }
+            HStack(spacing: 0) {
                 Text(text)
-                    .contentTransition(.opacity)
+                    .foregroundStyle(state == .searching ? .tertiary : .secondary)
+                if let note = Copy.Search.note(state) {
+                    Text(note).foregroundStyle(.tertiary)
+                }
             }
             .font(CobaltType.captionSmall)
-            .foregroundStyle(.secondary)
             .monospacedDigit()
+            .lineLimit(1)
+            .contentTransition(.opacity)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
+            .padding(.vertical, 5)
             .background(.bar)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.updatesFrequently)
@@ -601,19 +630,25 @@ struct LibrarySearchLine: View {
     }
 }
 
-/// The quiet line above the results while the whole library loads: `loading the whole library · 60 of 140`.
-struct LibraryLoadingLine: View {
-    let loaded: Int
-    let total: Int
+/// A 2 pt hairline along the bottom of the library's top bar while something is loading: filling up with the whole
+/// library's pages, or a calm sweep while the server searches (still under Reduce Motion). Replaces the old
+/// `loading the whole library · 60 of 140` text line; VoiceOver still reads that text.
+struct LibraryActivityBar: View {
+    /// 0...1, or nil for a sweep.
+    let fraction: Double?
+    let label: String
 
     var body: some View {
-        Text(Copy.Library2.loadingAll(loaded, of: total))
-            .font(CobaltType.captionSmall)
-            .foregroundStyle(.secondary)
-            .monospacedDigit()
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .background(.bar)
+        StoryBar(
+            fraction: fraction,
+            ink: ProgressInk(
+                fill: CobaltColor.text.opacity(0.55), onFill: CobaltColor.onText, track: .clear,
+                quiet: CobaltColor.caption, error: CobaltColor.errorText),
+            height: 2)
+            .padding(.horizontal, 16)
+            .transition(.opacity)
+            .accessibilityElement()
+            .accessibilityLabel(label)
             .accessibilityAddTraits(.updatesFrequently)
     }
 }

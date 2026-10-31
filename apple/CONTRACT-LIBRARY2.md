@@ -225,8 +225,9 @@ route, one additive response field, one capability flag.** Marked **(owner)** wh
     drawer; iPad/Mac: toolbar): matches the resolved title, the custom title, service, ref and file
     names, case- and diacritic-insensitive. The server pages by latest activity only, so any search,
     any filter other than `everything`, or any sort other than date-newest first **loads the whole
-    library** first (`LibraryModel.loadAll`, pages of 50, cap 1000 posts) with a quiet line
-    `loading the whole library · 60 of 140` above the results; then sorts/filters on device. No
+    library** first (`LibraryModel.loadAll`, pages of 50, cap 1000 posts) with a hairline
+    under the top bar that fills as the pages come in (VoiceOver: `loading the whole library · 60 of 140`;
+    CONTRACT.md 13); then sorts/filters on device. No
     search result: `nothing matches "<q>".`. No server search parameter (lane call: a personal
     library is tens to hundreds of posts; one more server route is not worth it).
 15. **(lane) iPad and Mac: the detail is an inspector column, not a split.** A mosaic or an

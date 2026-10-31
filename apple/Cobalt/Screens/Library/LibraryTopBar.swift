@@ -163,6 +163,9 @@ struct LibrarySearchField: View {
         .background(.bar)
         .motion(Motion.copy, value: text.isEmpty)
         .onChange(of: focused) { _, now in fold.held = now }
+        // The bar outlives this field only by identity: if anything above rebuilds it while it has the keyboard
+        // (`fold.held`), the new field takes the keyboard back at once instead of dropping it mid-word.
+        .onAppear { if fold.held, !focused { focused = true } }
         .accessibilityElement(children: .contain)
     }
 }
