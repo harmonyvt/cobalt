@@ -12,12 +12,18 @@ struct EditorBin: View {
     @Environment(EditorHost.self) private var host
     @State private var entries: [EditorBinEntry] = []
     @State private var query = ""
+    /// nil = all; shelves show once the server takes webps and layers (39.2).
+    @State private var shelf: EditorBinEntry.Shelf?
+    @State private var cutoutOf: EditSource?
+
+    private var hasShelves: Bool { session.overlayTrackLimit > 1 }
 
     private var shown: [EditorBinEntry] {
+        let shelved = entries.filter { shelf == nil || $0.shelf == shelf }
         let folded = query.trimmingCharacters(in: .whitespacesAndNewlines)
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-        guard !folded.isEmpty else { return entries }
-        return entries.filter {
+        guard !folded.isEmpty else { return shelved }
+        return shelved.filter {
             "\($0.source.name)\n\($0.postTitle)".folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
                 .contains(folded)
         }
@@ -35,9 +41,20 @@ struct EditorBin: View {
                     .font(Font.cobalt(11, .regular, relativeTo: .caption2))
                     .foregroundStyle(CobaltColor.caption)
             }
+            if hasShelves {
+                Picker(Copy.Editor.library, selection: $shelf) {
+                    Text(Copy.Editor.shelfAll).tag(EditorBinEntry.Shelf?.none)
+                    Text(Copy.Editor.shelfVideos).tag(EditorBinEntry.Shelf?.some(.videos))
+                    Text(Copy.Editor.shelfImages).tag(EditorBinEntry.Shelf?.some(.images))
+                    Text(Copy.Editor.shelfEmotes).tag(EditorBinEntry.Shelf?.some(.emotes))
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+            }
             searchField
             if shown.isEmpty {
-                Text(Copy.Editor.binEmpty)
+                Text(shelf == .emotes ? Copy.Editor.emotesEmpty : Copy.Editor.binEmpty)
                     .font(CobaltType.captionSmall)
                     .foregroundStyle(CobaltColor.caption)
                     .padding(.top, 8)
@@ -47,6 +64,14 @@ struct EditorBin: View {
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                         ForEach(shown) { entry in
                             EditorBinTile(entry: entry, add: add)
+                                .contextMenu {
+                                    Button { add(entry) } label: { Label(Copy.Editor.add, systemImage: Symbol.Editor.add) }
+                                    if session.canCutout, entry.canCutout {
+                                        Button { cutoutOf = entry.source } label: {
+                                            Label(Copy.Editor.removeBackground, systemImage: Symbol.Editor.cutout)
+                                        }
+                                    }
+                                }
                         }
                         if model.library.hasMore, query.isEmpty {
                             Color.clear.frame(height: 1)
@@ -65,6 +90,9 @@ struct EditorBin: View {
         .accessibilityLabel(Copy.Editor.binA11y)
         .task(id: model.library.posts.map(\.id)) { entries = EditorBinEntry.entries(model) }
         .task { if model.library.posts.isEmpty { await model.library.refresh() } }
+        .sheet(item: $cutoutOf) { picture in
+            EditorCutoutSheet(session: session, source: picture) { cutoutOf = nil }
+        }
     }
 
     private var searchField: some View {
@@ -91,7 +119,9 @@ struct EditorBin: View {
         case .video:
             session.add([entry.source], at: nil)
         case .gif, .photo:
-            if !session.addOverlay(entry.source, atFrame: nil) { host.show(Copy.Editor.dropIntoOverlayRefused) }
+            if !session.addOverlay(entry.source, atFrame: nil) {
+                host.show(session.overlayTrackLimit > 1 ? Copy.Editor.allLayersBusy : Copy.Editor.dropIntoOverlayRefused)
+            }
         case .unsupported:
             host.show(Copy.Editor.cantEdit)
         }
@@ -127,6 +157,7 @@ private struct EditorBinTile: View {
 
     private var badgeText: String {
         if !entry.isEditable { return Copy.Editor.cantEditBadge }
+        if entry.isEmote { return Copy.Editor.badgeEmote }
         switch entry.source.kind {
         case .video: return entry.source.duration.map(Copy.Editor.clock) ?? ""
         case .gif: return Copy.Editor.badgeGif

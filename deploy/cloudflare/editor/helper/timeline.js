@@ -21,7 +21,9 @@ export const EDIT_CANVASES = [
     [1920, 1080],
     [1280, 720],
 ];
-export const EDIT_SOURCE_TYPES = ["video/mp4", "video/quicktime", "video/x-m4v", "image/gif", "image/jpeg", "image/png"];
+export const EDIT_SOURCE_TYPES = ["video/mp4", "video/quicktime", "video/x-m4v", "image/gif", "image/jpeg", "image/png", "image/webp"];
+/** Overlay layers (section 39): an overlay's optional `track` is 0..EDIT_OVERLAY_TRACKS - 1; absent means 0. */
+export const EDIT_OVERLAY_TRACKS = 8;
 
 /** Smallest cropped width and height in pixels (section 10: api/helper/crop.js, copied because the image has no monorepo). */
 export const MIN_CROP_PX = 64;
@@ -38,7 +40,7 @@ export const EDIT_CROP_ASPECTS = ["free", "9:16", "1:1", "4:5", "16:9"];
  * @typedef {{id: string, item: string, in: number, out: number, speed: number, crop?: EditCrop, fit: "fill" | "fit",
  *            volume: number, muted: boolean, pitch?: number}} MainClip
  * @typedef {{id: string, item: string, at: number, in: number, out: number, frame: {x: number, y: number, w: number},
- *            opacity: number, volume: number, muted: boolean, pitch?: number}} OverlayClip
+ *            opacity: number, volume: number, muted: boolean, pitch?: number, track?: number}} OverlayClip
  * @typedef {{version: 1, canvas: {w: number, h: number, fps: number}, main: MainClip[], overlay: OverlayClip[]}} Timeline
  * @typedef {{id: string, content_type: string | null, source?: string | null, width: number | null, height: number | null,
  *            duration: number | null, bytes: number | null, deleted?: boolean | number | null}} SourceRow
@@ -243,7 +245,7 @@ function parseCrop(c, p) {
  */
 function parseOverlay(c, p, idOk) {
     if (!isObj(c)) return bad(p);
-    let f = keysOk(c, ["id", "item", "at", "in", "out", "frame", "opacity", "volume", "muted"], ["pitch"], p);
+    let f = keysOk(c, ["id", "item", "at", "in", "out", "frame", "opacity", "volume", "muted"], ["pitch", "track"], p);
     if (f) return f;
     f = idOk(c.id, `${p}.id`);
     if (f) return f;
@@ -272,10 +274,18 @@ function parseOverlay(c, p, idOk) {
     if (vol < 0 || vol > 1) return range(`${p}.volume`);
     const pt = parsePitch(c, p);
     if (!pt.ok) return pt;
+    // optional layer (section 39): an integer 0..7, present only when non-zero, so older timelines stay byte for byte
+    let track = 0;
+    if (c.track !== undefined) {
+        if (!Number.isInteger(c.track)) return bad(`${p}.track`);
+        track = /** @type {number} */ (c.track) + 0;
+        if (track < 0 || track >= EDIT_OVERLAY_TRACKS) return range(`${p}.track`);
+    }
     return {
         ok: true,
         clip: sortKeys({
             ...(pt.pitch !== 0 ? { pitch: pt.pitch } : {}),
+            ...(track !== 0 ? { track } : {}),
             at: roundTo(at, 3),
             frame,
             id: /** @type {string} */ (c.id),
@@ -314,13 +324,16 @@ function cmp(a, b) {
 function checkTiming(t) {
     const tm = timing(t);
     if (tm.frames > EDIT_MAX_SECONDS * tm.fps) return fail("error.edit.too_long", "main");
-    let maxEnd = 0;
+    // overlays are sorted by `at`; on one layer (`track`, section 39) they never share a frame, on different layers they may
+    /** @type {number[]} */
+    const maxEnd = new Array(EDIT_OVERLAY_TRACKS).fill(0);
     for (let i = 0; i < t.overlay.length; i++) {
         const o = tm.overlay[i];
+        const k = t.overlay[i].track ?? 0;
         if (i > 0 && t.overlay[i].at < t.overlay[i - 1].at) return fail("error.edit.overlay_overlap", `overlay[${i}]`);
-        if (o.start < maxEnd) return fail("error.edit.overlay_overlap", `overlay[${i}]`);
+        if (o.start < maxEnd[k]) return fail("error.edit.overlay_overlap", `overlay[${i}]`);
         if (o.start + o.frames > tm.frames) return fail("error.edit.overlay_past_end", `overlay[${i}]`);
-        maxEnd = Math.max(maxEnd, o.start + o.frames);
+        maxEnd[k] = Math.max(maxEnd[k], o.start + o.frames);
     }
     return null;
 }
@@ -377,12 +390,25 @@ export function timing(t) {
 // --- sources (needs the library rows) -----------------------------------------------------------------------------
 
 const VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/x-m4v"];
-/** The kind a content type means to the editor, or null for one it does not take. @param {string | null | undefined} ct @returns {"video" | "gif" | "photo" | null} */
+/**
+ * The kind a content type means to the editor, or null for one it does not take. A webp (section 39) is a "photo" here:
+ * the render helper finds out from its bytes whether it is animated (then it loops like a gif) or a still.
+ * @param {string | null | undefined} ct @returns {"video" | "gif" | "photo" | null}
+ */
 export function sourceKind(ct) {
     const t = String(ct ?? "").split(";")[0].trim().toLowerCase();
     if (!EDIT_SOURCE_TYPES.includes(t)) return null;
     if (VIDEO_TYPES.includes(t)) return "video";
     return t === "image/gif" ? "gif" : "photo";
+}
+
+/**
+ * The overlays in drawing order (section 39): bottom layer first, then by `at` (their order in the array). Returns indexes
+ * into `t.overlay`. Without layers this is 0, 1, 2, ... (the order of 31.5).
+ * @param {Timeline} t @returns {number[]}
+ */
+export function overlayDrawOrder(t) {
+    return t.overlay.map((o, i) => ({ i, k: o.track ?? 0 })).sort((a, b) => a.k - b.k || a.i - b.i).map((x) => x.i);
 }
 
 /**

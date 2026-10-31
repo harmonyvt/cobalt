@@ -180,7 +180,7 @@ const stop = (call: string, message: string) => new OpError(400, "error.make.ref
 // A post id or a file id -> the file a make reads: the file itself, or the post's first source file of the wanted type.
 // Nothing is made of a hidden post (section 37.2): the refusal the model reads, with the way out.
 const hiddenStop = (call: string, what: string) => new OpError(409, "error.hidden", `cobalt.${call}: ${what}: ${HIDDEN_HINT}`);
-async function refuseHiddenPost(ctx: OpContext, call: string, postKey: string | null | undefined): Promise<void> {
+export async function refuseHiddenPost(ctx: OpContext, call: string, postKey: string | null | undefined): Promise<void> {
     if (postKey && (await hiddenRows(ctx.db, [postKey])).get(postKey)?.state === "hidden") throw hiddenStop(call, postKey);
 }
 
@@ -267,7 +267,7 @@ export const JobSchema = z
     .meta({ id: "Job" });
 type Job = z.infer<typeof JobSchema>;
 
-const rendersCap = (ctx: OpContext) => dailyCap(ctx.env.CHAT_DAILY_RENDERS, CHAT_DAILY_RENDERS_DEFAULT);
+export const rendersCap = (ctx: OpContext) => dailyCap(ctx.env.CHAT_DAILY_RENDERS, CHAT_DAILY_RENDERS_DEFAULT);
 
 function threadOf(ctx: OpContext, call: string): string {
     if (!ctx.chat) throw new OpError(404, "error.chat.off", `cobalt.${call}: only the chat can call this`);
@@ -632,7 +632,7 @@ export const makeGalleryImageOp = defineOp({
 // ---- the editor from chat -----------------------------------------------------------------------------------------
 
 // One editor route for the chat, with the chat's key id; a refusal says the code and the field.
-async function editCall(ctx: OpContext, call: string, op: EditsOp, params: Record<string, string>, body?: unknown): Promise<Record<string, any>> {
+export async function editCall(ctx: OpContext, call: string, op: EditsOp, params: Record<string, string>, body?: unknown): Promise<Record<string, any>> {
     const d = editsDeps(ctx);
     if (!d) throw new OpError(404, "error.edit.off", `cobalt.${call}: the editor is off on this server`);
     const req = new Request("https://do.internal/edits", {
@@ -699,10 +699,13 @@ const TimelineInput = z
 const TIMELINE_TYPE = `type Timeline = { version: 1; canvas: { w, h, fps: 30 | 60 } (w x h: 1080x1920, 720x1280, 1080x1080, 720x720, 1920x1080, 1280x720);
   main: { id: string /* unique, letters */; item: string /* a video file id */; in: number; out: number /* source seconds */; speed: number /* 0.25..4 */;
           crop?: { aspect: "free"; x; y; w; h } /* fractions */; fit: "fill" | "fit"; volume: number /* 0..1 */; muted: boolean; pitch?: number /* semitones -12..12 */ }[];
-  overlay: { id; item /* video, gif or photo file id */; at: number /* output seconds */; in; out; frame: { x; y; w } /* canvas fractions */; opacity: number; volume; muted }[] }`;
+  overlay: { id; item /* a video, gif, photo, webp (7TV emotes too) or cutout file id */; at: number /* output seconds */; in; out /* video: source seconds; picture: in 0, out = seconds shown */;
+             frame: { x; y; w } /* top-left + width, canvas fractions; height follows the picture */; opacity: number; volume; muted; track?: number /* layer 0..7, higher on top */ }[] }
+  // overlay[] sorted by at; overlays on one track never overlap, on different tracks they may (stack stickers, several videos at once).
+  // Adding one overlay to an existing project: edits.addOverlay is simpler.`;
 
-const ProjectSchema = z.object({ id: z.string(), title: z.string(), revision: z.number(), duration: z.number(), render: z.unknown().nullable() }).meta({ id: "EditProject" });
-const projectOf = (p: Record<string, any>) => ({ id: p.id, title: p.title, revision: p.revision, duration: p.duration, render: p.render ?? null });
+export const ProjectSchema = z.object({ id: z.string(), title: z.string(), revision: z.number(), duration: z.number(), render: z.unknown().nullable() }).meta({ id: "EditProject" });
+export const projectOf = (p: Record<string, any>) => ({ id: p.id, title: p.title, revision: p.revision, duration: p.duration, render: p.render ?? null });
 
 // The canvas for one clip, by the shape of what it shows (31.2.1), 1080p 30 fps.
 function canvasFor(w: number | null, h: number | null, shape?: "9:16" | "1:1" | "16:9") {
@@ -835,11 +838,17 @@ export const editsGetOp = defineOp({
     runs: "worker",
     cors: false,
     input: z.object({ id: z.string().regex(EDIT_PROJECT_ID_REGEX, "an edit project id") }),
-    output: z.intersection(ProjectSchema, z.object({ timeline: z.unknown().meta({ ts: "Timeline" }) })),
-    ai: { tier: "free", only: true, summary: "One project with its timeline.", params: ["id"] },
+    output: z.intersection(
+        ProjectSchema,
+        z.object({
+            timeline: z.unknown().meta({ ts: "Timeline" }),
+            sources: z.record(z.string(), z.unknown()).optional().describe("every file the timeline names: kind, content_type, width, height, duration, source"),
+        }),
+    ),
+    ai: { tier: "free", only: true, summary: "One project with its timeline and the files it uses.", params: ["id"] },
     handler: async (ctx, input) => {
-        const p = (await editCall(ctx, "edits.get", "get", { id: input.id })).project;
-        return ok({ ...projectOf(p), timeline: p.timeline });
+        const b = await editCall(ctx, "edits.get", "get", { id: input.id });
+        return ok({ ...projectOf(b.project), timeline: b.project.timeline, sources: b.sources ?? {} });
     },
 });
 

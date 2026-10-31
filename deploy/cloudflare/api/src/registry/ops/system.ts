@@ -96,6 +96,8 @@ export const capabilitiesOp = defineOp({
             // section 34: the words need the Anthropic key, the sound Workers AI
             !!env.ANTHROPIC_API_KEY?.trim(),
             !!env.AI,
+            // section 39.5: cutouts by the server (auto lifts the subject) need the Cloudflare Images binding
+            !!env.IMAGES,
         );
         return { status: r.status, body: r.body };
     },

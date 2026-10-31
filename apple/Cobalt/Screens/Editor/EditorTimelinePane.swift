@@ -1,10 +1,12 @@
 import CobaltKit
 import SwiftUI
 
-/// The bottom of the Mac and iPad screen (apple/CONTRACT-EDITOR.md 4.3): track headers (`overlay`, `main`, `audio`) and zoom on
-/// the left; on the right a horizontally scrolling ruler and three lanes under one playhead. Click selects, click on nothing
-/// deselects, drag a clip's body to reorder (main) or move in time (overlay, snapping within 6 pt), drag a handle to trim,
-/// click with the blade to split. Files dragged from the bin land on the main lane (videos) or the overlay lane (anything).
+/// The bottom of the Mac and iPad screen (apple/CONTRACT-EDITOR.md 4.3, 12): track headers (the overlay layers `L1`...,
+/// `main`, `audio`) and zoom on the left; on the right a horizontally scrolling ruler and the lanes under one playhead. Each
+/// overlay layer is a lane, the highest on top, plus an empty one above them for a new layer (when the server has layers).
+/// Click selects, click on nothing deselects, drag a clip's body to reorder (main) or move in time (overlay, snapping within
+/// 6 pt; up or down to another layer), drag a handle to trim, click with the blade to split. Files dragged from the bin land on
+/// the main lane (videos) or an overlay lane (anything).
 struct EditorTimelinePane: View {
     let session: EditSession
     @Binding var scale: TimelineScale
@@ -20,17 +22,24 @@ struct EditorTimelinePane: View {
     @State private var scrubbing = false
     @State private var bladeX: CGFloat?
     @State private var mainTargeted = false
-    @State private var overlayTargeted = false
+    @State private var overlayTargeted: Int?
 
     private static let headerWidth: CGFloat = 92
     private static let rulerHeight: CGFloat = 28
     private static let footer: CGFloat = 34
 
     private var unit: CGFloat { min(80, max(34, (height - Self.rulerHeight - Self.footer) / 3.2)) }
-    private var overlayHeight: CGFloat { unit }
+    /// Overlay lanes: every layer up to the highest in use, plus an empty one for a new layer, within the server's limit.
+    private var overlayLanes: Int {
+        let used = (session.timeline.overlay.map(\.track).max() ?? -1) + 1
+        return min(session.overlayTrackLimit, max(1, session.timeline.overlay.isEmpty ? 1 : used + 1))
+    }
+    /// One lane is as tall as before; several share about two lanes' room (at least 22 pt each).
+    private var overlayHeight: CGFloat { overlayLanes == 1 ? unit : max(22, unit * 1.8 / CGFloat(overlayLanes)) }
+    private var overlaysHeight: CGFloat { overlayHeight * CGFloat(overlayLanes) }
     private var mainHeight: CGFloat { unit * 1.4 }
     private var audioHeight: CGFloat { unit * 0.8 }
-    private var lanesHeight: CGFloat { overlayHeight + mainHeight + audioHeight }
+    private var lanesHeight: CGFloat { overlaysHeight + mainHeight + audioHeight }
 
     private var contentSeconds: Double {
         max(session.timing.seconds + 8, visibleWidth > 0 ? scale.seconds(at: visibleWidth) : 0)
@@ -56,7 +65,13 @@ struct EditorTimelinePane: View {
     private var headers: some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: Self.rulerHeight)
-            header(Copy.Editor.trackOverlay, height: overlayHeight)
+            if overlayLanes == 1 {
+                header(Copy.Editor.trackOverlay, height: overlayHeight)
+            } else {
+                ForEach((0..<overlayLanes).reversed(), id: \.self) { track in
+                    header(Copy.Editor.layerN(track), height: overlayHeight)
+                }
+            }
             header(Copy.Editor.trackMain, height: mainHeight)
             header(Copy.Editor.trackAudio, height: audioHeight)
             Spacer(minLength: 0)
@@ -115,7 +130,9 @@ struct EditorTimelinePane: View {
         return ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
                 ruler(width: width)
-                overlayLane(width: width)
+                ForEach((0..<overlayLanes).reversed(), id: \.self) { track in
+                    overlayLane(width: width, track: track)
+                }
                 mainLane(width: width)
                 audioLane(width: width)
             }
@@ -167,23 +184,26 @@ struct EditorTimelinePane: View {
 
     // MARK: lanes
 
-    private func overlayLane(width: CGFloat) -> some View {
+    /// The lane of overlay layer `track`.
+    private func overlayLane(width: CGFloat, track: Int) -> some View {
         let spans = session.overlaySpans
         return ZStack(alignment: .topLeading) {
-            laneBackground(height: overlayHeight, targeted: overlayTargeted)
+            laneBackground(height: overlayHeight, targeted: overlayTargeted == track)
                 .onTapGesture { deselect() }
             ForEach(Array(session.timeline.overlay.enumerated()), id: \.element.id) { index, overlay in
-                if spans.indices.contains(index) {
+                if spans.indices.contains(index), overlay.track == track {
                     OverlayClipBlock(
                         session: session, index: index, overlay: overlay, span: spans[index], scale: scale,
-                        laneHeight: overlayHeight, snap: snapped)
+                        laneHeight: overlayHeight, topTrack: min(session.overlayTrackLimit - 1, overlayLanes), snap: snapped)
                 }
             }
         }
         .frame(width: width, height: overlayHeight, alignment: .topLeading)
         .dropDestination(for: String.self) { items, location in
-            dropOnOverlay(items, at: location)
-        } isTargeted: { overlayTargeted = $0 }
+            dropOnOverlay(items, at: location, track: overlayLanes > 1 ? track : nil)
+        } isTargeted: { targeted in
+            if targeted { overlayTargeted = track } else if overlayTargeted == track { overlayTargeted = nil }
+        }
         .motion(Motion.rows, value: session.timeline.overlay.map(\.id))
     }
 
@@ -310,14 +330,15 @@ struct EditorTimelinePane: View {
         }
     }
 
-    private func dropOnOverlay(_ items: [String], at location: CGPoint) -> Bool {
+    private func dropOnOverlay(_ items: [String], at location: CGPoint, track: Int?) -> Bool {
         guard let source = items.compactMap(EditorDragPayload.source(from:)).first else { return false }
         guard source.kind != .unsupported else {
             host.show(Copy.Editor.cantEdit)
             return false
         }
         let frame = session.timing.frame(at: scale.seconds(at: location.x))
-        guard session.addOverlay(source, atFrame: frame) else {
+        // the lane it was dropped on, else the lowest free layer there
+        guard session.addOverlay(source, atFrame: frame, track: track) || session.addOverlay(source, atFrame: frame) else {
             host.show(Copy.Editor.dropIntoOverlayRefused)
             return false
         }

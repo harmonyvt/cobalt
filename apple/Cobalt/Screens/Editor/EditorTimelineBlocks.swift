@@ -176,16 +176,20 @@ struct OverlayClipBlock: View {
     let span: TimelineSpan
     let scale: TimelineScale
     let laneHeight: CGFloat
+    /// The highest layer a drag up may reach (one past the lanes shown, within the server's limit).
+    var topTrack = 0
     /// Moves a start (and its length) to the nearest edge or the playhead within 6 pt; reports whether it snapped.
     let snap: (_ start: Double, _ length: Double, _ id: String) -> (value: Double, snapped: Bool)
 
     @State private var baseFrame: Int?
+    @State private var baseTrack: Int?
     @State private var baseLength: Double?
     @State private var baseIn: Double?
     @State private var snapTick = 0
     @State private var wasSnapped = false
 
-    private var blockHeight: CGFloat { max(20, laneHeight - 12) }
+    /// 6 pt above and below in a full lane; less in the thin lanes of many layers.
+    private var blockHeight: CGFloat { max(16, laneHeight - min(12, laneHeight * 0.3)) }
     private var width: CGFloat { max(2, scale.x(span.length) - 2) }
     private var selected: Bool { session.selection == .overlay(overlay.id) }
     private var source: EditSource? { session.source(for: overlay.item) }
@@ -202,7 +206,7 @@ struct OverlayClipBlock: View {
             }
         }
         .frame(width: width, height: blockHeight, alignment: .topLeading)
-        .offset(x: scale.x(span.start) + 1, y: 6)
+        .offset(x: scale.x(span.start) + 1, y: (laneHeight - blockHeight) / 2)
         .zIndex(selected ? 2 : 1)
         .gesture(SpatialTapGesture().onEnded { _ in session.selection = .overlay(overlay.id) })
         .gesture(move)
@@ -222,10 +226,19 @@ struct OverlayClipBlock: View {
                 let result = snap(max(0, raw), span.length, overlay.id)
                 if result.snapped && !wasSnapped { snapTick += 1 }
                 wasSnapped = result.snapped
-                session.moveOverlay(id: overlay.id, toFrame: EditMath.roundHalfUp(result.value * fps))
+                let frame = EditMath.roundHalfUp(result.value * fps)
+                // up and down: another layer (39.1), one lane per lane height; a busy layer keeps it where it is
+                let fromTrack = baseTrack ?? overlay.track
+                baseTrack = fromTrack
+                let lanes = Int((-value.translation.height / max(1, laneHeight)).rounded())
+                let track = min(max(0, fromTrack + lanes), topTrack)
+                if track == overlay.track || !session.moveOverlay(id: overlay.id, toFrame: frame, track: track) {
+                    session.moveOverlay(id: overlay.id, toFrame: frame)
+                }
             }
             .onEnded { _ in
                 baseFrame = nil
+                baseTrack = nil
                 wasSnapped = false
                 session.endGesture()
             }
@@ -282,6 +295,8 @@ struct OverlayClipBlock: View {
         TimelineClipActions(
             select: { session.selection = .overlay(overlay.id) },
             delete: { session.remove(.overlay(overlay.id)) },
-            trim: { session.selection = .overlay(overlay.id) })
+            trim: { session.selection = .overlay(overlay.id) },
+            layerUp: overlay.track + 1 < session.overlayTrackLimit ? { _ = session.setOverlayTrack(id: overlay.id, overlay.track + 1) } : nil,
+            layerDown: overlay.track > 0 ? { _ = session.setOverlayTrack(id: overlay.id, overlay.track - 1) } : nil)
     }
 }

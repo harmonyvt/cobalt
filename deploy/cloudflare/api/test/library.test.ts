@@ -962,6 +962,8 @@ describe("GET /capabilities", () => {
                 live_activity_push: false,
                 notify_bridge: false,
                 crop: true,
+                cutout: true,
+                cutout_auto: false,
                 source_wait: true,
                 delete_post: true,
                 telemetry: true,
@@ -1017,6 +1019,7 @@ describe("GET /capabilities", () => {
                 edit_max_clips: 50,
                 edit_max_projects: 200,
                 edit_pitch: true,
+                edit_overlay_tracks: 8,
                 status_ids: 200,
             },
             media_base_url: "https://media.capybaraharmony.com/",
@@ -1047,6 +1050,7 @@ describe("GET /capabilities", () => {
             edit_max_clips: 50,
             edit_max_projects: 200,
             edit_pitch: true,
+            edit_overlay_tracks: 8,
             status_ids: STATUS_IDS_MAX,
         });
     });

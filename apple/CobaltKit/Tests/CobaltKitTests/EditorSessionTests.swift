@@ -242,9 +242,9 @@ struct EditSessionOverlayTests {
         let rig = try await Rig()
         defer { rig.finish() }
         let dance = rig.sources[PreviewEditorIDs.dance]!
-        #expect(!rig.session.addOverlay(dance, atFrame: 100))           // inside the one at 90...180
+        #expect(!rig.session.addOverlay(dance, atFrame: 100, track: 0)) // inside the one at 90...180
         #expect(rig.session.timeline.overlay.count == 1)
-        #expect(rig.session.addOverlay(dance, atFrame: 30))             // 60 frames of room before the next one
+        #expect(rig.session.addOverlay(dance, atFrame: 30, track: 0))   // 60 frames of room before the next one
         #expect(rig.session.timeline.overlay.count == 2)
         let added = rig.session.timeline.overlay[0]
         #expect(added.at == 1 && added.out == 2 && added.item == PreviewEditorIDs.dance)

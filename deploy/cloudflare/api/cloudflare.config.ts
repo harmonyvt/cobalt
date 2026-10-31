@@ -186,6 +186,10 @@ export default defineConfig({
 			// videos, originals/<session id>.<ext>. No public domain; only the
 			// Worker reads it (GET /studio/<id>/source). Bucket already exists.
 			ORIGINALS: bindings.r2({ name: "cobalt-originals" }),
+			// Cloudflare Images (APP-API-CONTRACT.md section 39.5): POST /library/items/<id>/cutout and the chat's
+			// make.cutout decode pictures and remove backgrounds (`segment: "foreground"`, open beta) through it. Billed per
+			// unique transformation (5,000 a month free). No secret, no migration.
+			IMAGES: bindings.images(),
 			// Worker version id: part of the container env, so each deploy
 			// restarts the running container once (see src/index.ts).
 			VERSION: bindings.versionMetadata(),

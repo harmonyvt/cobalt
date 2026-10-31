@@ -4,16 +4,19 @@
 
 import { spawn } from "node:child_process";
 import { open } from "node:fs/promises";
+import { explodeWebp, readWebp } from "./webp.js";
 
-/** The kind of a file from its first bytes, never from a name: "gif", "jpeg", "png", "mp4" (ISO-BMFF with a video brand), else null.
+/** The kind of a file from its first bytes, never from a name: "gif", "jpeg", "png", "webp", "mp4" (ISO-BMFF with a video
+ * brand), else null.
  * @param {Uint8Array | Buffer} head at least 12 bytes where there are that many
- * @returns {"gif" | "jpeg" | "png" | "mp4" | null} */
+ * @returns {"gif" | "jpeg" | "png" | "webp" | "mp4" | null} */
 export function sniffKind(head) {
     const n = head.length;
     const ascii = (/** @type {number} */ a, /** @type {number} */ b) => String.fromCharCode(...head.subarray(a, Math.min(b, n)));
     if (n >= 6 && (ascii(0, 6) === "GIF87a" || ascii(0, 6) === "GIF89a")) return "gif";
     if (n >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return "jpeg";
     if (n >= 8 && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((v, i) => head[i] === v)) return "png";
+    if (n >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "webp";
     // QuickTime files from older apps have no ftyp: they open with wide / mdat / moov / free / skip / pnot
     if (n >= 8 && ascii(4, 8) !== "ftyp" && /^(wide|mdat|moov|free|skip|pnot)$/.test(ascii(4, 8))) {
         const size = Buffer.from(head.buffer, head.byteOffset, head.length).readUInt32BE(0);
@@ -247,7 +250,9 @@ export const MAX_PIXELS = 120_000_000;
  *
  * @typedef {{item: string, path: string, kind: "video" | "gif" | "photo", contentType: string, bytes: number, width: number,
  *            height: number, squareFrom: {w: number, h: number} | null, duration: number | null, hasAudio: boolean,
- *            channels: number | null, hdr: boolean, transfer: string | null, orientation: number}} Source
+ *            channels: number | null, hdr: boolean, transfer: string | null, orientation: number, frames?: string}} Source
+ * `frames`: an animated webp (section 39) taken apart by webp.js: an APNG of its composed frames; `kind` is then
+ * "gif" (it loops) and `contentType` "image/webp".
  */
 export async function probeSource(o) {
     const unsupported = { code: "error.edit.unsupported_source", ok: /** @type {const} */ (false) };
@@ -259,7 +264,16 @@ export async function probeSource(o) {
     }
     const sniffed = sniffKind(head);
     const want = { gif: "gif", photo: null, video: "mp4" }[o.kind];
-    if (o.kind === "photo" ? sniffed !== "jpeg" && sniffed !== "png" : sniffed !== want) return unsupported;
+    if (o.kind === "photo" ? sniffed !== "jpeg" && sniffed !== "png" && sniffed !== "webp" : sniffed !== want) return unsupported;
+    if (sniffed === "webp") {
+        const wi = await readWebp(o.file);
+        if (!wi || wi.width * wi.height > MAX_PIXELS) return unsupported;
+        if (wi.animated) {
+            const ex = await explodeWebp({ ffmpeg: o.ffmpeg, info: wi, dir: `${o.file}.frames` });
+            if (!ex) return unsupported;
+            return { ok: true, source: { ...imageSource(o, "image/webp", ex.width, ex.height), frames: ex.file, kind: "gif" } };
+        }
+    }
     const info = parseInfo(await ffmpegInfo(o.ffmpeg, o.file));
     if (!info.hasVideo || !info.width || !info.height) return unsupported;
     if (info.width * info.height > MAX_PIXELS) return unsupported;
@@ -276,7 +290,7 @@ export async function probeSource(o) {
         source: {
             bytes: o.bytes,
             channels: o.kind === "video" ? info.channels : null,
-            contentType: o.kind === "video" ? "video/mp4" : o.kind === "gif" ? "image/gif" : sniffed === "png" ? "image/png" : "image/jpeg",
+            contentType: o.kind === "video" ? "video/mp4" : o.kind === "gif" ? "image/gif" : sniffed === "png" ? "image/png" : sniffed === "webp" ? "image/webp" : "image/jpeg",
             duration: o.kind === "video" ? info.duration : null,
             hasAudio: o.kind === "video" && info.hasAudio,
             hdr: o.kind === "video" && info.hdr,
@@ -290,4 +304,10 @@ export async function probeSource(o) {
             width: sz.width,
         },
     };
+}
+
+/** A picture source's fields (no sound, no colour transfer). @param {{item: string, file: string, bytes: number}} o @param {string} contentType @param {number} width @param {number} height
+ * @returns {Source} */
+function imageSource(o, contentType, width, height) {
+    return { bytes: o.bytes, channels: null, contentType, duration: null, hasAudio: false, hdr: false, height, item: o.item, kind: "photo", orientation: 1, path: o.file, squareFrom: null, transfer: null, width };
 }

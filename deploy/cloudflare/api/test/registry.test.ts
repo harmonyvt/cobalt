@@ -289,6 +289,8 @@ describe("defineOp and the registry", () => {
             "edits.delete",
             "jobs.wait",
             "jobs.onDone",
+            "make.cutout",
+            "edits.addOverlay",
             // T5 (33.9, 33.10)
             "links.create", "links.revoke", "links.update", "collections.create", "collections.add", "collections.update", "collections.reroll",
             "collections.delete", "sets.list", "sets.create", "sets.add", "sets.update", "sets.delete",

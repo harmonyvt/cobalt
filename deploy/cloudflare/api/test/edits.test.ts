@@ -296,6 +296,7 @@ describe("GET /edits and GET /edits/<id>", () => {
             duration: 12,
             bytes: 1500,
             poster_url: `${MEDIA_BASE}CoverAAAAA.jpg`,
+            source: "saved",
             available: true,
         });
         expect(r.json.sources[ids.gif]).toMatchObject({ kind: "gif", available: true });

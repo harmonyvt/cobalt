@@ -22,7 +22,7 @@
 // not); the fork's Worker bundles this one field.
 import { SHARE_SET_MAX } from "./share-sets";
 import { deleteAboutObjects } from "./about-store";
-import { EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_MAX_SECONDS } from "../../editor/helper/timeline.js";
+import { EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_MAX_SECONDS, EDIT_OVERLAY_TRACKS } from "../../editor/helper/timeline.js";
 import { version as apiVersion } from "../../../../api/package.json";
 
 import { LINE_MAX, LINE_WAIT_MS, parseQueryFlag } from "./line";
@@ -198,6 +198,8 @@ export async function capabilities(
     // "what it's about" (section 34): search on and the Anthropic key; `aboutSound`: and the Workers AI binding (Whisper)
     about = false,
     aboutSound = false,
+    // the Cloudflare Images binding is there: POST /library/items/<id>/cutout makes cutouts itself (section 39.5)
+    cutoutAuto = false,
 ): Promise<StudioReply> {
     const state = await resolveKeyState(d.db, auth, key, d.now());
     const version: unknown = apiVersion;
@@ -295,6 +297,10 @@ export async function capabilities(
                 // /edits*: timeline projects rendered on Cloudflare (APP-API-CONTRACT.md section 31): exactly while the
                 // EditRenderer binding is there and migration 0021 is applied
                 editor: editor === true,
+                // POST /library/items/<id>/cutout (section 39.5): `cutout` = the route is there (the app may store its own
+                // cutouts); `cutout_auto` = the server makes them too (auto, white, color) through Cloudflare Images
+                cutout: true,
+                cutout_auto: cutoutAuto === true,
                 // PUT /live/edits/<rid>: the server keeps an editor render's Live Activity current (section 32)
                 edit_live_push: editor === true && livePush === true,
                 // PUT /live/chat-start-token: a chat reply sent from another device shows on this one (section 27.9)
@@ -318,6 +324,8 @@ export async function capabilities(
                 edit_max_projects: EDIT_MAX_PROJECTS,
                 // clips accept `pitch` (section 31.16); an older server answers bad_request to the key
                 edit_pitch: true,
+                // overlays accept `track` 0..edit_overlay_tracks-1 and webp sources (section 39); older servers refuse both
+                edit_overlay_tracks: EDIT_OVERLAY_TRACKS,
                 // the most ids one POST /library/status takes (section 37.4)
                 status_ids: STATUS_IDS_MAX,
             },

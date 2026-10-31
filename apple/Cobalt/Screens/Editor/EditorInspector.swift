@@ -159,12 +159,17 @@ private struct OverlayInspector: View {
     let overlay: EditOverlay
     var pitchEnabled = true
 
+    @State private var cutoutOf: EditSource?
+
     private var source: EditSource? { session.source(for: overlay.item) }
     private var fps: Int { session.timeline.canvas.fps }
     private var isVideo: Bool { source?.kind == .video }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) { content }
+            .sheet(item: $cutoutOf) { picture in
+                EditorCutoutSheet(session: session, source: picture, replacing: overlay.id) { cutoutOf = nil }
+            }
     }
 
     @ViewBuilder
@@ -175,6 +180,7 @@ private struct OverlayInspector: View {
                 .font(CobaltType.captionSmall)
                 .foregroundStyle(CobaltColor.errorText)
         }
+        EditorOverlayLayerRows(session: session, overlay: overlay) { cutoutOf = source }
         EditorSection(Copy.Editor.start) {
             VStack(spacing: 6) {
                 EditorNumberField.time(
