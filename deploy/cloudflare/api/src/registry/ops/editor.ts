@@ -297,7 +297,7 @@ export const makeCropImageOp = defineOp({
                 }),
             ])
             .optional()
-            .describe("true: also remove the background of the cropped part (auto) and trim to the subject; or a make.cutout spec"),
+            .describe("leave out for a plain crop (default). true: also remove the background (auto) and trim to the subject, only for a subject on a plain background; or a make.cutout spec"),
         title: z.string().min(1).max(80).optional(),
     }),
     output: JobSchema,
@@ -305,7 +305,7 @@ export const makeCropImageOp = defineOp({
         tier: "free",
         only: true,
         summary:
-            "A new png of part of a picture (a crop: private, in the library; the original stays), optionally turned, flipped and with its background removed. Done at once: returns file_id; look([file_id]) to check it, then put it in an edit (edits.addOverlay).",
+            "A new png of part of a picture (a crop: private, in the library; the original stays), optionally turned, flipped and, only with cutout, with its background removed (plain crop by default; no cutout for banners, bars, text or anything rectangular). Read the box off look({ grid: true }) and check it with look({ box }) first. Done at once: returns file_id; look([file_id]) to check it, then put it in an edit (edits.addOverlay).",
         params: ["id", "crop"],
         options: true,
     },

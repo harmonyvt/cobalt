@@ -183,7 +183,7 @@ export type Ranked = { title: string | null; query: string | null; within: strin
 export type ChatCollect = {
     look: string[];
     // look(ids, { grid, frames }) per post id (section 44.3)
-    lookOpts?: Record<string, { grid?: boolean; frames?: boolean }>;
+    lookOpts?: Record<string, { grid?: boolean; frames?: boolean; box?: { x: number; y: number; w: number; h: number } }>;
     show: string[];
     collage?: { title: string | null; query: string | null; ids: string[] } | null;
     ranked?: Ranked | null;
@@ -318,13 +318,14 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
                 }),
             };
         },
-        async look(ids: unknown, opts?: { grid?: boolean; frames?: boolean }) {
+        async look(ids: unknown, opts?: { grid?: boolean; frames?: boolean; box?: { x: number; y: number; w: number; h: number } }) {
             const ok = await known(idList(ids));
             for (const i of ok) {
                 if (!collect.look.includes(i) && collect.look.length < LOOK_MAX) collect.look.push(i);
-                if (collect.look.includes(i) && (opts?.grid || opts?.frames)) {
+                if (collect.look.includes(i) && (opts?.grid || opts?.frames || opts?.box)) {
                     const cur = (collect.lookOpts ??= {})[i] ?? {};
-                    collect.lookOpts[i] = { ...(cur.grid || opts.grid ? { grid: true } : {}), ...(cur.frames || opts.frames ? { frames: true } : {}) };
+                    const box = opts.box ?? cur.box;
+                    collect.lookOpts[i] = { ...(cur.grid || opts.grid ? { grid: true } : {}), ...(cur.frames || opts.frames ? { frames: true } : {}), ...(box ? { box } : {}) };
                 }
             }
             return collect.look.length;
