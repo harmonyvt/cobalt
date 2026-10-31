@@ -297,8 +297,9 @@ struct QueueRowFacts: Equatable {
                 detail = [Format.size(r.width, r.height), Format.seconds(r.seconds), Format.bytes(r.bytes)].joined(separator: " · ")
             }
         case .edit(let render):
-            symbol = Symbol.Editor.render
-            title = Copy.Editor.queueTitle(render.title)
+            // a chat video (APP-API-CONTRACT 45.3) is a render too, named after its thread
+            symbol = render.isChat ? Symbol.chatVideo : Symbol.Editor.render
+            title = render.isChat ? Copy.Chat.videoQueueTitle(render.title) : Copy.Editor.queueTitle(render.title)
             poster = render.posterURL
             switch render.status {
             case .done:

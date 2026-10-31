@@ -137,8 +137,14 @@ extension EditProject: Decodable {
 /// `<render>` of 31.12: one revision of a project being made into an MP4.
 public struct EditRender: Sendable, Equatable, Identifiable {
     public enum Status: String, Sendable { case queued, preparing, rendering, finishing, done, error, cancelled }
+    /// What the render makes (APP-API-CONTRACT 45.3): an editor project's video, or a chat thread replayed as a video.
+    public enum Kind: String, Sendable { case edit, chat }
 
     public var id: String
+    /// `edit` for an editor project; `chat` for a chat video, whose `projectID` is `"chat:<thread id>"` (never a project).
+    public var kind: Kind
+    /// The chat thread a `chat` render replays; nil for editor renders.
+    public var threadID: String?
     public var projectID: String
     public var revision: Int
     public var title: String
@@ -167,9 +173,12 @@ public struct EditRender: Sendable, Equatable, Identifiable {
         id: String, projectID: String, revision: Int, title: String, status: Status, queueAhead: Int? = nil,
         progress: Double? = nil, secondsDone: Double? = nil, secondsTotal: Double, error: String? = nil, itemID: String? = nil,
         posterURL: URL? = nil, bytes: Int64? = nil, width: Int? = nil, height: Int? = nil, duration: Double? = nil,
-        cancelRequested: Bool = false, createdAt: Date, startedAt: Date? = nil, finishedAt: Date? = nil
+        cancelRequested: Bool = false, createdAt: Date, startedAt: Date? = nil, finishedAt: Date? = nil,
+        kind: Kind = .edit, threadID: String? = nil
     ) {
         self.id = id
+        self.kind = kind
+        self.threadID = threadID
         self.projectID = projectID
         self.revision = revision
         self.title = title
@@ -202,6 +211,12 @@ public struct EditRender: Sendable, Equatable, Identifiable {
     /// Ended (done, error or cancelled).
     public var isEnded: Bool { !isActive }
 
+    /// A chat video (45.3): there is no editor project to open, only its library post once it is done.
+    public var isChat: Bool { kind == .chat || Self.isChatProjectID(projectID) }
+
+    /// The `project_id` the server gives a chat render (`"chat:<thread id>"`), which no editor project ever has.
+    public static func isChatProjectID(_ id: String) -> Bool { id.hasPrefix("chat:") }
+
     /// The newest moment the render is known to have reached: when it ended, else when it started, else when it was asked for.
     public var lastMoment: Date { finishedAt ?? startedAt ?? createdAt }
 
@@ -229,7 +244,8 @@ extension EditRender.Status: Decodable {}
 extension EditRender: Decodable {
     private enum CodingKeys: String, CodingKey {
         case id, revision, title, status, queueAhead, progress, secondsDone, secondsTotal, error, bytes, width, height, duration
-        case cancelRequested, createdAt, startedAt, finishedAt
+        case cancelRequested, createdAt, startedAt, finishedAt, kind
+        case threadID = "threadId"              // `thread_id`
         case projectID = "projectId"            // `project_id`
         case itemID = "itemId"                  // `item_id`
         case posterURL = "posterUrl"            // `poster_url`
@@ -239,6 +255,10 @@ extension EditRender: Decodable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         projectID = (try? c.decodeIfPresent(String.self, forKey: .projectID)) ?? ""
+        // absent (an older server) or unknown: an editor render, unless the project id says it is a chat's
+        let rawKind = try? c.decodeIfPresent(String.self, forKey: .kind)
+        kind = rawKind.flatMap(Kind.init(rawValue:)) ?? (Self.isChatProjectID(projectID) ? .chat : .edit)
+        threadID = try? c.decodeIfPresent(String.self, forKey: .threadID)
         revision = (try? c.decodeIfPresent(Int.self, forKey: .revision)) ?? 0
         title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? ""
         status = try c.decode(Status.self, forKey: .status)

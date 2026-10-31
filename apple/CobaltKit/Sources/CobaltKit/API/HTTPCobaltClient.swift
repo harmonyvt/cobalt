@@ -219,6 +219,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var cutoutAuto: Bool?
                 var accounts: Bool?
                 var imageCrop: Bool?
+                var chatVideo: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -312,6 +313,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.cutoutAuto = (f?.cutoutAuto ?? false) && caps.cutout
         caps.accounts = f?.accounts ?? false
         caps.imageCrop = f?.imageCrop ?? false
+        caps.chatVideo = (f?.chatVideo ?? false) && caps.chat
         return caps
     }
 
@@ -1022,6 +1024,45 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
             throw CobaltError.invalidResponse(httpStatus: http.statusCode)
         }
         return list
+    }
+
+    /// `POST /chat/threads/<id>/video` (keyed, 45.1): `202 {render}`. Only the fields given are sent (a false `notify` is
+    /// left out, the server's default). The render queue's own refusals come back as `EditError`.
+    public func makeChatVideo(
+        threadID: String, shape: ChatVideoShape?, theme: ChatVideoTheme?, speed: Double?, from: String?, to: String?, notify: Bool
+    ) async throws -> EditRender {
+        let req = try makeRequest("POST", "/chat/threads/\(Self.encode(threadID))/video", keyed: true, timeout: 45)
+        let (data, http) = try await send(req, body: Self.jsonBody(Self.chatVideoBody(
+            shape: shape, theme: theme, speed: speed, from: from, to: to, notify: notify)))
+        guard (200..<300).contains(http.statusCode) else {
+            if let env = try? JSONDecoder().decode(ErrorEnvelope.self, from: data), let code = env.error?.code {
+                switch code {
+                case "error.edit.queue_full": throw EditError.queueFull
+                case "error.edit.off": throw EditError.off
+                default: break
+                }
+            }
+            throw chatError(data, status: http.statusCode)
+        }
+        struct Wire: Decodable { var render: EditRender }
+        guard let wire = try? CobaltJSON.decoder().decode(Wire.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return wire.render
+    }
+
+    /// The body of `POST /chat/threads/<id>/video`: nil fields left out, the speed held to 0.5...2.
+    static func chatVideoBody(
+        shape: ChatVideoShape?, theme: ChatVideoTheme?, speed: Double?, from: String?, to: String?, notify: Bool
+    ) -> [String: Any] {
+        var body: [String: Any] = [:]
+        if let shape { body["shape"] = shape.rawValue }
+        if let theme { body["theme"] = theme.rawValue }
+        if let speed, speed.isFinite { body["speed"] = max(0.5, min(2, speed)) }
+        if let from { body["from"] = from }
+        if let to { body["to"] = to }
+        if notify { body["notify"] = true }
+        return body
     }
 
     private func chatThreadAnswer(_ data: Data, _ http: HTTPURLResponse) throws -> ChatThread {

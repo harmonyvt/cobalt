@@ -52,6 +52,7 @@ extension Copy {
             case .badRequest: return "the message is empty or over \(ChatRule.messageLimit) characters."
             case .interrupted: return "the reply was cut off. it may still be in the chat tab."
             case .confirmGone: return "that ask is gone. nothing changed."
+            case .videoEmpty: return "there is nothing in that chat to show yet."
             case .model, .unavailable: return "the reply failed. try again."
             }
         }

@@ -660,7 +660,7 @@ private struct ChatJobBody: View {
                     Text(result).font(CobaltType.badge).foregroundStyle(CobaltColor.caption)
                 }
             }
-            if let project = job.projectID {
+            if let project = job.projectID, !EditRender.isChatProjectID(project) {      // a chat video has no project (45.3)
                 Button {
                     Task { await EditorLauncher.shared.open(project, model: model) }
                 } label: {

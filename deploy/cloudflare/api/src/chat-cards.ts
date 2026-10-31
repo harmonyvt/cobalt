@@ -210,6 +210,7 @@ async function build(op: string, input: Any, out: unknown, d: CardDeps): Promise
         case "make.cutout":
         case "make.cropImage":
         case "edits.render":
+        case "chat.video":
         case "jobs.wait":
         case "jobs.onDone":
             if (o && /^agent:/.test(String(o.job))) return { type: "agents", change: "waiting", agents: [agentCardRow(o)], message: null, mail: [] };

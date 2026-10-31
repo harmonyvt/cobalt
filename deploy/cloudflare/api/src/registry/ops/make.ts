@@ -29,7 +29,7 @@ const NoInput = z.object({});
 const noInput = () => ({});
 
 // The editor's deps for one call (section 31.13), or null while the editor is off.
-function editsDeps(ctx: OpContext) {
+export function editsDeps(ctx: OpContext) {
     if (!ctx.env.EDIT_RENDERER) return null;
     return {
         db: ctx.db,
@@ -283,13 +283,13 @@ function threadOf(ctx: OpContext, call: string): string {
 }
 
 // One unit of today's render cap for this thread, or a refusal the model can read.
-async function takeRender(ctx: OpContext, call: string): Promise<void> {
+export async function takeRender(ctx: OpContext, call: string): Promise<void> {
     const cap = rendersCap(ctx);
     if (!(await budgetPort(ctx.container).take(threadOf(ctx, call), "renders", cap))) {
         throw new OpError(429, "error.chat.render_cap", `cobalt.${call}: this chat already made ${cap} files today, the most it may make in a day. Tell Harmony it can make more tomorrow.`);
     }
 }
-const refundRender = (ctx: OpContext, call: string) => budgetPort(ctx.container).refund(threadOf(ctx, call), "renders");
+export const refundRender = (ctx: OpContext, call: string) => budgetPort(ctx.container).refund(threadOf(ctx, call), "renders");
 
 // Start a studio make (render, slideshow, gallery image) on an open session. The keyed ones run as the session's owner:
 // the chat is Harmony's own, and the Durable Object only lets the key that made a session add to it.

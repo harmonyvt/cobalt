@@ -140,6 +140,9 @@ enum PreviewData {
             caps.cutoutAuto = true
             caps.imageCrop = true
         }
+        if scenario.hasChat && scenario.hasEditor && caps.kind == .fork {
+            caps.chatVideo = true                 // chat videos are made by the editor's render containers (APP-API-CONTRACT 45.6)
+        }
         if scenario == .skyMap && caps.kind == .fork {
             caps.search = true
         }

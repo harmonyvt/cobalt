@@ -211,6 +211,9 @@ type ProjectRow = {
 
 export type RenderRow = {
     id: string;
+    // 'edit' | 'chat' (section 45, migration 0028)
+    kind?: string | null;
+    thread_id?: string | null;
     project_id: string;
     revision: number;
     title: string;
@@ -235,7 +238,7 @@ export type RenderRow = {
 
 // The columns of a <render> (31.12), `queue_ahead` in the claim's own order (created_at, id) and the result's poster.
 // Shared by the routes and GET /queue.
-export const RENDER_SELECT = `SELECT r.id, r.project_id, r.revision, r.title, r.status, r.cancel_requested, r.sent_bytes, r.input_bytes,
+export const RENDER_SELECT = `SELECT r.id, r.kind, r.thread_id, r.project_id, r.revision, r.title, r.status, r.cancel_requested, r.sent_bytes, r.input_bytes,
     r.seconds_done, r.seconds_total, r.error_code, r.item_id, r.bytes, r.width, r.height, r.duration, r.created_at, r.started_at, r.finished_at,
     (SELECT COUNT(*) FROM edit_renders q WHERE q.status = 'queued' AND q.cancel_requested = 0
         AND (q.created_at < r.created_at OR (q.created_at = r.created_at AND q.id < r.id))) AS queue_ahead,
@@ -263,6 +266,8 @@ export function renderProgress(r: Pick<RenderRow, "status" | "sent_bytes" | "inp
 export function renderShape(r: RenderRow) {
     return {
         id: r.id,
+        kind: r.kind === "chat" ? "chat" : "edit",
+        thread_id: r.kind === "chat" ? (r.thread_id ?? null) : null,
         project_id: r.project_id,
         revision: r.revision,
         title: r.title,
@@ -287,7 +292,7 @@ export function renderShape(r: RenderRow) {
 
 export type RenderShape = ReturnType<typeof renderShape>;
 
-async function getRender(db: D1Database, rid: string): Promise<RenderRow | null> {
+export async function getRender(db: D1Database, rid: string): Promise<RenderRow | null> {
     return await db.prepare(`${RENDER_SELECT} WHERE r.id = ?1`).bind(rid).first<RenderRow>();
 }
 

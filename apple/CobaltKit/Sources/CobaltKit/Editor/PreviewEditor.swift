@@ -94,6 +94,8 @@ final class PreviewEditorState: Sendable {
         var createdAt: Date
         var fails: Bool
         var cancelledAt: Date?
+        /// A chat video's thread (APP-API-CONTRACT 45.3); nil for an editor render.
+        var threadID: String? = nil
     }
 
     /// How long a render takes, before `timeScale`.
@@ -192,7 +194,8 @@ final class PreviewEditorState: Sendable {
         let total = renderSeconds * max(0.01, timeScale)
         let t = max(0, now.timeIntervalSince(r.createdAt)) / total
         var out = EditRender(id: r.id, projectID: r.projectID, revision: r.revision, title: r.title, status: .queued,
-                             secondsTotal: r.secondsTotal, createdAt: r.createdAt)
+                             secondsTotal: r.secondsTotal, createdAt: r.createdAt, kind: r.threadID == nil ? .edit : .chat,
+                             threadID: r.threadID)
         let started = r.createdAt.addingTimeInterval(0.05 * total)
         if let cancelled = r.cancelledAt, now >= cancelled {
             out.status = .cancelled
@@ -405,6 +408,25 @@ final class PreviewEditorState: Sendable {
             let running = Running(
                 id: rid, projectID: id, revision: p.revision, title: p.title, secondsTotal: EditTiming(t).seconds, createdAt: now,
                 fails: scenario == .editorRenderFails, cancelledAt: nil)
+            s.running[rid] = running
+            s.renderOrder.append(rid)
+            return Self.view(running, now: now, timeScale: timeScale, scenario: scenario)
+        }
+    }
+
+    /// `POST /chat/threads/<id>/video` (45.1): a chat render, queued like an editor render (`project_id` `"chat:<thread>"`,
+    /// revision 0). `queueFull` at 20 running.
+    func startChatRender(
+        threadID: String, title: String, secondsTotal: Double, now: Date, timeScale: Double, scenario: PreviewScenario
+    ) throws -> EditRender {
+        try state.withLock { s in
+            let active = Self.renders(s, now: now, timeScale: timeScale, scenario: scenario).filter(\.isActive).count
+            if active >= 20 { throw EditError.queueFull }
+            s.counter += 1
+            let rid = "PrEvIeWchRnd" + String(format: "%04d", 100 + s.counter)
+            let running = Running(
+                id: rid, projectID: "chat:\(threadID)", revision: 0, title: title, secondsTotal: secondsTotal, createdAt: now,
+                fails: false, cancelledAt: nil, threadID: threadID)
             s.running[rid] = running
             s.renderOrder.append(rid)
             return Self.view(running, now: now, timeScale: timeScale, scenario: scenario)

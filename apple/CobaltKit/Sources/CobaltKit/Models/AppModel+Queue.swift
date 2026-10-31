@@ -12,7 +12,7 @@ extension AppModel {
             // an editor render: the editor's own cancel (`DELETE /edits/renders/<id>`), then the snapshot is read again
             try? await editor.cancel(render: render.id)
             await unifiedQueue.refresh()
-        } else if let render = item.editRender, action == .retry {
+        } else if let render = item.editRender, action == .retry, !render.isChat {
             // "try again": the project opens with the render confirm up
             queueShown = false
             await openEdit(render.projectID, confirmRender: true)
