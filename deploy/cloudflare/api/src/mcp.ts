@@ -95,7 +95,7 @@ const INSTRUCTIONS = [
     "Posts are found with library_list or library_search (meaning search) and opened with library_post; use the post `id` they return.",
     "Save a link (TikTok, X, YouTube, Instagram, a direct file...) with library_save. Upload a local file with upload_begin, then PUT the file's bytes to the upload_url it returns (its `curl` field is ready to run).",
     "Make ops (make_*, edits_render) answer a job: check on it with jobs_wait. Share links: links_create; collections and sets group them.",
-    "To use part of a picture (a sticker in a screenshot) in a video: look with grid: true, make_cropImage with the box (cutout: true for just the thing), look at the crop to check it, then edits_addOverlay.",
+    "To use part of a picture (a sticker in a screenshot) in a video: look with grid: true (a moment of a video: make_frames first saves frames as pictures), make_cropImage with the box (cutout: true for just the thing), look at the crop to check it, then edits_addOverlay.",
     "Tools marked destructive delete or change things for good: confirm with the user first.",
 ].join("\n");
 

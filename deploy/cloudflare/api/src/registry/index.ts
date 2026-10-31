@@ -4,6 +4,7 @@ import { AUTH_OPS } from "./ops/auth";
 import { BOX_OPS } from "./ops/box";
 import { CHAT_OPS } from "./ops/chat";
 import { EDITOR_OPS } from "./ops/editor";
+import { FRAME_OPS } from "./ops/frames";
 import { HIDDEN_OPS } from "./ops/hidden";
 import { HOST_OPS } from "./ops/hosts";
 import { LIBRARY_OPS } from "./ops/library";
@@ -31,6 +32,7 @@ export const REGISTRY = new Registry([
     ...HIDDEN_OPS,
     ...STAGE_OPS,
     ...BOX_OPS,
+    ...FRAME_OPS,
     ...LIVE_OPS,
     ...SYSTEM_OPS,
     ...MCP_OPS,

@@ -163,7 +163,7 @@ Response (streams, uploads, file bytes, forwarding). Chat: the op is also a chat
 | ANY | `stage host /*` | `host.stage` | open |  |  | Worker | yes |  |
 | ANY | `studio host /*` | `host.studio` | open |  |  | Worker | yes |  |
 
-The chat AI's calls (67): `cobalt.library.list`, `cobalt.library.search`, `cobalt.library.post`, `cobalt.look`,
+The chat AI's calls (68): `cobalt.library.list`, `cobalt.library.search`, `cobalt.library.post`, `cobalt.look`,
 `cobalt.show`, `cobalt.collage`, `cobalt.rank`, `cobalt.links.list`, `cobalt.collections.list`, `cobalt.library.about`,
 `cobalt.library.about.set` (asks first), `cobalt.queue`, `cobalt.library.save`, `cobalt.library.title`,
 `cobalt.library.visibility` (asks first), `cobalt.library.delete` (asks first), `cobalt.library.deleteFile` (asks
@@ -178,7 +178,8 @@ first), `cobalt.make.webp`, `cobalt.make.still`, `cobalt.make.trim`, `cobalt.mak
 `cobalt.hidden.rules.list`, `cobalt.hidden.rules.add` (asks first), `cobalt.hidden.rules.update` (asks first),
 `cobalt.hidden.rules.delete` (asks first), `cobalt.hidden.rules.preview`, `cobalt.stage.get`, `cobalt.stage.set`,
 `cobalt.stage.store` (asks first), `cobalt.stage.pool`, `cobalt.stage.items`, `cobalt.stage.action`,
-`cobalt.emotes.find`, `cobalt.emotes.save`, `cobalt.box.run`, `cobalt.box.pull`, `cobalt.box.save`.
+`cobalt.emotes.find`, `cobalt.emotes.save`, `cobalt.box.run`, `cobalt.box.pull`, `cobalt.box.save`,
+`cobalt.make.frames`.
 
 <!-- routes:end -->
 
@@ -5175,9 +5176,22 @@ from an image overlay (the crop then replaces the overlay's picture: same place,
 the device at full resolution and uploads the PNG (44.1 second body); when the picture isn't on the device it asks the
 server (44.1 JSON). Shown only when `features.image_crop` is true.
 
+### 44.7 `make.frames`: video frames as pictures (owner, same day: "a tool for agents to extract and analyze frames of a video too and then they can edit them as image")
+
+`cobalt.make.frames(id, { at?, count?, title? })` (MCP `make_frames`, tier free, offered only while the workbench box is on,
+section 33.11): `id` is a video or gif file id, or a post id (its first video). `at` lists seconds (at most 8, each inside
+the video); without it `count` frames (default 1, at most 8) are spread evenly, each in the middle of its share. The video
+is copied into the thread's box and ffmpeg cuts each frame (`-ss <t> -frames:v 1`, at most 3072 px a side, never scaled
+up); each becomes a new private PNG in `cobalt-originals` at `frames/<new id>.png`, source `studio`, `made_from: [<video>]`,
+`made_spec: {kind: "frame", from, at}`, title "<video title> frame m:ss.s". Answers `{ frames: [{ file_id, at, width,
+height }] }`. One unit of `CHAT_DAILY_RENDERS` per call (given back on failure); refuses hidden posts. The frames are
+pictures like any other: `look` (with a grid), `make.cropImage`, `make.cutout`, `edits.addOverlay`. For a quick glance
+`look(ids, { frames: true })` (44.3) needs no box and makes no files. The chat's instructions (44.4) mention it when the box
+is on.
+
 ### 44.6 Files, tests, deploy
 
-- Files: `api/src/{image-crop,image-crop-core,look-pictures}.ts`, `api/src/registry/ops/editor.ts`,
+- Files: `api/src/{image-crop,image-crop-core,look-pictures}.ts`, `api/src/registry/ops/{editor,frames}.ts`,
   `api/src/registry/ops/library.ts`, `api/src/{chat,chat-tools,chat-cards,mcp,app-routes}.ts`.
 - Tests: `api/test/image-crop.test.ts` (both bodies and every error, crop/rotate/flip pixels, cutout chaining,
   `make.cropImage`, `look` private pictures, grid and frames in chat and MCP, capabilities).

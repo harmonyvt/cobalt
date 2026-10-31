@@ -7,6 +7,7 @@ import { dropInlineImages } from "../src/chat";
 import { chatTools, type ChatCollect } from "../src/chat-tools";
 import { decodePng, encodePng, type Rgba } from "../src/cutout-core";
 import { parseCropSpec } from "../src/image-crop";
+import { frameTimes } from "../src/registry/ops/frames";
 import { drawGrid, flip, GRID_RGB, pixelBox, rotate } from "../src/image-crop-core";
 import { hashKey } from "../src/keys";
 import { lookBlocks, lookImages } from "../src/look-pictures";
@@ -142,7 +143,7 @@ function cobalt(name: string, ...args: unknown[]) {
         messageId: "1",
         collect,
         legacy,
-        flags: { search: false },
+        flags: { search: false, box: true },
         pending: { put: async () => {}, take: async () => null, drop: async () => {} },
     }).tools;
     return tools[name]!(...args) as Promise<any>;
@@ -344,5 +345,74 @@ describe("look (44.3)", () => {
     it("pictures sent inline are not saved with the message", () => {
         const api = [{ role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } }, { type: "image", source: { type: "url", url: "u" } }] }] }];
         expect(dropInlineImages(api)[0].content[0].content).toEqual([{ type: "text", text: "[a picture you looked at earlier]" }, { type: "image", source: { type: "url", url: "u" } }]);
+    });
+});
+
+// ---- make.frames (44.7) -------------------------------------------------------------------------------------------
+
+describe("cobalt.make.frames", () => {
+    let runs: string[];
+    let files: Map<string, Uint8Array>;
+    let runAnswer: { code: number; stdout: string; stderr: string; timed_out: boolean; ms: number };
+    const port = {
+        async write(_t: string, name: string, body: ReadableStream<Uint8Array>) {
+            const b = new Uint8Array(await new Response(body).arrayBuffer());
+            files.set(name, b);
+            return { size: b.length };
+        },
+        async run(_t: string, cmd: string) {
+            runs.push(cmd);
+            // "ffmpeg" writes a frame for every line that asks for one inside the 9.6 s video
+            for (const m of cmd.matchAll(/-ss ([0-9.]+) .* (frames-out\/f\d+\.png)/g)) if (Number(m[1]) <= 9.6) files.set(m[2]!, await encodePng(coords(12, 8)));
+            return runAnswer;
+        },
+        async stat() {
+            return { error: "unused" };
+        },
+        async read(_t: string, path: string) {
+            const b = files.get(path);
+            return b ? new Response(b).body! : { error: `no such file: ${path}` };
+        },
+    };
+
+    beforeEach(async () => {
+        runs = [];
+        files = new Map();
+        runAnswer = { code: 0, stdout: "", stderr: "", timed_out: false, ms: 5 };
+        (env as any).WORKBENCH = { idFromName: () => "main", get: () => port };
+        await putObject(env.ORIGINALS, "originals/VideoFile0000001.mp4", new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]), "video/mp4");
+    });
+
+    it("where the frames go", () => {
+        expect(frameTimes(10, undefined, undefined)).toEqual([5]);
+        expect(frameTimes(10, undefined, 4)).toEqual([1.25, 3.75, 6.25, 8.75]);
+        expect(frameTimes(10, [3, 1, 3], undefined)).toEqual([1, 3]);
+        expect(frameTimes(10, [11], undefined)).toBe("the video is 10 s long");
+        expect(frameTimes(null, undefined, 2)).toMatch(/length is unknown/);
+    });
+
+    it("cuts frames in the box and saves each as a private png linked to the video", async () => {
+        const r = await cobalt("make.frames", "VideoFile0000001", { at: [1.5, 3] });
+        expect(r.frames.map((f: any) => [f.at, f.width, f.height])).toEqual([[1.5, 12, 8], [3, 12, 8]]);
+        expect(files.has("frames-src-VideoFile0000001.mp4")).toBe(true);
+        expect(runs[0]).toContain("-ss 1.5 -i frames-src-VideoFile0000001.mp4 -frames:v 1");
+        expect(runs[0]).toContain("min(iw,3072)");
+        const row = db.raw.prepare("SELECT * FROM media_items WHERE id = ?").get(r.frames[0].file_id) as any;
+        expect(row).toMatchObject({ kind: "private", source: "studio", content_type: "image/png", width: 12, height: 8 });
+        expect(row.r2_key).toMatch(/^frames\//);
+        expect(JSON.parse(row.made_spec)).toEqual({ kind: "frame", from: "VideoFile0000001", at: 1.5 });
+        expect((db.raw.prepare("SELECT title FROM media_titles WHERE post_key = ?").get(r.frames[1].file_id) as any).title).toBe("VideoFile0000001 frame 0:03.0");
+        expect((storage.get(`chat:budget:${THREAD}:renders`) as { n: number }).n).toBe(1);
+        // the frame is a picture like any other: crop it
+        const c = await cobalt("make.cropImage", r.frames[0].file_id, { x: 0, y: 0, w: 0.5, h: 0.5 });
+        expect(c).toMatchObject({ status: "done", kind: "image" });
+    });
+
+    it("refuses a picture and too many frames; ffmpeg failing gives the unit back", async () => {
+        expect(await thrown(cobalt("make.frames", "PhotoFile0000001"))).toMatch(/has no video/);
+        expect(await thrown(cobalt("make.frames", "VideoFile0000001", { at: [20] }))).toMatch(/9\.6 s long/);
+        runAnswer = { code: 1, stdout: "", stderr: "boom", timed_out: false, ms: 5 };
+        expect(await thrown(cobalt("make.frames", "VideoFile0000001"))).toMatch(/ffmpeg failed: boom/);
+        expect((storage.get(`chat:budget:${THREAD}:renders`) as { n: number } | undefined)?.n ?? 0).toBe(0);
     });
 });
