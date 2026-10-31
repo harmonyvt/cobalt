@@ -11,6 +11,7 @@ import { SHARE, world } from "./stage-world";
 
 const THREAD = "Thread0000000002";
 const PRIVATE = /^https:\/\/share\.capybaraharmony\.com\/p\/[A-Za-z0-9]{22}$/;
+const fileOf = (page: string, n: number, ext: string) => `${page}/${n}.${ext}`;
 
 class MemoryPending implements PendingPort {
     cards = new Map<string, PendingConfirm>();
@@ -131,5 +132,39 @@ describe("links.update", () => {
         await expect(w.call("links.update", link.id, { add: w.file({ visibility: "private" }).id })).rejects.toThrow(/not public/);
         await expect(w.call("links.update", link.id, { order: ["Nope000000000001"] })).rejects.toThrow(/not in the link/);
         expect((await w.call("links.update", link.id, { title: "" })).title).toBeNull();
+    });
+});
+
+// The direct file links (share.../p/<key>/<n>.<ext>) come back with every private link, so a caller never reads the page.
+describe("direct file links of private links", () => {
+    it("links.private, links.rotate, links.create, links.list and post() give each file's direct link", async () => {
+        const w = await setup();
+        const a = w.file({ visibility: "private" });
+        const b = w.file({ visibility: "private" });
+        w.set("1234567890123456789", [a.id, b.id]);
+        const on = await w.call("links.private", "1234567890123456789", true);
+        expect(on.file_urls).toEqual([fileOf(on.url, 1, "mp4"), fileOf(on.url, 2, "mp4")]);
+        const listed = (await w.call("links.list")).find((l: any) => l.id === "1234567890123456789");
+        expect(listed.file_urls).toEqual(on.file_urls);
+
+        const c = w.file({ visibility: "private" });
+        const one = await w.call("links.private", c.id, true);
+        expect(one.file_urls).toEqual([fileOf(one.url, 1, "mp4")]);
+        const post = await w.call("post", c.id);
+        expect(post.files[0]).toMatchObject({ private_url: one.url, private_file_url: fileOf(one.url, 1, "mp4") });
+        expect((await w.call("post", a.id)).files[0].private_url).toBeUndefined();
+
+        await w.call("links.rotate", one.url);
+        const rotated = (await w.confirm()).result;
+        expect(rotated.file_urls).toEqual([fileOf(rotated.url, 1, "mp4")]);
+
+        const made = await w.call("links.create", [w.file({ visibility: "private" }).id, w.file({ visibility: "private" }).id], { private: true });
+        expect(made.file_urls).toEqual([fileOf(made.url, 1, "mp4"), fileOf(made.url, 2, "mp4")]);
+        const single = await w.call("links.create", w.file({ visibility: "private" }).id, { private: true });
+        expect(single.file_urls).toEqual([fileOf(single.url, 1, "mp4")]);
+
+        // a public gallery link has none
+        const pub = await w.call("links.create", [w.file().id, w.file().id], { private: false });
+        expect(pub.file_urls).toBeUndefined();
     });
 });

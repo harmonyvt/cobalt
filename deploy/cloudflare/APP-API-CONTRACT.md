@@ -4585,6 +4585,12 @@ gets 404). They are tier `hidden` ops: the chat and MCP reach private links only
   (`free`). `links.rotate` (`links_rotate`): `{ link }`, tier `ask`. Owner-only ops stay hidden: `rotate-all` and the
   settings (and every `/share/private` route).
 - `links.list` shows `private` and the live `url` per link.
+- Direct file links: wherever a private link comes back (`links.create` with `private`, `links.private` turning one on,
+  `links.rotate`, a private link in `links.list`) it also carries `file_urls`, each file's
+  `share.../p/<key>/<n>.<ext>` (the bytes, 36.4) in the link's order, null for a file that is gone. `library.post`
+  gives a file with its own live private link `private_url` and `private_file_url` (`.../p/<key>/1.<ext>`). These
+  stay on the share host, never the media domain; like the page, anyone holding one can download the file until the
+  key is rotated or revoked.
 - Code: `src/private-actions.ts`, `src/registry/ops/private.ts`; tests `test/private-links.test.ts`,
   `test/private-links-chat.test.ts`, `test/migration-0024.test.ts`.
 

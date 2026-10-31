@@ -24,6 +24,7 @@ import { createShareSet, listShareSets, revokeShareSet, SET_ID_REGEX, SHARE_SET_
 import type { StudioReply } from "../../studio";
 import { itemOn, type PrivateDeps } from "../../private-actions";
 import { newLinksSetting, setIsPrivate } from "../../private-links";
+import { privateFileUrls } from "../../share-private";
 import { HIDDEN_HINT, hiddenTargets } from "../../hidden";
 import { effectiveVisibility } from "../../visibility";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
@@ -211,6 +212,10 @@ const LinkShape = z
         title: z.string().nullable(),
         files: z.number(),
         private: z.boolean().describe("true: a private link (share.../p/<key>), the only way in while it is live").optional(),
+        file_urls: z
+            .array(z.string().nullable())
+            .optional()
+            .describe("a private link's direct file links (share.../p/<key>/<n>.<ext>, the bytes, for a download or an import), in order; anyone holding one can download that file"),
     })
     .meta({ id: "ShareLink" });
 
@@ -329,7 +334,9 @@ export async function makeLink(
             "error.private.not_found": "that file is gone",
             "error.hidden": HIDDEN_HINT,
         });
-        return { id: null, url: body.link.url, title: null, files: 1, private: true };
+        const key = /\/p\/([A-Za-z0-9]{22})$/.exec(body.link.url)?.[1];
+        const fileUrls = key ? await privateFileUrls(ctx.db, d.shareBaseUrl, { kind: "item", target_id: fileIds[0]!.id, key }) : [];
+        return { id: null, url: body.link.url, title: null, files: 1, private: true, file_urls: fileUrls };
     }
     if (fileIds.length === 1) {
         const name = /\/([A-Za-z0-9]{6,40})\.[A-Za-z0-9]{1,8}$/.exec(fileIds[0]!.url)?.[1];
@@ -341,12 +348,19 @@ export async function makeLink(
         bodyRequest("POST", { items: fileIds.map((f) => f.id), ...(title ? { title } : {}), private: o.private === true }),
         ctx.keyId!,
     );
-    const body = unwrap<{ set: { id: string; url: string; title: string | null; items: unknown[]; private?: boolean } }>(r, {
+    const body = unwrap<{ set: { id: string; url: string; title: string | null; items: { url: string | null }[]; private?: boolean } }>(r, {
         "error.share.not_public": o.private ? "some of those files were deleted" : "some of those files are not public any more",
         "error.hidden": HIDDEN_HINT,
         "error.share.bad_request": `a gallery link holds 2 to ${SHARE_SET_MAX} files and a title of at most 80 characters`,
     });
-    return { id: body.set.id, url: body.set.url, title: body.set.title, files: body.set.items.length, ...(body.set.private ? { private: true } : {}) };
+    return {
+        id: body.set.id,
+        url: body.set.url,
+        title: body.set.title,
+        files: body.set.items.length,
+        // a private link's items are already its direct file links (share.../p/<key>/<n>.<ext>)
+        ...(body.set.private ? { private: true, file_urls: body.set.items.map((i) => i.url) } : {}),
+    };
 }
 
 // ---- the chat AI's calls --------------------------------------------------------------------------------------------

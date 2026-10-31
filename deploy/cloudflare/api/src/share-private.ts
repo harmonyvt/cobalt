@@ -56,6 +56,23 @@ async function fileOfLink(db: D1Database, link: PrivateLinkRow, n: number): Prom
     return (await rowsById(db, [id])).get(id) ?? null;
 }
 
+// The direct file links of a live private link, in its order: share.../p/<key>/<n>.<ext>, the bytes themselves (null for a
+// file that is gone). For the chat AI and MCP, which would otherwise read them off the page (section 36.5).
+export async function privateFileUrls(db: D1Database, shareBaseUrl: string, link: Pick<PrivateLinkRow, "kind" | "target_id" | "key">): Promise<(string | null)[]> {
+    if (link.kind === "item") {
+        const row = await privateItem(db, link.target_id);
+        return [row ? privateFileUrl(shareBaseUrl, link.key, 1, row) : null];
+    }
+    const set = await liveSetRow(db, link.target_id);
+    if (!set) return [];
+    const ids = parseItems(set.items);
+    const rows = await rowsById(db, ids);
+    return ids.map((id, i) => {
+        const r = rows.get(id);
+        return r ? privateFileUrl(shareBaseUrl, link.key, i + 1, r) : null;
+    });
+}
+
 // GET|HEAD /p/<key> and /p/<key>/<n>.<ext> (sharePage has answered other methods with a 405).
 export async function privateRoute(d: ShareDeps, request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
