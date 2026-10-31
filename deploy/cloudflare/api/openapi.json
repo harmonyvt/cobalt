@@ -696,6 +696,70 @@
         }
       }
     },
+    "/chat/threads/{id}/agents": {
+      "get": {
+        "operationId": "chat.agents",
+        "summary": "A chat thread's sub-agents and their messages (section 43.6).",
+        "tags": [
+          "chat"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "agents": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Agent"
+                      }
+                    },
+                    "mail": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AgentMail"
+                      }
+                    }
+                  },
+                  "required": [
+                    "agents",
+                    "mail"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/chat/threads/{id}/confirm/{cid}": {
       "post": {
         "operationId": "chat.confirm",
@@ -1626,11 +1690,15 @@
                       "additionalProperties": false
                     },
                     "next": {
-                      "description": "the cursor of the next page, null on the last",
-                      "type": [
-                        "string",
-                        "null"
-                      ]
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "the cursor of the next page, null on the last"
                     }
                   },
                   "required": [
@@ -1704,9 +1772,13 @@
                           "type": "object",
                           "properties": {
                             "sentence": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "tags": {
@@ -1726,15 +1798,23 @@
                               }
                             },
                             "transcript": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "language": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "frames": {
@@ -1744,15 +1824,23 @@
                               "type": "boolean"
                             },
                             "model": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "written_at": {
-                              "type": [
-                                "number",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             }
                           },
@@ -1930,9 +2018,13 @@
                           "type": "object",
                           "properties": {
                             "sentence": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "tags": {
@@ -1952,15 +2044,23 @@
                               }
                             },
                             "transcript": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "language": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "frames": {
@@ -1970,15 +2070,23 @@
                               "type": "boolean"
                             },
                             "model": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "written_at": {
-                              "type": [
-                                "number",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             }
                           },
@@ -2749,9 +2857,13 @@
                                   "type": "string"
                                 },
                                 "private_url": {
-                                  "type": [
-                                    "string",
-                                    "null"
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
                                   ]
                                 }
                               },
@@ -3388,17 +3500,25 @@
                               "type": "number"
                             },
                             "last_used_at": {
-                              "type": [
-                                "number",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "used_by": {
-                              "description": "the client's name from its last initialize",
-                              "type": [
-                                "string",
-                                "null"
-                              ]
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "the client's name from its last initialize"
                             },
                             "calls_today": {
                               "type": "number",
@@ -3515,17 +3635,25 @@
                                   "type": "number"
                                 },
                                 "last_used_at": {
-                                  "type": [
-                                    "number",
-                                    "null"
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
                                   ]
                                 },
                                 "used_by": {
-                                  "description": "the client's name from its last initialize",
-                                  "type": [
-                                    "string",
-                                    "null"
-                                  ]
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "the client's name from its last initialize"
                                 },
                                 "calls_today": {
                                   "type": "number",
@@ -3629,17 +3757,25 @@
                                   "type": "number"
                                 },
                                 "last_used_at": {
-                                  "type": [
-                                    "number",
-                                    "null"
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
                                   ]
                                 },
                                 "used_by": {
-                                  "description": "the client's name from its last initialize",
-                                  "type": [
-                                    "string",
-                                    "null"
-                                  ]
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "the client's name from its last initialize"
                                 },
                                 "calls_today": {
                                   "type": "number",
@@ -4026,9 +4162,13 @@
                             "description": "page opens (GET)"
                           },
                           "last_opened_at": {
-                            "type": [
-                              "number",
-                              "null"
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           }
                         },
@@ -4276,9 +4416,13 @@
                             "description": "page opens (GET)"
                           },
                           "last_opened_at": {
-                            "type": [
-                              "number",
-                              "null"
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           }
                         },
@@ -4390,9 +4534,13 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "type": [
-                            "number",
-                            "null"
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         }
                       },
@@ -4526,9 +4674,13 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "type": [
-                            "number",
-                            "null"
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         }
                       },
@@ -4617,9 +4769,13 @@
                             "description": "page opens (GET)"
                           },
                           "last_opened_at": {
-                            "type": [
-                              "number",
-                              "null"
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           }
                         },
@@ -4722,9 +4878,13 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "type": [
-                            "number",
-                            "null"
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         }
                       },
@@ -4858,9 +5018,13 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "type": [
-                            "number",
-                            "null"
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         }
                       },
@@ -6088,6 +6252,156 @@
   },
   "components": {
     "schemas": {
+      "Agent": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "description": "its id"
+          },
+          "job": {
+            "type": "string",
+            "description": "agent:<id>: hand it to jobs.onDone to hear when it finishes"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "error",
+              "stopped"
+            ]
+          },
+          "task": {
+            "type": "string"
+          },
+          "activity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "while running: the call it made last"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "its report (its last reply), once it ended"
+          },
+          "post_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "the posts it showed"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "turns": {
+            "type": "number",
+            "description": "replies it ran: its task, then one per message that woke it"
+          },
+          "unread": {
+            "type": "number",
+            "description": "messages waiting for it"
+          },
+          "created_at": {
+            "type": "number"
+          },
+          "updated_at": {
+            "type": "number"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "agent",
+          "job",
+          "name",
+          "status",
+          "task",
+          "activity",
+          "result",
+          "post_ids",
+          "error",
+          "turns",
+          "unread",
+          "created_at",
+          "updated_at",
+          "ended_at"
+        ],
+        "additionalProperties": false
+      },
+      "AgentMail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number"
+          },
+          "from": {
+            "type": "string",
+            "description": "\"parent\" or an agent id"
+          },
+          "from_name": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "to_name": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "number"
+          },
+          "read": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "from",
+          "from_name",
+          "to",
+          "to_name",
+          "text",
+          "created_at",
+          "read"
+        ],
+        "additionalProperties": false
+      },
       "AuthKeyRow": {
         "type": "object",
         "properties": {
@@ -6158,11 +6472,15 @@
             "description": "ms; slides 90 days on each use"
           },
           "country": {
-            "description": "cf.country of the last use",
-            "type": [
-              "string",
-              "null"
-            ]
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "cf.country of the last use"
           },
           "current": {
             "type": "boolean",
@@ -6233,57 +6551,93 @@
             "description": "the post key"
           },
           "service": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "link": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "title": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "custom_title": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "duration": {
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "width": {
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "height": {
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "poster_url": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "public_url": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "created_at": {
@@ -6332,9 +6686,13 @@
                   "type": "string"
                 },
                 "url": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },

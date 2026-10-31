@@ -97,6 +97,11 @@ export interface WorkerEnv {
     // The chat's job hooks (section 33.14): the ChatJobs Durable Object namespace (one object per chat thread). Absent:
     // cobalt.jobs.onDone only looks at the job, it never continues the chat.
     CHAT_JOBS?: DurableObjectNamespace;
+    // Sub-agents (section 43): the ChatAgent Durable Object namespace (one object per sub-agent, its replies run in its
+    // alarm). Absent: cobalt.agents is not offered.
+    CHAT_AGENTS?: DurableObjectNamespace;
+    // How many sub-agents one chat may start per UTC day (default 20, "0" turns sub-agents off).
+    CHAT_DAILY_AGENTS?: string;
 }
 
 

@@ -6,7 +6,7 @@ import { makeImageCrop } from "../../image-crop";
 import { EDIT_OVERLAY_TRACKS, EDIT_SOURCE_TYPES, sourceKind } from "../../../../editor/helper/timeline.js";
 import { EDIT_PROJECT_ID_REGEX, ITEM_ID_REGEX } from "../../gate";
 import { budgetPort } from "../budget";
-import { defineOp, ok, OpError, type OpContext } from "../op";
+import { defineOp, ok, OpError, type OpContext, capThreadOf } from "../op";
 import { editCall, FILE_SELECT, JobSchema, projectOf, ProjectSchema, refuseHiddenPost, rendersCap, type FileRow } from "./make";
 
 const json = (status: number, body: unknown) =>
@@ -57,7 +57,8 @@ async function fileOf(ctx: OpContext, call: string, id: string, want: (f: FileRo
 
 function threadOf(ctx: OpContext, call: string): string {
     if (!ctx.chat) throw new OpError(404, "error.chat.off", `cobalt.${call}: only the chat can call this`);
-    return ctx.chat.threadId;
+    // a sub-agent uses its parent's caps and box (section 43.7)
+    return capThreadOf(ctx.chat);
 }
 
 export const makeCutoutOp = defineOp({

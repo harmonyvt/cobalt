@@ -14,6 +14,10 @@ private let collageThread = "PrEvIeWchat00004"
 private let collageMessage = "132"
 /// The `.chatConfirm` scenario's thread: the chat asks before deleting three timer clips.
 private let confirmThread = "PrEvIeWchat00005"
+/// The `.chatAgents` scenario's thread (APP-API-CONTRACT 43): two helpers, one working, one done.
+private let agentsThread = "PrEvIeWchat00006"
+private let runningHelper = "PrEvIeWagent0001"
+private let doneHelper = "PrEvIeWagent0002"
 
 #Preview("chat · happy", traits: .fixedLayout(width: 390, height: 844)) {
     PreviewHost(.happy, tab: .chat) { model in NavigationStack { ChatScreen(model: model, tier: .compact) } }
@@ -128,6 +132,41 @@ private struct ThreadPreview: View {
             guard let card = model.chat.content(of: confirmThread)?.messages.last?.confirm else { return }
             try? await model.chat.answer(card, yes: true, in: confirmThread)
         }
+    }
+}
+#Preview("thread · helpers", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.chatAgents, tab: .chat) { model in
+        ThreadPreview(model: model, threadID: agentsThread) { model in
+            model.chat.openThreadID = agentsThread
+            await model.chat.loadAgents(agentsThread)
+        }
+    }
+}
+#Preview("thread · helpers, dark", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.chatAgents, tab: .chat) { model in
+        ThreadPreview(model: model, threadID: agentsThread) { model in
+            model.chat.openThreadID = agentsThread
+            await model.chat.loadAgents(agentsThread)
+        }
+    }
+    .preferredColorScheme(.dark)
+}
+#Preview("helper · done, read-only", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.chatAgents, tab: .chat) { model in
+        ChatHelperSheet(model: model, agentID: doneHelper, parentID: agentsThread)
+            .task {
+                await model.chat.load(agentsThread)
+                await model.chat.loadAgents(agentsThread)
+            }
+    }
+}
+#Preview("helper · working, read-only", traits: .fixedLayout(width: 390, height: 844)) {
+    PreviewHost(.chatAgents, tab: .chat) { model in
+        ChatHelperSheet(model: model, agentID: runningHelper, parentID: agentsThread)
+            .task {
+                await model.chat.load(agentsThread)
+                await model.chat.loadAgents(agentsThread)
+            }
     }
 }
 #Preview("thread · composer with a file", traits: .fixedLayout(width: 390, height: 844)) {

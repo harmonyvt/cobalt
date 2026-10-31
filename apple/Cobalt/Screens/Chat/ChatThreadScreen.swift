@@ -4,12 +4,16 @@ import SwiftUI
 // One thread (APP-API-CONTRACT section 27.4): its messages in a list anchored to the bottom, the reply streaming into it
 // (code steps collapsed, the shown files as thumbnails that open the post), and the composer. The list follows the reply
 // while the owner is at the bottom and lets go the moment they scroll up. A shown file opens the way the library opens
-// one: on iPhone the detail is pushed here; on iPad and Mac the library tab reveals the post.
+// one: on iPhone the detail is pushed here; on iPad and Mac the library tab reveals the post. A thread whose chat started
+// helpers (APP-API-CONTRACT 43.6) shows them as a strip under the header; a helper's own thread opens in a sheet with this
+// same screen, read-only: its mail with the chat on top and a footer instead of the composer.
 
 struct ChatThreadScreen: View {
     let model: AppModel
     let threadID: String
     let tier: Tier
+    /// Set when this is a helper's own thread opened from its parent (the parent's id): read-only, in a sheet.
+    var helperOf: String? = nil
 
     @Environment(\.shell) private var shell
     @Environment(\.dismiss) private var dismiss
@@ -24,10 +28,11 @@ struct ChatThreadScreen: View {
     @State private var confirmedNo = 0
     @FocusState private var composerFocused: Bool
 
-    init(model: AppModel, threadID: String, tier: Tier) {
+    init(model: AppModel, threadID: String, tier: Tier, helperOf: String? = nil) {
         self.model = model
         self.threadID = threadID
         self.tier = tier
+        self.helperOf = helperOf
         _controller = State(initialValue: ChatController(model: model))
     }
 
@@ -35,6 +40,8 @@ struct ChatThreadScreen: View {
     private var content: ChatThreadContent? { store.content(of: threadID) }
     private var busy: Bool { store.isBusy(threadID) }
     private var title: String { content?.thread.title ?? store.thread(threadID)?.title ?? Copy.Chat.title }
+    /// A helper's thread (43.1): only its parent writes to it.
+    private var readOnly: Bool { helperOf != nil || content?.isAgentThread == true }
 
     var body: some View {
         Group {
@@ -56,7 +63,12 @@ struct ChatThreadScreen: View {
             ToolbarItem(placement: .primaryAction) { menu }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if content != nil {
+            if let content, readOnly {
+                ChatHelperFooter(model: model, content: content, parentID: helperOf ?? content.agent?.parent)
+                    .frame(maxWidth: 760)
+                    .frame(maxWidth: .infinity)
+                    .background(.bar)
+            } else if content != nil {
                 ChatComposer(
                     model: model, threadID: threadID, content: content, busy: busy, focus: $composerFocused
                 ) { send($0) }
@@ -65,11 +77,12 @@ struct ChatThreadScreen: View {
                 .background(.bar)
             }
         }
+        .modifier(ChatHelperChrome(model: model, threadID: threadID, shows: !readOnly && content != nil))
         .task(id: threadID) {
             await store.load(threadID)
-            await focusIfAsked()
+            if !readOnly { await focusIfAsked() }
         }
-        .onChange(of: store.composerFocus) { Task { await focusIfAsked() } }
+        .onChange(of: store.composerFocus) { if !readOnly { Task { await focusIfAsked() } } }
         .navigationDestination(item: $opened) { target in
             MediaDetail(model: model, item: target.item, initial: target.initial)
         }
@@ -93,7 +106,10 @@ struct ChatThreadScreen: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
-                    if content.messages.isEmpty { emptyHint }
+                    if let parent = helperOf ?? content.agent?.parent {
+                        ChatHelperMail(mail: store.agents(of: parent).mail(with: threadID))
+                    }
+                    if content.messages.isEmpty, !readOnly { emptyHint }
                     ForEach(content.messages) { message in
                         ChatMessageView(
                             model: model, message: message, content: content, tier: tier, open: open,
@@ -197,7 +213,7 @@ struct ChatThreadScreen: View {
 
     @ViewBuilder
     private var menu: some View {
-        if let thread = content?.thread ?? store.thread(threadID) {
+        if !readOnly, let thread = content?.thread ?? store.thread(threadID) {
             Menu {
                 Button(Copy.Chat.rename, systemImage: Symbol.chatRename) { controller.renaming = thread }
                 Divider()

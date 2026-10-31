@@ -8,13 +8,16 @@ import Synchronization
 // deleted since; the replies in that thread (and any message that says "collage") stream a `collage` event too.
 // `PreviewScenario.chatEmpty` has no threads, `.chatFail` cannot list them, `.chatReplyFails` ends every reply in
 // `error.chat.model`. `.happy` and `.renditions` have the three samples. `.chatConfirm` adds a fifth thread whose last reply
-// waits on a confirm card (33.5): answering it streams the card's new status and a short reply.
+// waits on a confirm card (33.5): answering it streams the card's new status and a short reply. `.chatAgents` adds a sixth
+// thread whose chat started two helpers (43): "lia share 11" still running, "lia share 12" done with its report, the mail
+// between them and the chat, and the agents cards; `GET /chat/threads/<id>/agents` answers them, the helpers' own
+// threads read with their `agent`, and they are left out of the list.
 
 extension PreviewScenario {
     /// The preview server has `features.chat`.
     var hasChat: Bool {
         switch self {
-        case .happy, .renditions, .chatEmpty, .chatFail, .chatReplyFails, .chatConfirm, .hidden: return true
+        case .happy, .renditions, .chatEmpty, .chatFail, .chatReplyFails, .chatConfirm, .chatAgents, .hidden: return true
         default: return false
         }
     }
@@ -98,6 +101,124 @@ extension PreviewData {
                 confirm: card, createdAt: t(1)),
         ]
         return (thread, messages)
+    }
+
+    /// The `.chatAgents` thread, its two helpers (one running, one done) and their own threads.
+    static let agentsThreadID = "PrEvIeWchat00006"
+    static let agentIDs = ["PrEvIeWagent0001", "PrEvIeWagent0002"]
+
+    struct ChatAgentsSeed {
+        var thread: ChatThread
+        var messages: [ChatMessage]
+        var list: ChatAgentList
+        var agentThreads: [(ref: ChatAgentRef, thread: ChatThread, messages: [ChatMessage])]
+    }
+
+    /// "what's in lia share 11 and 12": the chat split the job between two helpers and waits for their reports.
+    static func chatAgentsSeed(now: Date) -> ChatAgentsSeed {
+        func t(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
+        let shown = chatShownPostIDs(now: now)
+        let task11 = "go through the collection \"Lia Share 11\" and say what kinds of clips are in it (counts per kind), and flag any link that shows the same video twice."
+        let task12 = "go through the collection \"Lia Share 12\" and say what kinds of clips are in it (counts per kind). only count videos, skip the images."
+        let report12 = "Lia Share 12 has 11 links with 14 videos: 6 cats, 4 harbour clips, 3 cooking, 1 timer. No video is in it twice. The three that sum it up are shown."
+        let running = ChatAgent(
+            id: agentIDs[0], name: "lia share 11", status: .running, task: task11, activity: "library.search", turns: 2,
+            createdAt: t(6), updatedAt: t(0.2))
+        let done = ChatAgent(
+            id: agentIDs[1], name: "lia share 12", status: .done, task: task12, result: report12, postIDs: shown, turns: 1,
+            createdAt: t(6), updatedAt: t(2), endedAt: t(2))
+        let mail = [
+            ChatAgentMail(id: "1", from: ChatAgentMail.parent, to: done.id, toName: done.name, text: "only count videos, skip the images", createdAt: t(5.5)),
+            ChatAgentMail(
+                id: "2", from: running.id, fromName: running.name, to: ChatAgentMail.parent,
+                text: "two links in Lia Share 11 show the same harbour video. want me to flag both?", createdAt: t(4), read: false),
+            ChatAgentMail(id: "3", from: ChatAgentMail.parent, to: running.id, toName: running.name, text: "yes, put both link ids in your report", createdAt: t(3.5)),
+        ]
+        let rows: [ChatToolCard.Agents.Row] = [
+            .init(id: running.id, name: running.name, status: .running, task: String(task11.prefix(200)), activity: "library.search", watching: true),
+            .init(id: done.id, name: done.name, status: .done, task: String(task12.prefix(200)), result: report12, postIDs: shown, watching: true),
+        ]
+        let code = """
+        const a = await cobalt.agents.spawn("go through the collection \\"Lia Share 11\\" ...", { name: "lia share 11" });
+        const b = await cobalt.agents.spawn("go through the collection \\"Lia Share 12\\" ...", { name: "lia share 12" });
+        await cobalt.agents.send("lia share 12", "only count videos, skip the images");
+        await cobalt.jobs.onDone(a.job, "relay the report");
+        await cobalt.jobs.onDone(b.job, "relay the report");
+        """
+        let code2 = """
+        const { messages } = await cobalt.agents.inbox();
+        await cobalt.agents.send("lia share 11", "yes, put both link ids in your report");
+        return messages;
+        """
+        let thread = ChatThread(
+            id: agentsThreadID, title: "what's in lia share 11 and 12", createdAt: t(7), updatedAt: t(2),
+            preview: "lia share 12 is done: 14 videos, mostly cats. lia share 11 is still going.", messageCount: 4)
+        let messages = [
+            ChatMessage(id: "151", role: .user, text: "what's in lia share 11 and lia share 12? any repeats?", createdAt: t(7)),
+            ChatMessage(
+                id: "152", role: .assistant, text: "two helpers are on it, one per collection. i'll tell you when they report back.",
+                steps: [ChatStep(
+                    id: "toolu_51", status: .done, code: code, result: "null", durationMS: 420,
+                    calls: [
+                        ChatToolCall(op: "agents.spawn", ms: 60, card: .agents(.init(change: .started, agents: [rows[0]]))),
+                        ChatToolCall(op: "agents.spawn", ms: 55, card: .agents(.init(change: .started, agents: [rows[1]]))),
+                        ChatToolCall(op: "agents.send", ms: 12, card: .agents(.init(
+                            change: .sent, message: .init(to: done.name, text: "only count videos, skip the images")))),
+                        ChatToolCall(op: "jobs.onDone", ms: 8, card: .agents(.init(change: .waiting, agents: [rows[0]]))),
+                        ChatToolCall(op: "jobs.onDone", ms: 8, card: .agents(.init(change: .waiting, agents: [rows[1]]))),
+                    ])],
+                createdAt: t(6)),
+            ChatMessage(id: "153", role: .user, text: "did they find anything yet?", createdAt: t(3.6)),
+            ChatMessage(
+                id: "154", role: .assistant,
+                text: "lia share 12 is done: **14 videos**, mostly cats, no repeats. lia share 11 found the same harbour video twice and is still going; i told it to list both links.",
+                postIDs: shown,
+                steps: [ChatStep(
+                    id: "toolu_52", status: .done, code: code2, result: "[...]", durationMS: 140,
+                    calls: [
+                        ChatToolCall(op: "agents.inbox", ms: 20, card: .agents(.init(change: .inbox, mail: [
+                            .init(from: running.name, text: "two links in Lia Share 11 show the same harbour video. want me to flag both?"),
+                        ]))),
+                        ChatToolCall(op: "agents.send", ms: 14, card: .agents(.init(
+                            change: .sent, message: .init(to: running.name, text: "yes, put both link ids in your report")))),
+                        ChatToolCall(op: "agents.list", ms: 10, card: .agents(.init(change: .listed, agents: rows))),
+                    ])],
+                createdAt: t(3.5)),
+        ]
+
+        // the helpers' own threads: the task first, then their replies
+        let search = ChatToolCall(op: "library.search", ms: 380, card: .search(.init(
+            query: "", within: "Lia Share 12", total: 14, hits: shown.map { .init(postID: $0) })))
+        let thread12 = ChatThread(id: done.id, title: done.name, createdAt: t(6), updatedAt: t(2), preview: String(report12.prefix(120)), messageCount: 2)
+        let messages12 = [
+            ChatMessage(id: "161", role: .user, text: task12, createdAt: t(6)),
+            ChatMessage(
+                id: "162", role: .assistant, text: report12, postIDs: shown,
+                steps: [ChatStep(
+                    id: "toolu_61", status: .done, code: "const posts = await cobalt.library.list({ within: \"Lia Share 12\" });\nreturn posts.length;",
+                    result: "14", durationMS: 610, calls: [search])],
+                createdAt: t(2)),
+        ]
+        let thread11 = ChatThread(id: running.id, title: running.name, createdAt: t(6), updatedAt: t(0.2), messageCount: 3)
+        let messages11 = [
+            ChatMessage(id: "171", role: .user, text: task11, createdAt: t(6)),
+            ChatMessage(
+                id: "172", role: .assistant, text: "Asked the parent about the repeated harbour video.",
+                steps: [ChatStep(
+                    id: "toolu_71", status: .done,
+                    code: "await cobalt.agents.send(\"parent\", \"two links in Lia Share 11 show the same harbour video. want me to flag both?\");",
+                    result: "null", durationMS: 90,
+                    calls: [ChatToolCall(op: "agents.send", ms: 11, card: .agents(.init(
+                        change: .sent, message: .init(to: "parent", text: "two links in Lia Share 11 show the same harbour video. want me to flag both?"))))])],
+                createdAt: t(4)),
+            ChatMessage(id: "173", role: .assistant, status: .running, createdAt: t(3.4)),
+        ]
+        return ChatAgentsSeed(
+            thread: thread, messages: messages, list: ChatAgentList(agents: [running, done], mail: mail),
+            agentThreads: [
+                (ChatAgentRef(id: running.id, parent: agentsThreadID, name: running.name, status: .running, task: task11), thread11, messages11),
+                (ChatAgentRef(id: done.id, parent: agentsThreadID, name: done.name, status: .done, task: task12), thread12, messages12),
+            ])
     }
 
     /// A post a sample message shows that the library no longer has (the "removed" tile).
@@ -284,6 +405,9 @@ final class PreviewChatState: Sendable {
         var collageFails = false
         /// The sends in flight (one reply at a time per thread).
         var replying: Set<String> = []
+        /// Sub-agents (43) by parent thread, and the `agent` of each helper's own thread (left out of the list).
+        var agents: [String: ChatAgentList] = [:]
+        var agentRefs: [String: ChatAgentRef] = [:]
     }
 
     private let state = Mutex(State())
@@ -300,6 +424,16 @@ final class PreviewChatState: Sendable {
             $0.replyFails = replyFails
         }
     }
+
+    func seedAgents(parent: String, list: ChatAgentList, refs: [ChatAgentRef]) {
+        state.withLock { s in
+            s.agents[parent] = list
+            for ref in refs { s.agentRefs[ref.id] = ref }
+        }
+    }
+
+    func agentList(of id: String) -> ChatAgentList { state.withLock { $0.agents[id] ?? ChatAgentList() } }
+    func agentRef(_ id: String) -> ChatAgentRef? { state.withLock { $0.agentRefs[id] } }
 
     /// Tests: `GET /chat/threads` answers 503 while this is true.
     var listFails: Bool {
@@ -335,7 +469,9 @@ final class PreviewChatState: Sendable {
     func record(_ call: String) { state.withLock { $0.calls.append(call) } }
 
     func list() -> [ChatThread]? {
-        state.withLock { $0.listFails ? nil : $0.threads.sorted { $0.updatedAt > $1.updatedAt } }
+        state.withLock { s in
+            s.listFails ? nil : s.threads.filter { s.agentRefs[$0.id] == nil }.sorted { $0.updatedAt > $1.updatedAt }
+        }
     }
 
     func thread(_ id: String) -> ChatThread? { state.withLock { s in s.threads.first { $0.id == id } } }
@@ -455,7 +591,17 @@ extension PreviewClient {
         for postID in Set(messages.flatMap { $0.postIDs + ($0.ranked?.hits.map(\.postID) ?? []) } + cardIDs) {
             if let post = library.first(where: { $0.id == postID }) { posts[postID] = post }
         }
-        return ChatThreadDetail(thread: thread, messages: messages, posts: posts)
+        return ChatThreadDetail(thread: thread, messages: messages, posts: posts, agent: chatState.agentRef(id))
+    }
+
+    /// `GET /chat/threads/<id>/agents` (43.6): the `.chatAgents` thread's two helpers and their mail; empty lists for any
+    /// other thread, `notFound` for an unknown one.
+    public func chatAgents(threadID: String) async throws -> ChatAgentList {
+        chatState.record("AGENTS " + threadID)
+        try await clock.sleep(seconds: 0.2 * timeScale)
+        guard scenario.hasChat else { throw PipelineFailure.unsupported }
+        guard chatState.thread(threadID) != nil else { throw ChatError.notFound }
+        return chatState.agentList(of: threadID)
     }
 
     /// `GET /chat/threads/<id>/messages/<message id>/collage?offset=&limit=` (27.5): a page of the collage, from the

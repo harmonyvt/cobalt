@@ -1,5 +1,6 @@
 // The registry every request and chat call goes through (APP-API-CONTRACT.md section 33). Add an area's ops here; each
 // area keeps its ops in ops/<area>.ts.
+import { AGENT_OPS } from "./ops/agents";
 import { AUTH_OPS } from "./ops/auth";
 import { BOX_OPS } from "./ops/box";
 import { CHAT_OPS } from "./ops/chat";
@@ -19,6 +20,7 @@ import { STAGE_OPS } from "./ops/stage";
 import { SYSTEM_OPS } from "./ops/system";
 import { Registry } from "./registry";
 import { toolTypesFor } from "./typescript";
+import type { AiFlags } from "./op";
 
 export const REGISTRY = new Registry([
     ...LIBRARY_OPS,
@@ -26,6 +28,7 @@ export const REGISTRY = new Registry([
     ...LIBRARY_ADMIN_OPS,
     ...CHAT_OPS,
     ...MAKE_OPS,
+    ...AGENT_OPS,
     ...EDITOR_OPS,
     ...SHARE_OPS,
     ...PRIVATE_OPS,
@@ -42,7 +45,8 @@ export const REGISTRY = new Registry([
 
 // The model's cheat sheet for the sandbox API, generated from the ops (`search` only while meaning search is on, `box`
 // only while the workbench is on).
-export const toolTypes = (search: boolean, registry: Registry = REGISTRY, box = false): string => toolTypesFor(registry, { search, box });
+export const toolTypes = (search: boolean, registry: Registry = REGISTRY, box = false, extra: Partial<AiFlags> = {}): string =>
+    toolTypesFor(registry, { ...extra, search, box });
 export const TOOL_TYPES = toolTypes(true);
 
 export { defineOp, ok, OpError, type Op, type OpContext, type OpReply } from "./op";

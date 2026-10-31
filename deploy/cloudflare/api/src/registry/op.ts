@@ -90,7 +90,12 @@ export type ChatCallContext = {
     watchJob?: (job: string, note: string | null) => Promise<void>;
     // MCP calls only (section 35): the API's public origin and the client key behind the MCP thread
     mcp?: { origin: string; clientKeyId: string };
+    // a sub-agent's calls (section 43): its own id and its parent thread, whose daily caps and box it shares
+    agent?: { id: string; parent: string } | null;
 };
+
+// The thread whose daily caps (renders, saves) and workbench box a chat call uses: a sub-agent's parent (section 43.7).
+export const capThreadOf = (chat: ChatCallContext) => chat.agent?.parent ?? chat.threadId;
 
 export type AiSpec<I> = {
     tier: AiTier;
@@ -121,7 +126,8 @@ export type AiSpec<I> = {
 
 // search: meaning search is configured; box: the workbench is on (section 33.11); mcp: the caller is the MCP server
 // (section 35), which also sees the MCP-only ops (`when: (f) => f.mcp === true`)
-export type AiFlags = { search: boolean; box?: boolean; mcp?: boolean };
+// agents: sub-agents are on (the CHAT_AGENTS binding, section 43); subagent: the caller is a sub-agent itself
+export type AiFlags = { search: boolean; box?: boolean; mcp?: boolean; agents?: boolean; subagent?: boolean };
 
 // The hosts the Worker answers: the API (the default), the share host's link pages (section 22), the stage host
 // (section 30.4), and any other studio.* host (a 404 page while the stage is off or elsewhere).

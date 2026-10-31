@@ -247,6 +247,9 @@ public protocol CobaltClient: Sendable {
     /// reply goes on as a stream like a send's: first a `confirm` event with the card's new status, then a new assistant
     /// message (no `user` event). `ChatError.confirmGone` when the card was answered, expired or replaced.
     func answerChatConfirm(threadID: String, confirmID: String, yes: Bool) -> AsyncThrowingStream<ChatEvent, Error>
+    /// `GET /chat/threads/<id>/agents` (43.6): the thread's sub-agents and the last 50 messages between it and them, oldest
+    /// first. `ChatError.notFound` for an unknown thread; empty lists on a server before migration 0027.
+    func chatAgents(threadID: String) async throws -> ChatAgentList
     // Stage, the studio tab (APP-API-CONTRACT 30.10; keyed; only when `features.stage`). Defaulted below
     // (`.unsupported`) so older fakes compile. The routes throw `StageError` for the server's refusals.
     /// `GET /stage`: the stage and its four rewards. Also retries what Twitch refused earlier.
@@ -409,6 +412,7 @@ extension CobaltClient {
     public func answerChatConfirm(threadID: String, confirmID: String, yes: Bool) -> AsyncThrowingStream<ChatEvent, Error> {
         AsyncThrowingStream { $0.finish(throwing: PipelineFailure.unsupported) }
     }
+    public func chatAgents(threadID: String) async throws -> ChatAgentList { throw PipelineFailure.unsupported }
     public func stage() async throws -> StageSnapshot { throw PipelineFailure.unsupported }
     public func updateStage(_ patch: StagePatch) async throws -> StageSettings { throw PipelineFailure.unsupported }
     public func rotateStage() async throws -> StageSettings { throw PipelineFailure.unsupported }

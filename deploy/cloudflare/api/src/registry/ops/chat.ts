@@ -14,6 +14,7 @@ import {
     sendMessage,
     type ChatDeps,
 } from "../../chat";
+import { agentsOn, agentsPort, type AgentsNamespace } from "../../chat-agents";
 import { jobsPort, type JobsNamespace } from "../../chat-jobs";
 import { ChatLivePusher } from "../../chat-live";
 // the thread id pattern comes from gate.ts, not chat.ts: through chat.ts's import of the registry it would be undefined here
@@ -43,6 +44,7 @@ export function chatDepsFrom(base: OpBase): ChatDeps | null {
         base,
         pending: pendingPort(base.container),
         jobs: env.CHAT_JOBS ? jobsPort(env.CHAT_JOBS as unknown as JobsNamespace, env.COBALT_API_KEY) : null,
+        agents: agentsOn(env) ? agentsPort(env.CHAT_AGENTS as unknown as AgentsNamespace, env.COBALT_API_KEY) : null,
     };
 }
 

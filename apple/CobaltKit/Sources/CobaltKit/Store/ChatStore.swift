@@ -4,7 +4,8 @@ import Observation
 // Chat (APP-API-CONTRACT 27): the threads the owner has with Claude about the library. `ChatThreadContent` is one open
 // thread and the pure rules that apply a reply's events to it; `ChatStore` lists, creates, renames and deletes threads,
 // sends a message and applies the reply as it streams, and follows a reply whose stream dropped by reading the thread
-// again every 2 s (at most 3 minutes), then calls it interrupted.
+// again every 2 s (at most 3 minutes), then calls it interrupted. It also follows the open thread's sub-agents (43.6):
+// every 3 s while one is queued or running, at most every 30 s otherwise.
 
 // MARK: - one open thread
 
@@ -15,16 +16,22 @@ public struct ChatThreadContent: Sendable, Equatable {
     public var messages: [ChatMessage]
     /// Keyed by the post's id. A post a message references that is not here was deleted: draw "removed".
     public var posts: [String: LibraryPost]
+    /// Set when this is a sub-agent's own thread (43.1): read-only, its parent writes to it.
+    public var agent: ChatAgentRef?
 
-    public init(thread: ChatThread, messages: [ChatMessage] = [], posts: [String: LibraryPost] = [:]) {
+    public init(thread: ChatThread, messages: [ChatMessage] = [], posts: [String: LibraryPost] = [:], agent: ChatAgentRef? = nil) {
         self.thread = thread
         self.messages = messages
         self.posts = posts
+        self.agent = agent
     }
 
     public init(_ detail: ChatThreadDetail) {
-        self.init(thread: detail.thread, messages: detail.messages, posts: detail.posts)
+        self.init(thread: detail.thread, messages: detail.messages, posts: detail.posts, agent: detail.agent)
     }
+
+    /// A sub-agent's thread: no composer.
+    public var isAgentThread: Bool { agent != nil }
 
     /// The last message is still being written.
     public var isReplying: Bool { messages.last.map { $0.role == .assistant && $0.status == .running } ?? false }
@@ -252,6 +259,20 @@ public final class ChatStore {
     public static let jobPollInterval = 4.0
     public static let jobPollLimit = Int(3600.0 / jobPollInterval)
 
+    /// The sub-agents of the threads read so far and their mail with the thread (43.6), by thread id.
+    public private(set) var agentLists: [String: ChatAgentList] = [:]
+    /// The sub-agent whose thread is open in its sheet: it is read again when its row changes.
+    public var openAgentID: String?
+    /// How often the open thread's sub-agents are read while one is queued or running, and at most how often otherwise
+    /// (43.6); the watcher gives up after an hour (opening the thread again starts it again).
+    public static let agentPollInterval = 3.0
+    public static let agentIdleInterval = 30.0
+    public static let agentPollLimit = Int(3600.0 / agentPollInterval)
+    @ObservationIgnored private var agentWatchers: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var agentsReadAt: [String: Date] = [:]
+    /// Threads whose sub-agents are read at the watcher's next tick (a reply just ended).
+    @ObservationIgnored private var agentsDue: Set<String> = []
+
     /// The collages read so far, by the message that carries them (27.5).
     public private(set) var collagePages: [String: ChatCollageState] = [:]
     public static let collagePageSize = ChatRule.collagePage
@@ -363,6 +384,7 @@ public final class ChatStore {
             }
             loadStates[id] = .loaded
             if contents[id]?.isReplying == true, !sendingIDs.contains(id) { follow(id) }
+            watchAgents(id)
         } catch ChatError.notFound {
             guard started == generation else { return }
             forget(id)
@@ -431,6 +453,52 @@ public final class ChatStore {
                 collagePages[message.id] = nil
             }
         }
+    }
+
+    // MARK: sub-agents
+
+    /// The thread's sub-agents and their mail as last read (empty before the first read, or when it has none).
+    public func agents(of id: String) -> ChatAgentList { agentLists[id] ?? ChatAgentList() }
+
+    /// Reads a thread's sub-agents (`GET /chat/threads/<id>/agents`). A failure keeps what was read before. The helper open
+    /// in its sheet (`openAgentID`) is read again when its row changed or it is still working.
+    public func loadAgents(_ id: String) async {
+        let started = generation
+        agentsReadAt[id] = ctx.clock.now()
+        agentsDue.remove(id)
+        guard let list = try? await ctx.client.chatAgents(threadID: id), started == generation, contents[id] != nil else { return }
+        let before = agentLists[id]
+        if before != list { agentLists[id] = list }
+        if let open = openAgentID, let now = list.agent(open), !sendingIDs.contains(open), contents[open] != nil,
+           now.isLive || before?.agent(open)?.updatedAt != now.updatedAt {
+            await load(open)
+        }
+    }
+
+    /// While the thread is open (and is not a sub-agent's own), reads its sub-agents at once, then every 3 s while one is
+    /// queued or running or a reply just ended, every 30 s otherwise while it has any. Stops when the thread is no longer
+    /// open, mirroring `watchJobs`.
+    private func watchAgents(_ id: String) {
+        guard agentWatchers[id] == nil, openThreadID == id, contents[id]?.isAgentThread == false else { return }
+        let started = generation
+        agentWatchers[id] = Task { [weak self] in
+            guard let self else { return }
+            defer { if started == self.generation { self.agentWatchers[id] = nil } }
+            await self.loadAgents(id)
+            for _ in 0..<Self.agentPollLimit {
+                do { try await self.ctx.clock.sleep(seconds: Self.agentPollInterval) } catch { return }
+                guard started == self.generation, self.openThreadID == id, self.contents[id] != nil else { return }
+                if self.agentsAreDue(id) { await self.loadAgents(id) }
+            }
+        }
+    }
+
+    private func agentsAreDue(_ id: String) -> Bool {
+        if agentsDue.contains(id) { return true }
+        guard let list = agentLists[id], !list.isEmpty else { return false }
+        if list.isLive { return true }
+        guard let last = agentsReadAt[id] else { return true }
+        return ctx.clock.now().timeIntervalSince(last) >= Self.agentIdleInterval
     }
 
     // MARK: the draft
@@ -736,6 +804,9 @@ public final class ChatStore {
             put(thread)
             pruneCollagePages(of: id)
             watchJobs(id)
+            // the reply may have started, steered or stopped helpers: read them at the next tick
+            agentsDue.insert(id)
+            watchAgents(id)
             // the ranked list names posts the stream may not have shipped: read the thread for their shapes
             if let ranked = message.ranked, let have = contents[id]?.posts, ranked.hits.contains(where: { have[$0.postID] == nil }) {
                 Task { await load(id) }
@@ -748,10 +819,11 @@ public final class ChatStore {
         let id = detail.thread.id
         var merged = contents[id]?.posts ?? [:]
         merged.merge(detail.posts) { _, new in new }
-        let next = ChatThreadContent(thread: detail.thread, messages: detail.messages, posts: merged)
+        let next = ChatThreadContent(thread: detail.thread, messages: detail.messages, posts: merged, agent: detail.agent)
         // an unchanged poll (every 2 s, or 4 s while a job runs) must not re-render the open thread
         if contents[id] != next { contents[id] = next }
-        put(detail.thread)
+        // a sub-agent's own thread is never in the list (43.1)
+        if detail.agent == nil { put(detail.thread) }
         pruneCollagePages(of: id)
         watchJobs(id)
     }
@@ -773,14 +845,20 @@ public final class ChatStore {
         followers[id] = nil
         jobWatchers[id]?.cancel()
         jobWatchers[id] = nil
+        agentWatchers[id]?.cancel()
+        agentWatchers[id] = nil
+        agentLists[id] = nil
+        agentsReadAt[id] = nil
+        agentsDue.remove(id)
         if openThreadID == id { openThreadID = nil }
+        if openAgentID == id { openAgentID = nil }
     }
 
     /// Tests: an open thread the store did not read.
     func seed(_ content: ChatThreadContent) {
         contents[content.thread.id] = content
         loadStates[content.thread.id] = .loaded
-        put(content.thread)
+        if content.agent == nil { put(content.thread) }
     }
 
     /// Another server or key: nothing from the old one is kept.
@@ -794,6 +872,12 @@ public final class ChatStore {
         followers = [:]
         for task in jobWatchers.values { task.cancel() }
         jobWatchers = [:]
+        for task in agentWatchers.values { task.cancel() }
+        agentWatchers = [:]
+        agentLists = [:]
+        agentsReadAt = [:]
+        agentsDue = []
+        openAgentID = nil
         threads = []
         contents = [:]
         collagePages = [:]

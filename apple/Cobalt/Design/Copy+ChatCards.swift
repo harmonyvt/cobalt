@@ -175,6 +175,29 @@ extension Copy {
         static func folderCount(_ c: ChatToolCard.Folder) -> String? {
             c.count.map { n in c.isSet ? "\(n) \(n == 1 ? "collection" : "collections")" : "\(n) \(n == 1 ? "link" : "links")" }
         }
+        // MARK: helpers (43.5)
+
+        static func agentsTitle(_ a: ChatToolCard.Agents) -> String {
+            let n = a.agents.count
+            switch a.change {
+            case .started: return n == 1 ? "started a helper" : "started \(n) helpers"
+            case .listed: return Copy.Chat.helpers
+            case .viewed: return Copy.Chat.helper
+            case .stopped: return "stopped a helper"
+            case .sent: return "sent a message"
+            case .inbox: return "read messages"
+            case .waiting: return n == 1 ? "waiting for a helper" : "waiting for \(n) helpers"
+            }
+        }
+        static func agentsSub(_ a: ChatToolCard.Agents) -> String? {
+            switch a.change {
+            case .waiting: return "the chat carries on when it's done"
+            case .inbox: return a.mail.isEmpty ? noMail : "\(a.mail.count) new"
+            default: return nil
+            }
+        }
+        static let noMail = "nothing new"
+
         static let saved = "saved to your library"
         static func saveStatus(_ s: String?) -> String? {
             switch s {

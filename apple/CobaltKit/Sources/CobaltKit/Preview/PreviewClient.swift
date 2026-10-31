@@ -252,9 +252,24 @@ public struct PreviewClient: CobaltClient {
                 seed.threads.insert(extra.thread, at: 0)
                 seed.messages[extra.thread.id] = extra.messages
             }
+            var agents: PreviewData.ChatAgentsSeed?
+            if scenario == .chatAgents {
+                let extra = PreviewData.chatAgentsSeed(now: now)
+                seed.threads.insert(extra.thread, at: 0)
+                seed.messages[extra.thread.id] = extra.messages
+                for (ref, thread, messages) in extra.agentThreads {
+                    seed.threads.append(thread)
+                    seed.messages[ref.id] = messages
+                }
+                agents = extra
+            }
             let empty = scenario == .chatEmpty || scenario == .chatFail
             chatState.seed(empty ? [] : seed.threads, messages: empty ? [:] : seed.messages,
                            listFails: scenario == .chatFail, replyFails: scenario == .chatReplyFails)
+            if let agents {
+                chatState.seedAgents(
+                    parent: agents.thread.id, list: agents.list, refs: agents.agentThreads.map { $0.ref })
+            }
         }
     }
 

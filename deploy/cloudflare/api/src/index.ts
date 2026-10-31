@@ -34,6 +34,7 @@ export { StageRoom } from "./stage-room";
 export { Workbench } from "./workbench";
 // The chat's job hooks (APP-API-CONTRACT.md section 33.14): one object per chat thread.
 export { ChatJobs } from "./chat-jobs-do";
+export { ChatAgent } from "./chat-agents-do";
 export { ContainerProxy } from "@cloudflare/containers";
 
 export interface Env extends WorkerEnv {

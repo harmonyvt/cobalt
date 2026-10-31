@@ -70,6 +70,8 @@ export type ChatToolboxOpts = {
     randomBytes?: (n: number) => Uint8Array;
     // each call as it ends, with its card (section 38)
     onCall?: (call: ToolCall) => void;
+    // a sub-agent's run (section 43): its id and parent
+    agent?: { id: string; parent: string } | null;
 };
 
 export type ChatToolbox = {
@@ -97,9 +99,10 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
           }
         : undefined;
     const ctx = forCall(base, {
-        keyId: chatKeyId(o.threadId),
+        // a sub-agent acts as its parent's chat key: the same daily caps and the same studio sessions (section 43.7)
+        keyId: chatKeyId(o.agent?.parent ?? o.threadId),
         caller: "chat",
-        chat: { threadId: o.threadId, collect: o.collect, tools: o.legacy, ...(watchJob ? { watchJob } : {}) },
+        chat: { threadId: o.threadId, collect: o.collect, tools: o.legacy, ...(watchJob ? { watchJob } : {}), ...(o.agent ? { agent: o.agent } : {}) },
     });
     const tools: ChatTools = {};
     for (const op of registry.toolsFor("chat", o.flags)) {
@@ -116,6 +119,10 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
                 o.onCall?.(c);
             };
             if (op.ai.tier === "ask" && (op.ai.asks ? await op.ai.asks(input, ctx) : true)) {
+                if (o.agent) {
+                    record({ status: "error", error: "a sub-agent cannot ask Harmony" });
+                    throw new Error(`cobalt.${op.callName} needs Harmony's ok, and a sub-agent cannot ask: put what should be done in your report (or cobalt.agents.send("parent", ...)) and the main chat will ask`);
+                }
                 if (!o.pending) throw new Error(`cobalt.${op.callName} needs Harmony's ok, and confirm cards are off on this server`);
                 const card = op.ai.preview ? await op.ai.preview(ctx, input) : { summary: op.ai.summary.split("\n")[0]!, effect: {} };
                 const now = base.now();

@@ -15,7 +15,8 @@ import { HIDDEN_HINT, sessionPostKey } from "../../hidden";
 import { hiddenRows } from "../../hidden-store";
 import { effectiveVisibility } from "../../visibility";
 import { budgetPort, dailyCap } from "../budget";
-import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
+import { AGENT_JOB_REGEX, agentJobState, agentRow, isMissingTable } from "../../chat-agents";
+import { defineOp, ok, OpError, type OpContext, type OpReply, capThreadOf } from "../op";
 
 export const CHAT_DAILY_RENDERS_DEFAULT = 10;
 // A code run stops after 30 s (chat-limits.ts), so one wait is at most 25 s; the model calls it again while pending.
@@ -263,6 +264,12 @@ export const JobSchema = z
         seconds: z.number().nullable().optional(),
         public: z.boolean().optional(),
         share_url: z.string().nullable().optional().describe("done and public: the link to give Harmony"),
+        // a sub-agent's job, agent:<id> (section 43.4)
+        agent: z.string().optional().describe("agent jobs: the sub-agent's id"),
+        name: z.string().optional().describe("agent jobs: its name"),
+        activity: z.string().nullable().optional().describe("agent jobs while running: the call it made last"),
+        result: z.string().optional().describe("agent jobs that ended: its report"),
+        post_ids: z.array(z.string()).optional().describe("agent jobs that ended: the posts it showed"),
     })
     .meta({ id: "Job" });
 type Job = z.infer<typeof JobSchema>;
@@ -271,7 +278,8 @@ export const rendersCap = (ctx: OpContext) => dailyCap(ctx.env.CHAT_DAILY_RENDER
 
 function threadOf(ctx: OpContext, call: string): string {
     if (!ctx.chat) throw new OpError(404, "error.chat.off", `cobalt.${call}: only the chat can call this`);
-    return ctx.chat.threadId;
+    // a sub-agent uses its parent's caps and box (section 43.7)
+    return capThreadOf(ctx.chat);
 }
 
 // One unit of today's render cap for this thread, or a refusal the model can read.
@@ -416,6 +424,19 @@ async function waitEdit(ctx: OpContext, rid: string, deadline: number): Promise<
     return { job: id, status: "running" };
 }
 
+// A sub-agent (section 43.4): only its parent and its siblings may wait on it. Read from D1 every 2 s.
+async function waitAgent(ctx: OpContext, id: string, deadline: number): Promise<Job> {
+    const parent = ctx.chat ? capThreadOf(ctx.chat) : null;
+    for (;;) {
+        const row = await agentRow(ctx.db, id).catch((e) => (isMissingTable(e) ? null : Promise.reject(e)));
+        if (!row || row.parent !== parent) throw stop("jobs.wait", `agent:${id} is not one of this chat's sub-agents`);
+        const state = agentJobState(row) as Job;
+        if (state.status !== "queued" && state.status !== "running") return state;
+        if (remaining(ctx, deadline) <= 0) return state;
+        await ctx.edge.sleep(Math.min(2000, Math.max(0, deadline - ctx.now())));
+    }
+}
+
 // A job's state after waiting up to `seconds` (0: right now). The chat's job watcher (chat-jobs.ts) reads it too.
 export async function waitJob(ctx: OpContext, job: string, seconds: number): Promise<Job> {
     const deadline = ctx.now() + seconds * 1000;
@@ -423,6 +444,8 @@ export async function waitJob(ctx: OpContext, job: string, seconds: number): Pro
     if (studio) return waitStudio(ctx, studio[1]!, studio[2]!, deadline);
     const edit = /^edit:([A-Za-z0-9]{20})$/.exec(job);
     if (edit) return waitEdit(ctx, edit[1]!, deadline);
+    const agent = AGENT_JOB_REGEX.exec(job);
+    if (agent) return waitAgent(ctx, agent[1]!, deadline);
     const open = /^open:([A-Za-z0-9]{22}):([A-Za-z0-9_-]{1,4000})$/.exec(job);
     if (open) {
         let plan: Plan;
