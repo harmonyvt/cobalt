@@ -5667,7 +5667,7 @@ for the current model and meaning), "created_at", "updated_at" }`. `yes`/`no` ne
 
 ### 48.6 Clients
 
-- **App (iPhone, iPad, Mac)**: "names" in the library's menu opens the names list (each name, its meaning, how many posts
+- **App (iPhone, iPad, Mac)**: a "search names" tab (under "more" on iPhone, in the sidebar on iPad and Mac) shows the names list (each name, its meaning, how many posts
   carry it, an on/off toggle; swipe or right click to delete). The name screen: the word and "also called" chips, the
   meaning, a "this is <name>" strip and a "not <name>" strip of thumbnails, a slider "listen to: the words … the
   examples" (strength), a slider "cut-off: more posts … stricter", and "who's in": the preview's posts with a dashed
