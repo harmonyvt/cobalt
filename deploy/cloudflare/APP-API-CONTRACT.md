@@ -5299,3 +5299,82 @@ is on.
 - Tests: `api/test/image-crop.test.ts` (both bodies and every error, crop/rotate/flip pixels, cutout chaining,
   `make.cropImage`, `look` private pictures, grid and frames in chat and MCP, capabilities).
 - **Deploy**: API deploy only. No migration, no secret, no binding change.
+
+## 45. Chat videos: a chat replayed as an MP4 (addendum, 2026-10-31; owner: "create like a video, like animation of the chat with the video embedded, and it plays it"; plan `chat-video/PLAN.md`, sample `chat-video/sample-chat.mp4`)
+
+A chat thread (section 27) rendered as a video that replays it: the owner's message types into the composer and is sent,
+the reply "thinks", its tool chips and cards (section 38) pop in one by one, its text streams in word by word, then the
+posts it showed appear and their videos play inline with their sound. The camera scrolls like the app. The result is a
+private library post, made by the editor's render containers (section 31.8) as a second kind of render.
+
+### 45.1 Route
+
+`POST /chat/threads/<id>/video` (keyed, CORS like the other chat routes, no-store), body (all optional, at most 4 KB):
+
+```
+{ "shape": "portrait" | "landscape" | "square",   // 1080x1920 (default), 1920x1080, 1080x1080; 30 fps, H.264 + AAC
+  "theme": "dark" | "light",                       // default dark
+  "speed": 0.5..2,                                  // pacing (typing, popping, streaming); default 1. Videos play at 1x
+  "from": "<message id>", "to": "<message id>",    // only these messages, both included (ids from GET /chat/threads/<id>)
+  "notify": true | false }                          // one Hark message when it ends (31.11), default false
+```
+
+→ `202 { "status": "success", "render": <render> }` (31.12's shape, 45.3). Errors: `400 error.chat.bad_request` (bad
+JSON, unknown key, bad value; `from`/`to` not a message of the thread), `404 error.chat.not_found`, `404 error.chat.off`,
+`404 error.edit.off` (no render containers), `409 error.chat.busy` (a reply is being written), `409
+error.chat.video.empty` (nothing to show: no user or assistant message in the range), `429 error.edit.queue_full`.
+`GET /edits/renders/<rid>`, `DELETE /edits/renders/<rid>` (cancel), `GET /edits/renders` and `GET /queue` show and
+cancel it like any render.
+
+### 45.2 What is in it
+
+- Messages in order, at most 40; user and assistant only. Per assistant message: each code step's header ("ran code · N
+  tools · 0.8 s"), its chips, then at most 6 cards in all (38.2's types: search, look, emotes, edit, job, box, files, link,
+  collection, saved, facts; thumbnails are the posts' posters), the text (markdown: bold, code, links), then up to 4 of the
+  posts it showed. A user message's attached posts show as pictures.
+- A shown video post plays from its start for at most 12 s with its sound (faded out at the end); a picture shows for a
+  moment. Pacing at speed 1: typing 28 characters a second (at most 2.2 s a message), replies 14 words a second (at most
+  5 s of streaming). The video is at most 180 s; past that the chat is cut at a message.
+- Hidden posts (section 37.2) are left out, like in thread reads. Code, logs and results of steps are never drawn.
+- Files used: each shown post's first video or picture and every post's poster (a picture without a poster uses itself).
+  At most 50 files and 6 GiB (31's caps); posters past that are left blank.
+
+### 45.3 The render
+
+- `edit_renders` gets `kind` (`'edit'` | `'chat'`, default `'edit'`) and `thread_id` (migration 0028). A chat render's
+  `project_id` is `"chat:<thread id>"` (never a project), `revision` 0, `title` the thread title, `timeline` the frozen
+  spec (45.4), `seconds_total` the planned length.
+- `<render>` gains `kind` and `thread_id` (null for editor renders). Older apps see an extra render in the queue whose
+  project does not open.
+- The result: a private post in `cobalt-originals` (`edits/<rid>.mp4`, source `studio`, `made_from` the files used,
+  `made_spec: {kind: "chat", thread, render}`), titled with the thread title, poster from 10 % in (31.10).
+- Progress is 31.12's: `seconds_done` counts drawn seconds. Rendering takes about 2.5x the video's length.
+
+### 45.4 The spec and the container
+
+The Worker freezes the thread when the render is queued: `{ "kind": "chat", "thread_id", "options": {shape, theme,
+speed}, "snapshot": {...}, "inputs": [{n, item, bucket, key, bytes, kind}] }`. `snapshot` is the thread read
+(`{version: 1, thread: {id, title}, messages: [{id, role, text, status, post_ids, steps: [{id, kind, status, duration_ms,
+calls: [{op, ms, status, card}]}]}], posts: {<id>: {id, title, kind, poster: "<n>"|null, files: [{kind: "video"|"image",
+url: "<n>"|null, width, height, duration, share_url}]}}}`), with every file named by its input number `n`. The renderer
+streams the inputs like an editor render (31.9), then `POST /renders/<rid>/start {"chat": {snapshot, options}, "inputs":
+[{n, item, kind}]}`. The helper (`editor/helper/chat/`) draws the chat in headless Chromium (`page.html`, at half the
+output size, 2x) one frame at a time, pipes the JPEG frames to ffmpeg (libx264 CRF 20, veryfast), then mixes the played
+videos' sound in at their moments. A missing input is drawn without its picture.
+
+### 45.5 The chat AI and MCP
+
+`cobalt.chat.video({ thread?, shape?, theme?, speed?, from?, to? })` (MCP `chat_video`, tier free): `thread` defaults to
+the calling chat (MCP: required). One unit of `CHAT_DAILY_RENDERS` (refunded when it is refused); answers a job (`edit:<rid>`,
+33.8) for `jobs.onDone` / `jobs.wait`; the job card is 38.2's `job`.
+
+### 45.6 Capabilities, clients, files
+
+- `features.chat_video`: `chat` and `editor` are on and migration 0028 is applied.
+- App (`apple/`): "make video" in a chat thread's menu opens a small sheet (shape, theme, speed, "only from this message"
+  from a message's menu); the render shows in the queue and opens the library post when done.
+- Files: `editor/helper/chat/{plan,page,render,cdp}.js`, `page.html`, `page.css`, `fonts/` (IBM Plex Mono, OFL);
+  `editor/Dockerfile` (Chromium, Noto emoji and CJK fonts); `api/src/chat-video.ts` (snapshot, inputs, queue),
+  `api/src/edit-render-core.ts` (the `chat` kind), `api/src/edits.ts` (shape), `api/src/registry/ops/chat.ts` (route and
+  op); `d1/migrations/0028_chat_videos.sql`.
+- **Deploy**: migration 0028, then the API (the editor image is rebuilt: Chromium makes it about 400 MB bigger).

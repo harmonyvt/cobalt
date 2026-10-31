@@ -12,9 +12,9 @@ export const CHROMIUM_ARGS = [
     "--font-render-hinting=none", "--force-color-profile=srgb", "--remote-debugging-port=0", "about:blank",
 ];
 
-/** The Chromium binary: CHAT_CHROMIUM, else the usual Alpine / Debian paths. */
+/** The Chromium binary: CHAT_CHROMIUM, else Alpine's /usr/bin/chromium. */
 export function chromiumPath() {
-    return process.env.CHAT_CHROMIUM || "/usr/bin/chromium-browser";
+    return process.env.CHAT_CHROMIUM || "/usr/bin/chromium";
 }
 
 /**

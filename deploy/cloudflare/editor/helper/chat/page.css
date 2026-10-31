@@ -3,7 +3,7 @@
 @font-face{font-family:Plex;src:url(fonts/plex-600.woff2);font-weight:600}
 :root{--bg:#000;--surface:#191919;--elev:#282828;--text:#e1e1e1;--cap:#8f8f8f;--hair:rgba(255,255,255,.07);--row:#141414;
   --blue:#2f8af9;--green:#30bd1b;--red:#ff5c6c;--amber:#f5ad5b;--violet:#a78bfa;--pink:#ff8fc8;
-  --font:Plex,"Noto Color Emoji",ui-monospace,monospace}
+  --font:Plex,"Noto Sans Mono","Noto Sans","Noto Sans CJK JP","Noto Color Emoji",ui-monospace,monospace}
 body.light{--bg:#fff;--surface:#f2f2f4;--elev:#e4e4e8;--text:#0b0b0d;--cap:#6e6e75;--hair:rgba(0,0,0,.08);--row:#fafafa;--violet:#6d4fd8;--amber:#a65b08;--blue:#196bd4}
 *{box-sizing:border-box}
 html,body{margin:0;width:var(--w);height:var(--h);overflow:hidden;background:var(--bg)}
