@@ -156,6 +156,8 @@ a { color: inherit; }
 .more { display: flex; justify-content: center; }
 .toast { position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: calc(100vw - 24px); background: var(--secondary); color: var(--primary); padding: 8px 14px; border-radius: 99px; font-size: 12.5px; display: flex; gap: 10px; align-items: center; z-index: 5; }
 .toast a { color: inherit; font-weight: 600; }
+.toast .tbtn { background: transparent; box-shadow: none; color: inherit; font-weight: 600; min-height: 28px; padding: 0 8px; text-decoration: underline; }
+.toast .tbtn:hover { background: transparent; opacity: .8; }
 
 /* search */
 .search { display: grid; gap: 4px; }
@@ -295,6 +297,50 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
 .lkside .foot { font-size: 11.5px; color: var(--gray); }
 .lkside .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .lkside .confirm { padding: 0; }
+/* editing a gallery link (section 41) */
+dialog.sheet.wide { width: min(760px, calc(100vw - 24px)); }
+.hint { font-size: 11.5px; color: var(--gray); }
+.ld-title { flex: 1; min-width: 0; min-height: 40px; padding: 0 10px; border-radius: var(--radius); border: 0; background: var(--page); box-shadow: 0 0 0 1px var(--input-border) inset; font-size: 15px; font-weight: 600; }
+.ld-title:focus { outline: 2px solid var(--blue); outline-offset: 0; }
+.ld-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.ld-meta code { min-width: 0; overflow-wrap: anywhere; }
+.ld-meta button { min-height: 32px; font-size: 12px; }
+.ld-note { font-size: 12.5px; color: var(--orange); }
+.ld-prev { display: flex; gap: 4px; flex-wrap: wrap; }
+.ld-prev .pc { position: relative; width: 64px; height: 44px; border-radius: 6px; overflow: hidden; background: var(--track); }
+.ld-prev .pc > span { position: absolute; left: 3px; bottom: 2px; font-size: 10px; color: #fff; text-shadow: 0 0 3px #000; }
+.lt-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 8px; }
+.ltile { position: relative; border-radius: var(--radius); background: var(--button); box-shadow: 0 0 0 1px var(--button-stroke) inset; overflow: hidden; min-width: 0; }
+.ltile.off .lt-thumb { opacity: .45; }
+.ltile.dragging { opacity: .4; }
+.ltile.over { box-shadow: 0 0 0 2px var(--blue) inset; }
+.ltile[draggable="true"] { cursor: grab; }
+.lt-body { display: block; position: relative; color: inherit; text-decoration: none; border-radius: var(--radius); }
+.lt-body:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.lt-thumb { aspect-ratio: 16 / 11; position: relative; background: var(--track); overflow: hidden; display: block; }
+.lt-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; -webkit-user-drag: none; }
+.lt-num { position: absolute; left: 6px; top: 6px; min-width: 22px; height: 22px; border-radius: 99px; background: var(--secondary); color: var(--primary); font-size: 11.5px; font-weight: 600; display: grid; place-items: center; padding: 0 6px; }
+.lt-kind { display: block; font-size: 11px; color: var(--gray); padding: 4px 8px 6px; }
+.lt-off { display: block; font-size: 10.5px; color: var(--orange); padding: 0 8px 6px; }
+.lt-x { position: absolute; right: 6px; top: 6px; min-height: 28px; width: 28px; padding: 0; border-radius: 99px; font-size: 16px; line-height: 1; }
+.lt-mv { position: absolute; right: 6px; bottom: 6px; display: flex; gap: 4px; }
+.lt-mv button { min-height: 28px; width: 28px; padding: 0; border-radius: 99px; font-size: 15px; line-height: 1; }
+.ltile.add { background: transparent; box-shadow: 0 0 0 1px var(--input-border) inset; }
+.lt-add { display: grid; width: 100%; height: 100%; min-height: 96px; background: transparent; box-shadow: none; gap: 2px; align-content: center; }
+.ld-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; position: sticky; bottom: 0; background: var(--page); padding-top: 8px; }
+.ld-bar .sum { margin-right: auto; font-size: 12.5px; }
+.ld-bar .err { color: var(--red); font-size: 12px; flex-basis: 100%; order: -1; }
+.pk-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pk-tools .omni { flex: 1; min-width: 160px; }
+.pk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; max-height: 52vh; overflow: auto; padding: 2px; }
+.pk { position: relative; display: flex; flex-direction: column; justify-content: flex-start; align-items: stretch; gap: 0; padding: 0; text-align: left; font-weight: 400; overflow: hidden; }
+.pk.dim { opacity: .45; }
+.pk.in { opacity: .7; }
+.pk.sel { box-shadow: 0 0 0 2px var(--blue) inset; }
+.pk-mark { position: absolute; right: 6px; top: 6px; min-width: 22px; height: 22px; border-radius: 99px; background: var(--secondary); color: var(--primary); font-size: 11.5px; display: grid; place-items: center; padding: 0 5px; }
+.pk-mark:empty { display: none; }
+.pk-name { display: block; font-size: 11.5px; padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (pointer: coarse), (max-width: 640px) { .lt-x, .lt-mv button { min-height: 36px; width: 36px; } }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chips span { font-size: 11px; padding: 2px 9px; border-radius: 99px; box-shadow: 0 0 0 1px var(--input-border) inset; letter-spacing: .03em; }
 @media (pointer: coarse), (max-width: 640px) { .near button { min-height: 44px; } .mapwrap .tools button { min-height: 44px; } }
@@ -426,6 +472,16 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
     <section id="sheetPost" aria-label="post"></section>
     <section id="sheetIndex" aria-label="search index"><h3>search index</h3><div id="sheetIndexBody"></div></section>
     <section id="sheetEmb" aria-label="embedding"><h3>embedding</h3><div id="sheetEmbBody"></div></section>
+  </div>
+</dialog>
+
+<dialog class="sheet wide" id="linkDlg" aria-labelledby="ldTitle"><div class="in" id="ldBody"></div></dialog>
+<dialog class="sheet wide" id="pickDlg" aria-labelledby="pkTitle"><div class="in" id="pkBody"></div></dialog>
+<dialog class="sheet" id="discardDlg" aria-labelledby="dcTitle">
+  <div class="in">
+    <h2 id="dcTitle">discard changes?</h2>
+    <p class="muted small">the edits to this link aren't saved yet.</p>
+    <div class="ld-bar"><button id="dcKeep" type="button">keep editing</button><button id="dcDiscard" type="button" class="danger">discard</button></div>
   </div>
 </dialog>
 
@@ -671,7 +727,8 @@ var toastTimer = 0;
 function toast(msg, link) {
   var t = $("toast");
   t.textContent = msg;
-  if (link) t.append(h("a", { href: link.href, target: "_blank", rel: "noopener", text: link.label }));
+  if (link && link.onclick) t.append(h("button", { type: "button", class: "tbtn", text: link.label, onclick: function () { t.hidden = true; link.onclick(); } }));
+  else if (link) t.append(h("a", { href: link.href, target: "_blank", rel: "noopener", text: link.label }));
   t.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(function () { t.hidden = true; }, link ? 8000 : 2200);
@@ -1625,7 +1682,7 @@ function linkCard(s) {
   var p = setIsPrivate(s);
   var n = (s.items || []).length;
   return h("button", { type: "button", class: "lcard", "data-id": s.id, "data-link": p ? "private" : "public", "aria-pressed": String(L.sel === s.id),
-      onclick: function () { L.sel = s.id; L.confirm = false; renderLinks(); } },
+      onclick: function () { L.sel = s.id; L.confirm = false; renderLinks(); openLinkDlg(s.id); } },
     linkThumbs(s),
     h("span", { class: "body" },
       h("span", { class: "name", text: setTitle(s), title: setTitle(s) }),
@@ -1673,6 +1730,7 @@ function renderSide() {
   side.append(
     h("h3", { text: setTitle(s) }),
     group,
+    h("div", { class: "row" }, h("button", { type: "button", "data-ga": "set-files", text: "files · edit", onclick: function () { openLinkDlg(s.id); } })),
     h("div", { class: "linkbox" },
       h("code", { text: url, "data-ga": "set-url" }),
       h("button", { type: "button", "data-ga": "set-copy", "aria-label": "copy link", text: "copy", onclick: function () { copyText(url); } }),
@@ -1708,6 +1766,422 @@ function rotateSet(s) {
 document.querySelectorAll("#linkFilters button").forEach(function (b) {
   b.onclick = function () { L.filter = b.dataset.lf; renderLinks(); };
 });
+
+/* ---------- editing a gallery link: files, order, title (APP-API-CONTRACT.md section 41) ---------- */
+var LINK_MAX = 10, LINK_MIN = 2;
+// LE: the open link. set = what the server holds (L.sets); items/title = the working copy being edited.
+var LE = { id: null, mode: "view", items: [], title: "", saving: false, error: "", note: "", focus: null, say: "", drag: -1, after: null };
+var LINK_ERRORS = {
+  "error.share.not_public": "some of those files aren't public. a public link takes public files only.",
+  "error.hidden": "a hidden post can't go in a link.",
+  "error.share.bad_request": "a link holds 2 to 10 files.",
+  "error.share.not_found": "that link is gone.",
+  "error.share.off": "link pages aren't set up on the server.",
+  "error.share.changed": "this link changed somewhere else. reloaded.",
+  "error.api.generic": "the server couldn't do that right now. try again in a moment."
+};
+function linkErrText(code) { return LINK_ERRORS[code] || messageFor(code); }
+function findSet(id) {
+  for (var i = 0; i < L.sets.length; i++) if (L.sets[i].id === id) return L.sets[i];
+  return null;
+}
+function fileIds(list) { return list.map(function (f) { return f.id; }); }
+function sameIds(a, b) {
+  if (a.length !== b.length) return false;
+  for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+// What the edit changes: files added, files out, whether the files left in moved, whether the title changed.
+function linkDiff(orig, cur, origTitle, curTitle) {
+  var oi = fileIds(orig), ci = fileIds(cur);
+  var keptO = oi.filter(function (x) { return ci.indexOf(x) >= 0; });
+  var keptC = ci.filter(function (x) { return oi.indexOf(x) >= 0; });
+  var d = {
+    added: ci.filter(function (x) { return oi.indexOf(x) < 0; }).length,
+    out: oi.filter(function (x) { return ci.indexOf(x) < 0; }).length,
+    reordered: !sameIds(keptO, keptC),
+    retitled: String(curTitle || "").trim() !== String(origTitle || "")
+  };
+  d.files = d.added > 0 || d.out > 0 || d.reordered;
+  d.dirty = d.files || d.retitled;
+  return d;
+}
+function diffText(d) {
+  var parts = [];
+  if (d.added) parts.push(d.added + " added");
+  if (d.out) parts.push(d.out + " out");
+  if (d.reordered) parts.push("new order");
+  if (d.retitled) parts.push("new title");
+  return parts.length ? parts.join(" · ") : "no changes";
+}
+function moveFile(list, from, to) {
+  var out = list.slice();
+  if (from === to || from < 0 || to < 0 || from >= out.length || to >= out.length) return out;
+  out.splice(to, 0, out.splice(from, 1)[0]);
+  return out;
+}
+// Why a file in the link no longer shows ("" = it shows). A private link shows private files, which have no public url.
+function fileNotShown(f, priv) {
+  if (f.hidden) return "hidden";
+  if (!priv && !f.url) return "private or deleted";
+  return "";
+}
+function fileKind(f) {
+  var t = f.content_type || "";
+  var k = t === "image/gif" ? "gif" : isVideoType(t) ? "video" : t.indexOf("image/") === 0 ? "image" : "file";
+  return k + (f.duration ? " · " + fmtElapsed(f.duration * 1000) : "");
+}
+// The library's files as picker tiles, one per post (the post's file that fits the link), hidden posts left out.
+// inLink: ids already in the link. A public link needs a public file with a url; a private link takes any.
+function pickCandidates(items, inLink, priv) {
+  var order = [], by = {};
+  items.forEach(function (it) {
+    if (it.hidden) return;
+    var k = it.post_key || it.id;
+    if (!by[k]) { by[k] = []; order.push(k); }
+    by[k].push(it);
+  });
+  return order.map(function (k) {
+    var files = by[k];
+    var linked = files.filter(function (f) { return inLink[f.id]; })[0];
+    var usable = files.filter(function (f) { return priv || (isPub(f) && f.url); })[0];
+    return { key: k, file: linked || usable || files[0], linked: !!linked, blocked: !linked && !usable };
+  });
+}
+function leToast(msg, undo) { toast(msg, undo ? { label: "undo", onclick: undo } : undefined); }
+function linkReq(id, body) {
+  return lib("/api/library/links/" + id, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+}
+function applySet(set) {
+  for (var i = 0; i < L.sets.length; i++) if (L.sets[i].id === set.id) { L.sets[i] = Object.assign({}, L.sets[i], set); break; }
+  renderLinks();
+}
+function resetEdit(s) { LE.items = (s.items || []).slice(); LE.title = s.title || ""; LE.error = ""; }
+function showDlg(d) { if (typeof d.showModal === "function") { if (!d.open) d.showModal(); } else d.setAttribute("open", ""); }
+function hideDlg(d) { if (d.close) d.close(); else d.removeAttribute("open"); }
+function openLinkDlg(id) {
+  var s = findSet(id);
+  if (!s) return;
+  LE.id = id; LE.mode = "view"; LE.note = ""; LE.say = ""; LE.saving = false; LE.focus = null; LE.after = null;
+  resetEdit(s);
+  renderLinkDlg();
+  showDlg($("linkDlg"));
+}
+function leDirty() {
+  var s = findSet(LE.id);
+  return !!s && LE.mode === "edit" && linkDiff(s.items || [], LE.items, s.title, LE.title).dirty;
+}
+// Anything that would throw edits away goes through here: asks first, in the page.
+function leGuard(go) {
+  if (!leDirty()) { go(); return; }
+  LE.after = go;
+  showDlg($("discardDlg"));
+}
+function leClose() { leGuard(function () { LE.mode = "view"; hideDlg($("linkDlg")); }); }
+function leEdit() { var s = findSet(LE.id); if (!s) return; resetEdit(s); LE.mode = "edit"; LE.note = ""; LE.focus = "title"; renderLinkDlg(); }
+function leCancel() {
+  leGuard(function () { var s = findSet(LE.id); if (s) resetEdit(s); LE.mode = "view"; LE.focus = "edit"; renderLinkDlg(); });
+}
+function leMove(i, j) {
+  var n = LE.items.length;
+  if (j < 0 || j >= n || i === j) return;
+  var id = LE.items[i].id;
+  LE.items = moveFile(LE.items, i, j);
+  LE.focus = "tile-" + id; LE.say = "file moved to place " + (j + 1) + " of " + n;
+  renderLinkDlg();
+}
+function leRemove(i) {
+  if (LE.items.length <= LINK_MIN) return;
+  LE.items.splice(i, 1);
+  LE.focus = LE.items[i] ? "tile-" + LE.items[i].id : "tile-" + LE.items[LE.items.length - 1].id;
+  LE.say = "file taken out. " + LE.items.length + " left";
+  renderLinkDlg();
+}
+function leThumb(f) {
+  var box = h("div", { class: "lt-thumb" });
+  var src = f.poster_url || (f.url && isImageType(f.content_type) ? f.url : "");
+  if (src) {
+    var img = h("img", { src: src, alt: "", loading: "lazy", decoding: "async", draggable: "false" });
+    img.addEventListener("error", function () { img.remove(); box.append(placeholder("image", fileKind(f))); });
+    box.append(img);
+  } else box.append(placeholder(isVideoType(f.content_type) ? "film" : "image", fileKind(f)));
+  return box;
+}
+function leTile(f, i, edit, priv) {
+  var n = LE.items.length;
+  var off = fileNotShown(f, priv);
+  var label = "file " + (i + 1) + " of " + n + ", " + fileKind(f) + (off ? ", not shown: " + off : "");
+  var tile = h("li", { class: "ltile" + (off ? " off" : ""), "data-id": f.id });
+  var body = edit ? h("div", { class: "lt-body", tabindex: "0", role: "group", "aria-label": label + ". alt and an arrow key moves it.", "data-fk": "tile-" + f.id }, leThumb(f))
+    : (f.url && !off ? h("a", { class: "lt-body", href: shareUrl(f.url), target: "_blank", rel: "noopener", "aria-label": label }, leThumb(f)) : h("div", { class: "lt-body", role: "group", "aria-label": label }, leThumb(f)));
+  tile.append(body);
+  body.append(h("span", { class: "lt-num", text: String(i + 1), "aria-hidden": "true" }), h("span", { class: "lt-kind", text: fileKind(f) }));
+  if (off) body.append(h("span", { class: "lt-off", text: "not shown: " + off }));
+  if (edit) {
+    var rm = h("button", { type: "button", class: "lt-x", "aria-label": "take file " + (i + 1) + " out", title: n <= LINK_MIN ? "a link needs 2 files. revoke it instead" : "take out", text: "×", disabled: n <= LINK_MIN, onclick: function () { leRemove(i); } });
+    var mv = h("div", { class: "lt-mv" },
+      h("button", { type: "button", "aria-label": "move file " + (i + 1) + " earlier", title: "move earlier", text: "‹", disabled: i === 0, onclick: function () { leMove(i, i - 1); } }),
+      h("button", { type: "button", "aria-label": "move file " + (i + 1) + " later", title: "move later", text: "›", disabled: i === n - 1, onclick: function () { leMove(i, i + 1); } }));
+    tile.append(rm, mv);
+    tile.draggable = true;
+    tile.addEventListener("dragstart", function (ev) {
+      LE.drag = i; tile.classList.add("dragging");
+      if (ev.dataTransfer) { ev.dataTransfer.effectAllowed = "move"; try { ev.dataTransfer.setData("text/plain", f.id); } catch (e) {} }
+    });
+    tile.addEventListener("dragover", function (ev) {
+      if (LE.drag < 0) return;
+      ev.preventDefault();
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+      tile.classList.add("over");
+    });
+    tile.addEventListener("dragleave", function () { tile.classList.remove("over"); });
+    tile.addEventListener("drop", function (ev) {
+      ev.preventDefault();
+      var from = LE.drag; LE.drag = -1;
+      if (from >= 0) leMove(from, i);
+    });
+    tile.addEventListener("dragend", function () { LE.drag = -1; tile.classList.remove("dragging"); document.querySelectorAll("#ldBody .ltile.over").forEach(function (t) { t.classList.remove("over"); }); });
+    body.addEventListener("keydown", function (ev) {
+      var k = ev.key;
+      if (!ev.altKey || (k !== "ArrowLeft" && k !== "ArrowRight" && k !== "ArrowUp" && k !== "ArrowDown")) return;
+      ev.preventDefault();
+      leMove(i, i + (k === "ArrowLeft" || k === "ArrowUp" ? -1 : 1));
+    });
+  }
+  return tile;
+}
+function renderLinkDlg() {
+  var s = findSet(LE.id);
+  if (!s) return;
+  var edit = LE.mode === "edit";
+  var priv = setIsPrivate(s);
+  var n = LE.items.length;
+  var keep = document.activeElement && document.activeElement.getAttribute ? document.activeElement.getAttribute("data-fk") : null;
+  var body = $("ldBody");
+  body.textContent = "";
+  var head = h("div", { class: "head" });
+  if (edit) {
+    head.append(h("h2", { id: "ldTitle", class: "sr", text: "edit " + setTitle(s) }),
+      h("input", { type: "text", class: "ld-title", id: "ldTitleField", "data-fk": "title", maxlength: "80", value: LE.title, placeholder: "no title: the ai caption is used", "aria-label": "title", "aria-describedby": "ldTitleHint",
+        oninput: function (ev) { LE.title = ev.target.value; renderLinkBar(); } }));
+  } else head.append(h("h2", { id: "ldTitle", text: setTitle(s) }));
+  head.append(h("button", { type: "button", id: "ldClose", text: "close", onclick: leClose }));
+  body.append(head);
+  if (edit) body.append(h("p", { class: "hint", id: "ldTitleHint", text: "shown on the link's preview · leave empty for the ai caption" }));
+  var url = setLiveUrl(s);
+  body.append(h("div", { class: "ld-meta" },
+    h("span", { class: "badge " + (priv ? "key" : "pub"), text: priv ? "private" : "public" }),
+    h("code", { text: url }),
+    h("button", { type: "button", text: "copy", onclick: function () { copyText(url); } }),
+    edit ? null : h("button", { type: "button", "data-fk": "edit", text: "edit", onclick: leEdit })));
+  if (LE.note) body.append(h("p", { class: "ld-note", role: "status", text: LE.note }));
+  var shown = LE.items.filter(function (f) { return !fileNotShown(f, priv); });
+  var prev = h("div", { class: "ld-prev", "aria-hidden": "true" });
+  shown.forEach(function (f, i) { var c = h("div", { class: "pc" }, leThumb(f), h("span", { text: String(i + 1) })); prev.append(c); });
+  body.append(h("section", { "aria-label": "how discord shows it" }, h("h3", { text: "how discord shows it" }), shown.length ? prev : h("p", { class: "hint", text: "no file shows right now." })));
+  var list = h("ol", { class: "lt-grid", "aria-label": "files in this link" });
+  LE.items.forEach(function (f, i) { list.append(leTile(f, i, edit, priv)); });
+  if (edit) {
+    var full = n >= LINK_MAX;
+    list.append(h("li", { class: "ltile add" }, h("button", { type: "button", class: "lt-add", "data-fk": "add", disabled: full, onclick: openPicker },
+      h("span", { text: full ? "full" : "+ add files" }), h("span", { class: "hint", text: full ? "10 is the most discord shows" : "room for " + (LINK_MAX - n) }))));
+  }
+  body.append(h("section", { "aria-label": "files" }, h("h3", { text: n + (n === 1 ? " file" : " files") + (edit ? " · drag to reorder" : "") }), list));
+  if (edit && n <= LINK_MIN) body.append(h("p", { class: "hint", text: "a link needs 2 files. revoke it instead to take it down." }));
+  if (!edit) body.append(h("p", { class: "hint", text: "edit to move, take out or add files." }));
+  body.append(h("div", { class: "sr", id: "ldLive", role: "status", "aria-live": "polite", text: LE.say }));
+  body.append(h("div", { class: "ld-bar", id: "ldBar" }));
+  renderLinkBar();
+  var want = LE.focus || keep;
+  LE.focus = null;
+  if (want) {
+    var el = body.querySelector('[data-fk="' + want + '"]');
+    if (!el || el.disabled) el = body.querySelector('[data-fk="add"]:not(:disabled)') || body.querySelector("#ldClose");
+    if (el) el.focus();
+  }
+}
+function renderLinkBar() {
+  var bar = $("ldBar");
+  var s = findSet(LE.id);
+  if (!bar || !s) return;
+  bar.textContent = "";
+  bar.hidden = LE.mode !== "edit";
+  if (LE.mode !== "edit") return;
+  var d = linkDiff(s.items || [], LE.items, s.title, LE.title);
+  bar.append(
+    h("span", { class: "sum", role: "status", text: diffText(d) }),
+    LE.error ? h("span", { class: "err", role: "alert", text: LE.error }) : "",
+    h("button", { type: "button", text: "cancel", onclick: leCancel }),
+    h("button", { type: "button", class: "primary", "data-fk": "save", text: LE.saving ? "saving…" : "save", disabled: !d.dirty || LE.saving || LE.items.length < LINK_MIN || LE.items.length > LINK_MAX, onclick: saveLink }));
+}
+async function saveLink() {
+  var s = findSet(LE.id);
+  if (!s || LE.saving) return;
+  var d = linkDiff(s.items || [], LE.items, s.title, LE.title);
+  if (!d.dirty) return;
+  var oldIds = fileIds(s.items || []), oldTitle = s.title || "", newIds = fileIds(LE.items);
+  var body = { expect: oldIds };
+  if (d.files) body.items = newIds;
+  if (d.retitled) body.title = LE.title.trim();
+  LE.saving = true; LE.error = ""; renderLinkBar();
+  try {
+    var r = await linkReq(s.id, body);
+    if (r.status === 409 && errCode(r) === "error.share.changed" && r.body && r.body.set) {
+      applySet(r.body.set);
+      resetEdit(findSet(s.id)); LE.mode = "view"; LE.saving = false; LE.note = LINK_ERRORS["error.share.changed"];
+      renderLinkDlg(); toast(LE.note);
+      return;
+    }
+    var out = ok(r);
+    applySet(out.set);
+    var now = findSet(s.id);
+    resetEdit(now); LE.mode = "view"; LE.saving = false; LE.note = "";
+    hideDlg($("linkDlg"));   // the toast (with undo) sits under a modal dialog, so the dialog closes
+    var back = { expect: fileIds(now.items || []) };
+    if (d.files) back.items = oldIds;
+    if (d.retitled) back.title = oldTitle;
+    leToast("link updated", function () { undoLink(s.id, back); });
+  } catch (e) {
+    LE.saving = false;
+    LE.error = linkErrText(e && e.code);
+    if (e && e.code === "error.share.not_found") loadLinks();
+    renderLinkBar();
+  }
+}
+async function undoLink(id, body) {
+  try {
+    var r = await linkReq(id, body);
+    if (r.status === 409 && errCode(r) === "error.share.changed" && r.body && r.body.set) {
+      applySet(r.body.set); toast(LINK_ERRORS["error.share.changed"]);
+    } else {
+      applySet(ok(r).set); toast("undone");
+    }
+    var s = findSet(id);
+    if (s && LE.id === id && $("linkDlg").open) { resetEdit(s); LE.mode = "view"; renderLinkDlg(); }
+  } catch (e) { toast(linkErrText(e && e.code)); }
+}
+
+/* the library grid in a dialog: pick files to add */
+var PK = { items: [], next: null, loading: false, error: "", q: "", kind: "all", picked: [], seq: 0 };
+async function pickLoad(reset) {
+  var seq = ++PK.seq;
+  if (reset) { PK.items = []; PK.next = null; }
+  PK.loading = true; PK.error = "";
+  renderPickGrid();
+  try {
+    var r = await lib("/api/library?filter=all&limit=100" + (!reset && PK.next ? "&before=" + PK.next : ""));
+    if (seq !== PK.seq) return;
+    if (r.status !== 200 || !r.body) throw new Fail(errCode(r) || "error.library.upstream");
+    PK.items = PK.items.concat(r.body.items || []);
+    PK.next = r.body.next_before || null;
+  } catch (e) {
+    if (seq !== PK.seq) return;
+    if (!e || e.code !== "expired") PK.error = describe(e).text;
+  } finally {
+    if (seq === PK.seq) { PK.loading = false; renderPickGrid(); }
+  }
+}
+function pickRoom() { return Math.max(0, LINK_MAX - LE.items.length); }
+function openPicker() {
+  var s = findSet(LE.id);
+  if (!s || LE.items.length >= LINK_MAX) return;
+  PK.picked = []; PK.q = ""; PK.kind = "all";
+  var body = $("pkBody");
+  body.textContent = "";
+  body.append(
+    h("div", { class: "head" }, h("h2", { id: "pkTitle", text: "add files" }), h("button", { type: "button", id: "pkClose", text: "cancel", onclick: closePicker })),
+    h("div", { class: "pk-tools" },
+      h("div", { class: "omni" }, h("input", { type: "search", id: "pkQ", maxlength: "200", placeholder: "search these files", "aria-label": "search files", autocomplete: "off",
+        oninput: function (ev) { PK.q = ev.target.value; renderPickGrid(); } })),
+      h.apply(null, ["div", { class: "seg", role: "group", "aria-label": "kind", id: "pkKinds" }].concat(
+        ["all", "videos", "images"].map(function (k) { return h("button", { type: "button", "data-k": k, "aria-pressed": String(k === "all"), text: k, onclick: function () { PK.kind = k; renderPickGrid(); } }); })))),
+    h("div", { class: "empty", id: "pkNote", role: "status", "aria-live": "polite" }),
+    h("div", { class: "pk-grid", id: "pkGrid", role: "group", "aria-label": "library files" }),
+    h("div", { class: "more", id: "pkMore", hidden: true }, h("button", { type: "button", text: "load more", onclick: function () { pickLoad(false); } })),
+    h("div", { class: "ld-bar" }, h("span", { class: "sum", id: "pkSum", role: "status" }), h("button", { type: "button", text: "cancel", onclick: closePicker }), h("button", { type: "button", class: "primary", id: "pkAdd", onclick: pickAdd })));
+  showDlg($("pickDlg"));
+  pickLoad(true);
+}
+function closePicker() { hideDlg($("pickDlg")); }
+function pickMatches(c) {
+  var f = c.file;
+  var t = f.content_type || "";
+  if (PK.kind === "videos" && !(isVideoType(t) || t === "image/gif")) return false;
+  if (PK.kind === "images" && !(t.indexOf("image/") === 0 && t !== "image/gif")) return false;
+  var q = PK.q.trim().toLowerCase();
+  return !q || String(f.custom_title || f.name || "").toLowerCase().indexOf(q) >= 0;
+}
+function renderPickGrid() {
+  var grid = $("pkGrid");
+  if (!grid) return;
+  var s = findSet(LE.id);
+  var priv = s ? setIsPrivate(s) : false;
+  var inLink = {};
+  LE.items.forEach(function (f) { inLink[f.id] = 1; });
+  var room = pickRoom();
+  var cands = pickCandidates(PK.items, inLink, priv);
+  var shown = cands.filter(pickMatches);
+  var byId = {};
+  cands.forEach(function (c) { byId[c.file.id] = c; });
+  PK.picked = PK.picked.filter(function (id) { return byId[id] && !byId[id].linked && !byId[id].blocked; }).slice(0, room);
+  document.querySelectorAll("#pkKinds button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.k === PK.kind)); });
+  grid.textContent = "";
+  shown.forEach(function (c) {
+    var f = c.file;
+    var idx = PK.picked.indexOf(f.id);
+    var full = idx < 0 && PK.picked.length >= room;
+    var why = c.linked ? "in link" : c.blocked ? "private: only in private links" : "";
+    var name = f.custom_title || f.name || "file";
+    var b = h("button", { type: "button", class: "pk" + (c.linked ? " in" : "") + (c.blocked || full ? " dim" : "") + (idx >= 0 ? " sel" : ""), "data-id": f.id, role: "checkbox",
+      "aria-checked": String(c.linked || idx >= 0), "aria-label": name + (why ? ", " + why : "") + (idx >= 0 ? ", will be file " + (LE.items.length + idx + 1) : ""),
+      disabled: c.linked || c.blocked || full, onclick: function () { pickToggle(f.id); } },
+      leThumb(f),
+      h("span", { class: "pk-mark", "aria-hidden": "true", text: c.linked ? "✓" : idx >= 0 ? String(LE.items.length + idx + 1) : "" }),
+      h("span", { class: "pk-name", text: name }),
+      why ? h("span", { class: "lt-off", text: why }) : null);
+    grid.append(b);
+  });
+  var note = $("pkNote");
+  if (PK.loading && !PK.items.length) note.textContent = "loading your library…";
+  else if (PK.error) { note.textContent = "couldn't load your library. " + PK.error; }
+  else if (!shown.length) note.textContent = PK.items.length ? "nothing matches." : "nothing here yet.";
+  else note.textContent = "";
+  $("pkMore").hidden = !PK.next;
+  var k = PK.picked.length;
+  $("pkSum").textContent = k + " picked · room for " + room;
+  var add = $("pkAdd");
+  add.textContent = "add " + k;
+  add.disabled = k === 0;
+}
+function pickToggle(id) {
+  var i = PK.picked.indexOf(id);
+  if (i >= 0) PK.picked.splice(i, 1);
+  else if (PK.picked.length < pickRoom()) PK.picked.push(id);
+  renderPickGrid();
+}
+function pickAdd() {
+  var byId = {};
+  PK.items.forEach(function (it) { byId[it.id] = it; });
+  var have = {};
+  LE.items.forEach(function (f) { have[f.id] = 1; });
+  var add = [];
+  PK.picked.forEach(function (id) {
+    var it = byId[id];
+    if (!it || have[id] || LE.items.length + add.length >= LINK_MAX) return;
+    add.push({ id: it.id, url: it.url || null, content_type: it.content_type || null, poster_url: it.poster_url || null, width: it.width || null, height: it.height || null, duration: it.duration || null });
+  });
+  LE.items = LE.items.concat(add);
+  LE.say = add.length + (add.length === 1 ? " file" : " files") + " added at the end";
+  LE.focus = add.length ? "tile-" + add[0].id : "add";
+  closePicker();
+  renderLinkDlg();
+}
+$("linkDlg").addEventListener("cancel", function (ev) { ev.preventDefault(); leClose(); });
+$("linkDlg").addEventListener("click", function (ev) { if (ev.target === $("linkDlg")) leClose(); });
+$("linkDlg").addEventListener("close", function () { LE.id = null; LE.mode = "view"; });
+$("pickDlg").addEventListener("click", function (ev) { if (ev.target === $("pickDlg")) closePicker(); });
+$("dcKeep").onclick = function () { LE.after = null; hideDlg($("discardDlg")); };
+$("dcDiscard").onclick = function () { var go = LE.after; LE.after = null; hideDlg($("discardDlg")); if (go) { var s = findSet(LE.id); if (s) resetEdit(s); LE.mode = "view"; go(); } };
 
 /* ---------- the map: embeddings laid out in 2D (/api/library/map, APP-API-CONTRACT.md section 21) ---------- */
 // The server hands over each indexed post's vector; the page lays them out with t-SNE (posts with

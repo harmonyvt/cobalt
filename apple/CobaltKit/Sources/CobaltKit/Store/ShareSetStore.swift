@@ -107,6 +107,60 @@ public final class ShareSetStore {
         }
     }
 
+    // MARK: editing a link (APP-API-CONTRACT 41)
+
+    /// The link with this id, if it is loaded.
+    public func set(_ id: String) -> ShareSet? { sets.first { $0.id == id } }
+
+    /// Changes a link's files and/or title (`PATCH /share/sets/<id>`): `items` the whole new list (nil keeps it),
+    /// `expect` the list last seen. The answer replaces the link in `sets` (it keeps its place). When the link moved on
+    /// meanwhile (`ShareSetError.changed(set)`) the server's link replaces it and the error is rethrown, so the screen can
+    /// say it reloaded; a link the server no longer has (`.notFound`) goes from the list. Anything else changes nothing.
+    @discardableResult
+    public func update(
+        _ setID: String, items: [String]?, title: ShareSetTitleChange = .keep, expect: [String]?
+    ) async throws -> ShareSet {
+        let started = generation
+        do {
+            let updated = try await ctx.client.updateShareSet(id: setID, items: items, title: title, expect: expect)
+            if started == generation { replace(updated) }
+            return updated
+        } catch let ShareSetError.changed(current) {
+            if started == generation { replace(current) }
+            throw ShareSetError.changed(current)
+        } catch ShareSetError.notFound {
+            if started == generation {
+                dropLocally(setIDs: [setID])
+                privateLinks.removeAll { $0.id == PrivateLink.id(.set, setID) }
+            }
+            throw ShareSetError.notFound
+        }
+    }
+
+    /// The library's "add to link": appends these files to the link, in order, skipping ones it holds already, with the
+    /// link's list as `expect`. Answers the link as stored (unchanged when there was nothing new). Past
+    /// `limits.share_set_max` is `.badRequest` without asking; a link that is not loaded is `.notFound`.
+    @discardableResult
+    public func addFiles(_ fileIDs: [String], to setID: String) async throws -> ShareSet {
+        guard let link = set(setID) else { throw ShareSetError.notFound }
+        let current = link.items.map(\.id)
+        var next = current
+        for id in fileIDs where !next.contains(id) { next.append(id) }
+        guard next.count > current.count else { return link }
+        guard next.count <= ctx.capabilities.limits.shareSetMax else { throw ShareSetError.badRequest }
+        return try await update(setID, items: next, expect: current)
+    }
+
+    /// A link as the server just answered it: in place of the old one (its place in the list kept), else first.
+    private func replace(_ link: ShareSet) {
+        if let index = sets.firstIndex(where: { $0.id == link.id }) {
+            sets[index] = link
+        } else {
+            sets.insert(link, at: 0)
+        }
+        if let key = link.link { notePrivate(key) }
+    }
+
     // MARK: private links (APP-API-CONTRACT 36)
 
     /// Lists the private links and `new_links` again (`GET /share/private`) without touching the links. Throws what the
@@ -537,7 +591,8 @@ public final class ShareSetStore {
         case ShareSetError.unavailable: return "The server can't make links right now."
         case ShareCollectionError.unavailable: return "The server can't load collections right now."
         case CollectionGroupError.unavailable: return "The server can't load sets right now."
-        case ShareSetError.notFound, ShareSetError.badRequest, ShareSetError.notPublic: return "The server refused the request."
+        case ShareSetError.notFound, ShareSetError.badRequest, ShareSetError.notPublic, ShareSetError.hidden: return "The server refused the request."
+        case ShareSetError.changed: return "The link changed on another device."
         case PrivateLinkError.unavailable: return "The server can't make private links right now."
         case PrivateLinkError.notFound, PrivateLinkError.notToggleable, PrivateLinkError.badRequest: return "The server refused the request."
         case CobaltError.network: return "Can't reach the server."

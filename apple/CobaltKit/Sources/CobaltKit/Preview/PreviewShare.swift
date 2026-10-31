@@ -136,6 +136,27 @@ final class PreviewShareState: Sendable {
         }
     }
 
+    /// The link with this id, if it is live.
+    func set(_ id: String) -> ShareSet? { state.withLock { s in s.sets.first { $0.id == id } } }
+
+    /// `PATCH`: the link with these items and this title, in its place. Nil when it is not live.
+    func replace(_ id: String, items: [ShareSetItem], title: String?) -> ShareSet? {
+        state.withLock { s in
+            guard let index = s.sets.firstIndex(where: { $0.id == id }) else { return nil }
+            s.sets[index].items = items
+            s.sets[index].title = title
+            return s.sets[index]
+        }
+    }
+
+    /// Tests: another device changes the link's files behind the client's back.
+    func changeBehind(_ id: String, items: [ShareSetItem]) {
+        state.withLock { s in
+            guard let index = s.sets.firstIndex(where: { $0.id == id }) else { return }
+            s.sets[index].items = items
+        }
+    }
+
     /// Revokes a link: it goes from the list and from every collection.
     func remove(_ id: String) -> Bool {
         state.withLock { s in
@@ -317,6 +338,65 @@ extension PreviewClient {
         let made = shareState.add(items: wire, title: cleaned, at: clock.now())
         if makesPrivate { _ = privateState.enable(.set, made.id, now: clock.now()) }
         return privateState.applying(to: made, now: clock.now())
+    }
+
+    /// `PATCH /share/sets/<id>` (APP-API-CONTRACT 41.1) against the preview library: `notFound` for a link it does not
+    /// hold, `changed(set)` when `expect` is not its list, `badRequest` unless 2..max distinct ids (and a title of 1..80
+    /// characters), `hidden(ids)` for added files of hidden posts, `notPublic(ids)` for added files that are missing (or
+    /// private, in a public link). Files already in the link stay as they are.
+    public func updateShareSet(id: String, items: [String]?, title: ShareSetTitleChange, expect: [String]?) async throws -> ShareSet {
+        shareState.record("PATCH \(id) " + (items ?? []).joined(separator: ","))
+        try await clock.sleep(seconds: 0.4 * timeScale)
+        guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
+        let now = clock.now()
+        guard let stored = shareState.set(id) else { throw ShareSetError.notFound }
+        let before = stored.items.map(\.id)
+        if let expect, expect != before { throw ShareSetError.changed(privateState.applying(to: stored, now: now)) }
+        let newTitle: String?
+        switch title {
+        case .keep:
+            newTitle = stored.title
+        case .clear:
+            newTitle = nil
+        case .set(let text):
+            let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard cleaned.unicodeScalars.count <= ShareSetRule.titleLimit else { throw ShareSetError.badRequest }
+            newTitle = cleaned.isEmpty ? nil : cleaned
+        }
+        if items == nil, title == .keep { throw ShareSetError.badRequest }
+        let next = items ?? before
+        let maximum = PreviewData.capabilities(for: scenario).limits.shareSetMax
+        guard next.count >= ShareSetRule.minimum, next.count <= maximum, Set(next).count == next.count else {
+            throw ShareSetError.badRequest
+        }
+        let added = next.filter { !before.contains($0) }
+        let hiddenFiles = Set(hiddenState.hidden.flatMap { $0.files.map(\.id) })
+        let hiddenAdded = added.filter { hiddenFiles.contains($0) }
+        if !hiddenAdded.isEmpty { throw ShareSetError.hidden(hiddenAdded) }
+        let isPrivate = privateState.link(.set, id, now: now) != nil
+        var posts: [LibraryPost] = []
+        if !added.isEmpty { posts = try await library(cursor: nil, limit: 100, v2: visibility != .off).posts }
+        var wire: [ShareSetItem] = []
+        var refused: [String] = []
+        for fileID in next {
+            if let kept = stored.items.first(where: { $0.id == fileID }) {
+                wire.append(kept)
+                continue
+            }
+            guard let post = posts.first(where: { $0.files.contains { $0.id == fileID } }),
+                  let file = post.files.first(where: { $0.id == fileID }), isPrivate || (file.isPublic && file.url != nil) else {
+                refused.append(fileID)
+                continue
+            }
+            let isVideo = file.contentType?.lowercased().hasPrefix("video/") == true
+            wire.append(ShareSetItem(
+                id: fileID, url: file.url ?? file.privateURL, contentType: file.contentType,
+                posterURL: file.posterURL ?? (isVideo ? post.posterURL : nil),
+                width: file.width, height: file.height, duration: file.duration))
+        }
+        if !refused.isEmpty { throw ShareSetError.notPublic(refused) }
+        guard let updated = shareState.replace(id, items: wire, title: newTitle) else { throw ShareSetError.notFound }
+        return privateState.applying(to: updated, now: now)
     }
 
     /// `GET /share/sets`: newest first; `.shareLinksFail` answers `503`.

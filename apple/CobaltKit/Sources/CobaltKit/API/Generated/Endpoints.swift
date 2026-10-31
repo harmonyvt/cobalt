@@ -301,6 +301,11 @@ enum Endpoints {
         APIEndpoint(op: "share_sets.revoke", method: "DELETE", path: "/share/sets/\(HTTPCobaltClient.encode(id))", auth: .key)
     }
 
+    /// `PATCH /share/sets/:id` (op `share_sets.update`, auth key_or_service): PATCH /share/sets/:id
+    static func shareSetsUpdate(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "share_sets.update", method: "PATCH", path: "/share/sets/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
+    }
+
     /// `GET /share/collections` (op `share_collections.list`, auth key): GET /share/collections
     static func shareCollectionsList() -> APIEndpoint<ShareCollectionsListResponse> {
         APIEndpoint(op: "share_collections.list", method: "GET", path: "/share/collections", auth: .key)

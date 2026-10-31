@@ -278,6 +278,9 @@ export async function capabilities(
                 // /share/private*, share.../p/<key>: private links of files and gallery links (APP-API-CONTRACT.md
                 // section 36), with the share host
                 private_links: !!d.shareBaseUrl,
+                // PATCH /share/sets/<id>: a gallery link's files added, taken out and moved, and its title
+                // (APP-API-CONTRACT.md section 41), with the share host
+                share_set_edit: !!d.shareBaseUrl,
                 // POST /library/status, /hidden/rules*, `hidden=1` and the `hidden` fields of GET /library: hidden posts
                 // and auto-hide rules (APP-API-CONTRACT.md section 37), once migration 0025 is applied
                 hidden: await hiddenReady(d.db),

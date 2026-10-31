@@ -116,3 +116,20 @@ describe("links.private and links.rotate", () => {
         expect(mcp.some((n) => n.startsWith("share_private"))).toBe(false);
     });
 });
+
+// section 41: the chat's links.update (add at the end, take out, move first, title), through the real PATCH handler
+describe("links.update", () => {
+    it("adds, takes out and moves files; keeps 2..10; a public link refuses a private file", async () => {
+        const w = await setup();
+        const [a, b, c] = [w.file(), w.file(), w.file()];
+        const link = await w.call("links.create", [a.id, b.id]);
+        const added = await w.call("links.update", link.url, { add: c.id, order: [c.id] });
+        expect(added).toMatchObject({ id: link.id, files: 3, file_ids: [c.id, a.id, b.id] });
+        const out = await w.call("links.update", link.id, { remove: [a.id], title: "friday" });
+        expect(out).toMatchObject({ files: 2, title: "friday", file_ids: [c.id, b.id] });
+        await expect(w.call("links.update", link.id, { remove: [b.id] })).rejects.toThrow(/revoke it instead/);
+        await expect(w.call("links.update", link.id, { add: w.file({ visibility: "private" }).id })).rejects.toThrow(/not public/);
+        await expect(w.call("links.update", link.id, { order: ["Nope000000000001"] })).rejects.toThrow(/not in the link/);
+        expect((await w.call("links.update", link.id, { title: "" })).title).toBeNull();
+    });
+});

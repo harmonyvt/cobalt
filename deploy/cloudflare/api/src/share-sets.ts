@@ -294,6 +294,103 @@ export async function revokeShareSet(d: ShareSetDeps, id: string): Promise<Studi
     }
 }
 
+// One live set as the list shows it (section 24.1, its private link 36, hidden files marked 37.2).
+export async function shapedSet(d: ShareSetDeps, s: SetRow): Promise<ReturnType<typeof setShape>> {
+    const ids = parseItems(s.items);
+    const rows = await rowsById(d.db, ids);
+    const link = (await liveLinksFor(d.db, "set", [s.id])).get(s.id) ?? null;
+    const hidden = new Set(await hiddenFileIds(d.db, ids));
+    const items = itemsFor(d, ids, rows, link).map((i) => (hidden.has(i.id) ? { ...i, hidden: true } : i));
+    return setShape(d, s, items, link);
+}
+
+// PATCH /share/sets/<id> (section 41): a new list of files (added, taken out, moved) and/or a new title, in one write.
+// `items` is the whole new list, 2..10 distinct ids. A file already in the link may stay whatever its state now (the
+// apps show it as "not shown"); an added file must be live, not hidden, and public now unless the link is private.
+// `expect`: the list the client last saw; when the stored list differs the answer is 409 error.share.changed with the
+// current set, so two devices never overwrite each other blindly. `title`: a string sets it, null or "" clears it
+// (the roast caption shows again), absent keeps it.
+export async function updateShareSet(d: ShareSetDeps, request: Request, id: string): Promise<StudioReply> {
+    let body: unknown;
+    try {
+        body = await request.json();
+    } catch {
+        return err(400, "error.share.bad_request");
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) return err(400, "error.share.bad_request");
+    const b = body as { items?: unknown; title?: unknown; expect?: unknown };
+    const idList = (v: unknown, min: number) =>
+        Array.isArray(v) &&
+        v.length >= min &&
+        v.length <= SHARE_SET_MAX &&
+        v.every((x) => typeof x === "string" && /^[A-Za-z0-9]{16}$/.test(x)) &&
+        new Set(v).size === v.length;
+    if (b.items !== undefined && !idList(b.items, SHARE_SET_MIN)) return err(400, "error.share.bad_request");
+    if (b.expect !== undefined && !idList(b.expect, 0)) return err(400, "error.share.bad_request");
+    const hasTitle = "title" in b;
+    const title = hasTitle ? cleanTitle(b.title) : undefined;
+    if (title === null) return err(400, "error.share.bad_request");
+    if (b.items === undefined && !hasTitle) return err(400, "error.share.bad_request");
+    try {
+        const set = await liveSetRow(d.db, id);
+        if (!set) return err(404, "error.share.not_found");
+        const before = parseItems(set.items);
+        if (b.expect !== undefined && (b.expect as string[]).join(",") !== before.join(",")) {
+            return err(409, "error.share.changed", { set: await shapedSet(d, set) });
+        }
+        const next = b.items === undefined ? before : (b.items as string[]);
+        const added = next.filter((x) => !before.includes(x));
+        const filesChanged = next.join(",") !== before.join(",");
+        let rows: Map<string, MediaRow> | null = null;
+        if (added.length > 0) {
+            // a hidden post's files never go into a link (section 37.2); a held one's wait ends here (37.3)
+            const hidden = await shareGate(d.db, added);
+            if (hidden.length > 0) return err(409, "error.hidden", { ids: hidden });
+            rows = await rowsById(d.db, next);
+            const isPrivate = await setIsPrivate(d.db, id);
+            const bad = added.filter((x) => {
+                const r = rows!.get(x);
+                return !r || (!isPrivate && publicUrlOf(r, d.mediaBaseUrl) === null);
+            });
+            if (bad.length > 0) return err(409, "error.share.not_public", { items: bad });
+        }
+        const newTitle = hasTitle ? (title ?? null) : set.title;
+        if (filesChanged || newTitle !== set.title) {
+            // only if nobody changed it since we read it (a second device, the chat): else the same 409 as `expect`
+            const res = await d.db
+                .prepare("UPDATE share_sets SET items = ?2, title = ?3 WHERE id = ?1 AND revoked_at IS NULL AND items = ?4")
+                .bind(id, JSON.stringify(next), newTitle, set.items)
+                .run();
+            if ((res.meta?.changes ?? 1) === 0) {
+                const now = await liveSetRow(d.db, id);
+                return now ? err(409, "error.share.changed", { set: await shapedSet(d, now) }) : err(404, "error.share.not_found");
+            }
+        }
+        const row: SetRow = { ...set, items: JSON.stringify(next), title: newTitle };
+        if (filesChanged && d.captioner) {
+            // the caption describes the files, so new files get a new one (a typed title still wins on the page)
+            rows ??= await rowsById(d.db, next);
+            const files = next
+                .map((x) => rows!.get(x))
+                .filter((r): r is MediaRow => !!r)
+                .map((r) => fileOf(r, publicUrlOf(r, d.mediaBaseUrl)));
+            if (files.length > 0) {
+                const wait = d.captionWaitMs ?? CAPTION_WAIT_MS;
+                await Promise.race([
+                    writeCaption({ db: d.db, captioner: d.captioner, now: d.now }, setSubject(id), { files, userTitle: newTitle }),
+                    new Promise((r) => setTimeout(r, wait)),
+                ]);
+            }
+        }
+        if (d.kickLoops && added.length > 0 && added.some((x) => (rows?.get(x)?.content_type ?? "").startsWith("video/"))) {
+            await d.kickLoops().catch(() => {});
+        }
+        return { status: 200, body: { status: "success", set: await shapedSet(d, row) } };
+    } catch {
+        return err(503, "error.api.generic");
+    }
+}
+
 // ---- the share host --------------------------------------------------------------------------------
 
 // `loop_url`: a video's moving preview (section 29), when it has one

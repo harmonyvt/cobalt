@@ -3,10 +3,11 @@ import SwiftUI
 /// The select panel's action row (library, bottom): one icon button per action, all the same capsule and height,
 /// each tinted for what it does. `link` is the main one (solid, the same ink as the `select` pill), `collection` is
 /// the collection amber, `edit` the editor violet, `share` the shared blue, `status` (`status…` and `unhide`,
-/// APP-API-CONTRACT 37.7) the plain ink on the elevated grey. A plain style on purpose: the glass styles drew some of
+/// APP-API-CONTRACT 37.7) the plain ink on the elevated grey, `addLink` (`add to link`, APP-API-CONTRACT 41.4) the focus
+/// blue. A plain style on purpose: the glass styles drew some of
 /// them as light slabs, some dark, and a `Menu` label not at all.
 struct SelectActionStyle: ButtonStyle {
-    enum Tone { case link, collection, edit, share, status }
+    enum Tone { case link, collection, edit, share, status, addLink }
 
     let tone: Tone
     @Environment(\.isEnabled) private var isEnabled
@@ -20,6 +21,7 @@ struct SelectActionStyle: ButtonStyle {
         case .edit: CobaltColor.collectionSet
         case .share: CobaltColor.linkBlue
         case .status: CobaltColor.text
+        case .addLink: CobaltColor.focus
         }
     }
 
@@ -30,6 +32,7 @@ struct SelectActionStyle: ButtonStyle {
         case .edit: CobaltColor.collectionSetBack
         case .share: CobaltColor.linkBlue.opacity(0.16)
         case .status: CobaltColor.elevated
+        case .addLink: CobaltColor.focus.opacity(0.14)
         }
     }
 

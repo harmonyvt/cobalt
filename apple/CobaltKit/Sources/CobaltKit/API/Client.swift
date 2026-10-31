@@ -157,6 +157,11 @@ public protocol CobaltClient: Sendable {
     /// uses `new_links`). Private: the files may be any live files, and the answer is already private. Defaulted below:
     /// nil and false fall back to `createShareSet(items:title:)`, true is `.unsupported`.
     func createShareSet(items: [String], title: String?, private isPrivate: Bool?) async throws -> ShareSet
+    /// `PATCH /share/sets/<id>` `{items?, title?, expect?}` (APP-API-CONTRACT 41.1; only when `features.share_set_edit`):
+    /// the whole new list of files (nil leaves it), the title kept, set or cleared, and the list last seen (nil sends
+    /// none). Answers the link as stored. Throws `ShareSetError` (`.changed(set)` when the list moved on, `.hidden(ids)`,
+    /// `.notPublic(ids)`, `.badRequest`, `.notFound`). Defaulted below (`.unsupported`) so older fakes compile.
+    func updateShareSet(id: String, items: [String]?, title: ShareSetTitleChange, expect: [String]?) async throws -> ShareSet
     // Private share links (APP-API-CONTRACT 36; keyed; only when `features.private_links`). Defaulted below
     // (`.unsupported`) so older fakes compile. All throw `PrivateLinkError` for the server's refusals.
     /// `GET /share/private`: every live private link, newest first, and `new_links`.
@@ -351,6 +356,9 @@ extension CobaltClient {
     public func createShareSet(items: [String], title: String?, private isPrivate: Bool?) async throws -> ShareSet {
         guard isPrivate != true else { throw PipelineFailure.unsupported }
         return try await createShareSet(items: items, title: title)
+    }
+    public func updateShareSet(id: String, items: [String]?, title: ShareSetTitleChange, expect: [String]?) async throws -> ShareSet {
+        throw PipelineFailure.unsupported
     }
     public func privateLinks() async throws -> PrivateLinkList { throw PipelineFailure.unsupported }
     public func enablePrivateLink(_ kind: PrivateLink.Kind, id: String) async throws -> PrivateLink { throw PipelineFailure.unsupported }
