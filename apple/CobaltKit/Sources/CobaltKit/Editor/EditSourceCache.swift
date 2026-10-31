@@ -178,7 +178,10 @@ public actor EditSourceCache {
         if (1...5).contains(ext.count), ext.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) { return ext }
         switch source.kind {
         case .gif: return "gif"
-        case .photo: return source.contentType?.lowercased().contains("png") == true ? "png" : "jpg"
+        case .photo:
+            let type = source.contentType?.lowercased() ?? ""
+            if type.contains("webp") { return "webp" }
+            return type.contains("png") ? "png" : "jpg"
         case .video, .unsupported: return source.contentType?.lowercased().contains("quicktime") == true ? "mov" : "mp4"
         }
     }
@@ -242,6 +245,10 @@ public actor EditSourceCache {
             return (.gif(frames: frames, delays: timeline.delays, display: PixelSize(w: frames[0].width, h: frames[0].height)), nil)
         case .photo:
             guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { throw EditError.other("source:\(source.id)") }
+            // an animated webp (a 7TV emote) or APNG loops like a GIF (APP-API-CONTRACT 39.2)
+            if CGImageSourceGetCount(src) > 1, let animated = animatedFrames(src) {
+                return (.gif(frames: animated.frames, delays: animated.delays, display: animated.display), nil)
+            }
             // the thumbnail call applies the EXIF orientation; the size cap is above any size the render uses
             let options: [CFString: Any] = [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -255,5 +262,34 @@ public actor EditSourceCache {
         case .unsupported:
             throw EditError.other("unsupported")
         }
+    }
+
+    /// The composed frames of an animated webp or APNG and how long each shows. A delay of 10 ms or less is 100 ms, as browsers
+    /// and the render (39.2) do. Nil when a frame cannot be read; at most 2000 frames, as the render.
+    static func animatedFrames(_ src: CGImageSource) -> (frames: [CGImage], delays: [Double], display: PixelSize)? {
+        let n = CGImageSourceGetCount(src)
+        guard n > 1, n <= 2_000 else { return nil }
+        var frames: [CGImage] = [], delays: [Double] = []
+        for i in 0..<n {
+            guard let image = CGImageSourceCreateImageAtIndex(src, i, nil) else { return nil }
+            let props = (CGImageSourceCopyPropertiesAtIndex(src, i, nil) as? [CFString: Any]) ?? [:]
+            frames.append(image)
+            delays.append(frameDelay(props))
+        }
+        return (frames, delays, PixelSize(w: frames[0].width, h: frames[0].height))
+    }
+
+    static func frameDelay(_ props: [CFString: Any]) -> Double {
+        let pairs: [(CFString, CFString, CFString)] = [
+            (kCGImagePropertyWebPDictionary, kCGImagePropertyWebPUnclampedDelayTime, kCGImagePropertyWebPDelayTime),
+            (kCGImagePropertyPNGDictionary, kCGImagePropertyAPNGUnclampedDelayTime, kCGImagePropertyAPNGDelayTime),
+            (kCGImagePropertyGIFDictionary, kCGImagePropertyGIFUnclampedDelayTime, kCGImagePropertyGIFDelayTime),
+        ]
+        for (dictKey, unclamped, clamped) in pairs {
+            guard let dict = props[dictKey] as? [CFString: Any] else { continue }
+            let raw = (dict[unclamped] as? NSNumber)?.doubleValue ?? (dict[clamped] as? NSNumber)?.doubleValue ?? 0
+            return raw <= 0.01 ? 0.1 : raw
+        }
+        return 0.1
     }
 }

@@ -6,8 +6,8 @@ import ImageIO
 
 // The preview composition (APP-API-CONTRACT 31.5, apple/CONTRACT-EDITOR.md 3.3): the same timeline the server renders with ffmpeg,
 // built for AVFoundation. Main clips go back to back on one video track and one audio track, each inserted from `in` to `out` and
-// scaled to exactly `frames_i / fps`; video overlays go on a second video track (and audio track) at `ostart / fps`; GIFs and
-// photos have no track (the compositor draws them). The picture is made by `EditCompositor` (Core Image), the sound by an audio
+// scaled to exactly `frames_i / fps`; video overlays go on one video track (and audio track) per overlay layer (39.1) at
+// `ostart / fps`; GIFs and photos have no track (the compositor draws them, layer by layer). The picture is made by `EditCompositor` (Core Image), the sound by an audio
 // mix, and `audioTimePitchAlgorithm = .spectral` keeps the pitch at any speed.
 
 /// A library file the composition can use, loaded on the device.
@@ -74,12 +74,13 @@ public enum EditComposition {
         let composition = AVMutableComposition()
         var mainVideo: AVMutableCompositionTrack?
         var mainAudio: AVMutableCompositionTrack?
-        var overlayVideo: AVMutableCompositionTrack?
-        var overlayAudio: AVMutableCompositionTrack?
+        // one pair per overlay layer: overlays of one layer never overlap, so they can share a track
+        var overlayVideo: [Int: AVMutableCompositionTrack] = [:]
+        var overlayAudio: [Int: AVMutableCompositionTrack] = [:]
         var mainInfo: [EditRenderPlan.MainClip] = []
         var overlayInfo: [EditRenderPlan.OverlayClip] = []
         var mainVolumes: [(at: CMTime, volume: Float)] = []
-        var overlayVolumes: [(at: CMTime, volume: Float)] = []
+        var overlayVolumes: [Int: [(at: CMTime, volume: Float)]] = [:]
 
         // main clips, back to back
         for (i, clip) in t.main.enumerated() {
@@ -132,9 +133,10 @@ public enum EditComposition {
                 display: display, orientation: EditRenderPlan.orientation(of: transform), trackID: videoTrack.trackID))
         }
 
-        // overlays: videos on a second track, gifs and photos drawn by the compositor
+        // overlays: videos on their layer's track, gifs and photos drawn by the compositor
         for (j, o) in t.overlay.enumerated() {
             guard let asset = assets[o.item] else { throw EditError.other("source:\(o.item)") }
+            let layer = min(max(0, o.track), EditValidation.maxOverlayTracks - 1)
             switch asset {
             case .video(let avAsset, let display, let hasAudio):
                 guard let sourceVideo = try await avAsset.loadTracks(withMediaType: .video).first else {
@@ -142,10 +144,11 @@ public enum EditComposition {
                 }
                 let videoRange = try await sourceVideo.load(.timeRange)
                 let transform = try await sourceVideo.load(.preferredTransform)
-                if overlayVideo == nil {
-                    overlayVideo = composition.addMutableTrack(withMediaType: .video, preferredTrackID: 3)
+                if overlayVideo[layer] == nil {
+                    overlayVideo[layer] = composition.addMutableTrack(
+                        withMediaType: .video, preferredTrackID: CMPersistentTrackID(3 + 2 * layer))
                 }
-                guard let videoTrack = overlayVideo else { throw EditError.other("source:\(o.item)") }
+                guard let videoTrack = overlayVideo[layer] else { throw EditError.other("source:\(o.item)") }
                 let clip = timing.overlay[j]
                 let at = CMTime(value: Int64(clip.start), timescale: fps)
                 let length = CMTime(value: Int64(clip.frames), timescale: fps)
@@ -154,22 +157,23 @@ public enum EditComposition {
                 if hasAudio, !o.muted, let key = EditPitchKey(overlay: o), let url = shifted[key] {
                     pitched = await shiftedTrack(url)
                 }
-                if let pitched {
-                    if overlayAudio == nil {
-                        overlayAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 4)
+                func audioTrack() -> AVMutableCompositionTrack? {
+                    if overlayAudio[layer] == nil {
+                        overlayAudio[layer] = composition.addMutableTrack(
+                            withMediaType: .audio, preferredTrackID: CMPersistentTrackID(4 + 2 * layer))
                     }
-                    if let audioTrack = overlayAudio {
+                    return overlayAudio[layer]
+                }
+                if let pitched {
+                    if let audioTrack = audioTrack() {
                         try insertPlain(into: audioTrack, from: pitched.track, sourceRange: pitched.range, in: 0, length: length, at: at)
-                        overlayVolumes.append((at, Float(o.volume)))
+                        overlayVolumes[layer, default: []].append((at, Float(o.volume)))
                     }
                 } else if hasAudio, !o.muted, let sourceAudio = try await avAsset.loadTracks(withMediaType: .audio).first {
                     let audioRange = try await sourceAudio.load(.timeRange)
-                    if overlayAudio == nil {
-                        overlayAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 4)
-                    }
-                    if let audioTrack = overlayAudio {
+                    if let audioTrack = audioTrack() {
                         try insertPlain(into: audioTrack, from: sourceAudio, sourceRange: audioRange, in: o.`in`, length: length, at: at)
-                        overlayVolumes.append((at, Float(o.volume)))
+                        overlayVolumes[layer, default: []].append((at, Float(o.volume)))
                     }
                 }
                 overlayInfo.append(EditRenderPlan.OverlayClip(
@@ -184,7 +188,7 @@ public enum EditComposition {
 
         let plan = EditRenderPlan(timeline: t, timing: timing, main: mainInfo, overlay: overlayInfo)
 
-        // the picture: one instruction per stretch with the same main clip and the same overlay
+        // the picture: one instruction per stretch with the same main clip and the same overlays
         let end = CMTimeMaximum(CMTime(value: Int64(timing.frames), timescale: fps), composition.duration)
         var breaks: Set<Int> = [0, timing.frames]
         for c in timing.main { breaks.insert(c.start) }
@@ -197,11 +201,13 @@ public enum EditComposition {
         for (n, a) in ordered.enumerated() where n + 1 < ordered.count {
             let b = ordered[n + 1]
             guard b > a, let (mainIndex, _) = timing.clip(atFrame: a) else { continue }
-            let overlayIndex = timing.overlay.firstIndex { a >= $0.start && a < $0.start + $0.frames }
+            let overlayIndices = timing.overlay.indices.filter {
+                a >= timing.overlay[$0].start && a < timing.overlay[$0].start + timing.overlay[$0].frames
+            }
             let from = CMTime(value: Int64(a), timescale: fps)
             let to = b == timing.frames ? end : CMTime(value: Int64(b), timescale: fps)
             instructions.append(EditInstruction(
-                timeRange: CMTimeRange(start: from, end: to), plan: plan, mainIndex: mainIndex, overlayIndex: overlayIndex))
+                timeRange: CMTimeRange(start: from, end: to), plan: plan, mainIndex: mainIndex, overlayIndices: overlayIndices))
         }
         guard !instructions.isEmpty else { throw EditError.other("empty") }
 
@@ -222,9 +228,9 @@ public enum EditComposition {
             for entry in mainVolumes { p.setVolume(entry.volume, at: entry.at) }
             parameters.append(p)
         }
-        if let track = overlayAudio {
+        for (layer, track) in overlayAudio.sorted(by: { $0.key < $1.key }) {
             let p = AVMutableAudioMixInputParameters(track: track)
-            for entry in overlayVolumes { p.setVolume(entry.volume, at: entry.at) }
+            for entry in overlayVolumes[layer] ?? [] { p.setVolume(entry.volume, at: entry.at) }
             parameters.append(p)
         }
         mix.inputParameters = parameters
@@ -334,7 +340,7 @@ final class EditRenderPlan: @unchecked Sendable {
     }
 }
 
-/// One stretch of the output with the same main clip and the same overlay: what `requiredSourceTrackIDs` and the compositor key on.
+/// One stretch of the output with the same main clip and the same overlays: what `requiredSourceTrackIDs` and the compositor key on.
 final class EditInstruction: NSObject, AVVideoCompositionInstructionProtocol, @unchecked Sendable {
     let timeRange: CMTimeRange
     let enablePostProcessing = false
@@ -345,16 +351,17 @@ final class EditInstruction: NSObject, AVVideoCompositionInstructionProtocol, @u
 
     let plan: EditRenderPlan
     let mainIndex: Int
-    let overlayIndex: Int?
+    /// The overlays up in this stretch (indices into the timeline's `overlay`), at most one per layer.
+    let overlayIndices: [Int]
 
-    init(timeRange: CMTimeRange, plan: EditRenderPlan, mainIndex: Int, overlayIndex: Int?) {
+    init(timeRange: CMTimeRange, plan: EditRenderPlan, mainIndex: Int, overlayIndices: [Int]) {
         self.timeRange = timeRange
         self.plan = plan
         self.mainIndex = mainIndex
-        self.overlayIndex = overlayIndex
+        self.overlayIndices = overlayIndices
         var ids: [NSValue] = [NSNumber(value: plan.main[mainIndex].trackID)]
-        if let overlayIndex, case .video(let trackID, _) = plan.overlay[overlayIndex].source {
-            ids.append(NSNumber(value: trackID))
+        for j in overlayIndices where j < plan.overlay.count {
+            if case .video(let trackID, _) = plan.overlay[j].source { ids.append(NSNumber(value: trackID)) }
         }
         self.requiredSourceTrackIDs = ids
         super.init()

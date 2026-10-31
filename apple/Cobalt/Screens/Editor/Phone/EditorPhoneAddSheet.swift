@@ -2,9 +2,10 @@
 import CobaltKit
 import SwiftUI
 
-/// The bin as a sheet (apple/CONTRACT-EDITOR.md 4.4): the library's files in a grid with `add` on each tile, a search field and
-/// `done`. For the main track (`+` on the timeline) it offers videos and appends the pick; for the overlay (the `overlay` tool)
-/// it offers videos, GIFs and photos and puts the pick on the overlay at the playhead.
+/// The bin as a sheet (apple/CONTRACT-EDITOR.md 4.4, 12): the library's files in a grid with `add` on each tile, a search field
+/// and `done`. For the main track (`+` on the timeline) it offers videos and appends the pick; for the overlay (the `overlay`
+/// tool) it offers videos, images (photos, gifs, webps, cutouts) and 7TV emotes on three shelves and puts the pick at the
+/// playhead on the lowest free layer. A picture's menu has `remove background`.
 struct EditorPhoneAddSheet: View {
     let model: AppModel
     let session: EditSession
@@ -16,9 +17,16 @@ struct EditorPhoneAddSheet: View {
     @State private var query = ""
     @State private var added: Set<String> = []
     @State private var addedTick = 0
+    @State private var shelf: EditorBinEntry.Shelf = .images
+    @State private var cutoutOf: EditSource?
+
+    /// Shelves show once the server takes webps and layers; before that the overlay takes everything in one grid.
+    private var hasShelves: Bool { mode == .overlay && session.overlayTrackLimit > 1 }
 
     private var shown: [EditorBinEntry] {
-        let wanted = entries.filter { mode == .overlay || $0.source.kind == .video }
+        let wanted = entries.filter {
+            mode == .main ? $0.source.kind == .video : (!hasShelves || $0.shelf == shelf)
+        }
         let folded = query.trimmingCharacters(in: .whitespacesAndNewlines)
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
         guard !folded.isEmpty else { return wanted }
@@ -31,6 +39,7 @@ struct EditorPhoneAddSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
+            if hasShelves { shelfPicker }
             searchField
             content
         }
@@ -40,6 +49,20 @@ struct EditorPhoneAddSheet: View {
         .task(id: model.library.posts.map(\.id)) { entries = EditorBinEntry.entries(model) }
         .task { if model.library.posts.isEmpty { await model.library.refresh() } }
         .modifier(EditorPhoneAddedHaptic(tick: addedTick))
+        .sheet(item: $cutoutOf) { picture in
+            EditorCutoutSheet(session: session, source: picture, made: { dismiss() }) { cutoutOf = nil }
+                .presentationDetents([.large])
+        }
+    }
+
+    private var shelfPicker: some View {
+        Picker(Copy.Editor.addOverlay, selection: $shelf) {
+            Text(Copy.Editor.shelfVideos).tag(EditorBinEntry.Shelf.videos)
+            Text(Copy.Editor.shelfImages).tag(EditorBinEntry.Shelf.images)
+            Text(Copy.Editor.shelfEmotes).tag(EditorBinEntry.Shelf.emotes)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
     }
 
     private var header: some View {
@@ -74,7 +97,7 @@ struct EditorPhoneAddSheet: View {
     @ViewBuilder
     private var content: some View {
         if shown.isEmpty {
-            Text(Copy.Editor.binEmpty)
+            Text(hasShelves && shelf == .emotes ? Copy.Editor.emotesEmpty : Copy.Editor.binEmpty)
                 .font(CobaltType.captionSmall)
                 .foregroundStyle(CobaltColor.caption)
                 .padding(.top, 8)
@@ -84,6 +107,13 @@ struct EditorPhoneAddSheet: View {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                     ForEach(shown) { entry in
                         EditorPhoneAddTile(entry: entry, isAdded: added.contains(entry.id)) { add(entry) }
+                            .contextMenu {
+                                if mode == .overlay, session.canCutout, entry.canCutout {
+                                    Button { cutoutOf = entry.source } label: {
+                                        Label(Copy.Editor.removeBackground, systemImage: Symbol.Editor.cutout)
+                                    }
+                                }
+                            }
                     }
                     if model.library.hasMore, query.isEmpty {
                         Color.clear.frame(height: 1)
@@ -111,7 +141,7 @@ struct EditorPhoneAddSheet: View {
             if session.addOverlay(entry.source, atFrame: nil) {
                 dismiss()
             } else {
-                host.show(Copy.Editor.dropIntoOverlayRefused)
+                host.show(session.overlayTrackLimit > 1 ? Copy.Editor.allLayersBusy : Copy.Editor.dropIntoOverlayRefused)
             }
         case .unsupported:
             host.show(Copy.Editor.cantEdit)
@@ -151,6 +181,7 @@ private struct EditorPhoneAddTile: View {
 
     private var kindText: String {
         if !entry.isEditable { return Copy.Editor.cantEditBadge }
+        if entry.isEmote { return Copy.Editor.badgeEmote }
         switch entry.source.kind {
         case .video: return entry.source.duration.map(Copy.Editor.clock) ?? ""
         case .gif: return Copy.Editor.badgeGif

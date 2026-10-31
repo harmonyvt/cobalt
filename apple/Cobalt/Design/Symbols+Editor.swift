@@ -38,6 +38,11 @@ extension Symbol {
         static let photo = "photo"
         static let video = "film"
         static let retry = "arrow.clockwise"
+        static let cutout = "wand.and.stars"                         // remove background
+        static let layers = "square.3.layers.3d"
+        static let layerUp = "arrow.up.square"
+        static let layerDown = "arrow.down.square"
+        static let emote = "face.smiling"
         static let close = "xmark"
         static let more = "ellipsis.circle"
     }

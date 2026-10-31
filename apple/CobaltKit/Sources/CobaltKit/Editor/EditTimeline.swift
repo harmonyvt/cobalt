@@ -5,7 +5,7 @@ import Foundation
 // and reads exactly the server's canonical form: numbers rounded as 31.2 says, keys sorted, no whitespace, `crop` left out when
 // absent. `EditJSON.encode(EditJSON.decode(bytes)) == bytes` for any canonical document.
 
-/// One timeline: a main track of video clips, one overlay track.
+/// One timeline: a main track of video clips, overlays on up to 8 layers above it (APP-API-CONTRACT 39.1).
 public struct EditTimeline: Sendable, Equatable, Codable {
     public var version: Int                     // 1
     public var canvas: EditCanvas
@@ -191,7 +191,7 @@ public struct EditCrop: Sendable, Equatable, Codable {
 
 public enum EditFit: String, Sendable, Codable, CaseIterable { case fill, fit }
 
-/// A video, GIF or photo drawn over the main track.
+/// A video, GIF or photo (a webp, a 7TV emote, a cutout) drawn over the main track, on one of the overlay layers.
 public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
     public var id: String, item: String
     public var at: Double                       // output seconds
@@ -202,10 +202,13 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
     public var muted: Bool                      // true by default
     /// Semitones, -12...12 in steps of 0.5 (31.16); a gif or photo has no sound and ignores it. Left out of the JSON at 0.
     public var pitch: Double = 0
+    /// The layer, 0...7 (APP-API-CONTRACT 39.1): a higher layer is drawn on top; overlays on one layer never overlap. 0 is left
+    /// out of the JSON, so a one-layer timeline keeps its bytes.
+    public var track: Int = 0
 
     public init(
         id: String, item: String, at: Double, in inPoint: Double, out: Double, frame: EditFrame, opacity: Double = 1,
-        volume: Double = 1, muted: Bool = true, pitch: Double = 0
+        volume: Double = 1, muted: Bool = true, pitch: Double = 0, track: Int = 0
     ) {
         self.id = id
         self.item = item
@@ -217,6 +220,7 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
         self.volume = volume
         self.muted = muted
         self.pitch = pitch
+        self.track = track
     }
 
     /// 31.2: video `0` and min(duration, the rest of the timeline); a gif or photo `0` and 3 s (held to the rest of the
@@ -237,7 +241,7 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
     /// How long it is up, in output seconds.
     public var length: Double { out - `in` }
 
-    private enum CodingKeys: String, CodingKey { case id, item, at, `in`, out, frame, opacity, volume, muted, pitch }
+    private enum CodingKeys: String, CodingKey { case id, item, at, `in`, out, frame, opacity, volume, muted, pitch, track }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -251,6 +255,7 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
         volume = try c.decode(Double.self, forKey: .volume)
         muted = try c.decode(Bool.self, forKey: .muted)
         pitch = try c.decodeIfPresent(Double.self, forKey: .pitch) ?? 0
+        track = try c.decodeIfPresent(Int.self, forKey: .track) ?? 0
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -265,7 +270,21 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
         try c.encode(volume, forKey: .volume)
         try c.encode(muted, forKey: .muted)
         if pitch != 0 { try c.encode(pitch, forKey: .pitch) }
+        if track != 0 { try c.encode(track, forKey: .track) }
     }
+}
+
+extension EditTimeline {
+    /// The order overlays are drawn in (APP-API-CONTRACT 39.1, the server's `overlayDrawOrder`): layer ascending, then their
+    /// order in `overlay`. Indices into `overlay`.
+    public var overlayDrawOrder: [Int] {
+        overlay.indices.sorted { a, b in
+            overlay[a].track != overlay[b].track ? overlay[a].track < overlay[b].track : a < b
+        }
+    }
+
+    /// The layers in use, ascending.
+    public var overlayTracks: [Int] { Array(Set(overlay.map(\.track))).sorted() }
 }
 
 /// An overlay's rectangle as fractions of the canvas: `x`, `y` the top-left corner, `w` the width. The height follows the
@@ -345,6 +364,14 @@ public enum EditJSON {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(rounded(t))
+    }
+
+    /// The timeline with every overlay on layer 0: what goes to a server that does not know layers
+    /// (`limits.edit_overlay_tracks` 1). Only safe when no two overlays overlap; `EditSession` keeps it so on such a server.
+    public static func withoutTracks(_ t: EditTimeline) -> EditTimeline {
+        var out = t
+        for i in out.overlay.indices { out.overlay[i].track = 0 }
+        return out
     }
 
     /// The timeline with every pitch at 0: what goes to a server that does not know pitch (`limits.edit_pitch` false).

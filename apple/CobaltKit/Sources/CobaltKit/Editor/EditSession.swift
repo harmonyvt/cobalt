@@ -368,15 +368,22 @@ public final class EditSession {
 
     // MARK: - Overlay
 
-    /// Puts a video, gif or photo on the overlay track at frame `k` (nil = the playhead). Refuses (false) when `k` is inside
-    /// another overlay or less than 0.1 s of room is left; a longer one is cut at the next overlay.
+    /// The overlay layers this server takes (`limits.edit_overlay_tracks`, APP-API-CONTRACT 39.1): 1 on an older server.
+    public var overlayTrackLimit: Int {
+        min(EditValidation.maxOverlayTracks, max(1, ctx.capabilities.limits.editOverlayTracks))
+    }
+
+    /// Puts a video, gif or photo (a webp, an emote, a cutout) over the main track at frame `k` (nil = the playhead), on layer
+    /// `track` (nil = the lowest layer with room there). Refuses (false) when `k` is inside another overlay of that layer (of
+    /// every layer, when `track` is nil) or less than 0.1 s of room is left; a longer one is cut at the next overlay of its
+    /// layer.
     ///
     /// A video whose length is not known is fetched and measured first (as `add`): true means it goes on once it is read (at
     /// that frame, if there is still room then).
     @discardableResult
-    public func addOverlay(_ file: EditSource, atFrame k: Int?) -> Bool {
+    public func addOverlay(_ file: EditSource, atFrame k: Int?, track: Int? = nil) -> Bool {
         let known = withMeasured(file)
-        guard let spot = overlayRoom(for: known, atFrame: k) else { return false }
+        guard let spot = overlayRoom(for: known, atFrame: k, track: track) else { return false }
         let start = spot.start
         if known.kind == .video, known.duration == nil {
             guard let task = measureLoad(known) else { return false }
@@ -385,34 +392,40 @@ public final class EditSession {
                 guard let self, !self.isClosed else { return }
                 let measured = self.withMeasured(known)
                 guard (measured.duration ?? 0) >= Self.minSeconds else { return }
-                _ = self.placeOverlay(measured, atFrame: start)
+                _ = self.placeOverlay(measured, atFrame: start, track: track)
             }
             return true
         }
-        return placeOverlay(known, atFrame: start)
+        return placeOverlay(known, atFrame: start, track: spot.track)
     }
 
-    /// Where an overlay put at `k` (nil = the playhead) would start, and the frames it has; nil when it cannot go there.
-    private func overlayRoom(for file: EditSource, atFrame k: Int?) -> (start: Int, room: Int)? {
+    /// Where an overlay put at `k` (nil = the playhead) on layer `track` (nil = the lowest one with room) would start, the frames
+    /// it has and its layer; nil when it cannot go there.
+    func overlayRoom(for file: EditSource, atFrame k: Int?, track: Int? = nil) -> (start: Int, room: Int, track: Int)? {
         guard file.available, file.kind != .unsupported, timeline.main.count + timeline.overlay.count < EditValidation.maxClips,
               timing.frames > 0 else { return nil }
         let start = min(max(0, k ?? playhead), timing.frames - 1)
-        var room = timing.frames - start
-        for o in timing.overlay {
-            if start >= o.start, start < o.start + o.frames { return nil }
-            if o.start > start { room = min(room, o.start - start) }
+        let layers = track.map { [$0] } ?? Array(0..<overlayTrackLimit)
+        for layer in layers where (0..<overlayTrackLimit).contains(layer) {
+            var room = timing.frames - start
+            var blocked = false
+            for (j, o) in timing.overlay.enumerated() where j < timeline.overlay.count && timeline.overlay[j].track == layer {
+                if start >= o.start, start < o.start + o.frames { blocked = true; break }
+                if o.start > start { room = min(room, o.start - start) }
+            }
+            if !blocked, room >= Self.minFrames(fps: timing.fps) { return (start, room, layer) }
         }
-        guard room >= Self.minFrames(fps: timing.fps) else { return nil }
-        return (start, room)
+        return nil
     }
 
-    private func placeOverlay(_ file: EditSource, atFrame k: Int) -> Bool {
-        guard let spot = overlayRoom(for: file, atFrame: k) else { return false }
+    private func placeOverlay(_ file: EditSource, atFrame k: Int, track: Int?) -> Bool {
+        guard let spot = overlayRoom(for: file, atFrame: k, track: track) else { return false }
         let start = spot.start, room = spot.room
         sources[file.id] = file
         var overlay = EditOverlay.added(
             item: file.id, kind: file.kind, duration: file.duration, at: timing.time(ofFrame: start),
             remaining: Double(room) / Double(timing.fps))
+        overlay.track = spot.track
         if let display = file.display {
             overlay.frame = EditGeometry.clampInside(overlay.frame, display: display, canvas: timeline.canvas)
         }
@@ -422,20 +435,65 @@ public final class EditSession {
         return true
     }
 
-    /// Moves the overlay's start to output frame `k`, between its neighbours and the end.
-    public func moveOverlay(id: String, toFrame k: Int) {
+    /// The free stretch around frame `anchor` on layer `track`, leaving out overlay `i`: from the end of the overlay before it
+    /// (one that covers `anchor` counts as before) to the start of the next one (or the end of the timeline).
+    static func layerGap(_ t: EditTimeline, timing: EditTiming, excluding i: Int, track: Int, anchor: Int) -> (from: Int, to: Int) {
+        var from = 0, to = timing.frames
+        for (j, o) in timing.overlay.enumerated() where j != i && j < t.overlay.count && t.overlay[j].track == track {
+            if o.start <= anchor { from = max(from, o.start + o.frames) } else { to = min(to, o.start) }
+        }
+        return (from, to)
+    }
+
+    /// Moves the overlay's start to output frame `k` (and to layer `track`, nil = its own), between the overlays next to it on
+    /// that layer and the end. On its own layer it never jumps over a neighbour; on another layer it goes in the gap at `k`.
+    /// False when it does not fit there (nothing changes).
+    @discardableResult
+    public func moveOverlay(id: String, toFrame k: Int, track: Int? = nil) -> Bool {
+        if let track, !(0..<overlayTrackLimit).contains(track) { return false }
+        var moved = false
         commit(key: "move:\(id)") { t in
             guard let i = t.overlay.firstIndex(where: { $0.id == id }) else { return }
             let timing = EditTiming(t)
             guard i < timing.overlay.count else { return }
             let me = timing.overlay[i]
-            let previousEnd = i > 0 ? timing.overlay[i - 1].start + timing.overlay[i - 1].frames : 0
-            let nextStart = i + 1 < timing.overlay.count ? timing.overlay[i + 1].start : timing.frames
-            let latest = nextStart - me.frames
-            guard latest >= previousEnd else { return }
-            let start = min(max(k, previousEnd), latest)
+            let layer = track ?? t.overlay[i].track
+            let anchor = layer == t.overlay[i].track ? me.start : min(max(0, k), max(0, timing.frames - 1))
+            let gap = Self.layerGap(t, timing: timing, excluding: i, track: layer, anchor: anchor)
+            let latest = gap.to - me.frames
+            guard latest >= gap.from else { return }
+            let start = min(max(k, gap.from), latest)
             t.overlay[i].at = Double(start) / Double(timing.fps)
+            t.overlay[i].track = layer
+            moved = true
         }
+        return moved
+    }
+
+    /// Swaps the picture an overlay shows (its cutout, 39.3): the same place, width, time and layer; the height follows the new
+    /// picture. Only a gif or photo overlay, and only for a gif or photo.
+    public func setOverlayItem(id: String, _ file: EditSource) {
+        guard file.kind == .photo || file.kind == .gif else { return }
+        sources[file.id] = file
+        commit(key: nil) { t in
+            guard let i = t.overlay.firstIndex(where: { $0.id == id }),
+                  let kind = self.sources[t.overlay[i].item]?.kind, kind == .photo || kind == .gif else { return }
+            t.overlay[i].item = file.id
+            if let display = file.display {
+                t.overlay[i].frame = EditGeometry.clampInside(t.overlay[i].frame, display: display, canvas: t.canvas)
+            }
+        }
+    }
+
+    /// Puts the overlay on layer `track` at the same time. False when that layer is busy then.
+    @discardableResult
+    public func setOverlayTrack(id: String, _ track: Int) -> Bool {
+        guard let i = timeline.overlay.firstIndex(where: { $0.id == id }), i < timing.overlay.count else { return false }
+        if timeline.overlay[i].track == track { return true }
+        let me = timing.overlay[i]
+        let gap = Self.layerGap(timeline, timing: timing, excluding: i, track: track, anchor: me.start)
+        guard gap.from <= me.start, gap.to >= me.start + me.frames else { return false }
+        return moveOverlay(id: id, toFrame: me.start, track: track)
     }
 
     /// How long it stays up, 0.1 s to the room it has (the next overlay, the end, the file's own length for a video).
@@ -445,7 +503,7 @@ public final class EditSession {
             let timing = EditTiming(t)
             guard i < timing.overlay.count else { return }
             let me = timing.overlay[i]
-            let nextStart = i + 1 < timing.overlay.count ? timing.overlay[i + 1].start : timing.frames
+            let nextStart = Self.layerGap(t, timing: timing, excluding: i, track: t.overlay[i].track, anchor: me.start).to
             var most = Double(nextStart - me.start) / Double(timing.fps)
             let source = self.sources[t.overlay[i].item]
             if source?.kind == .video, let duration = source?.duration { most = min(most, duration - t.overlay[i].`in`) }
@@ -462,7 +520,7 @@ public final class EditSession {
             let timing = EditTiming(t)
             guard i < timing.overlay.count else { return }
             let me = timing.overlay[i]
-            let nextStart = i + 1 < timing.overlay.count ? timing.overlay[i + 1].start : timing.frames
+            let nextStart = Self.layerGap(t, timing: timing, excluding: i, track: t.overlay[i].track, anchor: me.start).to
             let room = Double(nextStart - me.start) / Double(timing.fps)
             var (inP, outP) = Self.clampTrim(
                 in: t.overlay[i].`in`, out: t.overlay[i].out, minSpan: Self.minSeconds, newIn: newIn, newOut: newOut,
@@ -502,6 +560,71 @@ public final class EditSession {
     public func setOverlayPitch(_ semitones: Double, overlay id: String) {
         guard ctx.capabilities.limits.editPitch else { return }
         editOverlay(id, key: "opitch:\(id)") { $0.pitch = Self.clampPitch(semitones) }
+    }
+
+    // MARK: - Cutouts (APP-API-CONTRACT 39.3)
+
+    /// The server takes cutouts (`features.cutout`) and the client can send them.
+    public var canCutout: Bool { ctx.capabilities.cutout && ctx.client is any CutoutClient }
+
+    /// The server can make a cutout itself (`features.cutout_auto`): the way when the picture cannot be read on the device.
+    public func canServerCutout(mode: CutoutMode) -> Bool { canCutout && ctx.capabilities.cutoutAuto }
+
+    /// The picture of a library file (a photo, or the first frame of a gif or animated webp), for the cutout sheet.
+    public func picture(for source: EditSource) async throws -> CGImage {
+        switch try await cache.asset(for: source) {
+        case .photo(let image, _): return image
+        case .gif(let frames, _, _):
+            guard let first = frames.first else { throw CutoutError.failed }
+            return first
+        case .video: throw CutoutError.notImage
+        }
+    }
+
+    /// Makes the cutout of `source` (a new private PNG in the library) and, with `place`, puts it over the main track at the
+    /// playhead on the lowest free layer. Made on the device first (Vision for `auto`, the flood fill for white and colour) and
+    /// uploaded; when the device cannot (the picture is not here, Vision finds no subject) and the server can
+    /// (`features.cutout_auto`), the server makes it. A white or colour cutout with nothing left throws `.empty` at once.
+    /// `replacing`: an overlay that shows `source` now shows the cutout instead (nothing new is placed).
+    @discardableResult
+    public func makeCutout(
+        of source: EditSource, options: CutoutMaker.Options, place: Bool = true, replacing overlayID: String? = nil
+    ) async throws -> EditSource {
+        guard ctx.capabilities.cutout, let client = ctx.client as? any CutoutClient else { throw CutoutError.off }
+        var png: Data?
+        do {
+            let picture = CutoutBox(try await picture(for: source))
+            png = try await Task.detached(priority: .userInitiated) {
+                let image = try CutoutMaker.make(picture.image, options)
+                guard let data = CutoutMaker.png(image) else { throw CutoutError.failed }
+                return data
+            }.value
+        } catch let e as CutoutError where e == .empty && options.mode != .auto {
+            throw e
+        } catch {
+            png = nil
+        }
+        let result: CutoutResult
+        if let png {
+            result = try await client.uploadCutout(of: source.id, png: png, mode: options.mode, title: nil)
+        } else if ctx.capabilities.cutoutAuto {
+            let spec = CutoutSpec(
+                mode: options.mode, color: options.mode == .color ? CutoutMaker.hex(options.key) : nil,
+                tolerance: options.tolerance, edgesOnly: options.edgesOnly, soften: options.soften, trim: options.trim)
+            result = try await client.makeCutout(of: source.id, spec: spec)
+        } else {
+            throw CutoutError.failed
+        }
+        var made = result.source
+        made.posterURL = nil
+        sources[made.id] = made
+        if isClosed { return made }
+        if let overlayID, timeline.overlay.contains(where: { $0.id == overlayID }) {
+            setOverlayItem(id: overlayID, made)
+        } else if place {
+            addOverlay(made, atFrame: nil)
+        }
+        return made
     }
 
     // MARK: - Canvas, title
@@ -656,17 +779,20 @@ public final class EditSession {
 
     static func minFrames(fps: Int) -> Int { max(1, Int((Self.minSeconds * Double(fps) - 1e-9).rounded(.up))) }
 
-    /// Rounded, and with the overlays made safe: sorted, inside the canvas, never overlapping (in frames), inside the main track.
-    /// An overlay with under 0.1 s of room is dropped.
+    /// Rounded, and with the overlays made safe: sorted by start (ties keep their order), on a known layer, inside the canvas,
+    /// never overlapping another of their layer (in frames), inside the main track. An overlay with under 0.1 s of room is dropped.
     private func normalized(_ input: EditTimeline) -> EditTimeline {
         var t = EditJSON.rounded(input)
         let fps = Double(max(1, t.canvas.fps))
         let total = EditTiming(t).frames
         let minFrames = Self.minFrames(fps: t.canvas.fps)
-        t.overlay.sort { $0.at < $1.at }
+        t.overlay = t.overlay.enumerated()
+            .sorted { $0.element.at != $1.element.at ? $0.element.at < $1.element.at : $0.offset < $1.offset }
+            .map(\.element)
         var kept: [EditOverlay] = []
-        var previousEnd = 0
+        var previousEnd = [Int](repeating: 0, count: EditValidation.maxOverlayTracks)
         for var o in t.overlay {
+            o.track = min(max(0, o.track), EditValidation.maxOverlayTracks - 1)
             if let display = sources[o.item]?.display, display.w > 0, display.h > 0 {
                 o.frame = EditGeometry.clampInside(o.frame, display: display, canvas: t.canvas)
             } else {
@@ -674,13 +800,13 @@ public final class EditSession {
             }
             let wantedStart = EditMath.roundHalfUp(o.at * fps)
             let wantedFrames = max(1, EditMath.roundHalfUp((o.out - o.`in`) * fps))
-            let start = max(previousEnd, max(0, wantedStart))
+            let start = max(previousEnd[o.track], max(0, wantedStart))
             var frames = wantedFrames
             if start + frames > total { frames = total - start }
             guard frames >= minFrames else { continue }
             if start != wantedStart { o.at = Double(start) / fps }
             if frames != wantedFrames { o.out = o.`in` + Double(frames) / fps }
-            previousEnd = start + frames
+            previousEnd[o.track] = start + frames
             kept.append(o)
         }
         t.overlay = kept
@@ -1160,4 +1286,10 @@ public final class EditSession {
         player.replaceCurrentItem(with: nil)
         Task { [cache] in await cache.cancelAll() }
     }
+}
+
+/// Carries a decoded picture to the cutout's background task.
+private final class CutoutBox: @unchecked Sendable {
+    let image: CGImage
+    init(_ image: CGImage) { self.image = image }
 }

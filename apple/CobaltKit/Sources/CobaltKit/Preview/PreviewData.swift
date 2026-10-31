@@ -128,6 +128,9 @@ enum PreviewData {
         if scenario.hasEditor && caps.kind == .fork {
             caps.editor = true
             caps.limits.editPitch = true
+            caps.limits.editOverlayTracks = 8
+            caps.cutout = true
+            caps.cutoutAuto = true
         }
         if scenario == .skyMap && caps.kind == .fork {
             caps.search = true

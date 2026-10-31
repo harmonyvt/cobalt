@@ -12,6 +12,7 @@ struct EditorPhoneOverlaySheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var original: EditOverlay?
     @State private var overlayID: String
+    @State private var cutoutOf: EditSource?
 
     init(session: EditSession, pitchEnabled: Bool = true) {
         self.session = session
@@ -29,6 +30,9 @@ struct EditorPhoneOverlaySheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     if let overlay {
+                        EditorOverlayLayerRows(session: session, overlay: overlay) {
+                            cutoutOf = session.source(for: overlay.item)
+                        }
                         lengthSection(overlay)
                         sizeSection(overlay)
                         opacitySection(overlay)
@@ -47,6 +51,10 @@ struct EditorPhoneOverlaySheet: View {
             .scrollIndicators(.hidden)
         }
         .background(CobaltColor.surface.ignoresSafeArea())
+        .sheet(item: $cutoutOf) { picture in
+            EditorCutoutSheet(session: session, source: picture, replacing: overlayID) { cutoutOf = nil }
+                .presentationDetents([.large])
+        }
     }
 
     // MARK: header
@@ -77,6 +85,7 @@ struct EditorPhoneOverlaySheet: View {
         if now.volume != original.volume { session.setOverlayVolume(id: original.id, original.volume) }
         if now.pitch != original.pitch { session.setOverlayPitch(original.pitch, overlay: original.id) }
         if now.muted != original.muted { session.setOverlayMuted(id: original.id, original.muted) }
+        if now.track != original.track { session.setOverlayTrack(id: original.id, original.track) }
         session.endGesture()
     }
 

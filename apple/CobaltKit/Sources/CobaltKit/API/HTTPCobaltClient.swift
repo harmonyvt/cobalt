@@ -212,6 +212,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var about: Bool?
                 var aboutSound: Bool?
                 var hidden: Bool?
+                var cutout: Bool?
+                var cutoutAuto: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -222,6 +224,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var editMaxSeconds: Double?; var editMaxClips: Int?; var editMaxProjects: Int?
                 var editPitch: Bool?
                 var statusIds: Int?
+                var editOverlayTracks: Int?
             }
             var server: String?
             var cobalt: Cobalt?
@@ -252,6 +255,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
             limits.editMaxProjects = l.editMaxProjects ?? limits.editMaxProjects
             limits.editPitch = l.editPitch ?? limits.editPitch
             limits.statusIds = min(200, max(1, l.statusIds ?? limits.statusIds))
+            limits.editOverlayTracks = min(EditValidation.maxOverlayTracks, max(1, l.editOverlayTracks ?? limits.editOverlayTracks))
         }
         let f = w.features
         var caps = Capabilities(
@@ -298,6 +302,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.about = (f?.about ?? false) && caps.search
         caps.aboutSound = (f?.aboutSound ?? false) && caps.about
         caps.hidden = f?.hidden ?? false
+        caps.cutout = f?.cutout ?? false
+        caps.cutoutAuto = (f?.cutoutAuto ?? false) && caps.cutout
         return caps
     }
 
