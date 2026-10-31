@@ -450,9 +450,7 @@ private struct LibraryContent: View {
         #endif
         ToolbarItemGroup(placement: .primaryAction) {
             // select lives in the pill at the bottom (`LibrarySelectPill`), not here
-            LibrarySortMenu(
-                library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery,
-                openNames: model.capabilities.names ? showNames : nil)
+            LibrarySortMenu(library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery)
             #if os(macOS)
             Button(Copy.Library2.refresh, systemImage: Symbol.Library.refresh) { Task { await controller.refresh() } }
                 .labelStyle(.iconOnly)
@@ -462,12 +460,15 @@ private struct LibraryContent: View {
             #if os(iOS)
             // the iPhone's bar is full: paste and file share one "more" menu there
             if tier == .compact {
-                LibraryAddMenu(showsFile: model.capabilities.showsFileButton)
+                // names (APP-API-CONTRACT 48.6) live in this "more" menu on iPhone
+                LibraryAddMenu(showsFile: model.capabilities.showsFileButton, openNames: model.capabilities.names ? showNames : nil)
             } else {
                 PasteFileButtons(showsFile: model.capabilities.showsFileButton)
+                if model.capabilities.names { LibraryNamesButton(open: showNames) }
             }
             #else
             PasteFileButtons(showsFile: model.capabilities.showsFileButton)
+            if model.capabilities.names { LibraryNamesButton(open: showNames) }
             #endif
             if tier != .compact {
                 Button(Copy.Library2.toggleDetail, systemImage: Symbol.Library.inspector) {
@@ -947,6 +948,8 @@ private struct SharePrepLine: View {
 /// actions as `PasteFileButtons`, folded into one item so the bar fits.
 private struct LibraryAddMenu: View {
     let showsFile: Bool
+    /// Opens library › names; nil on a server without `features.names`.
+    var openNames: (@MainActor () -> Void)?
     @Environment(\.shell) private var shell
 
     var body: some View {
@@ -956,6 +959,11 @@ private struct LibraryAddMenu: View {
                 Button(Copy.sourcePhotos, systemImage: Symbol.sourcePhotos) { shell.choosePhotos() }
                 Button(Copy.sourceFiles, systemImage: Symbol.sourceFiles) { shell.chooseFile() }
             }
+            if let openNames {
+                Section {
+                    Button(Copy.Names.menuItem, systemImage: Symbol.Names.menu, action: openNames)
+                }
+            }
         } label: {
             Label(Copy.Media.more, systemImage: Symbol.Library.more).labelStyle(.iconOnly)
         }
@@ -964,6 +972,17 @@ private struct LibraryAddMenu: View {
     }
 }
 #endif
+
+/// library › names (APP-API-CONTRACT 48.6) as its own toolbar button where the bar has room (iPad, Mac).
+private struct LibraryNamesButton: View {
+    let open: @MainActor () -> Void
+
+    var body: some View {
+        Button(Copy.Names.menuItem, systemImage: Symbol.Names.menu, action: open)
+            .labelStyle(.iconOnly)
+            .help(Copy.Names.menuItem)
+    }
+}
 
 /// What a shift-click range runs through: the posts on screen, in order. Its own modifier: the screen's chain is
 /// already at the type-checker's limit on iOS.

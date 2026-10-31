@@ -8,7 +8,7 @@ extension Copy {
     enum Names {
         // MARK: the library's menu
 
-        static let menuItem = "names"
+        static let menuItem = "search names"
 
         // MARK: the list
 
