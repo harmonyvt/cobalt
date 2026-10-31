@@ -652,6 +652,39 @@ public final class EditSession {
         return made
     }
 
+    // MARK: - Cropping pictures (APP-API-CONTRACT 44, apple/CONTRACT-EDITOR.md 13)
+
+    /// The server takes crops (`features.image_crop`) and the client can send them.
+    public var canCropImage: Bool { ctx.capabilities.imageCrop && ctx.client is any ImageCropClient }
+
+    /// The server can make the crop of `source` itself: the way when the picture cannot be read or made on the device.
+    public func canServerCrop(_ source: EditSource, cutout: Bool) -> Bool {
+        canCropImage && ctx.capabilities.canServerCropImage(contentType: source.contentType, cutout: cutout)
+    }
+
+    /// Makes the crop of `source` (a new private PNG in the library) from `picture` (the stored picture at full size, from
+    /// `picture(for:)`; nil asks the server) and, with `place`, puts it over the main track at the playhead on the lowest
+    /// free layer. `replacing`: an overlay that shows `source` now shows the crop instead (same place, width, time and layer;
+    /// nothing new is placed).
+    @discardableResult
+    public func makeImageCrop(
+        of source: EditSource, picture: CGImage?, spec: ImageCropSpec, place: Bool = true, replacing overlayID: String? = nil
+    ) async throws -> EditSource {
+        guard canCropImage, let client = ctx.client as? any ImageCropClient else { throw ImageCropError.off }
+        let result = try await ImageCropRun.make(
+            of: source.id, picture: picture, spec: spec, client: client, server: canServerCrop(source, cutout: spec.cutout))
+        var made = result.source
+        made.posterURL = nil
+        sources[made.id] = made
+        if isClosed { return made }
+        if let overlayID, timeline.overlay.contains(where: { $0.id == overlayID }) {
+            setOverlayItem(id: overlayID, made)
+        } else if place {
+            addOverlay(made, atFrame: nil)
+        }
+        return made
+    }
+
     // MARK: - Canvas, title
 
     /// One of the six sizes at 30 or 60 fps. Overlays are moved inside the new canvas and cut to fit the frames it has.

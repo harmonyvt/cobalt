@@ -7,7 +7,8 @@
 // caps (saves, renders) and the workbench box behave as they do for one chat thread.
 // Free of Cloudflare imports: the tests run it under node.
 import * as z from "zod";
-import { chatTools, picturesOf, type ChatCollect } from "./chat-tools";
+import { chatTools, type ChatCollect } from "./chat-tools";
+import { lookImages, type LookOpts } from "./look-pictures";
 import { chatKeyId, runOp } from "./registry/ai";
 import { forCall } from "./registry/context";
 import { OpError, type AiFlags, type Op, type OpContext } from "./registry/op";
@@ -57,7 +58,8 @@ const ASK_NOTE =
 // The MCP description of a call: its cheat-sheet summary, with the chat's wording made general.
 function describeOp(op: Op): string {
     let text = op.ai.summary.replace(/\n/g, " ");
-    if (op.callName === "look") text = `See these posts' pictures (poster or image), returned as images. Max ${MCP_LOOK_MAX} per call.`;
+    if (op.callName === "look")
+        text = `See these posts' pictures (poster or image, private ones too), returned as images. grid: lines every 0.1 to read off a crop box for make_cropImage; frames: up to 3 frames across a video. Max ${MCP_LOOK_MAX} per call.`;
     if (op.ai.tier === "ask") text += ` ${ASK_NOTE}`;
     return text;
 }
@@ -93,6 +95,7 @@ const INSTRUCTIONS = [
     "Posts are found with library_list or library_search (meaning search) and opened with library_post; use the post `id` they return.",
     "Save a link (TikTok, X, YouTube, Instagram, a direct file...) with library_save. Upload a local file with upload_begin, then PUT the file's bytes to the upload_url it returns (its `curl` field is ready to run).",
     "Make ops (make_*, edits_render) answer a job: check on it with jobs_wait. Share links: links_create; collections and sets group them.",
+    "To use part of a picture (a sticker in a screenshot) in a video: look with grid: true (a moment of a video: make_frames first saves frames as pictures), make_cropImage with the box (cutout: true for just the thing), look at the crop to check it, then edits_addOverlay.",
     "Tools marked destructive delete or change things for good: confirm with the user first.",
 ].join("\n");
 
@@ -181,7 +184,10 @@ async function callTool(op: Op, caller: McpCaller, args: Json): Promise<ToolResu
         return textResult(`${mcpToolName(op.callName)}: ${parts.join("; ")}`, true);
     }
     try {
-        if (op.callName === "look") return await look(ctx, caller, (parsed.data as { ids: string[] }).ids);
+        if (op.callName === "look") {
+            const l = parsed.data as { ids: string[]; grid?: boolean; frames?: boolean };
+            return await look(ctx, caller, l.ids, { grid: l.grid === true, frames: l.frames === true });
+        }
         // the chat's own runner, so a route op goes through the Durable Object exactly as the chat's does
         return textResult((await runOp(op, ctx, parsed.data)) ?? null);
     } catch (e) {
@@ -190,28 +196,42 @@ async function callTool(op: Op, caller: McpCaller, args: Json): Promise<ToolResu
     }
 }
 
-// look: the posts' pictures as MCP images (the chat shows them to its model the same way, by URL).
-async function look(ctx: OpContext, caller: McpCaller, ids: string[]): Promise<ToolResult> {
+// look: the posts' pictures as MCP images (section 44.3: private ones read from R2, a grid or video frames when asked).
+async function look(ctx: OpContext, caller: McpCaller, ids: string[], o: LookOpts = {}): Promise<ToolResult> {
     const wanted = [...new Set(ids)].slice(0, MCP_LOOK_MAX);
-    const urls = await picturesOf({ db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl }, wanted);
+    const env = ctx.env as { ORIGINALS?: unknown; MEDIA?: unknown; IMAGES?: unknown };
+    const opts = Object.fromEntries(wanted.map((id) => [id, o]));
+    const imgs = await lookImages(
+        { db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl, originals: env.ORIGINALS as never, media: env.MEDIA as never, images: (env.IMAGES ?? null) as never },
+        wanted,
+        opts,
+    );
     const doFetch = caller.fetch ?? fetch;
     const content: Content[] = [];
     for (const id of wanted) {
-        const url = urls.get(id);
-        if (!url) {
+        const list = imgs.get(id) ?? [];
+        if (list.length === 0) {
             content.push({ type: "text", text: `Post ${id} has no picture to look at.` });
             continue;
         }
-        content.push({ type: "text", text: `Picture of post ${id}: ${url}` });
-        try {
-            const res = await doFetch(url);
-            const type = (res.headers.get("content-type") ?? "").split(";")[0]!.trim();
-            const bytes = res.ok && type.startsWith("image/") ? new Uint8Array(await res.arrayBuffer()) : null;
-            if (bytes && bytes.length <= MCP_PICTURE_MAX_BYTES) content.push({ type: "image", data: toBase64(bytes), mimeType: type });
-            else await res.body?.cancel().catch(() => {});
-        } catch {
-            // the URL above stays as the answer
+        for (const im of list) {
+            if (im.data) {
+                content.push({ type: "text", text: im.label });
+                content.push({ type: "image", data: im.data, mimeType: im.mediaType! });
+                continue;
+            }
+            content.push({ type: "text", text: `${im.label} ${im.url}` });
+            try {
+                const res = await doFetch(im.url!);
+                const type = (res.headers.get("content-type") ?? "").split(";")[0]!.trim();
+                const bytes = res.ok && type.startsWith("image/") ? new Uint8Array(await res.arrayBuffer()) : null;
+                if (bytes && bytes.length <= MCP_PICTURE_MAX_BYTES) content.push({ type: "image", data: toBase64(bytes), mimeType: type });
+                else await res.body?.cancel().catch(() => {});
+            } catch {
+                // the URL above stays as the answer
+            }
         }
+        if (o.frames && !list.some((i) => i.label.startsWith("Frame "))) content.push({ type: "text", text: `Post ${id} has no stored frames (not a video, or not described yet).` });
     }
     if (ids.length > MCP_LOOK_MAX) content.push({ type: "text", text: `Only the first ${MCP_LOOK_MAX} were shown.` });
     return { content };

@@ -111,15 +111,15 @@ export function parseSpec(b: unknown): { ok: true; spec: Required<Omit<CutoutSpe
 
 const isImage = (ct: string | null) => CUTOUT_SOURCE_TYPES.includes(String(ct ?? "").split(";")[0]!.trim().toLowerCase());
 
-/** The title a cutout gets: the source post's title (or its file name), then " cutout", at most 80 code points. */
-async function titleFor(db: D1Database, row: MediaRow): Promise<string> {
+/** The title a made picture gets: the source post's title (or its file name), then " <word>", at most 80 code points. */
+async function titleFor(db: D1Database, row: MediaRow, word: string): Promise<string> {
     const t = await db
         .prepare("SELECT title FROM media_titles WHERE post_key IN (?1, ?2) ORDER BY post_key = ?1 DESC LIMIT 1")
         .bind(row.id, row.session_id ?? row.id)
         .first<{ title: string }>()
         .catch(() => null);
     const base = (t?.title ?? row.name ?? "").replace(/\.[A-Za-z0-9]{1,5}$/, "").replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g, "").trim();
-    return [...(base ? `${base} cutout` : "cutout")].slice(0, 80).join("");
+    return [...(base ? `${base} ${word}` : word)].slice(0, 80).join("");
 }
 
 /**
@@ -203,7 +203,14 @@ export async function makeCutout(d: CutoutDeps, id: string, request: Request, ke
         ...(spec.mode !== "auto" ? { tolerance: spec.tolerance, edges_only: spec.edges_only, soften: spec.soften } : {}),
         trim: spec.trim,
     };
-    return store(d, row, bytes, result.width, result.height, madeSpec, spec.title, keyId);
+    return cutoutReply(await storeMade(d, row, bytes, result.width, result.height, madeSpec, spec.title, keyId, CUTOUT_STORE), madeSpec.mode);
+}
+
+const CUTOUT_STORE = { prefix: "cutouts", word: "cutout", meta: "cutoutOf" } as const;
+
+function cutoutReply(r: StoredReply, mode: unknown): CutoutReply {
+    if (!r.ok) return r.reply;
+    return { status: 201, body: { status: "success", item: r.item, title: r.title, cutout: { width: r.width, height: r.height, mode } } };
 }
 
 async function storeUpload(d: CutoutDeps, row: MediaRow, request: Request, keyId: string): Promise<CutoutReply> {
@@ -227,11 +234,20 @@ async function storeUpload(d: CutoutDeps, row: MediaRow, request: Request, keyId
     }
     const mode = q.get("mode");
     const madeSpec = { kind: "cutout", from: row.id, mode: mode === "auto" || mode === "white" || mode === "color" ? mode : "device", device: true };
-    return store(d, row, buf, size.width, size.height, madeSpec, title, keyId);
+    return cutoutReply(await storeMade(d, row, buf, size.width, size.height, madeSpec, title, keyId, CUTOUT_STORE), madeSpec.mode);
 }
 
-async function store(
-    d: CutoutDeps,
+export type StoredReply =
+    | { ok: true; item: Record<string, unknown>; title: string; width: number; height: number }
+    | { ok: false; reply: CutoutReply };
+
+/**
+ * Stores a PNG the server or the app made from `from` as a new private library item (`<prefix>/<new id>.png` in
+ * cobalt-originals, source studio, made_from = [from]) with its title. Cutouts (39) and crops (44) share it; errors use
+ * `error.<word>.storage`.
+ */
+export async function storeMade(
+    d: Pick<CutoutDeps, "db" | "originals" | "now" | "randomBytes">,
     from: MediaRow,
     bytes: Uint8Array,
     width: number,
@@ -239,21 +255,22 @@ async function store(
     madeSpec: Record<string, unknown>,
     title: string | null,
     keyId: string,
-): Promise<CutoutReply> {
+    kind: { prefix: string; word: string; meta: string },
+): Promise<StoredReply> {
     const now = d.now();
     const name = mintItemId(d.randomBytes);
-    const key = `cutouts/${name}.png`;
+    const key = `${kind.prefix}/${name}.png`;
     try {
         await d.originals.put(key, bytes, {
             httpMetadata: { contentType: "image/png" },
-            customMetadata: { keyId, source: "studio", cutoutOf: from.id, createdAt: String(now) },
+            customMetadata: { keyId, source: "studio", [kind.meta]: from.id, createdAt: String(now) },
         });
     } catch (e) {
-        console.error("[cutout] R2 put failed", String(e));
-        return fail(502, "error.cutout.storage");
+        console.error(`[${kind.word}] R2 put failed`, String(e));
+        return { ok: false, reply: fail(502, `error.${kind.word}.storage`) };
     }
-    const t = title ?? (await titleFor(d.db, from));
-    const base = t.replace(/[/\\\u0000-\u001F\u007F]/g, "").trim().slice(0, 116) || "cutout";
+    const t = title ?? (await titleFor(d.db, from, kind.word));
+    const base = t.replace(/[/\\\u0000-\u001F\u007F]/g, "").trim().slice(0, 116) || kind.word;
     const id = await insertMediaItem(
         d.db,
         {
@@ -281,12 +298,9 @@ async function store(
     );
     if (!id) {
         await d.originals.delete(key).catch(() => {});
-        return fail(503, "error.api.generic");
+        return { ok: false, reply: fail(503, "error.api.generic") };
     }
-    await upsertTitle(d.db, id, t, keyId, now).catch((e) => console.error("[cutout] could not store the title", String(e)));
+    await upsertTitle(d.db, id, t, keyId, now).catch((e) => console.error(`[${kind.word}] could not store the title`, String(e)));
     const made = await getRow(d.db, id);
-    return {
-        status: 201,
-        body: { status: "success", item: made ? itemShape(made) : { id }, title: t, cutout: { width, height, mode: madeSpec.mode } },
-    };
+    return { ok: true, item: made ? (itemShape(made) as Record<string, unknown>) : { id }, title: t, width, height };
 }

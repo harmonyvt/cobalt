@@ -138,6 +138,7 @@ enum PreviewData {
             caps.limits.editOverlayTracks = 8
             caps.cutout = true
             caps.cutoutAuto = true
+            caps.imageCrop = true
         }
         if scenario == .skyMap && caps.kind == .fork {
             caps.search = true

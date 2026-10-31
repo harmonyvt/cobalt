@@ -19,6 +19,7 @@ struct EditorPhoneAddSheet: View {
     @State private var addedTick = 0
     @State private var shelf: EditorBinEntry.Shelf = .images
     @State private var cutoutOf: EditSource?
+    @State private var croppingImage: EditSource?
 
     /// Shelves show once the server takes webps and layers; before that the overlay takes everything in one grid.
     private var hasShelves: Bool { mode == .overlay && session.overlayTrackLimit > 1 }
@@ -53,6 +54,9 @@ struct EditorPhoneAddSheet: View {
             EditorCutoutSheet(session: session, source: picture, made: { dismiss() }) { cutoutOf = nil }
                 .presentationDetents([.large])
         }
+        .modifier(EditorImageCropPresenter(
+            session: session, source: $croppingImage, saved: { [library = model.library] in Task { await library.refresh() } },
+            placed: { dismiss() }))
     }
 
     private var shelfPicker: some View {
@@ -111,6 +115,11 @@ struct EditorPhoneAddSheet: View {
                                 if mode == .overlay, session.canCutout, entry.canCutout {
                                     Button { cutoutOf = entry.source } label: {
                                         Label(Copy.Editor.removeBackground, systemImage: Symbol.Editor.cutout)
+                                    }
+                                }
+                                if mode == .overlay, session.canCropImage, entry.canCutout {
+                                    Button { croppingImage = entry.source } label: {
+                                        Label(Copy.Editor.pictureCrop, systemImage: Symbol.Editor.imageCrop)
                                     }
                                 }
                             }

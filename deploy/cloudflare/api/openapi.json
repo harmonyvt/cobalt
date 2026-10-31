@@ -2152,6 +2152,44 @@
         }
       }
     },
+    "/library/items/{id}/crop": {
+      "post": {
+        "operationId": "library.crop",
+        "summary": "Crop a picture into a new png (POST /library/items/<id>/crop); the chat uses make.cropImage.",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/library/items/{id}/cutout": {
       "post": {
         "operationId": "library.cutout",

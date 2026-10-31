@@ -175,15 +175,21 @@ export const lookOp = defineOp({
     auth: "key",
     runs: "worker",
     cors: false,
-    input: z.object({ ids: Ids }),
+    input: z.object({
+        ids: Ids,
+        grid: z.boolean().optional().describe("draw lines every 0.1 of the width and height, to read off a crop box for make.cropImage"),
+        frames: z.boolean().optional().describe("a video: also up to 3 frames spread across it, not only its poster"),
+    }),
     output: z.number(),
     ai: {
         tier: "free",
         only: true,
-        summary: "You get to SEE these posts' pictures (poster or image) after this code returns. Max 4 per reply. Returns how many are queued.",
+        summary: "You get to SEE these posts' pictures (poster or image, private ones too) after this code returns. Max 4 per reply. Returns how many are queued.",
         params: ["ids"],
+        options: true,
     },
-    handler: async (ctx, input) => ok(await tools(ctx).look!(input.ids)),
+    handler: async (ctx, input) =>
+        ok(await tools(ctx).look!(input.ids, { ...(input.grid ? { grid: true } : {}), ...(input.frames ? { frames: true } : {}) })),
 });
 
 export const showOp = defineOp({

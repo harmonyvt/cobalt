@@ -8,6 +8,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { assemblePosts, libraryHide, type AppDeps } from "./app-routes";
 import { hiddenPostKeys } from "./hidden-store";
+import { lookBlocks, lookImages, type LookDeps } from "./look-pictures";
 import { chatTools, loadPosts, picturesOf, recordsOf, type ChatCollect, type ChatToolDeps, type ChatTools, type Ranked } from "./chat-tools";
 import { chatToolbox, runConfirmed } from "./registry/ai";
 import type { OpBase } from "./registry/context";
@@ -451,6 +452,9 @@ const CONFIRMS = `Some calls change things that are hard to undo (the API marks 
 // never polled across runs.
 const MAKING = `Making files: cobalt.make.* and cobalt.edits.render start jobs on Harmony's server (webps, animated stills, slideshows, gallery images, and mp4s from the editor, which cost real money). Make something only when Harmony asks for it; each chat may make only a few a day. Each call returns a job: in the same run, pass it to cobalt.jobs.onDone(job, note) with a short note of what to do with the result. If it finishes within a few seconds you get the result at once: cobalt.show([post_id]) and give share_url when Harmony wants a link. Otherwise it answers watching: true, and the server tells you when the job ends: end your reply right there in one short line (it is on its way), without more code. A new reply starts by itself with the result. Never poll: do not call cobalt.jobs.wait over and over, and never ask Harmony to tell you to check.`;
 // The workbench (section 33.11): only while cobalt.box is in the API.
+// Section 44.4: "look at this video and this screenshot, crop the screenshot, use that part in the video".
+const PICTURE_PARTS = (frames: boolean) => `Using part of a picture (a sticker in a screenshot, a face, a logo) somewhere else: look at it first with cobalt.look([id], { grid: true }) (and a video with { frames: true }).${frames ? " For one moment of a video, cobalt.make.frames(video, { at: [seconds] }) saves that frame as a picture first (or { count } frames spread across it, to study the video closely); frame pictures are looked at and edited like any other." : ""} Read the box off the grid as fractions of the width and height, then cobalt.make.cropImage(id, { x, y, w, h }, { cutout: true }) when only the thing itself is wanted (no box around it). It is done at once: look([file_id]) at the crop and make it again with a better box if anything is cut off or extra. To put it in a video, cobalt.edits.addOverlay(project, file_id, { at, seconds, position, size }) (cobalt.edits.create with the video as the main clip first when there is no project yet); render only when Harmony wants it.`;
+
 const WORKBENCH = `cobalt.box is a real Linux box (ffmpeg, ffprobe, yt-dlp, curl, python3, public internet). It has two uses. Editing: when Harmony wants something the make and edits calls cannot do (any ffmpeg filter, re-encode, reverse, boomerang, speed ramp, overlay, audio-only, frame grabs, inspecting a file with ffprobe), copy the files in with cobalt.box.pull(id), run ffmpeg on them with cobalt.box.run, and put the result back with cobalt.box.save(path). Prefer the make and edits calls when they already do the job. Saving: it is the LAST resort for a link the library cannot save. ffmpeg on the box is slow (half a CPU): keep outputs short, scale big videos down, use -preset veryfast, and split long work into several runs. It takes about 10 seconds to wake, and it keeps this thread's files only while awake (2 minutes after the last call). Work in /workspace, keep commands quiet (yt-dlp -q --no-progress, curl -sS), and finish with cobalt.box.save(path) to put the file in the library. One run of code may use up to ${CODE_TIMEOUT_BOX_MS / 1000} seconds while it calls the box. Never send anything from Harmony's library or this chat to a site from the box.`;
 
 export function systemPrompt(now: number, search = true, types: string = toolTypes(search)): string {
@@ -464,7 +468,7 @@ To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbn
 
 ${search ? FINDING_WITH_SEARCH : FINDING_WITHOUT_SEARCH}
 
-${/\bsave\(url/.test(types) ? `${CHANGES}\n\n` : ""}${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}${/\bmake: \{/.test(types) ? `${MAKING}\n\n` : ""}${/^ {2}box: \{$/m.test(types) ? `${WORKBENCH}\n\n` : ""}The API:
+${/\bsave\(url/.test(types) ? `${CHANGES}\n\n` : ""}${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}${/\bmake: \{/.test(types) ? `${MAKING}\n\n` : ""}${/\bcropImage\(/.test(types) ? `${PICTURE_PARTS(/\bframes\(id/.test(types))}\n\n` : ""}${/^ {2}box: \{$/m.test(types) ? `${WORKBENCH}\n\n` : ""}The API:
 ${types}`;
 }
 
@@ -500,6 +504,22 @@ function stripImages(messages: any[]): any[] {
         };
     });
 }
+
+// Pictures sent inline (look at a private picture, section 44.3) are not saved with the message: a reload strips every
+// picture anyway (stripImages), and base64 would make the row huge.
+export function dropInlineImages(messages: any[]): any[] {
+    const keep = (c: any) => (c?.type === "image" && c.source?.type === "base64" ? { type: "text", text: "[a picture you looked at earlier]" } : c);
+    return messages.map((m) =>
+        Array.isArray(m?.content)
+            ? { ...m, content: m.content.map((b: any) => (b?.type === "tool_result" && Array.isArray(b.content) ? { ...b, content: b.content.map(keep) } : keep(b))) }
+            : m,
+    );
+}
+
+const lookDepsOf = (d: ChatDeps): LookDeps => {
+    const env = (d.base?.env ?? {}) as { ORIGINALS?: unknown; MEDIA?: unknown; IMAGES?: unknown };
+    return { db: d.db, mediaBaseUrl: d.mediaBaseUrl, originals: env.ORIGINALS as never, media: env.MEDIA as never, images: (env.IMAGES ?? null) as never };
+};
 
 // Consecutive turns of one role become one (a failed reply can leave two user turns in a row).
 function mergeRoles(messages: any[]): any[] {
@@ -707,7 +727,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 text,
                 JSON.stringify(collect.show),
                 JSON.stringify(steps),
-                status === "running" ? null : JSON.stringify([...lead, ...api]),
+                status === "running" ? null : JSON.stringify(dropInlineImages([...lead, ...api])),
                 status,
                 error,
                 now(),
@@ -872,14 +892,9 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 const fresh = collect.look.slice(looked);
                 looked = collect.look.length;
                 if (fresh.length > 0) {
-                    const urls = await picturesOf(d, fresh);
-                    for (const pid of fresh) {
-                        const url = urls.get(pid);
-                        if (url) {
-                            content.push({ type: "text", text: `Picture of post ${pid}:` });
-                            content.push({ type: "image", source: { type: "url", url } });
-                        } else content.push({ type: "text", text: `Post ${pid} has no picture to look at.` });
-                    }
+                    // private pictures go inline, a grid or video frames when asked (section 44.3)
+                    const imgs = await lookImages(lookDepsOf(d), fresh, collect.lookOpts ?? {});
+                    for (const pid of fresh) content.push(...lookBlocks(pid, imgs.get(pid), collect.lookOpts?.[pid]?.frames === true));
                 }
                 results.push({ type: "tool_result", tool_use_id: u.id, ...(out.error !== undefined ? { is_error: true } : {}), content });
             }
