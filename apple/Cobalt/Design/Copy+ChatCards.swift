@@ -12,9 +12,10 @@ extension Copy {
         static func ms(_ ms: Int) -> String { ms < 1000 ? "\(ms)ms" : String(format: "%.1fs", Double(ms) / 1000) }
         static func calls(_ n: Int) -> String { "\(n) \(n == 1 ? "call" : "calls")" }
         static let asked = "asks first"
-        static func chipA11y(_ call: ChatToolCall) -> String {
+        static func times(_ n: Int) -> String { "×\(n)" }
+        static func chipA11y(_ call: ChatToolCall, count: Int = 1) -> String {
             switch call.status {
-            case .done: return "\(call.op), \(ms(call.ms))"
+            case .done: return count > 1 ? "\(call.op), \(count) times, \(ms(call.ms))" : "\(call.op), \(ms(call.ms))"
             case .asked: return "\(call.op), waiting for your ok"
             case .error: return "\(call.op) failed: \(call.error ?? "")"
             }

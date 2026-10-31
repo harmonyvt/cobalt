@@ -7,6 +7,13 @@ import SwiftUI
 // one: on iPhone the detail is pushed here; on iPad and Mac the library tab reveals the post. A thread whose chat started
 // helpers (APP-API-CONTRACT 43.6) shows them as a strip under the header; a helper's own thread opens in a sheet with this
 // same screen, read-only: its mail with the chat on top and a footer instead of the composer.
+//
+// Sticking to the bottom: `following` is the owner's choice, not a guess from where the list happens to be. It turns off
+// only when they drag or flick the list and it settles away from the bottom, and back on when they settle at the bottom,
+// send, answer a card or tap the arrow. While it is on and a reply is streaming (or the thread just opened and its pictures
+// are still arriving), every change of the list's height (a step, a chip, a tool card, a thumbnail, the keyboard) puts the
+// bottom back in view. It used to compare a token of the last message and ask "am I near the bottom?", which a tool card
+// taller than the 72-point slack had already answered "no" by the time the token changed, so the list stopped following.
 
 struct ChatThreadScreen: View {
     let model: AppModel
@@ -21,7 +28,12 @@ struct ChatThreadScreen: View {
     @State private var controller: ChatController
     /// The phone's pushed detail of a shown file.
     @State private var opened: OpenedMedia?
+    /// The list's end is in view (within 72 points).
     @State private var atBottom = true
+    /// The list keeps the bottom in view as it grows; off once the owner scrolls away (see the note at the top).
+    @State private var following = true
+    /// Until then the list keeps to the bottom even with no reply running: the thread's pictures load in after it opens.
+    @State private var settleUntil = Date.distantPast
     @State private var sent = 0
     /// Counts the confirm cards answered yes / no, for their haptics.
     @State private var confirmedYes = 0
@@ -74,7 +86,14 @@ struct ChatThreadScreen: View {
                 ) { send($0) }
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
-                .background(.bar)
+                // no bar behind it: the field floats over the end of the list, which fades out under it
+                .background {
+                    LinearGradient(
+                        colors: [CobaltColor.bg.opacity(0), CobaltColor.bg],
+                        startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.45))
+                    .ignoresSafeArea(edges: .bottom)
+                    .allowsHitTesting(false)
+                }
             }
         }
         .modifier(ChatHelperChrome(model: model, threadID: threadID, shows: !readOnly && content != nil))
@@ -97,10 +116,8 @@ struct ChatThreadScreen: View {
 
     // MARK: the messages
 
-    private func scrollToken(_ content: ChatThreadContent) -> String {
-        guard let last = content.messages.last else { return "empty" }
-        return "\(content.messages.count)|\(last.id)|\(last.text.count)|\(last.steps.count)|\(last.steps.last?.status.rawValue ?? "")|\(last.postIDs.count)|\(last.ranked?.hits.count ?? 0)|\(last.status.rawValue)|\(content.messages.compactMap(\.confirm?.status.rawValue).joined())"
-    }
+    /// Follow growth now: on while the owner hasn't scrolled away and something is still adding to the list.
+    private var keepsToBottom: Bool { following && (busy || Date.now < settleUntil) }
 
     private func messages(_ content: ChatThreadContent) -> some View {
         ScrollViewReader { proxy in
@@ -132,23 +149,48 @@ struct ChatThreadScreen: View {
             .defaultScrollAnchor(.bottom, for: .alignment)
             .defaultScrollAnchor(.top, for: .sizeChanges)
             .defaultScrollAnchor(.top, for: .initialOffset)
-            .onAppear { DispatchQueue.main.async { proxy.scrollTo(Self.bottom, anchor: .bottom) } }
+            .onAppear {
+                following = true
+                settleUntil = .now.addingTimeInterval(1.5)
+                DispatchQueue.main.async { proxy.scrollTo(Self.bottom, anchor: .bottom) }
+            }
             .scrollDismissesKeyboard(.interactively)
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 72
             } action: { _, now in
                 atBottom = now
             }
-            .onChange(of: scrollToken(content)) {
-                if atBottom { proxy.scrollTo(Self.bottom, anchor: .bottom) }
+            // the owner's own scrolling decides `following`; the list's growth and our own scrollTo never do
+            .onScrollPhaseChange { old, new in
+                if new == .tracking || new == .interacting {
+                    following = false
+                } else if new == .idle, old == .interacting || old == .decelerating || old == .tracking {
+                    following = atBottom
+                }
+            }
+            .onScrollGeometryChange(for: CGSize.self) { geometry in
+                CGSize(width: geometry.containerSize.height, height: geometry.contentSize.height)
+            } action: { _, _ in
+                if keepsToBottom { proxy.scrollTo(Self.bottom, anchor: .bottom) }
             }
             .onChange(of: sent) {
-                atBottom = true
+                following = true
                 withAnimation(Motion.card) { proxy.scrollTo(Self.bottom, anchor: .bottom) }
+            }
+            .onChange(of: busy) {
+                if busy {
+                    // a reply that started (an answered card, a send from elsewhere) brings the list along if it was at the end
+                    if atBottom { following = true }
+                } else if following {
+                    // the reply's last words, its posts and their pictures land as it finishes: keep to the bottom a moment more
+                    settleUntil = .now.addingTimeInterval(1.5)
+                    proxy.scrollTo(Self.bottom, anchor: .bottom)
+                }
             }
             .overlay(alignment: .bottomTrailing) {
                 if !atBottom, busy {
                     Button {
+                        following = true
                         withAnimation(Motion.card) { proxy.scrollTo(Self.bottom, anchor: .bottom) }
                     } label: {
                         Image(systemName: Symbol.chatLatest)
@@ -246,7 +288,7 @@ struct ChatThreadScreen: View {
     /// thread like a send; a card the server no longer has shows as a status line and the thread reloads.
     private func answer(_ card: ChatConfirm, yes: Bool) {
         if yes { confirmedYes += 1 } else { confirmedNo += 1 }
-        atBottom = true
+        following = true
         Task {
             do {
                 try await store.answer(card, yes: yes, in: threadID)
