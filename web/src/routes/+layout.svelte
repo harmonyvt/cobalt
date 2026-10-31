@@ -25,6 +25,7 @@
     import { turnstileCreated, turnstileEnabled } from "$lib/state/turnstile";
 
     import Sidebar from "$components/sidebar/Sidebar.svelte";
+    import SignedOutBar from "$components/misc/SignedOutBar.svelte";
     import Turnstile from "$components/misc/Turnstile.svelte";
     import NotchSticker from "$components/misc/NotchSticker.svelte";
     import DialogHolder from "$components/dialog/DialogHolder.svelte";
@@ -112,6 +113,7 @@
             <NotchSticker />
         {/if}
         <DialogHolder />
+        <SignedOutBar />
         <Sidebar />
         {#if $updated}
             <UpdateNotification />

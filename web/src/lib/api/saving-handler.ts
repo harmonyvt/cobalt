@@ -7,6 +7,7 @@ import { get } from "svelte/store";
 import { t } from "$lib/i18n/translations";
 import { downloadFile } from "$lib/download";
 import { createDialog } from "$lib/state/dialogs";
+import { signedOut, KEY_INVALID } from "$lib/api/accounts";
 import { downloadButtonState } from "$lib/state/omnibox";
 import { createSavePipeline } from "$lib/task-manager/queue";
 
@@ -78,6 +79,9 @@ export const savingHandler = async ({ url, request, oldTaskId }: SavingHandlerAr
 
     if (response.status === "error") {
         downloadButtonState.set("error");
+
+        // the signed-out bar is the only signal for a dead key
+        if (response.error.code === KEY_INVALID && get(signedOut)) return;
 
         return error(
             get(t)(response.error.code, response?.error?.context)

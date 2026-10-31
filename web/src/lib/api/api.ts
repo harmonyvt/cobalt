@@ -7,6 +7,7 @@ import { currentApiURL } from "$lib/api/api-url";
 import { turnstileEnabled, turnstileSolved } from "$lib/state/turnstile";
 import cachedInfo from "$lib/state/server-info";
 import { getServerInfo } from "$lib/api/server-info";
+import { ensureSignedIn, recoverFromInvalidKey, markSignedOut, KEY_INVALID } from "$lib/api/accounts";
 
 import type { Optional } from "$lib/types/generic";
 import type { CobaltAPIResponse, CobaltErrorResponse, CobaltSaveRequestBody } from "$lib/types/api";
@@ -79,6 +80,7 @@ const request = async (requestBody: CobaltSaveRequestBody, justRetried = false) 
     }
 
     const api = currentApiURL();
+    await ensureSignedIn();
     const authorization = await getAuthorization();
 
     if (authorization && typeof authorization !== "string") {
@@ -115,6 +117,22 @@ const request = async (requestBody: CobaltSaveRequestBody, justRetried = false) 
             } as CobaltErrorResponse;
         }
     });
+
+    // session died but access is still fine: sign in silently, retry once
+    if (
+        response?.status === 'error'
+            && response.error?.code === KEY_INVALID
+            && !justRetried
+    ) {
+        if (await recoverFromInvalidKey()) {
+            return request(requestBody, true);
+        }
+        return response;
+    }
+
+    if (response?.status === 'error' && response.error?.code === KEY_INVALID) {
+        markSignedOut();
+    }
 
     if (
         response?.status === 'error'

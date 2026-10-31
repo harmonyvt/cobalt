@@ -655,6 +655,46 @@ enum Endpoints {
     static func mcpLinkRotate() -> APIEndpoint<McpLinkRotateResponse> {
         APIEndpoint(op: "mcp.link.rotate", method: "POST", path: "/mcp/settings/rotate", auth: .keyOrService)
     }
+
+    /// `POST /auth/exchange` (op `auth.exchange`, auth open): Trade a sign-in code for a device session (POST /auth/exchange).
+    static func authExchange() -> APIEndpoint<AuthExchangeResponse> {
+        APIEndpoint(op: "auth.exchange", method: "POST", path: "/auth/exchange", auth: .open)
+    }
+
+    /// `GET /auth/me` (op `auth.me`, auth key): Who is calling (a key or a device session) and how many sessions and keys are active (GET /auth/me).
+    static func authMe() -> APIEndpoint<AuthMeResponse> {
+        APIEndpoint(op: "auth.me", method: "GET", path: "/auth/me", auth: .key)
+    }
+
+    /// `GET /auth/sessions` (op `auth.sessions.list`, auth key): The active device sessions, most recently used first (GET /auth/sessions).
+    static func authSessionsList() -> APIEndpoint<AuthSessionsListResponse> {
+        APIEndpoint(op: "auth.sessions.list", method: "GET", path: "/auth/sessions", auth: .key)
+    }
+
+    /// `DELETE /auth/sessions/:id` (op `auth.sessions.delete`, auth key): Sign a device out (DELETE /auth/sessions/<id>); the caller's own session too.
+    static func authSessionsDelete(id: String) -> APIEndpoint<AuthSessionsDeleteResponse> {
+        APIEndpoint(op: "auth.sessions.delete", method: "DELETE", path: "/auth/sessions/\(HTTPCobaltClient.encode(id))", auth: .key)
+    }
+
+    /// `POST /auth/signout` (op `auth.signout`, auth key): Sign the calling device out; a key is left alone (POST /auth/signout).
+    static func authSignout() -> APIEndpoint<AuthSignoutResponse> {
+        APIEndpoint(op: "auth.signout", method: "POST", path: "/auth/signout", auth: .key)
+    }
+
+    /// `POST /auth/signout-others` (op `auth.signout_others`, auth key): Sign out every other device (POST /auth/signout-others).
+    static func authSignoutOthers() -> APIEndpoint<AuthSignoutOthersResponse> {
+        APIEndpoint(op: "auth.signout_others", method: "POST", path: "/auth/signout-others", auth: .key)
+    }
+
+    /// `GET /auth/keys` (op `auth.keys.list`, auth key): The active keys for tools, newest first (GET /auth/keys).
+    static func authKeysList() -> APIEndpoint<AuthKeysListResponse> {
+        APIEndpoint(op: "auth.keys.list", method: "GET", path: "/auth/keys", auth: .key)
+    }
+
+    /// `DELETE /auth/keys/:id` (op `auth.keys.delete`, auth key): Revoke a key for tools, never a session (DELETE /auth/keys/<id>).
+    static func authKeysDelete(id: String) -> APIEndpoint<AuthKeysDeleteResponse> {
+        APIEndpoint(op: "auth.keys.delete", method: "DELETE", path: "/auth/keys/\(HTTPCobaltClient.encode(id))", auth: .key)
+    }
 }
 
 // MARK: - Reply types
@@ -1031,4 +1071,79 @@ struct McpLinkRotateResponse: Decodable, Sendable {
     var settings: McpLinkRotateResponseSettings
     /// the new private link, answered only here, once
     var linkUrl: String?
+}
+
+struct AuthSessionRow: Decodable, Sendable {
+    var id: String
+    var device: String
+    var platform: String
+    var createdAt: Int
+    var lastUsedAt: Int
+    /// ms; slides 90 days on each use
+    var expiresAt: Int
+    /// cf.country of the last use
+    var country: String?
+    /// this is the caller's own session
+    var current: Bool
+}
+
+struct AuthExchangeResponse: Decodable, Sendable {
+    var status: String
+    /// the session token: send it as Api-Key
+    var key: String
+    var session: AuthSessionRow
+}
+
+struct AuthMeResponseCaller: Decodable, Sendable {
+    var kind: String
+    var id: String
+    var device: String?
+    var platform: String?
+    var email: String?
+    var expiresAt: Int?
+}
+
+struct AuthMeResponse: Decodable, Sendable {
+    var caller: AuthMeResponseCaller
+    /// active sessions
+    var sessions: Int
+    /// active keys
+    var keys: Int
+}
+
+struct AuthSessionsListResponse: Decodable, Sendable {
+    var sessions: [AuthSessionRow]
+}
+
+struct AuthSessionsDeleteResponse: Decodable, Sendable {
+    var status: String
+}
+
+struct AuthSignoutResponse: Decodable, Sendable {
+    /// false: the caller is a key, which is never revoked here
+    var signedOut: Bool
+}
+
+struct AuthSignoutOthersResponse: Decodable, Sendable {
+    /// sessions signed out
+    var count: Int
+}
+
+struct AuthKeyRow: Decodable, Sendable {
+    var id: String
+    var name: String
+    /// the key's first 8 characters
+    var prefix: String
+    var createdAt: Int
+    var lastUsedAt: Int?
+    /// a device that used this pasted key has signed in since (replaced_by set)
+    var oldPaste: Bool
+}
+
+struct AuthKeysListResponse: Decodable, Sendable {
+    var keys: [AuthKeyRow]
+}
+
+struct AuthKeysDeleteResponse: Decodable, Sendable {
+    var status: String
 }

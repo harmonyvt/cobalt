@@ -76,6 +76,11 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// "selfie" off). `.happy` has the same six posts and rules; every other server with private links has the feature and
     /// starts with none.
     case hidden
+    /// Accounts (APP-API-CONTRACT 42; `PreviewAccount.swift`): `.happy` is signed in on a server with `features.accounts`
+    /// (five devices, four keys for tools, two of them old pastes). `.signedOut`: the session ended, so the token is refused
+    /// and "sign in again" is pinned; signing in (`PreviewWebSignIn`) brings it back. `.firstLaunch`: no token yet, the
+    /// sign-in screen. `.moveOver`: a key pasted before accounts and never signed in, so "capystore has accounts now" shows.
+    case signedOut, firstLaunch, moveOver
 }
 
 public struct ServerSummary: Sendable, Equatable {
@@ -101,6 +106,8 @@ public final class AppModel {
     public let stage: StageStore
     /// The auto-hide rules (APP-API-CONTRACT 37; settings › hidden). Idle until `load()`.
     public let hiddenRules: HiddenRulesModel
+    /// Settings › account (APP-API-CONTRACT 42): who is signed in, the devices and the keys for tools. Idle until `refresh()`.
+    public let account: AccountStore
     /// The video editor (APP-API-CONTRACT 31): the projects, this key's renders and the open project. Idle until `refresh()`.
     public let editor: EditorStore
     /// The library as a sky map (APP-API-CONTRACT 21, `GET /library/map`). Idle until `load()`.
@@ -196,6 +203,7 @@ public final class AppModel {
         self.editor = EditorStore(context: context)
         self.skyMap = SkyMapModel(context: context)
         self.hiddenRules = HiddenRulesModel(context: context, library: library)
+        self.account = AccountStore(context: context)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
         let jobQueue = JobQueue(
@@ -275,6 +283,10 @@ public final class AppModel {
             context: ctx, library: LibraryModel(context: ctx), photosSync: sync, macFolder: folder,
             savePull: pull, offlineDownloads: offline, ledger: JobLedger.shared(), makeClient: factory)
         model.telemetry = TelemetryService.live(settings: settings, capabilities: { [unowned model] in model.capabilities })
+        // any route that answers `401 error.api.auth.key.invalid` (an ended session): re-read the server (APP-API-CONTRACT 42.6)
+        AuthSignal.install { [model] in                 // the live model lives as long as the process
+            Task { @MainActor in model.serverRefusedKey() }
+        }
         pull.start()                             // the 5 minute tick (a no-op without the Mac folder)
         model.watchOwnUploads()
         fetcher.isActive = { [unowned ctx] in ctx.background.activity.isActive }
@@ -413,6 +425,7 @@ public final class AppModel {
         editor.reset()
         skyMap.reset()
         hiddenRules.reset()
+        account.reset()
     }
 
     // MARK: - Links, handoffs
@@ -430,6 +443,8 @@ public final class AppModel {
     /// sign-in's return), `cobalt-apple://chat/<thread>` (a chat reply's Live Activity) and `cobalt-apple://open`.
     public func open(_ url: URL) {
         guard url.scheme?.lowercased() == "cobalt-apple" else { return }
+        // the sign-in's return (APP-API-CONTRACT 42.3) belongs to the Access sheet, which keeps it; never move the screen for it
+        if AccountAuth.isCallback(url) { return }
         queueShown = false                              // a link to somewhere else leaves the queue sheet behind
         selectedTab = .save
         if url.host(percentEncoded: false)?.lowercased() == "library" {

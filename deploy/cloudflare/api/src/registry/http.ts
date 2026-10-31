@@ -3,7 +3,7 @@
 // CORS and cache headers. Runs in worker.ts before the gate; anything not registered falls through to it.
 import { parseAuthorization } from "../gate";
 import { KEY_ID_HEADER } from "../headers";
-import { lookupKey } from "../keys";
+import { countryOf, lookupKey } from "../keys";
 import { SERVICE_KEY_ID } from "../library";
 import { forCall, type OpBase } from "./context";
 import { OpError, type Op, type OpContext, type OpReply, type RouteHost } from "./op";
@@ -27,6 +27,7 @@ export type HttpCall = {
     service: boolean; // the library service credential, already checked
     allowOrigin?: string; // the web origin, when the request came from it
     host?: RouteHost; // which of the Worker's hosts it came to (default the API)
+    country?: string | null; // the original request's cf.country (section 42.2); default: read from `request`
 };
 
 // The registry's answer, or null when no op has this method and path.
@@ -42,6 +43,7 @@ export async function handleOp(registry: Registry, base: OpBase, call: HttpCall)
     // ---- who is asking (the gate's rules, then the Worker's D1 lookup) ----
     let keyId: string | null = null;
     let caller: OpContext["caller"] = "open";
+    const country = call.country ?? countryOf(call.request);
     if (op.auth === "service") {
         // the web Worker's library service only; any other caller is told its key is invalid, like the gate did
         if (!call.service) return json(401, errBody("error.api.auth.key.invalid"), allowOrigin);
@@ -59,7 +61,7 @@ export async function handleOp(registry: Registry, base: OpBase, call: HttpCall)
             const parsed = parseAuthorization(call.request.headers.get("Authorization"));
             if (!("key" in parsed)) return json(401, errBody(parsed.errorCode), allowOrigin);
             try {
-                keyId = await lookupKey(base.db, parsed.key, Date.now());
+                keyId = await lookupKey(base.db, parsed.key, base.now(), country);
             } catch {
                 // fail closed: never run an op when D1 cannot vouch for the key
                 return json(503, errBody("error.api.generic"), allowOrigin);
@@ -69,7 +71,7 @@ export async function handleOp(registry: Registry, base: OpBase, call: HttpCall)
         }
     }
 
-    const ctx = forCall(base, { keyId, caller, request: call.request, url: call.url, params });
+    const ctx = forCall(base, { keyId, caller, request: call.request, url: call.url, params, country });
     const headers: Record<string, string> = op.noStore ? { "cache-control": "no-store" } : {};
     const origin = op.cors ? allowOrigin : undefined;
 

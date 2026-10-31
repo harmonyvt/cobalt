@@ -180,6 +180,9 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `features.cutout_auto` (39.3): the server can also make the cutout itself (Cloudflare Images): `auto` and any
     /// picture type. False when absent: the app makes every cutout on the device.
     public var cutoutAuto: Bool = false
+    /// `features.accounts` (APP-API-CONTRACT 42): devices sign in through Cloudflare Access (`/auth/*`) instead of pasting a
+    /// key. False when absent: settings keep the api key paste, and a revoked key is the old alert.
+    public var accounts: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

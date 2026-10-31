@@ -180,6 +180,25 @@ public protocol CobaltClient: Sendable {
     /// `POST /share/collections/<id>/privacy`: the private links of the collection's live gallery links after the change
     /// (empty after `.makePublic`). Throws `ShareCollectionError` (`.notFound`, `.badRequest`).
     func setCollectionPrivacy(id: String, _ change: CollectionPrivacy) async throws -> [PrivateLink]
+    // Accounts (APP-API-CONTRACT 42; only when `features.accounts`). Defaulted in `HTTPCobaltClient+Account.swift`
+    // (`.unsupported`) so older fakes compile. Refusals are `AccountError` (`.codeInvalid`, `.notFound`); a revoked or
+    // ended token stays the generic `CobaltError.api(error.api.auth.key.invalid)`.
+    /// `POST /auth/exchange {code, verifier, old_key?}` (open, never sends the stored key in the header): the device's token.
+    func exchangeSignIn(code: String, verifier: String, oldKey: String?) async throws -> AuthExchange
+    /// `GET /auth/me`.
+    func accountMe() async throws -> AccountMe
+    /// `GET /auth/sessions`: active sessions, most recently used first.
+    func accountSessions() async throws -> [AccountSession]
+    /// `DELETE /auth/sessions/<id>`: that device is signed out on its next request.
+    func deleteAccountSession(id: String) async throws
+    /// `POST /auth/signout`: true when the caller was a session (now revoked); a key is never revoked here.
+    func signOutSession() async throws -> Bool
+    /// `POST /auth/signout-others`: how many other sessions were revoked.
+    func signOutOtherSessions() async throws -> Int
+    /// `GET /auth/keys`: the keys for tools, newest first.
+    func accountKeys() async throws -> [AccountKey]
+    /// `DELETE /auth/keys/<id>`: revokes a key (never a session).
+    func deleteAccountKey(id: String) async throws
     // Share link collections (APP-API-CONTRACT 26; keyed; only when `features.share_collections`). Defaulted below
     // (`.unsupported`) so older fakes compile. All throw `ShareCollectionError` for the server's refusals.
     /// `GET /share/collections`: the collections, most recently changed first.

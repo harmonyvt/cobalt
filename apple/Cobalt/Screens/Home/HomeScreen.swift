@@ -623,7 +623,8 @@ struct HomeScreen: View {
 
     private var keyAlertBinding: Binding<Bool> {
         Binding(
-            get: { failure.map(isBlocking) ?? false },
+            // with accounts the pinned "sign in again" says it instead (APP-API-CONTRACT 42.6): no alert, the screen stays
+            get: { !model.capabilities.accounts && (failure.map(isBlocking) ?? false) },
             set: { if !$0, let f = failure, isBlocking(f) { pipeline.reset() } })
     }
 

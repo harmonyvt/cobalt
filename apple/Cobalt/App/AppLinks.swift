@@ -20,6 +20,8 @@ func handleAppLink(_ url: URL, model: AppModel) {
     DebugHooks.log("handleAppLink \(url.absoluteString)")
     defer { DebugHooks.log("handleAppLink done: \(DebugHooks.describe(model))") }
     #endif
+    // the sign-in's return (APP-API-CONTRACT 42.3) belongs to the Access sheet; never navigate on it
+    if AccountAuth.isCallback(url) { return }
     if url.scheme?.lowercased() == "cobalt-apple", url.host(percentEncoded: false)?.lowercased() == "copy",
        let link = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
            .first(where: { $0.name == "url" })?.value,

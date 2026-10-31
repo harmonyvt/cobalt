@@ -29,7 +29,7 @@ export function opBase(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps,
 
 export function forCall(
     base: OpBase,
-    who: Pick<OpContext, "keyId" | "caller"> & Partial<Pick<OpContext, "request" | "url" | "query" | "params" | "chat">>,
+    who: Pick<OpContext, "keyId" | "caller"> & Partial<Pick<OpContext, "request" | "url" | "query" | "params" | "chat" | "country">>,
 ): OpContext {
     return {
         ...base,

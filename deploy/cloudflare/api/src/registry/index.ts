@@ -1,5 +1,6 @@
 // The registry every request and chat call goes through (APP-API-CONTRACT.md section 33). Add an area's ops here; each
 // area keeps its ops in ops/<area>.ts.
+import { AUTH_OPS } from "./ops/auth";
 import { BOX_OPS } from "./ops/box";
 import { CHAT_OPS } from "./ops/chat";
 import { EDITOR_OPS } from "./ops/editor";
@@ -33,6 +34,7 @@ export const REGISTRY = new Registry([
     ...LIVE_OPS,
     ...SYSTEM_OPS,
     ...MCP_OPS,
+    ...AUTH_OPS,
     ...HOST_OPS,
 ]);
 

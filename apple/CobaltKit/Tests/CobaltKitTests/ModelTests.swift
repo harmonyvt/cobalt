@@ -377,10 +377,14 @@ struct AppAndLibraryTests {
                 p.start(link: URL(string: pastedLink)!)
                 await h.driveToSettled()
                 if case .failed(.fetchFailed) = p.state {} else { Issue.record("\(scenario): \(p.state)") }
-            case .revokedKey:
+            case .revokedKey, .signedOut:
                 p.start(link: URL(string: pastedLink)!)
                 await h.driveToSettled()
                 #expect(p.state == .failed(.keyInvalid), "\(scenario)")
+            case .firstLaunch:
+                p.start(link: URL(string: pastedLink)!)
+                await h.driveToSettled()
+                #expect(p.state == .failed(.keyMissing), "\(scenario)")
             case .plainCobalt:
                 p.start(link: URL(string: pastedLink)!)
                 await h.driveToSettled()
@@ -397,7 +401,7 @@ struct AppAndLibraryTests {
                 if case .gallery = p.state {} else { Issue.record("\(scenario): \(p.state)") }
                 #expect(p.galleryRun?.isSaved == true, "\(scenario)")
             case .happy, .coldStart, .shortClip, .legacyFork, .emptyOrbit, .renditions, .renditionsLegacy, .renameFails, .offline, .shareLinksEmpty, .shareLinksFail, .chatEmpty, .chatFail, .chatReplyFails, .chatConfirm, .skyMap, .stageNotConnected, .stageFail,
-                 .editorEmpty, .editorRendering, .editorRenderFails, .editorConflict, .editorFail, .hidden:
+                 .editorEmpty, .editorRendering, .editorRenderFails, .editorConflict, .editorFail, .hidden, .moveOver:
                 p.start(link: URL(string: pastedLink)!)
                 await h.driveToSettled()
                 #expect(p.state == .ready, "\(scenario)")

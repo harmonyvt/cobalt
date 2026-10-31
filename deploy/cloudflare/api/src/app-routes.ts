@@ -305,6 +305,8 @@ export async function capabilities(
                 edit_live_push: editor === true && livePush === true,
                 // PUT /live/chat-start-token: a chat reply sent from another device shows on this one (section 27.9)
                 chat_live_push: chat === true && livePush === true,
+                // device sessions through Cloudflare Access: POST /auth/exchange, /auth/* (APP-API-CONTRACT.md section 42)
+                accounts: true,
             },
             limits: {
                 max_webp_seconds: MAX_RENDER_SECONDS,
