@@ -717,3 +717,43 @@ lane and no cutout button.
   picture is not on the device or Vision finds no subject.
 - Tests: `EditorLayersTests.swift` (JSON, validation, draw order, stacking pixels, session placement, capability) and
   `CutoutMakerTests.swift` (flood fill, edges only, trim, empty, colour picking).
+
+## 13. Cropping pictures (addendum, 2026-10-31; server half: APP-API-CONTRACT.md section 44)
+
+Mockup: https://claude.ai/artifact/TpWXqfmaoEuFLBsGA5Fua9 (sections 1 and 3). Everything below shows only on a server that
+sends `features.image_crop`; an older server has no crop item anywhere.
+
+- **Model** (CobaltKit, `Editor/ImageCropper.swift`): `ImageCropRect` (fractions, top-left origin, `clamped`, `isWhole`),
+  `ImageCropFlip` (`none` / `h` / `v`), `ImageCropSpec` (`crop` nil = the whole picture, `rotate` 0/90/180/270 clockwise,
+  `flip`, `cutout`, `title`; `jsonBody()` with sorted keys and the defaults left out, `query` for an upload,
+  `changesSomething`). `displayed` / `stored` map a box between the stored picture and the picture as shown (turned, then
+  flipped); `turnedLeft` is the turn after a quarter turn left of the shown picture (clockwise underneath when it is
+  mirrored). `ImageCropper` follows `image-crop-core.ts`: `pixelRect` rounds the box outward to whole pixels (a millionth of
+  slack) and clamps it, nil under 2 x 2 px (`.tooSmall`); `crop` cuts, turns, then flips at full resolution; `make` chains
+  `CutoutMaker` (`auto`, Vision) with `cutout`; `png` is nil over 8192 px a side or 20 MB; `decode` reads a file at full size
+  (EXIF orientation applied, at most 8192 px).
+- **Route** (`Editor/EditImageCrop.swift`): `ImageCropClient` (`HTTPCobaltClient`, `PreviewClient`): `cropImage(of:spec:)` (JSON)
+  and `uploadImageCrop(of:png:spec:)` (`content-type: image/png`, query `title,x,y,w,h,rotate,flip,cutout`). Answer
+  `ImageCropResult` (`source` is a still PNG). `ImageCropError` maps `error.crop.*`. `ImageCropRun.make` crops on the device
+  and uploads; when the picture is not here, the device cannot (the PNG is too big, Vision found no subject) and
+  `Capabilities.canServerCropImage` says the server can (a PNG without `cutout`, or anything with `features.cutout_auto`), the
+  server makes it. `Capabilities.imageCrop` = `features.image_crop` (false when absent).
+- **Sheet** (`Screens/Tools/ImageCropSheet.swift`, `ImageCropStage.swift`, `ImageCropModel.swift`), one for iPhone, iPad and
+  Mac: `crop` · the picture's name and size · `reset` · the close top right. The picture as it will be turned and flipped
+  with the box (drag inside to move, a corner or an edge to resize, the thirds while it moves, the outside dimmed, the pixel
+  size at its corner); aspect chips `free` `original` `1:1` `4:5` `9:16` `16:9`; `rotate left`, `flip` (left to right);
+  `remove background`. Buttons: `save a copy` and `crop and place` (the editor's bin and add sheet), `crop` alone (an image
+  overlay: the crop takes the overlay's picture, same place, width, time and layer, as the cutout does), `save a copy`
+  alone (the library). Mac: a panel, the picture on the left and the controls in a 248 pt sidebar (`aspect`, `turn`, the
+  switch, `x 52% · y 38% · 465 × 615 px`); the arrow keys nudge the box a hundredth (shift: a tenth), a shift-drag keeps its
+  shape, return runs the primary button, esc cancels. VoiceOver: the box (adjustable size, move actions) and its four
+  handles (adjustable). When the picture cannot be opened the sheet says so and, if the server can, still turns, flips and
+  cuts out the whole picture there.
+- **Entry points**: the editor bin's and the add sheet's picture context menu `crop` (next to `remove background`); the
+  overlay sheet and the inspector `crop` (next to `remove background`, `EditorOverlayLayerRows`); the library's context
+  menu and the viewer's `more` menu `crop a copy…` (the existing `crop…` stays the gallery's made-file crop), which saves a
+  copy, refreshes the library and says `saved a copy to your library`.
+- **Session**: `EditSession.canCropImage`, `canServerCrop(_:cutout:)`, `makeImageCrop(of:picture:spec:place:replacing:)`.
+  **AppModel**: `canCropImages`, `canCropImage(_:)`, `cropPicture(of:)`, `cropImage(of:picture:spec:)`.
+- Tests: `ImageCropperTests.swift` (rounding, clamping, the 2 px floor, turn and flip pixels for every combination, the
+  shown-picture mapping, JSON and query, error codes, the answer, the capability, the session's place / replace / refuse).

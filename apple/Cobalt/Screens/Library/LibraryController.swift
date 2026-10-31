@@ -131,6 +131,8 @@ final class LibraryController {
     var makingPrivate: MediaItem?
     /// The gallery the owner chose `make from this post…` for: the combine sheet is open on it (`LibraryCombineSheet`).
     var combining: MediaItem?
+    /// The picture the owner chose `crop a copy…` for: the crop sheet is open on it (`LibraryImageCropHook.swift`).
+    var croppingPicture: LibraryImageCropTarget?
     /// The sky map (`SkyMap/LibrarySkyMapHook.swift`) is open.
     var showingSkyMap = false
 

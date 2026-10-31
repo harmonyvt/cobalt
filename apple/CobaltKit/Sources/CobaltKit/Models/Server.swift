@@ -183,6 +183,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `features.accounts` (APP-API-CONTRACT 42): devices sign in through Cloudflare Access (`/auth/*`) instead of pasting a
     /// key. False when absent: settings keep the api key paste, and a revoked key is the old alert.
     public var accounts: Bool = false
+    /// `features.image_crop` (APP-API-CONTRACT 44.1): `POST /library/items/<id>/crop` exists: a picture can be cropped, turned,
+    /// flipped and have its background removed into a new private PNG (the app's own crop is uploaded there; the server's own
+    /// crops of non-PNG pictures need `cutoutAuto`). False when absent: no crop sheet.
+    public var imageCrop: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

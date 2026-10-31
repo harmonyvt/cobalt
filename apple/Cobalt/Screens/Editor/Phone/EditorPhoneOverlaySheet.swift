@@ -13,6 +13,7 @@ struct EditorPhoneOverlaySheet: View {
     @State private var original: EditOverlay?
     @State private var overlayID: String
     @State private var cutoutOf: EditSource?
+    @State private var croppingImage: EditSource?
 
     init(session: EditSession, pitchEnabled: Bool = true) {
         self.session = session
@@ -30,9 +31,10 @@ struct EditorPhoneOverlaySheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     if let overlay {
-                        EditorOverlayLayerRows(session: session, overlay: overlay) {
-                            cutoutOf = session.source(for: overlay.item)
-                        }
+                        EditorOverlayLayerRows(
+                            session: session, overlay: overlay,
+                            removeBackground: { cutoutOf = session.source(for: overlay.item) },
+                            crop: { croppingImage = session.source(for: overlay.item) })
                         lengthSection(overlay)
                         sizeSection(overlay)
                         opacitySection(overlay)
@@ -57,6 +59,7 @@ struct EditorPhoneOverlaySheet: View {
             EditorCutoutSheet(session: session, source: picture, replacing: overlayID) { cutoutOf = nil }
                 .presentationDetents([.large])
         }
+        .modifier(EditorImageCropPresenter(session: session, source: $croppingImage, replacing: overlayID))
     }
 
     // MARK: header

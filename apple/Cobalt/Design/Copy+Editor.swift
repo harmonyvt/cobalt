@@ -379,6 +379,45 @@ extension Copy {
             }
         }
 
+        // MARK: cropping pictures (CONTRACT-EDITOR 13)
+
+        static let pictureCrop = "crop", cropAPicture = "crop a copy…", cropping = "cropping…"
+        static let cropSaveCopy = "save a copy", cropAndPlace = "crop and place"
+        static let cropNote = "makes a new private png in your library · the picture stays as it was"
+        static let cropReplaceNote = "the overlay keeps its place, size, time and layer"
+        static let cropAspect = "aspect", cropTurn = "turn"
+        static let cropOriginal = "original"
+        static let cropRotateLeft = "rotate left", cropFlip = "flip"
+        static let cropRemoveBackground = "remove background"
+        static let cropLoading = "getting the picture…"
+        static let cropNoPreview = "can't open the picture here · the server will crop it"
+        static let cropBoxA11y = "crop box"
+        static let cropBoxHint = "use the actions to move it or change its size"
+        static let cropBigger = "bigger", cropSmaller = "smaller"
+        static let cropMoveLeft = "move left", cropMoveRight = "move right", cropMoveUp = "move up", cropMoveDown = "move down"
+        static let cropSaved = "saved a copy to your library"
+        static func cropCorner(top: Bool, left: Bool) -> String {
+            "\(top ? "top" : "bottom") \(left ? "left" : "right") handle"
+        }
+        static let cropCornerHint = "swipe up to pull it out, down to push it in"
+        static func cropSize(_ w: Int, _ h: Int) -> String { "\(w) × \(h)" }
+        static func cropSizeA11y(_ w: Int, _ h: Int) -> String { "\(w) by \(h) pixels" }
+        static func cropReadout(x: Double, y: Double, w: Int, h: Int) -> String {
+            "x \(Int((x * 100).rounded()))% · y \(Int((y * 100).rounded()))% · \(w) × \(h) px"
+        }
+        static func cropError(_ e: ImageCropError) -> String {
+            switch e {
+            case .tooSmall: return "the box is too small · keep at least 2 px a side"
+            case .empty: return "nothing was left after removing the background"
+            case .notImage: return "that isn't a picture"
+            case .tooLarge: return "that picture is too big"
+            case .offline: return "you're offline · try again"
+            case .off: return "this server can't crop that picture"
+            case .notFound: return "that picture is gone from your library"
+            default: return "couldn't crop it · try again"
+            }
+        }
+
         // MARK: icon names (added for the icon-first controls: what a long press shows and VoiceOver reads)
 
         static let lengthShorter = "a tenth shorter", lengthLonger = "a tenth longer"

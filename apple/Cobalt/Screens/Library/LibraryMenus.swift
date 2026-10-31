@@ -73,6 +73,9 @@ struct LibraryMenuItems: View {
         if controller.canMakeFromPost(item) {
             Button(Copy.Library2.makeFromPost, systemImage: Symbol.Gallery.make) { controller.makeFromPost(item) }
         }
+        if controller.croppablePicture(item) != nil {
+            Button(Copy.Editor.cropAPicture, systemImage: Symbol.Editor.imageCrop) { controller.cropPicture(item) }
+        }
         OfflineMenuItems(item: item, controller: controller, askRemove: askRemove)
         ShowInFilesButton(model: controller.model, item: item)
         ShowInFinderButton(model: controller.model, item: item)

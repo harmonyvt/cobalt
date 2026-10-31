@@ -283,16 +283,21 @@ struct Checkerboard: View {
     }
 }
 
-/// The overlay's layer (`layer 2` with down and up) and, for a picture, `remove background`: shared by the inspector (Mac,
-/// iPad) and the overlay sheet (iPhone).
+/// The overlay's layer (`layer 2` with down and up) and, for a picture, `remove background` and `crop` (CONTRACT-EDITOR 13):
+/// shared by the inspector (Mac, iPad) and the overlay sheet (iPhone).
 struct EditorOverlayLayerRows: View {
     let session: EditSession
     let overlay: EditOverlay
     let removeBackground: () -> Void
+    /// Opens the crop sheet on the overlay's picture (shown with `features.image_crop`).
+    var crop: (() -> Void)?
 
     @State private var refused = 0
 
     private var source: EditSource? { session.source(for: overlay.item) }
+
+    /// A photo or gif overlay: its picture can lose its background or be cropped.
+    private var isPicture: Bool { source?.kind == .photo || source?.kind == .gif }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -308,9 +313,14 @@ struct EditorOverlayLayerRows: View {
                     }
                 }
             }
-            if session.canCutout, let kind = source?.kind, kind == .photo || kind == .gif {
+            if isPicture, session.canCutout || (session.canCropImage && crop != nil) {
                 IconRow(alignment: .leading) {
-                    EditorInspectorButton(title: Copy.Editor.removeBackground, symbol: Symbol.Editor.cutout, action: removeBackground)
+                    if session.canCutout {
+                        EditorInspectorButton(title: Copy.Editor.removeBackground, symbol: Symbol.Editor.cutout, action: removeBackground)
+                    }
+                    if session.canCropImage, let crop {
+                        EditorInspectorButton(title: Copy.Editor.pictureCrop, symbol: Symbol.Editor.imageCrop, action: crop)
+                    }
                 }
             }
         }
