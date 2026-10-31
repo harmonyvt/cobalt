@@ -104,6 +104,22 @@ struct LibraryBarFoldEffect: ViewModifier {
     }
 }
 
+/// `.searchable` where the system's field is used (iPad, Mac); nothing on the iPhone, which has `LibrarySearchField`.
+struct LibrarySearchable: ViewModifier {
+    @Binding var text: String
+    let placement: SearchFieldPlacement
+    let prompt: String
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.searchable(text: $text, placement: placement, prompt: prompt)
+        } else {
+            content
+        }
+    }
+}
+
 #if os(iOS)
 /// The iPhone's search field, in the top bar so it folds away with the chips (the system's drawer search field
 /// stays put in the navigation bar). Same binding and prompt as the iPad's and Mac's `.searchable`.

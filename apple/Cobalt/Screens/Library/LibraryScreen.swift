@@ -934,19 +934,3 @@ private struct LibraryAddMenu: View {
     }
 }
 #endif
-
-/// `.searchable` where the system's field is used (iPad, Mac); nothing on the iPhone, which has `LibrarySearchField`.
-private struct LibrarySearchable: ViewModifier {
-    @Binding var text: String
-    let placement: SearchFieldPlacement
-    let prompt: String
-    let enabled: Bool
-
-    func body(content: Content) -> some View {
-        if enabled {
-            content.searchable(text: $text, placement: placement, prompt: prompt)
-        } else {
-            content
-        }
-    }
-}
