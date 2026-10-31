@@ -160,6 +160,7 @@ public struct QueueItem: Identifiable {
         case .photos: return .settings
         case .edit(let render):
             if render.status == .done, let item = render.itemID { return .media("post:\(item)") }
+            if render.isChat { return nil }             // a chat video has no project to open (45.3)
             return .edit(projectID: render.projectID)
         case .server, .download: return nil
         }
@@ -530,6 +531,17 @@ public final class UnifiedQueue {
         for (i, r) in edits.enumerated() where !dismissedEdits.contains(r.id) {
             let id = "edit:\(r.id)"
             switch r.status {
+            case .queued where r.isChat:
+                // a chat video (45.3): nothing to open until its post exists, and no project to try again from
+                let actions: [QueueAction] = r.cancelRequested ? [] : [.cancel]
+                waiting.append((QueueItem(id: id, section: .waiting, kind: .edit(r), actions: actions), (r.queueAhead ?? 0) + 1, jobs.count + 1_000 + i))
+            case .preparing where r.isChat, .rendering where r.isChat, .finishing where r.isChat:
+                let actions: [QueueAction] = r.cancelRequested ? [] : [.cancel]
+                now_.append(QueueItem(id: id, section: .now, kind: .edit(r), actions: actions))
+            case .error where r.isChat:
+                if now.timeIntervalSince(r.lastMoment) < finishedLinger {
+                    failed.append(QueueItem(id: id, section: .failed, kind: .edit(r), actions: [.dismiss]))
+                }
             case .queued:
                 let actions: [QueueAction] = r.cancelRequested ? [.open] : [.cancel, .open]
                 waiting.append((QueueItem(id: id, section: .waiting, kind: .edit(r), actions: actions), (r.queueAhead ?? 0) + 1, jobs.count + 1_000 + i))

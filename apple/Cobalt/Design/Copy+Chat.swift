@@ -225,6 +225,53 @@ extension Copy {
             return asked ? "\(name), \(state), \(helperAsked)" : "\(name), \(state)"
         }
 
+        // MARK: chat videos (APP-API-CONTRACT 45)
+
+        static let makeVideo = "make video"
+        static let makeVideoFromHere = "make video from here"
+        static let videoTitle = "make a video of this chat"
+        static let videoFromTitle = "make a video from here"
+        static let videoNote = "replays the chat with its videos playing. it lands in your library, private."
+        static let videoShape = "shape"
+        static let videoTheme = "theme"
+        static let videoSpeed = "speed"
+        static let videoNotify = "tell me when it's done"
+        static func videoShapeName(_ shape: ChatVideoShape) -> String {
+            switch shape {
+            case .portrait: return "portrait"
+            case .landscape: return "wide"
+            case .square: return "square"
+            }
+        }
+        static func videoThemeName(_ theme: ChatVideoTheme) -> String {
+            switch theme {
+            case .dark: return "dark"
+            case .light: return "light"
+            }
+        }
+        static func videoSpeedName(_ speed: ChatVideoSpeed) -> String {
+            switch speed {
+            case .slow: return "slow"
+            case .normal: return "normal"
+            case .fast: return "fast"
+            }
+        }
+        /// After "make video": the status line, its second line and its action.
+        static let videoQueued = "video in the queue"
+        static let videoQueuedDetail = "it lands in your library, private"
+        static let videoOpenQueue = "open queue"
+        static let videoEmpty = "nothing in this chat to show yet"
+        /// A chat video's row in the queue.
+        static func videoQueueTitle(_ title: String) -> String { "chat video · \(title.isEmpty ? newChat : title)" }
+        /// What a refused "make video" says: the chat's refusals, and the render queue's.
+        static func videoMessage(for error: Error) -> String {
+            switch error {
+            case ChatError.videoEmpty: return videoEmpty
+            case let e as EditError: return Copy.Editor.errorLine(e)
+            default: return message(for: error)
+            }
+        }
+
         // MARK: refusals
 
         static let busy = "wait for the reply to finish"
@@ -244,6 +291,7 @@ extension Copy {
             case ChatError.notFound: return gone
             case ChatError.badRequest: return tooLong
             case ChatError.confirmGone: return confirmGone
+            case ChatError.videoEmpty: return videoEmpty
             default: return Copy.actionFailed
             }
         }

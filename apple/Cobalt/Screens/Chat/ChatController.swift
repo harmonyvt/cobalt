@@ -19,6 +19,8 @@ final class ChatController {
     var renaming: ChatThread?
     /// The thread the owner chose `delete` for: the confirm is open on it.
     var deleting: ChatThread?
+    /// "make video" (APP-API-CONTRACT 45): the sheet is open on this thread (and message).
+    var video: ChatVideoRequest?
     /// A new thread is being made (the button is dimmed meanwhile).
     var making = false
     /// Threads whose DELETE is in flight.
@@ -89,6 +91,9 @@ private struct ChatPresentations: ViewModifier {
             .sheet(item: $controller.renaming) { thread in
                 ChatRenameSheet(model: controller.model, thread: thread)
             }
+            .sheet(item: $controller.video) { request in
+                ChatVideoSheet(controller: controller, request: request)
+            }
             .haptic(.success, trigger: controller.doneTick)
             .haptic(.error, trigger: controller.failTick)
     }
@@ -99,7 +104,7 @@ private struct ChatPresentations: ViewModifier {
 }
 
 extension View {
-    /// The delete confirm and the rename sheet of `controller`; `deleted` runs after a delete the owner confirmed.
+    /// The delete confirm, the rename sheet and the "make video" sheet of `controller`; `deleted` runs after a delete the owner confirmed.
     func chatPresentations(_ controller: ChatController, deleted: @escaping () -> Void = {}) -> some View {
         modifier(ChatPresentations(controller: controller, deleted: deleted))
     }

@@ -123,7 +123,40 @@ export type StepRecord = {
     ended?: { status: "done" | "error" | "cancelled"; code: string | null };
     notifyTries?: number;
     cleanTries?: number;
+    // a chat video (section 45): the inputs come from the frozen spec; one that is gone is skipped (listed here)
+    chat?: boolean;
+    missing?: number[];
 };
+
+// ---- chat videos (section 45) ----------------------------------------------------------------------------------------
+
+// The frozen spec of a chat render (`edit_renders.timeline` when `kind` is 'chat'; built by src/chat-video.ts).
+export type ChatSpec = {
+    kind: "chat";
+    thread_id: string;
+    options: { shape: string; theme: string; speed: number };
+    snapshot: { messages: unknown[]; posts: Record<string, unknown> } & Record<string, unknown>;
+    inputs: InputRef[];
+};
+
+// The inputs of a chat spec, checked; null when the spec is not one.
+export function chatSpecInputs(text: string): InputRef[] | null {
+    let spec: ChatSpec;
+    try {
+        spec = JSON.parse(text) as ChatSpec;
+    } catch {
+        return null;
+    }
+    if (!spec || spec.kind !== "chat" || !Array.isArray(spec.inputs) || typeof spec.snapshot !== "object" || spec.snapshot === null) return null;
+    const out: InputRef[] = [];
+    for (const i of spec.inputs) {
+        if (!i || !Number.isInteger(i.n) || i.n < 0 || i.n >= 50 || typeof i.item !== "string" || typeof i.key !== "string") return null;
+        if (i.bucket !== "media" && i.bucket !== "originals") return null;
+        if (i.kind !== "video" && i.kind !== "gif" && i.kind !== "photo") return null;
+        out.push({ n: i.n, item: i.item, bucket: i.bucket, key: i.key, bytes: Number(i.bytes) || 0, kind: i.kind });
+    }
+    return out;
+}
 
 // ---- messages (31.11) -----------------------------------------------------------------------------------------------
 
@@ -218,7 +251,7 @@ export type EditCoreDeps = {
 
 type Outcome = number | null;
 
-type ClaimRow = RenderRow & { timeline: string; key_id: string | null; notify: number; notified_at: number | null; instance: string | null; attempts: number };
+type ClaimRow = RenderRow & { kind?: string | null; timeline: string; key_id: string | null; notify: number; notified_at: number | null; instance: string | null; attempts: number };
 
 const json = async (res: Response): Promise<any> => {
     try {
@@ -461,6 +494,19 @@ export class EditRenderCore {
             deadline: 0,
             retried: false,
         };
+        if (row.kind === "chat") {
+            const inputs = chatSpecInputs(row.timeline);
+            if (!inputs) return await this.end(rec, "error", "error.edit.render_failed");
+            rec.chat = true;
+            rec.inputs = inputs;
+            await this.d.storage.put(RENDER_KEY, rec);
+            if (!(await this.ensure(rec))) {
+                await this.d.storage.put(RENDER_KEY, rec);
+                return await this.lose(rec, "the container would not start");
+            }
+            await this.d.storage.put(RENDER_KEY, rec);
+            return STEP_NOW_S;
+        }
         let timeline: Timeline;
         try {
             timeline = JSON.parse(row.timeline) as Timeline;
@@ -558,6 +604,7 @@ export class EditRenderCore {
         rec.busy = 0;
         rec.pollFails = 0;
         rec.sent = 0;
+        rec.missing = undefined;
         rec.result = undefined;
         await this.d.db
             .prepare(
@@ -596,6 +643,14 @@ export class EditRenderCore {
             obj = await raceCeiling(store.get(inp.key), R2_GET_MS, "edit input get");
         } catch (e) {
             return await this.retry(rec, `R2 get: ${String(e)}`);
+        }
+        if (!obj && rec.chat) {
+            // a chat video draws a file that is gone without its picture (45.4)
+            rec.missing = [...(rec.missing ?? []), inp.n];
+            rec.n += 1;
+            if (rec.n >= rec.inputs.length) rec.step = "start";
+            await this.d.storage.put(RENDER_KEY, rec);
+            return STEP_NOW_S;
         }
         if (!obj) return await this.end(rec, "error", "error.edit.source_missing");
 
@@ -655,6 +710,10 @@ export class EditRenderCore {
         } catch {
             return await this.end(rec, "error", "error.edit.render_failed");
         }
+        const sent = rec.inputs.filter((i) => !(rec.missing ?? []).includes(i.n)).map((i) => ({ n: i.n, item: i.item, kind: i.kind }));
+        const startBody = rec.chat
+            ? { chat: { snapshot: (timeline as ChatSpec).snapshot, options: (timeline as ChatSpec).options }, inputs: sent }
+            : { timeline, inputs: sent };
         let res: Response;
         try {
             res = await this.call(
@@ -663,7 +722,7 @@ export class EditRenderCore {
                 {
                     method: "POST",
                     headers: { "content-type": "application/json" },
-                    body: JSON.stringify({ timeline, inputs: rec.inputs.map((i) => ({ n: i.n, item: i.item, kind: i.kind })) }),
+                    body: JSON.stringify(startBody),
                 },
                 START_CALL_MS,
                 "edit start",
@@ -910,8 +969,12 @@ export class EditRenderCore {
         }
         // the title cleaned like an upload name: no `/`, no control characters, at most 120 characters
         const name = cleanName(`${row.title}.mp4`, "mp4");
-        const madeFrom = JSON.stringify(timelineItems(timeline));
-        const madeSpec = JSON.stringify({ kind: "edit", project: row.project_id, render: rec.rid, revision: row.revision });
+        const madeFrom = JSON.stringify(rec.chat ? [...new Set(rec.inputs.map((i) => i.item))] : timelineItems(timeline));
+        const madeSpec = JSON.stringify(
+            rec.chat
+                ? { kind: "chat", thread: (timeline as unknown as ChatSpec).thread_id, render: rec.rid }
+                : { kind: "edit", project: row.project_id, render: rec.rid, revision: row.revision },
+        );
         // insertMediaItem inserts unless the object is already named by a row (a retried tick), and swallows D1 errors
         await insertMediaItem(
             this.d.db,

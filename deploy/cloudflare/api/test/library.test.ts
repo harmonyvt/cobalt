@@ -983,6 +983,7 @@ describe("GET /capabilities", () => {
                 editor: false,
                 edit_live_push: false,
                 chat_live_push: false,
+                chat_video: false,
                 accounts: true,
                 still_webp: false,
                 // no embedding Space in this world's env (section 21)

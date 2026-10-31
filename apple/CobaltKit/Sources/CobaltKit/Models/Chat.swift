@@ -554,6 +554,8 @@ public enum ChatError: Error, Sendable, Equatable {
     case model
     /// `error.chat.interrupted`: the reply was cut off (an `error` event, or a reply still running after 3 minutes).
     case interrupted
+    /// `409 error.chat.video.empty` (45.1): a chat video would show nothing (no user or assistant message in the range).
+    case videoEmpty
     /// `503 error.api.generic`: the server cannot take it right now.
     case unavailable
 
@@ -569,6 +571,7 @@ public enum ChatError: Error, Sendable, Equatable {
         case "error.chat.confirm_gone": self = .confirmGone
         case "error.chat.model": self = .model
         case "error.chat.interrupted": self = .interrupted
+        case "error.chat.video.empty": self = .videoEmpty
         default: return nil
         }
     }
@@ -585,6 +588,7 @@ public enum ChatError: Error, Sendable, Equatable {
         case .confirmGone: return "error.chat.confirm_gone"
         case .model: return "error.chat.model"
         case .interrupted: return "error.chat.interrupted"
+        case .videoEmpty: return "error.chat.video.empty"
         case .unavailable: return "error.api.generic"
         }
     }

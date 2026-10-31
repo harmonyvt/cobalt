@@ -187,6 +187,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// flipped and have its background removed into a new private PNG (the app's own crop is uploaded there; the server's own
     /// crops of non-PNG pictures need `cutoutAuto`). False when absent: no crop sheet.
     public var imageCrop: Bool = false
+    /// `features.chat_video` (APP-API-CONTRACT 45.6): `POST /chat/threads/<id>/video` exists: a chat thread can be replayed as an
+    /// MP4 by the editor's render containers (a render of kind `chat`). True only with `chat` (the server also needs `editor`).
+    /// False when absent: no "make video" in a thread.
+    public var chatVideo: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

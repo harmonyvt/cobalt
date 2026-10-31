@@ -289,6 +289,7 @@ describe("defineOp and the registry", () => {
             "edits.delete",
             "jobs.wait",
             "jobs.onDone",
+            "chat.video",
             "make.cutout",
             "edits.addOverlay",
             // section 44.2

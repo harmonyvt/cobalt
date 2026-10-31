@@ -54,4 +54,6 @@ extension Symbol {
     static let chatHelperSent = "arrow.turn.up.right"
     /// A message received.
     static let chatHelperReceived = "arrow.turn.down.left"
+    /// "make video" (APP-API-CONTRACT 45): the thread's menu, a message's menu, a chat video's queue row.
+    static let chatVideo = "film"
 }

@@ -95,7 +95,7 @@ const INSTRUCTIONS = [
     "capystore is Harmony's media library: videos, images and galleries saved from links or uploaded, with public share links.",
     "Posts are found with library_list or library_search (meaning search) and opened with library_post; use the post `id` they return.",
     "Save a link (TikTok, X, YouTube, Instagram, a direct file...) with library_save. Upload a local file with upload_begin, then PUT the file's bytes to the upload_url it returns (its `curl` field is ready to run).",
-    "Make ops (make_*, edits_render) answer a job: check on it with jobs_wait. Share links: links_create; collections and sets group them.",
+    "Make ops (make_*, edits_render, chat_video) answer a job: check on it with jobs_wait. Share links: links_create; collections and sets group them.",
     "Cropping (make_cropImage for pictures, make_crop for videos): never guess the position or assume the centre. Look at the source with grid: true (a video: frames: true, or make_frames for frames at chosen seconds), read the box off the labelled grid, check it with look's box option before making it, and look at the result after. A moving subject needs a box that covers it in every frame, or several clips with their own crops. Plain crop by default: cutout only for a subject on a plain background, never for banners, bars or text. Then edits_addOverlay to use it in a video.",
     "When offered, agents_spawn starts a helper (another capystore agent with these tools) on one task in the background; follow it with agents_get or jobs_wait on its job, message it with agents_send, read what helpers sent you with agents_inbox.",
     "Tools marked destructive delete or change things for good: confirm with the user first.",

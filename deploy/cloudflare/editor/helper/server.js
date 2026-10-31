@@ -25,6 +25,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
+import { renderChat } from "./chat/render.js";
 import { compile } from "./compile.js";
 import { ffmpegInfo, parseInfo, probeSource } from "./probe.js";
 import { EDIT_MAX_CLIPS, EDIT_MAX_INPUT_BYTES, EDIT_MAX_OUTPUT_BYTES, checkSources, parseTimeline, sourceKind } from "./timeline.js";
@@ -235,6 +236,7 @@ export function createEditServer(opts = {}) {
             return err(res, 400, "error.edit.bad_request", { path: "" });
         }
         if (typeof body !== "object" || body === null || !Array.isArray(body.inputs)) return err(res, 400, "error.edit.bad_request", { path: "inputs" });
+        if (body.chat !== undefined) return startChat(r, res, body);
         const parsed = parseTimeline(body.timeline);
         if (!parsed.ok) return err(res, 400, parsed.code, { path: parsed.path });
         const timeline = parsed.timeline;
@@ -339,6 +341,11 @@ export function createEditServer(opts = {}) {
             r.error = "error.edit.render_failed";
             return;
         }
+        await finish(r, output);
+    }
+
+    /** The finished file: its size, duration and poster, then done. @param {Render} r @param {string} output */
+    async function finish(r, output) {
         const size = (await stat(output).catch(() => null))?.size ?? 0;
         if (size <= 0) {
             r.status = "error";
@@ -363,6 +370,64 @@ export function createEditServer(opts = {}) {
         r.hasPoster = pr.code === 0 && ((await stat(poster).catch(() => null))?.size ?? 0) > 0;
         if (!r.hasPoster) log(`render ${r.rid}: no poster (${pr.stderr.trim().slice(-200)})`);
         r.status = "done";
+    }
+
+    // ---- POST /renders/<rid>/start with {"chat": {snapshot, options}, "inputs"} (section 45.4)
+    /** @param {Render} r @param {http.ServerResponse} res @param {any} body */
+    function startChat(r, res, body) {
+        const chat = body.chat;
+        if (typeof chat !== "object" || chat === null || typeof chat.snapshot !== "object" || chat.snapshot === null || !Array.isArray(chat.snapshot.messages)) {
+            return err(res, 400, "error.edit.bad_request", { path: "chat" });
+        }
+        const o = typeof chat.options === "object" && chat.options !== null ? chat.options : {};
+        // the snapshot names its files by input number; one that never arrived is drawn without its picture
+        const have = (/** @type {unknown} */ n) => (typeof n === "string" && /^\d{1,2}$/.test(n) && r.inputs.has(Number(n)) ? n : null);
+        const snap = structuredClone(chat.snapshot);
+        for (const p of Object.values(snap.posts ?? {})) {
+            const post = /** @type {any} */ (p);
+            post.poster = have(post.poster);
+            for (const f of post.files ?? []) f.url = have(f.url);
+        }
+        const output = path.join(r.dir, "out.mp4");
+        r.status = "encoding";
+        r.secondsDone = 0;
+        res.writeHead(202, { "cache-control": "no-store", "content-length": 2, "content-type": "application/json" });
+        res.end("{}");
+        renderChat({
+            snap,
+            mediaDir: path.join(r.dir, "in"),
+            out: output,
+            work: path.join(r.dir, "chat"),
+            shape: o.shape,
+            theme: o.theme,
+            speed: typeof o.speed === "number" ? o.speed : undefined,
+            ffmpeg: FFMPEG,
+            chromium: opts.chromium,
+            gone: () => r.gone,
+            onChild: (c) => {
+                r.child = c;
+            },
+            onProgress: (done, total) => {
+                r.secondsTotal = total;
+                r.secondsDone = Math.min(total, done);
+                r.touched = Date.now();
+            },
+        })
+            .then(async (made) => {
+                r.child = undefined;
+                if (r.gone || !made) return;
+                r.width = made.width;
+                r.height = made.height;
+                await rm(path.join(r.dir, "chat"), { recursive: true, force: true }).catch(() => {});
+                await finish(r, output);
+            })
+            .catch((e) => {
+                log(`chat render ${r.rid}: ${e?.message ?? e}`);
+                if (!r.gone) {
+                    r.status = "error";
+                    r.error = "error.edit.render_failed";
+                }
+            });
     }
 
     /** @param {Render} r */

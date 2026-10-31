@@ -594,6 +594,34 @@ extension PreviewClient {
         return ChatThreadDetail(thread: thread, messages: messages, posts: posts, agent: chatState.agentRef(id))
     }
 
+    /// `POST /chat/threads/<id>/video` (45.1): a queued chat render on the preview editor's clock (about 6 s of video a
+    /// message, at most 180 s). `notFound` for an unknown thread, `badRequest` for a `from`/`to` that is not one of its
+    /// messages, `videoEmpty` with nothing to show, `busy` while a reply is written.
+    public func makeChatVideo(
+        threadID: String, shape: ChatVideoShape?, theme: ChatVideoTheme?, speed: Double?, from: String?, to: String?, notify: Bool
+    ) async throws -> EditRender {
+        chatState.record("VIDEO " + threadID)
+        try await clock.sleep(seconds: 0.3 * timeScale)
+        guard scenario.hasChat else { throw PipelineFailure.unsupported }
+        guard let thread = chatState.thread(threadID) else { throw ChatError.notFound }
+        let messages = chatState.messages(threadID)
+        if messages.contains(where: { $0.status == .running }) { throw ChatError.busy }
+        var range = messages[...]
+        if let from {
+            guard let i = range.firstIndex(where: { $0.id == from }) else { throw ChatError.badRequest }
+            range = range[i...]
+        }
+        if let to {
+            guard let i = range.firstIndex(where: { $0.id == to }) else { throw ChatError.badRequest }
+            range = range[...i]
+        }
+        guard !range.isEmpty else { throw ChatError.videoEmpty }
+        let pace = max(0.5, min(2, speed ?? 1))
+        let seconds = min(180, (Double(range.count) * 6 / pace).rounded())
+        return try editorState.startChatRender(
+            threadID: threadID, title: thread.title, secondsTotal: seconds, now: clock.now(), timeScale: timeScale, scenario: scenario)
+    }
+
     /// `GET /chat/threads/<id>/agents` (43.6): the `.chatAgents` thread's two helpers and their mail; empty lists for any
     /// other thread, `notFound` for an unknown one.
     public func chatAgents(threadID: String) async throws -> ChatAgentList {

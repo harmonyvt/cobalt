@@ -7,6 +7,11 @@ FROM node:24-alpine
 # (animated webps are turned into APNGs by helper/webp.js, section 39, so the apng demuxer too).
 RUN apk add --no-cache ffmpeg
 
+# Chat videos (APP-API-CONTRACT.md section 45): headless Chromium draws the chat; Noto covers what IBM Plex Mono (bundled in
+# helper/chat/fonts) lacks: kaomoji (CJK, halfwidth katakana, Greek) and colour emoji.
+RUN apk add --no-cache chromium font-noto font-noto-cjk font-noto-emoji \
+    && chromium --version
+
 # Fail the build, not a render, when the ffmpeg in the image lacks something the compiler's graph needs.
 RUN set -e; \
     ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libx264; \
@@ -27,7 +32,8 @@ COPY helper /app/helper
 
 ENV NODE_ENV=production \
     EDIT_WORK_DIR=/tmp/edit \
-    EDIT_PORT=9200
+    EDIT_PORT=9200 \
+    CHAT_CHROMIUM=/usr/bin/chromium
 EXPOSE 9200
 
 # EDIT_INTERNAL_KEY and EDIT_DEPLOY_VERSION come from the Durable Object (EditRenderer.envVars). Without a key every request is 403.

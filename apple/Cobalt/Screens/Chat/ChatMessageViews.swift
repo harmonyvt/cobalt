@@ -130,6 +130,10 @@ struct ChatMessageView: View, Equatable {
     var answer: (ChatConfirm, Bool) -> Void = { _, _ in }
     /// The card's answer is on its way.
     var answering = false
+    /// "make video from here" is offered (APP-API-CONTRACT 45: `features.chat_video`, no reply running).
+    var canMakeVideo = false
+    /// "make video from here": this message's id.
+    var makeVideo: (String) -> Void = { _ in }
 
     @Environment(\.shell) private var shell
 
@@ -137,6 +141,7 @@ struct ChatMessageView: View, Equatable {
     /// skips its body (closures are the screen's own and do the same thing every pass, so they are not compared).
     nonisolated static func == (a: Self, b: Self) -> Bool {
         guard a.message == b.message, a.tier == b.tier, a.canRetry == b.canRetry, a.answering == b.answering,
+              a.canMakeVideo == b.canMakeVideo,
               a.content.thread.id == b.content.thread.id, a.content.posts == b.content.posts else { return false }
         // only a failed reply shows (and retries) the words it answered
         return a.message.status != .error || a.content.prompt(before: a.message) == b.content.prompt(before: b.message)
@@ -243,6 +248,10 @@ struct ChatMessageView: View, Equatable {
         Button(Copy.Chat.copyText, systemImage: Symbol.copy) {
             Pasteboard.copy(message.text)
             shell.showStatus(Copy.Media.copied)
+        }
+        // a message the server has not numbered yet (`local-…`) cannot start a video
+        if canMakeVideo, !message.id.hasPrefix("local-") {
+            Button(Copy.Chat.makeVideoFromHere, systemImage: Symbol.chatVideo) { makeVideo(message.id) }
         }
     }
 }

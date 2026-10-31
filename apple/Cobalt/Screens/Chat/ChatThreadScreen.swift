@@ -54,6 +54,8 @@ struct ChatThreadScreen: View {
     private var title: String { content?.thread.title ?? store.thread(threadID)?.title ?? Copy.Chat.title }
     /// A helper's thread (43.1): only its parent writes to it.
     private var readOnly: Bool { helperOf != nil || content?.isAgentThread == true }
+    /// "make video" (APP-API-CONTRACT 45): the server makes chat videos and the thread has something to show.
+    private var canMakeVideo: Bool { model.canMakeChatVideos && !readOnly && content?.messages.isEmpty == false }
 
     var body: some View {
         Group {
@@ -132,7 +134,9 @@ struct ChatThreadScreen: View {
                             model: model, message: message, content: content, tier: tier, open: open,
                             retry: { send($0, attaching: false) }, canRetry: !busy,
                             answer: { answer($0, yes: $1) },
-                            answering: message.confirm.map { store.answeringConfirms.contains($0.id) } ?? false)
+                            answering: message.confirm.map { store.answeringConfirms.contains($0.id) } ?? false,
+                            canMakeVideo: canMakeVideo && !busy,
+                            makeVideo: { controller.video = ChatVideoRequest(threadID: threadID, from: $0) })
                             .equatable()
                             .id(message.id)
                     }
@@ -258,6 +262,12 @@ struct ChatThreadScreen: View {
         if !readOnly, let thread = content?.thread ?? store.thread(threadID) {
             Menu {
                 Button(Copy.Chat.rename, systemImage: Symbol.chatRename) { controller.renaming = thread }
+                if canMakeVideo {
+                    Button(Copy.Chat.makeVideo, systemImage: Symbol.chatVideo) {
+                        controller.video = ChatVideoRequest(threadID: thread.id, from: nil)
+                    }
+                    .disabled(busy)
+                }
                 Divider()
                 Button(Copy.Chat.delete, systemImage: Symbol.chatDelete, role: .destructive) { controller.deleting = thread }
             } label: {

@@ -286,6 +286,11 @@ enum Endpoints {
         APIEndpoint(op: "edits.route.render", method: "POST", path: "/edits/\(HTTPCobaltClient.encode(id))/render", auth: .key)
     }
 
+    /// `POST /chat/threads/:id/video` (op `chat.video.route`, auth key): Make a video of a chat thread (45.1).
+    static func chatVideoRoute(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "chat.video.route", method: "POST", path: "/chat/threads/\(HTTPCobaltClient.encode(id))/video", auth: .key)
+    }
+
     /// `GET /chat/threads/:id/agents` (op `chat.agents`, auth key): A chat thread's sub-agents and their messages (section 43.6).
     static func chatAgents(id: String) -> APIEndpoint<ChatAgentsResponse> {
         APIEndpoint(op: "chat.agents", method: "GET", path: "/chat/threads/\(HTTPCobaltClient.encode(id))/agents", auth: .key)

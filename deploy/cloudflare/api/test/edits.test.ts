@@ -423,6 +423,8 @@ describe("POST /edits/<id>/render", () => {
         const render = r.json.render;
         expect(render).toEqual({
             id: render.id,
+            kind: "edit",
+            thread_id: null,
             project_id: p.id,
             revision: 1,
             title: "Big edit",
