@@ -291,6 +291,11 @@ enum Endpoints {
         APIEndpoint(op: "library.cutout", method: "POST", path: "/library/items/\(HTTPCobaltClient.encode(id))/cutout", auth: .key)
     }
 
+    /// `POST /library/items/:id/crop` (op `library.crop`, auth key): Crop a picture into a new png (POST /library/items/<id>/crop); the chat uses make.cropImage.
+    static func libraryCrop(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library.crop", method: "POST", path: "/library/items/\(HTTPCobaltClient.encode(id))/crop", auth: .key)
+    }
+
     /// `GET /share/sets` (op `share_sets.list`, auth key): GET /share/sets
     static func shareSetsList() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "share_sets.list", method: "GET", path: "/share/sets", auth: .key)

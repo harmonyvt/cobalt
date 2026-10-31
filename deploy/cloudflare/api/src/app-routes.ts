@@ -301,6 +301,9 @@ export async function capabilities(
                 // cutouts); `cutout_auto` = the server makes them too (auto, white, color) through Cloudflare Images
                 cutout: true,
                 cutout_auto: cutoutAuto === true,
+                // POST /library/items/<id>/crop (section 44.1): the app's own crops always; server crops of non-PNG
+                // pictures and crop + auto cutout need `cutout_auto` (the Images binding)
+                image_crop: true,
                 // PUT /live/edits/<rid>: the server keeps an editor render's Live Activity current (section 32)
                 edit_live_push: editor === true && livePush === true,
                 // PUT /live/chat-start-token: a chat reply sent from another device shows on this one (section 27.9)
