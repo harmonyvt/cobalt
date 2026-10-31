@@ -131,6 +131,9 @@ public protocol CobaltClient: Sendable {
     /// `PATCH /library/about {key, tags}` (keyed): replaces the owner's tags (nil goes back to the server's own) and
     /// answers the `GET` body. Defaulted below (`.unsupported`).
     func setLibraryAboutTags(postKey: String, tags: [String]?) async throws -> LibraryAbout
+    /// `GET /library/transcript?key=` (APP-API-CONTRACT 47; keyed; only when `features.transcripts`): the post's subtitle
+    /// lines with each word's time. Defaulted below (`.unsupported`) so older fakes compile.
+    func libraryTranscript(postKey: String) async throws -> LibraryTranscript
     /// `GET /library/map` (APP-API-CONTRACT 21; keyed): every embedded post with its int8 vector, newest first, for the
     /// sky map. Defaulted below (`.unsupported`) so older fakes compile.
     func libraryMap() async throws -> LibraryMap
@@ -383,6 +386,7 @@ extension CobaltClient {
     public func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus { throw PipelineFailure.unsupported }
     public func libraryAbout(postKey: String) async throws -> LibraryAbout { throw PipelineFailure.unsupported }
     public func setLibraryAboutTags(postKey: String, tags: [String]?) async throws -> LibraryAbout { throw PipelineFailure.unsupported }
+    public func libraryTranscript(postKey: String) async throws -> LibraryTranscript { throw PipelineFailure.unsupported }
     public func libraryMap() async throws -> LibraryMap { throw PipelineFailure.unsupported }
     public func mcpSettings() async throws -> McpSettings { throw PipelineFailure.unsupported }
     public func setMcpMode(_ mode: McpSettings.Mode) async throws -> McpChange { throw PipelineFailure.unsupported }

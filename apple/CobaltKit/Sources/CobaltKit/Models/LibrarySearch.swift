@@ -13,11 +13,14 @@ public struct LibrarySearchResult: Sendable, Equatable {
         /// The cosine, plus 0.3 when the query is found as plain text in the post's title or text. No cut-off: the
         /// order is what counts. 0 when the server sent none.
         public var score: Double
+        /// Where the query was said in the post's video (APP-API-CONTRACT 47.5); empty when nowhere (or an older server).
+        public var said: [LibrarySaid]
         public var id: String { post.id }
 
-        public init(post: LibraryPost, score: Double) {
+        public init(post: LibraryPost, score: Double, said: [LibrarySaid] = []) {
             self.post = post
             self.score = score
+            self.said = said
         }
     }
 
@@ -70,13 +73,15 @@ struct LibrarySearchWire: Decodable {
     struct Scored: Decodable {
         var post: LibraryPost
         var score: Double
+        var said: [LibrarySaid]
 
-        private enum Keys: String, CodingKey { case score }
+        private enum Keys: String, CodingKey { case score, said }
 
         init(from decoder: Decoder) throws {
             post = try LibraryPost(from: decoder)
             let c = try decoder.container(keyedBy: Keys.self)
             score = ((try? c.decodeIfPresent(Double.self, forKey: .score)) ?? nil) ?? 0
+            said = ((try? c.decodeIfPresent([Lossy<LibrarySaid>].self, forKey: .said)) ?? nil)?.compactMap(\.value) ?? []
         }
     }
 
@@ -88,7 +93,7 @@ struct LibrarySearchWire: Decodable {
     func result(asked query: String) -> LibrarySearchResult {
         LibrarySearchResult(
             query: self.query ?? query, model: model,
-            hits: (posts ?? []).compactMap(\.value).map { .init(post: $0.post, score: $0.score) },
+            hits: (posts ?? []).compactMap(\.value).map { .init(post: $0.post, score: $0.score, said: $0.said) },
             indexed: index?.posts, pending: index?.pending)
     }
 

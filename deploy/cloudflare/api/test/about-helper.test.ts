@@ -87,10 +87,10 @@ describe("the about frames and sound (pure)", () => {
         expect(aboutTimes(1.5)).toEqual([0.75]);
         for (const bad of [null, undefined, 0, -1, NaN, Infinity]) expect(aboutTimes(bad as any)).toEqual([0]);
     });
-    it("the sound: the first 180 s, first audio stream, mono 16 kHz MP3 at 32 kbit/s, loudness measured, local files only", () => {
+    it("the sound: the first 600 s (section 47), first audio stream, mono 16 kHz MP3 at 32 kbit/s, loudness measured, local files only", () => {
         const a = buildAboutAudioArgs({ input: "/in", output: "/out.mp3" });
         expect(a[a.indexOf("-t") + 1]).toBe(String(ABOUT_AUDIO_SECONDS));
-        expect(ABOUT_AUDIO_SECONDS).toBe(180);
+        expect(ABOUT_AUDIO_SECONDS).toBe(600);
         expect(a[a.indexOf("-map") + 1]).toBe("0:a:0");
         expect(a[a.indexOf("-ac") + 1]).toBe("1");
         expect(a[a.indexOf("-ar") + 1]).toBe("16000");

@@ -158,9 +158,12 @@ export default defineConfig({
 			CHAT_MODEL: bindings.text("claude-haiku-5-5"),
 			// "What it's about" (APP-API-CONTRACT.md section 34): the model that describes each post from its frames and
 			// sound (same key as the captions; off without ANTHROPIC_API_KEY or search), and Workers AI, which transcribes the
-			// sound with Whisper (@cf/openai/whisper-large-v3-turbo). Without AI the words are written without the sound.
+			// sound (TRANSCRIBE_MODEL below). Without AI the words are written without the sound.
 			ABOUT_MODEL: bindings.text("claude-haiku-5-5"),
 			AI: bindings.ai(),
+			// Timed transcripts (APP-API-CONTRACT.md 47.1): the speech model. "assemblyai" (AssemblyAI Universal, most
+			// accurate) or "whisper" (Whisper turbo, about 7x cheaper). Changing it hears every post again.
+			TRANSCRIBE_MODEL: bindings.text("assemblyai"),
 			// How many files the chat AI may start making per thread per day (webps, slideshows, editor renders;
 			// APP-API-CONTRACT.md section 33.8). Editor renders run on a standard-4 container, so each costs real money.
 			CHAT_DAILY_RENDERS: bindings.text("10"),

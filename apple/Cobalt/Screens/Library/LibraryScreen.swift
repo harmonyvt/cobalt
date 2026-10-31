@@ -244,6 +244,14 @@ private struct LibraryContent: View {
                     }
                     loadingAllLine
                     LibrarySearchLine(state: library.searchState)
+                    if model.capabilities.transcripts {
+                        // results said in their video: a tap opens the post playing from that moment (APP-API-CONTRACT 47.5)
+                        LibrarySaidStrip(library: library) { post, said in
+                            library.pendingMoment = PendingMoment(postKey: post.id, seconds: said.start)
+                            let item = model.mediaItem(for: post)
+                            controller.open(item, initial: item.face.id)
+                        }
+                    }
                 }
                 .motion(Motion.rows, value: library.searchState)
                 // folds away with the scroll and comes back on the way up (`LibraryTopBar.swift`)

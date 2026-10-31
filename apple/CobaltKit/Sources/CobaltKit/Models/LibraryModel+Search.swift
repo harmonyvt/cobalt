@@ -48,6 +48,7 @@ extension LibraryModel {
         searchTask = nil
         searchResults = nil
         searchScores = [:]
+        searchSaid = [:]
         let q = trimmedQuery
         guard ctx.capabilities.search, Self.isServerQuery(q) else {
             searchState = .idle
@@ -76,12 +77,14 @@ extension LibraryModel {
             let posts = result.posts.filter { !$0.hidden && !recentlyHidden.contains($0.id) }     // hidden posts show in no search (37.2)
             searchResults = posts
             searchScores = Dictionary(result.hits.map { ($0.id, $0.score) }, uniquingKeysWith: { first, _ in first })
+            searchSaid = Dictionary(result.hits.filter { !$0.said.isEmpty }.map { ($0.id, $0.said) }, uniquingKeysWith: { first, _ in first })
             for post in posts { searchKnown[post.id] = post }
             searchState = .results(count: posts.count, pending: max(0, result.pending ?? 0))
         } catch {
             guard !Task.isCancelled, q == trimmedQuery else { return }
             searchResults = nil
             searchScores = [:]
+            searchSaid = [:]
             switch Self.searchErrorCode(error) {
             case "error.search.waking":
                 guard wakingRetriesLeft > 0 else {
@@ -118,6 +121,17 @@ extension LibraryModel {
     public func about(postKey: String) async throws -> LibraryAbout {
         guard ctx.capabilities.about else { throw PipelineFailure.unsupported }
         return try await ctx.client.libraryAbout(postKey: postKey)
+    }
+
+    /// `GET /library/transcript` for the detail's subtitles and timed "heard" list (only when `features.transcripts`).
+    public func transcript(postKey: String) async throws -> LibraryTranscript {
+        guard ctx.capabilities.transcripts else { throw PipelineFailure.unsupported }
+        return try await ctx.client.libraryTranscript(postKey: postKey)
+    }
+
+    /// The search results that were said in their video, best first, with where (the "said in it" strip).
+    public var saidResults: [(post: LibraryPost, said: [LibrarySaid])] {
+        (activeSearchResults ?? []).compactMap { post in searchSaid[post.id].map { (post, $0) } }
     }
 
     /// `PATCH /library/about`: the owner's tags for the post (cleaned and capped as the server keeps them); nil goes back

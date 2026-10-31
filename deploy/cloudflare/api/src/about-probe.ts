@@ -23,9 +23,9 @@ export const ABOUT_KICK_MAX = 25;
 // The helper call carries the whole video in and the frames and sound out (the helper gives itself 90 s).
 export const ABOUT_CALL_MS = 120_000;
 export const ABOUT_BUSY_LIMIT = 120;
-// What the helper may answer: three JPEGs and 180 s of 32 kbit/s MP3 fit well under this.
+// What the helper may answer: three JPEGs, and 600 s of 32 kbit/s MP3 (2.4 MB, section 47) fit under this.
 export const MAX_ABOUT_FRAME_BYTES = 2 * 1024 * 1024;
-export const MAX_ABOUT_AUDIO_BYTES = 2 * 1024 * 1024;
+export const MAX_ABOUT_AUDIO_BYTES = 3 * 1024 * 1024;
 
 // Where the probe reads the file (a private original, or a public-only copy) and writes its objects.
 export type AboutBucket = {

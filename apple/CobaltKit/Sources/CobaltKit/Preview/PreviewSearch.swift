@@ -129,8 +129,14 @@ extension PreviewClient {
         guard !q.isEmpty, q.count <= 200 else { throw CobaltError.api(code: "error.library.bad_request", httpStatus: 400) }
         let posts = try await library(cursor: nil, limit: 50).posts
         let pending = searchMode == .indexing ? min(3, posts.count) : 0
+        // what was said (APP-API-CONTRACT 47.5): every preview video says the sample lines, so "tail" finds them
+        let hits = PreviewData.searchHits(q, in: posts, limit: limit).map { hit in
+            var hit = hit
+            if hit.post.kind != .photo, hit.post.kind != .gallery { hit.said = PreviewData.said(q) }
+            return hit
+        }
         return LibrarySearchResult(
-            query: q, model: "google/embeddinggemma-2", hits: PreviewData.searchHits(q, in: posts, limit: limit),
+            query: q, model: "google/embeddinggemma-2", hits: hits,
             indexed: posts.count - pending, pending: pending)
     }
 
@@ -160,6 +166,7 @@ extension AppModel {
         caps.search = mode != .off
         caps.about = mode != .off
         caps.aboutSound = mode != .off
+        caps.transcripts = mode != .off
         ctx.capabilities = caps
         return AppModel(
             context: ctx, library: LibraryModel(context: ctx, seed: PreviewData.libraryPage(now: clock.now())),

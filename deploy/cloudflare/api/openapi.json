@@ -3468,6 +3468,103 @@
         }
       }
     },
+    "/library/transcript": {
+      "get": {
+        "operationId": "library.transcript",
+        "summary": "What is said in a video, line by line with times in seconds (from/to: only that part). state says why there are no lines.",
+        "tags": [
+          "library"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "post_key": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "done",
+                        "no_speech",
+                        "pending",
+                        "no_sound",
+                        "failed",
+                        "off"
+                      ],
+                      "description": "done: lines below; no_speech: heard, nothing said; pending: not heard yet; no_sound: nothing to hear; failed; off: no Whisper"
+                    },
+                    "language": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "model": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "updated_at": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/TranscriptLine"
+                      },
+                      "description": "subtitle lines, in order (the first 10 minutes of the sound)"
+                    }
+                  },
+                  "required": [
+                    "post_key",
+                    "state",
+                    "language",
+                    "model",
+                    "updated_at",
+                    "lines"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "free"
+        }
+      }
+    },
     "/library/visibility/migrate": {
       "post": {
         "operationId": "library.visibility.migrate",
@@ -7301,6 +7398,54 @@
         ],
         "additionalProperties": false,
         "x-swift": "ShareCollection"
+      },
+      "TranscriptLine": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "number",
+            "description": "seconds from the start of the clip"
+          },
+          "end": {
+            "type": "number"
+          },
+          "text": {
+            "type": "string"
+          },
+          "words": {
+            "description": "each word's own time (left out for the chat AI)",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptWord"
+            }
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "TranscriptWord": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "start": {
+            "type": "number"
+          },
+          "end": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "text",
+          "start",
+          "end"
+        ],
+        "additionalProperties": false
       }
     },
     "securitySchemes": {

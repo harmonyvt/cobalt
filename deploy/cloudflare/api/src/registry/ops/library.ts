@@ -7,6 +7,7 @@ import { LIBRARY_MAX_LIMIT, loadPosts, RANK_MAX, SEARCH_MAX } from "../../chat-t
 import { libraryAbout, libraryAboutSet } from "../../about";
 import { USER_TAGS_MAX } from "../../about-store";
 import { libraryMap, librarySearch } from "../../embed";
+import { transcriptOf, TranscriptNotFound } from "../../transcripts";
 import { WITHIN_POSTS_MAX } from "../../within";
 import { queueSnapshot } from "../../queue";
 import { defineOp, ok, OpError, type OpContext } from "../op";
@@ -126,6 +127,10 @@ export const librarySearchOp = defineOp({
             z.object({
                 score: z.number(),
                 why: z.array(z.string()).describe("up to 3 of its tags or sound tags, closest to the query first"),
+                said: z
+                    .array(z.object({ at: z.number(), end: z.number(), text: z.string(), match: z.enum(["words", "meaning"]) }))
+                    .optional()
+                    .describe("where it is said in the video: the lines holding the query (words) or the moment closest to it (meaning), seconds"),
                 indexed: z.literal(false).optional().describe("no vector yet: scored by its text only"),
             }),
         ),
@@ -393,6 +398,77 @@ export const libraryAboutSetOp = defineOp({
     },
 });
 
+// ---- timed transcripts (section 47) ----------------------------------------------------------------------------------
+
+const TranscriptWord = z.object({ text: z.string(), start: z.number(), end: z.number() }).meta({ id: "TranscriptWord" });
+const TranscriptLine = z
+    .object({
+        start: z.number().describe("seconds from the start of the clip"),
+        end: z.number(),
+        text: z.string(),
+        words: z.array(TranscriptWord).optional().describe("each word's own time (left out for the chat AI)"),
+    })
+    .meta({ id: "TranscriptLine" });
+
+const TranscriptBody = z.object({
+    post_key: z.string(),
+    state: z
+        .enum(["done", "no_speech", "pending", "no_sound", "failed", "off"])
+        .describe("done: lines below; no_speech: heard, nothing said; pending: not heard yet; no_sound: nothing to hear; failed; off: no Whisper"),
+    language: z.string().nullable(),
+    model: z.string().nullable(),
+    updated_at: z.number().nullable(),
+    lines: z.array(TranscriptLine).describe("subtitle lines, in order (the first 10 minutes of the sound)"),
+});
+
+const seconds = (v: string | null): number | undefined => {
+    if (v === null || v === "") return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : NaN;
+};
+
+// GET /library/transcript?key=<post key>[&from=<s>&to=<s>] (47.3): keyed or the library service, no CORS; the chat's
+// cobalt.library.transcript(id, { from, to }) ("what does she say at 0:12?").
+export const libraryTranscriptOp = defineOp({
+    name: "library.transcript",
+    route: { method: "GET", path: "/library/transcript" },
+    auth: "key_or_service",
+    runs: "worker",
+    cors: false,
+    noStore: true,
+    badRequest: "error.library.bad_request",
+    input: z.object({
+        key: z.string().min(1).max(2048).describe("the post id"),
+        from: z.number().min(0).optional().describe("seconds: only the lines that end at or after this"),
+        to: z.number().min(0).optional().describe("seconds: only the lines that start at or before this"),
+    }),
+    output: TranscriptBody,
+    http: (ctx) => ({ key: ctx.query.get("key") ?? "", from: seconds(ctx.query.get("from")), to: seconds(ctx.query.get("to")) }),
+    ai: {
+        tier: "free",
+        summary: "What is said in a video, line by line with times in seconds (from/to: only that part). state says why there are no lines.",
+        params: ["key"],
+        options: true,
+        result: (body: unknown) => {
+            const { status: _s, ...rest } = (body ?? {}) as Record<string, unknown>;
+            return rest;
+        },
+    },
+    handler: async (ctx, input) => {
+        try {
+            const t = await transcriptOf({ db: ctx.db, soundOn: !!(ctx.env as { AI?: unknown }).AI }, input.key, {
+                words: ctx.caller !== "chat",
+                from: input.from,
+                to: input.to,
+            });
+            return ok({ status: "success", ...t });
+        } catch (e) {
+            if (e instanceof TranscriptNotFound) throw new OpError(404, "error.library.not_found", `no post ${JSON.stringify(input.key)} in the library`);
+            throw e;
+        }
+    },
+});
+
 // ---- the library read routes ----------------------------------------------------------------------------------------
 
 // These routes read their query themselves (the handlers' own checks and error codes); the schema only names it.
@@ -492,6 +568,7 @@ export const LIBRARY_OPS = [
     collectionsListOp,
     libraryAboutOp,
     libraryAboutSetOp,
+    libraryTranscriptOp,
     libraryIndexOp,
     libraryQueryOp,
     libraryMapOp,

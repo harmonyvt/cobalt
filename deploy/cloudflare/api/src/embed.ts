@@ -17,6 +17,7 @@ import { aboutWordsOf, pickLead } from "./about-store";
 import { assemblePosts, libraryHide, POST_KEY_SQL, type AppDeps } from "./app-routes";
 import { hiddenPostKeys } from "./hidden-store";
 import type { StudioReply } from "./studio";
+import { MOMENT_FLOOR, MOMENT_SLACK, saidIndex, saidLines, type Said } from "./transcripts";
 import { resolveWithin, withinFromQuery, WithinError, type Within } from "./within";
 
 export const EMBED_MODEL = "google/embeddinggemma-2";
@@ -702,7 +703,7 @@ export async function searchQueue(d: { db: D1Database; mediaBaseUrl: string; now
 export type SearchHit = { post_key: string; score: number; latest: number; indexed: boolean };
 
 export type SearchOutcome =
-    | { ok: true; hits: SearchHit[]; indexed: number; pending: number; fallback: boolean; queryVector: number[] | null }
+    | { ok: true; hits: SearchHit[]; indexed: number; pending: number; fallback: boolean; queryVector: number[] | null; said: Map<string, Said[]> }
     | { ok: false; status: number; code: string };
 
 // The words of a query for the name-match fallback: lowercase, at least two characters each.
@@ -745,6 +746,9 @@ export async function searchPosts(
     const needle = q.toLowerCase();
     const words = queryWords(needle);
     const within = opts.within;
+    // what was said (section 47): the whole heard text counts as text, and a post's best moment can carry it
+    const heard = await saidIndex(d.db, qv);
+    const own = new Map<string, number>();
     const hits: SearchHit[] = [];
     let indexed = 0;
     let pending = 0;
@@ -754,11 +758,14 @@ export async function searchPosts(
         if (v) indexed++;
         if (!row || row.input_hash !== (await inputHash(p))) pending++;
         if (within && !within.has(p.post_key)) continue;
-        const hay = `${p.title ?? ""} ${p.text}`.toLowerCase();
+        const hay = `${p.title ?? ""} ${p.text} ${heard.text.get(p.post_key) ?? ""}`.toLowerCase();
         const bonus = hay.includes(needle) ? TEXT_MATCH_BONUS : 0;
         if (qv) {
-            if (!v && bonus === 0 && !within) continue;
-            hits.push({ post_key: p.post_key, score: (v ? dot(qv, v) : 0) + bonus, latest: p.latest, indexed: !!v });
+            const moment = heard.best.get(p.post_key);
+            if (!v && !moment && bonus === 0 && !within) continue;
+            const mine = v ? dot(qv, v) : 0;
+            own.set(p.post_key, mine);
+            hits.push({ post_key: p.post_key, score: Math.max(mine, moment?.score ?? -Infinity) + bonus, latest: p.latest, indexed: !!v });
             continue;
         }
         // Fallback: the whole query as text first, then posts holding more of its words; newest first within a score.
@@ -769,7 +776,15 @@ export async function searchPosts(
     }
     if (qv) hits.sort((a, b) => b.score - a.score || (a.post_key < b.post_key ? -1 : 1));
     else hits.sort((a, b) => b.score - a.score || b.latest - a.latest || (a.post_key < b.post_key ? -1 : 1));
-    return { ok: true, hits: hits.slice(0, limit), indexed, pending, fallback: qv === null, queryVector: qv };
+    const top = hits.slice(0, limit);
+    // where it was said: the lines holding the query, else the best moment when it is what matched
+    const said = await saidLines(d.db, top.filter((h) => heard.text.get(h.post_key)?.includes(needle)).map((h) => h.post_key), needle);
+    for (const h of top) {
+        const m = heard.best.get(h.post_key);
+        if (said.has(h.post_key) || !m) continue;
+        if (m.score >= Math.max(MOMENT_FLOOR, (own.get(h.post_key) ?? 0) - MOMENT_SLACK)) said.set(h.post_key, [{ start: m.s, end: m.e, text: m.t, match: "meaning" }]);
+    }
+    return { ok: true, hits: top, indexed, pending, fallback: qv === null, queryVector: qv, said };
 }
 
 // GET /library/search?q=<words>&limit=<1..50>&v=<2|3>: the posts that best match, best first, in the
@@ -814,6 +829,7 @@ export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, 
                 ...p,
                 score: Math.round((hits.get(p.id)?.score ?? 0) * 10000) / 10000,
                 why: why.get(p.id) ?? [],
+                ...(r.said.has(p.id) ? { said: r.said.get(p.id) } : {}),
                 ...(within ? { indexed: hits.get(p.id)?.indexed ?? false } : {}),
             }));
         return {

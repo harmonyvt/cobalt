@@ -95,7 +95,7 @@
 // "What it's about" (APP-API-CONTRACT.md section 34.2): frames and sound of a stored video, for the description.
 //   POST   /about?id=         body = the video bytes (streamed to /tmp/about/<id>, at most 200 MB); ffmpeg cuts 3 JPEG
 //                      frames at 15 %, 50 % and 85 % of the duration (one for a clip under 2 s), long side at most
-//                      768 px (never upscaled, rotation applied), and the first 180 s of sound as mono 16 kHz MP3 at
+//                      768 px (never upscaled, rotation applied), and the first 600 s of sound as mono 16 kHz MP3 at
 //                      32 kbit/s; everything is deleted and the answer is JSON:
 //                      200 {frames: ["<base64 jpeg>", ...], audio: "<base64 mp3>" | null, duration: <s> | null}
 //                      (audio null: no audio stream, or silent: mean volume under -60 dB) | 400 error.studio.not_video
