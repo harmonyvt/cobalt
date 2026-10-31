@@ -17,6 +17,11 @@ extension LibraryModel {
     /// Posts asked for (the server's maximum).
     static let searchLimit = 50
 
+    /// Server answers kept for typing back to a query.
+    static let searchMemoLimit = 30
+    /// At most one warm-up this often.
+    static let searchWarmGap: Double = 60
+
     /// A query the server is asked about: at least two characters once spaces are gone.
     static func isServerQuery(_ query: String) -> Bool {
         query.filter { !$0.isWhitespace }.count >= 2
@@ -42,23 +47,35 @@ extension LibraryModel {
         hiddenPosts.first { $0.id == id }
     }
 
-    /// `query` changed: drop the last answer (it was for other words), cancel what is in flight, and start the pause.
-    func queryDidChange() {
+    /// `query` changed: drop the last answer (it was for other words), cancel what is in flight, and start the pause. A
+    /// query the server answered before shows that answer at once, and is asked again after the pause. The first letter
+    /// typed into an empty field warms the server up (`GET /library/search?warm=1`), so the model and the database are
+    /// ready by the time the words are.
+    func queryDidChange(from old: String = "") {
         searchTask?.cancel()
         searchTask = nil
         searchResults = nil
         searchScores = [:]
         searchSaid = [:]
         let q = trimmedQuery
-        guard ctx.capabilities.search, Self.isServerQuery(q) else {
+        guard ctx.capabilities.search else {
             searchState = .idle
             return
         }
         if searchOffByServer {
-            searchState = .off
+            searchState = Self.isServerQuery(q) ? .off : .idle
             return
         }
-        searchState = .searching
+        if !q.isEmpty, old.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { warmUp() }
+        guard Self.isServerQuery(q) else {
+            searchState = .idle
+            return
+        }
+        if let known = searchMemo[q] {
+            show(known, for: q)
+        } else {
+            searchState = .searching
+        }
         let clock = ctx.clock
         searchTask = Task { [weak self] in
             do { try await clock.sleep(seconds: Self.searchDebounce) } catch { return }
@@ -67,21 +84,56 @@ extension LibraryModel {
         }
     }
 
+    /// The warm-up, at most once a `searchWarmGap`; not waited for.
+    private func warmUp() {
+        let now = ctx.clock.now()
+        if let last = lastSearchWarm, now.timeIntervalSince(last) < Self.searchWarmGap { return }
+        lastSearchWarm = now
+        let ctx = self.ctx
+        Task { await ctx.warmLibrarySearch() }
+    }
+
+    /// Puts a server answer for `q` on screen.
+    private func show(_ result: LibrarySearchResult, for q: String) {
+        let posts = result.posts.filter { !$0.hidden && !recentlyHidden.contains($0.id) }     // hidden posts show in no search (37.2)
+        searchResults = posts
+        searchScores = Dictionary(result.hits.map { ($0.id, $0.score) }, uniquingKeysWith: { first, _ in first })
+        searchSaid = Dictionary(result.hits.filter { !$0.said.isEmpty }.map { ($0.id, $0.said) }, uniquingKeysWith: { first, _ in first })
+        for post in posts { searchKnown[post.id] = post }
+        searchState = .results(count: posts.count, pending: max(0, result.pending ?? 0))
+    }
+
+    /// Keeps `result` as the answer for `q`, dropping the oldest past `searchMemoLimit`.
+    private func remember(_ result: LibrarySearchResult, for q: String) {
+        searchMemo[q] = result
+        searchMemoOrder.removeAll { $0 == q }
+        searchMemoOrder.append(q)
+        while searchMemoOrder.count > Self.searchMemoLimit { searchMemo[searchMemoOrder.removeFirst()] = nil }
+    }
+
+    /// A search needs the whole library only for name matches beyond what the server returns, so while the server is still
+    /// being asked the paging waits: the two would share the connection and the answer would come later. Only for a
+    /// plain search of the library (a filter, a sort or the hidden album still loads everything at once).
+    public var wholeLibraryWaitsForSearch: Bool {
+        guard !showingHidden, show == .everything, sort == .newest, kindFilter == .all, !trimmedQuery.isEmpty else { return false }
+        return searchState == .searching || searchState == .waking
+    }
+
     /// Asks the server for `q`; an answer for words that are no longer in the field is thrown away.
     func runSearch(_ q: String, wakingRetriesLeft: Int) async {
-        // a retry keeps saying the Space is waking up, not "searching…" for each try
-        if searchState != .waking { searchState = .searching }
+        // a retry keeps saying the Space is waking up, not "searching…" for each try; a remembered answer stays on screen
+        // while it is asked again
+        let showing = searchResults != nil
+        if searchState != .waking, !showing { searchState = .searching }
         do {
             let result = try await ctx.librarySearch(query: q, limit: Self.searchLimit)
             guard !Task.isCancelled, q == trimmedQuery else { return }
-            let posts = result.posts.filter { !$0.hidden && !recentlyHidden.contains($0.id) }     // hidden posts show in no search (37.2)
-            searchResults = posts
-            searchScores = Dictionary(result.hits.map { ($0.id, $0.score) }, uniquingKeysWith: { first, _ in first })
-            searchSaid = Dictionary(result.hits.filter { !$0.said.isEmpty }.map { ($0.id, $0.said) }, uniquingKeysWith: { first, _ in first })
-            for post in posts { searchKnown[post.id] = post }
-            searchState = .results(count: posts.count, pending: max(0, result.pending ?? 0))
+            remember(result, for: q)
+            show(result, for: q)
         } catch {
             guard !Task.isCancelled, q == trimmedQuery else { return }
+            // the remembered answer is better than none
+            if showing, searchMemo[q] != nil { return }
             searchResults = nil
             searchScores = [:]
             searchSaid = [:]
@@ -144,6 +196,7 @@ extension LibraryModel {
     /// Files the server confirmed gone leave the search's copies too; a post left with none goes.
     func forgetSearched(files ids: Set<String>) {
         guard !ids.isEmpty else { return }
+        searchMemo = [:]; searchMemoOrder = []
         if var results = searchResults {
             for index in results.indices { results[index].files.removeAll { ids.contains($0.id) } }
             searchResults = results.filter { !$0.files.isEmpty }
@@ -157,6 +210,7 @@ extension LibraryModel {
     /// Whole posts gone on the server leave the search's copies.
     func forgetSearched(posts ids: Set<String>) {
         guard !ids.isEmpty else { return }
+        searchMemo = [:]; searchMemoOrder = []
         searchResults?.removeAll { ids.contains($0.id) }
         for id in ids { searchKnown[id] = nil }
     }

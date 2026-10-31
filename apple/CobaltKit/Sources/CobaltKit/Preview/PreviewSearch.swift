@@ -27,6 +27,10 @@ final class PreviewSearchState: Sendable {
     let about = PreviewAboutState()
 
     var calls: [String] { state.withLock { $0 } }
+    private let warmed = Mutex(0)
+    /// Warm-ups (`GET /library/search?warm=1`) taken so far.
+    var warms: Int { warmed.withLock { $0 } }
+    func recordWarm() { warmed.withLock { $0 += 1 } }
 
     /// Records a call and returns how many came in so far (this one included).
     func record(_ query: String) -> Int {
@@ -138,6 +142,11 @@ extension PreviewClient {
         return LibrarySearchResult(
             query: q, model: "google/embeddinggemma-2", hits: hits,
             indexed: posts.count - pending, pending: pending)
+    }
+
+    /// `GET /library/search?warm=1`: counted, nothing else.
+    public func warmLibrarySearch() async throws {
+        searchState.recordWarm()
     }
 
     /// `GET /library/search/post` for the preview posts (`PreviewData.searchStatus`).

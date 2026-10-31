@@ -126,6 +126,14 @@ private struct LibraryContent: View {
         #endif
     }
 
+    /// What the whole-library loader is waiting for (the `.task` below): see there.
+    private var wholeLibraryStep: Int {
+        let library = model.library
+        guard library.needsWholeLibrary else { return 0 }
+        if controller.hiddenLocked { return 2 }
+        return library.wholeLibraryWaitsForSearch ? 3 : 1
+    }
+
     private func phase(_ rows: [LibraryRow]) -> LibraryPhase {
         #if DEBUG
         if let forced = LibraryDebug.state {
@@ -140,8 +148,10 @@ private struct LibraryContent: View {
         if library.showingHidden, model.capabilities.hidden { return albumPhase(rows) }
         if !rows.isEmpty { return .rows }
         if library.failure != nil, library.posts.isEmpty { return .failed }
-        if library.isLoading || library.loadingAll != nil { return .loading }
         let query = library.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // the server searched the whole library and found nothing: say so, while the paging still looks for names
+        if !query.isEmpty, case .results = library.searchState, library.activeSearchResults != nil { return .noMatch(query) }
+        if library.isLoading || library.loadingAll != nil { return .loading }
         // the server is still looking (or waking up): not "nothing matches" yet
         if !query.isEmpty, library.searchState == .searching || library.searchState == .waking { return .loading }
         if !query.isEmpty { return .noMatch(query) }
@@ -335,9 +345,10 @@ private struct LibraryContent: View {
             .haptic(.warning, trigger: controller.warnTick, enabled: haptics)
             .haptic(.error, trigger: controller.failTick, enabled: haptics)
             .onAppear { controller.showStatus = { shell.showStatus($0) } }
-            // 0 nothing to load, 1 the whole library (or album), 2 the same but the album is still locked: wait
-            .task(id: library.needsWholeLibrary ? (controller.hiddenLocked ? 2 : 1) : 0) {
-                if library.needsWholeLibrary, !controller.hiddenLocked { await library.loadAll() }
+            // 0 nothing to load, 1 the whole library (or album), 2 the same but the album is still locked: wait, 3 the same but
+            // the server search is still out: wait for its answer first (it covers the whole library and comes sooner alone)
+            .task(id: wholeLibraryStep) {
+                if wholeLibraryStep == 1 { await library.loadAll() }
             }
             // the album: locked at every open, its first page once the owner is in
             .onChange(of: library.showingHidden, initial: true) { _, open in

@@ -478,21 +478,25 @@ export type SaidIndex = {
     best: Map<string, { score: number; s: number; e: number; t: string }>;
 };
 
-export async function saidIndex(db: D1Database, queryVector: number[] | null): Promise<SaidIndex> {
+// `queryVector` may still be on its way: both tables are read while it is, then the moments are scored.
+export async function saidIndex(db: D1Database, queryVector: number[] | null | Promise<number[] | null>): Promise<SaidIndex> {
     const text = new Map<string, string>();
     const best = new Map<string, { score: number; s: number; e: number; t: string }>();
     try {
-        const { results } = await db.prepare("SELECT post_key, text FROM media_transcripts WHERE state = 'done' AND text IS NOT NULL").all<{ post_key: string; text: string }>();
-        for (const r of results) text.set(r.post_key, r.text.toLowerCase());
-        if (queryVector) {
-            const { results: ms } = await db
+        const [{ results }, { results: ms }] = await Promise.all([
+            db.prepare("SELECT post_key, text FROM media_transcripts WHERE state = 'done' AND text IS NOT NULL").all<{ post_key: string; text: string }>(),
+            db
                 .prepare(`SELECT post_key, start, "end" AS e, text, vector FROM media_moments WHERE model = ?1 AND dims = ?2 AND vector IS NOT NULL`)
                 .bind(EMBED_MODEL, EMBED_DIMS)
-                .all<{ post_key: string; start: number; e: number; text: string; vector: string }>();
+                .all<{ post_key: string; start: number; e: number; text: string; vector: string }>(),
+        ]);
+        for (const r of results) text.set(r.post_key, r.text.toLowerCase());
+        const qv = await queryVector;
+        if (qv) {
             for (const m of ms) {
                 const v = decodeVector(m.vector);
                 if (!v || v.length !== EMBED_DIMS) continue;
-                const score = dot(queryVector, v);
+                const score = dot(qv, v);
                 const was = best.get(m.post_key);
                 if (!was || score > was.score) best.set(m.post_key, { score, s: m.start, e: m.e, t: m.text });
             }

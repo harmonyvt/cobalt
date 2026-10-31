@@ -615,6 +615,12 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         }
     }
 
+    /// `GET /library/search?warm=1` (keyed): the warm-up at the first letter typed. The answer is not read.
+    public func warmLibrarySearch() async throws {
+        let req = try makeRequest("GET", "/library/search", query: [("warm", "1")], keyed: true, timeout: 30)
+        _ = try await send(req)
+    }
+
     /// `GET /library/search/post?key=<post key>` (keyed): how one post sits in the index. `404 error.library.not_found`
     /// is `CobaltError.api`.
     public func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus {

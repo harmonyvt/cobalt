@@ -557,7 +557,7 @@ const idsOfSets = (rows: { items: string }[]): string[] =>
 // wait for it: a pool or a summon must never be held up for the 25 s a normal search may take.
 function stageSearch(d: StageDeps, words: string, limit: number, ms: number): Promise<SearchOutcome> {
     const client: EmbedClient | null = d.embed ? { embed: (kind, inputs, t) => d.embed!.embed(kind, inputs, Math.min(t, ms)) } : null;
-    return withTimeout(searchPosts({ db: d.db, client, mediaBaseUrl: d.mediaBaseUrl }, words, limit, { textFallback: false }), ms, (): SearchOutcome => ({
+    return withTimeout(searchPosts({ db: d.db, client, mediaBaseUrl: d.mediaBaseUrl }, words, limit, { textFallback: false, fresh: true }), ms, (): SearchOutcome => ({
         ok: false,
         status: 503,
         code: "error.search.waking",
