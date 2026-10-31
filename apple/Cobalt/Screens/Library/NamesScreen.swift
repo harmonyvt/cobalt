@@ -3,8 +3,8 @@ import SwiftUI
 
 // Library › names (APP-API-CONTRACT 48.6): the words the owner has taught search. Each name with a few of its example
 // pictures, its meaning, how many posts carry it and a switch; swipe or right click to delete; a tap opens the name screen
-// (`NameEditorScreen`), pushed over the list. Shown as a sheet by `NamesPresenter`, from "names" in the library's menu,
-// a name in a post's detail, or "this is… › new name…" in a post's menu.
+// (`NameEditorScreen`), pushed over the list. Its own tab ("search names", under "more" on iPhone), and a sheet from
+// `NamesPresenter` for a name in a post's detail or "this is… › new name…" in a post's menu.
 
 struct NamesScreen: View {
     let model: AppModel

@@ -30,6 +30,7 @@ enum Copy {
         case .links: return Links.title
         case .chat: return Chat.title
         case .stage: return Stage.title
+        case .names: return Names.tabTitle
         case .queue: return "queue"
         case .settings: return "settings"
         }

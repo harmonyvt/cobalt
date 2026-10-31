@@ -7,16 +7,17 @@ import UserNotifications
 /// threads with Claude about the library (APP-API-CONTRACT 27) and shows only with `features.chat`; `stage` is the "studio"
 /// tab, the stream canvas and the viewer store (APP-API-CONTRACT 30), after chat, and shows only with `features.stage`.
 public enum AppTab: String, Sendable, CaseIterable {
-    case save, library, links, chat, stage, queue, settings
+    case save, library, links, chat, stage, names, queue, settings
 
     /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`,
-    /// chat needs `features.chat`, the studio needs `features.stage`.
+    /// chat needs `features.chat`, the studio needs `features.stage`, search names need `features.names` (48.6).
     public func isAvailable(with caps: Capabilities) -> Bool {
         switch self {
         case .library: return caps.library
         case .links: return caps.shareSets
         case .chat: return caps.chat
         case .stage: return caps.stage
+        case .names: return caps.names
         case .save, .queue, .settings: return true
         }
     }

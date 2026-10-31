@@ -366,6 +366,12 @@ struct AppShell: View {
                     NavigationStack { StageScreen(model: model, tier: tier) }
                 }
             }
+            // the words taught to search (APP-API-CONTRACT 48.6); with six tabs iPhone puts it under "more"
+            if model.capabilities.names {
+                Tab(Copy.tab(.names), systemImage: icon(for: .names), value: AppTab.names) {
+                    NavigationStack { NamesScreen(model: model) }
+                }
+            }
             // the queue is not a tab here: it is a sheet opened from the toolbar button on save, library, links and chat
             // (apple/CONTRACT.md 12; `AppModel.showQueue()`)
             Tab(Copy.tab(.settings), systemImage: icon(for: .settings), value: AppTab.settings) {
@@ -396,6 +402,7 @@ struct AppShell: View {
             case .links: NavigationStack { LinksScreen(model: model) }
             case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
             case .stage: NavigationStack { StageScreen(model: model, tier: tier) }
+            case .names: NavigationStack { NamesScreen(model: model) }
             case .queue: NavigationStack { QueueScreen(model: model) }
             case .settings: SettingsScreen(model: model)
             }
@@ -684,6 +691,7 @@ func icon(for tab: AppTab) -> String {
     case .links: return Symbol.links
     case .chat: return Symbol.chat
     case .stage: return Symbol.stage
+    case .names: return Symbol.Names.menu
     case .queue: return Symbol.queue
     case .settings: return Symbol.settings
     }
