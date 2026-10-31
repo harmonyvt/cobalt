@@ -218,6 +218,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var cutout: Bool?
                 var cutoutAuto: Bool?
                 var accounts: Bool?
+                var imageCrop: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -310,6 +311,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.cutout = f?.cutout ?? false
         caps.cutoutAuto = (f?.cutoutAuto ?? false) && caps.cutout
         caps.accounts = f?.accounts ?? false
+        caps.imageCrop = f?.imageCrop ?? false
         return caps
     }
 

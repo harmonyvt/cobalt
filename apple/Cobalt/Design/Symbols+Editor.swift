@@ -45,5 +45,11 @@ extension Symbol {
         static let emote = "face.smiling"
         static let close = "xmark"
         static let more = "ellipsis.circle"
+        static let imageCrop = "crop"                                // crop a picture (CONTRACT-EDITOR 13)
+        static let cropRotateLeft = "rotate.left"
+        static let cropFlip = "arrow.left.and.right.righttriangle.left.righttriangle.right"
+        static let cropReset = "arrow.counterclockwise"
+        static let cropSaveCopy = "square.and.arrow.down"
+        static let cropPlace = "square.on.square"
     }
 }

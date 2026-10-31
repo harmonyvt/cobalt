@@ -837,11 +837,20 @@ export const makeCropOp = defineOp({
     ai: {
         tier: "free",
         only: true,
-        summary: "A new mp4 of a video cropped to part of the picture (and trimmed if start/end are given). Returns a job and the edit project's id.",
+        summary: "A new mp4 of a video cropped to part of the picture (and trimmed if start/end are given). Returns a job and the edit project's id. Pictures: make.cropImage.",
         params: ["id", "crop"],
         options: true,
     },
-    handler: async (ctx, input) => ok(await oneClip(ctx, "make.crop", input, "crop").catch((e) => fail("make.crop", e))),
+    handler: async (ctx, input) => {
+        // a picture is cropped by make.cropImage (section 44.2)
+        const { results: rows } = await ctx.db.prepare(`${FILE_SELECT} WHERE id = ?1 OR post_key = ?1`).bind(input.id).all<FileRow>();
+        const still = (f: FileRow) => String(f.content_type ?? "").startsWith("image/") && f.content_type !== "image/gif";
+        const exact = rows.find((f) => f.id === input.id && f.post_key !== input.id);
+        if (exact ? still(exact) : rows.length > 0 && rows.every(still)) {
+            throw stop("make.crop", "that is a picture: crop pictures with make.cropImage (make.crop is for videos)");
+        }
+        return ok(await oneClip(ctx, "make.crop", input, "crop").catch((e) => fail("make.crop", e)));
+    },
 });
 
 export const editsListOp = defineOp({

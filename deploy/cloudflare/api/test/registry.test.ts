@@ -291,6 +291,8 @@ describe("defineOp and the registry", () => {
             "jobs.onDone",
             "make.cutout",
             "edits.addOverlay",
+            // section 44.2
+            "make.cropImage",
             // T5 (33.9, 33.10)
             "links.create", "links.revoke", "links.update", "collections.create", "collections.add", "collections.update", "collections.reroll",
             "collections.delete", "sets.list", "sets.create", "sets.add", "sets.update", "sets.delete",
@@ -379,7 +381,7 @@ describe("the model's cobalt API", () => {
         expect(TOOL_TYPES).toContain("rank(hits: (string | {");
         // (hidden: section 37.6)
         expect(TOOL_TYPES).toContain("post(id: string): Promise<Post & {\n      files: PostFile[];\n      hidden?: true; //");
-        expect(TOOL_TYPES).toContain("look(ids: string[]): Promise<number>;");
+        expect(TOOL_TYPES).toContain("look(ids: string[], opts?: {");
         expect(TOOL_TYPES).toContain("collage(ids: string[], opts?: { title?: string; query?: string }): Promise<number>;");
         expect(TOOL_TYPES).toContain("limit?: number; // default 100, max 1000");
         expect(toolTypes(false)).not.toContain("search(");

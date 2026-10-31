@@ -170,6 +170,7 @@ private struct OverlayInspector: View {
     var pitchEnabled = true
 
     @State private var cutoutOf: EditSource?
+    @State private var croppingImage: EditSource?
 
     private var source: EditSource? { session.source(for: overlay.item) }
     private var fps: Int { session.timeline.canvas.fps }
@@ -180,6 +181,7 @@ private struct OverlayInspector: View {
             .sheet(item: $cutoutOf) { picture in
                 EditorCutoutSheet(session: session, source: picture, replacing: overlay.id) { cutoutOf = nil }
             }
+            .modifier(EditorImageCropPresenter(session: session, source: $croppingImage, replacing: overlay.id))
     }
 
     @ViewBuilder
@@ -190,7 +192,8 @@ private struct OverlayInspector: View {
                 .font(CobaltType.captionSmall)
                 .foregroundStyle(CobaltColor.errorText)
         }
-        EditorOverlayLayerRows(session: session, overlay: overlay) { cutoutOf = source }
+        EditorOverlayLayerRows(
+            session: session, overlay: overlay, removeBackground: { cutoutOf = source }, crop: { croppingImage = source })
         EditorSection(Copy.Editor.start) {
             VStack(spacing: 6) {
                 EditorNumberField.time(

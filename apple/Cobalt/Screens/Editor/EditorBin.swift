@@ -15,6 +15,7 @@ struct EditorBin: View {
     /// nil = all; shelves show once the server takes webps and layers (39.2).
     @State private var shelf: EditorBinEntry.Shelf?
     @State private var cutoutOf: EditSource?
+    @State private var croppingImage: EditSource?
 
     private var hasShelves: Bool { session.overlayTrackLimit > 1 }
 
@@ -71,6 +72,11 @@ struct EditorBin: View {
                                             Label(Copy.Editor.removeBackground, systemImage: Symbol.Editor.cutout)
                                         }
                                     }
+                                    if session.canCropImage, entry.canCutout {
+                                        Button { croppingImage = entry.source } label: {
+                                            Label(Copy.Editor.pictureCrop, systemImage: Symbol.Editor.imageCrop)
+                                        }
+                                    }
                                 }
                         }
                         if model.library.hasMore, query.isEmpty {
@@ -93,6 +99,8 @@ struct EditorBin: View {
         .sheet(item: $cutoutOf) { picture in
             EditorCutoutSheet(session: session, source: picture) { cutoutOf = nil }
         }
+        .modifier(EditorImageCropPresenter(
+            session: session, source: $croppingImage, saved: { [library = model.library] in Task { await library.refresh() } }))
     }
 
     private var searchField: some View {

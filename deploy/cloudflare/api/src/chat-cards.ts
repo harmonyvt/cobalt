@@ -208,6 +208,7 @@ async function build(op: string, input: Any, out: unknown, d: CardDeps): Promise
         case "make.trim":
         case "make.crop":
         case "make.cutout":
+        case "make.cropImage":
         case "edits.render":
         case "jobs.wait":
         case "jobs.onDone":

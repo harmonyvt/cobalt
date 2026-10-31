@@ -2,6 +2,7 @@
 // cobalt.make.cutout and cobalt.edits.addOverlay.
 import * as z from "zod";
 import { CUTOUT_SOURCE_TYPES, makeCutout, type ImagesPort } from "../../cutout";
+import { makeImageCrop } from "../../image-crop";
 import { EDIT_OVERLAY_TRACKS, EDIT_SOURCE_TYPES, sourceKind } from "../../../../editor/helper/timeline.js";
 import { EDIT_PROJECT_ID_REGEX, ITEM_ID_REGEX } from "../../gate";
 import { budgetPort } from "../budget";
@@ -244,4 +245,99 @@ export const editsAddOverlayOp = defineOp({
     },
 });
 
-export const EDITOR_OPS = [libraryCutoutRoute, makeCutoutOp, editsAddOverlayOp];
+// ---- crops (section 44) -------------------------------------------------------------------------------------------
+
+// POST /library/items/<id>/crop (44.1): JSON = the server crops (and turns, flips, removes the background); image/png =
+// the app's own crop, stored.
+export const libraryCropRoute = defineOp({
+    name: "library.crop",
+    route: { method: "POST", path: "/library/items/:id/crop", params: { id: ITEM_ID_REGEX } },
+    auth: "key",
+    runs: "worker",
+    cors: true,
+    raw: true,
+    input: z.object({}),
+    http: () => ({}),
+    ai: { tier: "hidden", summary: "Crop a picture into a new png (POST /library/items/<id>/crop); the chat uses make.cropImage." },
+    handler: async (ctx) => {
+        const r = await makeImageCrop(cutoutDeps(ctx), ctx.params.id!, ctx.request!, ctx.keyId!);
+        return json(r.status, r.body);
+    },
+});
+
+const CropBoxInput = z
+    .object({
+        x: z.number().min(0).lt(1),
+        y: z.number().min(0).lt(1),
+        w: z.number().gt(0).max(1),
+        h: z.number().gt(0).max(1),
+    })
+    .describe("the part to keep, fractions of the picture's width and height from its top-left (look with grid: true to read them off)");
+
+export const makeCropImageOp = defineOp({
+    name: "make.cropImage",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({
+        id: z.string().min(1).max(40).describe("a picture's file id, or a post id (its first picture)"),
+        crop: CropBoxInput.optional(),
+        rotate: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).optional().describe("degrees clockwise, after the crop"),
+        flip: z.enum(["none", "h", "v"]).optional().describe("h: left to right, v: top to bottom (after rotate)"),
+        cutout: z
+            .union([
+                z.boolean(),
+                z.object({
+                    mode: z.enum(["auto", "white", "color"]).optional(),
+                    color: z.string().regex(/^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional(),
+                    tolerance: z.number().min(0).max(100).optional(),
+                    edges_only: z.boolean().optional(),
+                    soften: z.number().int().min(0).max(3).optional(),
+                    trim: z.boolean().optional(),
+                }),
+            ])
+            .optional()
+            .describe("true: also remove the background of the cropped part (auto) and trim to the subject; or a make.cutout spec"),
+        title: z.string().min(1).max(80).optional(),
+    }),
+    output: JobSchema,
+    ai: {
+        tier: "free",
+        only: true,
+        summary:
+            "A new png of part of a picture (a crop: private, in the library; the original stays), optionally turned, flipped and with its background removed. Done at once: returns file_id; look([file_id]) to check it, then put it in an edit (edits.addOverlay).",
+        params: ["id", "crop"],
+        options: true,
+    },
+    handler: async (ctx, input) => {
+        const call = "make.cropImage";
+        const thread = threadOf(ctx, call);
+        const f = await fileOf(ctx, call, input.id, isPicture, "picture");
+        if (!input.crop && !input.rotate && (input.flip ?? "none") === "none" && !input.cutout) throw stop(call, "give crop (or rotate, flip or cutout)");
+        if (input.crop && (input.crop.x + input.crop.w > 1.001 || input.crop.y + input.crop.h > 1.001)) throw stop(call, "the crop goes past the picture's edge (x + w and y + h must be at most 1)");
+        if (typeof input.cutout === "object" && input.cutout.mode === "color" && !input.cutout.color) throw stop(call, "cutout mode color needs color");
+        const cap = rendersCap(ctx);
+        if (!(await budgetPort(ctx.container).take(thread, "renders", cap))) {
+            throw new OpError(429, "error.chat.render_cap", `cobalt.${call}: this chat already made ${cap} files today, the most it may make in a day. Tell Harmony it can make more tomorrow.`);
+        }
+        const { id: _id, ...spec } = input;
+        const req = new Request(`https://do.internal/library/items/${f.id}/crop`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(spec),
+        });
+        const r = await makeImageCrop(cutoutDeps(ctx), f.id, req, ctx.keyId!);
+        if (r.status !== 201) {
+            await budgetPort(ctx.container).refund(thread, "renders");
+            const b = r.body as { error?: { code?: string }; message?: string; path?: string };
+            const code = b.error?.code ?? "error.api.generic";
+            const why = [b.message, b.path ? `field ${b.path}` : null].filter(Boolean).join(", ");
+            throw new OpError(r.status, code, `cobalt.${call}: ${code}${why ? ` (${why})` : ""}`);
+        }
+        const item = (r.body as { item: { id: string } }).item;
+        const c = (r.body as { crop: { width: number; height: number } }).crop;
+        return ok({ job: `crop:${item.id}`, status: "done", file_id: item.id, post_id: item.id, kind: "image", width: c.width, height: c.height, public: false, share_url: null });
+    },
+});
+
+export const EDITOR_OPS = [libraryCutoutRoute, makeCutoutOp, editsAddOverlayOp, libraryCropRoute, makeCropImageOp];

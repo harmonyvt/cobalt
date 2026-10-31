@@ -18,6 +18,8 @@ struct DetailMenu: View {
 
     /// `crop…` and `repost frame…` (lane A7, `Screens/Tools`): the tool sheet that is up.
     @State private var tool: ToolSheet?
+    /// `crop a copy…` (apple/CONTRACT-EDITOR.md 13): the picture crop sheet that is up.
+    @State private var cropping: LibraryImageCropTarget?
 
     private var model: AppModel { controller.model }
 
@@ -39,6 +41,12 @@ struct DetailMenu: View {
     // MARK: a gallery's and a photo's entries (CONTRACT-GALLERY 1.19)
 
     private var page: GalleryPage? { controller.currentPage(in: item) }
+
+    /// The photo in view, when the server crops pictures into new library files (`features.image_crop`).
+    private var croppablePicture: Rendition? {
+        guard let r = page?.rendition, ToolPhotos.isSource(r), model.canCropImage(r) else { return nil }
+        return r
+    }
     private var liveRendition: Rendition? { page?.rendition }
 
     /// After `rename` and `open in library`: make from this post…, select photos, save all to photos, copy all links (on the
@@ -124,6 +132,12 @@ struct DetailMenu: View {
                 Button(Copy.Chat.askAbout, systemImage: Symbol.chatAsk, action: askAbout)
             }
             if item.detailShape != .classic { galleryItems(deleting: deleting) }
+            if let picture = croppablePicture {
+                Button(Copy.Editor.cropAPicture, systemImage: Symbol.Editor.imageCrop) {
+                    cropping = LibraryImageCropTarget(item: item, rendition: picture)
+                }
+                .disabled(deleting)
+            }
             ShowInFinderButton(model: model, item: item)
             ShowInFilesButton(model: model, item: item)
             if showsKeepEverything {
@@ -159,6 +173,7 @@ struct DetailMenu: View {
         .accessibilityLabel(Copy.Media.more)
         // a crop that became a tab selects itself (`MediaDetail`); a picture sent to Photos says so under the actions
         .toolSheet($tool, model: model, item: item) { line in if let line { controller.say(line) } }
+        .modifier(LibraryImageCropPresenter(model: model, target: $cropping, done: { line in controller.say(line) }))
         #if DEBUG
         .task {
             ToolsDebug.seedPhotos(of: item)
