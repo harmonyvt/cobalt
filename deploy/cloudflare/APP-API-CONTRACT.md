@@ -5560,3 +5560,121 @@ meaning), and a vector per stretch of speech. Section numbers 45 and 46 (and mig
 - Tests: `api/test/transcripts.test.ts`, `api/test/migration-0030.test.ts`, `api/test/about.test.ts`,
   `api/test/about-helper.test.ts`.
 - **Deploy**: migration 0030, then the API (Worker and container: the helper's audio length). No secret, no binding change.
+
+## 48. Search names: teaching search a word (addendum, 2026-10-31; owner: "can we have a UX UI to tinker with embeddings so we can create relationships? So like if I say Lia it's talking about pink cat girl?", then "Implement please"; plan `search-names/PLAN.md`, mockup https://claude.ai/artifact/X9kfuT9k4Xzr8HMnfnscda)
+
+EmbeddingGemma 2 has never heard of Lia, so a search for "Lia" (section 21) only finds titles holding those letters. A
+**name** is a word the owner teaches search: `Lia` (also called `lia-chan`, `my model`) means "pink-haired cat girl with
+cat ears, my vtuber model", with optional **example** posts ("this is Lia") and **not** posts ("this isn't"). A search
+that says a name looks for what it means. Names change search only: no post's index input changes, nothing is
+re-indexed, and turning a name off or deleting it undoes it at once. A name with no examples is a plain "same as" word
+(`capy` means `capybara`).
+
+### 48.1 Storage (migration `0031_search_names.sql`)
+
+- `search_names`: `id` (16 base62), `name` (as typed, 1..40 characters after trimming), `name_key` (normalized: lower
+  case, trimmed, inner whitespace one space; unique), `aliases` (JSON array of normalized words, at most 8, each 1..40),
+  `meaning` (1..300 characters, trimmed), `strength` (0..1, default 0.5), `cutoff` (0..1, default 0.5), `enabled` (0|1),
+  `model`, `dims`, `vector` (the meaning embedded in query mode), `meaning_hash` (SHA-256 hex of the meaning the vector
+  was made from), `point` (48.2), `created_at`, `updated_at`. At most 100 names.
+- `search_name_posts`: `name_id`, `post_key` (the `GET /library` post key), `kind` `yes` | `no`, `created_at`. Primary
+  key `(name_id, post_key)`: one mark per post per name. At most 200 marks per name. Deleting a name deletes its marks.
+- Words are unique across names: a name's `name_key` and aliases may not equal another name's `name_key` or alias
+  (`409 error.names.taken`). Aliases equal to the name's own key are dropped; duplicates are dropped.
+- Until 0031 is applied every route below answers `503 error.api.generic`, search behaves exactly as before, and
+  `features.names` is false (checked in `sqlite_master` like 37.1).
+
+### 48.2 The name's point
+
+- `m` = the meaning's vector, `c` = the normalized average of the vectors of its `yes` posts that are indexed, minus
+  0.25 times the normalized average of its indexed `no` posts' vectors, normalized again (no indexed `no` posts: just
+  the `yes` average). `point` = normalize((1 - strength) * m + strength * c); only `m`: `m`; only `c`: `c`; neither:
+  NULL.
+- The point is written on every create or update (marks included) and by the 15-minute cron (below). Saving embeds the
+  meaning at once when it changed (one Space call, `QUERY_CALL_MS`); if the Space cannot answer the save still succeeds
+  with `vector` NULL (`embedded: false` in the answer) and the point from the examples alone.
+- Cron, before the search indexer: names whose `vector` is NULL, whose `meaning_hash` differs from the meaning, or whose
+  `model`/`dims` differ from the current ones get their meaning embedded (one batch call, at most 20 a run) and their
+  point rewritten; every name's point is rewritten too when any of its marked posts' vectors changed since (simplest:
+  every run rewrites every enabled name's point; it is a handful of rows).
+- A post **carries** a name when it is marked `yes`, or it is not marked `no`, has a vector, and `dot(vector, point) >=
+  cutoff`. Hidden posts (37.2) never carry a name in any answer.
+
+### 48.3 Search (`GET /library/search`, the chat and MCP `library.search`, `chat.rank`, stage pools)
+
+- A query **says** a name when the normalized query holds the name's `name_key` or one of its aliases as whole words
+  (bounded by start, end or a character that is not a letter or digit). Only enabled names. Longest words first; one
+  word in the query counts for one name.
+- With at least one name said: the text sent to the Space is the query, a space, then `(` + each name as
+  `<name>: <meaning>` joined by `; ` + `)`, cut to 600 characters. The query vector is then mixed:
+  `normalize(qv + sum of the said names' points)` (a name with no point adds nothing). The text match (34.6's
+  `TEXT_MATCH_BONUS`) still looks for the query as typed; on top, a post that carries a said name gets
+  `TEXT_MATCH_BONUS * w`, where `w` = the share of the query's words (34.6 `queryWords`) that belong to said names'
+  words (a query that is only "Lia" gives the full bonus). The two bonuses do not add past one `TEXT_MATCH_BONUS`.
+- The name-match fallback (Space asleep, `fallback: "text"`): a post that carries a said name counts as holding that
+  name's words.
+- `names=0` on `GET /library/search` turns names off for that search (the web and app "compare" view). The answer gains
+  `names: [{ "id", "name" }]`: the names that were said and used (always present, may be empty). Each post's `why` (34.6)
+  starts with the said names it carries.
+- The chat and MCP `library.search` and `chat.rank` use names the same way (they share `searchPosts`).
+
+### 48.4 Routes
+
+All take the app's client key or the web Worker's library service credential, CORS for the web app, `no-store`, like
+37.4. Errors: `400 error.names.bad` (the input does not fit 48.1), `404 error.names.not_found`, `409 error.names.taken`
+(with `word`: the clashing word), `409 error.names.too_many`, `503 error.api.generic` (before 0031).
+
+The `Name` shape: `{ "id", "name", "aliases": [string], "meaning", "strength", "cutoff", "enabled": bool,
+"yes": [post_key], "no": [post_key], "posts": int (posts that carry it now), "embedded": bool (the meaning has a vector
+for the current model and meaning), "created_at", "updated_at" }`. `yes`/`no` newest mark first.
+
+- `GET /library/names`: `{ "status": "success", "names": [Name] }`, oldest first.
+- `POST /library/names`: body `{ "name", "meaning", "aliases"?, "strength"?, "cutoff"?, "enabled"?, "yes"?: [post_key],
+  "no"?: [post_key] }` → `201 { "status": "success", "name": Name }`. A post key in both lists: `400`.
+- `PATCH /library/names/:id`: any of the create fields (lists replace the marks) plus `"mark": [{ "post_key", "kind":
+  "yes"|"no"|null }]` (at most 50; null removes the mark; applied after `yes`/`no`) → `{ "status": "success", "name": Name }`.
+- `DELETE /library/names/:id` → `{ "status": "success" }`.
+- `POST /library/names/preview`: body `{ "id"?, "name"?, "meaning"?, "strength"?, "cutoff"?, "yes"?, "no"?, "limit"?:
+  1..100 (default 60) }`: the name as it would be with these values (missing fields from the saved name `id`, else the
+  defaults; `meaning` is required without `id`), saving nothing. → `{ "status": "success", "embedded": bool, "carries":
+  int, "indexed": int (posts with a vector), "posts": [{ "post_key", "score": number (the cosine with the point, 4
+  places; 1 for a `yes` mark when it has no vector), "mark": "yes"|"no"|null, "carries": bool }] }`: marked posts first
+  (yes, then no), then the rest by score, cut to `limit`. Each entry also carries `"post"`: the post in the
+  `GET /library?v=3` shape (null when it no longer exists), so a client draws thumbnails without another call. The meaning
+  is embedded through the query-vector path (cached by exact text), so dragging a slider costs no Space call.
+- `GET /library/names/post?key=<post_key>`: `{ "status": "success", "names": [{ "id", "name", "score": number|null,
+  "mark": "yes"|"no"|null, "carries": bool }] }`: every enabled name that the post carries or is marked for, best first.
+  For the post detail's names row.
+- `features.names` in `GET /capabilities` (true once 0031 is applied).
+
+### 48.5 Chat and MCP
+
+- `names.list` (free): the names (no post lists, counts only).
+- `names.preview` (free): the preview above with `limit` default 20, posts as `{ id, title, score, mark, carries }`.
+- `names.set` (ask): create (no `id`) or update (with `id`) a name, marks included.
+- `names.delete` (ask).
+- Prompt line: when the owner says who or what a word means, offer to teach it with `names.set`.
+
+### 48.6 Clients
+
+- **App (iPhone, iPad, Mac)**: "names" in the library's menu opens the names list (each name, its meaning, how many posts
+  carry it, an on/off toggle; swipe or right click to delete). The name screen: the word and "also called" chips, the
+  meaning, a "this is <name>" strip and a "not <name>" strip of thumbnails, a slider "listen to: the words … the
+  examples" (strength), a slider "cut-off: more posts … stricter", and "who's in": the preview's posts with a dashed
+  cut-off line between those that carry it and those that don't; a tap cycles a post through example, not, and no
+  mark. Slider and mark changes re-run the preview (debounced 300 ms); save writes it. A "try a search" row runs the same
+  query with and without names (`names=0`) side by side. The post detail's "what it's about" gets a "names" row (each
+  name with its score; a tap opens the name; "not <name>" marks it `no`). A post's context menu gets "this is…" with the
+  names (and "new name…", which opens a new name with the post as its first example).
+- **Web library page**: a "names" panel with the same editor and list, and a "this is…" action on a post.
+- Copy follows the house style (lowercase labels in the app).
+
+### 48.7 Files, tests, deploy
+
+- Files: `api/src/names.ts`, `api/src/registry/ops/names.ts`, `api/src/embed.ts` (the search hook), the cron in
+  `api/src/index.ts`, `d1/migrations/0031_search_names.sql`; web `web/src/library.ts` + `web/src/library/page.html`;
+  app `apple/CobaltKit/.../Models/SearchNames*.swift`, `API/HTTPCobaltClient+Names.swift`, `Preview/PreviewNames.swift`,
+  `apple/Cobalt/Screens/Library/Names*.swift`, `Design/Copy+Names.swift`.
+- Tests: `api/test/names.test.ts`, `api/test/migration-0031.test.ts`, web `web/test/library-names.test.ts`, CobaltKit
+  `NamesTests.swift`.
+- **Deploy**: migration 0031, then the API, then the web, then the app. No secret, no binding change.
