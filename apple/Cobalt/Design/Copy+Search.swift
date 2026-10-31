@@ -9,6 +9,8 @@ extension Copy {
         // the search field and the line under it
         /// The field's prompt while the server searches by meaning (`search titles` without it).
         static let prompt = "search titles and what's in them"
+        /// The iPhone search field's clear button (VoiceOver).
+        static let clearField = "clear search"
         static let searching = "searching…"
         static func results(_ n: Int) -> String { n == 1 ? "1 result" : "\(n) results" }
         static func stillIndexing(_ n: Int) -> String { n == 1 ? "still indexing 1 post" : "still indexing \(n) posts" }
