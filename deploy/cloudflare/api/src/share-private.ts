@@ -117,7 +117,7 @@ async function privateFile(d: ShareDeps, request: Request, key: string, n: numbe
 
 // One stored object, Range aware (a single `bytes=` range: 206; unsatisfiable: 416), never cached. The size comes from
 // the object, never from the row.
-async function streamObject(bucket: ByteBucket, key: string, request: Request, contentType: string): Promise<Response> {
+export async function streamObject(bucket: ByteBucket, key: string, request: Request, contentType: string): Promise<Response> {
     const known = await bucket.head(key);
     if (!known) return NOT_FOUND();
     const total = known.size;

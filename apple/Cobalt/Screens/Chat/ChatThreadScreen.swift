@@ -39,6 +39,8 @@ struct ChatThreadScreen: View {
     @State private var confirmedYes = 0
     @State private var confirmedNo = 0
     @FocusState private var composerFocused: Bool
+    /// The "share as web page" sheet is open (APP-API-CONTRACT 46).
+    @State private var sharing = false
 
     init(model: AppModel, threadID: String, tier: Tier, helperOf: String? = nil) {
         self.model = model
@@ -110,6 +112,9 @@ struct ChatThreadScreen: View {
         .chatPresentations(controller) {
             store.openThreadID = nil
             dismiss()
+        }
+        .sheet(isPresented: $sharing) {
+            ChatShareSheet(model: model, threadID: threadID) { sharing = false }
         }
         .haptic(.impact(weight: .light), trigger: sent, enabled: haptics)
         .modifier(ReplyHaptics(status: content?.messages.last?.status))
@@ -268,6 +273,8 @@ struct ChatThreadScreen: View {
                     }
                     .disabled(busy)
                 }
+                Button(Copy.ChatSharing.menu, systemImage: Symbol.chatShare) { sharing = true }
+                    .disabled(content?.messages.isEmpty ?? true)
                 Divider()
                 Button(Copy.Chat.delete, systemImage: Symbol.chatDelete, role: .destructive) { controller.deleting = thread }
             } label: {

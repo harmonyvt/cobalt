@@ -11,6 +11,7 @@ import { POST_KEY_SQL } from "./app-routes";
 import { captionOf, fileOf, itemSubject, writeCaption, type Caption, type Captioner } from "./roast";
 import { shareSetRoute } from "./share-sets";
 import { privateRoute, type ByteBucket } from "./share-private";
+import { chatShareRoute } from "./chat-share-page";
 import { ITEM_COLUMNS, effectiveVisibility, extOf, type MediaRow } from "./visibility";
 
 export type ShareDeps = {
@@ -264,6 +265,8 @@ export async function sharePage(d: ShareDeps, request: Request): Promise<Respons
     if (url.pathname === "/" || url.pathname === "") return NOT_FOUND();
     // private links (section 36): /p/<key> and its files
     if (url.pathname === "/p" || url.pathname.startsWith("/p/")) return privateRoute(d, request);
+    // shared chats (section 46): /c/<key>, its JSON and its files
+    if (url.pathname === "/c" || url.pathname.startsWith("/c/")) return chatShareRoute(d, request);
     // gallery share links (section 24): /g/<id>, the Mastodon status Discord reads, its oEmbed
     const set = await shareSetRoute({ ...d, now: () => Date.now() }, request);
     if (set) return set;

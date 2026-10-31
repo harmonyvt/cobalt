@@ -257,6 +257,14 @@ public protocol CobaltClient: Sendable {
     func makeChatVideo(
         threadID: String, shape: ChatVideoShape?, theme: ChatVideoTheme?, speed: Double?, from: String?, to: String?, notify: Bool
     ) async throws -> EditRender
+    /// `GET /chat/threads/<id>/share` (46.2): the chat's live web page, or nil while it is not shared.
+    func chatShare(threadID: String) async throws -> ChatShare?
+    /// `PUT /chat/threads/<id>/share`: shares the chat (up to its latest message) or changes the live share.
+    func shareChat(threadID: String, _ change: ChatShareChange) async throws -> ChatShare
+    /// `POST /chat/threads/<id>/share/rotate`: a new link; the old one stops at once.
+    func rotateChatShare(threadID: String) async throws -> ChatShare
+    /// `DELETE /chat/threads/<id>/share`: stops sharing; the chat is private again.
+    func stopChatShare(threadID: String) async throws
     // Stage, the studio tab (APP-API-CONTRACT 30.10; keyed; only when `features.stage`). Defaulted below
     // (`.unsupported`) so older fakes compile. The routes throw `StageError` for the server's refusals.
     /// `GET /stage`: the stage and its four rewards. Also retries what Twitch refused earlier.
@@ -423,6 +431,10 @@ extension CobaltClient {
     public func makeChatVideo(
         threadID: String, shape: ChatVideoShape?, theme: ChatVideoTheme?, speed: Double?, from: String?, to: String?, notify: Bool
     ) async throws -> EditRender { throw PipelineFailure.unsupported }
+    public func chatShare(threadID: String) async throws -> ChatShare? { throw PipelineFailure.unsupported }
+    public func shareChat(threadID: String, _ change: ChatShareChange) async throws -> ChatShare { throw PipelineFailure.unsupported }
+    public func rotateChatShare(threadID: String) async throws -> ChatShare { throw PipelineFailure.unsupported }
+    public func stopChatShare(threadID: String) async throws { throw PipelineFailure.unsupported }
     public func stage() async throws -> StageSnapshot { throw PipelineFailure.unsupported }
     public func updateStage(_ patch: StagePatch) async throws -> StageSettings { throw PipelineFailure.unsupported }
     public func rotateStage() async throws -> StageSettings { throw PipelineFailure.unsupported }

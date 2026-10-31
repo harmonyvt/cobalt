@@ -484,6 +484,7 @@ struct ChatHTTPTests {
         await #expect(throws: PipelineFailure.unsupported) { try await bare.chatThreads() }
         await #expect(throws: PipelineFailure.unsupported) { try await bare.createChatThread(title: nil) }
         await #expect(throws: PipelineFailure.unsupported) { try await bare.chatThread(id: "x") }
+        await #expect(throws: PipelineFailure.unsupported) { try await bare.chatShare(threadID: "x") }
         await #expect(throws: PipelineFailure.unsupported) { try await bare.renameChatThread(id: "x", title: "y") }
         await #expect(throws: PipelineFailure.unsupported) { try await bare.deleteChatThread(id: "x") }
         await #expect(throws: PipelineFailure.unsupported) {

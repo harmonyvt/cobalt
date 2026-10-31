@@ -893,6 +893,504 @@
         }
       }
     },
+    "/chat/threads/{id}/share": {
+      "get": {
+        "operationId": "chat_share.get",
+        "summary": "A chat's live shared page, or null (GET /chat/threads/<id>/share).",
+        "tags": [
+          "chat_share"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "share": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "url": {
+                              "type": "string",
+                              "description": "share.../c/<key>: the only way in while it is live"
+                            },
+                            "thread_id": {
+                              "type": "string"
+                            },
+                            "upto_id": {
+                              "type": "string",
+                              "description": "the last message on the page"
+                            },
+                            "upto_at": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "ms; when that message was written"
+                            },
+                            "messages": {
+                              "type": "number",
+                              "description": "messages on the page"
+                            },
+                            "behind": {
+                              "type": "number",
+                              "description": "messages written after the page's last one (an update brings them in)"
+                            },
+                            "files": {
+                              "type": "number",
+                              "description": "videos and pictures the link streams"
+                            },
+                            "media": {
+                              "type": "boolean",
+                              "description": "the chat's videos and pictures play on the page"
+                            },
+                            "code": {
+                              "type": "boolean",
+                              "description": "the model's code is on the page, folded"
+                            },
+                            "created_at": {
+                              "type": "number"
+                            },
+                            "updated_at": {
+                              "type": "number"
+                            },
+                            "opened": {
+                              "type": "number",
+                              "description": "page opens (GET)"
+                            },
+                            "last_opened_at": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "url",
+                            "thread_id",
+                            "upto_id",
+                            "upto_at",
+                            "messages",
+                            "behind",
+                            "files",
+                            "media",
+                            "code",
+                            "created_at",
+                            "updated_at",
+                            "opened",
+                            "last_opened_at"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "share"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
+      "put": {
+        "operationId": "chat_share.put",
+        "summary": "Share a chat as a web page (201, up to its latest message), or change the live share's settings; upto \"latest\" brings in the messages written since (PUT /chat/threads/<id>/share).",
+        "tags": [
+          "chat_share"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "media": {
+                    "description": "the chat's videos and pictures play on the page (default on)",
+                    "type": "boolean"
+                  },
+                  "code": {
+                    "description": "show the model's code, folded (default off)",
+                    "type": "boolean"
+                  },
+                  "upto": {
+                    "description": "move the page up to the chat's latest message",
+                    "type": "string",
+                    "const": "latest"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "share": {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "description": "share.../c/<key>: the only way in while it is live"
+                        },
+                        "thread_id": {
+                          "type": "string"
+                        },
+                        "upto_id": {
+                          "type": "string",
+                          "description": "the last message on the page"
+                        },
+                        "upto_at": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "ms; when that message was written"
+                        },
+                        "messages": {
+                          "type": "number",
+                          "description": "messages on the page"
+                        },
+                        "behind": {
+                          "type": "number",
+                          "description": "messages written after the page's last one (an update brings them in)"
+                        },
+                        "files": {
+                          "type": "number",
+                          "description": "videos and pictures the link streams"
+                        },
+                        "media": {
+                          "type": "boolean",
+                          "description": "the chat's videos and pictures play on the page"
+                        },
+                        "code": {
+                          "type": "boolean",
+                          "description": "the model's code is on the page, folded"
+                        },
+                        "created_at": {
+                          "type": "number"
+                        },
+                        "updated_at": {
+                          "type": "number"
+                        },
+                        "opened": {
+                          "type": "number",
+                          "description": "page opens (GET)"
+                        },
+                        "last_opened_at": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "url",
+                        "thread_id",
+                        "upto_id",
+                        "upto_at",
+                        "messages",
+                        "behind",
+                        "files",
+                        "media",
+                        "code",
+                        "created_at",
+                        "updated_at",
+                        "opened",
+                        "last_opened_at"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "share"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "chat_share.delete",
+        "summary": "Stop sharing a chat: its link is a 404 at once.",
+        "tags": [
+          "chat_share"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/chat/threads/{id}/share/rotate": {
+      "post": {
+        "operationId": "chat_share.rotate",
+        "summary": "A new key for a chat's shared page; the old link is a 404 at once.",
+        "tags": [
+          "chat_share"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "share": {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "description": "share.../c/<key>: the only way in while it is live"
+                        },
+                        "thread_id": {
+                          "type": "string"
+                        },
+                        "upto_id": {
+                          "type": "string",
+                          "description": "the last message on the page"
+                        },
+                        "upto_at": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "ms; when that message was written"
+                        },
+                        "messages": {
+                          "type": "number",
+                          "description": "messages on the page"
+                        },
+                        "behind": {
+                          "type": "number",
+                          "description": "messages written after the page's last one (an update brings them in)"
+                        },
+                        "files": {
+                          "type": "number",
+                          "description": "videos and pictures the link streams"
+                        },
+                        "media": {
+                          "type": "boolean",
+                          "description": "the chat's videos and pictures play on the page"
+                        },
+                        "code": {
+                          "type": "boolean",
+                          "description": "the model's code is on the page, folded"
+                        },
+                        "created_at": {
+                          "type": "number"
+                        },
+                        "updated_at": {
+                          "type": "number"
+                        },
+                        "opened": {
+                          "type": "number",
+                          "description": "page opens (GET)"
+                        },
+                        "last_opened_at": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "url",
+                        "thread_id",
+                        "upto_id",
+                        "upto_at",
+                        "messages",
+                        "behind",
+                        "files",
+                        "media",
+                        "code",
+                        "created_at",
+                        "updated_at",
+                        "opened",
+                        "last_opened_at"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "share"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/chat/threads/{id}/video": {
       "post": {
         "operationId": "chat.video.route",
@@ -1728,11 +2226,15 @@
                       "additionalProperties": false
                     },
                     "next": {
-                      "description": "the cursor of the next page, null on the last",
-                      "type": [
-                        "string",
-                        "null"
-                      ]
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "the cursor of the next page, null on the last"
                     }
                   },
                   "required": [
@@ -1806,9 +2308,13 @@
                           "type": "object",
                           "properties": {
                             "sentence": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "tags": {
@@ -1828,15 +2334,23 @@
                               }
                             },
                             "transcript": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "language": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "frames": {
@@ -1846,15 +2360,23 @@
                               "type": "boolean"
                             },
                             "model": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "written_at": {
-                              "type": [
-                                "number",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             }
                           },
@@ -2032,9 +2554,13 @@
                           "type": "object",
                           "properties": {
                             "sentence": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "tags": {
@@ -2054,15 +2580,23 @@
                               }
                             },
                             "transcript": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "language": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "frames": {
@@ -2072,15 +2606,23 @@
                               "type": "boolean"
                             },
                             "model": {
-                              "type": [
-                                "string",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "written_at": {
-                              "type": [
-                                "number",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             }
                           },
@@ -2851,9 +3393,13 @@
                                   "type": "string"
                                 },
                                 "private_url": {
-                                  "type": [
-                                    "string",
-                                    "null"
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
                                   ]
                                 }
                               },
@@ -3490,17 +4036,25 @@
                               "type": "number"
                             },
                             "last_used_at": {
-                              "type": [
-                                "number",
-                                "null"
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
                               ]
                             },
                             "used_by": {
-                              "description": "the client's name from its last initialize",
-                              "type": [
-                                "string",
-                                "null"
-                              ]
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "the client's name from its last initialize"
                             },
                             "calls_today": {
                               "type": "number",
@@ -3617,17 +4171,25 @@
                                   "type": "number"
                                 },
                                 "last_used_at": {
-                                  "type": [
-                                    "number",
-                                    "null"
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
                                   ]
                                 },
                                 "used_by": {
-                                  "description": "the client's name from its last initialize",
-                                  "type": [
-                                    "string",
-                                    "null"
-                                  ]
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "the client's name from its last initialize"
                                 },
                                 "calls_today": {
                                   "type": "number",
@@ -3731,17 +4293,25 @@
                                   "type": "number"
                                 },
                                 "last_used_at": {
-                                  "type": [
-                                    "number",
-                                    "null"
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
                                   ]
                                 },
                                 "used_by": {
-                                  "description": "the client's name from its last initialize",
-                                  "type": [
-                                    "string",
-                                    "null"
-                                  ]
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "the client's name from its last initialize"
                                 },
                                 "calls_today": {
                                   "type": "number",
@@ -4128,9 +4698,13 @@
                             "description": "page opens (GET)"
                           },
                           "last_opened_at": {
-                            "type": [
-                              "number",
-                              "null"
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           }
                         },
@@ -4378,9 +4952,13 @@
                             "description": "page opens (GET)"
                           },
                           "last_opened_at": {
-                            "type": [
-                              "number",
-                              "null"
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           }
                         },
@@ -4492,9 +5070,13 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "type": [
-                            "number",
-                            "null"
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         }
                       },
@@ -4628,9 +5210,13 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "type": [
-                            "number",
-                            "null"
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         }
                       },
@@ -4719,9 +5305,13 @@
                             "description": "page opens (GET)"
                           },
                           "last_opened_at": {
-                            "type": [
-                              "number",
-                              "null"
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           }
                         },
@@ -4824,9 +5414,13 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "type": [
-                            "number",
-                            "null"
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         }
                       },
@@ -4960,9 +5554,13 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "type": [
-                            "number",
-                            "null"
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         }
                       },
@@ -6218,18 +6816,26 @@
             "type": "string"
           },
           "activity": {
-            "description": "while running: the call it made last",
-            "type": [
-              "string",
-              "null"
-            ]
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "while running: the call it made last"
           },
           "result": {
-            "description": "its report (its last reply), once it ended",
-            "type": [
-              "string",
-              "null"
-            ]
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "its report (its last reply), once it ended"
           },
           "post_ids": {
             "type": "array",
@@ -6239,9 +6845,13 @@
             "description": "the posts it showed"
           },
           "error": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "turns": {
@@ -6259,9 +6869,13 @@
             "type": "number"
           },
           "ended_at": {
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
             ]
           }
         },
@@ -6394,11 +7008,15 @@
             "description": "ms; slides 90 days on each use"
           },
           "country": {
-            "description": "cf.country of the last use",
-            "type": [
-              "string",
-              "null"
-            ]
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "cf.country of the last use"
           },
           "current": {
             "type": "boolean",
@@ -6469,57 +7087,93 @@
             "description": "the post key"
           },
           "service": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "link": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "title": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "custom_title": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "duration": {
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "width": {
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "height": {
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "poster_url": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "public_url": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "created_at": {
@@ -6568,9 +7222,13 @@
                   "type": "string"
                 },
                 "url": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
