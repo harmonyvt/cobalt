@@ -696,6 +696,70 @@
         }
       }
     },
+    "/chat/threads/{id}/agents": {
+      "get": {
+        "operationId": "chat.agents",
+        "summary": "A chat thread's sub-agents and their messages (section 43.6).",
+        "tags": [
+          "chat"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "agents": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Agent"
+                      }
+                    },
+                    "mail": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AgentMail"
+                      }
+                    }
+                  },
+                  "required": [
+                    "agents",
+                    "mail"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/chat/threads/{id}/confirm/{cid}": {
       "post": {
         "operationId": "chat.confirm",
@@ -6050,6 +6114,140 @@
   },
   "components": {
     "schemas": {
+      "Agent": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "description": "its id"
+          },
+          "job": {
+            "type": "string",
+            "description": "agent:<id>: hand it to jobs.onDone to hear when it finishes"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "error",
+              "stopped"
+            ]
+          },
+          "task": {
+            "type": "string"
+          },
+          "activity": {
+            "description": "while running: the call it made last",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "description": "its report (its last reply), once it ended",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "post_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "the posts it showed"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turns": {
+            "type": "number",
+            "description": "replies it ran: its task, then one per message that woke it"
+          },
+          "unread": {
+            "type": "number",
+            "description": "messages waiting for it"
+          },
+          "created_at": {
+            "type": "number"
+          },
+          "updated_at": {
+            "type": "number"
+          },
+          "ended_at": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "agent",
+          "job",
+          "name",
+          "status",
+          "task",
+          "activity",
+          "result",
+          "post_ids",
+          "error",
+          "turns",
+          "unread",
+          "created_at",
+          "updated_at",
+          "ended_at"
+        ],
+        "additionalProperties": false
+      },
+      "AgentMail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number"
+          },
+          "from": {
+            "type": "string",
+            "description": "\"parent\" or an agent id"
+          },
+          "from_name": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "to_name": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "number"
+          },
+          "read": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "from",
+          "from_name",
+          "to",
+          "to_name",
+          "text",
+          "created_at",
+          "read"
+        ],
+        "additionalProperties": false
+      },
       "AuthKeyRow": {
         "type": "object",
         "properties": {

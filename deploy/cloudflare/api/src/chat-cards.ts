@@ -85,7 +85,27 @@ export type ToolCard =
     | { type: "link"; id: string | null; url: string; title: string | null; files: number | null; private: boolean }
     | { type: "collection"; of: "collection" | "set"; id: string; name: string; count: number | null; change: "created" | "added" | "updated" }
     | { type: "saved"; post_ids: string[]; title: string | null; status: string | null }
-    | { type: "facts"; title: string; rows: [string, string][]; post_ids: string[] };
+    | { type: "facts"; title: string; rows: [string, string][]; post_ids: string[] }
+    // sub-agents (section 43.6): the ones a call started, listed, looked at or stopped, a message sent, mail read
+    | {
+          type: "agents";
+          change: "started" | "listed" | "viewed" | "stopped" | "sent" | "inbox" | "waiting";
+          agents: AgentCardRow[];
+          message: { to: string; text: string } | null;
+          mail: { from: string; text: string }[];
+      };
+
+export type AgentCardRow = {
+    id: string;
+    name: string;
+    status: string;
+    task: string;
+    activity: string | null;
+    result: string | null;
+    post_ids: string[];
+    // jobs.onDone: the server continues the chat when it finishes
+    watching: boolean;
+};
 
 export type ToolCall = {
     // the op name ("library.search"); the model's call name when it differs
@@ -191,7 +211,26 @@ async function build(op: string, input: Any, out: unknown, d: CardDeps): Promise
         case "edits.render":
         case "jobs.wait":
         case "jobs.onDone":
+            if (o && /^agent:/.test(String(o.job))) return { type: "agents", change: "waiting", agents: [agentCardRow(o)], message: null, mail: [] };
             return o && str(o.job) ? jobCard(op, o) : null;
+        case "agents.spawn":
+        case "agents.get":
+        case "agents.stop":
+            return o && str(o.agent)
+                ? { type: "agents", change: op === "agents.spawn" ? "started" : op === "agents.stop" ? "stopped" : "viewed", agents: [agentCardRow(o)], message: null, mail: [] }
+                : null;
+        case "agents.list":
+            return o && Array.isArray(o.agents)
+                ? { type: "agents", change: "listed", agents: (o.agents as Any[]).slice(0, AGENTS_SHOWN).map(agentCardRow), message: null, mail: [] }
+                : null;
+        case "agents.send":
+            return o ? { type: "agents", change: "sent", agents: [], message: { to: String(o.to_name ?? input.to ?? ""), text: clip(String(input.text ?? ""), TEXT_MAX) }, mail: [] } : null;
+        case "agents.inbox": {
+            const mail = Array.isArray(o?.messages) ? (o!.messages as Any[]) : [];
+            return mail.length > 0
+                ? { type: "agents", change: "inbox", agents: [], message: null, mail: mail.slice(0, AGENTS_SHOWN).map((m) => ({ from: String(m.from_name ?? m.from ?? ""), text: clip(String(m.text ?? ""), TEXT_MAX) })) }
+                : null;
+        }
         case "box.run":
             return o
                 ? { type: "box", cmd: clip(String(input.cmd ?? ""), CMD_MAX), code: num(o.code), timed_out: o.timed_out === true, stdout: tail(o.stdout, OUT_TAIL), stderr: tail(o.stderr, ERR_TAIL) }
@@ -243,6 +282,23 @@ function emoteOf(e: Any): { id: string; name: string; animated: boolean; url: st
     const id = str(e?.id);
     if (!url || !id || !/^https:\/\//.test(url)) return [];
     return [{ id, name: clip(String(e.name ?? ""), 64), animated: e.animated === true, url, library_id: str(e.library_id) }];
+}
+
+const AGENTS_SHOWN = 8;
+
+function agentCardRow(o: Any): AgentCardRow {
+    // an agent's shape (agents.*) or its job state (jobs.wait / jobs.onDone on agent:<id>)
+    const status = String(o.status ?? "running");
+    return {
+        id: String(o.agent ?? String(o.job ?? "").replace(/^agent:/, "")),
+        name: String(o.name ?? ""),
+        status: status === "cancelled" ? "stopped" : status,
+        task: clip(String(o.task ?? ""), TEXT_MAX),
+        activity: str(o.activity),
+        result: typeof o.result === "string" && o.result !== "" ? clip(o.result, 300) : null,
+        post_ids: idsOf(o.post_ids),
+        watching: o.watching === true,
+    };
 }
 
 function jobCard(op: string, o: Any): ToolCard {
@@ -393,6 +449,8 @@ export function postIdsOf(card: ToolCard): string[] {
             return card.post_id ? [card.post_id] : [];
         case "emotes":
             return card.emotes.map((e) => e.library_id).filter((x): x is string => x !== null);
+        case "agents":
+            return card.agents.flatMap((a) => a.post_ids);
         default:
             return [];
     }

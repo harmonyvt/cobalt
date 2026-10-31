@@ -168,6 +168,8 @@ export default defineConfig({
 			// Chat saves (APP-API-CONTRACT.md 33.7): how many links one chat thread may save in any 24 hours; "0" turns the
 			// chat's cobalt.library.save off.
 			CHAT_DAILY_SAVES: bindings.text("20"),
+			// Sub-agents (APP-API-CONTRACT.md section 43): how many one chat thread may start per UTC day; "0" turns them off.
+			CHAT_DAILY_AGENTS: bindings.text("20"),
 			// Stage (APP-API-CONTRACT.md section 30): https://<stage host>/ , one of `domains` above; empty turns the stage
 			// off (every /stage* route is a 404, `features.stage` false). The three Twitch values are SECRETS from
 			// ~/.config/cobalt/secrets.json (`cf deploy` refuses while a declared one is missing; empty is fine and
@@ -230,6 +232,12 @@ export default defineConfig({
 				worker: "cobalt-api",
 				exportName: "ChatJobs",
 			}),
+			// Sub-agents (src/chat-agents-do.ts, APP-API-CONTRACT.md section 43): one object per sub-agent runs its replies
+			// in its alarm. Needs D1 migration 0027.
+			CHAT_AGENTS: bindings.durableObject({
+				worker: "cobalt-api",
+				exportName: "ChatAgent",
+			}),
 		},
 		exports: {
 			CobaltContainer: exports.durableObject({
@@ -247,6 +255,7 @@ export default defineConfig({
 				container: workbenchContainer,
 			}),
 			ChatJobs: exports.durableObject({ storage: "sqlite" }),
+			ChatAgent: exports.durableObject({ storage: "sqlite" }),
 		},
 	},
 	containers: [cobaltContainer, editContainer, workbenchContainer],

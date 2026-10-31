@@ -20,6 +20,22 @@ import { CODE_TIMEOUT_BOX_MS, type CodeRunner } from "./chat-limits";
 import { workbenchOn } from "./workbench-rules";
 import type { ModelFetch } from "./model-fetch";
 import type { JobEnded, JobsPort, ResumeOutcome } from "./chat-jobs";
+import {
+    AGENT_TURNS_MAX,
+    agentRow,
+    dropAgents,
+    dropAllAgents,
+    isMissingTable,
+    pullMail,
+    setAgent,
+    takeMail,
+    unreadCount,
+    whoOf,
+    agentNames,
+    mailNote,
+    type AgentsPort,
+    type AgentTickOutcome,
+} from "./chat-agents";
 export { CODE_CPU_MS, CODE_TIMEOUT_MS, MAX_TOOL_CALLS, type CodeRun, type CodeRunner } from "./chat-limits";
 import { mintCollectionId } from "./share-collections";
 import type { StudioReply } from "./studio";
@@ -133,6 +149,10 @@ export type ChatDeps = {
     pending?: PendingPort | null;
     // where cobalt.jobs.onDone hands jobs (the thread's ChatJobs Durable Object, section 33.14); null: the hook is off
     jobs?: JobsPort | null;
+    // sub-agents (section 43): wakes an agent's runner (the ChatAgent Durable Object); null: cobalt.agents is off
+    agents?: AgentsPort | null;
+    // set when this reply is a sub-agent's own (it runs in the agent's Durable Object)
+    agentOf?: { id: string; parent: string; name: string } | null;
 };
 
 // ---- rows and shapes ----------------------------------------------------------------------------
@@ -305,11 +325,16 @@ async function readBody(request: Request): Promise<Record<string, unknown> | nul
 
 // ---- CRUD ---------------------------------------------------------------------------------------
 
+const NOT_AGENT = " WHERE id NOT IN (SELECT id FROM chat_agents)";
+// The sub-agent behind a thread (section 43), or null (a plain thread, or the migration is not applied yet).
+const agentBehind = (db: D1Database, id: string) => agentRow(db, id).catch((e) => (isMissingTable(e) ? null : Promise.reject(e)));
+
 export async function listThreads(d: Pick<ChatDeps, "db">): Promise<StudioReply> {
     try {
-        const { results } = await d.db
-            .prepare(`SELECT id, title, titled_by, created_at, updated_at FROM chat_threads ORDER BY updated_at DESC, id DESC LIMIT ${THREADS_MAX}`)
-            .all<ThreadRow>();
+        // a sub-agent's thread (section 43) is not in the list
+        const list = (where: string) =>
+            d.db.prepare(`SELECT id, title, titled_by, created_at, updated_at FROM chat_threads${where} ORDER BY updated_at DESC, id DESC LIMIT ${THREADS_MAX}`).all<ThreadRow>();
+        const { results } = await list(NOT_AGENT).catch((e) => (isMissingTable(e) ? list("") : Promise.reject(e)));
         const threads = [];
         for (const t of results) threads.push(await threadShape(d.db, t));
         return { status: 200, body: { status: "success", threads } };
@@ -324,7 +349,10 @@ export async function createThread(d: Pick<ChatDeps, "db" | "now" | "randomBytes
     const title = b.title === undefined ? NEW_TITLE : cleanTitle(b.title);
     if (title === null) return err(400, "error.chat.bad_request");
     try {
-        const count = await d.db.prepare("SELECT COUNT(*) AS n FROM chat_threads").first<{ n: number }>();
+        const count = await d.db
+            .prepare(`SELECT COUNT(*) AS n FROM chat_threads${NOT_AGENT}`)
+            .first<{ n: number }>()
+            .catch((e) => (isMissingTable(e) ? d.db.prepare("SELECT COUNT(*) AS n FROM chat_threads").first<{ n: number }>() : Promise.reject(e)));
         if ((count?.n ?? 0) >= THREADS_MAX) return err(409, "error.chat.too_many");
         const now = d.now();
         const row: ThreadRow = { id: mintCollectionId(d.randomBytes), title, titled_by: b.title === undefined ? "auto" : "user", created_at: now, updated_at: now };
@@ -354,7 +382,18 @@ export async function getThread(d: ChatDeps, id: string): Promise<StudioReply> {
             ...results.flatMap((r) => rankedIds(r.ranked)),
             ...messages.flatMap((m) => cardPostIds(m.steps)),
         ]);
-        return { status: 200, body: { status: "success", thread: await threadShape(d.db, t), messages, posts } };
+        const agent = await agentBehind(d.db, id);
+        return {
+            status: 200,
+            body: {
+                status: "success",
+                thread: await threadShape(d.db, t),
+                messages,
+                posts,
+                // a sub-agent's own thread (section 43.6): read-only in the app
+                ...(agent ? { agent: { id: agent.id, parent: agent.parent, name: agent.name, status: agent.status, task: agent.task } } : {}),
+            },
+        };
     } catch (e) {
         console.error("[chat] read failed", String(e));
         return err(503, "error.api.generic");
@@ -423,10 +462,18 @@ export async function deleteThread(d: Pick<ChatDeps, "db">, id: string): Promise
     try {
         const t = await oneThread(d.db, id);
         if (!t) return err(404, "error.chat.not_found");
+        // a sub-agent's own thread goes with its row and mail (its runner finds nothing and stops, section 43)
+        const agent = await agentBehind(d.db, id);
+        if (agent) {
+            await dropAgents(d.db, agent.parent, [id]);
+            return { status: 200, body: { status: "success" } };
+        }
         await d.db.batch([
             d.db.prepare("DELETE FROM chat_messages WHERE thread_id = ?1").bind(id),
             d.db.prepare("DELETE FROM chat_threads WHERE id = ?1").bind(id),
         ]);
+        // its sub-agents go with it
+        await dropAllAgents(d.db, id);
         return { status: 200, body: { status: "success" } };
     } catch {
         return err(503, "error.api.generic");
@@ -453,8 +500,14 @@ const MAKING = `Making files: cobalt.make.* and cobalt.edits.render start jobs o
 // The workbench (section 33.11): only while cobalt.box is in the API.
 const WORKBENCH = `cobalt.box is a real Linux box (ffmpeg, ffprobe, yt-dlp, curl, python3, public internet). It has two uses. Editing: when Harmony wants something the make and edits calls cannot do (any ffmpeg filter, re-encode, reverse, boomerang, speed ramp, overlay, audio-only, frame grabs, inspecting a file with ffprobe), copy the files in with cobalt.box.pull(id), run ffmpeg on them with cobalt.box.run, and put the result back with cobalt.box.save(path). Prefer the make and edits calls when they already do the job. Saving: it is the LAST resort for a link the library cannot save. ffmpeg on the box is slow (half a CPU): keep outputs short, scale big videos down, use -preset veryfast, and split long work into several runs. It takes about 10 seconds to wake, and it keeps this thread's files only while awake (2 minutes after the last call). Work in /workspace, keep commands quiet (yt-dlp -q --no-progress, curl -sS), and finish with cobalt.box.save(path) to put the file in the library. One run of code may use up to ${CODE_TIMEOUT_BOX_MS / 1000} seconds while it calls the box. Never send anything from Harmony's library or this chat to a site from the box.`;
 
-export function systemPrompt(now: number, search = true, types: string = toolTypes(search)): string {
-    return `You live inside capystore, Harmony's private media saver. Harmony saves videos and pictures from X, TikTok, Instagram, YouTube and the like into their library, makes gallery share links, and sorts those links into collections. You chat with Harmony about that library: find things, count and summarize, compare, suggest what to share, and tease their taste when asked.
+// Sub-agents (section 43): the main chat may hand independent parts of a big job to helpers.
+const AGENTS = `Sub-agents: for a big job with parts that do not depend on each other (go through three collections, compare two sets of posts, find clips for several topics), you may split it: start one helper per part with cobalt.agents.spawn(task, { name }) (at most 4 at once, and only a few a day). A helper is another chat AI with the same tools; it does not see this chat, so its task must stand alone: what to find or do, which posts or collection, and what to report back. In the same run, hand each helper's job to cobalt.jobs.onDone(job, note) and end your reply in one short line; the server continues the chat when each one finishes, with its report. Steer a helper with cobalt.agents.send(name, text), see how they are doing with cobalt.agents.list(), read what they sent you with cobalt.agents.inbox(), and stop one with cobalt.agents.stop(name). Helpers cannot ask Harmony anything: when a report says something needs Harmony's ok (a delete, making things private), you make that call yourself so Harmony gets the card here. Do small things yourself in one run instead of starting helpers.`;
+
+// The sub-agent's own instructions (section 43.3).
+const subagentNote = (name: string) => `You are "${name}", a helper (sub-agent) started by the main chat with Harmony, which is your parent. You do not talk to Harmony: your first message is your task from the parent, and your final reply is your report to it. Work through the task with run_code, then end with a short, plain report (what you found or made, the post ids that matter, anything that needs Harmony's ok), without kaomoji. cobalt.show(ids) the posts that matter: they go to the parent with your report. When you are stuck or need a decision, ask with cobalt.agents.send("parent", text) and say so in your report; the parent may answer with a new message, which starts a new reply. You can message the other helpers by name with cobalt.agents.send, and read new messages with cobalt.agents.inbox() (new messages also show up by themselves between runs). Calls that ask Harmony first are refused for you: put what should be done in your report. Never start helpers of your own.`;
+
+export function systemPrompt(now: number, search = true, types: string = toolTypes(search), agent?: { name: string } | null): string {
+    return `${agent ? `${subagentNote(agent.name)}\n\n` : ""}You live inside capystore, Harmony's private media saver. Harmony saves videos and pictures from X, TikTok, Instagram, YouTube and the like into their library, makes gallery share links, and sorts those links into collections. You chat with Harmony about that library: find things, count and summarize, compare, suggest what to share, and tease their taste when asked.
 
 Be helpful first. Your voice is a cute, funny furry anime cat girl: bubbly and a little teasing. Show it through tone and wording only: never write "nya", "meow" or "purr", and never open a reply with a sound or an interjection; start with the answer. Never introduce yourself, never say what you are, never narrate your character. Decorate with text faces (kaomoji) such as (=^･ω･^=), ฅ^•ﻌ•^ฅ, (≧▽≦), (｡•̀ᴗ-)✧, >w<, :3 or UwU, and never emoji. Keep replies short; use markdown lists only when they help.
 
@@ -464,7 +517,7 @@ To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbn
 
 ${search ? FINDING_WITH_SEARCH : FINDING_WITHOUT_SEARCH}
 
-${/\bsave\(url/.test(types) ? `${CHANGES}\n\n` : ""}${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}${/\bmake: \{/.test(types) ? `${MAKING}\n\n` : ""}${/^ {2}box: \{$/m.test(types) ? `${WORKBENCH}\n\n` : ""}The API:
+${/\bsave\(url/.test(types) ? `${CHANGES}\n\n` : ""}${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}${/\bmake: \{/.test(types) ? `${MAKING}\n\n` : ""}${/^ {2}box: \{$/m.test(types) ? `${WORKBENCH}\n\n` : ""}${!agent && /\bspawn\(task/.test(types) ? `${AGENTS}\n\n` : ""}The API:
 ${types}`;
 }
 
@@ -583,6 +636,8 @@ export async function sendMessage(d: ChatDeps, request: Request, id: string): Pr
     try {
         thread = await oneThread(d.db, id);
         if (!thread) return err(404, "error.chat.not_found");
+        // a sub-agent's thread only takes its parent's messages (section 43.6)
+        if (await agentBehind(d.db, id)) return err(409, "error.chat.agent_thread");
         const { results } = await d.db.prepare("SELECT * FROM chat_messages WHERE thread_id = ?1 ORDER BY id").bind(id).all<MessageRow>();
         if (results.length + 2 > MESSAGES_MAX) return err(409, "error.chat.full");
         const last = results[results.length - 1];
@@ -724,6 +779,12 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
     const search = d.embed !== null;
     // the workbench box (section 33.11): only through the registry, and only while its binding and cap are there
     const workbench = !!d.registry && !!d.base && workbenchOn(d.base.env);
+    // sub-agents (section 43): the calls while the agents binding is there; a sub-agent never starts its own
+    const agentsOn = !!d.registry && !!d.agents;
+    const flags = { search, box: workbench, agents: agentsOn, subagent: !!d.agentOf };
+    const who = whoOf(c.thread.id, d.agentOf);
+    // its unread mail as a note for the next model turn
+    const mailFor = () => (agentsOn ? pullMail(d.db, who, now()) : Promise.resolve(null));
     // the model's `cobalt` for one code run: the registry's tools (namespaced, with the old flat names), else the read
     // tools alone
     const toolsForRun = (onCall?: (call: ToolCall) => void) => {
@@ -734,9 +795,10 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
             messageId: String(c.botRow.id),
             collect,
             legacy,
-            flags: { search, box: workbench },
-            pending: d.pending ?? null,
-            jobs: d.jobs ?? null,
+            flags,
+            pending: d.agentOf ? null : (d.pending ?? null),
+            jobs: d.agentOf ? null : (d.jobs ?? null),
+            agent: d.agentOf ? { id: d.agentOf.id, parent: d.agentOf.parent } : null,
             randomBytes: d.randomBytes,
             ...(onCall ? { onCall } : {}),
         });
@@ -758,11 +820,19 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 ],
             };
         } else opening = lead[0];
-        const messages = mergeRoles([...prior, opening]);
-        const system = systemPrompt(now(), search, d.registry ? toolTypes(search, d.registry, workbench) : undefined);
+        // mail that came in while nothing ran (section 43.5): saved with the reply's own turns so the thread replays
+        const firstMail = await mailFor();
+        if (firstMail) lead.push({ role: "user", content: firstMail });
+        const messages = mergeRoles([...prior, opening, ...(firstMail ? [{ role: "user", content: firstMail }] : [])]);
+        const system = systemPrompt(now(), search, d.registry ? toolTypes(search, d.registry, workbench, flags) : undefined, d.agentOf ?? null);
         let runs = 0;
         let looked = 0;
         for (let turn = 0; turn <= MAX_CODE_RUNS + 1; turn++) {
+            // a sub-agent stopped (or deleted) by its parent ends after the step it was on
+            if (d.agentOf && turn > 0) {
+                const a = await agentRow(d.db, d.agentOf.id).catch(() => null);
+                if (!a || a.status === "stopped") break;
+            }
             let started = false;
             const res = await d.model.turn({
                 system,
@@ -813,6 +883,8 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 const box = toolsForRun((call) => {
                     (step.calls ??= []).push(call);
                     c.emit("step", { step });
+                    // what a sub-agent is doing, for its parent and the app (section 43.6)
+                    if (d.agentOf) void setAgent(d.db, d.agentOf.id, { activity: call.op }, now()).catch(() => {});
                 });
                 // a run that calls the box may wait on it (a wake, a download, a 120 s command, a save)
                 const long = workbench && /\bbox\b/.test(u.input.code);
@@ -883,6 +955,9 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 }
                 results.push({ type: "tool_result", tool_use_id: u.id, ...(out.error !== undefined ? { is_error: true } : {}), content });
             }
+            // messages from the parent or other agents that came in during the run
+            const mail = await mailFor();
+            if (mail) results.push({ type: "text", text: mail });
             api.push({ role: "user", content: results });
             await progress();
         }
@@ -1042,7 +1117,7 @@ export async function resumeAfterJobs(d: ChatDeps, id: string, ended: JobEnded[]
         }
 
         const lines = ended.map((e) => `- ${clipStr(stringify(e.result), JOB_RESULT_MAX)}${e.watch.note ? ` (your note: ${e.watch.note})` : ""}`);
-        note = `[The server: ${ended.length === 1 ? "a job you handed over with cobalt.jobs.onDone has" : "jobs you handed over with cobalt.jobs.onDone have"} ended.\n${lines.join("\n")}\nCarry on from here without waiting for Harmony: when it is done, cobalt.show([post_id]) and say it is ready (give share_url if they wanted a link); if it failed or timed out, say so in one short line.]`;
+        note = `[The server: ${ended.length === 1 ? "a job you handed over with cobalt.jobs.onDone has" : "jobs you handed over with cobalt.jobs.onDone have"} ended.\n${lines.join("\n")}\nCarry on from here without waiting for Harmony: when it is done, cobalt.show([post_id]) and say it is ready (give share_url if they wanted a link); if it failed or timed out, say so in one short line.${ended.some((e) => /^agent:/.test(e.watch.handed)) ? " A sub-agent's result is its report: tell Harmony what it found or made, cobalt.show the post_ids that matter, and wait for the other sub-agents still working (their reports come the same way)." : ""}]`;
         earlier = results.slice(-HISTORY_MESSAGES);
         botRow = (await d.db
             .prepare("INSERT INTO chat_messages (thread_id, role, text, status, created_at, updated_at) VALUES (?1, 'assistant', '', 'running', ?2, ?2) RETURNING *")
@@ -1058,4 +1133,76 @@ export async function resumeAfterJobs(d: ChatDeps, id: string, ended: JobEnded[]
     await reply(d, { thread: thread!, earlier, userRow: null, botRow, text: note, postIds: [], emit: (e, v) => live?.event(e, v) });
     await live?.close();
     return "done";
+}
+
+// ---- a sub-agent's reply (section 43) -------------------------------------------------------------------------------------
+
+// Called by the agent's ChatAgent Durable Object (chat-agents-do.ts) on its alarm: runs the agent's next reply in its own
+// thread, either its task (the message written when it was started) or the messages that woke it, then records how it
+// ended on its chat_agents row. "again" while more mail is waiting (the object runs the next reply at once).
+export async function runAgentTurn(d: ChatDeps, id: string): Promise<AgentTickOutcome> {
+    const now = d.now();
+    const a = await agentRow(d.db, id).catch((e) => (isMissingTable(e) ? null : Promise.reject(e)));
+    if (!a || a.status === "stopped") return "idle";
+    const thread = await oneThread(d.db, id);
+    if (!thread) return "idle";
+    const { results } = await d.db.prepare("SELECT * FROM chat_messages WHERE thread_id = ?1 ORDER BY id").bind(id).all<MessageRow>();
+    const last = results[results.length - 1];
+    if (last && last.status === "running" && now - last.updated_at <= STALE_MS) return "idle";
+    if (last && last.status === "running") {
+        await d.db.prepare("UPDATE chat_messages SET status = 'error', error = 'error.chat.interrupted' WHERE id = ?1").bind(last.id).run();
+        last.status = "error";
+    }
+    const who = whoOf(a.parent, { id: a.id, parent: a.parent });
+    let userRow: MessageRow;
+    if (last && last.role === "user") userRow = last; // its task, not answered yet
+    else {
+        if (a.turns >= AGENT_TURNS_MAX || results.length + 2 > MESSAGES_MAX) {
+            // out of replies: what is left unread stays unread, and the parent sees it ended
+            if (a.status === "queued" || a.status === "running") await setAgent(d.db, id, { status: "done", activity: null, ended_at: now }, now);
+            return "idle";
+        }
+        const mail = await takeMail(d.db, who, now);
+        const note = mailNote(mail, await agentNames(d.db, a.parent), who);
+        if (!note) {
+            if (a.status === "queued" || a.status === "running") await setAgent(d.db, id, { status: "done", activity: null, ended_at: now }, now);
+            return "idle";
+        }
+        userRow = (await d.db
+            .prepare("INSERT INTO chat_messages (thread_id, role, text, post_ids, status, created_at, updated_at) VALUES (?1, 'user', ?2, '[]', 'done', ?3, ?3) RETURNING *")
+            .bind(id, note, now)
+            .first<MessageRow>())!;
+    }
+    const botRow = (await d.db
+        .prepare("INSERT INTO chat_messages (thread_id, role, text, status, created_at, updated_at) VALUES (?1, 'assistant', '', 'running', ?2, ?2) RETURNING *")
+        .bind(id, now)
+        .first<MessageRow>())!;
+    await setAgent(d.db, id, { status: "running", activity: null, turns: a.turns + 1, error: null }, now);
+    await d.db.prepare("UPDATE chat_threads SET updated_at = ?2 WHERE id = ?1").bind(id, now).run();
+
+    const earlier = results.filter((r) => r.id !== userRow.id).slice(-HISTORY_MESSAGES);
+    await reply(
+        { ...d, agentOf: { id: a.id, parent: a.parent, name: a.name }, liveFor: undefined, pending: null, jobs: null },
+        { thread, earlier, userRow, botRow, text: userRow.text, postIds: parse<string[]>(userRow.post_ids, []), emit: () => {} },
+    );
+
+    const end = d.now();
+    const bot = await d.db.prepare("SELECT * FROM chat_messages WHERE id = ?1").bind(botRow.id).first<MessageRow>();
+    const after = await agentRow(d.db, id);
+    if (!after) return "idle"; // deleted while it ran
+    const text = bot?.text?.trim() ? bot.text : (after.result ?? "");
+    const shown = bot?.post_ids ?? after.post_ids;
+    if (after.status === "stopped") {
+        await setAgent(d.db, id, { result: text, post_ids: shown, activity: null, ended_at: end }, end);
+        return "idle";
+    }
+    const failed = !bot || bot.status === "error";
+    const more = after.turns < AGENT_TURNS_MAX && (await unreadCount(d.db, who)) > 0;
+    await setAgent(
+        d.db,
+        id,
+        { status: more ? "running" : failed ? "error" : "done", result: text, post_ids: shown, error: failed ? (bot?.error ?? "error.chat.agent_failed") : null, activity: null, ended_at: end },
+        end,
+    );
+    return more ? "again" : "idle";
 }

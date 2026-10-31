@@ -82,6 +82,7 @@ export const PATHS: string[] = [
     `/chat/threads/${ID16}`,
     `/chat/threads/${ID16}/messages`,
     `/chat/threads/${ID16}/messages/5/collage`,
+    `/chat/threads/${ID16}/agents`,
     `/chat/threads/${ID16}/messages/5/collage?offset=0&limit=500`,
     `/chat/threads/${ID16}/other`,
     "/chat/threads/bad",

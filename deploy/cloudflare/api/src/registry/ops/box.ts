@@ -8,7 +8,7 @@ import { ITEM_ID_REGEX } from "../../gate";
 import type { BoxError, BoxRun, BoxStat, BoxWrite } from "../../workbench-core";
 import { BOX_NAME_REGEX, RUN_DEFAULT_S, RUN_MAX_S } from "../../workbench-core";
 import { sniffSave } from "../../workbench-rules";
-import { defineOp, ok, OpError, type OpContext } from "../op";
+import { defineOp, ok, OpError, type OpContext, capThreadOf } from "../op";
 import { FILE_SELECT, isSource, type FileRow } from "./make";
 
 // The Workbench object as the ops see it (its RPC methods).
@@ -27,7 +27,8 @@ export function workbenchPort(ctx: OpContext): WorkbenchPort {
 
 const threadOf = (ctx: OpContext) => {
     if (!ctx.chat) throw new OpError(404, "error.chat.off", "only the chat can call this");
-    return ctx.chat.threadId;
+    // a sub-agent uses its parent's caps and box (section 43.7)
+    return capThreadOf(ctx.chat);
 };
 
 const isError = (v: unknown): v is BoxError => !!v && typeof v === "object" && typeof (v as BoxError).error === "string";
