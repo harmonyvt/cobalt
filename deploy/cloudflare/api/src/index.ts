@@ -14,6 +14,7 @@ import { releaseHeld } from "./hidden";
 import { shareBaseFrom } from "./deps";
 import { shareLinkFrom } from "./share";
 import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
+import { refreshNames } from "./names";
 import { backfillCaptions, captionerFrom } from "./roast";
 import { ABOUT_RUN_BUDGET_MS, describerFrom, transcriberFrom, writeAbouts } from "./about-writer";
 import { indexTerms } from "./about";
@@ -519,6 +520,13 @@ export default {
             // indexer's POSTs at once without waking, and a search would then wait while it boots. A GET every
             // run is traffic (and wakes it if it slept anyway). Under a second when it is up.
             if (client.wake && !(await client.wake(SPACE_WAKE_MS))) console.log("[search] space did not answer its wake-up");
+            // Search names (section 48.2): meanings embedded, then every name's point rewritten. D1 and the Space.
+            try {
+                const r = await refreshNames({ db: env.DB, client, now: () => Date.now() });
+                if (r.embedded || r.points || r.unavailable) console.log("[names] refresh", JSON.stringify(r));
+            } catch (e) {
+                console.error("[names] refresh failed", e instanceof Error ? e.name : "error");
+            }
             let indexed = 0;
             try {
                 const r = await drainIndexer({

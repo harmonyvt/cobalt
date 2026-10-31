@@ -154,6 +154,9 @@ final class PipelineContext {
         try? await client.warmLibrarySearch()
     }
 
+    /// The `GET /library` shape a search asks its posts in (the same as `libraryPage`'s).
+    var searchVersion: Int? { capabilities.gallery ? 3 : (capabilities.visibility ? 2 : nil) }
+
     func refreshCapabilities() async -> Capabilities {
         let fresh = await client.capabilities()
         capabilities = fresh

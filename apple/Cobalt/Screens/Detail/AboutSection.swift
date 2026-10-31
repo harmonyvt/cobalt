@@ -43,6 +43,8 @@ struct AboutSection: View {
     var body: some View {
         Section {
             content
+            // the names the post carries (APP-API-CONTRACT 48.6)
+            if model.capabilities.names { NamesDetailRow(model: model, postKey: postKey) }
         } header: {
             Text(Copy.Search.aboutSection)
         }

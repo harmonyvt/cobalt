@@ -303,6 +303,10 @@ describe("defineOp and the registry", () => {
             // section 37.6
             "library.status", "library.hidden", "hidden.rules.list", "hidden.rules.add", "hidden.rules.update", "hidden.rules.delete",
             "hidden.rules.preview",
+            "names.list",
+            "names.preview",
+            "names.set",
+            "names.delete",
             "stage.get", "stage.set", "stage.store", "stage.pool", "stage.items", "stage.action", "emotes.find", "emotes.save",
             "test.wipe",
             "test.echo",

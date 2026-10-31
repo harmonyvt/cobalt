@@ -31,6 +31,7 @@ import { POST_KEY_SQL } from "./post-key";
 import { atReady, STATUS_IDS_MAX, type Gate } from "./hidden";
 import { fileIsHidden, hiddenCount, hiddenReady, hiddenRows, NOT_HIDDEN_SQL, ONLY_HIDDEN_SQL } from "./hidden-store";
 import { lookupKey } from "./keys";
+import { namesReady } from "./names";
 import { SERVICE_KEY_ID, mintItemId, readCapped, releasePoster } from "./library";
 import { POSTER_COOLDOWN_MS, posterEligible } from "./poster";
 import type { PublishBucket } from "./publish";
@@ -290,6 +291,9 @@ export async function capabilities(
                 // POST /library/status, /hidden/rules*, `hidden=1` and the `hidden` fields of GET /library: hidden posts
                 // and auto-hide rules (APP-API-CONTRACT.md section 37), once migration 0025 is applied
                 hidden: await hiddenReady(d.db),
+                // /library/names*: search names, words taught to library search (APP-API-CONTRACT.md section 48), once
+                // migration 0031 is applied
+                names: await namesReady(d.db),
                 // /chat/threads: threads with Claude about the library, code mode in a sandbox (APP-API-CONTRACT.md
                 // section 27): with the Anthropic key and the Worker Loader binding
                 chat: chat === true,

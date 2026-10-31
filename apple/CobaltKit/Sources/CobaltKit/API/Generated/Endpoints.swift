@@ -476,6 +476,36 @@ enum Endpoints {
         APIEndpoint(op: "hidden_rules.delete", method: "DELETE", path: "/hidden/rules/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
     }
 
+    /// `GET /library/names` (op `library_names.list`, auth key_or_service): The search names, oldest first (GET /library/names).
+    static func libraryNamesList() -> APIEndpoint<LibraryNamesListResponse> {
+        APIEndpoint(op: "library_names.list", method: "GET", path: "/library/names", auth: .keyOrService)
+    }
+
+    /// `POST /library/names` (op `library_names.create`, auth key_or_service): Teach search a new name (at most 100) (POST /library/names).
+    static func libraryNamesCreate() -> APIEndpoint<LibraryNamesCreateResponse> {
+        APIEndpoint(op: "library_names.create", method: "POST", path: "/library/names", auth: .keyOrService)
+    }
+
+    /// `POST /library/names/preview` (op `library_names.preview`, auth key_or_service): Which posts a name would carry with these values, saving nothing (POST /library/names/preview).
+    static func libraryNamesPreview() -> APIEndpoint<LibraryNamesPreviewResponse> {
+        APIEndpoint(op: "library_names.preview", method: "POST", path: "/library/names/preview", auth: .keyOrService)
+    }
+
+    /// `GET /library/names/post` (op `library_names.post`, auth key_or_service): The names one post carries or is marked for, best first (GET /library/names/post?key=).
+    static func libraryNamesPost() -> APIEndpoint<LibraryNamesPostResponse> {
+        APIEndpoint(op: "library_names.post", method: "GET", path: "/library/names/post", auth: .keyOrService)
+    }
+
+    /// `PATCH /library/names/:id` (op `library_names.update`, auth key_or_service): Change a name, its marks included (PATCH /library/names/<id>).
+    static func libraryNamesUpdate(id: String) -> APIEndpoint<LibraryNamesUpdateResponse> {
+        APIEndpoint(op: "library_names.update", method: "PATCH", path: "/library/names/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
+    }
+
+    /// `DELETE /library/names/:id` (op `library_names.delete`, auth key_or_service): Delete a name and its marks (DELETE /library/names/<id>).
+    static func libraryNamesDelete(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library_names.delete", method: "DELETE", path: "/library/names/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
+    }
+
     /// `GET /stage` (op `stage_owner.get`, auth key): GET /stage
     static func stageOwnerGet() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "stage_owner.get", method: "GET", path: "/stage", auth: .key)
@@ -1203,6 +1233,79 @@ struct HiddenRulesUpdateResponse: Decodable, Sendable {
     var status: String
     var rule: HiddenRule
     var applied: Int
+}
+
+struct SearchName: Decodable, Sendable {
+    var id: String
+    /// as typed
+    var name: String
+    /// other words for it, normalized
+    var aliases: [String]
+    var meaning: String
+    /// 0 = only the words, 1 = only the examples
+    var strength: Double
+    /// how close a post must be to carry the name
+    var cutoff: Double
+    var enabled: Bool
+    /// example post keys, newest mark first
+    var yes: [String]
+    /// not-this post keys, newest mark first
+    var no: [String]
+    /// posts that carry it now
+    var posts: Int
+    /// the meaning has a vector for the current model
+    var embedded: Bool
+    var createdAt: Int
+    var updatedAt: Int
+}
+
+struct LibraryNamesListResponse: Decodable, Sendable {
+    var status: String
+    var names: [SearchName]
+}
+
+struct LibraryNamesCreateResponse: Decodable, Sendable {
+    var status: String
+    var name: SearchName
+}
+
+struct LibraryNamesPreviewResponsePostsItemPost: Decodable, Sendable {
+    var id: String
+}
+
+struct LibraryNamesPreviewResponsePostsItem: Decodable, Sendable {
+    var postKey: String
+    var score: Double
+    var mark: String?
+    var carries: Bool
+    /// the post in the GET /library?v=3 shape
+    var post: LibraryNamesPreviewResponsePostsItemPost?
+}
+
+struct LibraryNamesPreviewResponse: Decodable, Sendable {
+    var status: String
+    var embedded: Bool
+    var carries: Int
+    var indexed: Int
+    var posts: [LibraryNamesPreviewResponsePostsItem]
+}
+
+struct LibraryNamesPostResponseNamesItem: Decodable, Sendable {
+    var id: String
+    var name: String
+    var score: Double?
+    var mark: String?
+    var carries: Bool
+}
+
+struct LibraryNamesPostResponse: Decodable, Sendable {
+    var status: String
+    var names: [LibraryNamesPostResponseNamesItem]
+}
+
+struct LibraryNamesUpdateResponse: Decodable, Sendable {
+    var status: String
+    var name: SearchName
 }
 
 struct McpSettingsResponseLink: Decodable, Sendable {

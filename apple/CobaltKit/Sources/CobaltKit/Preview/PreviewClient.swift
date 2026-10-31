@@ -285,6 +285,7 @@ public struct PreviewClient: CobaltClient {
         caps.line = lineMode.hasLine
         caps.queue = queueFeature && caps.kind == .fork
         caps.search = searchMode != .off && caps.kind == .fork
+        caps.names = caps.search                  // every preview server with search has names (`PreviewNames.swift`)
         if scenario.startsSignedOut {
             // refused until a preview sheet signs in (APP-API-CONTRACT 42.2)
             if accountState.signedIn { caps.key = .valid; caps.keyName = Self.previewDeviceName }

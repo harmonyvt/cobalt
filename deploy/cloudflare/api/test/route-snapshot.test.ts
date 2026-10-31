@@ -119,6 +119,13 @@ export const PATHS: string[] = [
     `/hidden/rules/${ID16}`,
     "/hidden/rules/bad",
     "/hidden/other",
+    // added with search names (section 48): the names, the preview and one post's names
+    "/library/names",
+    "/library/names/preview",
+    "/library/names/post",
+    `/library/names/post?key=${ID16}`,
+    `/library/names/${ID16}`,
+    "/library/names/bad",
     "/library/search/index",
     "/library/posters/backfill",
     "/library/visibility/migrate",

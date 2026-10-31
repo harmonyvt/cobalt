@@ -313,6 +313,24 @@ public protocol CobaltClient: Sendable {
     func updateHiddenRule(id: String, enabled: Bool?, value: String?, apply: Bool) async throws -> (rule: HideRule, applied: Int)
     /// `DELETE /hidden/rules/<id>`: the posts it hid stay hidden.
     func deleteHiddenRule(id: String) async throws
+    // Search names (APP-API-CONTRACT 48; keyed; only when `features.names`). Defaulted below so older fakes compile. The
+    // server's refusals are `CobaltError.api(code:httpStatus:)` (`error.names.bad`, `error.names.not_found`,
+    // `error.names.too_many`), except `409 error.names.taken`, which is `SearchNameTaken` with the clashing word.
+    /// `GET /library/search` with `names=0` when `names` is false (48.3, the "compare" view). The answer's `names` lists the
+    /// names said and used.
+    func librarySearch(query: String, limit: Int, version: Int?, names: Bool) async throws -> LibrarySearchResult
+    /// `GET /library/names`: oldest first.
+    func searchNames() async throws -> [TaughtName]
+    /// `POST /library/names`: 201 with the new name.
+    func createSearchName(_ draft: SearchNameDraft) async throws -> TaughtName
+    /// `PATCH /library/names/<id>`: the set fields (lists replace the marks), then `mark`.
+    func updateSearchName(id: String, _ patch: SearchNamePatch) async throws -> TaughtName
+    /// `DELETE /library/names/<id>`: its marks go with it.
+    func deleteSearchName(id: String) async throws
+    /// `POST /library/names/preview`: who would carry the name with these values; nothing is saved.
+    func previewSearchName(_ request: SearchNamePreviewRequest) async throws -> SearchNamePreview
+    /// `GET /library/names/post?key=`: the enabled names the post carries or is marked for, best first.
+    func searchNames(forPost postKey: String) async throws -> [PostName]
 }
 
 extension CobaltClient {
@@ -465,6 +483,18 @@ extension CobaltClient {
         throw PipelineFailure.unsupported
     }
     public func deleteHiddenRule(id: String) async throws { throw PipelineFailure.unsupported }
+    /// A client that predates search names searches as before: the server says no names either way.
+    public func librarySearch(query: String, limit: Int, version: Int?, names: Bool) async throws -> LibrarySearchResult {
+        try await librarySearch(query: query, limit: limit, version: version)
+    }
+    public func searchNames() async throws -> [TaughtName] { throw PipelineFailure.unsupported }
+    public func createSearchName(_ draft: SearchNameDraft) async throws -> TaughtName { throw PipelineFailure.unsupported }
+    public func updateSearchName(id: String, _ patch: SearchNamePatch) async throws -> TaughtName { throw PipelineFailure.unsupported }
+    public func deleteSearchName(id: String) async throws { throw PipelineFailure.unsupported }
+    public func previewSearchName(_ request: SearchNamePreviewRequest) async throws -> SearchNamePreview {
+        throw PipelineFailure.unsupported
+    }
+    public func searchNames(forPost postKey: String) async throws -> [PostName] { throw PipelineFailure.unsupported }
     /// Likewise: a client that predates titles says the server cannot do it.
     public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult { throw PipelineFailure.unsupported }
 }

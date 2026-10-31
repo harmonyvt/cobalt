@@ -221,6 +221,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var accounts: Bool?
                 var imageCrop: Bool?
                 var chatVideo: Bool?
+                var names: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -316,6 +317,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.accounts = f?.accounts ?? false
         caps.imageCrop = f?.imageCrop ?? false
         caps.chatVideo = (f?.chatVideo ?? false) && caps.chat
+        caps.names = (f?.names ?? false) && caps.search
         return caps
     }
 
@@ -600,8 +602,15 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     /// plus its `score`. Errors as the keyed calls throw them: `503 error.search.waking` / `error.search.off`,
     /// `502 error.search.failed` and `400 error.library.bad_request` are `CobaltError.api(code:httpStatus:)`.
     public func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult {
+        try await librarySearch(query: query, limit: limit, version: version, names: true)
+    }
+
+    /// The same, with `names=0` when `names` is false (APP-API-CONTRACT 48.3: the search as it would be without the
+    /// owner's search names). A server that predates names ignores the parameter and sends no `names`.
+    public func librarySearch(query: String, limit: Int, version: Int?, names: Bool) async throws -> LibrarySearchResult {
         var params = [("q", String(query.prefix(200))), ("limit", String(max(1, min(50, limit))))]
         if let version, version == 2 || version == 3 { params.append(("v", String(version))) }
+        if !names { params.append(("names", "0")) }
         let req = try makeRequest("GET", "/library/search", query: params, keyed: true, timeout: 30)
         let (data, http) = try await send(req)
         guard (200..<300).contains(http.statusCode) else { throw apiError(data, status: http.statusCode) }

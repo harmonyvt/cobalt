@@ -25,6 +25,8 @@ final class PreviewSearchState: Sendable {
     private let state = Mutex<[String]>([])
     /// What the preview server holds for `/library/about` (`PreviewAbout.swift`).
     let about = PreviewAboutState()
+    /// The search names the preview server holds (`PreviewNames.swift`).
+    let names = PreviewNamesState()
 
     var calls: [String] { state.withLock { $0 } }
     private let warmed = Mutex(0)
@@ -119,6 +121,11 @@ extension PreviewData {
 extension PreviewClient {
     /// `GET /library/search` against `searchMode`, after a short think (0.4 s on the clock, scaled).
     public func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult {
+        try await librarySearch(query: query, limit: limit, version: version, names: true)
+    }
+
+    /// The same, with the search names (`PreviewNames.swift`) unless `names` is false (`names=0`, APP-API-CONTRACT 48.3).
+    public func librarySearch(query: String, limit: Int, version: Int?, names: Bool) async throws -> LibrarySearchResult {
         let n = searchState.record(query)
         try await clock.sleep(seconds: 0.4 * timeScale)
         switch searchMode {
@@ -134,14 +141,20 @@ extension PreviewClient {
         let posts = try await library(cursor: nil, limit: 50).posts
         let pending = searchMode == .indexing ? min(3, posts.count) : 0
         // what was said (APP-API-CONTRACT 47.5): every preview video says the sample lines, so "tail" finds them
-        let hits = PreviewData.searchHits(q, in: posts, limit: limit).map { hit in
+        var hits = PreviewData.searchHits(q, in: posts, limit: limit).map { hit in
             var hit = hit
             if hit.post.kind != .photo, hit.post.kind != .gallery { hit.said = PreviewData.said(q) }
             return hit
         }
+        var said: [SearchNameRef] = []
+        if names {
+            let applied = applyNames(q, to: hits, posts: posts)
+            hits = applied.hits
+            said = applied.said
+        }
         return LibrarySearchResult(
             query: q, model: "google/embeddinggemma-2", hits: hits,
-            indexed: posts.count - pending, pending: pending)
+            indexed: posts.count - pending, pending: pending, names: said)
     }
 
     /// `GET /library/search?warm=1`: counted, nothing else.
@@ -176,6 +189,7 @@ extension AppModel {
         caps.about = mode != .off
         caps.aboutSound = mode != .off
         caps.transcripts = mode != .off
+        caps.names = mode != .off                 // search names (`PreviewNames.swift`)
         ctx.capabilities = caps
         return AppModel(
             context: ctx, library: LibraryModel(context: ctx, seed: PreviewData.libraryPage(now: clock.now())),

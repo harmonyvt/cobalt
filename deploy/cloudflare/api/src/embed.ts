@@ -16,6 +16,7 @@ import { whyFor } from "./about";
 import { aboutWordsOf, pickLead } from "./about-store";
 import { assemblePosts, libraryHide, POST_KEY_SQL, type AppDeps } from "./app-routes";
 import { hiddenPostKeys } from "./hidden-store";
+import { applyNames, type NamesApplied } from "./names";
 import type { StudioReply } from "./studio";
 import { MOMENT_FLOOR, MOMENT_SLACK, saidIndex, saidLines, type Said } from "./transcripts";
 import { resolveWithin, withinFromQuery, WithinError, type Within } from "./within";
@@ -724,6 +725,7 @@ export type SearchOutcome =
           fallback: boolean;
           queryVector: number[] | null;
           said: Map<string, Said[]>;
+          names: NamesApplied;
           // milliseconds: the query's vector (0 when remembered), the library's reads, the whole search
           timing: { embed: number; reads: number; total: number; remembered: boolean };
       }
@@ -785,7 +787,7 @@ export async function queryVector(client: EmbedClient, q: string, opts: { fresh?
 }
 
 // The words of a query for the name-match fallback: lowercase, at least two characters each.
-const queryWords = (needle: string): string[] => [...new Set(needle.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2))];
+export const queryWords = (needle: string): string[] => [...new Set(needle.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2))];
 
 // `within` (section 34.6): only these posts, and every one of them is scored (a post without a vector gets its text
 // score only), so the caller's limit is the only cut.
@@ -794,7 +796,7 @@ export async function searchPosts(
     rawQuery: string,
     limit: number,
     // fresh: always ask the Space (stage pools treat its answer as proof it is awake)
-    opts: { textFallback?: boolean; within?: ReadonlySet<string>; fresh?: boolean } = {},
+    opts: { textFallback?: boolean; within?: ReadonlySet<string>; fresh?: boolean; names?: boolean } = {},
 ): Promise<SearchOutcome> {
     const q = rawQuery.trim().replace(/\s+/g, " ");
     if (q.length === 0 || q.length > MAX_QUERY_CHARS) return { ok: false, status: 400, code: "error.library.bad_request" };
@@ -802,12 +804,14 @@ export async function searchPosts(
 
     // The query's vector and the library's rows are fetched side by side: the Space's answer (a few hundred ms awake,
     // longer from a cold isolate) and D1's reads no longer wait for each other. A repeated query skips the Space.
+    // search names (section 48): the said names' meanings are embedded with the query and their points mixed in
+    const names = await applyNames(d.db, q, opts.names !== false);
     const started = Date.now();
-    const remembered = !opts.fresh && queryMemo.has(q);
+    const remembered = !opts.fresh && queryMemo.has(names.text);
     let embedMs = 0;
     let readsMs = 0;
-    const embedded = queryVector(d.client, q, { fresh: opts.fresh }).then(
-        (v) => ((embedMs = Date.now() - started), { ok: true as const, v }),
+    const embedded = queryVector(d.client, names.text, { fresh: opts.fresh }).then(
+        (v) => ((embedMs = Date.now() - started), { ok: true as const, v: names.mix(v) }),
         (e: unknown) => ((embedMs = Date.now() - started), { ok: false as const, e }),
     );
     // hidden posts (section 37.2) are never search results; they stay indexed for when they are unhidden
@@ -861,7 +865,8 @@ export async function searchPosts(
         if (!row || row.input_hash !== hashes[i]) pending++;
         if (within && !within.has(p.post_key)) continue;
         const hay = `${p.title ?? ""} ${p.text} ${heard.text.get(p.post_key) ?? ""}`.toLowerCase();
-        const bonus = hay.includes(needle) ? TEXT_MATCH_BONUS : 0;
+        const text = hay.includes(needle) ? TEXT_MATCH_BONUS : 0;
+        const bonus = Math.min(TEXT_MATCH_BONUS, text + names.bonus(p.post_key, v));
         if (qv) {
             const moment = heard.best.get(p.post_key);
             if (!v && !moment && bonus === 0 && !within) continue;
@@ -871,9 +876,9 @@ export async function searchPosts(
             continue;
         }
         // Fallback: the whole query as text first, then posts holding more of its words; newest first within a score.
-        const found = words.filter((w) => hay.includes(w)).length;
-        if (bonus === 0 && found === 0 && !within) continue;
-        const score = bonus + (words.length > 0 ? (TEXT_MATCH_BONUS * found) / words.length : 0);
+        const found = words.filter((w) => hay.includes(w) || names.holds(p.post_key, v, w)).length;
+        if (text === 0 && found === 0 && !within) continue;
+        const score = text + (words.length > 0 ? (TEXT_MATCH_BONUS * found) / words.length : 0);
         hits.push({ post_key: p.post_key, score, latest: p.latest, indexed: !!v });
     }
     if (qv) hits.sort((a, b) => b.score - a.score || (a.post_key < b.post_key ? -1 : 1));
@@ -894,6 +899,7 @@ export async function searchPosts(
         fallback: qv === null,
         queryVector: qv,
         said,
+        names,
         timing: { embed: embedMs, reads: readsMs, total: Date.now() - started, remembered },
     };
 }
@@ -928,7 +934,7 @@ export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, 
             }
         }
         const t0 = Date.now();
-        const r = await searchPosts({ db: d.db, client: d.embed, mediaBaseUrl: d.mediaBaseUrl }, q.get("q") ?? "", limit, within ? { within: within.postKeys } : {});
+        const r = await searchPosts({ db: d.db, client: d.embed, mediaBaseUrl: d.mediaBaseUrl }, q.get("q") ?? "", limit, { ...(within ? { within: within.postKeys } : {}), names: q.get("names") !== "0" });
         if (!r.ok) return fail(r.status, r.code);
         const v3 = q.get("v") === "3";
         const v2 = v3 || q.get("v") === "2";
@@ -949,7 +955,7 @@ export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, 
             .map((p) => ({
                 ...p,
                 score: Math.round((hits.get(p.id)?.score ?? 0) * 10000) / 10000,
-                why: why.get(p.id) ?? [],
+                why: [...new Set([...r.names.carried(p.id), ...(why.get(p.id) ?? [])])],
                 ...(r.said.has(p.id) ? { said: r.said.get(p.id) } : {}),
                 ...(within ? { indexed: hits.get(p.id)?.indexed ?? false } : {}),
             }));
@@ -960,6 +966,7 @@ export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, 
                 query: (q.get("q") ?? "").trim(),
                 model: EMBED_MODEL,
                 posts: out,
+                names: r.names.said,
                 index: { posts: r.indexed, pending: r.pending },
                 ...(within ? { within: { kind: within.kind, id: within.id, name: within.name, posts: within.postKeys.size } } : {}),
                 // the Space could not answer: these are name matches, and a search a minute later is semantic again

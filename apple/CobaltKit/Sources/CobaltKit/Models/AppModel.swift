@@ -109,6 +109,8 @@ public final class AppModel {
     public let stage: StageStore
     /// The auto-hide rules (APP-API-CONTRACT 37; settings › hidden). Idle until `load()`.
     public let hiddenRules: HiddenRulesModel
+    /// Search names (APP-API-CONTRACT 48; library › names). Idle until `load()`.
+    public let searchNames: SearchNamesModel
     /// Settings › account (APP-API-CONTRACT 42): who is signed in, the devices and the keys for tools. Idle until `refresh()`.
     public let account: AccountStore
     /// The video editor (APP-API-CONTRACT 31): the projects, this key's renders and the open project. Idle until `refresh()`.
@@ -206,6 +208,7 @@ public final class AppModel {
         self.editor = EditorStore(context: context)
         self.skyMap = SkyMapModel(context: context)
         self.hiddenRules = HiddenRulesModel(context: context, library: library)
+        self.searchNames = SearchNamesModel(context: context, library: library)
         self.account = AccountStore(context: context)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
@@ -428,6 +431,7 @@ public final class AppModel {
         editor.reset()
         skyMap.reset()
         hiddenRules.reset()
+        searchNames.reset()
         account.reset()
     }
 
