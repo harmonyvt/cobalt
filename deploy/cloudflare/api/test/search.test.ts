@@ -2,7 +2,7 @@
 // client and GET /library/search, on the real migrations (node:sqlite). The Space is a fake that
 // "sees" a poster through a table of words per poster URL, so a word that is only in the picture
 // still finds the post, as the real multimodal model does.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { capabilities, type AppDeps } from "../src/app-routes";
 import {
     EMBED_DIMS,
@@ -26,6 +26,9 @@ import {
     runIndexer,
     spaceClient,
     resetSpaceRestarts,
+    resetQueryVectorMemo,
+    queryVector,
+    QUERY_MEMO_MAX,
     type EmbedClient,
     type EmbedInput,
 } from "../src/embed";
@@ -39,6 +42,9 @@ import { queueSnapshot } from "../src/queue";
 import { type FakeD1 } from "../../test-support/d1-sqlite";
 import { createBatchD1 } from "./d1-batch";
 import { MemoryMedia, MemoryOriginals } from "./studio-fakes";
+
+// a query vector one test made must not answer the next test's Space
+beforeEach(() => resetQueryVectorMemo());
 
 const MEDIA = "https://media.capybaraharmony.com/";
 const SPACE = "https://capybaraharmony-cobalt-embed.hf.space";
@@ -442,6 +448,30 @@ describe("GET /library/search", () => {
         const w = await library();
         w.space.fail = () => new EmbedError("rejected", 400);
         expect(await w.search("cat")).toEqual({ status: 502, body: { status: "error", error: { code: "error.search.failed" } } });
+    });
+
+    it("asks the Space once for a query typed twice", async () => {
+        const w = await library();
+        await w.search("sunset drive");
+        const asked = w.space.calls.length;
+        const again = (await w.search("sunset drive")).body as any;
+        expect(w.space.calls.length).toBe(asked);
+        expect(again.status).toBe("success");
+        expect(again.fallback).toBeUndefined();
+    });
+
+    it("warm=1 wakes the Space with one word and reads the library, without a query", async () => {
+        const w = await library();
+        const warm = (extra: string) => librarySearch({ ...w.d, embed: w.space }, new URLSearchParams(extra));
+        const r = await warm("warm=1");
+        expect(r.status).toBe(200);
+        expect((r.body as any).warm.space).toBe("ready");
+        expect(w.space.calls.at(-1)!.inputs.map((i) => i.text)).toEqual(["warm"]);
+        w.space.fail = () => new EmbedError("unavailable", 503);
+        expect(((await warm("warm=1")).body as any).warm.space).toBe("unavailable");
+        expect(((await librarySearch({ ...w.d, embed: null }, new URLSearchParams("warm=1"))).body as any).warm.space).toBe("off");
+        expect((await warm("warm=2")).status).toBe(400);
+        expect((await warm("warm=1&q=cat")).status).toBe(400);
     });
 });
 
@@ -1070,5 +1100,40 @@ describe("GET /library/map", () => {
         } finally {
             vi.unstubAllGlobals();
         }
+    });
+});
+
+describe("query vectors are remembered", () => {
+    const unit = (i: number) => Array.from({ length: EMBED_DIMS }, (_, j) => (j === i ? 1 : 0));
+    const counting = () => {
+        const calls: string[] = [];
+        const client: EmbedClient = {
+            async embed(_kind, inputs) {
+                calls.push(inputs[0]!.text);
+                return { model: EMBED_MODEL, vectors: [unit(calls.length % EMBED_DIMS)], images: [false] };
+            },
+        };
+        return { client, calls };
+    };
+
+    it("asks the Space once for the same words", async () => {
+        const { client, calls } = counting();
+        const a = await queryVector(client, "tom and jerry");
+        const b = await queryVector(client, "tom and jerry");
+        expect(b).toEqual(a);
+        expect(calls).toEqual(["tom and jerry"]);
+        await queryVector(client, "Tom and Jerry");                 // other words as typed: their own vector
+        expect(calls).toEqual(["tom and jerry", "Tom and Jerry"]);
+    });
+
+    it("forgets the oldest past the cap, and never keeps a failure", async () => {
+        const { client, calls } = counting();
+        for (let i = 0; i <= QUERY_MEMO_MAX; i++) await queryVector(client, `q${i}`);
+        await queryVector(client, "q0");
+        expect(calls.length).toBe(QUERY_MEMO_MAX + 2);
+        const failing: EmbedClient = { embed: async () => { throw new EmbedError("unavailable", 503); } };
+        await expect(queryVector(failing, "asleep")).rejects.toBeInstanceOf(EmbedError);
+        await queryVector(client, "asleep");
+        expect(calls.at(-1)).toBe("asleep");
     });
 });

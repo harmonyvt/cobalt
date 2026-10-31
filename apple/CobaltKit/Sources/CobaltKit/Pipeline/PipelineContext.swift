@@ -149,6 +149,11 @@ final class PipelineContext {
         return try await client.librarySearch(query: query, limit: limit, version: version)
     }
 
+    /// `GET /library/search?warm=1`: failures are of no interest (the search that follows says them).
+    func warmLibrarySearch() async {
+        try? await client.warmLibrarySearch()
+    }
+
     func refreshCapabilities() async -> Capabilities {
         let fresh = await client.capabilities()
         capabilities = fresh

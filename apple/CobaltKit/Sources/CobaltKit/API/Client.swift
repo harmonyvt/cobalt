@@ -122,6 +122,9 @@ public protocol CobaltClient: Sendable {
     /// first, each with its `score`. `version` is the `GET /library` shape the posts come in (2 or 3; nil sends none).
     /// Defaulted below (`.unsupported`) so older fakes compile.
     func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult
+    /// `GET /library/search?warm=1` (APP-API-CONTRACT 21, "Speed"; keyed): wakes the search model and the database at
+    /// the first letter typed. Fire and forget. Defaulted below (does nothing) so older fakes compile.
+    func warmLibrarySearch() async throws
     /// `GET /library/search/post?key=` (keyed; only when `features.search`): how one post sits in the search index.
     func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus
     /// `GET /library/about?key=` (APP-API-CONTRACT 34; keyed; only when `features.about`): the post's sentence, tags,
@@ -383,6 +386,7 @@ extension CobaltClient {
     public func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult {
         throw PipelineFailure.unsupported
     }
+    public func warmLibrarySearch() async throws {}
     public func librarySearchStatus(postKey: String) async throws -> LibrarySearchStatus { throw PipelineFailure.unsupported }
     public func libraryAbout(postKey: String) async throws -> LibraryAbout { throw PipelineFailure.unsupported }
     public func setLibraryAboutTags(postKey: String, tags: [String]?) async throws -> LibraryAbout { throw PipelineFailure.unsupported }

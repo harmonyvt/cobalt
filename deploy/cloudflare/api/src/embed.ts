@@ -221,7 +221,9 @@ export function spaceClient(c: EmbedConfig, fetchFn: typeof fetch = fetch): Embe
                     console.log("[search] space unavailable", e.status, awake ? "awake, out of time" : "did not wake");
                     throw e;
                 }
-                return await post(kind, inputs, left());
+                const again = await post(kind, inputs, left());
+                console.log("[search] space answered after a wake-up", e.status, Math.round(timeoutMs - left()), "ms");
+                return again;
             }
         },
     };
@@ -322,6 +324,23 @@ function linkWords(link: string | null): string {
 export const INPUT_TEXT_MAX = 3000;
 export const INPUT_TRANSCRIPT_MAX = 1200;
 
+// Caption titles (section 25) of these items, or of every item (null). Empty before their migration.
+async function captionRows(db: D1Database, itemIDs: string[] | null): Promise<{ subject: string; title: string }[]> {
+    try {
+        const ids = itemIDs?.map((id) => `item:${id}`) ?? null;
+        if (ids && ids.length === 0) return [];
+        const stmt = db.prepare(
+            ids
+                ? `SELECT subject, title FROM media_captions WHERE title IS NOT NULL AND subject IN (${ids.map((_, i) => `?${i + 1}`).join(", ")})`
+                : "SELECT subject, title FROM media_captions WHERE title IS NOT NULL AND subject LIKE 'item:%'",
+        );
+        const { results } = await (ids ? stmt.bind(...ids) : stmt).all<{ subject: string; title: string }>();
+        return results;
+    } catch {
+        return []; // no captions table
+    }
+}
+
 // Every live post's inputs, newest post first (or only `onlyPostKey`'s, which D1 filters: one post's
 // rows and title come back, not the whole library's). Posters are used only from the public media
 // domain (the Space fetches them itself and refuses any other URL).
@@ -333,26 +352,20 @@ export async function postInputs(db: D1Database, mediaBaseUrl: string, onlyPostK
                         FROM media_items m WHERE m.deleted_at IS NULL)${one ? " WHERE post_key = ?1" : ""}
          ORDER BY created_at DESC`,
     );
-    const { results: files } = await (one ? filesStmt.bind(onlyPostKey) : filesStmt).all<InputRow>();
-    if (one && files.length === 0) return [];
     const titlesStmt = db.prepare(`SELECT post_key, title FROM media_titles${one ? " WHERE post_key = ?1" : ""}`);
-    const { results: titleRows } = await (one ? titlesStmt.bind(onlyPostKey) : titlesStmt).all<{ post_key: string; title: string }>();
+    // the library's four reads go out together (a whole-library read is on every search)
+    const [{ results: files }, { results: titleRows }, words, caps] = await Promise.all([
+        (one ? filesStmt.bind(onlyPostKey) : filesStmt).all<InputRow>(),
+        (one ? titlesStmt.bind(onlyPostKey) : titlesStmt).all<{ post_key: string; title: string }>(),
+        // what the post is about (section 34.3): empty before its migration
+        aboutWordsOf(db, onlyPostKey),
+        // the caption titles (section 25), by item id (one post's: once its files are known, below)
+        one ? Promise.resolve(null) : captionRows(db, null),
+    ]);
+    if (one && files.length === 0) return [];
     const titles = new Map(titleRows.map((t) => [t.post_key, t.title]));
-    // what the post is about (section 34.3) and its caption title (section 25): empty before their migrations
-    const words = await aboutWordsOf(db, onlyPostKey);
     const captions = new Map<string, string>();
-    try {
-        const ids = one ? files.map((f) => `item:${f.id}`) : null;
-        const capStmt = db.prepare(
-            ids
-                ? `SELECT subject, title FROM media_captions WHERE title IS NOT NULL AND subject IN (${ids.map((_, i) => `?${i + 1}`).join(", ")})`
-                : "SELECT subject, title FROM media_captions WHERE title IS NOT NULL AND subject LIKE 'item:%'",
-        );
-        const { results: caps } = await (ids ? capStmt.bind(...ids) : capStmt).all<{ subject: string; title: string }>();
-        for (const c of caps) captions.set(c.subject.slice(5), c.title);
-    } catch {
-        // no captions table
-    }
+    for (const c of caps ?? (await captionRows(db, files.map((f) => f.id)))) captions.set(c.subject.slice(5), c.title);
 
     const byPost = new Map<string, InputRow[]>();
     for (const f of files) {
@@ -703,8 +716,73 @@ export async function searchQueue(d: { db: D1Database; mediaBaseUrl: string; now
 export type SearchHit = { post_key: string; score: number; latest: number; indexed: boolean };
 
 export type SearchOutcome =
-    | { ok: true; hits: SearchHit[]; indexed: number; pending: number; fallback: boolean; queryVector: number[] | null; said: Map<string, Said[]> }
+    | {
+          ok: true;
+          hits: SearchHit[];
+          indexed: number;
+          pending: number;
+          fallback: boolean;
+          queryVector: number[] | null;
+          said: Map<string, Said[]>;
+          // milliseconds: the query's vector (0 when remembered), the library's reads, the whole search
+          timing: { embed: number; reads: number; total: number; remembered: boolean };
+      }
     | { ok: false; status: number; code: string };
+
+// ---- query vectors, remembered -------------------------------------------------------------------------------------------
+
+// A query's vector depends only on its words and the model, so it is kept: in this isolate (QUERY_MEMO_MAX, newest
+// kept) and in the colo's Cache API (QUERY_CACHE_TTL_S), so typing a query again, or the app asking once more after the
+// web did, never waits on the Space. Exact words: a vector is made from the text as typed.
+export const QUERY_MEMO_MAX = 256;
+export const QUERY_CACHE_TTL_S = 30 * 24 * 60 * 60;
+const queryMemo = new Map<string, number[]>();
+export const resetQueryVectorMemo = (): void => queryMemo.clear();
+
+const queryCacheUrl = async (q: string): Promise<string> =>
+    `https://search-cache.cobalt.invalid/query/${encodeURIComponent(EMBED_MODEL)}/${EMBED_DIMS}/${await sha256(q)}`;
+
+// The Workers Cache API, when this runtime has it (not under node tests).
+const edgeCache = (): Cache | null => {
+    const c = (globalThis as { caches?: { default?: Cache } }).caches;
+    return c?.default ?? null;
+};
+
+function remember(key: string, v: number[]): void {
+    queryMemo.delete(key);
+    queryMemo.set(key, v);
+    while (queryMemo.size > QUERY_MEMO_MAX) queryMemo.delete(queryMemo.keys().next().value!);
+}
+
+// The query's vector: remembered, else the Space's (then remembered). Throws what the Space's call threw.
+export async function queryVector(client: EmbedClient, q: string, opts: { fresh?: boolean } = {}): Promise<number[]> {
+    const memo = opts.fresh ? undefined : queryMemo.get(q);
+    if (memo) return memo;
+    const cache = opts.fresh ? null : edgeCache();
+    const url = cache ? await queryCacheUrl(q) : null;
+    if (cache && url) {
+        try {
+            const hit = await cache.match(url);
+            const v = hit ? ((await hit.json()) as unknown) : null;
+            if (Array.isArray(v) && v.length === EMBED_DIMS && v.every((x) => typeof x === "number")) {
+                remember(q, v as number[]);
+                return v as number[];
+            }
+        } catch {
+            // a cache miss by another name
+        }
+    }
+    const r = await client.embed("query", [{ title: null, text: q, image_url: null }], QUERY_CALL_MS);
+    const v = r.vectors[0]!;
+    remember(q, v);
+    if (cache && url) {
+        const res = new Response(JSON.stringify(v), {
+            headers: { "content-type": "application/json", "cache-control": `public, max-age=${QUERY_CACHE_TTL_S}` },
+        });
+        await cache.put(url, res).catch(() => undefined);
+    }
+    return v;
+}
 
 // The words of a query for the name-match fallback: lowercase, at least two characters each.
 const queryWords = (needle: string): string[] => [...new Set(needle.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2))];
@@ -715,18 +793,48 @@ export async function searchPosts(
     d: { db: D1Database; client: EmbedClient | null; mediaBaseUrl: string },
     rawQuery: string,
     limit: number,
-    opts: { textFallback?: boolean; within?: ReadonlySet<string> } = {},
+    // fresh: always ask the Space (stage pools treat its answer as proof it is awake)
+    opts: { textFallback?: boolean; within?: ReadonlySet<string>; fresh?: boolean } = {},
 ): Promise<SearchOutcome> {
     const q = rawQuery.trim().replace(/\s+/g, " ");
     if (q.length === 0 || q.length > MAX_QUERY_CHARS) return { ok: false, status: 400, code: "error.library.bad_request" };
     if (!d.client) return { ok: false, status: 503, code: "error.search.off" };
 
+    // The query's vector and the library's rows are fetched side by side: the Space's answer (a few hundred ms awake,
+    // longer from a cold isolate) and D1's reads no longer wait for each other. A repeated query skips the Space.
+    const started = Date.now();
+    const remembered = !opts.fresh && queryMemo.has(q);
+    let embedMs = 0;
+    let readsMs = 0;
+    const embedded = queryVector(d.client, q, { fresh: opts.fresh }).then(
+        (v) => ((embedMs = Date.now() - started), { ok: true as const, v }),
+        (e: unknown) => ((embedMs = Date.now() - started), { ok: false as const, e }),
+    );
+    // hidden posts (section 37.2) are never search results; they stay indexed for when they are unhidden
+    const library = Promise.all([
+        hiddenPostKeys(d.db),
+        postInputs(d.db, d.mediaBaseUrl),
+        d.db
+            .prepare("SELECT post_key, vector, input_hash FROM media_embeddings WHERE model = ? AND dims = ? AND vector IS NOT NULL")
+            .bind(EMBED_MODEL, EMBED_DIMS)
+            .all<{ post_key: string; vector: string; input_hash: string }>()
+            .then((r) => r.results),
+    ]).finally(() => (readsMs = Date.now() - started));
+    const [[hidden, allInputs, vectorRows], heard] = await Promise.all([
+        library,
+        // what was said (section 47): the whole heard text counts as text, and a post's best moment can carry it
+        saidIndex(
+            d.db,
+            embedded.then((r) => (r.ok ? r.v : null)),
+        ),
+    ]);
+
     // null: the Space could not answer (asleep, booting, down), so the answer is name matches only
     let qv: number[] | null;
-    try {
-        const r = await d.client.embed("query", [{ title: null, text: q, image_url: null }], QUERY_CALL_MS);
-        qv = r.vectors[0]!;
-    } catch (e) {
+    const r = await embedded;
+    if (r.ok) qv = r.v;
+    else {
+        const e = r.e;
         if (e instanceof EmbedError && e.kind === "rejected") return { ok: false, status: 502, code: "error.search.failed" };
         // callers that need meaning (stage pools) say "waking up" instead of name matches
         if (opts.textFallback === false) return { ok: false, status: 503, code: "error.search.waking" };
@@ -734,29 +842,23 @@ export async function searchPosts(
         qv = null;
     }
 
-    // hidden posts (section 37.2) are never search results; they stay indexed for when they are unhidden
-    const hidden = await hiddenPostKeys(d.db);
-    const inputs = (await postInputs(d.db, d.mediaBaseUrl)).filter((p) => !hidden.has(p.post_key));
-    const { results: rows } = await d.db
-        .prepare("SELECT post_key, vector, input_hash FROM media_embeddings WHERE model = ? AND dims = ? AND vector IS NOT NULL")
-        .bind(EMBED_MODEL, EMBED_DIMS)
-        .all<{ post_key: string; vector: string; input_hash: string }>();
-    const vectors = new Map(rows.map((r) => [r.post_key, r]));
+    const inputs = allInputs.filter((p) => !hidden.has(p.post_key));
+    const vectors = new Map(vectorRows.map((row) => [row.post_key, row]));
+    // every post's input hash at once (the pending count), not one digest after another
+    const hashes = await Promise.all(inputs.map((p) => (vectors.has(p.post_key) ? inputHash(p) : Promise.resolve(""))));
 
     const needle = q.toLowerCase();
     const words = queryWords(needle);
     const within = opts.within;
-    // what was said (section 47): the whole heard text counts as text, and a post's best moment can carry it
-    const heard = await saidIndex(d.db, qv);
     const own = new Map<string, number>();
     const hits: SearchHit[] = [];
     let indexed = 0;
     let pending = 0;
-    for (const p of inputs) {
+    for (const [i, p] of inputs.entries()) {
         const row = vectors.get(p.post_key);
         const v = row ? decodeVector(row.vector) : null;
         if (v) indexed++;
-        if (!row || row.input_hash !== (await inputHash(p))) pending++;
+        if (!row || row.input_hash !== hashes[i]) pending++;
         if (within && !within.has(p.post_key)) continue;
         const hay = `${p.title ?? ""} ${p.text} ${heard.text.get(p.post_key) ?? ""}`.toLowerCase();
         const bonus = hay.includes(needle) ? TEXT_MATCH_BONUS : 0;
@@ -784,7 +886,16 @@ export async function searchPosts(
         if (said.has(h.post_key) || !m) continue;
         if (m.score >= Math.max(MOMENT_FLOOR, (own.get(h.post_key) ?? 0) - MOMENT_SLACK)) said.set(h.post_key, [{ start: m.s, end: m.e, text: m.t, match: "meaning" }]);
     }
-    return { ok: true, hits: top, indexed, pending, fallback: qv === null, queryVector: qv, said };
+    return {
+        ok: true,
+        hits: top,
+        indexed,
+        pending,
+        fallback: qv === null,
+        queryVector: qv,
+        said,
+        timing: { embed: embedMs, reads: readsMs, total: Date.now() - started, remembered },
+    };
 }
 
 // GET /library/search?q=<words>&limit=<1..50>&v=<2|3>: the posts that best match, best first, in the
@@ -795,6 +906,7 @@ export const WITHIN_MAX = 500;
 
 export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, q: URLSearchParams): Promise<StudioReply> {
     const fail = (status: number, code: string): StudioReply => ({ status, body: { status: "error", error: { code } } });
+    if (q.has("warm")) return warmSearch(d, q);
     const spec = withinFromQuery(q);
     if (spec === "bad") return fail(400, "error.library.bad_request");
     const max = spec ? WITHIN_MAX : MAX_SEARCH_LIMIT;
@@ -815,14 +927,23 @@ export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, 
                 throw e;
             }
         }
+        const t0 = Date.now();
         const r = await searchPosts({ db: d.db, client: d.embed, mediaBaseUrl: d.mediaBaseUrl }, q.get("q") ?? "", limit, within ? { within: within.postKeys } : {});
         if (!r.ok) return fail(r.status, r.code);
         const v3 = q.get("v") === "3";
         const v2 = v3 || q.get("v") === "2";
         const page = r.hits.map((h) => ({ post_key: h.post_key, latest: h.latest }));
-        const { posts } = await assemblePosts(d, page, { v2, v3, hide: libraryHide(v2, v3), now: d.now() });
+        const [{ posts }, why] = await Promise.all([
+            assemblePosts(d, page, { v2, v3, hide: libraryHide(v2, v3), now: d.now() }),
+            whyFor(d.db, r.queryVector, (q.get("q") ?? "").trim(), r.hits.map((h) => h.post_key)),
+        ]);
         const hits = new Map(r.hits.map((h) => [h.post_key, h]));
-        const why = await whyFor(d.db, r.queryVector, (q.get("q") ?? "").trim(), r.hits.map((h) => h.post_key));
+        const t = r.timing;
+        // one line per search, so a slow one says where its time went (Workers logs)
+        console.log(
+            "[search] timing",
+            JSON.stringify({ embed: t.embed, remembered: t.remembered, reads: t.reads, search: t.total, posts: Date.now() - t0 - t.total, total: Date.now() - t0, fallback: r.fallback }),
+        );
         const out = posts
             .filter((p) => Array.isArray(p.files) && p.files.length > 0)
             .map((p) => ({
@@ -849,6 +970,32 @@ export async function librarySearch(d: AppDeps & { embed: EmbedClient | null }, 
         console.error("[search] failed", String(e));
         return fail(503, "error.api.generic");
     }
+}
+
+// GET /library/search?warm=1 (section 21.9): the app's first typed letter. The Space gets a one-word query (waking it when
+// it sleeps) while D1 reads what every search reads, so the search that follows a second later finds both ready.
+// Answers once both are done: { status, warm: { space: "ready" | "unavailable" | "off", ms } }.
+export const WARM_WORD = "warm";
+
+export async function warmSearch(d: AppDeps & { embed: EmbedClient | null }, q: URLSearchParams): Promise<StudioReply> {
+    if (q.get("warm") !== "1" || q.has("q")) return { status: 400, body: { status: "error", error: { code: "error.library.bad_request" } } };
+    const started = Date.now();
+    const client = d.embed;
+    const [space] = await Promise.all([
+        client
+            ? client.embed("query", [{ title: null, text: WARM_WORD, image_url: null }], QUERY_CALL_MS).then(
+                  () => "ready" as const,
+                  () => "unavailable" as const,
+              )
+            : Promise.resolve("off" as const),
+        Promise.all([
+            postInputs(d.db, d.mediaBaseUrl),
+            d.db.prepare("SELECT COUNT(*) AS n FROM media_embeddings WHERE model = ? AND dims = ?").bind(EMBED_MODEL, EMBED_DIMS).first(),
+        ]).catch(() => null),
+    ]);
+    const ms = Date.now() - started;
+    console.log("[search] warm", JSON.stringify({ space, ms }));
+    return { status: 200, body: { status: "success", warm: { space, ms } } };
 }
 
 // POST /library/search/index: one indexer pass now; `?drain=1` loops passes for up to

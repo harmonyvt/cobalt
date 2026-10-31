@@ -333,6 +333,64 @@ struct LibrarySearchModelTests {
         #expect(LibraryModel.isServerQuery("ab") && !LibraryModel.isServerQuery(" a ") && LibraryModel.isServerQuery("a b"))
     }
 
+    @Test func aQueryTypedAgainShowsItsLastAnswerAtOnceAndIsAskedAgain() async {
+        let rig = SearchRig(.ready)
+        rig.library.query = "kitchen"
+        await rig.run(for: 1)
+        let first = rig.library.searchResults?.map(\.id)
+        rig.library.query = "kitche"                                     // backspace
+        #expect(rig.library.searchResults == nil && rig.library.searchState == .searching)
+        rig.library.query = "kitchen"                                    // and back
+        #expect(rig.library.searchResults?.map(\.id) == first)          // no wait
+        if case .results = rig.library.searchState {} else { Issue.record("expected results, got \(rig.library.searchState)") }
+        #expect(!rig.library.wholeLibraryWaitsForSearch)
+        await rig.run(for: 1)
+        #expect(rig.calls == ["kitchen", "kitchen"])                     // still asked, for anything new
+        #expect(rig.library.searchResults?.map(\.id) == first)
+        rig.library.reset()
+        rig.library.query = "kitchen"
+        #expect(rig.library.searchResults == nil)                        // another server: nothing remembered
+    }
+
+    @Test func theFirstLetterWarmsTheServerUpOnceAMinute() async {
+        let rig = SearchRig(.ready)
+        rig.library.query = "k"
+        rig.library.query = "ki"
+        rig.library.query = "kitchen"
+        await rig.run(for: 1)
+        #expect(rig.client.searchState.warms == 1)                       // only from an empty field
+        rig.library.query = ""
+        rig.library.query = "b"
+        await rig.run(for: 1)
+        #expect(rig.client.searchState.warms == 1)                       // within the minute
+        rig.library.query = ""
+        await rig.run(for: 61)
+        rig.library.query = "c"
+        await rig.run(for: 1)
+        #expect(rig.client.searchState.warms == 2)
+        let off = SearchRig(.off)
+        off.library.query = "kitchen"
+        await off.run(for: 1)
+        #expect(off.client.searchState.warms == 0)                       // no search on the server: nothing to warm
+    }
+
+    @Test func theWholeLibraryWaitsForTheServersAnswer() async {
+        let rig = SearchRig(.ready)
+        rig.library.query = "boats"
+        #expect(rig.library.needsWholeLibrary && rig.library.wholeLibraryWaitsForSearch)
+        await rig.run(for: 1)
+        #expect(rig.library.needsWholeLibrary && !rig.library.wholeLibraryWaitsForSearch)   // answered: name matches may load
+        rig.library.query = "coffee"
+        #expect(rig.library.wholeLibraryWaitsForSearch)
+        rig.library.sort = LibrarySort(key: .title, ascending: true)                        // a sort needs it all at once
+        #expect(!rig.library.wholeLibraryWaitsForSearch)
+        rig.library.sort = .newest
+        let failing = SearchRig(.failing)
+        failing.library.query = "boats"
+        await failing.run(for: 2)
+        #expect(!failing.library.wholeLibraryWaitsForSearch)                                // failed: the names answer
+    }
+
     @Test func theKindChipStillFiltersServerResults() async {
         let rig = SearchRig(.ready)
         rig.library.query = "boats"

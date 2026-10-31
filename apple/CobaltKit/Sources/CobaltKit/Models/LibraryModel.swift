@@ -57,7 +57,7 @@ public final class LibraryModel {
     /// The search text; not persisted. With `features.search` a change also starts the server search
     /// (`LibraryModel+Search.swift`).
     public var query: String = "" {
-        didSet { if query != oldValue { queryDidChange() } }
+        didSet { if query != oldValue { queryDidChange(from: oldValue) } }
     }
     /// The server's answer for the current query, posts best first (APP-API-CONTRACT 21); nil while there is none (no
     /// query, under two letters, no `features.search`, still waiting, or the search failed): the local name filter then
@@ -87,6 +87,12 @@ public final class LibraryModel {
     @ObservationIgnored var redownloadTasks: [String: Task<StoredVideo, Error>] = [:]
     /// The debounce, request and waking retry of the current query; cancelled by the next keystroke.
     @ObservationIgnored var searchTask: Task<Void, Never>?
+    /// The server's last answers by query (`searchMemoLimit`, oldest dropped): typing or backspacing back to a query shows
+    /// them at once while the server is asked again. Emptied by `reset()` and whenever files or posts go.
+    @ObservationIgnored var searchMemo: [String: LibrarySearchResult] = [:]
+    @ObservationIgnored var searchMemoOrder: [String] = []
+    /// When the last warm-up went out (`GET /library/search?warm=1`).
+    @ObservationIgnored var lastSearchWarm: Date?
     /// The server answered `error.search.off`: no more server searches until `reset()` (a server or key change).
     @ObservationIgnored var searchOffByServer = false
     /// The hidden album's next page.
@@ -133,7 +139,7 @@ public final class LibraryModel {
     func reset() {
         posts = []; postCount = 0; fileCount = 0; failure = nil; hasMore = false; cursor = nil
         expandedPostID = nil; loadingAll = nil; localTitles = [:]
-        searchTask?.cancel(); searchTask = nil; searchOffByServer = false
+        searchTask?.cancel(); searchTask = nil; searchOffByServer = false; searchMemo = [:]; searchMemoOrder = []; lastSearchWarm = nil
         searchResults = nil; searchScores = [:]; searchSaid = [:]; searchState = .idle; searchKnown = [:]
         showingHidden = false; hiddenPosts = []; hiddenCount = 0; hiddenLoading = false; hiddenFailure = nil
         hiddenHasMore = false; hiddenCursor = nil; hiddenSyncedCount = nil; hiddenSyncedAt = nil; recentlyHidden = []
