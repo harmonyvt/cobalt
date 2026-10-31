@@ -5375,13 +5375,15 @@ meaning), and a vector per stretch of speech. Section numbers 45 and 46 (and mig
 
 ### 47.6 Clients (app)
 
-- The detail's video bar gets a CC button while `features.transcripts` and the transcript is `done` (a small spinner while
-  `pending`; none for `no_sound` / `no_speech`). Subtitles show **under the video** (the current word lit) or **on the
-  picture** (always on the picture in full screen); the choice and on/off are remembered for every video.
-- "heard" in the about section lists the timed lines; a tap seeks the video there and the line being said is highlighted.
-- Search hits with `said` show the line and "said at m:ss" (≈ for `meaning`); opening one starts the video at that moment.
-  A "said in it" filter keeps hits with `match: "words"`.
-- Mac: the same, with `C` toggling subtitles and "copy as .srt" made on the device from the lines.
+- The detail of a video post, on its own video tab, loads the transcript once (`SubtitleSession`,
+  `apple/Cobalt/Screens/Detail/Subtitles.swift`). While it has lines (`done`), the hero's bar gets a CC button; nothing
+  for any other state. Subtitles show **under the video** (default; two lines of room, the current word lit) or **on the
+  picture** (long press or right click on CC); on/off and the place are remembered for every video. Full screen is the
+  system player and shows none.
+- "heard" in the about section lists the timed lines with their times; a tap plays the video from there, the line being
+  said is lit, and the list copies as text or as a .srt made on the device from the lines.
+- Search: a "said in it" strip under the search line shows the hits with `said` (their first moment, its time, "by
+  meaning" for `meaning`); a tap opens the post playing from that moment with subtitles on for that opening.
 
 ### 47.7 Files, tests, deploy
 

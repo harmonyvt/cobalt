@@ -170,6 +170,9 @@ public struct Capabilities: Sendable, Codable, Equatable {
     public var about: Bool = false
     /// `features.about_sound` (34): the descriptions also hear the post's sound (Workers AI transcript). False when absent.
     public var aboutSound: Bool = false
+    /// `features.transcripts` (APP-API-CONTRACT 47): `GET /library/transcript` gives a video's subtitles with word times, and
+    /// search hits say where the query was said (`said`). The app also needs `about_sound`. False when absent: no CC button.
+    public var transcripts: Bool = false
     /// `features.hidden` (APP-API-CONTRACT 37): posts can be hidden (`POST /library/status`, `GET /library?hidden=1`) and
     /// auto-hide rules exist (`/hidden/rules`). True once the server's migration 0025 is applied. False when absent: no
     /// hidden chip, no status menu, no rules in settings.

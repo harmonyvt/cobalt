@@ -31,6 +31,8 @@ struct AboutSection: View {
     @State private var tagsRemoved = 0
     @State private var saveFailures = 0
     @FocusState private var adding: Bool
+    /// The detail's subtitles: with this post's timed lines, "heard" lists them with their times.
+    @Environment(\.subtitles) private var subtitles
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     private var pushes: Bool { sizeClass == .compact }
@@ -135,7 +137,14 @@ struct AboutSection: View {
             Label(Copy.Search.heard, systemImage: Symbol.SearchIndex.heard)
                 .font(CobaltType.captionSmall)
                 .foregroundStyle(.secondary)
-            if let transcript = words.transcript {
+            if let subtitles, subtitles.postKey == postKey, let timed = subtitles.transcript, timed.hasLines {
+                SubtitleHeardList(session: subtitles, transcript: timed)
+                if let language = timed.language ?? words.language {
+                    Text(Copy.Search.language(language))
+                        .font(CobaltType.badge)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let transcript = words.transcript {
                 Text(transcript)
                     .font(CobaltType.captionSmall)
                     .lineLimit(showsTranscript ? nil : 3)
@@ -159,8 +168,11 @@ struct AboutSection: View {
             }
         }
         .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: timedHeard ? .contain : .combine)
     }
+
+    /// "heard" holds the timed lines (each its own button), so VoiceOver must reach them one by one.
+    private var timedHeard: Bool { subtitles?.postKey == postKey && subtitles?.transcript?.hasLines == true }
 
     // MARK: tags
 

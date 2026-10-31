@@ -154,3 +154,52 @@ extension PreviewClient {
         return try await libraryAbout(postKey: postKey)
     }
 }
+
+// MARK: - timed transcripts (APP-API-CONTRACT 47)
+
+extension PreviewData {
+    /// The sample lines every preview video says (the fox in first class), with each word's time spread over its line.
+    static let transcriptLines: [LibraryTranscript.Line] = {
+        let lines: [(Double, Double, String)] = [
+            (0.6, 3.4, "wait is that a fox in first class?"),
+            (4.1, 7.9, "sir, you cannot bring the tail into the cabin."),
+            (8.4, 10.6, "it is part of me."),
+            (11.2, 14.6, "okay okay, but it's on my armrest."),
+            (15.3, 18.9, "the pilot said the tail can stay if it behaves."),
+            (19.6, 23.2, "does it want a snack? it wants three snacks."),
+        ]
+        return lines.map { start, end, text in
+            let words = text.split(separator: " ").map(String.init)
+            let total = Double(words.reduce(0) { $0 + $1.count + 1 })
+            var at = start
+            let timed = words.map { w -> LibraryTranscript.Word in
+                let len = (end - start) * Double(w.count + 1) / total
+                defer { at += len }
+                return .init(text: w, start: (at * 100).rounded() / 100, end: ((at + len) * 100).rounded() / 100)
+            }
+            return .init(start: start, end: end, text: text, words: timed)
+        }
+    }()
+
+    /// A preview search hit's `said`: the sample lines holding the query, else none.
+    static func said(_ query: String) -> [LibrarySaid] {
+        let q = query.lowercased()
+        return transcriptLines.filter { $0.text.lowercased().contains(q) }.prefix(5)
+            .map { LibrarySaid(start: $0.start, end: $0.end, text: $0.text, match: .words) }
+    }
+}
+
+extension PreviewClient {
+    /// `GET /library/transcript`: every preview video says the sample lines; a photo or gallery has no sound. A server
+    /// without `features.search` is `.unsupported`.
+    public func libraryTranscript(postKey: String) async throws -> LibraryTranscript {
+        try await clock.sleep(seconds: 0.2 * timeScale)
+        guard searchMode != .off else { throw PipelineFailure.unsupported }
+        let posts = try await library(cursor: nil, limit: 50).posts
+        guard let post = posts.first(where: { $0.id == postKey }) else {
+            return LibraryTranscript(postKey: postKey, state: .done, language: "en", lines: PreviewData.transcriptLines)
+        }
+        if post.kind == .photo || post.kind == .gallery { return LibraryTranscript(postKey: postKey, state: .noSound) }
+        return LibraryTranscript(postKey: postKey, state: .done, language: "en", lines: PreviewData.transcriptLines)
+    }
+}

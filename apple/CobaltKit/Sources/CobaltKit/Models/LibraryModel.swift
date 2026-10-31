@@ -65,6 +65,10 @@ public final class LibraryModel {
     public internal(set) var searchResults: [LibraryPost]?
     /// Each result's `score`, by post id.
     public internal(set) var searchScores: [String: Double] = [:]
+    /// Each result's `said` (APP-API-CONTRACT 47.5), by post id: where the query was said in its video. Only hits with any.
+    public internal(set) var searchSaid: [String: [LibrarySaid]] = [:]
+    /// A search's "said at" asked to open a post at a moment: its detail starts there with subtitles on, and clears it.
+    public var pendingMoment: PendingMoment?
     /// Where the server search is, for the line under the search field.
     public internal(set) var searchState: LibrarySearchState = .idle
     /// Posts a search returned, by id, kept after the query is cleared, so a detail opened from a result that is not
@@ -130,7 +134,7 @@ public final class LibraryModel {
         posts = []; postCount = 0; fileCount = 0; failure = nil; hasMore = false; cursor = nil
         expandedPostID = nil; loadingAll = nil; localTitles = [:]
         searchTask?.cancel(); searchTask = nil; searchOffByServer = false
-        searchResults = nil; searchScores = [:]; searchState = .idle; searchKnown = [:]
+        searchResults = nil; searchScores = [:]; searchSaid = [:]; searchState = .idle; searchKnown = [:]
         showingHidden = false; hiddenPosts = []; hiddenCount = 0; hiddenLoading = false; hiddenFailure = nil
         hiddenHasMore = false; hiddenCursor = nil; hiddenSyncedCount = nil; hiddenSyncedAt = nil; recentlyHidden = []
         recentlyUnhidden = []; statusInFlight = false; hiddenEpoch += 1; hiddenVersion += 1

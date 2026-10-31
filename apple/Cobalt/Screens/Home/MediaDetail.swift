@@ -25,6 +25,8 @@ struct MediaDetail: View {
     @State private var gone = false
     /// The rename alert (CONTRACT-LIBRARY2 decision 5), opened by the title menu or the `more` menu.
     @State private var renaming: Bool
+    /// The post's timed subtitles (APP-API-CONTRACT 47), handed to the video tab's hero, the strip and the "heard" list.
+    @State private var subtitles = SubtitleSession()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.shell) private var shell
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -98,6 +100,18 @@ struct MediaDetail: View {
         return local.map { model.mediaItem(for: $0) }
     }
 
+    /// Subtitles go with a video post's own video tab (not a webp, a made file, a photo or a gallery).
+    private func subtitlesShown(_ item: MediaItem, _ selected: Rendition) -> Bool {
+        model.capabilities.transcripts && item.post != nil && item.detailShape == .classic && selected.kind == .video
+    }
+
+    /// A search's "said at" for this post: play from there, subtitles on.
+    private func takeMoment() {
+        guard let moment = model.library.pendingMoment, moment.postKey == postID else { return }
+        model.library.pendingMoment = nil
+        subtitles.start(at: moment.seconds)
+    }
+
     /// The header, at every width: the title the whole app shares (the custom title; a link save's
     /// `service · ref`; a file's name without its extension; `cobalt`), through `MediaTitle.resolve`.
     private func title(_ item: MediaItem) -> String { item.titleText }
@@ -127,6 +141,7 @@ struct MediaDetail: View {
                 CompactDetail(c: context, maxSegments: width >= DetailWidth.sixTabs ? 6 : 4)
             }
         }
+        .environment(\.subtitles, subtitlesShown(item, selected) ? subtitles : nil)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .navigationTitle(title(item))
         // omitted when not selecting (an empty subtitle reserves a blank line under the title). Set from an empty
@@ -196,6 +211,11 @@ struct MediaDetail: View {
         .task {
             if live, model.library.posts.isEmpty, model.capabilities.library { await model.library.refresh() }
         }
+        .task(id: postID) {
+            guard let postID, model.capabilities.transcripts else { return }
+            await subtitles.load(model.library, postKey: postID)
+        }
+        .onChange(of: model.library.pendingMoment, initial: true) { takeMoment() }
         #if DEBUG
         .task { await GalleryDebug.apply(to: controller, item: { resolved ?? lastShown }, leave: { dismiss() }) }
         .task {

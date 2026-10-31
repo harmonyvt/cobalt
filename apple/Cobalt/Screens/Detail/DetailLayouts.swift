@@ -84,6 +84,7 @@ struct CompactDetail: View {
                 VStack(spacing: 12) {
                     RenditionTabs(item: c.item, selection: c.selection, maxSegments: maxSegments)
                     DetailHero(c: c, maxHeight: c.isGalleryLike ? 330 : 360)
+                    SubtitleStrip()
                     DetailInfo(item: c.item, rendition: c.rendition, missing: c.missingIndex, shareLink: c.model.capabilities.shareLink(for:))
                 }
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
@@ -122,6 +123,7 @@ struct WideDetail: View {
                             // strip takes ~70 more)
                             DetailHero(
                                 c: c, maxHeight: min(560, max(280, geometry.size.height - (c.isGalleryLike ? 230 : 150))))
+                            SubtitleStrip()
                         }
                         .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                         .listRowBackground(Color.clear)

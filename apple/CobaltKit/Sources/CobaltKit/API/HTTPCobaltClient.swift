@@ -214,6 +214,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var stillWebp: Bool?
                 var about: Bool?
                 var aboutSound: Bool?
+                var transcripts: Bool?
                 var hidden: Bool?
                 var cutout: Bool?
                 var cutoutAuto: Bool?
@@ -307,6 +308,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.stillWebp = (f?.stillWebp ?? false) && caps.galleryMake
         caps.about = (f?.about ?? false) && caps.search
         caps.aboutSound = (f?.aboutSound ?? false) && caps.about
+        caps.transcripts = (f?.transcripts ?? false) && caps.aboutSound
         caps.hidden = f?.hidden ?? false
         caps.cutout = f?.cutout ?? false
         caps.cutoutAuto = (f?.cutoutAuto ?? false) && caps.cutout
@@ -624,6 +626,13 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     public func libraryAbout(postKey: String) async throws -> LibraryAbout {
         let req = try makeRequest("GET", "/library/about", query: [("key", postKey)], keyed: true, timeout: 20)
         return try await sendJSON(LibraryAbout.self, req)
+    }
+
+    /// `GET /library/transcript?key=<post key>` (keyed, APP-API-CONTRACT 47.3): the post's subtitle lines with word times.
+    /// `404 error.library.not_found` is `CobaltError.api`.
+    public func libraryTranscript(postKey: String) async throws -> LibraryTranscript {
+        let req = try makeRequest("GET", "/library/transcript", query: [("key", postKey)], keyed: true, timeout: 20)
+        return try await sendJSON(LibraryTranscript.self, req)
     }
 
     /// `PATCH /library/about {"key", "tags"}` (keyed): the owner's tags (`null` resets to the server's own). `400

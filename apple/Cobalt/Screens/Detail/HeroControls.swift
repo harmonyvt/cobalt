@@ -190,6 +190,19 @@ final class HeroTransport {
         reveal()
     }
 
+    /// Plays from `seconds` (a subtitle line, a search's "said at").
+    func jump(to seconds: Double, play: Bool = true) {
+        guard let player, seconds.isFinite else { return }
+        let target = max(0, duration > 0 ? min(seconds, max(0, duration - 0.05)) : seconds)
+        time = target
+        seek(to: target, tolerance: 0.05)
+        if play, !isPlaying {
+            pausedByUser = false
+            player.play()
+        }
+        reveal()
+    }
+
     private func seek(to seconds: Double, tolerance: Double) {
         pending = (CMTime(seconds: seconds, preferredTimescale: 600), CMTime(seconds: tolerance, preferredTimescale: 600))
         guard chase == nil else { return }
@@ -222,8 +235,16 @@ struct HeroControls: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.hapticsEnabled) private var haptics
+    /// The detail's subtitles (a video post's own video tab only): the CC button and the subtitles on the picture.
+    @Environment(\.subtitles) private var subtitles
 
     private var shown: Bool { mode == .webp || voiceOver || transport.barShown }
+
+    /// The subtitles this bar drives: there are lines, and this is the hero they follow.
+    private var captions: SubtitleSession? {
+        guard mode == .video, let subtitles, subtitles.available, subtitles.transport === transport else { return nil }
+        return subtitles
+    }
 
     var body: some View {
         ZStack {
@@ -239,6 +260,14 @@ struct HeroControls: View {
                     .allowsHitTesting(shown)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: shown)
+                if let captions, captions.shows(.picture), let transcript = captions.transcript {
+                    SubtitleLineText(transcript: transcript, time: transport.time, onPicture: true)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, shown ? 96 : 16)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .allowsHitTesting(false)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: shown)
+                }
                 if !shown { quietSoundBadge }
             case .webp:
                 if let onFullScreen {
@@ -251,6 +280,8 @@ struct HeroControls: View {
         .environment(\.colorScheme, .dark)
         .haptic(.impact(weight: .light), trigger: transport.endHits, enabled: haptics) { $0 > 0 }
         .onHover { if $0, mode == .video { transport.reveal() } }
+        .onAppear { if mode == .video { subtitles?.adopt(transport) } }
+        .onDisappear { subtitles?.release(transport) }
     }
 
     // MARK: pieces
@@ -262,6 +293,7 @@ struct HeroControls: View {
                 elapsed
                 scrubber
                 remaining
+                captionsButton
                 soundButton
                 fullScreenButton
             }
@@ -279,6 +311,7 @@ struct HeroControls: View {
                 HStack(spacing: 0) {
                     playButton
                     Spacer(minLength: 0)
+                    captionsButton
                     soundButton
                     fullScreenButton
                 }
@@ -303,6 +336,11 @@ struct HeroControls: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(transport.isPlaying ? Copy.Media.pause : Copy.Media.play)
+    }
+
+    @ViewBuilder
+    private var captionsButton: some View {
+        if let captions { SubtitleButton(session: captions, transport: transport) }
     }
 
     private var soundButton: some View {
