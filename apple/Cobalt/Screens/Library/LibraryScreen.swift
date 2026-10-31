@@ -173,6 +173,20 @@ private struct LibraryContent: View {
         return library.hasMore ? .loading : .none
     }
 
+    private var searchPrompt: String {
+        model.capabilities.search ? Copy.Search.prompt : Copy.Library2.searchPrompt
+    }
+
+    /// The iPhone puts its own search field in the top bar, so it folds away with the chips; the iPad and Mac keep the
+    /// system's field. By device, not tier: an iPad resized to compact keeps the same field (no identity change).
+    private var ownSearchField: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
+
     private var searchPlacement: SearchFieldPlacement {
         #if os(iOS)
         tier == .compact ? .navigationBarDrawer(displayMode: .always) : .toolbar
@@ -205,12 +219,16 @@ private struct LibraryContent: View {
                     : library.showingHidden
                         ? (controller.hiddenLocked ? Copy.HiddenAlbum.chipName : Copy.HiddenAlbum.note(library.hiddenCount))
                         : Copy.libraryCounts(posts: library.postCount, files: library.fileCount))
-            .searchable(
-                text: $library.query, placement: searchPlacement,
-                prompt: model.capabilities.search ? Copy.Search.prompt : Copy.Library2.searchPrompt)
+            .modifier(LibrarySearchable(
+                text: $library.query, placement: searchPlacement, prompt: searchPrompt, enabled: !ownSearchField))
             .toolbar { toolbar }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
+                    #if os(iOS)
+                    if ownSearchField {
+                        LibrarySearchField(text: $library.query, prompt: searchPrompt, fold: controller.fold)
+                    }
+                    #endif
                     if model.capabilities.gallery || model.capabilities.hidden {
                         LibraryKindChips(
                             model: model, extra: debugExtra,
@@ -228,6 +246,8 @@ private struct LibraryContent: View {
                     LibrarySearchLine(state: library.searchState)
                 }
                 .motion(Motion.rows, value: library.searchState)
+                // folds away with the scroll and comes back on the way up (`LibraryTopBar.swift`)
+                .modifier(LibraryBarFoldEffect(fold: controller.fold))
             }
             // select, by the thumb: the `select` pill, which grows into the panel with the picks and their actions
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -333,8 +353,15 @@ private struct LibraryContent: View {
             .modifier(LibraryHiddenWatchers(model: model, controller: controller))
     }
 
-    @ViewBuilder
     private func content(rows: [LibraryRow], phase: LibraryPhase, shareIndex: ShareSetIndex) -> some View {
+        phaseContent(rows: rows, phase: phase, shareIndex: shareIndex)
+            // a different scroll view (or none): the top bar opens again
+            .onChange(of: phase) { controller.fold.reset() }
+            .onChange(of: library.viewMode) { controller.fold.reset() }
+    }
+
+    @ViewBuilder
+    private func phaseContent(rows: [LibraryRow], phase: LibraryPhase, shareIndex: ShareSetIndex) -> some View {
         switch phase {
         case .rows:
             switch library.viewMode {
