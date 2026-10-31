@@ -188,16 +188,43 @@ export function whisperFrom(ai: AiRunner | undefined | null): Transcriber | null
 
 // AssemblyAI Universal takes the audio as a data URI (`audio_url`) and answers `{ text, language_code, words: [{ text,
 // start, end }] }` with times in milliseconds.
+// The partner model's answer has come back as the transcript object, as JSON text, as a Response, or wrapped in
+// `result` / `response`; this unwraps whichever arrives.
+async function assemblyAnswer(raw: unknown): Promise<unknown> {
+    let r = raw;
+    if (r instanceof Response) r = await r.text();
+    if (typeof r === "string") {
+        try {
+            r = JSON.parse(r);
+        } catch {
+            return null;
+        }
+    }
+    for (let i = 0; i < 2 && r && typeof r === "object" && !("text" in r); i++) {
+        const o = r as { result?: unknown; response?: unknown };
+        const inner = o.result ?? o.response;
+        if (!inner || typeof inner !== "object") break;
+        r = inner;
+    }
+    return r;
+}
+
+// What an unreadable answer looked like, for the log: its type and top-level keys (never the words).
+function answerShape(raw: unknown): string {
+    if (raw === null || raw === undefined) return String(raw);
+    if (raw instanceof Response) return `Response ${raw.status}`;
+    if (typeof raw !== "object") return typeof raw;
+    return `keys ${Object.keys(raw).slice(0, 12).join(",")}`;
+}
+
 export function assemblyFrom(ai: AiRunner | undefined | null): Transcriber | null {
     if (!ai || typeof ai.run !== "function") return null;
     return {
         model: ASSEMBLY_MODEL,
         async transcribe(mp3) {
-            const r = (await ai.run(ASSEMBLY_MODEL, { audio_url: `data:audio/mpeg;base64,${toBase64(mp3)}`, language_detection: true })) as {
-                text?: unknown;
-                language_code?: unknown;
-            } | null;
-            if (!r || (typeof r.text !== "string" && r.text !== null)) throw new Error("bad assemblyai answer");
+            const raw = await ai.run(ASSEMBLY_MODEL, { audio_url: `data:audio/mpeg;base64,${toBase64(mp3)}`, language_detection: true });
+            const r = (await assemblyAnswer(raw)) as { text?: unknown; language_code?: unknown } | null;
+            if (!r || (typeof r.text !== "string" && r.text !== null)) throw new Error(`bad assemblyai answer: ${answerShape(raw)}`);
             const text = cleanHeard(typeof r.text === "string" ? r.text : "");
             return heardFrom(text, r.language_code, text ? linesOf(segmentsOfAssembly(r)) : []);
         },

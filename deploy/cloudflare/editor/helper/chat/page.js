@@ -54,7 +54,18 @@ function thumb(postId, extra = "") {
     return t;
 }
 
+/** A card for a tool call; one that cannot be drawn becomes a plain header, never a failed render. */
 function card(c) {
+    try {
+        return drawCard(c);
+    } catch (e) {
+        console.warn("card", c?.type, String(e));
+        const [color, glyph] = ICON.facts;
+        return h("div", "card", `<div class="ch"><div class="ic" style="background:${color}">${glyph}</div><span class="t">${esc(c?.type ?? "tool")}</span></div>`);
+    }
+}
+
+function drawCard(c) {
     const [color, glyph] = ICON[c.type] ?? ICON.facts;
     const el = h("div", "card");
     const head = (t, s) => {
@@ -94,7 +105,11 @@ function card(c) {
             head(c.op, c.status);
             const p = c.status === "done" ? 1 : c.progress ?? 0;
             el.append(h("div", "prog", `<div style="width:${Math.round(p * 100)}%"></div>`));
-            if (c.post_id) el.append(h("div", "thumbs")).append(thumb(c.post_id));
+            if (c.post_id) {
+                const row = h("div", "thumbs");
+                row.append(thumb(c.post_id));
+                el.append(row);
+            }
             break;
         }
         case "emotes": {
