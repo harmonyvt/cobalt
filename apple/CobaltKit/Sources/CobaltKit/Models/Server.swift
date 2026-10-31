@@ -33,6 +33,9 @@ public struct Capabilities: Sendable, Codable, Equatable {
         /// `limits.status_ids` (APP-API-CONTRACT 37.4): the most ids one `POST /library/status` takes. 200 when absent;
         /// kept within 1...200.
         public var statusIds: Int = 200
+        /// `limits.edit_overlay_tracks` (APP-API-CONTRACT 39.1): overlay layers an edit may use (`track` 0..n-1). 1 when
+        /// absent: an older server refuses `track`, so everything stays on one layer.
+        public var editOverlayTracks: Int = 1
 
         public static let fork = Limits(
             maxWebpSeconds: 10, minWebpSeconds: 0.5, webpWidths: [320, 480], renderFPS: 15,
@@ -132,6 +135,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// exactly with `share_sets`, and so does the app: false whenever `shareSets` is false. False when absent: the
     /// detail keeps the public/private switch and the links tab has no badges.
     public var privateLinks: Bool = false
+    /// `features.share_set_edit` (APP-API-CONTRACT 41): a gallery link's files can be added, taken out and moved, and its
+    /// title changed, after it was made (`PATCH /share/sets/<id>`). The server sets it exactly with `share_sets`, and so
+    /// does the app: false whenever `shareSets` is false. False when absent: a link card opens nothing.
+    public var shareSetEdit: Bool = false
     /// `features.chat` (APP-API-CONTRACT 27): threads with Claude about the library (`/chat/threads`). True exactly while
     /// the server has an Anthropic key and the sandbox loader. False when absent: no chat tab.
     public var chat: Bool = false
@@ -167,6 +174,12 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// auto-hide rules exist (`/hidden/rules`). True once the server's migration 0025 is applied. False when absent: no
     /// hidden chip, no status menu, no rules in settings.
     public var hidden: Bool = false
+    /// `features.cutout` (APP-API-CONTRACT 39.3): `POST /library/items/<id>/cutout` exists: a picture's background can be
+    /// taken out into a new private PNG (the app's own cutout is uploaded there). False when absent: no cutout button.
+    public var cutout: Bool = false
+    /// `features.cutout_auto` (39.3): the server can also make the cutout itself (Cloudflare Images): `auto` and any
+    /// picture type. False when absent: the app makes every cutout on the device.
+    public var cutoutAuto: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

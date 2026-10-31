@@ -202,6 +202,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var shareCollections: Bool?
                 var shareGroups: Bool?
                 var privateLinks: Bool?
+                var shareSetEdit: Bool?
                 var chat: Bool?
                 var stage: Bool?
                 var stageTwitch: Bool?
@@ -212,6 +213,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var about: Bool?
                 var aboutSound: Bool?
                 var hidden: Bool?
+                var cutout: Bool?
+                var cutoutAuto: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -222,6 +225,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var editMaxSeconds: Double?; var editMaxClips: Int?; var editMaxProjects: Int?
                 var editPitch: Bool?
                 var statusIds: Int?
+                var editOverlayTracks: Int?
             }
             var server: String?
             var cobalt: Cobalt?
@@ -252,6 +256,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
             limits.editMaxProjects = l.editMaxProjects ?? limits.editMaxProjects
             limits.editPitch = l.editPitch ?? limits.editPitch
             limits.statusIds = min(200, max(1, l.statusIds ?? limits.statusIds))
+            limits.editOverlayTracks = min(EditValidation.maxOverlayTracks, max(1, l.editOverlayTracks ?? limits.editOverlayTracks))
         }
         let f = w.features
         var caps = Capabilities(
@@ -288,6 +293,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.shareCollections = (f?.shareCollections ?? false) && caps.shareSets
         caps.shareGroups = (f?.shareGroups ?? false) && caps.shareCollections
         caps.privateLinks = (f?.privateLinks ?? false) && caps.shareSets
+        caps.shareSetEdit = (f?.shareSetEdit ?? false) && caps.shareSets
         caps.chat = f?.chat ?? false
         caps.stage = f?.stage ?? false
         caps.stageTwitch = (f?.stageTwitch ?? false) && caps.stage
@@ -298,6 +304,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.about = (f?.about ?? false) && caps.search
         caps.aboutSound = (f?.aboutSound ?? false) && caps.about
         caps.hidden = f?.hidden ?? false
+        caps.cutout = f?.cutout ?? false
+        caps.cutoutAuto = (f?.cutoutAuto ?? false) && caps.cutout
         return caps
     }
 
@@ -562,6 +570,15 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         return try await sendJSON(EmoteListWire.self, req).items
     }
 
+    public func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage {
+        var params: [(String, String)] = [("sort", sort.rawValue), ("page", String(page))]
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !q.isEmpty { params.insert(("q", q), at: 0) }
+        let req = try makeRequest("GET", "/emotes", query: params, keyed: true)
+        let wire = try await sendJSON(EmotePageWire.self, req)
+        return EmotePage(items: wire.items, page: wire.page ?? page, hasMore: wire.hasMore ?? false)
+    }
+
     public func saveEmote(id: String) async throws -> SavedEmote {
         let req = try makeRequest("POST", "/emotes", keyed: true)
         return try await sendJSON(SavedEmote.self, req, body: Self.jsonBody(["id": id]))
@@ -673,18 +690,49 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         guard (200..<300).contains(http.statusCode) else { throw shareSetError(data, status: http.statusCode) }
     }
 
+    /// `PATCH /share/sets/<id>` `{items?, title?, expect?}` (keyed; APP-API-CONTRACT 41.1). `.keep` leaves `title` out,
+    /// `.clear` sends `null`. `409 error.share.changed` is `ShareSetError.changed(set)` with the link as it is now,
+    /// `409 error.hidden` is `.hidden(ids)`, the rest as `createShareSet`.
+    public func updateShareSet(id: String, items: [String]?, title: ShareSetTitleChange, expect: [String]?) async throws -> ShareSet {
+        let req = try makeRequest("PATCH", "/share/sets/\(Self.encode(id))", keyed: true, timeout: 30)
+        var body: [String: Any] = [:]
+        if let items { body["items"] = items }
+        switch title {
+        case .keep: break
+        case .set(let text): body["title"] = text
+        case .clear: body["title"] = NSNull()
+        }
+        if let expect { body["expect"] = expect }
+        let (data, http) = try await send(req, body: Self.jsonBody(body))
+        guard (200..<300).contains(http.statusCode) else { throw shareSetError(data, status: http.statusCode) }
+        struct Wire: Decodable { var set: ShareSet }
+        guard let wire = try? CobaltJSON.decoder().decode(Wire.self, from: data) else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return wire.set
+    }
+
     /// The share routes' refusals as `ShareSetError`; any other code stays the generic `CobaltError.api`.
     private func shareSetError(_ data: Data, status: Int) -> Error {
         struct Body: Decodable {
             struct Err: Decodable { var code: String? }
             var error: Err?
             var items: [String]?
+            var ids: [String]?
         }
         let body = try? JSONDecoder().decode(Body.self, from: data)
         switch body?.error?.code {
         case "error.share.not_public": return ShareSetError.notPublic(body?.items ?? [])
         case "error.share.bad_request": return ShareSetError.badRequest
         case "error.share.not_found": return ShareSetError.notFound
+        case "error.share.changed":
+            // the link as it is now; a body without a readable one is the generic answer
+            struct Changed: Decodable { var set: ShareSet }
+            if let changed = try? CobaltJSON.decoder().decode(Changed.self, from: data) {
+                return ShareSetError.changed(changed.set)
+            }
+            return apiError(data, status: status)
+        case "error.hidden": return ShareSetError.hidden(body?.ids ?? [])
         default:
             if status == 503 { return ShareSetError.unavailable }
             return apiError(data, status: status)
@@ -1383,6 +1431,12 @@ private struct VisibilityWire: Decodable {
 
 private struct EmoteListWire: Decodable {
     var items: [EmoteHit]
+}
+
+private struct EmotePageWire: Decodable {
+    var items: [EmoteHit]
+    var page: Int?
+    var hasMore: Bool?
 }
 
 // MARK: - Delegates

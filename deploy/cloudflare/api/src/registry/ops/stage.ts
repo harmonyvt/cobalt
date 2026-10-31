@@ -4,7 +4,7 @@
 // Twitch connect stay owner-only (no AI call).
 import * as z from "zod";
 import { stageDepsFrom } from "../../deps";
-import { saveEmote, searchEmotes } from "../../emotes";
+import { EMOTE_SORT_KEYS, saveEmote, searchEmotes, type EmoteSort } from "../../emotes";
 import { stageKeyed, type StageDeps, type StageOp } from "../../stage";
 import type { StudioReply } from "../../studio";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
@@ -349,7 +349,7 @@ export const stageActionOp = defineOp({
 });
 
 const EMOTE_MESSAGES: Record<string, string> = {
-    "error.emote.query": "an emote search is 1 to 64 characters",
+    "error.emote.query": "an emote search is up to 64 characters (a name is needed without a sort), page 1 to 50",
     "error.emote.unavailable": "7TV did not answer: try again later",
     "error.emote.not_found": "no 7TV emote with that id",
     "error.emote.too_big": "that emote's file is too big to save",
@@ -360,20 +360,49 @@ export const emotesSearchOp = defineOp({
     auth: "key",
     runs: "worker",
     cors: false,
-    input: z.object({ query: z.string().trim().min(1).max(64) }),
-    output: z.array(
-        z.object({
-            id: z.string().describe("the 7TV emote id (for save)"),
-            name: z.string(),
-            animated: z.boolean(),
-            preview_url: z.string(),
-            library_id: z.string().nullable().describe("already saved: its library file id"),
-        }),
-    ),
-    ai: { tier: "free", only: true, summary: "Search 7TV emotes by name.", params: ["query"] },
+    input: z
+        .object({
+            query: z.string().trim().max(64).optional().describe("an emote name to look for; leave out to browse a sort"),
+            sort: z
+                .enum(EMOTE_SORT_KEYS as [EmoteSort, ...EmoteSort[]])
+                .optional()
+                .describe(
+                    "top = most used of all time; top_daily/top_weekly/top_monthly = most used over that window; trending_daily/trending_weekly/trending_monthly = rising fastest; new = newest uploads; global = 7TV's global emote set. Default top.",
+                ),
+            page: z.number().int().min(1).max(50).optional().describe("24 per page, default 1"),
+        })
+        .refine((v) => (v.query ?? "").length > 0 || v.sort !== undefined, { message: "give a query, a sort, or both" }),
+    output: z.object({
+        sort: z.string(),
+        page: z.number(),
+        has_more: z.boolean(),
+        items: z.array(
+            z.object({
+                id: z.string().describe("the 7TV emote id (for save)"),
+                name: z.string(),
+                animated: z.boolean(),
+                preview_url: z.string(),
+                file_url: z.string().describe("the largest webp on 7TV's CDN"),
+                width: z.number(),
+                height: z.number(),
+                library_id: z.string().nullable().describe("already saved: its library file id"),
+                library_url: z.string().nullable(),
+            }),
+        ),
+    }),
+    ai: {
+        tier: "free",
+        only: true,
+        summary: "Search or browse 7TV emotes: by name, and/or by top (all time, day, week, month), trending (day, week, month), new, or the global set.",
+        params: ["query", "sort", "page"],
+    },
     handler: async (ctx, input) => {
-        const r = await searchEmotes(ctx.app(), new URLSearchParams({ q: input.query }));
-        return ok(unwrap<{ items: unknown[] }>(r, EMOTE_MESSAGES).items);
+        const q = new URLSearchParams();
+        if (input.query) q.set("q", input.query);
+        q.set("sort", input.sort ?? "top");
+        if (input.page) q.set("page", String(input.page));
+        const r = await searchEmotes(ctx.app(), q);
+        return ok(unwrap<{ items: unknown[]; sort: string; page: number; has_more: boolean }>(r, EMOTE_MESSAGES));
     },
 });
 

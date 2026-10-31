@@ -93,10 +93,13 @@ public struct ShareSetItem: Sendable, Equatable, Identifiable, Decodable {
     public var width: Int?
     public var height: Int?
     public var duration: Double?
+    /// `hidden` (APP-API-CONTRACT 37.2): the file's post is hidden, so the link leaves it out (`url` is null too).
+    /// False when absent.
+    public var hidden: Bool
 
     public init(
         id: String, url: URL? = nil, contentType: String? = nil, posterURL: URL? = nil,
-        width: Int? = nil, height: Int? = nil, duration: Double? = nil
+        width: Int? = nil, height: Int? = nil, duration: Double? = nil, hidden: Bool = false
     ) {
         self.id = id
         self.url = url
@@ -105,6 +108,7 @@ public struct ShareSetItem: Sendable, Equatable, Identifiable, Decodable {
         self.width = width
         self.height = height
         self.duration = duration
+        self.hidden = hidden
     }
 
     /// The still to draw: the poster, else the file itself when it is an image (a photo or a webp); nil for a video
@@ -118,8 +122,11 @@ public struct ShareSetItem: Sendable, Equatable, Identifiable, Decodable {
     /// The file is still public (the server sends `url: null` otherwise).
     public var isPublic: Bool { url != nil }
 
+    /// The file is a video (by its content type).
+    public var isVideo: Bool { contentType?.lowercased().hasPrefix("video/") == true }
+
     enum CodingKeys: String, CodingKey {
-        case id, url, contentType, width, height, duration
+        case id, url, contentType, width, height, duration, hidden
         case posterURL = "posterUrl"           // `poster_url` after convertFromSnakeCase
     }
 
@@ -132,6 +139,7 @@ public struct ShareSetItem: Sendable, Equatable, Identifiable, Decodable {
         width = (try? c.decodeIfPresent(Int.self, forKey: .width)) ?? nil
         height = (try? c.decodeIfPresent(Int.self, forKey: .height)) ?? nil
         duration = (try? c.decodeIfPresent(Double.self, forKey: .duration)) ?? nil
+        hidden = ((try? c.decodeIfPresent(Bool.self, forKey: .hidden)) ?? nil) ?? false
     }
 }
 
@@ -145,6 +153,21 @@ public enum ShareSetError: Error, Sendable, Equatable {
     case notFound
     /// `503 error.api.generic`: the server cannot take it right now.
     case unavailable
+    /// `409 error.share.changed` (APP-API-CONTRACT 41.1): the link's files are not the ones the client last saw
+    /// (`expect`), so nothing was written. Carries the link as it is now.
+    case changed(ShareSet)
+    /// `409 error.hidden` (APP-API-CONTRACT 37.2): these library file ids belong to hidden posts and never go in a link.
+    case hidden([String])
+}
+
+/// What `PATCH /share/sets/<id>` does with a link's title (APP-API-CONTRACT 41.1).
+public enum ShareSetTitleChange: Sendable, Equatable {
+    /// The field is left out: the title stays.
+    case keep
+    /// A new title (trimmed, 1..80 characters).
+    case set(String)
+    /// `null`: no title, so the roast caption shows again.
+    case clear
 }
 
 /// What the select bar says about a pick.

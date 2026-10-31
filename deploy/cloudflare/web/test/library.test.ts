@@ -30,7 +30,7 @@ const MEDIA = "https://media.capybaraharmony.com/";
 
 // The exact header set pinned in LIBRARY-CONTRACT.md (studio CSP plus 'self' API calls and media).
 const CONTRACT_CSP =
-    "default-src 'self'; base-uri 'none'; connect-src 'self' https://api.capybaraharmony.com; media-src 'self' https://media.capybaraharmony.com blob:; img-src 'self' data: blob: https://media.capybaraharmony.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
+    "default-src 'self'; base-uri 'none'; connect-src 'self' https://api.capybaraharmony.com; media-src 'self' https://media.capybaraharmony.com blob:; img-src 'self' data: blob: https://media.capybaraharmony.com https://cdn.7tv.app; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
 
 // ---------- fakes ----------
 
@@ -240,6 +240,8 @@ const ROUTES: [string, string][] = [
     ["PUT", "/api/library/upload?name=a.gif"],
     ["GET", "/api/library/search?q=cats"],
     ["GET", "/api/library/search/post?key=abc"],
+    ["GET", "/api/library/emotes?sort=top"],
+    ["POST", "/api/library/emotes"],
     ["GET", "/api/library/map"],
     ["GET", `/api/library/webp/${JOB}`],
     ["GET", `/api/library/studio/${SID}`],
@@ -250,6 +252,7 @@ const ROUTES: [string, string][] = [
     ["DELETE", "/api/library/items/aaaaaaaaaaaaaaaa"],
     ["DELETE", `/api/library/studios/${SID}`],
     ["GET", "/api/library/links"],
+    ["PATCH", `/api/library/links/${SET}`],
     ["PUT", "/api/library/private/items/aaaaaaaaaaaaaaaa"],
     ["DELETE", "/api/library/private/items/aaaaaaaaaaaaaaaa"],
     ["POST", "/api/library/private/items/aaaaaaaaaaaaaaaa/rotate"],
@@ -379,6 +382,7 @@ describe("route shape", () => {
         ["POST", "/library", "GET, HEAD"],
         ["POST", "/api/library/search?q=a", "GET"],
         ["DELETE", "/api/library/search/post?key=a", "GET"],
+        ["DELETE", "/api/library/emotes", "GET, POST"],
     ])("%s %s is 405 with allow: %s", async (method, path, allow) => {
         const r = await call(method, path, { body: {} });
         expect(r.status).toBe(405);
@@ -426,7 +430,7 @@ describe("embedded page", () => {
         expect(LIBRARY_HTML).not.toMatch(/<script[^>]*\bsrc=/i);
         const hosts = new Set([...LIBRARY_HTML.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]));
         for (const h of hosts) {
-            expect(["api.capybaraharmony.com", "fonts.googleapis.com", "fonts.gstatic.com", "media.capybaraharmony.com", "share.capybaraharmony.com"]).toContain(h);
+            expect(["api.capybaraharmony.com", "fonts.googleapis.com", "fonts.gstatic.com", "media.capybaraharmony.com", "share.capybaraharmony.com", "cdn.7tv.app"]).toContain(h);
         }
     });
     it("has a valid inline script", () => {
@@ -734,6 +738,90 @@ describe("service calls", () => {
     it("garbage from upstream is a 502", async () => {
         apiReply = () => new Response("<html>oops</html>", { status: 200 });
         expect((await call("GET", `/api/library/studio/${SID}`)).status).toBe(502);
+    });
+});
+
+describe("/api/library/emotes", () => {
+    const LIST = { status: "success", items: [{ id: "01EMOTEAAAAAAAAAAAAAAAAAAA", name: "KEKW", animated: true, library_id: null, library_url: null }], sort: "top_weekly", page: 2, has_more: true };
+    it("forwards sort, trimmed q and page with the service key only", async () => {
+        apiReply = () => jsonRes(200, LIST);
+        const r = await call("GET", "/api/library/emotes?q=%20%20kek%20%20w%20&sort=top_weekly&page=2&x=1", {
+            headers: { cookie: "CF_Authorization=secret", authorization: "Api-Key leak" },
+        });
+        expect(r.status).toBe(200);
+        expect(await json(r)).toEqual(LIST);
+        const c = apiCalls[0]!;
+        expect(c.method).toBe("GET");
+        expect(c.url).toBe(`${API_BASE}/emotes?q=kek+w&sort=top_weekly&page=2`);
+        expect(c.headers["x-cobalt-service"]).toBe(SERVICE_KEY);
+        for (const h of ["authorization", "cookie", "cf-access-jwt-assertion"]) expect(c.headers[h]).toBeUndefined();
+    });
+    it("browse: a sort without q is fine; every sort is accepted", async () => {
+        apiReply = () => jsonRes(200, LIST);
+        for (const s of ["top", "top_daily", "top_weekly", "top_monthly", "trending_daily", "trending_weekly", "trending_monthly", "new", "global"]) {
+            expect((await call("GET", `/api/library/emotes?sort=${s}`)).status).toBe(200);
+        }
+        expect(apiCalls[0]!.url).toBe(`${API_BASE}/emotes?sort=top`);
+    });
+    it("without a sort q is required (old behaviour)", async () => {
+        apiReply = () => jsonRes(200, LIST);
+        expect((await call("GET", "/api/library/emotes?q=cat")).status).toBe(200);
+        expect(apiCalls[0]!.url).toBe(`${API_BASE}/emotes?q=cat`);
+    });
+    it.each([
+        ["nothing", "/api/library/emotes"],
+        ["blank q, no sort", "/api/library/emotes?q=%20"],
+        ["unknown sort", "/api/library/emotes?sort=hot"],
+        ["q over 64 chars", `/api/library/emotes?sort=top&q=${"a".repeat(65)}`],
+        ["page 0", "/api/library/emotes?sort=top&page=0"],
+        ["page 51", "/api/library/emotes?sort=top&page=51"],
+        ["page not a number", "/api/library/emotes?sort=top&page=x"],
+    ])("rejects %s with 400 and never calls the API", async (_n, path) => {
+        const r = await call("GET", path);
+        expect(r.status).toBe(400);
+        expect(await errorCode(r)).toBe("error.library.bad_request");
+        expect(apiCalls).toEqual([]);
+    });
+    it("keeps the API's error status and code", async () => {
+        apiReply = () => jsonRes(502, { status: "error", error: { code: "error.emote.unavailable" } });
+        const r = await call("GET", "/api/library/emotes?sort=top");
+        expect(r.status).toBe(502);
+        expect(await errorCode(r)).toBe("error.emote.unavailable");
+    });
+    it("upstream 403 becomes 502 error.library.upstream", async () => {
+        apiReply = () => jsonRes(403, { status: "error", error: { code: "forbidden" } });
+        const r = await call("GET", "/api/library/emotes?sort=top");
+        expect(r.status).toBe(502);
+        expect(await errorCode(r)).toBe("error.library.upstream");
+    });
+    it("POST saves: only {id} is forwarded, 201 and 200 pass through", async () => {
+        const saved = { status: "success", id: "aaaaaaaaaaaaaaaa", url: `${MEDIA}AbCdEfGhIj.webp`, emote_id: "01EMOTEAAAAAAAAAAAAAAAAAAA" };
+        apiReply = () => jsonRes(201, saved);
+        const r = await call("POST", "/api/library/emotes", { body: { id: "01EMOTEAAAAAAAAAAAAAAAAAAA", extra: "x" } });
+        expect(r.status).toBe(201);
+        expect(await json(r)).toEqual(saved);
+        const c = apiCalls[0]!;
+        expect(c.method).toBe("POST");
+        expect(c.url).toBe(`${API_BASE}/emotes`);
+        expect(c.body).toEqual({ id: "01EMOTEAAAAAAAAAAAAAAAAAAA" });
+        expect(c.headers["x-cobalt-service"]).toBe(SERVICE_KEY);
+        apiReply = () => jsonRes(200, saved);
+        expect((await call("POST", "/api/library/emotes", { body: { id: "01EMOTEAAAAAAAAAAAAAAAAAAA" } })).status).toBe(200);
+    });
+    it("POST needs the web Origin", async () => {
+        const r = await call("POST", "/api/library/emotes", { body: { id: "01EMOTEAAAAAAAAAAAAAAAAAAA" }, origin: "https://evil.example" });
+        expect(r.status).toBe(403);
+        expect(apiCalls).toEqual([]);
+    });
+    it.each([
+        ["no id", {}],
+        ["id not a string", { id: 5 }],
+        ["id with a slash", { id: "../../x/yyyyyyyy" }],
+        ["id too short", { id: "abc" }],
+    ])("POST rejects %s with 400", async (_n, body) => {
+        const r = await call("POST", "/api/library/emotes", { body });
+        expect(r.status).toBe(400);
+        expect(apiCalls).toEqual([]);
     });
 });
 
@@ -1835,7 +1923,7 @@ describe("server-made posters", () => {
 
         it("has the functions the test runs, and the page still uses the same CSP (posters come from the media origin)", () => {
             expect(src.length).toBeGreaterThan(200);
-            expect(CONTRACT_CSP).toContain("img-src 'self' data: blob: https://media.capybaraharmony.com");
+            expect(CONTRACT_CSP).toContain("img-src 'self' data: blob: https://media.capybaraharmony.com https://cdn.7tv.app");
         });
         it("a private video with a poster shows the poster as a picture (no <video>, no lock); if it fails to load, the lock placeholder", () => {
             const { itemThumb } = make();

@@ -345,6 +345,40 @@ extension Copy {
             return Format.when(date, now: now).split(separator: " ").dropLast().joined(separator: " ")
         }
 
+        // MARK: layers, images, emotes and cutouts (CONTRACT-EDITOR 12)
+
+        static let shelfAll = "all", shelfVideos = "videos", shelfImages = "images", shelfEmotes = "emotes"
+        static let badgeEmote = "emote"
+        static let layer = "layer", layers = "layers"
+        static func layerN(_ track: Int) -> String { "L\(track + 1)" }                  // layer 0 is "L1"
+        static func layerName(_ track: Int) -> String { "layer \(track + 1)" }
+        static func moreLayers(_ n: Int) -> String { "+\(n) more" }
+        static let fewerLayers = "fewer layers"
+        static let layerUp = "up a layer", layerDown = "down a layer"
+        static let layerBusy = "that layer is busy then"
+        static let allLayersBusy = "all layers are busy there"
+        static let emotesEmpty = "no emotes yet. save some from 7tv in the chat or the mcp."
+        static let removeBackground = "remove background", cutOut = "cut out", cutOutAndPlace = "cut out and place"
+        static let cutoutAuto = "auto", cutoutWhite = "white", cutoutColour = "colour"
+        static let cutoutTolerance = "tolerance", cutoutEdgesOnly = "only from the edges", cutoutEdgesHint = "keeps white eyes"
+        static let cutoutSoften = "soften edges", cutoutTrim = "trim to the subject"
+        static let cutoutPickColour = "tap the picture to pick a colour"
+        static let cutoutMaking = "cutting out…", cutoutBefore = "before", cutoutAfter = "after"
+        static let cutoutLoading = "getting the picture…"
+        static let cutoutNoPreview = "no preview here · the server will cut it out"
+        static let cutoutHoldBefore = "hold to see the original"
+        static func cutoutError(_ e: CutoutError) -> String {
+            switch e {
+            case .empty: return "nothing was left · lower the tolerance or try another mode"
+            case .notImage: return "that isn't a picture"
+            case .tooLarge: return "that picture is too big"
+            case .offline: return "you're offline · try again"
+            case .off: return "this server can't make cutouts yet"
+            case .notFound: return "that picture is gone from your library"
+            default: return "couldn't cut it out · try again"
+            }
+        }
+
         // MARK: numbers
 
         private static func twoDigits(_ n: Int) -> String { n < 10 ? "0\(n)" : "\(n)" }

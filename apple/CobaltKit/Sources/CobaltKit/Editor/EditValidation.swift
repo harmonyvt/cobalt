@@ -57,6 +57,8 @@ public enum EditProblem: Sendable, Equatable {
 public enum EditValidation {
     public static let maxSeconds = 600.0
     public static let maxClips = 50
+    /// Overlay layers (APP-API-CONTRACT 39.1): `track` is 0..<maxOverlayTracks.
+    public static let maxOverlayTracks = 8
     public static let minClipSeconds = 0.1
     /// Slack on `x + w <= 1` and `out <= duration` (31.2).
     static let frameSlack = 0.001
@@ -101,11 +103,13 @@ public enum EditValidation {
         let timing = EditTiming(t)
         if canvasOK, timing.seconds > maxSeconds { problems.append(.tooLong) }
 
-        // overlays: ranges, order, overlap, the end
-        var previousEnd = 0
+        // overlays: ranges, order, overlap (per layer, 39.1), the end
+        var previousEnd = [Int](repeating: 0, count: maxOverlayTracks)
         for (j, o) in t.overlay.enumerated() {
             let p = "overlay[\(j)]"
             let source = sources[o.item]
+            let trackOK = (0..<maxOverlayTracks).contains(o.track)
+            if !trackOK { problems.append(.range(path: "\(p).track")) }
             if !(o.at >= 0) { problems.append(.range(path: "\(p).at")) }
             if !(o.`in` >= 0) {
                 problems.append(.range(path: "\(p).in"))
@@ -130,13 +134,14 @@ public enum EditValidation {
             }
             guard j < timing.overlay.count else { continue }
             let clip = timing.overlay[j]
-            if clip.start < previousEnd {
+            let k = trackOK ? o.track : 0
+            if (j > 0 && o.at < t.overlay[j - 1].at) || clip.start < previousEnd[k] {
                 problems.append(.overlayOverlap(path: p))
             }
             if canvasOK, clip.start + clip.frames > timing.frames {
                 problems.append(.overlayPastEnd(path: p))
             }
-            previousEnd = max(previousEnd, clip.start + clip.frames)
+            previousEnd[k] = max(previousEnd[k], clip.start + clip.frames)
         }
 
         problems.append(contentsOf: checkSources(t, sources: sources))

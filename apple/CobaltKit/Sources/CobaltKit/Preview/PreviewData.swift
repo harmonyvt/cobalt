@@ -115,6 +115,7 @@ enum PreviewData {
             caps.shareCollections = true
             caps.shareGroups = true
             caps.privateLinks = true
+            caps.shareSetEdit = true              // the same share host edits links (APP-API-CONTRACT 41)
             caps.hidden = true                    // the server that has private links has migration 0025 (APP-API-CONTRACT 37)
             caps.limits.shareSetMax = 4
         }
@@ -128,6 +129,9 @@ enum PreviewData {
         if scenario.hasEditor && caps.kind == .fork {
             caps.editor = true
             caps.limits.editPitch = true
+            caps.limits.editOverlayTracks = 8
+            caps.cutout = true
+            caps.cutoutAuto = true
         }
         if scenario == .skyMap && caps.kind == .fork {
             caps.search = true

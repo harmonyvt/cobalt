@@ -12,6 +12,9 @@ struct TimelineClipActions {
     var split: (() -> Void)?
     var delete: (() -> Void)?
     var trim: (() -> Void)?
+    /// An overlay: up or down a layer (39.1); nil when it cannot go that way.
+    var layerUp: (() -> Void)?
+    var layerDown: (() -> Void)?
 }
 
 private struct TimelineClipAccessibility: ViewModifier {
@@ -31,6 +34,8 @@ private struct TimelineClipAccessibility: ViewModifier {
             .modifier(OptionalAction(name: Copy.Editor.splitAtPlayhead, run: actions.split))
             .modifier(OptionalAction(name: Copy.Editor.deleteClip, run: actions.delete))
             .modifier(OptionalAction(name: Copy.Editor.trimAction, run: actions.trim))
+            .modifier(OptionalAction(name: Copy.Editor.layerUp, run: actions.layerUp))
+            .modifier(OptionalAction(name: Copy.Editor.layerDown, run: actions.layerDown))
     }
 }
 

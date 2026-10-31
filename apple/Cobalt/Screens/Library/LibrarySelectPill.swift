@@ -23,12 +23,22 @@ struct LibrarySelectPill: View {
 
     @State private var pickingCollection = false
     @State private var editNote: String?
+    /// `add to link` (APP-API-CONTRACT 41.4): the link picker is up.
+    @State private var pickingLink = false
+    /// An append to a link is on its way.
+    @State private var addingToLink = false
+    /// The link the "added to" toast's `open` opened, in a sheet.
+    @State private var openedLink: LinkRoute?
+    @State private var addedToken = 0
+    @State private var addFailedToken = 0
+    @Environment(\.shell) private var shell
 
     private var store: ShareSetStore { model.shareSets }
     private var makesLinks: Bool { model.capabilities.shareSets }
     private var files: Bool { makesLinks && model.capabilities.shareCollections }
     private var inAlbum: Bool { model.library.showingHidden }
     private var offersStatus: Bool { model.capabilities.hidden }
+    private var addsToLinks: Bool { makesLinks && model.capabilities.shareSetEdit }
 
     var body: some View {
         Group {
@@ -49,6 +59,36 @@ struct LibrarySelectPill: View {
         .frame(maxWidth: .infinity)
         .sheet(isPresented: $pickingCollection) {
             CollectionPickerSheet(store: store, picks: controller.pickedRows(rows), file: file)
+        }
+        .modifier(AddToLinkPresentations(
+            model: model, picks: controller.pickedRows(rows).map { ShareSetPick(item: $0.item) },
+            pickingLink: $pickingLink, openedLink: $openedLink, choose: addToLink))
+        .haptic(.success, trigger: addedToken)
+        .haptic(.error, trigger: addFailedToken)
+    }
+
+    // MARK: add to link (APP-API-CONTRACT 41.4)
+
+    /// Appends the picks to the chosen link; select mode ends and the toast offers `open`.
+    private func addToLink(_ link: ShareSet, _ ids: [String]) {
+        guard !ids.isEmpty, !addingToLink else { return }
+        addingToLink = true
+        let store = self.store
+        let shell = self.shell
+        Task {
+            defer { addingToLink = false }
+            do {
+                let updated = try await store.addFiles(ids, to: link.id)
+                withAnimation(Motion.rows) { controller.endSelecting() }
+                addedToken += 1
+                let id = updated.id
+                shell.showNote(StatusNote(
+                    text: Copy.LinkEdit.addedTo(ids.count, updated.displayTitle), actionTitle: Copy.LinkEdit.openAction
+                ) { openedLink = LinkRoute(id: id) })
+            } catch {
+                addFailedToken += 1
+                shell.showStatus(Copy.LinkEdit.message(for: error))
+            }
         }
     }
 
@@ -185,6 +225,20 @@ struct LibrarySelectPill: View {
             .help(Copy.Library2.collection)
             .accessibilityLabel(Copy.Library2.collection)
         }
+        if addsToLinks {
+            Button { pickingLink = true } label: {
+                if addingToLink {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Label(Copy.LinkEdit.addToLink, systemImage: Symbol.LinkEdit.addToLink)
+                }
+            }
+            .buttonStyle(.selectAction(.addLink))
+            .disabled(picks.isEmpty || store.sets.isEmpty || addingToLink)
+            .help(Copy.LinkEdit.addToLink)
+            .accessibilityLabel(Copy.LinkEdit.addToLink)
+            .accessibilityHint(Copy.LinkEdit.addToLinkHint)
+        }
         if model.editor.isAvailable { EditPicksButton(model: model, picks: picks, note: $editNote) }
         Button(action: share) { Label(Copy.Library2.share, systemImage: Symbol.Library.share) }
             .buttonStyle(.selectAction(.share))
@@ -295,5 +349,33 @@ private struct PickThumb: View {
         .peekOnHold(row, controller: controller)
         .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
         .accessibilityHint(Copy.Library2.unpickHint)
+    }
+}
+
+/// The link picker the pill's `add to link` opens, and the link the toast's `open` shows (in a sheet, since the library
+/// has no links stack).
+private struct AddToLinkPresentations: ViewModifier {
+    let model: AppModel
+    let picks: [ShareSetPick]
+    @Binding var pickingLink: Bool
+    @Binding var openedLink: LinkRoute?
+    let choose: (ShareSet, [String]) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $pickingLink) {
+                LinkPickerSheet(
+                    store: model.shareSets, picks: picks, maximum: model.capabilities.limits.shareSetMax,
+                    showsBadges: model.capabilities.privateLinks, choose: choose)
+            }
+            .sheet(item: $openedLink) { route in
+                NavigationStack {
+                    LinkScreen(model: model, setID: route.id, inSheet: true)
+                }
+                .cobaltRoot(model: model)
+                #if os(macOS)
+                .frame(minWidth: 520, minHeight: 620)
+                #endif
+            }
     }
 }

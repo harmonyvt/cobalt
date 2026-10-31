@@ -17,6 +17,8 @@ struct LinksScreen: View {
     /// The collection a folder card opened (a button, not a `NavigationLink`: several links in one list row all fired
     /// on a tap).
     @State private var openedCollection: CollectionRoute?
+    /// The link a card opened (APP-API-CONTRACT 41.4), the same way.
+    @State private var openedLink: LinkRoute?
 
     init(model: AppModel) {
         self.model = model
@@ -59,6 +61,9 @@ struct LinksScreen: View {
             }
             .navigationDestination(item: $openedCollection) { route in
                 CollectionScreen(model: model, collectionID: route.id)
+            }
+            .navigationDestination(item: $openedLink) { route in
+                LinkScreen(model: model, setID: route.id)
             }
             .linkPresentations(controller)
     }
@@ -131,7 +136,9 @@ struct LinksScreen: View {
             let copiedID = controller.copiedID
             Section {
                 ForEach(store.sets) { link in
-                    LinkItemRow(link: link, collection: nil, controller: controller, lookup: lookup, copied: copiedID == link.id)
+                    LinkItemRow(
+                        link: link, collection: nil, controller: controller, lookup: lookup, copied: copiedID == link.id,
+                        open: opener(link))
                         .listRowSeparator(.hidden)
                 }
             } header: {
@@ -142,6 +149,15 @@ struct LinksScreen: View {
         .scrollContentBackground(.hidden)
         .motion(Motion.rows, value: store.sets.map(\.id))
         .refreshable { await store.refresh() }
+    }
+}
+
+extension LinksScreen {
+    /// What a card's tap does: open the link's screen, only while the server edits links (`features.share_set_edit`).
+    fileprivate func opener(_ link: ShareSet) -> (() -> Void)? {
+        guard model.capabilities.shareSetEdit else { return nil }
+        let id = link.id
+        return { openedLink = LinkRoute(id: id) }
     }
 }
 
@@ -181,11 +197,13 @@ struct LinkItemRow: View {
     let controller: LinksController
     let lookup: LinkRowLookup
     let copied: Bool
+    /// A tap on the card (APP-API-CONTRACT 41.4): opens the link's screen. Nil while the server cannot edit links.
+    var open: (() -> Void)? = nil
 
     @Environment(\.shell) private var shell
 
     var body: some View {
-        LinkRow(link: link, collection: collection, controller: controller, lookup: lookup, copied: copied)
+        LinkRow(link: link, collection: collection, controller: controller, lookup: lookup, copied: copied, open: open)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
             #if os(iOS)
@@ -323,6 +341,8 @@ struct LinkRow: View {
     let controller: LinksController
     let lookup: LinkRowLookup
     let copied: Bool
+    /// A tap on the card opens the link's screen (APP-API-CONTRACT 41.4); the copy and Mac buttons keep their own taps.
+    var open: (() -> Void)? = nil
 
     @Environment(\.shell) private var shell
     private var busy: Bool { controller.revokingIDs.contains(link.id) || controller.privacyIDs.contains(link.id) }
@@ -399,12 +419,17 @@ struct LinkRow: View {
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(rowLabel(when))
+                .accessibilityAddTraits(open == nil ? [] : .isButton)
+                .accessibilityHint(open == nil ? "" : Copy.LinkEdit.openA11yHint)
+                .accessibilityAction { open?() }
                 Spacer(minLength: 4)
                 buttons
             }
         }
         .padding(10)
         .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture { open?() }
         .opacity(busy ? 0.4 : 1)
         .disabled(busy)
         .animation(Motion.fade, value: busy)

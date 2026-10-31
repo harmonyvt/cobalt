@@ -3,7 +3,7 @@
 //
 // Graph shape: every main clip and every overlay clip is its own `-i` (so one file used twice is read twice; simple and
 // robust), each main clip becomes [v<i>] + [a<i>] of exactly frames_i frames / frames_i * 48000 / F samples, `concat` joins
-// them, one `overlay` per overlay clip in `at` order, `amix` sums the audio.
+// them, one `overlay` per overlay clip, bottom layer first then in `at` order, `amix` sums the audio.
 //
 // Sample-and-hold (31.4): output frame k of a clip shows the latest source frame at or before in + k / F * s. The graph does
 // it as: trim only the END, shift time so `in` is 0 (frames before it get negative pts), divide by the speed, then
@@ -12,7 +12,7 @@
 // The input is opened with `-ss` a few seconds before `in` and `-t` after `out` so a clip of a long file does not decode
 // the whole file; timestamps are relative to that seek, so the filter times are `in - seek`.
 
-import { EDIT_SAMPLE_RATE, mainPlacement, overlayPlacement, timing } from "./timeline.js";
+import { EDIT_SAMPLE_RATE, mainPlacement, overlayDrawOrder, overlayPlacement, timing } from "./timeline.js";
 import { orientationFilters } from "./probe.js";
 
 /** Seconds of decoding before `in` (a held source frame older than this is not found; a keyframe interval is usually 1-2 s). */
@@ -72,6 +72,8 @@ function inputFor(s, F, w) {
     if (s.kind === "photo") {
         return { args: [...wl, ...(s.contentType === "image/jpeg" ? ["-noautorotate"] : []), "-loop", "1", "-framerate", String(F), "-t", dec(w.seconds + 1), "-i", s.path], seek: 0 };
     }
+    // an animated webp (section 39) arrives as an APNG of its composed frames (webp.js), looped like a gif
+    if (s.kind === "gif" && s.frames) return { args: [...wl, "-f", "apng", "-i", s.frames], seek: 0 };
     if (s.kind === "gif") return { args: [...wl, "-i", s.path], seek: 0 };
     const seek = Math.max(0, Math.floor((w.in - SEEK_MARGIN) * 1000) / 1000);
     return { args: [...wl, ...(seek > 0 ? ["-ss", dec(seek)] : []), "-t", dec(w.out - seek + 1), "-i", s.path], seek };
@@ -157,11 +159,11 @@ export function compile(t, sources, opts) {
     }
     chains.push(`${concatIn.join("")}concat=n=${t.main.length}:v=1:a=1[vm][am]`);
 
-    // ---- overlay track
+    // ---- overlay layers: bottom layer first, then by `at` (section 39; without layers this is the array's order)
     let vLast = "[vm]";
     /** @type {string[]} */
     const mixIn = ["[am]"];
-    for (let j = 0; j < t.overlay.length; j++) {
+    for (const j of overlayDrawOrder(t)) {
         const o = t.overlay[j], om = tm.overlay[j], s = src(o.item);
         if (!s) return { code: "error.edit.input_missing", ok: false, path: `overlay[${j}].item` };
         const box = overlayPlacement({ h: s.height, w: s.width }, o.frame, t.canvas);

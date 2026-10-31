@@ -286,6 +286,11 @@ enum Endpoints {
         APIEndpoint(op: "edits.route.render", method: "POST", path: "/edits/\(HTTPCobaltClient.encode(id))/render", auth: .key)
     }
 
+    /// `POST /library/items/:id/cutout` (op `library.cutout`, auth key): Remove a picture's background into a new png (POST /library/items/<id>/cutout); the chat uses make.cutout.
+    static func libraryCutout(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library.cutout", method: "POST", path: "/library/items/\(HTTPCobaltClient.encode(id))/cutout", auth: .key)
+    }
+
     /// `GET /share/sets` (op `share_sets.list`, auth key): GET /share/sets
     static func shareSetsList() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "share_sets.list", method: "GET", path: "/share/sets", auth: .key)
@@ -299,6 +304,11 @@ enum Endpoints {
     /// `DELETE /share/sets/:id` (op `share_sets.revoke`, auth key): DELETE /share/sets/:id
     static func shareSetsRevoke(id: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "share_sets.revoke", method: "DELETE", path: "/share/sets/\(HTTPCobaltClient.encode(id))", auth: .key)
+    }
+
+    /// `PATCH /share/sets/:id` (op `share_sets.update`, auth key_or_service): PATCH /share/sets/:id
+    static func shareSetsUpdate(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "share_sets.update", method: "PATCH", path: "/share/sets/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
     }
 
     /// `GET /share/collections` (op `share_collections.list`, auth key): GET /share/collections

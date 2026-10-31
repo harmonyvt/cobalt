@@ -1700,6 +1700,44 @@
         }
       }
     },
+    "/library/items/{id}/cutout": {
+      "post": {
+        "operationId": "library.cutout",
+        "summary": "Remove a picture's background into a new png (POST /library/items/<id>/cutout); the chat uses make.cutout.",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/library/items/{id}/file": {
       "get": {
         "operationId": "library.file",
@@ -4526,6 +4564,41 @@
         ],
         "x-cobalt": {
           "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "patch": {
+        "operationId": "share_sets.update",
+        "summary": "PATCH /share/sets/:id",
+        "tags": [
+          "share_sets"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{19}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
           "runs": "worker",
           "cors": true,
           "input": "read by the handler",

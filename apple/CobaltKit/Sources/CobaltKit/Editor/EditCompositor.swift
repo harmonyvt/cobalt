@@ -6,7 +6,7 @@ import ImageIO
 
 // The custom compositor (APP-API-CONTRACT 31.5, apple/CONTRACT-EDITOR.md 3.3): per output frame, black canvas, then the main clip's
 // frame (orientation, crop, scale with Lanczos, place; geometry from `EditGeometry`, so the same integers as the server's ffmpeg
-// graph), then the overlay at its rectangle with alpha x opacity. Colour management is switched off end to end: pixel values
+// graph), then every overlay that is up, lowest layer first (39.1), at its rectangle with alpha x opacity. Colour management is switched off end to end: pixel values
 // go through untouched, as they do through ffmpeg.
 
 /// Moves a non-Sendable AVFoundation object onto the compositor's own queue.
@@ -61,16 +61,18 @@ public final class EditCompositor: NSObject, AVVideoCompositing, @unchecked Send
             } else {
                 main = self.lastFrames[mainTrack]
             }
-            var overlayVideo: CIImage?
-            if let j = instruction.overlayIndex, case .video(let trackID, _) = plan.overlay[j].source {
+            var overlayVideos: [Int: CIImage] = [:]
+            for j in instruction.overlayIndices where j < plan.overlay.count {
+                guard case .video(let trackID, _) = plan.overlay[j].source else { continue }
                 if let buffer = request.sourceFrame(byTrackID: trackID) {
-                    overlayVideo = CIImage(cvPixelBuffer: buffer, options: opts)
-                    self.lastFrames[trackID] = overlayVideo
+                    let frame = CIImage(cvPixelBuffer: buffer, options: opts)
+                    overlayVideos[j] = frame
+                    self.lastFrames[trackID] = frame
                 } else {
-                    overlayVideo = self.lastFrames[trackID]       // an overlay file that ends early holds its last frame
+                    overlayVideos[j] = self.lastFrames[trackID]   // an overlay file that ends early holds its last frame
                 }
             }
-            let image = EditFrameComposer.compose(plan: plan, frame: k, main: main, overlayVideo: overlayVideo)
+            let image = EditFrameComposer.compose(plan: plan, frame: k, main: main, overlayVideos: overlayVideos)
             let canvas = plan.timeline.canvas
             Self.context.render(
                 image, to: output, bounds: CGRect(x: 0, y: 0, width: canvas.w, height: canvas.h), colorSpace: nil)
@@ -84,8 +86,9 @@ public final class EditCompositor: NSObject, AVVideoCompositing, @unchecked Send
 /// The picture of one output frame, from the plan and the source frames. Pure Core Image, so a test draws a frame with no player.
 enum EditFrameComposer {
     /// The canvas for output frame `k`. `main` is the main clip's decoded frame as the track delivers it (not yet oriented);
-    /// `overlayVideo` is the same for a video overlay. A GIF or a photo overlay comes from the plan.
-    static func compose(plan: EditRenderPlan, frame k: Int, main: CIImage?, overlayVideo: CIImage?) -> CIImage {
+    /// `overlayVideos` is the same for each video overlay that is up, by its index in `overlay`. A GIF or a photo overlay comes
+    /// from the plan. Overlays are drawn in `overlayDrawOrder` (lowest layer first, so a higher one is on top).
+    static func compose(plan: EditRenderPlan, frame k: Int, main: CIImage?, overlayVideos: [Int: CIImage]) -> CIImage {
         let canvas = plan.timeline.canvas
         let rect = CGRect(x: 0, y: 0, width: canvas.w, height: canvas.h)
         var out = CIImage(color: CIColor.black).cropped(to: rect)
@@ -96,13 +99,15 @@ enum EditFrameComposer {
             if let drawn = drawMain(oriented, clip: clip, canvas: canvas) { out = drawn.composited(over: out) }
         }
 
-        for (j, t) in plan.timing.overlay.enumerated() where k >= t.start && k < t.start + t.frames {
-            guard j < plan.timeline.overlay.count, j < plan.overlay.count else { continue }
+        for j in plan.timeline.overlayDrawOrder {
+            guard j < plan.timing.overlay.count, j < plan.overlay.count else { continue }
+            let t = plan.timing.overlay[j]
+            guard k >= t.start, k < t.start + t.frames else { continue }
             let o = plan.timeline.overlay[j]
             var source: CIImage?
             switch plan.overlay[j].source {
             case .video(_, let orientation):
-                source = overlayVideo.map { squarePixels(orient($0, orientation), display: plan.overlay[j].display) }
+                source = overlayVideos[j].map { squarePixels(orient($0, orientation), display: plan.overlay[j].display) }
             case .gif(let frames, let delays):
                 let seconds = Double(k - t.start) / Double(plan.timing.fps)
                 let images = plan.overlay[j].images

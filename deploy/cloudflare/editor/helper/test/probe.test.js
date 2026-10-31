@@ -76,7 +76,7 @@ test("sniffKind reads the bytes, never a name", () => {
     assert.equal(sniffKind(b("\0\0\0\x18ftypheic\0\0\0\0")), null, "a HEIC still");
     assert.equal(sniffKind(b("\0\0\0\x18ftypM4A \0\0\0\0")), null, "audio only");
     assert.equal(sniffKind(Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0, 0, 0, 0, 0])), null, "webm / matroska");
-    assert.equal(sniffKind(b("RIFF\0\0\0\0WEBPVP8 ")), null, "webp");
+    assert.equal(sniffKind(b("RIFF\0\0\0\0WEBPVP8 ")), "webp", "webp (section 39)");
     assert.equal(sniffKind(Buffer.alloc(0)), null);
     assert.equal(sniffKind(b("<html>")), null);
 });

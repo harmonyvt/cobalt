@@ -33,7 +33,7 @@ export const LIBRARY_CSP =
     "default-src 'self'; base-uri 'none'; " +
     "connect-src 'self' https://api.capybaraharmony.com; " +
     "media-src 'self' https://media.capybaraharmony.com blob:; " +
-    "img-src 'self' data: blob: https://media.capybaraharmony.com; " +
+    "img-src 'self' data: blob: https://media.capybaraharmony.com https://cdn.7tv.app; " +
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
 
@@ -181,6 +181,7 @@ type Route =
     | { name: "upload" }
     | { name: "search" }
     | { name: "searchPost" }
+    | { name: "emotes" }
     | { name: "map" }
     | { name: "webp"; id: string }
     | { name: "studio"; id: string }
@@ -192,6 +193,7 @@ type Route =
     | { name: "links" }
     | { name: "private"; kind: "items" | "sets"; id: string }
     | { name: "privateRotate"; kind: "items" | "sets"; id: string }
+    | { name: "linkEdit"; id: string }
     | { name: "studioDelete"; id: string }
     | { name: "status" }
     | { name: "hiddenRules" }
@@ -205,6 +207,7 @@ const ALLOWED: Record<Route["name"], string[]> = {
     upload: ["PUT"],
     search: ["GET"],
     searchPost: ["GET"],
+    emotes: ["GET", "POST"],
     map: ["GET"],
     webp: ["GET"],
     studio: ["GET"],
@@ -216,6 +219,7 @@ const ALLOWED: Record<Route["name"], string[]> = {
     links: ["GET"],
     private: ["PUT", "DELETE"],
     privateRotate: ["POST"],
+    linkEdit: ["PATCH"],
     studioDelete: ["DELETE"],
     status: ["POST"],
     hiddenRules: ["GET", "POST"],
@@ -230,12 +234,14 @@ export function matchRoute(pathname: string): Route | null {
     if (pathname === "/api/library/upload") return { name: "upload" };
     if (pathname === "/api/library/search") return { name: "search" };
     if (pathname === "/api/library/search/post") return { name: "searchPost" };
+    if (pathname === "/api/library/emotes") return { name: "emotes" };
     if (pathname === "/api/library/map") return { name: "map" };
     if (pathname === "/api/library/links") return { name: "links" };
     if (pathname === "/api/library/status") return { name: "status" };
     if (pathname === "/api/library/hidden/rules") return { name: "hiddenRules" };
     if (pathname === "/api/library/hidden/rules/preview") return { name: "hiddenPreview" };
     let m: RegExpExecArray | null;
+    if ((m = /^\/api\/library\/links\/([0-9]{19})$/.exec(pathname))) return { name: "linkEdit", id: m[1]! };
     if ((m = /^\/api\/library\/hidden\/rules\/([0-9A-Za-z]{16})$/.exec(pathname))) return { name: "hiddenRule", id: m[1]! };
     if ((m = /^\/api\/library\/private\/(items\/[0-9A-Za-z]{16}|sets\/[0-9]{10,24})$/.exec(pathname))) {
         const [kind, id] = m[1]!.split("/") as ["items" | "sets", string];
@@ -298,6 +304,8 @@ export async function handleLibrary(request: Request, env: Env, deps?: Partial<L
                 return await search(ctx, searchParams);
             case "searchPost":
                 return await searchPost(ctx, searchParams);
+            case "emotes":
+                return request.method === "POST" ? await emoteSave(ctx, request) : await emoteList(ctx, searchParams);
             case "map":
                 return relayResponse(await callApi(ctx, "/library/map", { method: "GET" }), (b) => b);
             case "webp":
@@ -323,6 +331,8 @@ export async function handleLibrary(request: Request, env: Env, deps?: Partial<L
                     await callApi(ctx, `/share/private/${route.kind}/${route.id}/rotate`, { method: "POST" }),
                     (b) => ({ status: "success", link: b.link ?? null }),
                 );
+            case "linkEdit":
+                return await editLink(ctx, request, route.id);
             case "studioDelete":
                 return await studioDelete(ctx, route.id);
             case "status":
@@ -756,6 +766,41 @@ async function searchPost(ctx: Ctx, q: URLSearchParams): Promise<Response> {
     return relayResponse(res, (b) => b);
 }
 
+// ---------- GET/POST /api/library/emotes (APP-API-CONTRACT.md section 20) ----------
+
+const EMOTE_SORTS = ["top", "top_daily", "top_weekly", "top_monthly", "trending_daily", "trending_weekly", "trending_monthly", "new", "global"];
+const MAX_EMOTE_QUERY = 64;
+const MAX_EMOTE_PAGE = 50;
+
+// GET /api/library/emotes?q=<0..64 chars>&sort=<EMOTE_SORTS>&page=<1..50>: the API's GET /emotes answered as is.
+// With a sort q may be empty (browse); without one q is required (the API's old search).
+async function emoteList(ctx: Ctx, q: URLSearchParams): Promise<Response> {
+    const text = (q.get("q") ?? "").trim().replace(/\s+/g, " ");
+    if (text.length > MAX_EMOTE_QUERY) return err(400, "error.library.bad_request");
+    const sort = q.get("sort");
+    if (sort !== null && !EMOTE_SORTS.includes(sort)) return err(400, "error.library.bad_request");
+    if (sort === null && !text) return err(400, "error.library.bad_request");
+    const out = new URLSearchParams();
+    if (text) out.set("q", text);
+    if (sort !== null) out.set("sort", sort);
+    if (q.has("page")) {
+        const n = intParam(q.get("page"));
+        if (n === null || n < 1 || n > MAX_EMOTE_PAGE) return err(400, "error.library.bad_request");
+        out.set("page", String(n));
+    }
+    const qs = out.toString();
+    const res = await callApi(ctx, qs ? `/emotes?${qs}` : "/emotes", { method: "GET" });
+    return relayResponse(res, (b) => b);
+}
+
+// POST /api/library/emotes { id }: saves the emote into the library (201 new, 200 already saved).
+async function emoteSave(ctx: Ctx, request: Request): Promise<Response> {
+    const body = await readJson(request);
+    if (!body || typeof body.id !== "string" || !/^[0-9A-Za-z]{20,32}$/.test(body.id)) return err(400, "error.library.bad_request");
+    const res = await callApi(ctx, "/emotes", { method: "POST", body: { id: body.id } });
+    return relayResponse(res, (b) => b);
+}
+
 // ---------- POST /api/library/link ----------
 
 const LINK_ACTIONS = ["webp", "studio", "host", "keep"];
@@ -862,6 +907,28 @@ async function links(ctx: Ctx): Promise<Response> {
         links: Array.isArray(b.links) ? b.links : [],
         new_links: b.new_links === "private" ? "private" : "public",
     }));
+}
+
+// PATCH /api/library/links/<19 digits> (APP-API-CONTRACT.md section 41.3): relays { items?, title?, expect? } to
+// PATCH /share/sets/<id> and answers its status and body as is. Unlike relayResponse, an error keeps its whole
+// body: 409 error.share.changed carries the current `set`, error.share.not_public its `items`, error.hidden its `ids`.
+async function editLink(ctx: Ctx, request: Request, id: string): Promise<Response> {
+    const body = await readJson(request);
+    if (!body) return err(400, "error.library.bad_request");
+    const res = await callApi(ctx, `/share/sets/${id}`, { method: "PATCH", body });
+    if (!res || res.status === 401 || res.status === 403) return err(502, "error.library.upstream");
+    let out: unknown;
+    try {
+        out = JSON.parse(await res.text());
+    } catch {
+        return err(502, "error.library.upstream");
+    }
+    if (!isObject(out)) return err(502, "error.library.upstream");
+    if (res.status >= 400 || out.status === "error") {
+        const e = out.error;
+        if (!(isObject(e) && typeof e.code === "string")) return err(res.status >= 400 ? res.status : 502, "error.library.upstream");
+    }
+    return json(res.status, out);
 }
 
 // PUT /api/library/private/(items|sets)/<id> turns the private link on, DELETE revokes it. The API does the work

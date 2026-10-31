@@ -13,6 +13,8 @@ struct CollectionScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.shell) private var shell
     @State private var controller: LinksController
+    /// The link a card opened (APP-API-CONTRACT 41.4).
+    @State private var openedLink: LinkRoute?
 
     init(model: AppModel, collectionID: String) {
         self.model = model
@@ -79,6 +81,9 @@ struct CollectionScreen: View {
         .onChange(of: collection == nil) { _, gone in
             if gone { dismiss() }
         }
+        .navigationDestination(item: $openedLink) { route in
+            LinkScreen(model: model, setID: route.id)
+        }
         .linkPresentations(controller)
     }
 
@@ -102,7 +107,9 @@ struct CollectionScreen: View {
             let copiedID = controller.copiedID
             List {
                 ForEach(links) { link in
-                    LinkItemRow(link: link, collection: collection, controller: controller, lookup: lookup, copied: copiedID == link.id)
+                    LinkItemRow(
+                        link: link, collection: collection, controller: controller, lookup: lookup, copied: copiedID == link.id,
+                        open: opener(link))
                 }
             }
             .listStyle(.plain)
@@ -110,5 +117,14 @@ struct CollectionScreen: View {
             .motion(Motion.rows, value: links.map(\.id))
             .refreshable { await store.refresh() }
         }
+    }
+}
+
+extension CollectionScreen {
+    /// What a card's tap does: open the link's screen, only while the server edits links (`features.share_set_edit`).
+    fileprivate func opener(_ link: ShareSet) -> (() -> Void)? {
+        guard model.capabilities.shareSetEdit else { return nil }
+        let id = link.id
+        return { openedLink = LinkRoute(id: id) }
     }
 }

@@ -50,6 +50,22 @@ enum Copy {
     static let seventv = "7tv"
     static let seventvA11y = "search 7tv"
     static let emoteSearchEmpty = "search for an emote"
+    static let emoteSaved = "saved"
+    static let emoteBrowseMiss = "nothing here right now"
+    static let emoteSortsA11y = "what to show"
+    static func emoteSort(_ sort: EmoteSort) -> String {
+        switch sort {
+        case .trendingDaily: "trending today"
+        case .trendingWeekly: "trending this week"
+        case .trendingMonthly: "trending this month"
+        case .topDaily: "top today"
+        case .topWeekly: "top this week"
+        case .topMonthly: "top this month"
+        case .top: "top all time"
+        case .new: "new"
+        case .global: "global"
+        }
+    }
     static let emoteSearchMiss = "nothing on 7tv for that"
     static let emoteSearchDown = "7tv didn't answer."
     static let emoteSaveFirst = "save it first"

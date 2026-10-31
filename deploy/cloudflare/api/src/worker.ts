@@ -28,6 +28,9 @@ export interface WorkerEnv {
     // an original here from the Worker itself.
     MEDIA: PublishBucket;
     MEDIA_BASE_URL: string;
+    // Cloudflare Images (section 39.5): cutouts decode pictures and lift subjects (`segment: "foreground"`) through it.
+    // Absent: only colour cutouts of PNGs and the app's own cutouts work, and `features.cutout_auto` is false.
+    IMAGES?: unknown;
     // Live Activity push (section 8). Secrets: absent or empty means no pushes and
     // `features.live_activity_push` false. The bundle id and transport have defaults.
     APNS_KEY_P8?: string;

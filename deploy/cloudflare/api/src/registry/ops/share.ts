@@ -20,10 +20,10 @@ import {
     updateCollection,
     type CollectionDeps,
 } from "../../share-collections";
-import { createShareSet, listShareSets, revokeShareSet, SET_ID_REGEX, SHARE_SET_MAX, type ShareSetDeps } from "../../share-sets";
+import { createShareSet, listShareSets, revokeShareSet, SET_ID_REGEX, SHARE_SET_MAX, updateShareSet, type ShareSetDeps } from "../../share-sets";
 import type { StudioReply } from "../../studio";
 import { itemOn, type PrivateDeps } from "../../private-actions";
-import { newLinksSetting } from "../../private-links";
+import { newLinksSetting, setIsPrivate } from "../../private-links";
 import { HIDDEN_HINT, hiddenTargets } from "../../hidden";
 import { effectiveVisibility } from "../../visibility";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
@@ -94,11 +94,12 @@ const route = (
     run: (ctx: OpContext, keyId: string) => Promise<StudioReply> | null,
     params?: Record<string, RegExp>,
     output?: z.ZodType,
+    auth: "key" | "key_or_service" = "key",
 ) =>
     defineOp({
         name,
         route: { method, path, ...(params ? { params } : {}) },
-        auth: "key",
+        auth,
         runs: "worker",
         cors: true,
         input: NoInput,
@@ -129,6 +130,16 @@ const ROUTE_OPS = [
     route("share_sets.list", "GET", "/share/sets", (ctx) => withSets(ctx, (d) => listShareSets(d))),
     route("share_sets.create", "POST", "/share/sets", (ctx, key) => withSets(ctx, (d) => createShareSet(d, ctx.request!, key))),
     route("share_sets.revoke", "DELETE", "/share/sets/:id", (ctx) => withSets(ctx, (d) => revokeShareSet(d, ctx.params.id!)), { id: SET_ID_REGEX }),
+    // section 41: a link's files (added, taken out, moved) and title; the web library's service credential may call it
+    route(
+        "share_sets.update",
+        "PATCH",
+        "/share/sets/:id",
+        (ctx) => withSets(ctx, (d) => updateShareSet(d, ctx.request!, ctx.params.id!)),
+        { id: SET_ID_REGEX },
+        undefined,
+        "key_or_service",
+    ),
     // collections (section 26)
     route("share_collections.list", "GET", "/share/collections", (ctx) => withCollections(ctx, (d) => listCollections(d)), undefined, ShareCollectionsListShape),
     route("share_collections.create", "POST", "/share/collections", (ctx, key) => withCollections(ctx, (d) => createCollection(d, ctx.request!, key))),
@@ -371,7 +382,7 @@ export const linksCreateOp = defineOp({
         const found = await linkFiles(ctx, input.ids, { anyState: wantPrivate });
         if (found.unknown.length > 0) throw new OpError(404, "error.share.not_found", `no post or file with id ${found.unknown.join(", ")}`);
         if (found.notPublic.length > 0) {
-            throw new OpError(409, "error.share.not_public", `not public, so they cannot be shared: ${found.notPublic.join(", ")}. Ask Harmony to make them public first`);
+            throw new OpError(409, "error.share.not_public", `not public, so a public link cannot hold them: ${found.notPublic.join(", ")}. Use private: true for a private link (share.../p/<key>), which may hold them, or ask Harmony to make them public`);
         }
         if (found.files.length > SHARE_SET_MAX) {
             throw new OpError(400, "error.share.bad_request", `that is ${found.files.length} files and a link holds at most ${SHARE_SET_MAX}: make several links`);
@@ -428,6 +439,96 @@ export const linksRevokeOp = defineOp({
         if (!d) throw shareOff();
         unwrap(await revokeShareSet(d, input.link), { "error.share.not_found": `no gallery link ${input.link}` });
         return ok({ revoked: input.link });
+    },
+});
+
+// section 41: change the files of a gallery link (add, take out, move) and its title, in one write
+export const linksUpdateOp = defineOp({
+    name: "links.update",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({
+        link: LinkId.describe("the link's id or its share URL"),
+        title: z.string().max(80).nullable().optional().describe('a new title; "" or null clears it (the caption shows again)'),
+        add: OneOrMany(z.string().min(1).max(2048)).optional().describe("post ids (or file ids from post()) to add at the end"),
+        remove: OneOrMany(z.string().min(1).max(64)).optional().describe("file ids (or post ids) to take out"),
+        order: OneOrMany(z.string().min(1).max(64))
+            .optional()
+            .describe("file ids to put first, in this order; the rest keep their order after them"),
+    }),
+    output: z.intersection(LinkShape, z.object({ file_ids: z.array(z.string()).describe("the link's files, in the order shown") })),
+    ai: {
+        tier: "free",
+        only: true,
+        summary: `Change a gallery link's files and title: add posts at the end, take files out, move files first (order). A link keeps 2 to ${SHARE_SET_MAX} files; a public link only takes public files. Everyone with the link sees the new files; messages already posted in Discord keep their old preview.`,
+        params: ["link"],
+        options: true,
+    },
+    handler: async (ctx, input) => {
+        const d = shareSetDeps(ctx);
+        if (!d) throw shareOff();
+        const row = await ctx.db
+            .prepare("SELECT items FROM share_sets WHERE id = ?1 AND revoked_at IS NULL")
+            .bind(input.link)
+            .first<{ items: string }>();
+        if (!row) throw new OpError(404, "error.share.not_found", `no live gallery link ${input.link}`);
+        let current: string[] = [];
+        try {
+            current = (JSON.parse(row.items) as unknown[]).filter((x): x is string => typeof x === "string");
+        } catch {
+            /* a bad row starts empty */
+        }
+        if (input.title === undefined && !input.add && !input.remove && !input.order) {
+            throw new OpError(400, "error.share.bad_request", "give a title, add, remove or order");
+        }
+        let next = [...current];
+        if (input.remove) {
+            // a post id takes out every file of that post
+            const { results } = await ctx.db
+                .prepare(`SELECT m.id AS id, ${POST_KEY_SQL} AS post_key FROM media_items m WHERE m.id IN (SELECT value FROM json_each(?1))`)
+                .bind(JSON.stringify(current))
+                .all<{ id: string; post_key: string }>();
+            const gone = new Set(input.remove);
+            next = next.filter((id) => !gone.has(id) && !results.some((r) => r.id === id && gone.has(r.post_key)));
+        }
+        if (input.add) {
+            const hidden = await hiddenTargets(ctx.db, input.add);
+            if (hidden.length > 0) throw new OpError(409, "error.hidden", `${hidden.join(", ")}: ${HIDDEN_HINT}`);
+            const isPrivate = await setIsPrivate(ctx.db, input.link);
+            const found = await linkFiles(ctx, input.add, { anyState: isPrivate });
+            if (found.unknown.length > 0) throw new OpError(404, "error.share.not_found", `no post or file with id ${found.unknown.join(", ")}`);
+            if (found.notPublic.length > 0) {
+                throw new OpError(409, "error.share.not_public", `not public, so they cannot go in a public link: ${found.notPublic.join(", ")}. Make the link private (links.private) or ask Harmony to make them public`);
+            }
+            for (const f of found.files) if (!next.includes(f.id)) next.push(f.id);
+        }
+        if (input.order) {
+            const first = input.order.filter((id) => next.includes(id));
+            const missing = input.order.filter((id) => !next.includes(id));
+            if (missing.length > 0) throw new OpError(400, "error.share.bad_request", `not in the link: ${missing.join(", ")}`);
+            next = [...new Set(first), ...next.filter((id) => !first.includes(id))];
+        }
+        if (next.length < 2 || next.length > SHARE_SET_MAX) {
+            throw new OpError(400, "error.share.bad_request", `that leaves ${next.length} files and a link holds 2 to ${SHARE_SET_MAX}${next.length < 2 ? ": revoke it instead" : ": make another link"}`);
+        }
+        const body: Record<string, unknown> = { items: next, expect: current };
+        if (input.title !== undefined) body.title = input.title;
+        const r = await updateShareSet(d, bodyRequest("PATCH", body), input.link);
+        const out = unwrap<{ set: { id: string; url: string; title: string | null; items: { id: string }[]; private?: boolean } }>(r, {
+            "error.share.changed": "the link changed while you worked on it: read it again (links.list) and retry",
+            "error.share.not_public": "some of those files are not public, so they cannot go in a public link",
+            "error.hidden": HIDDEN_HINT,
+            "error.share.bad_request": `a gallery link holds 2 to ${SHARE_SET_MAX} files and a title of at most 80 characters`,
+        }).set;
+        return ok({
+            id: out.id,
+            url: out.url,
+            title: out.title,
+            files: out.items.length,
+            ...(out.private ? { private: true } : {}),
+            file_ids: out.items.map((i) => i.id),
+        });
     },
 });
 
@@ -686,6 +787,7 @@ export const SHARE_OPS = [
     ...ROUTE_OPS,
     linksCreateOp,
     linksRevokeOp,
+    linksUpdateOp,
     collectionsCreateOp,
     collectionsAddOp,
     collectionsUpdateOp,

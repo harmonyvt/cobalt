@@ -123,6 +123,10 @@ final class PreviewEditorState: Sendable {
     func record(_ call: String) { state.withLock { $0.calls.append(call) } }
     var saveCount: Int { state.withLock { $0.saves.count } }
 
+    /// A library file the preview server now knows (a cutout made in the editor), so saves that name it pass.
+    func addSource(_ source: EditSource) { state.withLock { $0.sources[source.id] = source } }
+    func source(_ id: String) -> EditSource? { state.withLock { $0.sources[id] } }
+
     /// The stored timeline of a project (tests read what a save sent).
     func timeline(of id: String) -> EditTimeline? { state.withLock { $0.timelines[id] } }
     func project(_ id: String) -> EditProject? { state.withLock { $0.projects[id] } }

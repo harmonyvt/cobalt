@@ -686,3 +686,34 @@ Copy (widget, lowercase): queued `waiting to render` / `1 render ahead` / `N ren
 rendering `rendering`; finishing `saving the video`; done `video ready` with `m:ss · w×h · size`; failed `couldn't render` with
 the reason; cancelled `cancelled`; stale `waiting for capystore…`. Compact island: a film mark and the percent (`next` / `+N`
 while queued); minimal: a progress ring. A tap opens the queue (`cobalt-apple://jobs`).
+
+## 12. Layers, images, emotes and cutouts (addendum, 2026-10-31; server half: `deploy/cloudflare/APP-API-CONTRACT.md` section 39)
+
+Mockup: https://claude.ai/artifact/VqimMVfpEKT12kxKEkLhqb. Everything below shows only on a server that sends
+`limits.edit_overlay_tracks` > 1 (layers, webp sources) and `features.cutout` (cutouts); an older server keeps one overlay
+lane and no cutout button.
+
+- **Model** (CobaltKit): `EditOverlay.track` 0...7, left out of the JSON at 0. `EditValidation` checks overlap per layer (and
+  still that `overlay` is sorted by `at`) and `overlay[i].track` range. `EditTimeline.overlayDrawOrder` = layer, then list
+  order. `EditSession.overlayTrackLimit` (the capability, 1 when absent); `addOverlay(_:atFrame:track:)` takes the lowest
+  free layer when `track` is nil; `moveOverlay(id:toFrame:track:)` stays between its own layer's neighbours, or goes in the
+  gap at the frame on another layer; `setOverlayTrack` refuses a busy layer; `normalized` keeps ties in their order.
+- **Preview**: one video track and one audio track per layer (track ids `3 + 2L` / `4 + 2L`); an instruction lists every
+  overlay that is up and the compositor draws them in `overlayDrawOrder`. Animated webps and APNGs decode with ImageIO and
+  loop like a gif (a delay of 10 ms or less is 100 ms, as the render).
+- **Timeline**: Mac and iPad: one lane per layer (headers `L1`..., highest on top) plus an empty lane above for a new layer;
+  several lanes share about two lanes' height (22 pt at least). Drop on a lane = that layer (else the lowest free one).
+  iPhone: three layer lanes at most above the main lane, `+N more` / `fewer layers`. Dragging an overlay up or down moves it
+  a layer; a busy layer keeps it where it is. VoiceOver actions `up a layer`, `down a layer`.
+- **Bin and add sheet**: shelves `all` (Mac/iPad) / `videos` / `images` / `emotes` (library files with source `emote`). A
+  webp counts as a photo. A picture's context menu has `remove background`.
+- **Inspector / overlay sheet**: `layer N` with down and up, and `remove background` for a photo or gif overlay (the cutout
+  then replaces the overlay's picture: same place, width, time and layer).
+- **Cutout sheet** (`EditorCutoutSheet`): the picture on a checkerboard with a live preview on a 640 px copy (hold for the
+  original), `auto` / `white` / `colour` (starts at the commonest edge colour; tap the picture to pick), tolerance,
+  `only from the edges` (keeps white eyes), `soften edges`, `trim to the subject`, `cut out and place`. `CutoutMaker` makes
+  it on the device (Vision `VNGenerateForegroundInstanceMaskRequest` for auto, the server's flood fill for white/colour),
+  uploads the PNG (`content-type: image/png`), and falls back to the server's own cutout (`features.cutout_auto`) when the
+  picture is not on the device or Vision finds no subject.
+- Tests: `EditorLayersTests.swift` (JSON, validation, draw order, stacking pixels, session placement, capability) and
+  `CutoutMakerTests.swift` (flood fill, edges only, trim, empty, colour picking).

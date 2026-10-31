@@ -380,6 +380,7 @@ export const sourceKind = (contentType: string | null): "video" | "gif" | "photo
             return "gif";
         case "image/jpeg":
         case "image/png":
+        case "image/webp": // a still or an animated webp (section 39): the render finds out which from the bytes
             return "photo";
         default:
             return "unsupported";
@@ -396,6 +397,7 @@ const sourceShape = (id: string, r: MediaRow | undefined) => ({
     duration: r?.duration ?? null,
     bytes: r?.bytes ?? null,
     poster_url: r?.poster ?? null,
+    source: r?.source ?? null,
     available: !!r && r.deleted_at === null,
 });
 

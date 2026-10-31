@@ -145,13 +145,13 @@ struct EditFrameComposerTests {
 
     @Test func fillCoversEveryPixel() {
         let p = plan()
-        let px = pixels(EditFrameComposer.compose(plan: p, frame: 10, main: red(), overlayVideo: nil))
+        let px = pixels(EditFrameComposer.compose(plan: p, frame: 10, main: red(), overlayVideos: [:]))
         for (x, y) in [(2, 2), (540, 960), (1077, 1917), (3, 1900)] { #expect(at(px, x, y).r > 240 && at(px, x, y).g < 15) }
     }
 
     @Test func fitLeavesBlackBarsWhereTheGeometrySays() {
         let p = plan(fit: .fit)
-        let px = pixels(EditFrameComposer.compose(plan: p, frame: 10, main: red(), overlayVideo: nil))
+        let px = pixels(EditFrameComposer.compose(plan: p, frame: 10, main: red(), overlayVideos: [:]))
         // 1280 x 720 fits 1080 wide as 1080 x 608, placed at y 656
         #expect(at(px, 540, 100).r < 15 && at(px, 540, 1800).r < 15 && at(px, 540, 650).r < 15 && at(px, 540, 1270).r < 15)
         #expect(at(px, 540, 662).r > 240 && at(px, 540, 960).r > 240 && at(px, 540, 1258).r > 240)
@@ -159,16 +159,16 @@ struct EditFrameComposerTests {
 
     @Test func theOverlayAppearsInItsRectangleOnlyWhileItIsUp() {
         let p = plan(overlay: true)
-        let before = pixels(EditFrameComposer.compose(plan: p, frame: 10, main: red(), overlayVideo: nil))
+        let before = pixels(EditFrameComposer.compose(plan: p, frame: 10, main: red(), overlayVideos: [:]))
         #expect(at(before, 800, 200).b < 15)
-        let during = pixels(EditFrameComposer.compose(plan: p, frame: 100, main: red(), overlayVideo: nil))
+        let during = pixels(EditFrameComposer.compose(plan: p, frame: 100, main: red(), overlayVideos: [:]))
         // (648, 96, 378 x 284)
         #expect(at(during, 800, 200).b > 240 && at(during, 800, 200).r < 15)
         #expect(at(during, 640, 200).r > 240 && at(during, 656, 200).b > 240)
         #expect(at(during, 1034, 200).r > 240 && at(during, 1018, 200).b > 240)
         #expect(at(during, 800, 88).r > 240 && at(during, 800, 104).b > 240)
         #expect(at(during, 800, 388).r > 240 && at(during, 800, 372).b > 240)
-        let after = pixels(EditFrameComposer.compose(plan: p, frame: 180, main: red(), overlayVideo: nil))
+        let after = pixels(EditFrameComposer.compose(plan: p, frame: 180, main: red(), overlayVideos: [:]))
         #expect(at(after, 800, 200).b < 15)
     }
 
