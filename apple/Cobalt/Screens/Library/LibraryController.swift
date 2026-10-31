@@ -1,5 +1,8 @@
 import CobaltKit
 import SwiftUI
+#if os(iOS)
+import GameController
+#endif
 
 /// What a tap opened on the phone: the media as it was then (the detail keeps itself current) and the tab
 /// to start on.
@@ -93,8 +96,6 @@ final class LibraryController {
     @ObservationIgnored private var pickAnchor: String?
     /// The posts on screen in their order (the screen keeps it current): what a shift-click range runs through.
     @ObservationIgnored var shownRows: [LibraryRow] = []
-    /// The modifier keys held down right now on the iPad (a hardware keyboard); the Mac reads `NSEvent`.
-    @ObservationIgnored var heldKeys: EventModifiers = []
     /// The share chips: every post, not shared, shared, or one collection's.
     var shareFilter: LibraryShareFilter = .all
     /// The post a hold is showing full size (media only), while the finger stays down.
@@ -245,15 +246,19 @@ final class LibraryController {
     enum Click {
         case plain, toggle, range
 
-        /// The keys held right now: `NSEvent` on the Mac, `heldKeys` on the iPad.
+        /// The keys held right now: `NSEvent` on the Mac, the hardware keyboard (`GCKeyboard`) on the iPad.
         @MainActor static func current(_ controller: LibraryController) -> Click {
             #if os(macOS)
             let flags = NSEvent.modifierFlags
             if flags.contains(.shift) { return .range }
             if flags.contains(.command) { return .toggle }
             #else
-            if controller.heldKeys.contains(.shift) { return .range }
-            if controller.heldKeys.contains(.command) { return .toggle }
+            guard let keys = GCKeyboard.coalesced?.keyboardInput else { return .plain }
+            func held(_ a: GCKeyCode, _ b: GCKeyCode) -> Bool {
+                keys.button(forKeyCode: a)?.isPressed == true || keys.button(forKeyCode: b)?.isPressed == true
+            }
+            if held(.leftShift, .rightShift) { return .range }
+            if held(.leftGUI, .rightGUI) { return .toggle }
             #endif
             return .plain
         }
