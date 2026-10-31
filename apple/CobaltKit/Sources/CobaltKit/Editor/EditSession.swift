@@ -12,7 +12,8 @@ import Observation
 ///   `resolveConflict`. Offline or `503` is `.failed`, retried at 2, 5, 10, then every 30 s while the session is open.
 /// - Undo and redo keep whole-timeline snapshots (at most 100). Edits that arrive in a run with the same key within 0.6 s (a
 ///   drag, a slider) are one step; `endGesture()` ends a run at once. A save never clears the stacks.
-/// - The player is rebuilt (`EditComposition`) 150 ms after the timeline settles, and keeps the playhead.
+/// - The player is rebuilt (`EditComposition`) 150 ms after the timeline settles, and keeps the playhead. During a drag or
+///   slider run it waits for `endGesture()` (or 0.6 s of quiet), so the item is not swapped mid-gesture.
 @MainActor @Observable
 public final class EditSession {
     public enum Tool: String, CaseIterable, Sendable { case select, blade, crop }
@@ -81,9 +82,13 @@ public final class EditSession {
     // the player
     @ObservationIgnored private var rebuildTask: Task<Void, Never>?
     @ObservationIgnored private var rebuildGeneration = 0
+    /// A keyed edit (a drag or slider run) changed the timeline and its rebuild waits for `endGesture`.
+    @ObservationIgnored private var gestureRebuildPending = false
     @ObservationIgnored private var assets: [String: EditSourceAsset] = [:]
     @ObservationIgnored private var loads: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var timeObserver: Any?
+    @ObservationIgnored private var seekInFlight = false
+    @ObservationIgnored private var pendingSeekFrame: Int?
     @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
     @ObservationIgnored private var renderPoll: Task<Void, Never>?
@@ -151,8 +156,28 @@ public final class EditSession {
         let clamped = min(max(0, k), max(0, timing.frames - 1))
         playhead = clamped
         guard player.currentItem != nil else { return }
-        let time = CMTime(value: Int64(clamped), timescale: Int32(timing.fps))
-        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        chaseSeek(to: clamped)
+    }
+
+    /// One exact seek in flight; a scrub's newer targets wait, and only the latest is sent when it lands.
+    private func chaseSeek(to frame: Int) {
+        if seekInFlight {
+            pendingSeekFrame = frame
+            return
+        }
+        seekInFlight = true
+        let time = CMTime(value: Int64(frame), timescale: Int32(timing.fps))
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.seekLanded() }
+        }
+    }
+
+    private func seekLanded() {
+        seekInFlight = false
+        guard let next = pendingSeekFrame else { return }
+        pendingSeekFrame = nil
+        guard !isClosed, player.currentItem != nil else { return }
+        chaseSeek(to: min(next, max(0, timing.frames - 1)))
     }
 
     public func step(frames: Int) { seek(frame: playhead + frames) }
@@ -523,7 +548,14 @@ public final class EditSession {
     // MARK: - Undo
 
     /// Ends a run of drag or slider edits: the next edit is a step of its own.
-    public func endGesture() { lastKey = nil }
+    /// A rebuild held back during the run is scheduled now (the usual 150 ms debounce, so a burst of nudges is one rebuild).
+    public func endGesture() {
+        lastKey = nil
+        if gestureRebuildPending {
+            gestureRebuildPending = false
+            scheduleRebuild()
+        }
+    }
 
     public func undo() {
         guard let previous = undoStack.popLast() else { return }
@@ -584,10 +616,12 @@ public final class EditSession {
         lastKey = key
         lastEditAt = now
         timeline = t
-        afterChange()
+        afterChange(inGesture: key != nil)
     }
 
-    private func afterChange() {
+    /// `inGesture`: a drag or slider run; the player is rebuilt when it ends (`endGesture`), or after `coalesceWindow` of
+    /// quiet if no end comes, not on every tick.
+    private func afterChange(inGesture: Bool = false) {
         timing = EditTiming(timeline, sourceDurations: Self.durations(of: sources))
         problems = EditValidation.check(timeline, sources: sources)
         switch selection {
@@ -597,7 +631,13 @@ public final class EditSession {
         }
         if playhead > max(0, timing.frames - 1) { playhead = max(0, timing.frames - 1) }
         markChanged()
-        scheduleRebuild()
+        if inGesture {
+            gestureRebuildPending = true
+            scheduleRebuild(delay: Self.coalesceWindow)
+        } else {
+            gestureRebuildPending = false
+            scheduleRebuild()
+        }
     }
 
     /// The probed length of every video file, for the end-of-source clamp the renderer applies.
@@ -992,6 +1032,7 @@ public final class EditSession {
         rebuildTask = Task { @MainActor [weak self] in
             guard let self else { return }
             if delay > 0, await !self.nap(delay) { return }
+            self.gestureRebuildPending = false
             await self.rebuild(generation: generation)
         }
     }
@@ -1033,6 +1074,7 @@ public final class EditSession {
             playable = built
             let k = min(playhead, max(0, built.timing.frames - 1))
             playhead = k
+            pendingSeekFrame = nil                                                        // this seek goes to the playhead
             player.seek(to: CMTime(value: Int64(k), timescale: Int32(built.timing.fps)), toleranceBefore: .zero, toleranceAfter: .zero) { _ in }
             if wasPlaying { player.play() }
         } catch {

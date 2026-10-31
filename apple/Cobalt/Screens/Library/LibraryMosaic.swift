@@ -57,6 +57,7 @@ struct LibraryMosaic: View {
     @State private var viewport = ViewportBox()
     @State private var position = ScrollPosition()
     @State private var budget: AnimationBudget
+    @State private var layoutCache = MosaicLayoutCache()
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -96,15 +97,32 @@ struct LibraryMosaic: View {
     /// Nine grey tiles at mixed aspects while the first page loads.
     private static let skeletonAspects: [Double] = [16 / 9, 9 / 16, 1, 9 / 16, 4 / 3, 9 / 16, 1, 16 / 9, 9 / 16]
 
-    private func plan(width: Double) -> MasonryPlan {
+    /// The plan and each column's tiles, made again only when the posts, their aspects, the width or the column
+    /// count changed: a tick or a light redraws tiles, not the layout.
+    private func layout(width: Double) -> MosaicLayout {
         let columns = MasonryPlan.columns(
             width: width, minTile: minTile, gap: Self.gap, margin: Self.margin, accessibility: typeSize.isAccessibilitySize)
-        return MasonryPlan.make(aspects: aspects, width: width, columns: columns, gap: Self.gap, margin: Self.margin)
+        let key = MosaicLayout.Key(
+            skeleton: skeleton, ids: skeleton ? [] : rows.map(\.id), aspects: aspects, width: width, columns: columns)
+        if let cached = layoutCache.layout, cached.key == key { return cached }
+        let plan = MasonryPlan.make(aspects: key.aspects, width: width, columns: columns, gap: Self.gap, margin: Self.margin)
+        // slots come in index order, so each column's tiles stay top to bottom
+        var byColumn = [[MosaicTile]](repeating: [], count: plan.columns)
+        for slot in plan.slots where byColumn.indices.contains(slot.column) {
+            if skeleton {
+                byColumn[slot.column].append(MosaicTile(id: "ghost-\(slot.index)", slot: slot))
+            } else if key.ids.indices.contains(slot.index) {
+                byColumn[slot.column].append(MosaicTile(id: key.ids[slot.index], slot: slot))
+            }
+        }
+        let layout = MosaicLayout(key: key, plan: plan, columns: byColumn)
+        layoutCache.layout = layout
+        return layout
     }
 
     var body: some View {
-        let plan = plan(width: Double(max(width, 1)))
-        let byColumn = Dictionary(grouping: plan.slots, by: \.column)
+        let layout = self.layout(width: Double(max(width, 1)))
+        let plan = layout.plan
         // the picks' numbers, the same as the select pill's thumbnails
         let numbers = LibraryPickNumbers.of(rows, controller: controller)
         ScrollView {
@@ -124,7 +142,7 @@ struct LibraryMosaic: View {
                         HStack(alignment: .top, spacing: Self.gap) {
                             ForEach(0..<plan.columns, id: \.self) { column in
                                 LazyVStack(spacing: Self.gap) {
-                                    ForEach(tiles(byColumn[column] ?? [])) { tile in
+                                    ForEach(layout.columns.indices.contains(column) ? layout.columns[column] : []) { tile in
                                         tileView(tile.slot, plan: plan, numbers: numbers)
                                     }
                                 }
@@ -162,16 +180,6 @@ struct LibraryMosaic: View {
         .accessibilityLabel(Copy.postsA11y)
     }
 
-    /// A column's slots keyed by their post, not their position: a new save at the top or another sort shifts every
-    /// index, and a tile keyed by index handed its picture, its failed state and its delete confirm to another post.
-    private func tiles(_ slots: [MasonryPlan.Slot]) -> [MosaicTile] {
-        slots.compactMap { slot in
-            if skeleton { return MosaicTile(id: "ghost-\(slot.index)", slot: slot) }
-            guard rows.indices.contains(slot.index) else { return nil }
-            return MosaicTile(id: rows[slot.index].id, slot: slot)
-        }
-    }
-
     @ViewBuilder
     private func tileView(_ slot: MasonryPlan.Slot, plan: MasonryPlan, numbers: [String: Int]) -> some View {
         let size = CGSize(width: plan.columnWidth, height: slot.height)
@@ -195,7 +203,7 @@ struct LibraryMosaic: View {
 
     /// Scrolls the tile to the centre of the viewport and lights it (decision 17).
     private func scrollTo(_ id: String) {
-        let plan = plan(width: Double(max(width, 1)))
+        let plan = layout(width: Double(max(width, 1))).plan
         guard let index = rows.firstIndex(where: { $0.id == id }), let slot = plan.slots.first(where: { $0.index == index }) else { return }
         let centre = top + slot.y + slot.height / 2
         let target = max(0, centre - viewport.height / 2)
@@ -214,7 +222,28 @@ struct LibraryMosaic: View {
     }
 }
 
+/// A slot keyed by its post, not its position: a new save at the top or another sort shifts every index, and a tile
+/// keyed by index handed its picture, its failed state and its delete confirm to another post.
 private struct MosaicTile: Identifiable {
     let id: String
     let slot: MasonryPlan.Slot
+}
+
+/// The mosaic's plan and its columns' tiles, with what they were made from.
+private struct MosaicLayout {
+    struct Key: Equatable {
+        var skeleton: Bool
+        var ids: [String]
+        var aspects: [Double]
+        var width: Double
+        var columns: Int
+    }
+    let key: Key
+    let plan: MasonryPlan
+    let columns: [[MosaicTile]]
+}
+
+/// Holds the last layout across body passes (not observed: reading it never redraws).
+private final class MosaicLayoutCache {
+    var layout: MosaicLayout?
 }

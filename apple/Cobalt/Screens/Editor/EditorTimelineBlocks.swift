@@ -43,7 +43,7 @@ struct MainClipBlock: View {
             }
         }
         .frame(width: width, height: blockHeight, alignment: .topLeading)
-        .shadow(color: .black.opacity(dragging ? 0.35 : 0), radius: 8, y: 3)
+        .shadow(color: .black.opacity(dragging ? 0.35 : 0), radius: dragging ? 8 : 0, y: dragging ? 3 : 0)
         .opacity(dragging ? 0.92 : 1)
         .offset(x: scale.x(span.start) + 1 + (dragging ? (reorder?.translation ?? 0) : 0), y: 6)
         .zIndex(dragging ? 5 : (selected ? 2 : 1))

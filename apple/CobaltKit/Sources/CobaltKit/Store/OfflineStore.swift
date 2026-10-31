@@ -255,6 +255,8 @@ public final class OfflineStore {
     public internal(set) var videos: [StoredVideo] = []   // newest first
     /// The same records grouped by media (CONTRACT-MEDIA 1.1), latest activity first; rebuilt in `adopt`.
     public internal(set) var media: [StoredMedia] = []
+    /// Lookups into `media`, built on first use and dropped whenever `adopt` replaces `media` (its only writer).
+    @ObservationIgnored private var mediaIndex: MediaIndex?
 
     /// Incoming files older than this are leftovers of a run that never finished.
     nonisolated static let inboxLifetime: TimeInterval = 24 * 60 * 60
@@ -456,7 +458,34 @@ public final class OfflineStore {
     /// The newest `n` media by latest activity (the orbit shows `latestMedia(7)` and a few more).
     public func latestMedia(_ n: Int) -> [StoredMedia] { Array(media.prefix(max(0, n))) }
 
-    public func media(id: String) -> StoredMedia? { media.first { $0.id == id } }
+    public func media(id: String) -> StoredMedia? {
+        let list = media                                   // read first: the caller still observes `media`
+        return mediaLookup(list).byID[id].map { list[$0] }
+    }
+
+    /// The first media (in `media` order) that `MediaItem.joins` to `post`: the same answer as
+    /// `media.first { MediaItem.joins($0, post) }`, by lookup instead of a scan.
+    public func media(joining post: LibraryPost) -> StoredMedia? {
+        let list = media
+        let found = mediaLookup(list)
+        var best: Int?
+        func take(_ i: Int?) { if let i, i < (best ?? .max) { best = i } }
+        take(found.bySession[post.id])
+        if let sid = post.session?.id { take(found.bySession[sid]) }
+        for file in post.files {
+            if let url = file.url { take(found.byWebpURL[url]); continue }
+            // `MediaItem.isSameWebp`: a webp file with no link matches by the name its link ends in
+            if file.role == .webp, let name = file.mediaName { take(found.byWebpName[name]) }
+        }
+        return best.map { list[$0] }
+    }
+
+    private func mediaLookup(_ list: [StoredMedia]) -> MediaIndex {
+        if let mediaIndex { return mediaIndex }
+        let built = MediaIndex(list)
+        mediaIndex = built
+        return built
+    }
 
     /// The media that holds the record `videoID`.
     public func media(containing videoID: String) -> StoredMedia? {
@@ -1040,6 +1069,7 @@ public final class OfflineStore {
         records = merged
         videos = merged.map { $0.video(root: root, visibleRoot: visibleRoot) }
         media = StoredMedia.build(from: videos)
+        mediaIndex = nil
     }
 
     /// One coordinated write: `body` changes the merged index, then (unless `enforce` is false) the
@@ -1676,5 +1706,25 @@ private actor PreviewGate {
 
     func leave() {
         if waiting.isEmpty { busy = false } else { waiting.removeFirst().resume() }
+    }
+}
+
+/// `OfflineStore.media` by the keys `MediaItem.joins` matches on; each key maps to its lowest index.
+private struct MediaIndex {
+    var byID: [String: Int] = [:]
+    var bySession: [String: Int] = [:]
+    var byWebpURL: [URL: Int] = [:]
+    var byWebpName: [String: Int] = [:]
+
+    init(_ list: [StoredMedia]) {
+        for (i, m) in list.enumerated() {
+            if byID[m.id] == nil { byID[m.id] = i }
+            for sid in m.sessionIDs where bySession[sid] == nil { bySession[sid] = i }
+            for webp in m.webps {
+                guard let url = webp.remoteURL else { continue }
+                if byWebpURL[url] == nil { byWebpURL[url] = i }
+                if let name = MediaItem.mediaName(of: url), byWebpName[name] == nil { byWebpName[name] = i }
+            }
+        }
     }
 }

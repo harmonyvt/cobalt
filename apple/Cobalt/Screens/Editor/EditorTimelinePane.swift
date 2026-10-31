@@ -13,12 +13,13 @@ struct EditorTimelinePane: View {
 
     @Environment(EditorHost.self) private var host
     @State private var scroll = ScrollPosition()
-    @State private var scrollX: CGFloat = 0
+    /// The scroll offset, read only by the follower: kept out of observation so scrolling does not redraw the pane.
+    @State private var scrollX = TimelineScrollOffset()
     @State private var visibleWidth: CGFloat = 0
     @State private var reorder: ReorderDrag?
     @State private var pinchBase: CGFloat?
     @State private var scrubbing = false
-    @State private var bladeX: CGFloat?
+    @State private var blade = TimelineBladeHover()
     @State private var mainTargeted = false
     @State private var overlayTargeted = false
 
@@ -47,7 +48,9 @@ struct EditorTimelinePane: View {
         .background(EditorColor.lane)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Editor.timelineA11y)
-        .onChange(of: session.playhead) { _, _ in followPlayhead() }
+        .background {
+            TimelinePlayheadFollower(session: session) { followPlayhead() }
+        }
         .haptic(.selection, trigger: session.selection)
     }
 
@@ -105,7 +108,7 @@ struct EditorTimelinePane: View {
             content
         }
         .scrollPosition($scroll)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in scrollX = x }
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in scrollX.x = x }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { visibleWidth = $0 }
         .simultaneousGesture(pinch)
     }
@@ -119,9 +122,7 @@ struct EditorTimelinePane: View {
                 mainLane(width: width)
                 audioLane(width: width)
             }
-            TimelinePlayhead(height: Self.rulerHeight + lanesHeight)
-                .offset(x: scale.x(session.playheadSeconds) - TimelinePlayhead.headWidth / 2)
-            playheadAccessibility
+            TimelinePlayheadLayer(session: session, scale: scale, rulerHeight: Self.rulerHeight, height: Self.rulerHeight + lanesHeight)
         }
         .frame(width: width, height: Self.rulerHeight + lanesHeight, alignment: .topLeading)
     }
@@ -144,25 +145,6 @@ struct EditorTimelinePane: View {
                         session.seek(frame: session.timing.frame(at: scale.seconds(at: value.location.x)))
                     }
                     .onEnded { _ in scrubbing = false })
-    }
-
-    private var playheadAccessibility: some View {
-        Color.clear
-            .frame(width: 44, height: Self.rulerHeight)
-            .contentShape(Rectangle())
-            .allowsHitTesting(false)
-            .offset(x: scale.x(session.playheadSeconds) - 22)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Copy.Editor.a11yPlayhead)
-            .accessibilityValue(Copy.Editor.a11yPlayheadValue(
-                Copy.Editor.clockTenths(session.playheadSeconds), of: Copy.Editor.clockTenths(session.timing.seconds)))
-            .accessibilityAdjustableAction { direction in
-                switch direction {
-                case .increment: session.step(frames: session.timing.fps)
-                case .decrement: session.step(frames: -session.timing.fps)
-                @unknown default: break
-                }
-            }
     }
 
     // MARK: lanes
@@ -200,16 +182,19 @@ struct EditorTimelinePane: View {
                 }
             }
             if let reorder { insertionBar(for: reorder, spans: spans) }
-            if session.tool == .blade, let bladeX {
-                Rectangle().fill(EditorColor.selection).frame(width: 1, height: mainHeight).offset(x: bladeX).allowsHitTesting(false)
+            if session.tool == .blade {
+                TimelineBladeLine(blade: blade, height: mainHeight)
             }
             if let over = overflow(spans: spans) { over }
         }
         .frame(width: width, height: mainHeight, alignment: .topLeading)
         .onContinuousHover { phase in
             switch phase {
-            case .active(let point): bladeX = point.x
-            case .ended: bladeX = nil
+            case .active(let point):
+                // only the blade draws the line: no writes on every mouse move otherwise
+                if session.tool == .blade { blade.x = point.x } else if blade.x != nil { blade.x = nil }
+            case .ended:
+                if blade.x != nil { blade.x = nil }
             }
         }
         .dropDestination(for: String.self) { items, location in
@@ -359,8 +344,77 @@ struct EditorTimelinePane: View {
     private func followPlayhead() {
         guard session.isPlaying, !scrubbing, visibleWidth > 0 else { return }
         let x = scale.x(session.playheadSeconds)
-        if x < scrollX + 24 || x > scrollX + visibleWidth * 0.85 {
+        if x < scrollX.x + 24 || x > scrollX.x + visibleWidth * 0.85 {
             scroll.scrollTo(x: max(0, x - 80))
+        }
+    }
+}
+
+/// The scroll view's offset, outside observation (written every scroll frame, read only when following the playhead).
+@MainActor
+final class TimelineScrollOffset {
+    var x: CGFloat = 0
+}
+
+/// Where the pointer is over the main lane while the blade is out; only `TimelineBladeLine` reads it.
+@MainActor @Observable
+final class TimelineBladeHover {
+    var x: CGFloat?
+}
+
+/// The blade's line under the pointer.
+private struct TimelineBladeLine: View {
+    let blade: TimelineBladeHover
+    let height: CGFloat
+
+    var body: some View {
+        if let x = blade.x {
+            Rectangle().fill(EditorColor.selection).frame(width: 1, height: height).offset(x: x).allowsHitTesting(false)
+        }
+    }
+}
+
+/// Calls `follow` on every playhead change; the only view of the pane besides the layer that reads the playhead.
+private struct TimelinePlayheadFollower: View {
+    let session: EditSession
+    let follow: () -> Void
+
+    var body: some View {
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onChange(of: session.playhead) { _, _ in follow() }
+    }
+}
+
+/// The playhead line and its accessibility element: the only part of the lanes that redraws while playing.
+private struct TimelinePlayheadLayer: View {
+    let session: EditSession
+    let scale: TimelineScale
+    let rulerHeight: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        let x = scale.x(session.playheadSeconds)
+        ZStack(alignment: .topLeading) {
+            TimelinePlayhead(height: height)
+                .offset(x: x - TimelinePlayhead.headWidth / 2)
+            Color.clear
+                .frame(width: 44, height: rulerHeight)
+                .contentShape(Rectangle())
+                .allowsHitTesting(false)
+                .offset(x: x - 22)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Copy.Editor.a11yPlayhead)
+                .accessibilityValue(Copy.Editor.a11yPlayheadValue(
+                    Copy.Editor.clockTenths(session.playheadSeconds), of: Copy.Editor.clockTenths(session.timing.seconds)))
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment: session.step(frames: session.timing.fps)
+                    case .decrement: session.step(frames: -session.timing.fps)
+                    @unknown default: break
+                    }
+                }
         }
     }
 }

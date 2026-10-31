@@ -165,7 +165,7 @@ public final class LibraryModel {
         var pending: Set<String>?
         for post in page.posts {
             guard let title = post.customTitle.flatMap(MediaTitle.clean),
-                  let media = store.media.first(where: { MediaItem.joins($0, post) }),
+                  let media = store.media(joining: post),
                   media.customTitle != title else { continue }
             let queued = pending ?? Set(ctx.titles.all().map(\.itemID))
             pending = queued

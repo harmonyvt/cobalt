@@ -60,6 +60,7 @@ struct AppShell: View {
     /// What a screen that has just popped left to say ("deleted."), drawn over the shell for a moment.
     @State private var status: String?
     @State private var statusToken = 0
+    @State private var actionsBox = ShellActionsBox()
     #if DEBUG
     /// `-previewDetail N`: opens the Nth stored media's detail over the shell (simulator evidence).
     @State private var debugDetail: MediaItem?
@@ -342,12 +343,7 @@ struct AppShell: View {
         // always expanded: a collapsed bar hid the other two tabs after any scroll (owner's live run)
         .tabBarMinimizeBehavior(.never)
         .sheet(isPresented: $model.queueShown) { queueSheet }
-        // Anything that still selects the queue tab (a launch argument, a preview) opens the sheet instead.
-        .onChange(of: model.selectedTab, initial: true) { _, tab in
-            guard tab == .queue else { return }
-            model.selectedTab = .save
-            model.queueShown = true
-        }
+        .modifier(QueueTabRedirect(model: model))
         #else
         NavigationSplitView {
             List(selection: sidebarSelection) {
@@ -395,7 +391,18 @@ struct AppShell: View {
     }
     #endif
 
+    /// Built once and kept (the closures write through @State and the model, so the first copy stays right).
     private var actions: ShellActions {
+        if let made = actionsBox.value, actionsBox.model === model { return made }
+        var made = makeActions()
+        actionsBox.generation += 1
+        made.generation = actionsBox.generation
+        actionsBox.value = made
+        actionsBox.model = model
+        return made
+    }
+
+    private func makeActions() -> ShellActions {
         ShellActions(
             paste: { handle(Pasteboard.contents(), via: .circle, dropped: false) },
             chooseFile: { showImporter = true },
@@ -462,6 +469,31 @@ struct AppShell: View {
         #endif
     }
 }
+
+/// Holds the shell's actions once made (not observed: writing it never re-runs a body).
+@MainActor
+private final class ShellActionsBox {
+    var value: ShellActions?
+    /// The model the actions were made for (a new one, and they are made again).
+    weak var model: AppModel?
+    var generation = 0
+}
+
+#if os(iOS)
+/// Anything that still selects the queue tab (a launch argument, a preview) opens the sheet instead.
+/// Its own modifier, so the tab is read here and not in the shell's body.
+private struct QueueTabRedirect: ViewModifier {
+    let model: AppModel
+
+    func body(content: Content) -> some View {
+        content.onChange(of: model.selectedTab, initial: true) { _, tab in
+            guard tab == .queue else { return }
+            model.selectedTab = .save
+            model.queueShown = true
+        }
+    }
+}
+#endif
 
 /// The `name it` sheet and the upload it names (the sheet follows that run, focused or not).
 private struct TitleSheetRequest: Identifiable {

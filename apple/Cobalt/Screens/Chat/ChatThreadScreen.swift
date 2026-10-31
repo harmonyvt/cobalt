@@ -100,6 +100,7 @@ struct ChatThreadScreen: View {
                             retry: { send($0, attaching: false) }, canRetry: !busy,
                             answer: { answer($0, yes: $1) },
                             answering: message.confirm.map { store.answeringConfirms.contains($0.id) } ?? false)
+                            .equatable()
                             .id(message.id)
                     }
                     Color.clear.frame(height: 1).id(Self.bottom)

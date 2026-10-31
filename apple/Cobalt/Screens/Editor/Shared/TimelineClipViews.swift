@@ -92,18 +92,7 @@ struct TimelineMainClipView: View {
     }
 
     private var filmstrip: some View {
-        let tile = max(24, height * 0.8)
-        let count = min(32, max(1, Int((width / tile).rounded(.up))))
-        return HStack(spacing: 0) {
-            ForEach(0..<count, id: \.self) { _ in
-                EditorPoster(url: source?.posterURL, fallback: EditorColor.clip(for: clip.item), maxPixel: 160)
-                    .frame(width: tile, height: height)
-                    .opacity(0.55)
-            }
-        }
-        .frame(width: width, height: height, alignment: .leading)
-        .background(EditorColor.clip(for: clip.item))
-        .clipped()
+        TimelineFilmstrip(url: source?.posterURL, color: EditorColor.clip(for: clip.item), width: width, height: height)
     }
 
     private var label: some View {
@@ -351,5 +340,48 @@ extension View {
         #else
         self
         #endif
+    }
+}
+
+/// A main clip's filmstrip: the poster loaded once (as `EditorPoster` does) and drawn as plain tiles, so a long clip or a zoom
+/// does not start one loader per tile.
+private struct TimelineFilmstrip: View {
+    let url: URL?
+    let color: Color
+    let width: CGFloat
+    let height: CGFloat
+    @State private var image: ImageBox?
+
+    var body: some View {
+        let tile = max(24, height * 0.8)
+        let count = min(32, max(1, Int((width / tile).rounded(.up))))
+        HStack(spacing: 0) {
+            ForEach(0..<count, id: \.self) { _ in
+                color
+                    .overlay {
+                        if let image {
+                            Image(decorative: image.image, scale: 1)
+                                .resizable()
+                                .scaledToFill()
+                                .transition(.opacity)
+                        }
+                    }
+                    .clipped()
+                    .frame(width: tile, height: height)
+                    .opacity(0.55)
+            }
+        }
+        .frame(width: width, height: height, alignment: .leading)
+        .background(color)
+        .clipped()
+        .animation(.easeOut(duration: 0.2), value: image != nil)
+        .task(id: url) {
+            guard let url else {
+                image = nil
+                return
+            }
+            let source: LibraryPictureSource = url.isFileURL ? .file(url) : .image(url)
+            image = await LibraryPictureLoader.shared.picture(source, maxPixel: 160)
+        }
     }
 }

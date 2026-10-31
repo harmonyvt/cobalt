@@ -138,3 +138,28 @@ extension EditSession {
     /// `1080p · 30` for the timeline's canvas.
     var qualityLine: String { Copy.Editor.qualityLabel(timeline.canvas.resolution.rawValue, timeline.canvas.fps) }
 }
+
+/// What buttons need to know of the playhead: the main clip under it and whether a split there works.
+struct EditorPlayheadSpot: Equatable {
+    var clipID: String?
+    var canSplit: Bool
+
+    @MainActor init(_ session: EditSession) {
+        clipID = session.clipUnderPlayhead?.clip.id
+        canSplit = session.canSplitAtPlayhead
+    }
+}
+
+/// Reads the playhead in a view of its own and reports `EditorPlayheadSpot` only when it changes, so a toolbar using it does
+/// not redraw on every frame while playing.
+struct EditorPlayheadSpotReader: View {
+    let session: EditSession
+    let onChange: (EditorPlayheadSpot) -> Void
+
+    var body: some View {
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onChange(of: EditorPlayheadSpot(session), initial: true) { _, spot in onChange(spot) }
+    }
+}

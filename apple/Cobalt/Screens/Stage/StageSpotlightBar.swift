@@ -247,9 +247,8 @@ private struct PickTile: View {
                 ZStack(alignment: .bottomLeading) {
                     Rectangle().fill(FrameGradient.fill(item.kind == .video ? 2 : 0))
                     if let url = item.thumbnail {
-                        AsyncImage(url: url) { phase in
-                            if let image = phase.image { image.resizable().scaledToFill() }
-                        }
+                        // always a picture (thumb, poster or the image itself); cached by the library's loader
+                        RemoteStill(poster: RemotePoster(url: url, isVideo: false))
                     }
                     if let code = item.code {
                         Text(code)

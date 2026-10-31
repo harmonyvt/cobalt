@@ -269,7 +269,7 @@ public final class UnifiedQueue {
     /// The tab's badge: work in motion on this device (its live jobs and downloads). Server entries are left out: the
     /// snapshot is only fresh while the tab is on screen, and the index's backlog is not something to badge.
     public var badgeCount: Int {
-        jobs.live.count + offline.rows.filter { !$0.isFailed }.count
+        jobs.live.count + offline.unfinishedCount
             + mergedEdits.filter { $0.isActive && !dismissedEdits.contains($0.id) }.count
     }
 

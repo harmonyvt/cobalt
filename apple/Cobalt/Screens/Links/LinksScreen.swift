@@ -126,9 +126,12 @@ struct LinksScreen: View {
                 }
                 .motion(Motion.rows, value: store.collections.map(\.id))
             }
+            // looked up once for the list, not once per row; only the copied row changes on a copy
+            let lookup = LinkRowLookup(store: store, collectionsEnabled: controller.collectionsEnabled)
+            let copiedID = controller.copiedID
             Section {
                 ForEach(store.sets) { link in
-                    LinkItemRow(link: link, collection: nil, controller: controller)
+                    LinkItemRow(link: link, collection: nil, controller: controller, lookup: lookup, copied: copiedID == link.id)
                         .listRowSeparator(.hidden)
                 }
             } header: {
@@ -157,17 +160,32 @@ struct SectionLabel: View {
 
 // MARK: - one link as a list row
 
+/// What the rows look up in the store, worked out once per list.
+struct LinkRowLookup {
+    /// A link's collection names (main list only).
+    var collectionNames: [String: [String]] = [:]
+    var privateLinks: [String: PrivateLink] = [:]
+
+    @MainActor
+    init(store: ShareSetStore, collectionsEnabled: Bool) {
+        collectionNames = collectionsEnabled ? store.collectionNamesBySet() : [:]
+        privateLinks = store.privateLinksBySet()
+    }
+}
+
 /// A link's row with everything a list gives it: copy and revoke by swipe (iPhone, iPad), the context menu, and, inside
 /// a collection, "remove from collection". `collection` is nil in the main list.
 struct LinkItemRow: View {
     let link: ShareSet
     let collection: ShareCollection?
     let controller: LinksController
+    let lookup: LinkRowLookup
+    let copied: Bool
 
     @Environment(\.shell) private var shell
 
     var body: some View {
-        LinkRow(link: link, collection: collection, controller: controller)
+        LinkRow(link: link, collection: collection, controller: controller, lookup: lookup, copied: copied)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
             #if os(iOS)
@@ -303,6 +321,8 @@ struct LinkRow: View {
     let link: ShareSet
     let collection: ShareCollection?
     let controller: LinksController
+    let lookup: LinkRowLookup
+    let copied: Bool
 
     @Environment(\.shell) private var shell
     private var busy: Bool { controller.revokingIDs.contains(link.id) || controller.privacyIDs.contains(link.id) }
@@ -327,11 +347,9 @@ struct LinkRow: View {
     /// The collections the link is in, in the main list only ("memes · for discord"); nil when none.
     private var collectionsLine: String? {
         guard collection == nil, controller.collectionsEnabled else { return nil }
-        let names = controller.store.collections(containing: link.id).map(\.name)
+        let names = lookup.collectionNames[link.id] ?? []
         return names.isEmpty ? nil : names.joined(separator: " · ")
     }
-
-    private var copied: Bool { controller.copiedID == link.id }
 
     private func rowLabel(_ when: String) -> String {
         let base = Copy.Links.rowA11y(title: link.displayTitle, files: link.items.count, when: when)
@@ -360,7 +378,7 @@ struct LinkRow: View {
                         .foregroundStyle(CobaltColor.caption)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if link.isPrivate, let opened = controller.store.privateLink(forSet: link.id)?.opened {
+                    if link.isPrivate, let opened = lookup.privateLinks[link.id]?.opened {
                         Text(Copy.PrivateLinks.openedLine(opened))
                             .font(CobaltType.captionSmall)
                             .foregroundStyle(CobaltColor.caption)

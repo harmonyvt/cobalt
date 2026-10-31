@@ -48,6 +48,19 @@ struct EditorInspector: View {
 
 // MARK: - a main clip
 
+/// `split at playhead`: the one part of the inspector that reads the playhead, so playing redraws only this button.
+private struct MainClipSplitButton: View {
+    let session: EditSession
+    let clipID: String
+
+    var body: some View {
+        EditorInspectorButton(
+            title: Copy.Editor.splitAtPlayhead, symbol: Symbol.Editor.split,
+            isEnabled: session.canSplitAtPlayhead && session.clipUnderPlayhead?.clip.id == clipID
+        ) { session.split(clip: clipID, atFrame: session.playhead) }
+    }
+}
+
 private struct MainClipInspector: View {
     let session: EditSession
     let index: Int
@@ -92,10 +105,7 @@ private struct MainClipInspector: View {
                 onEnd: { session.endGesture() })
         }
         VStack(spacing: 8) {
-            EditorInspectorButton(
-                title: Copy.Editor.splitAtPlayhead, symbol: Symbol.Editor.split,
-                isEnabled: session.canSplitAtPlayhead && session.clipUnderPlayhead?.clip.id == clip.id
-            ) { session.split(clip: clip.id, atFrame: session.playhead) }
+            MainClipSplitButton(session: session, clipID: clip.id)
             EditorInspectorButton(title: Copy.Editor.deleteClip, symbol: Symbol.Editor.delete, destructive: true) {
                 session.remove(.main(clip.id))
             }

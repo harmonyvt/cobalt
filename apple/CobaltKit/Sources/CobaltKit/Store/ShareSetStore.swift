@@ -313,6 +313,25 @@ public final class ShareSetStore {
         collections.filter { $0.setIDs.contains(setID) }
     }
 
+    /// Every gallery link's collection names, in `collections` order, in one pass: for a whole list of rows.
+    public func collectionNamesBySet() -> [String: [String]] {
+        var out: [String: [String]] = [:]
+        for collection in collections {
+            for id in Set(collection.setIDs) { out[id, default: []].append(collection.name) }
+        }
+        return out
+    }
+
+    /// What `privateLink(forSet:)` answers, for every gallery link at once (the store's list wins over the link's own).
+    public func privateLinksBySet() -> [String: PrivateLink] {
+        var out: [String: PrivateLink] = [:]
+        for set in sets {
+            if let link = set.link { out[set.id] = link }
+        }
+        for link in privateLinks.reversed() where link.kind == .set { out[link.targetID] = link }
+        return out
+    }
+
     /// Makes a collection (`POST /share/collections`) and puts it first. Throws `ShareCollectionError` (`.linkNotFound`
     /// names links that are gone, `.tooMany` at 100 collections) or whatever the transport threw; nothing is inserted
     /// then. `name` is sent as given: clean it with `ShareCollectionRule.cleanName` first.

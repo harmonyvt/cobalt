@@ -311,9 +311,10 @@ public final class StageStore {
             let list = try await ctx.client.stageRedemptions(limit: StageRule.redemptionsLimit, before: nil)
             guard started == generation else { return }
             pollFailures = 0
-            feedProblem = false
+            // only on a change, so a quiet poll redraws nothing
+            if feedProblem { feedProblem = false }
             let arrived = redemptionsLoaded && list.first?.id != redemptions.first?.id
-            redemptions = list
+            if list != redemptions { redemptions = list }
             redemptionsLoaded = true
             if arrived, stage != nil { await refreshQuietly() }
         } catch {

@@ -481,8 +481,12 @@ struct DetailPlayer: View {
         guard diskChecked || video.fileURL == nil else { return nil }
         if let webp = remote.animatedWebp { return .webp(source: HeroSource.animated(webp), aspect: shape, name: video.name) }
         if let hosted = remote.playableVideo {
-            let seconds = transport.time
-            let start = withTime && seconds.isFinite && seconds > 0 ? CMTime(seconds: seconds, preferredTimescale: 600) : .zero
+            // `transport.time` ticks during playback: only the open itself reads it, so the body does not
+            var start = CMTime.zero
+            if withTime {
+                let seconds = transport.time
+                if seconds.isFinite && seconds > 0 { start = CMTime(seconds: seconds, preferredTimescale: 600) }
+            }
             return .video(url: HeroSource.resolve(hosted), name: video.name, start: start)
         }
         return nil

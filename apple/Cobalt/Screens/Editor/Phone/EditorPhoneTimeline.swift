@@ -7,8 +7,9 @@ import SwiftUI
 /// selects a clip and a tap on nothing deselects; a long press lifts a clip to reorder it. The overlay lane sits above the main
 /// lane; `+` at the right adds a clip.
 ///
-/// Nothing here scrolls: every block is placed at `centre + scale.x(its time - the playhead's time)`, so playing, scrubbing and
-/// seeking all move the same way and only the blocks on screen are built.
+/// Nothing here scrolls: every block is placed at `centre + scale.x(its time)` and the whole strip is shifted left by the
+/// playhead (`EditorPhoneTrackStrip`), so playing, scrubbing and seeking all move the same way. Only the strip's offset follows
+/// the playhead; the blocks are culled per screen width, so the set that is built changes rarely.
 struct EditorPhoneTimeline: View {
     let session: EditSession
     @Binding var scale: TimelineScale
@@ -50,8 +51,7 @@ struct EditorPhoneTimeline: View {
                 .contentShape(Rectangle())
                 .onTapGesture { session.selection = .none }
                 .accessibilityHidden(true)
-            overlayLane(width: width)
-            mainLane(width: width)
+            EditorPhoneTrackStrip(session: session, scale: scale, width: width, reorder: $reorder)
             playhead(width: width)
             addButton(width: width)
         }
@@ -62,88 +62,6 @@ struct EditorPhoneTimeline: View {
         .motion(Motion.rows, value: reorder?.target)
     }
 
-    // MARK: where things sit
-
-    /// The screen x of a time on the timeline.
-    private func x(_ seconds: Double, width: CGFloat) -> CGFloat {
-        width / 2 + scale.x(seconds - session.playheadSeconds)
-    }
-
-    private func onScreen(start: CGFloat, length: CGFloat, width: CGFloat) -> Bool {
-        start + length > -48 && start < width + 48
-    }
-
-    // MARK: lanes
-
-    private func mainLane(width: CGFloat) -> some View {
-        let spans = session.mainSpans
-        let rest = restStarts(spans)
-        return ZStack(alignment: .topLeading) {
-            ForEach(Array(session.timeline.main.enumerated()), id: \.element.id) { index, clip in
-                if spans.indices.contains(index) {
-                    mainBlock(index: index, clip: clip, span: spans[index], rest: rest, width: width)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func mainBlock(index: Int, clip: EditClip, span: TimelineSpan, rest: [String: Double], width: CGFloat) -> some View {
-        let restX = x(rest[span.id] ?? span.start, width: width)
-        let homeX = x(span.start, width: width)
-        let blockWidth = max(2, scale.x(span.length) - 2)
-        if reorder?.id == clip.id || onScreen(start: min(restX, homeX), length: blockWidth, width: width) {
-            EditorPhoneMainClip(
-                session: session, index: index, clip: clip, span: span, scale: scale, restX: restX, homeX: homeX,
-                reorder: $reorder)
-        }
-    }
-
-    /// Where each main clip starts (seconds) when the one being dragged is taken out and put in at its target.
-    private func restStarts(_ spans: [TimelineSpan]) -> [String: Double] {
-        var starts: [String: Double] = [:]
-        guard let drag = reorder, let dragged = spans.first(where: { $0.id == drag.id }) else {
-            for span in spans { starts[span.id] = span.start }
-            return starts
-        }
-        var order = spans.filter { $0.id != drag.id }
-        order.insert(dragged, at: min(max(0, drag.target), order.count))
-        var cursor = 0.0
-        for span in order {
-            starts[span.id] = cursor
-            cursor += span.length
-        }
-        return starts
-    }
-
-    private func overlayLane(width: CGFloat) -> some View {
-        let spans = session.overlaySpans
-        return ZStack(alignment: .topLeading) {
-            if session.timeline.overlay.isEmpty {
-                Text(Copy.Editor.trackOverlay)
-                    .font(Font.cobalt(10.5, .regular, relativeTo: .caption2))
-                    .foregroundStyle(CobaltColor.caption)
-                    .padding(.leading, 14)
-                    .padding(.top, Self.overlayY + 7)
-                    .accessibilityHidden(true)
-            }
-            ForEach(Array(session.timeline.overlay.enumerated()), id: \.element.id) { index, overlay in
-                if spans.indices.contains(index) {
-                    overlayBlock(index: index, overlay: overlay, span: spans[index], width: width)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func overlayBlock(index: Int, overlay: EditOverlay, span: TimelineSpan, width: CGFloat) -> some View {
-        let startX = x(span.start, width: width)
-        if onScreen(start: startX, length: max(2, scale.x(span.length)), width: width) {
-            EditorPhoneOverlayClip(
-                session: session, index: index, overlay: overlay, span: span, scale: scale, originX: startX)
-        }
-    }
-
     // MARK: playhead and +
 
     private func playhead(width: CGFloat) -> some View {
@@ -151,29 +69,9 @@ struct EditorPhoneTimeline: View {
             TimelinePlayhead(height: Self.height, color: .white, showsHead: false)
                 .shadow(color: .black.opacity(0.45), radius: 1.5)
                 .offset(x: width / 2 - TimelinePlayhead.headWidth / 2)
-            playheadAccessibility
+            EditorPhonePlayheadAccessibility(session: session, height: Self.height)
                 .offset(x: width / 2 - Metrics.hit / 2)
         }
-    }
-
-    /// An invisible 44 pt element on the playhead: adjustable by one second, with actions for one frame.
-    private var playheadAccessibility: some View {
-        Color.clear
-            .frame(width: Metrics.hit, height: Self.height)
-            .allowsHitTesting(false)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Copy.Editor.a11yPlayhead)
-            .accessibilityValue(Copy.Editor.a11yPlayheadValue(
-                Copy.Editor.clockTenths(session.playheadSeconds), of: Copy.Editor.clockTenths(session.timing.seconds)))
-            .accessibilityAdjustableAction { direction in
-                switch direction {
-                case .increment: session.step(frames: session.timing.fps)
-                case .decrement: session.step(frames: -session.timing.fps)
-                @unknown default: break
-                }
-            }
-            .accessibilityAction(named: Copy.Editor.backOneFrame) { session.step(frames: -1) }
-            .accessibilityAction(named: Copy.Editor.forwardOneFrame) { session.step(frames: 1) }
     }
 
     private func addButton(width: CGFloat) -> some View {
@@ -252,6 +150,151 @@ struct EditorPhoneTimeline: View {
     }
 }
 
+// MARK: - the sliding strip
+
+/// Shifts the tracks left by the playhead: the only part of the timeline that changes on every frame while playing.
+private struct EditorPhoneTrackStrip: View {
+    let session: EditSession
+    let scale: TimelineScale
+    let width: CGFloat
+    @Binding var reorder: ReorderDrag?
+
+    var body: some View {
+        let shift = scale.x(session.playheadSeconds)
+        let page = width > 0 ? Int((shift / width).rounded(.down)) : 0
+        EditorPhoneTracks(session: session, scale: scale, width: width, page: page, reorder: $reorder)
+            .offset(x: -shift)
+    }
+}
+
+/// The overlay and main lanes at their strip positions; does not read the playhead (`page` is the screen it is on).
+private struct EditorPhoneTracks: View {
+    let session: EditSession
+    let scale: TimelineScale
+    let width: CGFloat
+    let page: Int
+    @Binding var reorder: ReorderDrag?
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            overlayLane(width: width)
+            mainLane(width: width)
+        }
+    }
+
+    // MARK: where things sit
+
+    /// The x of a time on the strip (the screen x when the playhead is at 0).
+    private func x(_ seconds: Double, width: CGFloat) -> CGFloat {
+        width / 2 + scale.x(seconds)
+    }
+
+    /// Coarse culling: from one screen width before the playhead's page to two after it. That always covers what is visible
+    /// (48 pt margin included) and changes only when the playhead crosses a page.
+    private func onScreen(start: CGFloat, length: CGFloat, width: CGFloat) -> Bool {
+        let low = CGFloat(page - 1) * width
+        let high = CGFloat(page + 3) * width
+        return start + length > low && start < high
+    }
+
+    // MARK: lanes
+
+    private func mainLane(width: CGFloat) -> some View {
+        let spans = session.mainSpans
+        let rest = restStarts(spans)
+        return ZStack(alignment: .topLeading) {
+            ForEach(Array(session.timeline.main.enumerated()), id: \.element.id) { index, clip in
+                if spans.indices.contains(index) {
+                    mainBlock(index: index, clip: clip, span: spans[index], rest: rest, width: width)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func mainBlock(index: Int, clip: EditClip, span: TimelineSpan, rest: [String: Double], width: CGFloat) -> some View {
+        let restX = x(rest[span.id] ?? span.start, width: width)
+        let homeX = x(span.start, width: width)
+        let blockWidth = max(2, scale.x(span.length) - 2)
+        if reorder?.id == clip.id || onScreen(start: min(restX, homeX), length: blockWidth, width: width) {
+            EditorPhoneMainClip(
+                session: session, index: index, clip: clip, span: span, scale: scale, restX: restX, homeX: homeX,
+                reorder: $reorder)
+        }
+    }
+
+    /// Where each main clip starts (seconds) when the one being dragged is taken out and put in at its target.
+    private func restStarts(_ spans: [TimelineSpan]) -> [String: Double] {
+        var starts: [String: Double] = [:]
+        guard let drag = reorder, let dragged = spans.first(where: { $0.id == drag.id }) else {
+            for span in spans { starts[span.id] = span.start }
+            return starts
+        }
+        var order = spans.filter { $0.id != drag.id }
+        order.insert(dragged, at: min(max(0, drag.target), order.count))
+        var cursor = 0.0
+        for span in order {
+            starts[span.id] = cursor
+            cursor += span.length
+        }
+        return starts
+    }
+
+    private func overlayLane(width: CGFloat) -> some View {
+        let spans = session.overlaySpans
+        return ZStack(alignment: .topLeading) {
+            if session.timeline.overlay.isEmpty {
+                Text(Copy.Editor.trackOverlay)
+                    .font(Font.cobalt(10.5, .regular, relativeTo: .caption2))
+                    .foregroundStyle(CobaltColor.caption)
+                    .padding(.leading, 14)
+                    .padding(.top, EditorPhoneTimeline.overlayY + 7)
+                    .accessibilityHidden(true)
+            }
+            ForEach(Array(session.timeline.overlay.enumerated()), id: \.element.id) { index, overlay in
+                if spans.indices.contains(index) {
+                    overlayBlock(index: index, overlay: overlay, span: spans[index], width: width)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func overlayBlock(index: Int, overlay: EditOverlay, span: TimelineSpan, width: CGFloat) -> some View {
+        let startX = x(span.start, width: width)
+        if onScreen(start: startX, length: max(2, scale.x(span.length)), width: width) {
+            EditorPhoneOverlayClip(
+                session: session, index: index, overlay: overlay, span: span, scale: scale, originX: startX)
+        }
+    }
+}
+
+/// An invisible 44 pt element on the playhead: adjustable by one second, with actions for one frame. Its own view, so the
+/// value it reads does not redraw the timeline.
+private struct EditorPhonePlayheadAccessibility: View {
+    let session: EditSession
+    let height: CGFloat
+
+    var body: some View {
+        Color.clear
+            .frame(width: Metrics.hit, height: height)
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Copy.Editor.a11yPlayhead)
+            .accessibilityValue(Copy.Editor.a11yPlayheadValue(
+                Copy.Editor.clockTenths(session.playheadSeconds), of: Copy.Editor.clockTenths(session.timing.seconds)))
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: session.step(frames: session.timing.fps)
+                case .decrement: session.step(frames: -session.timing.fps)
+                @unknown default: break
+                }
+            }
+            .accessibilityAction(named: Copy.Editor.backOneFrame) { session.step(frames: -1) }
+            .accessibilityAction(named: Copy.Editor.forwardOneFrame) { session.step(frames: 1) }
+    }
+}
+
 /// The light tick on a clip edge while scrubbing, in its own modifier to keep the timeline's body simple.
 private struct EditorPhoneTimelineHaptics: ViewModifier {
     let edgeTick: Int
@@ -294,7 +337,7 @@ struct EditorPhoneMainClip: View {
         }
         .frame(width: width, height: height, alignment: .topLeading)
         .scaleEffect(lifted && !reduceMotion ? 1.04 : 1)
-        .shadow(color: .black.opacity(lifted ? 0.4 : 0), radius: 8, y: 3)
+        .shadow(color: .black.opacity(lifted ? 0.4 : 0), radius: lifted ? 8 : 0, y: lifted ? 3 : 0)
         .opacity(lifted ? 0.94 : 1)
         .offset(x: lifted ? homeX + (reorder?.translation ?? 0) : restX + 1, y: EditorPhoneTimeline.mainY)
         .zIndex(lifted ? 5 : (selected ? 2 : 1))

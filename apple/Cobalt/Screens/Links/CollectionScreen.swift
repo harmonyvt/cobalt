@@ -97,9 +97,12 @@ struct CollectionScreen: View {
             }
             .refreshable { await store.refresh() }
         } else {
+            // no collections line inside a collection: only the private links are looked up
+            let lookup = LinkRowLookup(store: store, collectionsEnabled: false)
+            let copiedID = controller.copiedID
             List {
                 ForEach(links) { link in
-                    LinkItemRow(link: link, collection: collection, controller: controller)
+                    LinkItemRow(link: link, collection: collection, controller: controller, lookup: lookup, copied: copiedID == link.id)
                 }
             }
             .listStyle(.plain)

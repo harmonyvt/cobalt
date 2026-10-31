@@ -75,7 +75,7 @@ private struct IndeterminateBar: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(ink.track)
                 if moving {
-                    TimelineView(.animation) { context in
+                    TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
                         let t = context.date.timeIntervalSinceReferenceDate
                         // one pass every 1.8 s, easing in and out of each end
                         let phase = (t.truncatingRemainder(dividingBy: 1.8)) / 1.8
@@ -209,7 +209,7 @@ private struct PulseHalo: View {
     let size: CGFloat
 
     var body: some View {
-        TimelineView(.animation) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             let phase = t.truncatingRemainder(dividingBy: 1.6) / 1.6
             let out = 1 - pow(1 - phase, 2)

@@ -323,9 +323,8 @@ struct StageThumb: View {
         ZStack(alignment: .bottomTrailing) {
             Rectangle().fill(FrameGradient.fill(0))
             if let url = item?.thumbnail {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image { image.resizable().scaledToFill() }
-                }
+                // always a picture (thumb, poster or the image itself); cached by the library's loader
+                RemoteStill(poster: RemotePoster(url: url, isVideo: false), maxPixel: max(120, Int(size * 3)))
             }
             if item?.kind == .video {
                 Image(systemName: Symbol.stagePlay)
