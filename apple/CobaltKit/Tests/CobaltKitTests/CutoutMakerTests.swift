@@ -1,4 +1,5 @@
 import CoreGraphics
+import ImageIO
 import Foundation
 import Testing
 @testable import CobaltKit
@@ -97,7 +98,9 @@ struct CutoutSessionTests {
         var summary = full
         summary.timeline = nil
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cutout-\(UUID().uuidString)", isDirectory: true)
-        let cache = EditSourceCache(directory: dir, client: { [ctx = h.ctx] in ctx.client }, provider: { _ in nil })
+        let cache = EditSourceCache(                                 // real files: the preview download waits on the harness clock
+            directory: dir, client: { [ctx = h.ctx] in ctx.client },
+            provider: { await PreviewEditorMedia.shared.url(forFile: $0) })
         let session = EditSession(
             project: summary, timeline: try #require(full.timeline), sources: named, context: h.ctx, cache: cache,
             onProject: { _ in }, onRender: { _ in })
@@ -120,7 +123,9 @@ struct CutoutSessionTests {
         var summary = full
         summary.timeline = nil
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cutout-\(UUID().uuidString)", isDirectory: true)
-        let cache = EditSourceCache(directory: dir, client: { [ctx = h.ctx] in ctx.client }, provider: { _ in nil })
+        let cache = EditSourceCache(                                 // real files: the preview download waits on the harness clock
+            directory: dir, client: { [ctx = h.ctx] in ctx.client },
+            provider: { await PreviewEditorMedia.shared.url(forFile: $0) })
         let session = EditSession(
             project: summary, timeline: try #require(full.timeline), sources: named, context: h.ctx, cache: cache,
             onProject: { _ in }, onRender: { _ in })

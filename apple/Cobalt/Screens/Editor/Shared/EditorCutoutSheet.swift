@@ -265,12 +265,6 @@ struct EditorCutoutSheet: View {
     }
 }
 
-/// Moves a decoded picture to and from the preview's background task.
-private final class ImageBox: @unchecked Sendable {
-    let image: CGImage
-    init(_ image: CGImage) { self.image = image }
-}
-
 /// The grey and white squares behind a transparent picture.
 struct Checkerboard: View {
     var size: CGFloat = 10

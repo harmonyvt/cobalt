@@ -105,7 +105,7 @@ struct EditLayersComposerTests {
 @MainActor
 struct EditLayersSessionTests {
     /// A session on the preview's "beach day edit" (dance.gif on layer 0 at 3 s for 3 s, frames 90...180).
-    private struct Rig {
+    @MainActor private struct Rig {
         let h: Harness
         let session: EditSession
         let sources: [String: EditSource]
