@@ -220,11 +220,10 @@ private struct LibraryContent: View {
         let holding = holdsRows(phase)
         // Ticks a search, a filter or a delete took off screen are neither counted nor shared.
         let pickedCount = controller.selecting ? controller.pickedRows(rows).count : 0
-        content(rows: holding ? heldRows : rows, phase: holding ? .rows : phase, shareIndex: shareIndex, held: holding)
-            .onChange(of: phase == .rows ? rows.map(\.id) : []) { _, ids in
-                if !ids.isEmpty { heldRows = rows }
-            }
-            .onChange(of: library.showingHidden) { heldRows = [] }
+        let shownRows: [LibraryRow] = holding ? heldRows : rows
+        let shownPhase: LibraryPhase = holding ? .rows : phase
+        content(rows: shownRows, phase: shownPhase, shareIndex: shareIndex, held: holding)
+            .modifier(LibraryHoldRows(rows: rows, showing: phase == .rows, album: library.showingHidden, held: $heldRows))
             .navigationTitle(Copy.library)
             #if os(iOS)
             // An inline title: the large title grew and shrank with the scroll (and with a pull to refresh) while the
@@ -598,6 +597,24 @@ private struct LibraryContent: View {
         }
         // the iPad and Mac's table has only the selection to show; every other view scrolls to it and lights it
         if tier == .compact || library.viewMode == .mosaic { controller.reveal = LibraryReveal(id: id) }
+    }
+}
+
+/// Remembers the rows on screen (whenever there are any) as the ones a search in flight keeps showing; forgets them when
+/// the hidden album opens or closes. Its own modifier: the screen's body chain is at the type checker's limit.
+private struct LibraryHoldRows: ViewModifier {
+    let rows: [LibraryRow]
+    let showing: Bool
+    let album: Bool
+    @Binding var held: [LibraryRow]
+
+    func body(content: Content) -> some View {
+        let ids: [String] = showing ? rows.map(\.id) : []
+        content
+            .onChange(of: ids) { _, now in
+                if !now.isEmpty { held = rows }
+            }
+            .onChange(of: album) { held = [] }
     }
 }
 
