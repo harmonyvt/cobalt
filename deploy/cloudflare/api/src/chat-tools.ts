@@ -290,7 +290,8 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
                           {
                               ...rec,
                               score: Math.round(h.score * 1000) / 1000,
-                              why: why.get(h.post_key) ?? [],
+                              // the said search names it carries first (section 48.3)
+                              why: [...new Set([...r.names.carried(h.post_key), ...(why.get(h.post_key) ?? [])])],
                               // where it is said (section 47): the lines with their times, or the moment that matched
                               ...(r.said.has(h.post_key) ? { said: r.said.get(h.post_key)!.map((x) => ({ at: x.start, end: x.end, text: x.text, match: x.match })) } : {}),
                               ...(h.indexed ? {} : { indexed: false }),

@@ -1002,6 +1002,8 @@ describe("GET /capabilities", () => {
                 share_set_edit: false,
                 // section 37: migration 0025 is applied in the tests
                 hidden: true,
+                // section 48: migration 0031 is applied in the tests
+                names: true,
                 chat: false,
                 // no STAGE_BASE_URL in this world's env (section 30)
                 stage: false,

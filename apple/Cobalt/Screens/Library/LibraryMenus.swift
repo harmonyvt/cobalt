@@ -87,6 +87,10 @@ struct LibraryMenuItems: View {
             }
         }
         Button(Copy.Library2.rename, systemImage: Symbol.Library.rename) { controller.renaming = item }
+        // "this is…": the post as an example of a search name, or the first example of a new one (APP-API-CONTRACT 48.6)
+        if controller.model.capabilities.names, !row.isHidden, let postKey = item.post?.id {
+            NamesPostMenu(model: controller.model, postKey: postKey, showStatus: controller.showStatus)
+        }
         if controller.model.capabilities.hidden {
             let targets = controller.statusTargets(row, also: selected)
             if row.isHidden {
@@ -285,6 +289,8 @@ struct LibrarySortMenu: View {
     var offersOffline = true
     /// False on a server that has no photos or galleries: the `kind` sort key and the `kind` list are not offered.
     var offersKinds = true
+    /// Opens library › names (APP-API-CONTRACT 48.6); nil on a server without `features.names`, which lists no "names".
+    var openNames: (@MainActor () -> Void)?
 
     /// Dates and sizes first-largest; a title reads a to z; kinds run galleries, photos, videos, webps.
     static func pick(_ key: LibrarySortKey, current: LibrarySort) -> LibrarySort {
@@ -329,6 +335,11 @@ struct LibrarySortMenu: View {
                         }
                     }
                     .pickerStyle(.inline)
+                }
+            }
+            if let openNames {
+                Section {
+                    Button(Copy.Names.menuItem, systemImage: Symbol.Names.menu, action: openNames)
                 }
             }
         } label: {

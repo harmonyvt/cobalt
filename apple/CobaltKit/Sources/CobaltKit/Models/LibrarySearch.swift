@@ -34,13 +34,19 @@ public struct LibrarySearchResult: Sendable, Equatable {
     public var indexed: Int?
     /// `index.pending`: posts whose vector is missing or out of date (found by name only, for now); nil when absent.
     public var pending: Int?
+    /// The search names the query said and the server used (APP-API-CONTRACT 48.3); empty with `names=0`, on a server
+    /// without names, or when none was said.
+    public var names: [SearchNameRef]
 
-    public init(query: String, model: String? = nil, hits: [Hit], indexed: Int? = nil, pending: Int? = nil) {
+    public init(
+        query: String, model: String? = nil, hits: [Hit], indexed: Int? = nil, pending: Int? = nil, names: [SearchNameRef] = []
+    ) {
         self.query = query
         self.model = model
         self.hits = hits
         self.indexed = indexed
         self.pending = pending
+        self.names = names
     }
 
     /// The posts in score order.
@@ -89,12 +95,15 @@ struct LibrarySearchWire: Decodable {
     var model: String?
     var posts: [Lossy<Scored>]?
     var index: Index?
+    /// The names said and used (48.3); absent on an older server.
+    var names: [Lossy<NamesWire.Ref>]?
 
     func result(asked query: String) -> LibrarySearchResult {
         LibrarySearchResult(
             query: self.query ?? query, model: model,
             hits: (posts ?? []).compactMap(\.value).map { .init(post: $0.post, score: $0.score, said: $0.said) },
-            indexed: index?.posts, pending: index?.pending)
+            indexed: index?.posts, pending: index?.pending,
+            names: (names ?? []).compactMap(\.value).map { SearchNameRef(id: $0.id, name: $0.name) })
     }
 
     /// Decodes an answer body (snake case, dates in ms) the way the HTTP client does.

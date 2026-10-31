@@ -198,7 +198,11 @@ type Route =
     | { name: "status" }
     | { name: "hiddenRules" }
     | { name: "hiddenPreview" }
-    | { name: "hiddenRule"; id: string };
+    | { name: "hiddenRule"; id: string }
+    | { name: "names" }
+    | { name: "namesPreview" }
+    | { name: "namesPost" }
+    | { name: "nameItem"; id: string };
 
 const ALLOWED: Record<Route["name"], string[]> = {
     page: ["GET", "HEAD"],
@@ -225,6 +229,10 @@ const ALLOWED: Record<Route["name"], string[]> = {
     hiddenRules: ["GET", "POST"],
     hiddenPreview: ["POST"],
     hiddenRule: ["PATCH", "DELETE"],
+    names: ["GET", "POST"],
+    namesPreview: ["POST"],
+    namesPost: ["GET"],
+    nameItem: ["PATCH", "DELETE"],
 };
 
 export function matchRoute(pathname: string): Route | null {
@@ -240,7 +248,11 @@ export function matchRoute(pathname: string): Route | null {
     if (pathname === "/api/library/status") return { name: "status" };
     if (pathname === "/api/library/hidden/rules") return { name: "hiddenRules" };
     if (pathname === "/api/library/hidden/rules/preview") return { name: "hiddenPreview" };
+    if (pathname === "/api/library/names") return { name: "names" };
+    if (pathname === "/api/library/names/preview") return { name: "namesPreview" };
+    if (pathname === "/api/library/names/post") return { name: "namesPost" };
     let m: RegExpExecArray | null;
+    if ((m = /^\/api\/library\/names\/([0-9A-Za-z]{16})$/.exec(pathname))) return { name: "nameItem", id: m[1]! };
     if ((m = /^\/api\/library\/links\/([0-9]{19})$/.exec(pathname))) return { name: "linkEdit", id: m[1]! };
     if ((m = /^\/api\/library\/hidden\/rules\/([0-9A-Za-z]{16})$/.exec(pathname))) return { name: "hiddenRule", id: m[1]! };
     if ((m = /^\/api\/library\/private\/(items\/[0-9A-Za-z]{16}|sets\/[0-9]{10,24})$/.exec(pathname))) {
@@ -347,6 +359,21 @@ export async function handleLibrary(request: Request, env: Env, deps?: Partial<L
                 return request.method === "DELETE"
                     ? relayResponse(await callApi(ctx, `/hidden/rules/${route.id}`, { method: "DELETE" }), (b) => b)
                     : await relayBody(ctx, request, `/hidden/rules/${route.id}`, "PATCH");
+            case "names":
+                return request.method === "GET"
+                    ? relayResponse(await callApi(ctx, "/library/names", { method: "GET" }), (b) => b)
+                    : await relayBody(ctx, request, "/library/names", "POST");
+            case "namesPreview":
+                return await relayBody(ctx, request, "/library/names/preview", "POST");
+            case "namesPost": {
+                const key = searchParams.get("key") ?? "";
+                if (!key || key.length > 2000) return err(400, "error.library.bad_request");
+                return relayResponse(await callApi(ctx, `/library/names/post?${new URLSearchParams({ key })}`, { method: "GET" }), (b) => b);
+            }
+            case "nameItem":
+                return request.method === "DELETE"
+                    ? relayResponse(await callApi(ctx, `/library/names/${route.id}`, { method: "DELETE" }), (b) => b)
+                    : await relayBody(ctx, request, `/library/names/${route.id}`, "PATCH");
         }
     } catch {
         return err(500, "error.library.server");
@@ -648,6 +675,9 @@ async function relayResponse(res: Response | null, map: (b: Record<string, unkno
     if (body.status === "error" || res.status >= 400) {
         const e = body.error;
         const code = isObject(e) && typeof e.code === "string" ? e.code : "error.library.upstream";
+        // error.names.taken (section 48.4) names the clashing word, in the error or beside it
+        const word = isObject(e) && typeof e.word === "string" ? e.word : typeof body.word === "string" ? body.word : null;
+        if (word !== null && code === "error.names.taken") return json(res.status, { status: "error", error: { code, word } });
         // A finished-but-failed job is a 200 upstream; keep the status, the body carries the error.
         return err(res.status, code);
     }
@@ -698,6 +728,11 @@ async function search(ctx: Ctx, q: URLSearchParams): Promise<Response> {
         if (n === null || n < 1 || n > MAX_SEARCH_LIMIT) return err(400, "error.library.bad_request");
         out.set("limit", String(n));
     }
+    // names=0 turns the owner's search names off for this search (section 48.3); no other value is forwarded
+    if (q.has("names")) {
+        if (q.get("names") !== "0") return err(400, "error.library.bad_request");
+        out.set("names", "0");
+    }
     out.set("v", "3");
     const res = await callApi(ctx, `/library/search?${out}`, { method: "GET" });
     return relayResponse(res, (b) => {
@@ -717,6 +752,7 @@ async function search(ctx: Ctx, q: URLSearchParams): Promise<Response> {
             model: typeof b.model === "string" ? b.model : null,
             posts: posts.length,
             items,
+            ...(Array.isArray(b.names) ? { names: b.names.filter(isObject).map((n) => ({ id: orNull(n.id, isStr), name: orNull(n.name, isStr) })) } : {}),
             index: {
                 posts: typeof index.posts === "number" ? index.posts : null,
                 pending: typeof index.pending === "number" ? index.pending : 0,
@@ -753,6 +789,7 @@ function searchItem(p: Record<string, unknown>, f: Record<string, unknown>): Rec
         visibility_toggle: f.visibility_toggle === true,
         post_key: orNull(p.id, isStr),
         score: isNum(p.score) ? p.score : null,
+        ...(Array.isArray(p.why) ? { why: p.why.filter(isStr) } : {}),
     };
 }
 

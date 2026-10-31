@@ -344,6 +344,57 @@ dialog.sheet.wide { width: min(760px, calc(100vw - 24px)); }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chips span { font-size: 11px; padding: 2px 9px; border-radius: 99px; box-shadow: 0 0 0 1px var(--input-border) inset; letter-spacing: .03em; }
 @media (pointer: coarse), (max-width: 640px) { .near button { min-height: 44px; } .mapwrap .tools button { min-height: 44px; } }
+/* search names (APP-API-CONTRACT.md section 48) */
+.nv { display: grid; gap: 12px; }
+.nv .nrow { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--button-stroke); }
+.nv .nrow:first-of-type { border-top: 0; }
+.nv .nrow .nmain { flex: 1 1 220px; min-width: 0; display: grid; gap: 1px; text-align: left; background: transparent; box-shadow: none; padding: 4px 0; min-height: 0; justify-content: start; font-weight: 400; }
+.nv .nrow .nmain b { font-size: 14px; }
+.nv .nrow .nmain span { font-size: 12px; color: var(--gray); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nv .nhead { display: flex; gap: 8px 12px; align-items: baseline; flex-wrap: wrap; justify-content: space-between; }
+.nv .nbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.nv .nbar .grow { flex: 1 1 auto; }
+.nv label.f { display: grid; gap: 4px; font-size: 12px; color: var(--gray); }
+.nv input[type=text], .nv textarea, .nv select { background: var(--page); color: var(--secondary); border: 0; border-radius: var(--radius); box-shadow: 0 0 0 1px var(--input-border) inset; padding: 8px 10px; min-height: 40px; width: 100%; font: inherit; }
+.nv textarea { min-height: 72px; resize: vertical; }
+.nv input.big { font-size: 17px; font-weight: 600; }
+.nv input[type=range] { width: 100%; accent-color: var(--blue); }
+.nv .ends { display: flex; justify-content: space-between; font-size: 11px; color: var(--gray); }
+.nv .lbl { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--gray); }
+.nv .lbl b { color: var(--secondary); font-weight: 500; }
+.nv .nchips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.nv .nchips .chip { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; padding: 0 4px 0 10px; min-height: 28px; border-radius: 99px; box-shadow: 0 0 0 1px var(--input-border) inset; }
+.nv .nchips .chip button { min-height: 24px; width: 24px; padding: 0; border-radius: 50%; background: transparent; box-shadow: none; color: var(--gray); }
+.nv .nchips input { width: 150px; min-height: 32px; padding: 4px 10px; }
+.nv .strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; min-height: 40px; align-items: center; }
+.nth { position: relative; width: 56px; height: 56px; flex: none; border-radius: 9px; overflow: hidden; background: var(--track); display: grid; place-items: center; color: var(--gray); font-size: 10px; text-transform: uppercase; }
+.nth img, .nth video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.nv .strip button.nth { padding: 0; min-height: 0; }
+.nv .who { display: grid; gap: 2px; }
+.nv .who .it { display: flex; align-items: center; gap: 10px; padding: 5px 6px; border-radius: 10px; text-align: left; justify-content: flex-start; background: transparent; box-shadow: none; font-weight: 400; min-height: 0; width: 100%; }
+.nv .who .it:hover { background: var(--button-hover); }
+.nv .who .it .nth { width: 40px; height: 40px; border-radius: 8px; }
+.nv .who .it .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.nv .who .it .sc { font-variant-numeric: tabular-nums; color: var(--gray); font-size: 12px; }
+.nv .who .it.out { opacity: .55; }
+.nv .tag { font-size: 10.5px; border-radius: 99px; padding: 1px 8px; flex: none; box-shadow: 0 0 0 1px currentColor inset; }
+.nv .tag.yes { color: var(--green); }
+.nv .tag.no { color: var(--red); }
+.nv .cutline { display: flex; align-items: center; gap: 8px; color: var(--blue); font-size: 11px; margin: 4px 0; }
+.nv .cutline::before, .nv .cutline::after { content: ""; flex: 1; border-top: 1px dashed var(--blue); }
+.nv .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 560px) { .nv .cols { grid-template-columns: 1fr; } }
+.nv .col { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.nv .col h4 { margin: 0; font-size: 12px; font-weight: 500; color: var(--gray); }
+.nv .res { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.nv .res .nth { width: 32px; height: 32px; border-radius: 6px; }
+.nv .res .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nv .res .s, .nv .res .why { font-size: 11px; color: var(--gray); }
+.nv .res .why { color: var(--blue); }
+.nrow-detail { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.nrow-detail .tag { font-size: 11px; border-radius: 99px; padding: 2px 9px; box-shadow: 0 0 0 1px var(--input-border) inset; background: transparent; min-height: 0; font-weight: 400; }
+.nrow-detail button { min-height: 28px; font-size: 11.5px; padding: 0 9px; border-radius: 99px; }
+.tact select { min-height: 36px; font-size: 12px; border-radius: var(--radius); border: 0; background: var(--page); color: inherit; box-shadow: 0 0 0 1px var(--input-border) inset; padding: 0 8px; max-width: 130px; }
 </style>
 </head>
 <body>
@@ -422,6 +473,7 @@ dialog.sheet.wide { width: min(760px, calc(100vw - 24px)); }
           <button type="button" data-v="map" aria-pressed="false">sky map</button>
           <button type="button" data-v="links" aria-pressed="false">links</button>
           <button type="button" data-v="emotes" aria-pressed="false">emotes</button>
+          <button type="button" data-v="names" id="namesTab" aria-pressed="false" hidden>names</button>
         </div>
         <div class="status" id="mapStatus" role="status" aria-live="polite"></div>
       </div>
@@ -456,6 +508,7 @@ dialog.sheet.wide { width: min(760px, calc(100vw - 24px)); }
         <div class="more" id="emoteMore" hidden><button id="emoteMoreBtn" type="button">more</button></div>
         <div id="emoteEnd" style="height:1px"></div>
       </div>
+      <div id="namesView" class="nv" hidden></div>
       <div id="gridView">
         <div class="grid" id="grid"></div>
         <div class="empty" id="gridNote" role="status" aria-live="polite">loading your library…</div>
@@ -470,6 +523,7 @@ dialog.sheet.wide { width: min(760px, calc(100vw - 24px)); }
   <div class="in">
     <div class="head"><h2 id="sheetTitle">post</h2><button id="sheetClose" type="button" aria-label="close">close</button></div>
     <section id="sheetPost" aria-label="post"></section>
+    <section id="sheetNames" aria-label="names" hidden><h3>names</h3><div id="sheetNamesBody"></div></section>
     <section id="sheetIndex" aria-label="search index"><h3>search index</h3><div id="sheetIndexBody"></div></section>
     <section id="sheetEmb" aria-label="embedding"><h3>embedding</h3><div id="sheetEmbBody"></div></section>
   </div>
@@ -596,6 +650,10 @@ var MESSAGES = {
   "error.hidden.bad_rule": "that rule isn't valid. check the value.",
   "error.hidden.too_many": "too many rules. delete one first.",
   "error.hidden.not_found": "that rule is gone.",
+  "error.names.bad": "that name doesn't fit. check the word, the meaning and the also-called words.",
+  "error.names.not_found": "that name is gone.",
+  "error.names.taken": "another name already uses that word.",
+  "error.names.too_many": "too many names, or too many examples. remove one first.",
   "error.private.not_toggleable": "that one can't have a link.",
   "error.library.already_public": "that already has a public link.",
   "error.library.not_toggleable": "that file is always public. delete it to remove the link.",
@@ -1111,6 +1169,7 @@ var EMPTY = {
   studio: "no open studios.",
   hidden: "nothing is hidden."
 };
+var N = { on: false, list: [], loaded: false, loading: false, error: "", confirmDel: null, busy: false, ed: null, posts: {}, pseq: 0, ptimer: 0, dseq: 0 };
 var G = { sel: null, selConfirm: null, selMenu: false, features: { hidden: false }, filter: "all", items: [], studios: [], next: null, usage: null, seq: 0, confirm: null, confirmAct: "delete", busy: {}, loading: false, error: false };
 
 function placeholder(icon, label) {
@@ -1231,6 +1290,7 @@ function tileFor(e) {
       else if (pub && e.it.url) copyButtons(e.it.url, "data-ga").forEach(function (b) { acts.push(b); });
       if (!e.it.hidden && e.it.visibility_toggle && (isVideoType(t) || t === "image/gif")) acts.push(h("button", { type: "button", "data-ga": "studio", disabled: busy, text: "open in studio", onclick: function () { privateToStudio(e.it); } }));
     }
+    if (e.t === "item" && N.on && e.it.post_key && !e.it.hidden) acts.push(thisIsSelect(e.it.post_key, { files: [e.it], title: e.it.custom_title || e.it.name }));
     acts.push(h("button", { type: "button", class: "danger", "data-ga": "del", disabled: busy, text: "delete", onclick: function () { G.confirm = id; G.confirmAct = "delete"; renderGrid(); } }));
     tail = h("div", { class: "tact" }, ...acts);
   }
@@ -1621,10 +1681,11 @@ function openPost(it) {
   if (typeof d.showModal === "function") { if (!d.open) d.showModal(); } else d.setAttribute("open", "");
   loadIndex(it.post_key);
   loadEmb(it.post_key);
+  loadPostNames(it);
 }
 $("sheetClose").onclick = function () { var d = $("sheet"); if (d.close) d.close(); else d.removeAttribute("open"); };
 $("sheet").addEventListener("click", function (e) { if (e.target === $("sheet")) $("sheetClose").onclick(); });
-$("sheet").addEventListener("close", function () { P.seq++; P.key = null; E.seq++; E.key = null; });
+$("sheet").addEventListener("close", function () { N.dseq++; P.seq++; P.key = null; E.seq++; E.key = null; });
 
 /* ---------- links: gallery links, public or private (APP-API-CONTRACT.md sections 24 and 36) ---------- */
 var L = { sets: [], priv: [], loaded: false, loading: false, error: "", filter: "all", sel: null, confirm: false, busy: false, seq: 0 };
@@ -2798,8 +2859,10 @@ async function setView(v) {
   $("gridView").hidden = v !== "grid";
   $("linksView").hidden = v !== "links";
   $("emoteView").hidden = v !== "emotes";
-  $("filtersBar").hidden = v === "links" || v === "emotes";
-  $("searchBar").hidden = v === "links" || v === "emotes";
+  $("namesView").hidden = v !== "names";
+  $("filtersBar").hidden = v === "links" || v === "emotes" || v === "names";
+  $("searchBar").hidden = v === "links" || v === "emotes" || v === "names";
+  if (v === "names") { mapStatus("", ""); hideTip(); openNames(); return; }
   if (v === "emotes") { mapStatus("", ""); hideTip(); openEmotes(); return; }
   if (EMO.dirty) { EMO.dirty = false; refreshGrid(); }
   if (v === "links") { mapStatus("", ""); hideTip(); loadLinks(); return; }
@@ -3230,8 +3293,481 @@ function renderRules() {
     h("div", { class: "rform" }, h("label", { class: "sw" }, ap, h("span", { text: "also hide what's saved" })), h("span", { class: "small muted", id: "rulePreview", "data-ga": "rule-preview", role: "status", "aria-live": "polite", text: previewText() })));
 }
 
+/* ---------- search names (APP-API-CONTRACT.md section 48) ---------- */
+// A name is a word the owner teaches search. Everything here is hidden until GET /api/library/names answers
+// (503 means migration 0031 is not applied: the tab, the "this is..." actions and the detail row stay away).
+function namesOff() {
+  N.on = false; N.ed = null; N.list = [];
+  $("namesTab").hidden = true;
+  $("sheetNames").hidden = true;
+  if (M.view === "names") setView("grid");
+  renderGrid();
+}
+async function nreq(method, path, body) {
+  var init = { method: method };
+  if (body !== undefined) { init.headers = { "content-type": "application/json" }; init.body = JSON.stringify(body); }
+  var r = await lib(path, init, 30000);
+  if (r.status === 503 && (errCode(r) === "error.api.generic" || !errCode(r))) { namesOff(); throw new Fail("off"); }
+  if (r.status >= 200 && r.status < 300 && r.body && r.body.status !== "error") return r.body;
+  var f = new Fail(errCode(r) || "error.library.upstream");
+  f.word = r.body && r.body.error && r.body.error.word || "";
+  throw f;
+}
+function nameError(e) {
+  if (e && e.code === "error.names.taken" && e.word) return "“" + e.word + "” is already used by another name.";
+  return describe(e).text;
+}
+async function probeNames() {
+  try {
+    var b = await nreq("GET", "/api/library/names");
+    N.list = b.names || []; N.loaded = true; N.on = true;
+    $("namesTab").hidden = false;
+    renderGrid();
+  } catch (e) { /* off, or unreachable: the page works without names */ }
+}
+async function loadNames() {
+  N.loading = true; N.error = "";
+  renderNames();
+  try {
+    var b = await nreq("GET", "/api/library/names");
+    N.list = b.names || []; N.loaded = true;
+  } catch (e) { if (e && e.code !== "off" && e.code !== "expired") N.error = describe(e).text; }
+  finally { N.loading = false; renderNames(); }
+}
+function openNames() {
+  if (!N.loaded || !N.ed) loadNames(); else renderNames();
+}
+function putName(n) {
+  var at = -1;
+  for (var i = 0; i < N.list.length; i++) if (N.list[i].id === n.id) at = i;
+  if (at >= 0) N.list[at] = n; else N.list.push(n);
+}
+
+/* thumbnails from the API's post shape (GET /library v=3: files[] with url, poster_url, content_type) */
+function postFile(post) {
+  var fs = post && post.files || [];
+  for (var i = 0; i < fs.length; i++) if (fs[i].poster_url) return fs[i];
+  for (var j = 0; j < fs.length; j++) if (fs[j].url && isImageType(fs[j].content_type)) return fs[j];
+  return fs[0] || null;
+}
+function postTitle(post, key) {
+  var f = postFile(post);
+  return post && (post.custom_title || post.title) || f && f.name || key || "post";
+}
+function pthumb(post, tag) {
+  var wrap = h(tag || "div", { class: "nth", "aria-hidden": "true" });
+  var f = postFile(post);
+  var src = f && (f.poster_url || (f.url && isImageType(f.content_type) ? f.url : null));
+  if (src) {
+    var img = h("img", { alt: "", loading: "lazy", src: src });
+    img.addEventListener("error", function () { img.remove(); wrap.append(h("span", { text: extOf(f.name) || "file" })); });
+    wrap.append(img);
+  } else if (f && f.url && isVideoType(f.content_type)) {
+    wrap.append(h("video", { muted: true, playsinline: true, preload: "metadata", tabindex: "-1", src: f.url + "#t=0.1" }));
+  } else wrap.append(h("span", { text: f ? (extOf(f.name) || "file") : "?" }));
+  return wrap;
+}
+function cachePost(key, post) { if (key && post) N.posts[key] = post; }
+
+/* the names list */
+function renderNames() {
+  var box = $("namesView");
+  if (box.hidden) return;
+  box.textContent = "";
+  if (N.ed) { renderEditor(box); return; }
+  box.append(h("div", { class: "nhead" },
+    h("div", {}, h("h3", { text: "names" }), h("span", { class: "small muted", text: "words you've taught search. a search that says one looks for what it means." })),
+    h("button", { type: "button", class: "primary", "data-ga": "name-new", text: "new name", onclick: function () { newName(); } })));
+  if (N.loading && !N.loaded) box.append(h("div", { class: "small muted", text: "loading…" }));
+  if (N.error) box.append(h("div", { class: "status bad" }, h("span", { text: N.error }), h("button", { type: "button", text: "try again", onclick: loadNames })));
+  if (N.loaded && !N.list.length) box.append(h("div", { class: "small muted", text: "no names yet. make one, or pick “this is…” on a post." }));
+  N.list.forEach(function (n) {
+    var row = h("div", { class: "nrow", "data-name": n.id });
+    row.append(h("button", { type: "button", class: "nmain", "data-ga": "name-open", onclick: function () { editName(n); } },
+      h("b", { text: n.name }), h("span", { text: n.meaning }),
+      h("span", { text: (n.posts || 0) + (n.posts === 1 ? " post" : " posts") + (n.aliases && n.aliases.length ? " · also " + n.aliases.join(", ") : "") + (n.embedded === false ? " · meaning not learned yet" : "") })));
+    var sw = h("label", { class: "sw" });
+    var cb = h("input", { type: "checkbox", "data-ga": "name-enabled", "aria-label": n.name + " on", checked: !!n.enabled, disabled: N.busy });
+    cb.addEventListener("change", function () { toggleName(n, cb.checked); });
+    sw.append(cb, h("span", { text: n.enabled ? "on" : "off" }));
+    row.append(sw);
+    if (N.confirmDel === n.id) {
+      row.append(h("span", { class: "small", style: "color:var(--red)", text: "delete? search goes back to how it was." }),
+        h("button", { type: "button", class: "danger", "data-ga": "name-delete-yes", disabled: N.busy, text: "delete", onclick: function () { deleteName(n); } }),
+        h("button", { type: "button", "data-ga": "name-delete-no", text: "keep", onclick: function () { N.confirmDel = null; renderNames(); } }));
+    } else row.append(h("button", { type: "button", class: "danger", "data-ga": "name-delete", disabled: N.busy, text: "delete", onclick: function () { N.confirmDel = n.id; renderNames(); } }));
+    box.append(row);
+  });
+}
+async function toggleName(n, on) {
+  N.busy = true;
+  try {
+    var b = await nreq("PATCH", "/api/library/names/" + n.id, { enabled: on });
+    putName(b.name);
+    toast(on ? "name on" : "name off");
+  } catch (e) { if (e.code !== "off") toast(nameError(e)); }
+  N.busy = false; renderNames();
+}
+async function deleteName(n) {
+  N.busy = true; N.confirmDel = null;
+  try {
+    await nreq("DELETE", "/api/library/names/" + n.id);
+    N.list = N.list.filter(function (x) { return x.id !== n.id; });
+    toast("name deleted");
+    renderGrid();
+  } catch (e) { if (e.code !== "off") toast(nameError(e)); }
+  N.busy = false; renderNames();
+}
+
+/* the editor */
+function blankEd() {
+  return { id: null, name: "", aliases: [], meaning: "", strength: 0.5, cutoff: 0.5, enabled: true, yes: [], no: [],
+           dirty: false, saving: false, prev: null, prevBusy: false, prevNote: "", confirmDel: false, confirmBack: false, q: "", cmp: null, cseq: 0, r: {} };
+}
+function newName(firstKey, firstPost) {
+  var e = blankEd();
+  if (firstKey) { e.yes = [firstKey]; cachePost(firstKey, firstPost); e.dirty = true; }
+  N.ed = e;
+  if (M.view !== "names") setView("names"); else renderNames();
+}
+function editName(n) {
+  var e = blankEd();
+  e.id = n.id; e.name = n.name; e.aliases = (n.aliases || []).slice(); e.meaning = n.meaning;
+  e.strength = n.strength; e.cutoff = n.cutoff; e.enabled = !!n.enabled; e.yes = (n.yes || []).slice(); e.no = (n.no || []).slice();
+  N.ed = e;
+  if (M.view !== "names") setView("names"); else renderNames();
+  queuePrev(true);
+}
+function closeEditor() { clearTimeout(N.ptimer); N.pseq++; N.ed = null; renderNames(); }
+function edMark(k) { var e = N.ed; return e.yes.indexOf(k) >= 0 ? "yes" : e.no.indexOf(k) >= 0 ? "no" : null; }
+function edDirty() { N.ed.dirty = true; edHead(); }
+
+function renderEditor(box) {
+  var e = N.ed, r = e.r = {};
+  r.head = h("div", { class: "nbar" });
+  var nameIn = h("input", { type: "text", class: "big", "data-ga": "ed-name", "aria-label": "name", maxlength: 40, placeholder: "the word, like lia", value: e.name, autocapitalize: "off", autocorrect: "off", spellcheck: "false" });
+  nameIn.addEventListener("input", function () { e.name = nameIn.value; edDirty(); edLabels(); });
+  r.chips = h("div", { class: "nchips" });
+  var meanIn = h("textarea", { "data-ga": "ed-meaning", "aria-label": "what it means", maxlength: 300, placeholder: "what it means, like: pink-haired cat girl with cat ears, my vtuber model" });
+  meanIn.value = e.meaning;
+  meanIn.addEventListener("input", function () { e.meaning = meanIn.value; edDirty(); queuePrev(); });
+  r.yesLbl = h("div", { class: "lbl" }); r.yesStrip = h("div", { class: "strip", "data-ga": "ed-yes" });
+  r.noLbl = h("div", { class: "lbl" }); r.noStrip = h("div", { class: "strip", "data-ga": "ed-no" });
+  r.strLbl = h("div", { class: "lbl" });
+  var str = h("input", { type: "range", min: 0, max: 100, step: 1, "data-ga": "ed-strength", "aria-label": "listen to the words or the examples", value: Math.round(e.strength * 100) });
+  str.addEventListener("input", function () { e.strength = str.value / 100; edDirty(); edLabels(); queuePrev(); });
+  r.cutLbl = h("div", { class: "lbl" });
+  var cut = h("input", { type: "range", min: 0, max: 100, step: 1, "data-ga": "ed-cutoff", "aria-label": "cut-off", value: Math.round(e.cutoff * 100) });
+  cut.addEventListener("input", function () { e.cutoff = cut.value / 100; edDirty(); edLabels(); edWho(); queuePrev(); });
+  r.whoLbl = h("div", { class: "lbl" }); r.who = h("div", { class: "who", "data-ga": "ed-who" });
+  var on = h("input", { type: "checkbox", "data-ga": "ed-enabled", "aria-label": "name on", checked: e.enabled });
+  on.addEventListener("change", function () { e.enabled = on.checked; edDirty(); });
+  r.cmp = h("div", { class: "cols" });
+  var q = h("input", { type: "text", "data-ga": "cmp-q", "aria-label": "try a search", maxlength: 200, placeholder: "try a search, like " + (e.name.trim() || "lia") + " dancing", value: e.q, autocapitalize: "off", autocorrect: "off", spellcheck: "false" });
+  q.addEventListener("input", function () { e.q = q.value; });
+  q.addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); runCompare(); } });
+  box.append(
+    r.head,
+    h("div", { class: "card" },
+      h("label", { class: "f" }, h("span", { text: "name" }), nameIn),
+      h("div", { class: "lbl" }, h("span", { text: "also called" })), r.chips,
+      h("label", { class: "f" }, h("span", { text: "means" }), meanIn),
+      h("label", { class: "sw" }, on, h("span", { text: "on" }))),
+    h("div", { class: "card" }, r.yesLbl, r.yesStrip, r.noLbl, r.noStrip),
+    h("div", { class: "card" },
+      r.strLbl, h("div", {}, str, h("div", { class: "ends" }, h("span", { text: "the words" }), h("span", { text: "the examples" }))),
+      r.cutLbl, h("div", {}, cut, h("div", { class: "ends" }, h("span", { text: "more posts" }), h("span", { text: "stricter" })))),
+    h("div", { class: "card" }, r.whoLbl, h("div", { class: "small muted", text: "click a post: example, then not, then no mark." }), r.who),
+    h("div", { class: "card" },
+      h("h3", { text: "try a search" }),
+      h("div", { class: "small muted", text: "runs the saved name, so save first. the left side is the same search with names off." }),
+      h("div", { class: "nbar" }, h("div", { class: "grow" }, q), h("button", { type: "button", "data-ga": "cmp-run", text: "compare", onclick: runCompare })),
+      r.cmp));
+  edHead(); edChips(); edLabels(); edStrips(); edWho(); edCompare();
+}
+function edHead() {
+  var e = N.ed, r = e.r;
+  if (!r.head) return;
+  r.head.textContent = "";
+  if (e.confirmBack) {
+    r.head.append(h("span", { class: "grow small", style: "color:var(--red)", text: "discard what you changed?" }),
+      h("button", { type: "button", class: "danger", "data-ga": "ed-discard", text: "discard", onclick: closeEditor }),
+      h("button", { type: "button", text: "keep editing", onclick: function () { e.confirmBack = false; edHead(); } }));
+    return;
+  }
+  if (e.confirmDel) {
+    r.head.append(h("span", { class: "grow small", style: "color:var(--red)", text: "delete this name? search goes back to how it was." }),
+      h("button", { type: "button", class: "danger", "data-ga": "ed-delete-yes", disabled: e.saving, text: "delete", onclick: function () { editorDelete(); } }),
+      h("button", { type: "button", text: "keep", onclick: function () { e.confirmDel = false; edHead(); } }));
+    return;
+  }
+  r.head.append(
+    h("button", { type: "button", "data-ga": "ed-back", text: "← names", onclick: function () { if (e.dirty) { e.confirmBack = true; edHead(); } else closeEditor(); } }),
+    h("span", { class: "grow small muted", text: e.dirty ? "not saved yet" : e.id ? "saved" : "" }),
+    e.id ? h("button", { type: "button", class: "danger", "data-ga": "ed-delete", text: "delete", onclick: function () { e.confirmDel = true; edHead(); } }) : null,
+    h("button", { type: "button", class: "primary", "data-ga": "ed-save", disabled: e.saving || (!e.dirty && !!e.id), text: e.saving ? "saving…" : "save", onclick: saveName }));
+}
+function edLabels() {
+  var e = N.ed, r = e.r, nm = e.name.trim() || "it";
+  r.yesLbl.textContent = ""; r.yesLbl.append(h("span", { text: "this is " + nm }), h("b", { text: String(e.yes.length) }));
+  r.noLbl.textContent = ""; r.noLbl.append(h("span", { text: "not " + nm }), h("b", { text: String(e.no.length) }));
+  r.strLbl.textContent = ""; r.strLbl.append(h("span", { text: "listen to" }), h("b", { text: Math.round(e.strength * 100) + "% examples" }));
+  r.cutLbl.textContent = ""; r.cutLbl.append(h("span", { text: "cut-off" }), h("b", { text: e.cutoff.toFixed(2) }));
+}
+function edChips() {
+  var e = N.ed, box = e.r.chips;
+  box.textContent = "";
+  e.aliases.forEach(function (a, i) {
+    box.append(h("span", { class: "chip" }, document.createTextNode(a),
+      h("button", { type: "button", "aria-label": "remove " + a, text: "×", onclick: function () { e.aliases.splice(i, 1); edDirty(); edChips(); } })));
+  });
+  var add = h("input", { type: "text", "data-ga": "ed-alias", "aria-label": "add another word", maxlength: 40, placeholder: "+ also called", autocapitalize: "off", autocorrect: "off", spellcheck: "false" });
+  function commit() {
+    var w = add.value.trim().toLowerCase().replace(/\s+/g, " ");
+    if (!w) return;
+    if (e.aliases.length >= 8) { toast("at most 8 other words"); return; }
+    if (e.aliases.indexOf(w) < 0 && w !== e.name.trim().toLowerCase().replace(/\s+/g, " ")) e.aliases.push(w);
+    edDirty(); edChips(); box.querySelector("input").focus();
+  }
+  add.addEventListener("keydown", function (ev) { if (ev.key === "Enter" || ev.key === ",") { ev.preventDefault(); commit(); } });
+  add.addEventListener("blur", function () { if (add.value.trim()) commit(); });
+  box.append(add);
+}
+function edStrips() {
+  var e = N.ed, r = e.r;
+  [[r.yesStrip, e.yes, "no examples yet. click posts in who's in below."], [r.noStrip, e.no, "nothing yet."]].forEach(function (c) {
+    c[0].textContent = "";
+    if (!c[1].length) { c[0].append(h("span", { class: "small muted", text: c[2] })); return; }
+    c[1].forEach(function (k) {
+      var post = N.posts[k];
+      var b = pthumb(post, "button");
+      b.setAttribute("title", postTitle(post, k) + " — click to remove the mark");
+      b.setAttribute("aria-label", "remove the mark from " + postTitle(post, k));
+      b.removeAttribute("aria-hidden");
+      b.addEventListener("click", function () {
+        var iy = e.yes.indexOf(k); if (iy >= 0) e.yes.splice(iy, 1);
+        var inn = e.no.indexOf(k); if (inn >= 0) e.no.splice(inn, 1);
+        markChanged();
+      });
+      c[0].append(b);
+    });
+  });
+}
+function markChanged() { var e = N.ed; edDirty(); edLabels(); edStrips(); edWho(); queuePrev(); }
+function cycleMark(k) {
+  var e = N.ed, iy = e.yes.indexOf(k), inn = e.no.indexOf(k);
+  if (iy >= 0) { e.yes.splice(iy, 1); e.no.unshift(k); }
+  else if (inn >= 0) e.no.splice(inn, 1);
+  else e.yes.unshift(k);
+  markChanged();
+}
+function whoRows() {
+  var e = N.ed, rows = ((e.prev && e.prev.posts) || []).map(function (p) {
+    var m = edMark(p.post_key);
+    var carries = m === "yes" ? true : m === "no" ? false : (typeof p.score === "number" ? p.score >= e.cutoff : !!p.carries);
+    return { key: p.post_key, post: p.post, score: p.score, mark: m, carries: carries };
+  });
+  rows.sort(function (a, b) { return (b.carries - a.carries) || ((b.score || 0) - (a.score || 0)); });
+  return rows;
+}
+function edWho() {
+  var e = N.ed, r = e.r;
+  if (!r.who) return;
+  var rows = whoRows(), inN = rows.filter(function (x) { return x.carries; }).length;
+  r.whoLbl.textContent = "";
+  r.whoLbl.append(h("span", { text: "who's in" }), h("b", { text: e.prev ? inN + " of " + e.prev.indexed + " indexed posts" + (e.prevBusy ? " · updating…" : "") : e.prevBusy ? "counting…" : "" }));
+  r.who.textContent = "";
+  if (!e.prev) { r.who.append(h("div", { class: "small muted", text: e.prevBusy ? "counting…" : e.prevNote || "" })); return; }
+  if (e.prev.embedded === false) r.who.append(h("div", { class: "small muted", text: "search can't learn the meaning right now, so this uses your examples only." }));
+  if (!rows.length) r.who.append(h("div", { class: "small muted", text: "no posts to show yet." }));
+  var cutDone = false;
+  rows.forEach(function (x) {
+    if (!cutDone && !x.carries) { r.who.append(h("div", { class: "cutline", text: "cut-off" })); cutDone = true; }
+    var post = x.post || N.posts[x.key];
+    var b = h("button", { type: "button", class: "it" + (x.carries ? "" : " out"), "data-key": x.key, "data-ga": "who-row", onclick: function () { cycleMark(x.key); } },
+      pthumb(post), h("span", { class: "nm", text: postTitle(post, x.key) }),
+      x.mark ? h("span", { class: "tag " + x.mark, text: x.mark === "yes" ? "example" : "not" }) : null,
+      h("span", { class: "sc", text: x.mark || typeof x.score !== "number" ? "" : x.score.toFixed(2) }));
+    r.who.append(b);
+  });
+}
+
+/* preview: debounced 300 ms; saves nothing */
+function queuePrev(now) {
+  clearTimeout(N.ptimer);
+  var e = N.ed;
+  if (!e) return;
+  if (!e.id && !e.meaning.trim()) { e.prev = null; e.prevBusy = false; e.prevNote = "say what it means to see who's in."; N.pseq++; edWho(); return; }
+  var seq = ++N.pseq;
+  e.prevBusy = true; edWho();
+  N.ptimer = setTimeout(async function () {
+    var body = { strength: e.strength, cutoff: e.cutoff, yes: e.yes.slice(), no: e.no.slice(), limit: 100 };
+    if (e.id) body.id = e.id;
+    if (e.name.trim()) body.name = e.name.trim();
+    if (e.meaning.trim()) body.meaning = e.meaning.trim();
+    try {
+      var b = await nreq("POST", "/api/library/names/preview", body);
+      if (seq !== N.pseq || N.ed !== e) return;
+      (b.posts || []).forEach(function (p) { cachePost(p.post_key, p.post); });
+      e.prev = { carries: b.carries || 0, indexed: b.indexed || 0, embedded: b.embedded !== false, posts: b.posts || [] };
+      e.prevNote = "";
+    } catch (err) {
+      if (seq !== N.pseq || N.ed !== e || err.code === "off") return;
+      e.prev = null; e.prevNote = err.code === "error.names.bad" ? "that doesn't fit yet. check the name and the meaning." : describe(err).text;
+    }
+    e.prevBusy = false;
+    edStrips(); edWho();
+  }, now ? 0 : 300);
+}
+
+async function saveName() {
+  var e = N.ed;
+  if (!e || e.saving) return;
+  var name = e.name.trim(), meaning = e.meaning.trim();
+  if (!name) { toast("give it a name first"); return; }
+  if (!meaning) { toast("say what it means first"); return; }
+  var body = { name: name, meaning: meaning, aliases: e.aliases.slice(), strength: e.strength, cutoff: e.cutoff, enabled: e.enabled, yes: e.yes.slice(), no: e.no.slice() };
+  e.saving = true; edHead();
+  try {
+    var b = e.id ? await nreq("PATCH", "/api/library/names/" + e.id, body) : await nreq("POST", "/api/library/names", body);
+    var fresh = !e.id;
+    e.id = b.name.id; e.dirty = false;
+    putName(b.name);
+    toast(b.name.embedded === false ? "saved. the meaning is learned when search wakes up" : "saved");
+    if (fresh) renderGrid();
+    queuePrev(true);
+  } catch (err) { if (err.code !== "off") toast(nameError(err)); }
+  e.saving = false; edHead();
+}
+async function editorDelete() {
+  var e = N.ed;
+  if (!e || !e.id) return;
+  e.saving = true; edHead();
+  try {
+    await nreq("DELETE", "/api/library/names/" + e.id);
+    N.list = N.list.filter(function (x) { return x.id !== e.id; });
+    toast("name deleted");
+    renderGrid();
+    closeEditor();
+  } catch (err) { e.saving = false; e.confirmDel = false; if (err.code !== "off") toast(nameError(err)); edHead(); }
+}
+
+/* try a search: the same query with names off and on */
+async function cmpSearch(q, namesOff) {
+  var r = await lib("/api/library/search?q=" + encodeURIComponent(q) + "&limit=24" + (namesOff ? "&names=0" : ""), {}, 45000);
+  if (r.status === 200 && r.body && r.body.status === "success") return r.body;
+  throw new Fail(errCode(r) || "error.library.upstream");
+}
+async function runCompare() {
+  var e = N.ed;
+  if (!e) return;
+  var q = e.q.trim().replace(/\s+/g, " ");
+  if (!q) { toast("type a search first"); return; }
+  var seq = ++e.cseq;
+  e.cmp = { busy: true };
+  edCompare();
+  try {
+    var two = await Promise.all([cmpSearch(q, true), cmpSearch(q, false)]);
+    if (seq !== e.cseq || N.ed !== e) return;
+    e.cmp = { before: two[0], after: two[1] };
+  } catch (err) {
+    if (seq !== e.cseq || N.ed !== e) return;
+    e.cmp = { error: describe(err).text };
+  }
+  edCompare();
+}
+function cmpList(b) {
+  var seen = {}, out = [];
+  (b.items || []).forEach(function (it) {
+    var k = it.post_key || it.id;
+    if (seen[k]) return;
+    seen[k] = true; out.push(it);
+  });
+  return out.slice(0, 8);
+}
+function edCompare() {
+  var e = N.ed, box = e.r.cmp, c = e.cmp;
+  if (!box) return;
+  box.textContent = "";
+  if (!c) return;
+  if (c.busy) { box.append(h("div", { class: "small muted", text: "searching…" })); return; }
+  if (c.error) { box.append(h("div", { class: "status bad", text: c.error })); return; }
+  function col(title, b) {
+    var items = cmpList(b), d = h("div", { class: "col" }, h("h4", { text: title }));
+    if (!items.length) d.append(h("div", { class: "small muted", text: "nothing found." }));
+    items.forEach(function (it) {
+      d.append(h("div", { class: "res" }, pthumb({ files: [it] }), h("span", { class: "n", text: it.custom_title || it.name }),
+        it.why && it.why.length ? h("span", { class: "why", text: it.why[0] }) : null,
+        typeof it.score === "number" ? h("span", { class: "s", text: it.score.toFixed(2) }) : null));
+    });
+    return d;
+  }
+  box.append(col("names off", c.before), col("with names", c.after));
+  var used = (c.after.names || []).map(function (n) { return n.name; }).filter(Boolean);
+  box.append(h("div", { class: "small muted", style: "grid-column:1/-1", "data-ga": "cmp-used", text: used.length ? "names used: " + used.join(", ") : "no name in this search, so both sides are the same search." }));
+}
+
+/* "this is..." on a post: add it as an example of a name, or start a new name with it */
+async function markPost(nameId, key, kind) {
+  var b = await nreq("PATCH", "/api/library/names/" + nameId, { mark: [{ post_key: key, kind: kind }] });
+  putName(b.name);
+  return b.name;
+}
+function thisIsSelect(key, post) {
+  var sel = h("select", { "aria-label": "this is…", "data-ga": "this-is" });
+  sel.append(h("option", { value: "", text: "this is…" }));
+  N.list.forEach(function (n) { sel.append(h("option", { value: n.id, text: n.name })); });
+  sel.append(h("option", { value: "+", text: "new name…" }));
+  sel.addEventListener("change", async function () {
+    var v = sel.value;
+    sel.value = "";
+    if (!v) return;
+    if (v === "+") { cachePost(key, post); newName(key, post); return; }
+    try {
+      var n = await markPost(v, key, "yes");
+      cachePost(key, post);
+      toast("added to " + n.name);
+      if ($("sheet").open) loadPostNames({ post_key: key, _post: post });
+    } catch (err) { if (err.code !== "off") toast(nameError(err)); }
+  });
+  return sel;
+}
+
+/* the post detail's names row */
+async function loadPostNames(it) {
+  var sec = $("sheetNames"), body = $("sheetNamesBody");
+  if (!N.on || !it.post_key) { sec.hidden = true; return; }
+  var seq = ++N.dseq;
+  sec.hidden = false;
+  var post = it._post || { files: [it], title: it.custom_title || it.name };
+  var b;
+  try { b = await nreq("GET", "/api/library/names/post?key=" + encodeURIComponent(it.post_key)); }
+  catch (e) { if (seq !== N.dseq || e.code === "off") return; body.textContent = ""; body.append(h("div", { class: "status bad", text: describe(e).text })); return; }
+  if (seq !== N.dseq) return;
+  body.textContent = "";
+  var row = h("div", { class: "nrow-detail" });
+  (b.names || []).forEach(function (n) {
+    var label = n.name + (typeof n.score === "number" ? " " + n.score.toFixed(2) : "") + (n.mark === "yes" ? " · example" : n.mark === "no" ? " · not" : "");
+    row.append(h("button", { type: "button", class: "tag", "data-ga": "post-name", title: "open " + n.name, text: label, onclick: function () {
+      var full = N.list.filter(function (x) { return x.id === n.id; })[0];
+      var d = $("sheet"); if (d.close) d.close(); else d.removeAttribute("open");
+      if (full) editName(full);
+    } }));
+    if (n.mark === "no") row.append(h("button", { type: "button", "data-ga": "post-name-undo", text: "undo", onclick: function () { detailMark(n.id, it, null); } }));
+    else row.append(h("button", { type: "button", "data-ga": "post-name-not", text: "not " + n.name, onclick: function () { detailMark(n.id, it, "no"); } }));
+  });
+  if (!(b.names || []).length) row.append(h("span", { class: "small muted", text: "no names yet." }));
+  row.append(thisIsSelect(it.post_key, post));
+  body.append(row);
+}
+async function detailMark(nameId, it, kind) {
+  try { await markPost(nameId, it.post_key, kind); } catch (e) { if (e.code !== "off") toast(nameError(e)); return; }
+  loadPostNames(it);
+}
+
 setPane("link");
 refreshGrid();
+probeNames();
 </script>
 </body>
 </html>

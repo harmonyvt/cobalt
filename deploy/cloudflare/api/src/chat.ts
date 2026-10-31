@@ -497,6 +497,9 @@ const CHANGES = `You can change the library too, but only when Harmony asks you 
 
 const CONFIRMS = `Some calls change things that are hard to undo (the API marks them "Asks Harmony first"). Calling one runs nothing: it returns { pending_confirm } and Harmony gets a confirm card with yes and no. End that run, say in one short line what you asked, and stop. When Harmony answers, you are told what happened and carry on from there.`;
 
+// Search names (section 48.5): a word Harmony explains can be taught to search.
+const NAMES = `Search names: when Harmony says who or what a word means ("Lia is my pink-haired cat girl"), offer to teach it to search with cobalt.names.set({ name, meaning, aliases, yes }) (yes: post ids that show it). A search that says a taught name already looks for its meaning; cobalt.names.list() lists them.`;
+
 // Making files (APP-API-CONTRACT.md 33.8): only when asked. A job is handed to the server with jobs.onDone (33.14),
 // never polled across runs.
 const MAKING = `Making files: cobalt.make.* and cobalt.edits.render start jobs on Harmony's server (webps, animated stills, slideshows, gallery images, mp4s from the editor, and with cobalt.chat.video an mp4 that replays a chat; they cost real money). Make something only when Harmony asks for it; each chat may make only a few a day. Each call returns a job: in the same run, pass it to cobalt.jobs.onDone(job, note) with a short note of what to do with the result. If it finishes within a few seconds you get the result at once: cobalt.show([post_id]) and give share_url when Harmony wants a link. Otherwise it answers watching: true, and the server tells you when the job ends: end your reply right there in one short line (it is on its way), without more code. A new reply starts by itself with the result. Never poll: do not call cobalt.jobs.wait over and over, and never ask Harmony to tell you to check.`;
@@ -531,7 +534,7 @@ To show Harmony files, call cobalt.show(ids) in your code: they appear as thumbn
 
 ${search ? FINDING_WITH_SEARCH : FINDING_WITHOUT_SEARCH}
 
-${/\bsave\(url/.test(types) ? `${CHANGES}\n\n` : ""}${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}${/\bmake: \{/.test(types) ? `${MAKING}\n\n` : ""}${/\bcropImage\(/.test(types) ? `${PICTURE_PARTS(/\bframes\(id/.test(types))}\n\n` : ""}${/^ {2}box: \{$/m.test(types) ? `${WORKBENCH}\n\n` : ""}${!agent && /\bspawn\(task/.test(types) ? `${AGENTS}\n\n` : ""}The API:
+${/\bsave\(url/.test(types) ? `${CHANGES}\n\n` : ""}${/Asks Harmony first/.test(types) ? `${CONFIRMS}\n\n` : ""}${/^ {2}names: \{$/m.test(types) ? `${NAMES}\n\n` : ""}${/\bmake: \{/.test(types) ? `${MAKING}\n\n` : ""}${/\bcropImage\(/.test(types) ? `${PICTURE_PARTS(/\bframes\(id/.test(types))}\n\n` : ""}${/^ {2}box: \{$/m.test(types) ? `${WORKBENCH}\n\n` : ""}${!agent && /\bspawn\(task/.test(types) ? `${AGENTS}\n\n` : ""}The API:
 ${types}`;
 }
 

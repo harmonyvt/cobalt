@@ -194,6 +194,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// MP4 by the editor's render containers (a render of kind `chat`). True only with `chat` (the server also needs `editor`).
     /// False when absent: no "make video" in a thread.
     public var chatVideo: Bool = false
+    /// `features.names` (APP-API-CONTRACT 48): search names (`/library/names`), words the owner teaches search. True once the
+    /// server's migration 0031 is applied; the app also needs `search`. False when absent: no "names" in the library's menu,
+    /// no names row in the detail, no "this is…" in a post's menu.
+    public var names: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

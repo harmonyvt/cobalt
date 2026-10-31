@@ -940,15 +940,11 @@
                               "description": "the last message on the page"
                             },
                             "upto_at": {
-                              "anyOf": [
-                                {
-                                  "type": "number"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ],
-                              "description": "ms; when that message was written"
+                              "description": "ms; when that message was written",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
                             },
                             "messages": {
                               "type": "number",
@@ -981,13 +977,9 @@
                               "description": "page opens (GET)"
                             },
                             "last_opened_at": {
-                              "anyOf": [
-                                {
-                                  "type": "number"
-                                },
-                                {
-                                  "type": "null"
-                                }
+                              "type": [
+                                "number",
+                                "null"
                               ]
                             }
                           },
@@ -1108,15 +1100,11 @@
                           "description": "the last message on the page"
                         },
                         "upto_at": {
-                          "anyOf": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ],
-                          "description": "ms; when that message was written"
+                          "description": "ms; when that message was written",
+                          "type": [
+                            "number",
+                            "null"
+                          ]
                         },
                         "messages": {
                           "type": "number",
@@ -1149,13 +1137,9 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "anyOf": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "null"
-                            }
+                          "type": [
+                            "number",
+                            "null"
                           ]
                         }
                       },
@@ -1298,15 +1282,11 @@
                           "description": "the last message on the page"
                         },
                         "upto_at": {
-                          "anyOf": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ],
-                          "description": "ms; when that message was written"
+                          "description": "ms; when that message was written",
+                          "type": [
+                            "number",
+                            "null"
+                          ]
                         },
                         "messages": {
                           "type": "number",
@@ -1339,13 +1319,9 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "anyOf": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "null"
-                            }
+                          "type": [
+                            "number",
+                            "null"
                           ]
                         }
                       },
@@ -2226,15 +2202,11 @@
                       "additionalProperties": false
                     },
                     "next": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ],
-                      "description": "the cursor of the next page, null on the last"
+                      "description": "the cursor of the next page, null on the last",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     }
                   },
                   "required": [
@@ -2308,13 +2280,9 @@
                           "type": "object",
                           "properties": {
                             "sentence": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
+                              "type": [
+                                "string",
+                                "null"
                               ]
                             },
                             "tags": {
@@ -2334,23 +2302,15 @@
                               }
                             },
                             "transcript": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
+                              "type": [
+                                "string",
+                                "null"
                               ]
                             },
                             "language": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
+                              "type": [
+                                "string",
+                                "null"
                               ]
                             },
                             "frames": {
@@ -2360,23 +2320,15 @@
                               "type": "boolean"
                             },
                             "model": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
+                              "type": [
+                                "string",
+                                "null"
                               ]
                             },
                             "written_at": {
-                              "anyOf": [
-                                {
-                                  "type": "number"
-                                },
-                                {
-                                  "type": "null"
-                                }
+                              "type": [
+                                "number",
+                                "null"
                               ]
                             }
                           },
@@ -2554,13 +2506,9 @@
                           "type": "object",
                           "properties": {
                             "sentence": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
+                              "type": [
+                                "string",
+                                "null"
                               ]
                             },
                             "tags": {
@@ -2580,23 +2528,15 @@
                               }
                             },
                             "transcript": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
+                              "type": [
+                                "string",
+                                "null"
                               ]
                             },
                             "language": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
+                              "type": [
+                                "string",
+                                "null"
                               ]
                             },
                             "frames": {
@@ -2606,23 +2546,15 @@
                               "type": "boolean"
                             },
                             "model": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
+                              "type": [
+                                "string",
+                                "null"
                               ]
                             },
                             "written_at": {
-                              "anyOf": [
-                                {
-                                  "type": "number"
-                                },
-                                {
-                                  "type": "null"
-                                }
+                              "type": [
+                                "number",
+                                "null"
                               ]
                             }
                           },
@@ -3197,6 +3129,640 @@
         }
       }
     },
+    "/library/names": {
+      "get": {
+        "operationId": "library_names.list",
+        "summary": "The search names, oldest first (GET /library/names).",
+        "tags": [
+          "library_names"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SearchName"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "names"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "post": {
+        "operationId": "library_names.create",
+        "summary": "Teach search a new name (at most 100) (POST /library/names).",
+        "tags": [
+          "library_names"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "the word, 1 to 40 characters"
+                  },
+                  "meaning": {
+                    "type": "string",
+                    "maxLength": 2000,
+                    "description": "what it means, 1 to 300 characters"
+                  },
+                  "aliases": {
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "description": "other words for the same thing"
+                  },
+                  "strength": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "0 = only the meaning's words, 1 = only the example posts (default 0.5)"
+                  },
+                  "cutoff": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "cosine a post needs to carry the name (default 0.5)"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "yes": {
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    },
+                    "description": "posts that are it (replaces the examples)"
+                  },
+                  "no": {
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    },
+                    "description": "posts that are not it (replaces them)"
+                  }
+                },
+                "required": [
+                  "name",
+                  "meaning"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "name": {
+                      "$ref": "#/components/schemas/SearchName"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/names/post": {
+      "get": {
+        "operationId": "library_names.post",
+        "summary": "The names one post carries or is marked for, best first (GET /library/names/post?key=).",
+        "tags": [
+          "library_names"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "score": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "mark": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "yes",
+                                  "no"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "carries": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "score",
+                          "mark",
+                          "carries"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "names"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/names/preview": {
+      "post": {
+        "operationId": "library_names.preview",
+        "summary": "Which posts a name would carry with these values, saving nothing (POST /library/names/preview).",
+        "tags": [
+          "library_names"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "description": "a saved name: missing fields come from it",
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "the word, 1 to 40 characters"
+                  },
+                  "meaning": {
+                    "description": "required without id",
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "strength": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "0 = only the meaning's words, 1 = only the example posts (default 0.5)"
+                  },
+                  "cutoff": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "cosine a post needs to carry the name (default 0.5)"
+                  },
+                  "yes": {
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    },
+                    "description": "posts that are it (replaces the examples)"
+                  },
+                  "no": {
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    },
+                    "description": "posts that are not it (replaces them)"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  }
+                },
+                "additionalProperties": false,
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "embedded": {
+                      "type": "boolean"
+                    },
+                    "carries": {
+                      "type": "integer"
+                    },
+                    "indexed": {
+                      "type": "integer"
+                    },
+                    "posts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "post_key": {
+                            "type": "string"
+                          },
+                          "score": {
+                            "type": "number"
+                          },
+                          "mark": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "yes",
+                                  "no"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "carries": {
+                            "type": "boolean"
+                          },
+                          "post": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id"
+                                ],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "the post in the GET /library?v=3 shape"
+                          }
+                        },
+                        "required": [
+                          "post_key",
+                          "score",
+                          "mark",
+                          "carries",
+                          "post"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "embedded",
+                    "carries",
+                    "indexed",
+                    "posts"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/names/{id}": {
+      "patch": {
+        "operationId": "library_names.update",
+        "summary": "Change a name, its marks included (PATCH /library/names/<id>).",
+        "tags": [
+          "library_names"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "the word, 1 to 40 characters"
+                  },
+                  "meaning": {
+                    "type": "string",
+                    "maxLength": 2000,
+                    "description": "what it means, 1 to 300 characters"
+                  },
+                  "aliases": {
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "description": "other words for the same thing"
+                  },
+                  "strength": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "0 = only the meaning's words, 1 = only the example posts (default 0.5)"
+                  },
+                  "cutoff": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "cosine a post needs to carry the name (default 0.5)"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "yes": {
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    },
+                    "description": "posts that are it (replaces the examples)"
+                  },
+                  "no": {
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    },
+                    "description": "posts that are not it (replaces them)"
+                  },
+                  "mark": {
+                    "description": "single posts: yes, no, or null to take the mark off (after yes/no)",
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "post_key": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048
+                        },
+                        "kind": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "yes",
+                                "no"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "post_key",
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "name": {
+                      "$ref": "#/components/schemas/SearchName"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "library_names.delete",
+        "summary": "Delete a name and its marks (DELETE /library/names/<id>).",
+        "tags": [
+          "library_names"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/library/posters/backfill": {
       "post": {
         "operationId": "library.posters.backfill",
@@ -3393,13 +3959,9 @@
                                   "type": "string"
                                 },
                                 "private_url": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
+                                  "type": [
+                                    "string",
+                                    "null"
                                   ]
                                 }
                               },
@@ -3499,33 +4061,21 @@
                       "description": "done: lines below; no_speech: heard, nothing said; pending: not heard yet; no_sound: nothing to hear; failed; off: no Whisper"
                     },
                     "language": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
+                      "type": [
+                        "string",
+                        "null"
                       ]
                     },
                     "model": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
+                      "type": [
+                        "string",
+                        "null"
                       ]
                     },
                     "updated_at": {
-                      "anyOf": [
-                        {
-                          "type": "number"
-                        },
-                        {
-                          "type": "null"
-                        }
+                      "type": [
+                        "number",
+                        "null"
                       ]
                     },
                     "lines": {
@@ -4133,25 +4683,17 @@
                               "type": "number"
                             },
                             "last_used_at": {
-                              "anyOf": [
-                                {
-                                  "type": "number"
-                                },
-                                {
-                                  "type": "null"
-                                }
+                              "type": [
+                                "number",
+                                "null"
                               ]
                             },
                             "used_by": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ],
-                              "description": "the client's name from its last initialize"
+                              "description": "the client's name from its last initialize",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "calls_today": {
                               "type": "number",
@@ -4268,25 +4810,17 @@
                                   "type": "number"
                                 },
                                 "last_used_at": {
-                                  "anyOf": [
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
+                                  "type": [
+                                    "number",
+                                    "null"
                                   ]
                                 },
                                 "used_by": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ],
-                                  "description": "the client's name from its last initialize"
+                                  "description": "the client's name from its last initialize",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
                                 },
                                 "calls_today": {
                                   "type": "number",
@@ -4390,25 +4924,17 @@
                                   "type": "number"
                                 },
                                 "last_used_at": {
-                                  "anyOf": [
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
+                                  "type": [
+                                    "number",
+                                    "null"
                                   ]
                                 },
                                 "used_by": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ],
-                                  "description": "the client's name from its last initialize"
+                                  "description": "the client's name from its last initialize",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
                                 },
                                 "calls_today": {
                                   "type": "number",
@@ -4795,13 +5321,9 @@
                             "description": "page opens (GET)"
                           },
                           "last_opened_at": {
-                            "anyOf": [
-                              {
-                                "type": "number"
-                              },
-                              {
-                                "type": "null"
-                              }
+                            "type": [
+                              "number",
+                              "null"
                             ]
                           }
                         },
@@ -5049,13 +5571,9 @@
                             "description": "page opens (GET)"
                           },
                           "last_opened_at": {
-                            "anyOf": [
-                              {
-                                "type": "number"
-                              },
-                              {
-                                "type": "null"
-                              }
+                            "type": [
+                              "number",
+                              "null"
                             ]
                           }
                         },
@@ -5167,13 +5685,9 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "anyOf": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "null"
-                            }
+                          "type": [
+                            "number",
+                            "null"
                           ]
                         }
                       },
@@ -5307,13 +5821,9 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "anyOf": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "null"
-                            }
+                          "type": [
+                            "number",
+                            "null"
                           ]
                         }
                       },
@@ -5402,13 +5912,9 @@
                             "description": "page opens (GET)"
                           },
                           "last_opened_at": {
-                            "anyOf": [
-                              {
-                                "type": "number"
-                              },
-                              {
-                                "type": "null"
-                              }
+                            "type": [
+                              "number",
+                              "null"
                             ]
                           }
                         },
@@ -5511,13 +6017,9 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "anyOf": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "null"
-                            }
+                          "type": [
+                            "number",
+                            "null"
                           ]
                         }
                       },
@@ -5651,13 +6153,9 @@
                           "description": "page opens (GET)"
                         },
                         "last_opened_at": {
-                          "anyOf": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "null"
-                            }
+                          "type": [
+                            "number",
+                            "null"
                           ]
                         }
                       },
@@ -6913,26 +7411,18 @@
             "type": "string"
           },
           "activity": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "while running: the call it made last"
+            "description": "while running: the call it made last",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "result": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "its report (its last reply), once it ended"
+            "description": "its report (its last reply), once it ended",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "post_ids": {
             "type": "array",
@@ -6942,13 +7432,9 @@
             "description": "the posts it showed"
           },
           "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "turns": {
@@ -6966,13 +7452,9 @@
             "type": "number"
           },
           "ended_at": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           }
         },
@@ -7105,15 +7587,11 @@
             "description": "ms; slides 90 days on each use"
           },
           "country": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "cf.country of the last use"
+            "description": "cf.country of the last use",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "current": {
             "type": "boolean",
@@ -7184,93 +7662,57 @@
             "description": "the post key"
           },
           "service": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "link": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "custom_title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "duration": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "width": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "height": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "poster_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "public_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "created_at": {
@@ -7319,13 +7761,9 @@
                   "type": "string"
                 },
                 "url": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "string",
+                    "null"
                   ]
                 }
               },
@@ -7363,6 +7801,83 @@
         ],
         "additionalProperties": {},
         "x-swift": "LibraryPost"
+      },
+      "SearchName": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "as typed"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "other words for it, normalized"
+          },
+          "meaning": {
+            "type": "string"
+          },
+          "strength": {
+            "type": "number",
+            "description": "0 = only the words, 1 = only the examples"
+          },
+          "cutoff": {
+            "type": "number",
+            "description": "how close a post must be to carry the name"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "yes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "example post keys, newest mark first"
+          },
+          "no": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "not-this post keys, newest mark first"
+          },
+          "posts": {
+            "type": "integer",
+            "description": "posts that carry it now"
+          },
+          "embedded": {
+            "type": "boolean",
+            "description": "the meaning has a vector for the current model"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "aliases",
+          "meaning",
+          "strength",
+          "cutoff",
+          "enabled",
+          "yes",
+          "no",
+          "posts",
+          "embedded",
+          "created_at",
+          "updated_at"
+        ],
+        "additionalProperties": false
       },
       "ShareCollection": {
         "type": "object",

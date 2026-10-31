@@ -291,6 +291,7 @@ private struct LibraryContent: View {
             .modifier(LibraryInspector(model: model, controller: controller, enabled: tier != .compact))
             .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: tier == .compact))
             .modifier(LibrarySkyMapPresenter(model: model, controller: controller))
+            .modifier(NamesPresenter(model: model))
             // a collection chip on the shelves pushes the same screen the links tab does
             .navigationDestination(for: CollectionRoute.self) { route in
                 CollectionScreen(model: model, collectionID: route.id)
@@ -449,7 +450,9 @@ private struct LibraryContent: View {
         #endif
         ToolbarItemGroup(placement: .primaryAction) {
             // select lives in the pill at the bottom (`LibrarySelectPill`), not here
-            LibrarySortMenu(library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery)
+            LibrarySortMenu(
+                library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery,
+                openNames: model.capabilities.names ? showNames : nil)
             #if os(macOS)
             Button(Copy.Library2.refresh, systemImage: Symbol.Library.refresh) { Task { await controller.refresh() } }
                 .labelStyle(.iconOnly)
@@ -475,6 +478,11 @@ private struct LibraryContent: View {
                 .help(Copy.Library2.toggleDetail)
             }
         }
+    }
+
+    /// "names" in the library's menu: library › names (APP-API-CONTRACT 48.6; `NamesPresenter`).
+    private func showNames() {
+        model.searchNames.showingList = true
     }
 
     private func toggleSelecting() {
