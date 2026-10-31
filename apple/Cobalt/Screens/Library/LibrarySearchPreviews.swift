@@ -35,14 +35,16 @@ private struct LibrarySearchPreviewHost: View {
 #Preview("search · off on the server") { LibrarySearchPreviewHost(.disabled, query: "dog") }
 #Preview("search · regular") { LibrarySearchPreviewHost(.ready, query: "cat", tier: .regular) }
 
-#Preview("search line · every state") {
+#Preview("status line · every state") {
     VStack(spacing: 8) {
-        LibrarySearchLine(state: .searching)
-        LibrarySearchLine(state: .results(count: 12, pending: 0))
-        LibrarySearchLine(state: .results(count: 12, pending: 3))
-        LibrarySearchLine(state: .waking)
-        LibrarySearchLine(state: .failed)
-        LibrarySearchLine(state: .off)
+        LibraryStatusLine(state: .searching)
+        LibraryStatusLine(state: .results(count: 12, pending: 0))
+        LibraryStatusLine(state: .results(count: 12, pending: 3))
+        LibraryStatusLine(state: .waking)
+        LibraryStatusLine(state: .failed)
+        LibraryStatusLine(state: .off)
+        LibraryActivityBar(fraction: 0.4, label: "loading")
+        LibraryActivityBar(fraction: nil, label: "searching")
     }
 }
 #endif

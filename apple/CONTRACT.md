@@ -1048,11 +1048,15 @@ score order** (the loaded copy of each when there is one; the sort is ignored), 
 did not return, in the sort's order; the show filter and the kind chip still apply. The same tiles, list, table, select
 mode and context menus draw them, and a tap opens the same `MediaDetail` (a result past the loaded pages resolves through
 `LibraryModel.post(id:)`). Clearing the field returns to the library at once. A quiet line under the field
-(`LibrarySearchLine`, `.bar` background like the loading-all line): `searching…`, `12 results`, `12 results · still
-indexing 3 posts` (`index.pending` > 0), `search is waking up…`, `couldn't search by meaning. showing name matches.`,
-`search by meaning is off on this server. showing name matches.`; none while idle. It fades in and out with
-`Motion.rows` (a crossfade under Reduce Motion). While the server is still looking and nothing matches by name, the
-content shows the loading state instead of `nothing matches`.
+(`LibraryStatusLine`, `.bar` background): `searching…` (fainter), `12 results`, `12 results · 3 still indexing` (the note
+fainter; `index.pending` > 0), `search is waking up…`, `name matches only · search didn't answer`, `name matches only ·
+search by meaning is off`; none while idle. No spinner: a 2 pt hairline along the top bar's bottom edge
+(`LibraryActivityBar`) sweeps while the server searches and fills while the whole library pages in (it replaced the
+`loading the whole library · 60 of 140` text line, which VoiceOver still reads). They fade with `Motion.rows` (a
+crossfade under Reduce Motion). While the server is still looking and nothing matches by name, the content keeps the
+last search's tiles on screen, dimmed and not tappable, rather than flashing to the grey loading tiles (which show only
+when there is nothing to keep). The grey tiles and the real ones are one mosaic, one scroll view, and the iPhone's field
+takes the keyboard back if it is ever rebuilt while focused: typing never loses the keyboard to a search answering.
 
 **Errors.** `503 error.search.waking` → `.waking`, then a retry every **15 s**, up to **8** retries (typing in between
 drops them; the line stays `search is waking up…` through them). A waking answer after the last retry → `.failed`, so
