@@ -21,8 +21,8 @@ struct ChatComposer: View {
     private var canSend: Bool { cleaned != nil && !busy }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if !draft.postIDs.isEmpty { chips }
+        VStack(alignment: .leading, spacing: 4) {
+            if !draft.postIDs.isEmpty { chips.padding(.top, 6) }
             HStack(alignment: .bottom, spacing: 8) {
                 field
                 sendButton
@@ -35,11 +35,16 @@ struct ChatComposer: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
+        // the send button's 44-point hit area sets the row's height; the field matches it (below) so one line of text sits
+        // level with the button instead of at the bottom of a taller row with a gap above it
+        .padding(.leading, 14)
+        .padding(.trailing, 4)
+        .padding(.vertical, 4)
+        .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(CobaltColor.hairline, lineWidth: 1))
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
         .animation(Motion.card, value: draft.postIDs)
     }
 
@@ -53,8 +58,7 @@ struct ChatComposer: View {
             .focused(focus)
             .textFieldStyle(.plain)
             .padding(.vertical, 6)
-            .padding(.leading, 4)
-            .frame(minHeight: 32)
+            .frame(minHeight: Metrics.hit)
             #if os(macOS)
             .onKeyPress(keys: [.return], phases: .down) { press in
                 if press.modifiers.contains(.shift) {

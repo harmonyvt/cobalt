@@ -9,13 +9,15 @@ import SwiftUI
 // MARK: - the chips
 
 /// The calls of a step as small chips that wrap: the op, how long it took; red when it failed, amber when it asks first.
+/// Calls in a row to the same op that all ran fine share one chip ("library.search ×3 5.0s", the longest of them), so a
+/// step that searched three times reads as one line instead of three chips wrapping into a grid.
 struct ChatCallTrail: View {
     let calls: [ChatToolCall]
 
     var body: some View {
         AboutFlow(spacing: 5) {
-            ForEach(Array(calls.enumerated()), id: \.offset) { _, call in
-                ChatCallChip(call: call)
+            ForEach(Array(ChatCallGroup.of(calls).enumerated()), id: \.offset) { _, group in
+                ChatCallChip(group: group)
             }
         }
         .accessibilityElement(children: .contain)
@@ -23,8 +25,28 @@ struct ChatCallTrail: View {
     }
 }
 
+/// One chip's worth of calls: a single call, or a run of the same op that all ran.
+struct ChatCallGroup: Equatable {
+    var call: ChatToolCall
+    var count: Int
+
+    static func of(_ calls: [ChatToolCall]) -> [ChatCallGroup] {
+        var groups: [ChatCallGroup] = []
+        for call in calls {
+            if call.status == .done, let last = groups.last, last.call.status == .done, last.call.op == call.op {
+                groups[groups.count - 1].count += 1
+                groups[groups.count - 1].call.ms = max(last.call.ms, call.ms)
+            } else {
+                groups.append(ChatCallGroup(call: call, count: 1))
+            }
+        }
+        return groups
+    }
+}
+
 private struct ChatCallChip: View {
-    let call: ChatToolCall
+    let group: ChatCallGroup
+    private var call: ChatToolCall { group.call }
 
     private var ink: Color {
         switch call.status {
@@ -44,17 +66,22 @@ private struct ChatCallChip: View {
                 .accessibilityHidden(true)
             Text(Copy.ChatCards.chip(call.op))
                 .foregroundStyle(ink)
+            if group.count > 1 {
+                Text(Copy.ChatCards.times(group.count))
+                    .foregroundStyle(ink)
+            }
             Text(call.status == .asked ? Copy.ChatCards.asked : Copy.ChatCards.ms(call.ms))
                 .foregroundStyle(CobaltColor.caption)
         }
         .font(CobaltType.badge)
         .lineLimit(1)
+        .fixedSize()
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
         .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .help(call.error ?? "")
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Copy.ChatCards.chipA11y(call))
+        .accessibilityLabel(Copy.ChatCards.chipA11y(call, count: group.count))
     }
 }
 
@@ -100,7 +127,7 @@ enum ChatCardTone {
         case .box: CobaltColor.caption
         case .saved: CobaltColor.success
         case .agents: Color(light: 0xc2410c, dark: 0xffb38a)
-        case .other: CobaltColor.border
+        case .other: CobaltColor.caption
         }
     }
 
@@ -116,7 +143,7 @@ enum ChatCardTone {
         case .folder: "folder"
         case .saved: "checkmark"
         case .agents: Symbol.chatHelpers
-        case .other: "circle"
+        case .other: "function"
         }
     }
 }
@@ -135,11 +162,11 @@ struct ChatToolCardView: View {
             switch card {
             case .search(let s):
                 cardFrame(.search, Copy.ChatCards.searched, Copy.ChatCards.searchSub(query: s.query, within: s.within, total: s.total)) {
-                    ChatCardPosts(model: model, ids: s.hits.map(\.postID), posts: posts, side: 64, scores: s.hits.map(\.score), top: s.topScore, open: open)
+                    ChatCardPosts(model: model, ids: s.hits.map(\.postID), posts: posts, side: 64, scores: s.hits.map(\.score), top: s.topScore, bleed: Self.pad, open: open)
                 }
             case .look(let ids):
                 cardFrame(.look, Copy.ChatCards.lookedAt, Copy.ChatCards.pictures(ids.count)) {
-                    ChatCardPosts(model: model, ids: ids, posts: posts, side: 48, open: open)
+                    ChatCardPosts(model: model, ids: ids, posts: posts, side: 48, bleed: Self.pad, open: open)
                 }
             case .emotes(let e):
                 cardFrame(.emotes, e.saved ? Copy.ChatCards.emoteSaved : Copy.ChatCards.emotes, Copy.ChatCards.emotesSub(e)) {
@@ -168,12 +195,12 @@ struct ChatToolCardView: View {
                 cardFrame(.folder, "\(Copy.ChatCards.folderChange(c)) \(Copy.ChatCards.folder(c))", nil) { ChatFolderBody(folder: c) }
             case .saved(let s):
                 cardFrame(.saved, Copy.ChatCards.saved, Copy.ChatCards.saveStatus(s.status) ?? s.title) {
-                    ChatCardPosts(model: model, ids: s.postIDs, posts: posts, side: 64, open: open)
+                    ChatCardPosts(model: model, ids: s.postIDs, posts: posts, side: 64, bleed: Self.pad, open: open)
                 }
             case .facts(let f):
                 cardFrame(.saved, f.title, f.rows.map { "\($0.name): \($0.value)" }.joined(separator: " · ")) {
                     if !f.postIDs.isEmpty {
-                        ChatCardPosts(model: model, ids: f.postIDs, posts: posts, side: 44, open: open)
+                        ChatCardPosts(model: model, ids: f.postIDs, posts: posts, side: 44, bleed: Self.pad, open: open)
                     }
                 }
             case .agents(let a):
@@ -183,6 +210,9 @@ struct ChatToolCardView: View {
             }
         }
     }
+
+    /// The card's inner padding; a post strip reaches back across it to the card's edges.
+    static let pad: CGFloat = 11
 
     private func cardFrame<Content: View>(_ tone: ChatCardTone, _ title: String, _ sub: String?, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -202,7 +232,7 @@ struct ChatToolCardView: View {
             .accessibilityElement(children: .combine)
             content()
         }
-        .padding(11)
+        .padding(Self.pad)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(CobaltColor.row, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(CobaltColor.hairline, lineWidth: 1))
@@ -338,6 +368,9 @@ private struct ChatCardPosts: View {
     let side: CGFloat
     var scores: [Double?] = []
     var top: Double? = nil
+    /// How far the strip reaches past its own frame on each side: a card's own padding, so the row runs to the card's
+    /// edges and is cut there (it used to draw past the card's right edge). Its first tile still lines up with the title.
+    var bleed: CGFloat = 0
     let open: (LibraryPost) -> Void
 
     var body: some View {
@@ -348,7 +381,8 @@ private struct ChatCardPosts: View {
                 }
             }
         }
-        .scrollClipDisabled()
+        .contentMargins(.horizontal, bleed, for: .scrollContent)
+        .padding(.horizontal, -bleed)
     }
 
     @ViewBuilder
@@ -356,7 +390,7 @@ private struct ChatCardPosts: View {
         if let post = posts[id] {
             ChatPostTile(model: model, post: post, side: side, showsTitle: false) { open(post) }
                 .overlay(alignment: .top) { bar(score) }
-                .overlay(alignment: .bottomLeading) { label(score) }
+                .overlay(alignment: .bottomTrailing) { label(score) }
         } else {
             ChatRemovedTile(side: side, showsTitle: false)
         }
