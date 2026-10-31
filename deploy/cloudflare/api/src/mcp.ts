@@ -60,7 +60,7 @@ const ASK_NOTE =
 function describeOp(op: Op): string {
     let text = op.ai.summary.replace(/\n/g, " ");
     if (op.callName === "look")
-        text = `See these posts' pictures (poster or image, private ones too), returned as images. grid: lines every 0.1 to read off a crop box for make_cropImage; frames: up to 3 frames across a video. Max ${MCP_LOOK_MAX} per call.`;
+        text = `See these posts' pictures (poster or image, private ones too), returned as images. grid: labelled lines every 0.1 to read off a crop box; box: draws a crop you are about to make so you can check it; frames: up to 3 frames across a video. Max ${MCP_LOOK_MAX} per call.`;
     if (op.ai.tier === "ask") text += ` ${ASK_NOTE}`;
     return text;
 }
@@ -96,7 +96,7 @@ const INSTRUCTIONS = [
     "Posts are found with library_list or library_search (meaning search) and opened with library_post; use the post `id` they return.",
     "Save a link (TikTok, X, YouTube, Instagram, a direct file...) with library_save. Upload a local file with upload_begin, then PUT the file's bytes to the upload_url it returns (its `curl` field is ready to run).",
     "Make ops (make_*, edits_render) answer a job: check on it with jobs_wait. Share links: links_create; collections and sets group them.",
-    "To use part of a picture (a sticker in a screenshot) in a video: look with grid: true (a moment of a video: make_frames first saves frames as pictures), make_cropImage with the box (cutout: true for just the thing), look at the crop to check it, then edits_addOverlay.",
+    "Cropping (make_cropImage for pictures, make_crop for videos): never guess the position or assume the centre. Look at the source with grid: true (a video: frames: true, or make_frames for frames at chosen seconds), read the box off the labelled grid, check it with look's box option before making it, and look at the result after. A moving subject needs a box that covers it in every frame, or several clips with their own crops. Plain crop by default: cutout only for a subject on a plain background, never for banners, bars or text. Then edits_addOverlay to use it in a video.",
     "When offered, agents_spawn starts a helper (another capystore agent with these tools) on one task in the background; follow it with agents_get or jobs_wait on its job, message it with agents_send, read what helpers sent you with agents_inbox.",
     "Tools marked destructive delete or change things for good: confirm with the user first.",
 ].join("\n");
@@ -187,8 +187,8 @@ async function callTool(op: Op, caller: McpCaller, args: Json): Promise<ToolResu
     }
     try {
         if (op.callName === "look") {
-            const l = parsed.data as { ids: string[]; grid?: boolean; frames?: boolean };
-            return await look(ctx, caller, l.ids, { grid: l.grid === true, frames: l.frames === true });
+            const l = parsed.data as { ids: string[]; grid?: boolean; frames?: boolean; box?: { x: number; y: number; w: number; h: number } };
+            return await look(ctx, caller, l.ids, { grid: l.grid === true, frames: l.frames === true, ...(l.box ? { box: l.box } : {}) });
         }
         // the chat's own runner, so a route op goes through the Durable Object exactly as the chat's does
         return textResult((await runOp(op, ctx, parsed.data)) ?? null);
@@ -233,7 +233,7 @@ async function look(ctx: OpContext, caller: McpCaller, ids: string[], o: LookOpt
                 // the URL above stays as the answer
             }
         }
-        if (o.frames && !list.some((i) => i.label.startsWith("Frame "))) content.push({ type: "text", text: `Post ${id} has no stored frames (not a video, or not described yet).` });
+        if (o.frames && !list.some((i) => i.label.startsWith("Frame "))) content.push({ type: "text", text: `Post ${id} has no stored frames (not a video, or not described yet): make_frames saves frames to look at.` });
     }
     if (ids.length > MCP_LOOK_MAX) content.push({ type: "text", text: `Only the first ${MCP_LOOK_MAX} were shown.` });
     return { content };

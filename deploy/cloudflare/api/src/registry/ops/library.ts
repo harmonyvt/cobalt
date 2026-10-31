@@ -179,6 +179,10 @@ export const lookOp = defineOp({
         ids: Ids,
         grid: z.boolean().optional().describe("draw lines every 0.1 of the width and height, to read off a crop box for make.cropImage"),
         frames: z.boolean().optional().describe("a video: also up to 3 frames spread across it, not only its poster"),
+        box: z
+            .object({ x: z.number().min(0).lt(1), y: z.number().min(0).lt(1), w: z.number().gt(0).max(1), h: z.number().gt(0).max(1) })
+            .optional()
+            .describe("a crop you are about to make, drawn on the pictures (and frames) in cyan with the outside darkened: check it before cropping"),
     }),
     output: z.number(),
     ai: {
@@ -189,7 +193,7 @@ export const lookOp = defineOp({
         options: true,
     },
     handler: async (ctx, input) =>
-        ok(await tools(ctx).look!(input.ids, { ...(input.grid ? { grid: true } : {}), ...(input.frames ? { frames: true } : {}) })),
+        ok(await tools(ctx).look!(input.ids, { ...(input.grid ? { grid: true } : {}), ...(input.frames ? { frames: true } : {}), ...(input.box ? { box: input.box } : {}) })),
 });
 
 export const showOp = defineOp({

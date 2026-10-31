@@ -8,7 +8,7 @@ import { chatTools, type ChatCollect } from "../src/chat-tools";
 import { decodePng, encodePng, type Rgba } from "../src/cutout-core";
 import { parseCropSpec } from "../src/image-crop";
 import { frameTimes } from "../src/registry/ops/frames";
-import { drawGrid, flip, GRID_RGB, pixelBox, rotate } from "../src/image-crop-core";
+import { BOX_RGB, drawBox, drawGrid, flip, GRID_RGB, pixelBox, rotate } from "../src/image-crop-core";
 import { hashKey } from "../src/keys";
 import { lookBlocks, lookImages } from "../src/look-pictures";
 import { handleChatBudgetRoute } from "../src/registry/budget";
@@ -78,6 +78,26 @@ describe("image-crop-core", () => {
         expect(at(g, 3, 25)[0]).toBeGreaterThan(150); // the half, across
         expect(GRID_RGB).toEqual([255, 0, 170]);
         expect(img.data[0 + 3]).toBe(0); // the input is not changed
+    });
+
+    it("the grid is labelled with its tenths (white digits on a dark backing near the top and left edges)", () => {
+        const img: Rgba = { width: 400, height: 400, data: new Uint8Array(400 * 400 * 4).map((_, i) => (i % 4 === 3 ? 255 : 128)) };
+        const g = drawGrid(img);
+        // somewhere just right of the 0.1 line, at the top: some white label pixels
+        let white = 0;
+        for (let y = 0; y < 20; y++) for (let x = 41; x < 60; x++) if (at(g, x, y)[0] === 255 && at(g, x, y)[1] === 255) white++;
+        expect(white).toBeGreaterThan(5);
+        // the middle of a cell is untouched
+        expect(at(g, 75, 75)).toEqual([128, 128, 128, 255]);
+    });
+
+    it("a proposed box: cyan edge, the outside darkened, the inside untouched", () => {
+        const img: Rgba = { width: 100, height: 100, data: new Uint8Array(100 * 100 * 4).map((_, i) => (i % 4 === 3 ? 255 : 200)) };
+        const b = drawBox(img, { x: 0.2, y: 0.2, w: 0.5, h: 0.5 });
+        expect(at(b, 45, 45)).toEqual([200, 200, 200, 255]);
+        expect(at(b, 5, 5)[0]).toBeLessThan(100);
+        expect(at(b, 19, 45).slice(0, 3)).toEqual(BOX_RGB);
+        expect(at(b, 70, 45).slice(0, 3)).toEqual(BOX_RGB);
     });
 
     it("the JSON body: defaults, cutout shorthand, and a refusal names the field", () => {
@@ -330,6 +350,18 @@ describe("look (44.3)", () => {
         expect((await lookImages(deps(), ["PhotoFile0000001"], { PhotoFile0000001: { grid: true } })).get("PhotoFile0000001")).toEqual([]);
     });
 
+    it("look(ids, { box }) draws the box and says what it is; the chat remembers it", async () => {
+        const collect: ChatCollect = { look: [], show: [] };
+        const t = chatTools({ db, mediaBaseUrl: MEDIA, shareBaseUrl: undefined, embed: null }, collect);
+        await t.look!(["PngFile000000001"], { box: { x: 0.5, y: 0, w: 0.5, h: 0.5 } });
+        expect(collect.lookOpts).toEqual({ PngFile000000001: { box: { x: 0.5, y: 0, w: 0.5, h: 0.5 } } });
+        const img = (await lookImages(deps(), ["PngFile000000001"], collect.lookOpts)).get("PngFile000000001")![0]!;
+        expect(img.label).toMatch(/cyan rectangle is the proposed crop/);
+        const png = await decodePng(Uint8Array.from(atob(img.data!), (c) => c.charCodeAt(0)));
+        expect(at(png, 7, 2)).toEqual([7, 2, 7, 255]); // inside: as it was
+        expect(at(png, 1, 8)[0]).toBe(0); // outside: darkened
+    });
+
     it("frames: the stored frames of a video, after its poster; none says so", async () => {
         const jpg = new Uint8Array([0xff, 0xd8, 0xff, 9]);
         for (const n of [1, 2]) await putObject(env.ORIGINALS, `about/VideoFile0000001/frame-${n}.jpg`, jpg, "image/jpeg");
@@ -339,7 +371,7 @@ describe("look (44.3)", () => {
         expect(blocks[1]).toMatchObject({ type: "image", source: { type: "base64", media_type: "image/jpeg" } });
         expect(lookBlocks("PngFile000000001", [], false)).toEqual([{ type: "text", text: "Post PngFile000000001 has no picture to look at." }]);
         const nf = lookBlocks("PngFile000000001", [{ label: "Picture of post PngFile000000001:", url: "https://x/y.png" }], true);
-        expect(nf.at(-1)).toEqual({ type: "text", text: "Post PngFile000000001 has no stored frames (not a video, or not described yet)." });
+        expect(nf.at(-1)).toMatchObject({ type: "text", text: expect.stringMatching(/has no stored frames .*make\.frames/) });
     });
 
     it("pictures sent inline are not saved with the message", () => {

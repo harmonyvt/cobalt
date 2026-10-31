@@ -837,7 +837,7 @@ export const makeCropOp = defineOp({
     ai: {
         tier: "free",
         only: true,
-        summary: "A new mp4 of a video cropped to part of the picture (and trimmed if start/end are given). Returns a job and the edit project's id. Pictures: make.cropImage.",
+        summary: "A new mp4 of a video cropped to part of the picture (and trimmed if start/end are given), one fixed box for the whole clip. Look at its frames with a grid and check the box with look({ box }) first; never guess the centre. Returns a job and the edit project's id. Pictures: make.cropImage.",
         params: ["id", "crop"],
         options: true,
     },

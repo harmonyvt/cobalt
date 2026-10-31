@@ -5292,6 +5292,23 @@ pictures like any other: `look` (with a grid), `make.cropImage`, `make.cutout`, 
 `look(ids, { frames: true })` (44.3) needs no box and makes no files. The chat's instructions (44.4) mention it when the box
 is on.
 
+### 44.8 Cropping without guessing (addendum, 2026-10-31, after a live job where the chat cropped a video "centred on her" and colour-cut a banner against a black shirt)
+
+- `look(ids, { box })` (MCP `look { box }`): `box` is `{x, y, w, h}` in fractions, as 44.1. It is drawn on every picture
+  `look` sends for those posts (the picture and, with `frames`, each frame): outside darkened, a cyan edge. The text before
+  each picture says so. Nothing is made and nothing is spent: it is how the model checks a box before `make.cropImage` or
+  `make.crop`.
+- The `grid` is labelled: the digits 1..9 (tenths) sit along the top edge right of each vertical line and down the left
+  edge under each horizontal line, white on a dark backing.
+- `look(ids, { frames: true })` on a video with no stored frames says to use `make.frames`.
+- The chat's instructions (44.4) become a cropping routine for pictures and videos: see the real source with the grid (a
+  video's frames, not its poster; `make.frames` when there are none or the subject moves), read the box with a margin,
+  check it with `look({ box })`, cover a moving subject in every frame looked at (or split the clip into several main
+  clips with their own crops), use `cutout` only for a subject on a plain background and never for banners, bars, text or
+  other rectangles, look at the result after, and ask Harmony one short question when the subject is unclear. The MCP
+  instructions and the `make.crop` / `make.cropImage` summaries say the same in short. `make.cropImage` stays a plain crop
+  unless `cutout` is given.
+
 ### 44.6 Files, tests, deploy
 
 - Files: `api/src/{image-crop,image-crop-core,look-pictures}.ts`, `api/src/registry/ops/{editor,frames}.ts`,
