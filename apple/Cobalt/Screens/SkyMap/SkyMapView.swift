@@ -59,6 +59,7 @@ struct SkyMapView: View {
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var stage = SkyStage()
     @State private var size: CGSize = .zero
@@ -114,7 +115,7 @@ struct SkyMapView: View {
         let viewport = camera.viewport
         let focus = card?.index ?? hover
 
-        TimelineView(.animation(minimumInterval: settling ? 1.0 / 30 : 1.0 / 12, paused: reduceMotion)) { timeline in
+        TimelineView(.animation(minimumInterval: settling ? 1.0 / 30 : 1.0 / 12, paused: reduceMotion || scenePhase != .active)) { timeline in
             Canvas { ctx, canvasSize in
                 let now = timeline.date.timeIntervalSinceReferenceDate
                 stage.advance(target: points, now: now, animate: !reduceMotion)

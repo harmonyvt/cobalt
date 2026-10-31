@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreGraphics
+import CoreImage
 import CoreMedia
 import Foundation
 import ImageIO
@@ -309,6 +310,18 @@ final class EditRenderPlan: @unchecked Sendable {
     struct OverlayClip {
         let display: PixelSize
         let source: OverlaySource
+        /// A gif's frames or a photo as Core Image images, made once here instead of on every output frame (`[]` for a video).
+        let images: [CIImage]
+
+        init(display: PixelSize, source: OverlaySource) {
+            self.display = display
+            self.source = source
+            switch source {
+            case .video: images = []
+            case .gif(let frames, _): images = frames.map(EditFrameComposer.ciImage)
+            case .photo(let image): images = [EditFrameComposer.ciImage(image)]
+            }
+        }
     }
 
     let timeline: EditTimeline                  // rounded

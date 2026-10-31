@@ -11,12 +11,19 @@ import SwiftUI
 /// kind chips are off while it is on, and a kind chip turns it off.
 ///
 /// A view of its own: it counts the loaded posts, and a download tick or a scroll in the tiles must not redo that.
-struct LibraryKindChips: View {
+///
+/// `Equatable` on its plain inputs (not `pickAll`): the body reads the model itself, so a parent pass that changed
+/// neither does not recount.
+struct LibraryKindChips: View, Equatable {
     let model: AppModel
     /// Synthetic rows a preview adds (DEBUG); empty in the app.
     var extra: [LibraryRow] = []
     /// A chip's long press: tick every post of that kind (`false`), or tick them and share (`true`). Nil offers neither.
-    var pickAll: ((LibraryKindFilter, Bool) -> Void)?
+    var pickAll: (@MainActor (LibraryKindFilter, Bool) -> Void)?
+
+    nonisolated static func == (a: LibraryKindChips, b: LibraryKindChips) -> Bool {
+        a.model === b.model && a.extra == b.extra && (a.pickAll == nil) == (b.pickAll == nil)
+    }
 
     private var library: LibraryModel { model.library }
 

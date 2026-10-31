@@ -262,6 +262,11 @@ public final class ChatStore {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var followers: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var jobWatchers: [String: Task<Void, Never>] = [:]
+    /// Streamed text not shown yet, per thread: deltas are applied together at most every `textBatch`, so a reply
+    /// re-renders the thread about 20 times a second instead of once per token.
+    @ObservationIgnored private var pendingText: [String: String] = [:]
+    @ObservationIgnored private var textFlush: [String: Task<Void, Never>] = [:]
+    static let textBatch: Duration = .milliseconds(50)
     /// The reply activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
     @ObservationIgnored var live: ChatLiveManager?
 
@@ -526,7 +531,7 @@ public final class ChatStore {
             for try await event in ctx.client.sendChatMessage(threadID: id, text: cleaned, postIDs: attached) {
                 guard started == generation else { return }
                 received += 1
-                apply(event, to: id)
+                if onEvent == nil { applyStreamed(event, to: id) } else { apply(event, to: id) }
                 onEvent?(event)
                 if event.isFinal { finished = true }
             }
@@ -534,6 +539,7 @@ public final class ChatStore {
             failure = error
         }
         guard started == generation else { return }
+        flushText(id)
         if finished { return }
 
         if received == 0 {
@@ -579,13 +585,14 @@ public final class ChatStore {
             for try await event in ctx.client.answerChatConfirm(threadID: id, confirmID: card.id, yes: yes) {
                 guard started == generation else { return }
                 received += 1
-                apply(event, to: id)
+                applyStreamed(event, to: id)
                 if event.isFinal { finished = true }
             }
         } catch {
             failure = error
         }
         guard started == generation else { return }
+        flushText(id)
         if finished { return }
 
         if received == 0 {
@@ -692,6 +699,31 @@ public final class ChatStore {
 
     // MARK: state
 
+    /// A streamed event: text waits up to `textBatch` to go with the deltas after it; anything else first shows the
+    /// text before it, then itself.
+    private func applyStreamed(_ event: ChatEvent, to id: String) {
+        if case .text(let delta) = event {
+            pendingText[id, default: ""] += delta
+            if textFlush[id] == nil {
+                let started = generation
+                textFlush[id] = Task { [weak self] in
+                    try? await Task.sleep(for: Self.textBatch)
+                    guard !Task.isCancelled, let self, started == self.generation else { return }
+                    self.flushText(id)
+                }
+            }
+            return
+        }
+        flushText(id)
+        apply(event, to: id)
+    }
+
+    private func flushText(_ id: String) {
+        textFlush.removeValue(forKey: id)?.cancel()
+        guard let text = pendingText.removeValue(forKey: id), !text.isEmpty else { return }
+        apply(.text(text), to: id)
+    }
+
     private func apply(_ event: ChatEvent, to id: String) {
         contents[id]?.apply(event)
         live?.observe(event, thread: id)
@@ -716,7 +748,9 @@ public final class ChatStore {
         let id = detail.thread.id
         var merged = contents[id]?.posts ?? [:]
         merged.merge(detail.posts) { _, new in new }
-        contents[id] = ChatThreadContent(thread: detail.thread, messages: detail.messages, posts: merged)
+        let next = ChatThreadContent(thread: detail.thread, messages: detail.messages, posts: merged)
+        // an unchanged poll (every 2 s, or 4 s while a job runs) must not re-render the open thread
+        if contents[id] != next { contents[id] = next }
         put(detail.thread)
         pruneCollagePages(of: id)
         watchJobs(id)
@@ -724,6 +758,7 @@ public final class ChatStore {
 
     /// A thread as the server just answered it: in the list, ordered by when it changed.
     private func put(_ thread: ChatThread) {
+        if threads.contains(thread) { return }
         threads.removeAll { $0.id == thread.id }
         threads.append(thread)
         threads.sort { $0.updatedAt > $1.updatedAt }
@@ -752,6 +787,9 @@ public final class ChatStore {
     func reset() {
         generation += 1
         live?.reset()
+        for task in textFlush.values { task.cancel() }
+        textFlush = [:]
+        pendingText = [:]
         for task in followers.values { task.cancel() }
         followers = [:]
         for task in jobWatchers.values { task.cancel() }

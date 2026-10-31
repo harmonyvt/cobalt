@@ -83,7 +83,10 @@ struct OrbitView: View {
         .opacity(dim)
         #endif
         .animation(reduceMotion ? Motion.fade : Motion.lights, value: dim)
-        .task(id: shown.map { "\($0.id)|\($0.face.id)|\($0.face.fileURL?.path ?? "")|\($0.items.count)|\($0.face.posterURL?.path ?? "")" }) {
+        .task(id: shown.map { m in
+            let face = m.face                       // computed: once per planet
+            return "\(m.id)|\(face.id)|\(face.fileURL?.path ?? "")|\(m.items.count)|\(face.posterURL?.path ?? "")"
+        }) {
             let planets = shown
             files = await Task.detached(priority: .utility) { OrbitFiles.resolve(planets) }.value
         }
@@ -387,7 +390,13 @@ private struct OrbitThumb: View, Equatable {
                     step: CardEdges.step(forShort: visibleShort) / max(0.01, scale))
             }
         }
-        .shadow(color: .black.opacity(0.35), radius: 8, y: 5)
+        .background {
+            // the drop shadow as a blurred copy of the planet's shape: a `.shadow` on the whole planet made each
+            // of ~35 moving planets (players included) render offscreen on every frame
+            shape.fill(Color.black.opacity(0.35))
+                .blur(radius: 8)
+                .offset(y: 5)
+        }
         .scaleEffect(scale * popScale)
         .accessibilityHidden(true)
         .onChange(of: pops) { _, isFresh in

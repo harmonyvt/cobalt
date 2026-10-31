@@ -88,6 +88,8 @@ struct FocusLayer: View {
     /// When "publishing the video" began (its seconds count from here).
     @State private var hostSince = Date()
     @Namespace private var span
+    /// Files already found on disk (`originalURL`, `webpSource`: asked many times per body).
+    @State private var fileCheck = FileCheck()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.hapticsEnabled) private var haptics
     @Environment(\.homeHeight) private var homeHeight
@@ -320,13 +322,13 @@ struct FocusLayer: View {
     }
 
     private var webpSource: AnimatedImageView.Source? {
-        if let url = storedWebp?.fileURL, FileManager.default.fileExists(atPath: url.path) { return .file(url) }
+        if let url = storedWebp?.fileURL, fileCheck.exists(url) { return .file(url) }
         if let result = pipeline.webpResult { return .remote(result.url) }
         return nil
     }
 
     private var originalURL: URL? {
-        guard let url = localVideo?.fileURL, FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let url = localVideo?.fileURL, fileCheck.exists(url) else { return nil }
         return url
     }
 
@@ -967,7 +969,7 @@ struct FocusLayer: View {
         if canCrop, !isLong, !isWorking { out.append(.crop) }
         if showsPublicShare, primary != .publicShare { out.append(.publicShare) }
         if primary != .savePhotos { out.append(.savePhotos) }
-        if let file = localVideo?.fileURL, !isFork, FileManager.default.fileExists(atPath: file.path) { out.append(.share) }
+        if let file = localVideo?.fileURL, !isFork, fileCheck.exists(file) { out.append(.share) }
         out.append(.close)
         return out
     }
@@ -1101,50 +1103,13 @@ struct FocusLayer: View {
 
     // MARK: trim
 
+    /// Its own view: a drag on the strip changes `pipeline.trim`, and only the panel reads it.
     private var trimPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                // with the crop badge beside it the readout drops its "of 00:14.8" so neither is cut
-                Text(cropBadge == nil
-                     ? Copy.timecodeOf(pipeline.trim, duration: pipeline.media?.duration ?? pipeline.maxClipSeconds)
-                     : Copy.timecodeRange(pipeline.trim))
-                    .font(CobaltType.caption)
-                    .foregroundStyle(CobaltColor.caption)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                if let cropBadge { CropBadge(text: cropBadge).transition(.opacity) }
-                Spacer(minLength: 0)
-                LengthReadout(seconds: pipeline.trim.length, over: pipeline.trimOverLimit)
-                    .layoutPriority(1)
-            }
-            .motion(Motion.rows, value: cropBadge)
-            TrimStrip(pipeline: pipeline, spanNamespace: span, preview: trimPreview)
-                .padding(.top, 4)
-            StripScale(duration: pipeline.media?.duration ?? pipeline.maxClipSeconds, developing: false)
-            Text(Copy.trimNote(duration: pipeline.media?.duration, limit: pipeline.maxClipSeconds))
-                .font(CobaltType.caption)
-                .foregroundStyle(CobaltColor.caption)
-                .fixedSize(horizontal: false, vertical: true)
-            let makeWebp = Button(Copy.makeWebp, systemImage: Symbol.makeWebp) { pipeline.makeWebp() }
-                .buttonStyle(.cobaltPrimary())
-            let crop = Button(CropCopy.crop, systemImage: CropCopy.symbol) { openCrop() }
-                .buttonStyle(.cobaltSecondary(fullWidth: true, compact: true))
-                .accessibilityHint(CropCopy.cropA11yHint)
-            let cancel = Button(Copy.cancelTrim, systemImage: Symbol.close) {
-                withAnimation(reduceMotion ? Motion.fade : FocusMotion.content) { showsTrim = false }
-            }
-            .buttonStyle(.cobaltSecondary(fullWidth: true, compact: true))
-            GlassEffectContainer(spacing: 10) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) { makeWebp; if canCrop { crop }; cancel }
-                    VStack(spacing: 10) { makeWebp; HStack(spacing: 10) { if canCrop { crop }; cancel } }
-                }
-            }
-        }
-        .padding(16)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
-        .transition(.move(edge: .bottom).combined(with: .opacity))
+        TrimPanel(
+            pipeline: pipeline, span: span, preview: trimPreview, cropBadge: cropBadge, canCrop: canCrop,
+            onCrop: openCrop,
+            onCancel: { withAnimation(reduceMotion ? Motion.fade : FocusMotion.content) { showsTrim = false } })
+            .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     // MARK: working
@@ -1171,6 +1136,76 @@ struct FocusLayer: View {
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
             .transition(.opacity)
         }
+    }
+}
+
+/// The trim under the planet: the readout, the strip, its scale and the buttons. Reads `pipeline.trim` itself,
+/// so a drag re-runs this and not the whole focus layer.
+private struct TrimPanel: View {
+    let pipeline: Pipeline
+    let span: Namespace.ID
+    let preview: TrimPreview
+    let cropBadge: String?
+    let canCrop: Bool
+    let onCrop: @MainActor () -> Void
+    let onCancel: @MainActor () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                // with the crop badge beside it the readout drops its "of 00:14.8" so neither is cut
+                Text(cropBadge == nil
+                     ? Copy.timecodeOf(pipeline.trim, duration: pipeline.media?.duration ?? pipeline.maxClipSeconds)
+                     : Copy.timecodeRange(pipeline.trim))
+                    .font(CobaltType.caption)
+                    .foregroundStyle(CobaltColor.caption)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if let cropBadge { CropBadge(text: cropBadge).transition(.opacity) }
+                Spacer(minLength: 0)
+                LengthReadout(seconds: pipeline.trim.length, over: pipeline.trimOverLimit)
+                    .layoutPriority(1)
+            }
+            .motion(Motion.rows, value: cropBadge)
+            TrimStrip(pipeline: pipeline, spanNamespace: span, preview: preview)
+                .padding(.top, 4)
+            StripScale(duration: pipeline.media?.duration ?? pipeline.maxClipSeconds, developing: false)
+            Text(Copy.trimNote(duration: pipeline.media?.duration, limit: pipeline.maxClipSeconds))
+                .font(CobaltType.caption)
+                .foregroundStyle(CobaltColor.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            let makeWebp = Button(Copy.makeWebp, systemImage: Symbol.makeWebp) { pipeline.makeWebp() }
+                .buttonStyle(.cobaltPrimary())
+            let crop = Button(CropCopy.crop, systemImage: CropCopy.symbol) { onCrop() }
+                .buttonStyle(.cobaltSecondary(fullWidth: true, compact: true))
+                .accessibilityHint(CropCopy.cropA11yHint)
+            let cancel = Button(Copy.cancelTrim, systemImage: Symbol.close) { onCancel() }
+                .buttonStyle(.cobaltSecondary(fullWidth: true, compact: true))
+            GlassEffectContainer(spacing: 10) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { makeWebp; if canCrop { crop }; cancel }
+                    VStack(spacing: 10) { makeWebp; HStack(spacing: 10) { if canCrop { crop }; cancel } }
+                }
+            }
+        }
+        .padding(16)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
+    }
+}
+
+/// Remembers which files were found on disk, so a body that asks many times checks each one once. A missing
+/// file is asked about again every time (it may land at any moment).
+@MainActor
+private final class FileCheck {
+    private var present: Set<String> = []
+
+    func exists(_ url: URL) -> Bool {
+        let path = url.path
+        if present.contains(path) { return true }
+        guard FileManager.default.fileExists(atPath: path) else { return false }
+        present.insert(path)
+        return true
     }
 }
 

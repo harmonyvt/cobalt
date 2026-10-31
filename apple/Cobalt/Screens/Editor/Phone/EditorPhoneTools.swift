@@ -12,13 +12,18 @@ struct EditorPhoneToolTray: View {
 
     @Environment(EditorHost.self) private var host
     @State private var splitTick = 0
+    /// The playhead as the buttons see it, set by `EditorPlayheadSpotReader` when it changes (nil until the first report: the
+    /// body then reads the session once).
+    @State private var spot: EditorPlayheadSpot?
+
+    private var currentSpot: EditorPlayheadSpot { spot ?? EditorPlayheadSpot(session) }
 
     /// A main clip is selected, or one is under the playhead.
-    private var hasClip: Bool { session.selectedMain != nil || session.clipUnderPlayhead != nil }
+    private var hasClip: Bool { session.selectedMain != nil || currentSpot.clipID != nil }
 
     private var splitReady: Bool {
         if case .overlay = session.selection { return false }
-        return session.canSplitAtPlayhead
+        return currentSpot.canSplit
     }
 
     var body: some View {
@@ -36,6 +41,7 @@ struct EditorPhoneToolTray: View {
         .padding(.top, 8)
         .padding(.bottom, 2)
         .modifier(EditorPhoneSplitHaptic(tick: splitTick))
+        .background { EditorPlayheadSpotReader(session: session) { spot = $0 } }
         .accessibilityElement(children: .contain)
     }
 
@@ -55,7 +61,9 @@ struct EditorPhoneToolTray: View {
     }
 
     private func split() {
-        guard splitReady else {
+        let ready: Bool
+        if case .overlay = session.selection { ready = false } else { ready = session.canSplitAtPlayhead }   // live, not `spot`
+        guard ready else {
             host.show(Copy.Editor.nothingToSplit)
             return
         }

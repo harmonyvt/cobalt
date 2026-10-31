@@ -66,14 +66,15 @@ struct LibraryTile: View, Equatable {
 
     private var isRemote: Bool { face.local?.fileURL == nil }
 
-    /// The meta line, whether the link is public, and (when it is true) that the picture did not load.
-    private var accessibilityValue: String {
-        var parts = [LibraryRowCopy.meta(row, now: Date()), row.isPublic ? Copy.Library2.publicBadgeA11y : Copy.Library2.privateBadgeA11y]
-        if let by = row.hiddenBy { parts.append(Copy.HiddenAlbum.byA11y(by)) }
-        if let offline = OfflineMark(item: row.item, model: controller.model).spoken { parts.append(offline) }
-        if let shared = Copy.Library2.sharedA11y(share) { parts.append(shared) }
-        if failed { parts.append(Copy.Library2.pictureFailed) }
-        return parts.joined(separator: ", ")
+    /// The meta line, whether the link is public, and (when it is true) that the picture did not load. The offline
+    /// state goes between, read in `OfflineSpokenValue` so a download tick does not redraw the tile.
+    private var accessibilityValue: OfflineSpokenValue {
+        var before = [LibraryRowCopy.meta(row, now: Date()), row.isPublic ? Copy.Library2.publicBadgeA11y : Copy.Library2.privateBadgeA11y]
+        if let by = row.hiddenBy { before.append(Copy.HiddenAlbum.byA11y(by)) }
+        var after: [String] = []
+        if let shared = Copy.Library2.sharedA11y(share) { after.append(shared) }
+        if failed { after.append(Copy.Library2.pictureFailed) }
+        return OfflineSpokenValue(item: row.item, model: controller.model, before: before, after: after)
     }
 
     var body: some View {
@@ -113,7 +114,7 @@ struct LibraryTile: View, Equatable {
             .onAppear { if nearEnd { controller.loadMoreIfNeeded() } }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
-            .accessibilityValue(accessibilityValue)
+            .modifier(accessibilityValue)
             .accessibilityAddTraits(selected || ticked ? [.isButton, .isSelected] : .isButton)
             // date order for VoiceOver, not column order
             .accessibilitySortPriority(Double(-index))

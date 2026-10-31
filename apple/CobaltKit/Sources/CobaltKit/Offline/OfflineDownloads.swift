@@ -44,6 +44,18 @@ public final class OfflineDownloads {
     }
     private var tracks: [String: Track] = [:]
 
+    /// Renditions downloading or waiting (not failed): the queue badge. Written only when it changes, so the badge is
+    /// not redrawn on every progress event.
+    public private(set) var unfinishedCount = 0
+
+    private func recount() {
+        let n = tracks.values.reduce(0) { count, t in
+            if case .failed = t.state { return count }
+            return count + 1
+        }
+        if n != unfinishedCount { unfinishedCount = n }
+    }
+
     /// What the queue is doing: renditions left (downloading or waiting), the bytes so far and the bytes in all
     /// (nil while any size is unknown). Settings' "downloading" row.
     public var summary: (left: Int, bytes: Int64, total: Int64?) {
@@ -128,13 +140,17 @@ public final class OfflineDownloads {
             queuedAt: entry.queuedAt)
         t.state = state
         if case .downloading(let p) = state, let total = p.total { t.expected = total }
-        tracks[entry.key] = t
-        for alias in t.aliases { states[alias] = state }
+        // write only what changed: every library card and the queue observe these
+        let old = tracks[entry.key]
+        if old == nil || old?.state != t.state || old?.expected != t.expected { tracks[entry.key] = t }
+        for alias in t.aliases where states[alias] != state { states[alias] = state }
+        recount()
     }
 
     private func forget(_ key: String) {
         guard let t = tracks.removeValue(forKey: key) else { return }
         for alias in t.aliases { states[alias] = nil }
+        recount()
     }
 
     /// The queue's entries a rendition's keys name.

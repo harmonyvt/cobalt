@@ -9,13 +9,15 @@ import SwiftUI
 
 /// A reply's Markdown: blocks found by `ChatMarkdown` (paragraphs, lists, headings, quotes, code), each block's text
 /// drawn as inline Markdown (bold, italic, `code`, links).
-struct ChatMarkdownText: View {
+struct ChatMarkdownText: View, Equatable {
     let markdown: String
     var font: Font = CobaltType.body
 
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.markdown == b.markdown && a.font == b.font }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(ChatMarkdown.blocks(markdown).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(ChatMarkdownCache.blocks(markdown).enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
         }
@@ -68,8 +70,13 @@ struct ChatMarkdownText: View {
         }
     }
 
-    /// Inline Markdown with line breaks kept; text that is not valid Markdown stays as typed.
+    /// Inline Markdown with line breaks kept; text that is not valid Markdown stays as typed. Parsed once per text: a
+    /// streaming reply only parses the blocks that changed since the last update.
     static func inline(_ text: String) -> AttributedString {
+        ChatMarkdownCache.inline(text) { parse(text) }
+    }
+
+    private static func parse(_ text: String) -> AttributedString {
         var options = AttributedString.MarkdownParsingOptions()
         options.interpretedSyntax = .inlineOnlyPreservingWhitespace
         options.failurePolicy = .returnPartiallyParsedIfPossible
@@ -81,10 +88,35 @@ struct ChatMarkdownText: View {
     }
 }
 
+/// Parsed Markdown by text. A reply re-renders many times while it streams, and every message re-renders when its
+/// thread changes: without this each pass re-split the whole reply and re-ran `AttributedString(markdown:)` per block.
+@MainActor
+enum ChatMarkdownCache {
+    private static var blockCache: [String: [ChatBlock]] = [:]
+    private static var inlineCache: [String: AttributedString] = [:]
+    private static let limit = 400
+
+    static func blocks(_ markdown: String) -> [ChatBlock] {
+        if let hit = blockCache[markdown] { return hit }
+        let blocks = ChatMarkdown.blocks(markdown)
+        if blockCache.count >= limit { blockCache.removeAll(keepingCapacity: true) }
+        blockCache[markdown] = blocks
+        return blocks
+    }
+
+    static func inline(_ text: String, parse: () -> AttributedString) -> AttributedString {
+        if let hit = inlineCache[text] { return hit }
+        let parsed = parse()
+        if inlineCache.count >= limit * 4 { inlineCache.removeAll(keepingCapacity: true) }
+        inlineCache[text] = parsed
+        return parsed
+    }
+}
+
 // MARK: - one message
 
 /// A message of the thread with everything that hangs off it.
-struct ChatMessageView: View {
+struct ChatMessageView: View, Equatable {
     let model: AppModel
     let message: ChatMessage
     let content: ChatThreadContent
@@ -100,6 +132,15 @@ struct ChatMessageView: View {
     var answering = false
 
     @Environment(\.shell) private var shell
+
+    /// While a reply streams, the thread re-renders about 20 times a second: every message but the one that changed
+    /// skips its body (closures are the screen's own and do the same thing every pass, so they are not compared).
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        guard a.message == b.message, a.tier == b.tier, a.canRetry == b.canRetry, a.answering == b.answering,
+              a.content.thread.id == b.content.thread.id, a.content.posts == b.content.posts else { return false }
+        // only a failed reply shows (and retries) the words it answered
+        return a.message.status != .error || a.content.prompt(before: a.message) == b.content.prompt(before: b.message)
+    }
 
     var body: some View {
         switch message.role {
@@ -145,6 +186,7 @@ struct ChatMessageView: View {
             }
             if !message.text.isEmpty {
                 ChatMarkdownText(markdown: message.text)
+                    .equatable()
                     .textSelection(.enabled)
                     .contextMenu { copyButton }
             } else if message.status == .running, !message.steps.contains(where: { $0.status == .running }) {

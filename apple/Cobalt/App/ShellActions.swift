@@ -26,6 +26,14 @@ struct ShellActions {
     var openSettings: @MainActor () -> Void = {}
     /// Re-reads the server (settings changed the server or the key).
     var recheckServer: @MainActor () -> Void = {}
+    /// Bumped only when the shell really builds new actions (closures cannot be compared).
+    var generation = 0
+}
+
+/// Equal while the generation is: the shell builds its actions once, so a new shell pass does not
+/// invalidate the 30-odd views that read `\.shell`.
+extension ShellActions: Equatable {
+    static func == (lhs: ShellActions, rhs: ShellActions) -> Bool { lhs.generation == rhs.generation }
 }
 
 /// A status line with an action (APP-API-CONTRACT 41.4: "link updated" with "undo", "added to <title>" with "open"):

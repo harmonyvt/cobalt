@@ -83,14 +83,16 @@ private struct LibraryContent: View {
     private var library: LibraryModel { model.library }
 
     /// The posts on screen: the library's rows (kind, search, show and sort applied), then the share chips' filter.
-    private var rows: [LibraryRow] {
+    private var rows: [LibraryRow] { rows(from: unfilteredRows, index: shareIndex) }
+
+    /// `rows` from rows and an index already in hand (the body builds both once per pass).
+    private func rows(from unfiltered: [LibraryRow], index: ShareSetIndex) -> [LibraryRow] {
         let filter = shareFilter
         // the share chips are not in the album: nothing hidden is in a link
-        guard filter != .all, !library.showingHidden else { return unfilteredRows }
-        let index = shareIndex
+        guard filter != .all, !library.showingHidden else { return unfiltered }
         var setCollections: Set<String> = []
         if case .set(let id) = filter { setCollections = Set(model.shareSets.group(id)?.collectionIDs ?? []) }
-        return unfilteredRows.filter { filter.admits($0, index: index, setCollections: setCollections) }
+        return unfiltered.filter { filter.admits($0, index: index, setCollections: setCollections) }
     }
 
     /// The share chips' filter, back to `all` when its collection is gone.
@@ -183,11 +185,14 @@ private struct LibraryContent: View {
 
     var body: some View {
         @Bindable var library = model.library
-        let rows = self.rows
+        // `libraryRows` joins every post: built once here, not once per reader
+        let unfiltered = unfilteredRows
+        let shareIndex = self.shareIndex
+        let rows = self.rows(from: unfiltered, index: shareIndex)
         let phase = phase(rows)
         // Ticks a search, a filter or a delete took off screen are neither counted nor shared.
         let pickedCount = controller.selecting ? controller.pickedRows(rows).count : 0
-        content(rows: rows, phase: phase)
+        content(rows: rows, phase: phase, shareIndex: shareIndex)
             .navigationTitle(Copy.library)
             #if os(iOS)
             // An inline title: the large title grew and shrank with the scroll (and with a pull to refresh) while the
@@ -210,13 +215,14 @@ private struct LibraryContent: View {
                         LibraryKindChips(
                             model: model, extra: debugExtra,
                             pickAll: { kind, share in pickKind(kind, thenShare: share) })
+                        .equatable()
                     }
                     if controller.albumOpen {
                         HiddenAlbumNote(count: library.hiddenCount)
                     }
                     if model.capabilities.shareSets, !model.shareSets.sets.isEmpty, !library.showingHidden {
                         LibraryShareChips(
-                            model: model, rows: unfilteredRows, index: shareIndex, filter: $controller.shareFilter)
+                            model: model, rows: unfiltered, index: shareIndex, filter: $controller.shareFilter)
                     }
                     loadingAllLine
                     LibrarySearchLine(state: library.searchState)
@@ -328,7 +334,7 @@ private struct LibraryContent: View {
     }
 
     @ViewBuilder
-    private func content(rows: [LibraryRow], phase: LibraryPhase) -> some View {
+    private func content(rows: [LibraryRow], phase: LibraryPhase, shareIndex: ShareSetIndex) -> some View {
         switch phase {
         case .rows:
             switch library.viewMode {

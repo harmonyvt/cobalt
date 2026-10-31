@@ -354,11 +354,16 @@ struct FileLinkSection: View {
         (url.host ?? "") + url.path
     }
 
-    static func when(_ date: Date) -> String {
-        if abs(date.timeIntervalSinceNow) < 60 { return "just now" }
+    /// One formatter for every row (making one is not cheap); only its own method reads it.
+    nonisolated(unsafe) private static let relative: RelativeDateTimeFormatter = {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
-        return f.localizedString(for: date, relativeTo: Date()).lowercased()
+        return f
+    }()
+
+    static func when(_ date: Date) -> String {
+        if abs(date.timeIntervalSinceNow) < 60 { return "just now" }
+        return relative.localizedString(for: date, relativeTo: Date()).lowercased()
     }
 }
 

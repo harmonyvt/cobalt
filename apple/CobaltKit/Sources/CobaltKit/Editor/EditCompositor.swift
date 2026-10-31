@@ -110,9 +110,12 @@ enum EditFrameComposer {
                 source = overlayVideos[j].map { squarePixels(orient($0, orientation), display: plan.overlay[j].display) }
             case .gif(let frames, let delays):
                 let seconds = Double(k - t.start) / Double(plan.timing.fps)
-                if let image = gifFrame(frames, delays, at: seconds) { source = ciImage(image) }
+                let images = plan.overlay[j].images
+                if let i = gifFrameIndex(count: frames.count, delays, at: seconds) {
+                    source = i < images.count ? images[i] : ciImage(frames[i])
+                }
             case .photo(let image):
-                source = ciImage(image)
+                source = plan.overlay[j].images.first ?? ciImage(image)
             }
             if let source, let drawn = drawOverlay(source, overlay: o, canvas: canvas) { out = drawn.composited(over: out) }
         }
@@ -143,17 +146,22 @@ enum EditFrameComposer {
 
     /// The GIF frame on screen `seconds` after the overlay started: the GIF loops end to start for as long as the overlay lasts.
     static func gifFrame(_ frames: [CGImage], _ delays: [Double], at seconds: Double) -> CGImage? {
-        guard !frames.isEmpty else { return nil }
+        gifFrameIndex(count: frames.count, delays, at: seconds).map { frames[$0] }
+    }
+
+    /// The index of that frame among `count` frames; nil when there are none.
+    static func gifFrameIndex(count: Int, _ delays: [Double], at seconds: Double) -> Int? {
+        guard count > 0 else { return nil }
         let total = delays.reduce(0, +)
-        guard total > 0, delays.count == frames.count else { return frames[0] }
+        guard total > 0, delays.count == count else { return 0 }
         var t = seconds.truncatingRemainder(dividingBy: total)
         if t < 0 { t += total }
         var passed = 0.0
         for (i, d) in delays.enumerated() {
             passed += d
-            if t < passed { return frames[i] }
+            if t < passed { return i }
         }
-        return frames[frames.count - 1]
+        return count - 1
     }
 
     /// A main clip on the canvas: crop, Lanczos scale, place (y flipped: Core Image's origin is the bottom-left).

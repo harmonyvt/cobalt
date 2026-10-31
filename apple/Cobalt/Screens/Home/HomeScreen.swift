@@ -93,6 +93,8 @@ struct HomeScreen: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.accessibilitySwitchControlEnabled) private var switchControl
     @Environment(\.shell) private var shell
     @Environment(\.photoImport) private var photoImport
     @Environment(\.hapticsEnabled) private var haptics
@@ -152,7 +154,8 @@ struct HomeScreen: View {
     private var homeVisible: Bool {
         guard model.selectedTab == .save else { return false }
         #if os(iOS)
-        return openedID == nil
+        // the queue sheet is full screen: nothing behind it needs to move
+        return openedID == nil && !model.queueShown
         #else
         return openedSheet == nil
         #endif
@@ -237,8 +240,10 @@ struct HomeScreen: View {
 
     /// What the orbit knows about its entries: the reserved focus slot, then every media with the shape of its
     /// face (a webp made with a crop is square or 4:5: the planet's box springs to it).
-    private var orbitEntries: [OrbitEntry] {
-        (focusReserved ? [OrbitEntry(id: OrbitScene.focusID)] : []) + orbitMedia.map { m in
+    private var orbitEntries: [OrbitEntry] { entries(for: orbitMedia) }
+
+    private func entries(for media: [StoredMedia]) -> [OrbitEntry] {
+        (focusReserved ? [OrbitEntry(id: OrbitScene.focusID)] : []) + media.map { m in
             OrbitEntry(id: m.id, width: CGFloat(m.face.width ?? 720), height: CGFloat(m.face.height ?? 1280))
         }
     }
@@ -332,12 +337,14 @@ struct HomeScreen: View {
     // MARK: body
 
     var body: some View {
-        GeometryReader { proxy in
+        // the planets, worked out once per pass (the orbit, its entries, the caption and VoiceOver all use them)
+        let media = orbitMedia
+        return GeometryReader { proxy in
             ZStack {
                 // The orbit is the page: full-bleed, under the status bar, the tab bar and the
                 // toolbar (and, on iPad and the Mac, extended under the sidebar). Everything else
                 // floats over it as glass.
-                orbitLayer
+                orbitLayer(media)
                 ScrollView {
                     column(height: proxy.size.height)
                         .environment(\.homeHeight, proxy.size.height)
@@ -475,7 +482,7 @@ struct HomeScreen: View {
         }
         .onChange(of: starCategory) { old, new in advanceStar(from: old, to: new) }
         .onChange(of: starSignal) { _, new in if starCategory == .working { heldSignal = new } }
-        .onChange(of: orbitEntries, initial: true) { _, _ in syncOrbit() }
+        .onChange(of: entries(for: media), initial: true) { _, _ in syncOrbit() }
         .onChange(of: orbitFrame.size) { _, _ in syncOrbit() }
         .onChange(of: orbitSpeed, initial: true) { old, new in
             // a finger stops the orbit quickly; letting go (or coming back to the screen) eases it up gently
@@ -577,10 +584,10 @@ struct HomeScreen: View {
         .cobaltPage()
     }
 
-    private var orbitLayer: some View {
-        let solo = soloCaption
+    private func orbitLayer(_ media: [StoredMedia]) -> some View {
+        let solo = soloCaption(media)
         return OrbitView(
-            media: orbitMedia, scene: scene, running: orbitRuns, dim: orbitDim, freshID: freshID,
+            media: media, scene: scene, running: orbitRuns, dim: orbitDim, freshID: freshID,
             // behind a lifted focus the orbit is a dim backdrop: its players and webps stop like its flipbooks, so the
             // focus video is not one decoder among four (the posters stay)
             popID: popID, pool: pool, playersEnabled: motionAllowed && !(focusActive && focusLifted),
@@ -594,8 +601,9 @@ struct HomeScreen: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Copy.orbitA11y)
             .accessibilityValue(orbitSummary)
-            // while a planet is in focus the orbit behind it offers nothing to open
-            .accessibilityActions { if !focusActive { orbitActions } }
+            // while a planet is in focus the orbit behind it offers nothing to open; built only for an
+            // assistive tech that offers custom actions (each one looks up a planet's title)
+            .accessibilityActions { if !focusActive, voiceOver || switchControl { orbitActions(media) } }
     }
 
     /// The orbit's timeline runs while the orbit turns, the star lives, or something is still easing
@@ -1059,8 +1067,8 @@ struct HomeScreen: View {
 
     /// VoiceOver: every visible planet is a custom action ("open instagram …") on the orbit.
     @ViewBuilder
-    private var orbitActions: some View {
-        ForEach(orbitMedia) { media in
+    private func orbitActions(_ planets: [StoredMedia]) -> some View {
+        ForEach(planets) { media in
             Button(PlanetSpeak.text(title: model.mediaItem(for: baseMedia(media)).titleText, media: media)) { open(media) }
         }
     }
@@ -1088,8 +1096,8 @@ struct HomeScreen: View {
 
     /// The two lines under a media that is alone in the orbit: "instagram · Dd7P496wolG" and
     /// "10.1 s · 480×480 · 2 webps" (service · ref, length · size). Built once per screen update.
-    private var soloCaption: (id: String, caption: OrbitCaption)? {
-        guard orbitMedia.count == 1, !focusReserved, let media = orbitMedia.first else { return nil }
+    private func soloCaption(_ planets: [StoredMedia]) -> (id: String, caption: OrbitCaption)? {
+        guard planets.count == 1, !focusReserved, let media = planets.first else { return nil }
         let item = model.mediaItem(for: baseMedia(media))
         // the one resolver (CONTRACT-LIBRARY2 decision 1): a custom title wins over `service · ref`; a file reads
         // as its name without the extension, never as "upload"

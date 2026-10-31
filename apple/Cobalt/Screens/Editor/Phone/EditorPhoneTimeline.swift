@@ -346,7 +346,7 @@ struct EditorPhoneMainClip: View {
         }
         .frame(width: width, height: height, alignment: .topLeading)
         .scaleEffect(lifted && !reduceMotion ? 1.04 : 1)
-        .shadow(color: .black.opacity(lifted ? 0.4 : 0), radius: 8, y: 3)
+        .shadow(color: .black.opacity(lifted ? 0.4 : 0), radius: lifted ? 8 : 0, y: lifted ? 3 : 0)
         .opacity(lifted ? 0.94 : 1)
         .offset(x: lifted ? homeX + (reorder?.translation ?? 0) : restX + 1, y: y)
         .zIndex(lifted ? 5 : (selected ? 2 : 1))

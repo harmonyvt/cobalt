@@ -253,7 +253,7 @@ struct LibraryListRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
-        .accessibilityValue(OfflineMark(item: row.item, model: model).spoken.map { "\(meta), \($0)" } ?? meta)
+        .modifier(OfflineSpokenValue(item: row.item, model: model, before: [meta]))
         .accessibilityAddTraits(ticked ? [.isButton, .isSelected] : .isButton)
     }
 }

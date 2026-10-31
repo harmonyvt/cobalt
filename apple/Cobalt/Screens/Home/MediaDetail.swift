@@ -95,7 +95,9 @@ struct MediaDetail: View {
     // MARK: body
 
     var body: some View {
-        let item = resolved ?? lastShown
+        // once per pass: it joins the store and the library
+        let current = resolved
+        let item = current ?? lastShown
         let selected = controller.selected(in: item)
         let context = DetailContext(
             controller: controller, item: item, rendition: selected,
@@ -170,7 +172,7 @@ struct MediaDetail: View {
         .makeSheet(controller: controller, item: item, model: model)
         .renameAlert(item: item, isPresented: $renaming, model: model) { controller.notice = $0 }
         .background { tabShortcuts(item) }
-        .onChange(of: resolved) { old, now in
+        .onChange(of: current) { old, now in
             if let now { lastShown = now }
             // a webp that arrived (made here or on another device) takes the selection, like a new tab
             if let old, let now, now.detailShape == .classic, now.webpCount > old.webpCount { controller.selectedID = now.face.id }
@@ -180,7 +182,7 @@ struct MediaDetail: View {
                 controller.selectedID = fresh.id
             }
         }
-        .onChange(of: resolved == nil) { _, vanished in
+        .onChange(of: current == nil) { _, vanished in
             if vanished { finishGone() }
         }
         .task {

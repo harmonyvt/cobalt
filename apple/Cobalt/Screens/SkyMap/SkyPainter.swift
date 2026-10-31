@@ -78,6 +78,7 @@ final class SkyStage {
     private var readyAt: TimeInterval?
     private var dust: (size: CGSize, items: [SkyDust]) = (.zero, [])
     private var glows: [UInt32: CGImage] = [:]
+    private var labels: (key: SkyLabelKey, items: [SkyLabelPlacement])?
 
     /// Moves the drawn stars towards `target`. They snap when the count changes (a new sky) or when `animate` is off.
     func advance(target: [SIMD2<Double>], now: TimeInterval, animate: Bool) {
@@ -115,6 +116,31 @@ final class SkyStage {
         glows[rgb.key] = made
         return made
     }
+
+    /// The labels placed for `key`, worked out again only when the view, the size or the sky changes.
+    func labels(for key: SkyLabelKey, make: () -> [SkyLabelPlacement]) -> [SkyLabelPlacement] {
+        if let labels, labels.key == key { return labels.items }
+        let items = make()
+        labels = (key, items)
+        return items
+    }
+}
+
+/// What label placement depends on: the frame, the canvas size, the sky and the text size.
+struct SkyLabelKey: Equatable {
+    var k: Double
+    var mid: SIMD2<Double>
+    var centre: CGPoint
+    var pan: CGSize
+    var size: CGSize
+    var constellations: [SkyConstellation]
+    var typeSize: DynamicTypeSize
+}
+
+/// One label that fitted: its words and the bottom-centre point it is drawn at.
+struct SkyLabelPlacement {
+    var text: String
+    var at: CGPoint
 }
 
 /// Everything one frame needs.
@@ -146,7 +172,7 @@ enum SkyPainter {
         if scene.reveal > 0 { paintNebulae(scene, frame: f, into: &ctx) }
         if scene.reveal > 0 { paintLines(scene, frame: f, into: &ctx) }
         paintStars(scene, frame: f, stage: stage, into: &ctx)
-        if scene.reveal > 0 { paintLabels(scene, frame: f, into: &ctx) }
+        if scene.reveal > 0 { paintLabels(scene, frame: f, stage: stage, into: &ctx) }
     }
 
     // MARK: backdrop
@@ -295,13 +321,36 @@ enum SkyPainter {
     /// loses its trailing keywords, and one that would land on a label already placed is tried again with fewer
     /// keywords (down to one) before it is left out at this zoom. A label first has to fit with at most 30 pt of
     /// sliding (so it still sits over its own constellation); only if no version does may it slide further.
-    static func paintLabels(_ scene: SkyScene, frame f: SkyFrame, into ctx: inout GraphicsContext) {
+    static func paintLabels(_ scene: SkyScene, frame f: SkyFrame, stage: SkyStage, into ctx: inout GraphicsContext) {
         let t = scene.theme
-        let inset: CGFloat = 12
-        var placed: [CGRect] = []
-        let screen = CGRect(origin: .zero, size: scene.size)
         var c = ctx
         c.opacity = scene.reveal
+        let key = SkyLabelKey(
+            k: f.k, mid: f.mid, centre: f.centre, pan: f.pan, size: scene.size, constellations: scene.constellations,
+            typeSize: ctx.environment.dynamicTypeSize)
+        let measurer = c
+        let placed = stage.labels(for: key) { placeLabels(scene, frame: f, measurer: measurer) }
+        for label in placed {
+            let base = labelText(label.text)
+            let halo = c.resolve(base.foregroundColor(t.halo.color(t.haloAlpha)))
+            let ink = c.resolve(base.foregroundColor(t.label.color()))
+            for (dx, dy) in [(-1.5, 0.0), (1.5, 0), (0, -1.5), (0, 1.5), (-1.1, -1.1), (1.1, -1.1), (-1.1, 1.1), (1.1, 1.1)] {
+                c.draw(halo, at: CGPoint(x: label.at.x + dx, y: label.at.y + dy), anchor: .bottom)
+            }
+            c.draw(ink, at: label.at, anchor: .bottom)
+        }
+    }
+
+    private static func labelText(_ label: String) -> Text {
+        Text(label).font(Font.cobalt(11, .semibold)).tracking(2)
+    }
+
+    /// The search described above; measuring is the slow part, so its answer is cached in the stage.
+    private static func placeLabels(_ scene: SkyScene, frame f: SkyFrame, measurer c: GraphicsContext) -> [SkyLabelPlacement] {
+        let inset: CGFloat = 12
+        var placed: [CGRect] = []
+        var out: [SkyLabelPlacement] = []
+        let screen = CGRect(origin: .zero, size: scene.size)
         for cl in scene.constellations.sorted(by: { $0.members.count != $1.members.count ? $0.members.count > $1.members.count : $0.id < $1.id })
         where cl.members.count >= 2 && !cl.keywords.isEmpty {
             let anchor = f.point(SIMD2(cl.centroid.x, cl.top))
@@ -310,9 +359,7 @@ enum SkyPainter {
                 var count = cl.keywords.count
                 while count >= 1 {
                     let label = cl.keywords.prefix(count).joined(separator: " · ").uppercased()
-                    let base = Text(label).font(Font.cobalt(11, .semibold)).tracking(2)
-                    let ink = c.resolve(base.foregroundColor(t.label.color()))
-                    let size = ink.measure(in: CGSize(width: 800, height: 40))
+                    let size = c.resolve(labelText(label)).measure(in: CGSize(width: 800, height: 40))
                     // too wide for the screen: fewer words
                     guard size.width <= scene.size.width - 2 * inset else { count -= 1; continue }
                     let natural = CGRect(x: anchor.x - size.width / 2, y: anchor.y - 12 - size.height, width: size.width, height: size.height)
@@ -329,16 +376,12 @@ enum SkyPainter {
                         continue
                     }
                     placed.append(rect)
-                    let halo = c.resolve(base.foregroundColor(t.halo.color(t.haloAlpha)))
-                    let at = CGPoint(x: x, y: anchor.y - 12)
-                    for (dx, dy) in [(-1.5, 0.0), (1.5, 0), (0, -1.5), (0, 1.5), (-1.1, -1.1), (1.1, -1.1), (-1.1, 1.1), (1.1, 1.1)] {
-                        c.draw(halo, at: CGPoint(x: at.x + dx, y: at.y + dy), anchor: .bottom)
-                    }
-                    c.draw(ink, at: at, anchor: .bottom)
+                    out.append(SkyLabelPlacement(text: label, at: CGPoint(x: x, y: anchor.y - 12)))
                     done = true
                     break
                 }
             }
         }
+        return out
     }
 }

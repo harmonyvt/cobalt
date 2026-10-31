@@ -147,11 +147,16 @@ enum PasteIntake {
     /// "just now", "3 hours ago", "yesterday", "2 weeks ago".
     static func when(_ date: Date, now: Date = Date()) -> String {
         if now.timeIntervalSince(date) < 60 { return "just now" }
+        return relative.localizedString(for: date, relativeTo: now).lowercased()
+    }
+
+    /// One formatter for every row (making one per call showed in list scrolling). Formatters are thread safe.
+    nonisolated(unsafe) private static let relative: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         formatter.dateTimeStyle = .named
-        return formatter.localizedString(for: date, relativeTo: now).lowercased()
-    }
+        return formatter
+    }()
 }
 
 // MARK: - the sheet

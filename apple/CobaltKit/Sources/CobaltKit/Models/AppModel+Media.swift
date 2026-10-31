@@ -15,7 +15,7 @@ extension AppModel {
 
     /// The library's post, joined with the device's media for it when the store has one.
     public func mediaItem(for post: LibraryPost) -> MediaItem {
-        let local = store.media.first { MediaItem.joins($0, post) }
+        let local = store.media(joining: post)                                      // = `store.media.first { MediaItem.joins($0, post) }`
         return withLocalTitle(MediaItem.merge(local: local, post: post)!)          // `post` is non-nil: never nil
     }
 

@@ -152,6 +152,20 @@ private final class StopFlag: Sendable {
     var isStopped: Bool { flag.withLock { $0 } }
 }
 
+/// One frame on its way to the main actor at a time: a frame that comes while the last is not shown yet is dropped.
+private final class FrameGate: Sendable {
+    private let pending = Mutex(false)
+    /// True (and the gate shut) when no frame is waiting.
+    func claim() -> Bool {
+        pending.withLock { busy in
+            if busy { return false }
+            busy = true
+            return true
+        }
+    }
+    func release() { pending.withLock { $0 = false } }
+}
+
 /// ImageIO's animation callback arrives on its own queue, so this lives outside any actor and the callback is
 /// `@Sendable`; the owner hops to the main actor to show a frame.
 private enum LibraryAnimationDriver {
@@ -173,8 +187,13 @@ private final class LibraryAnimator {
         halt()
         let flag = StopFlag()
         stopFlag = flag
+        let gate = FrameGate()
         _ = LibraryAnimationDriver.play(data: data, stop: flag) { @Sendable [weak self] frame in
-            Task { @MainActor in self?.image = frame }
+            guard gate.claim() else { return }
+            Task { @MainActor in
+                self?.image = frame
+                gate.release()
+            }
         }
     }
 

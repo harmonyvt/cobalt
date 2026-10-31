@@ -396,6 +396,20 @@ struct LibraryPickMark: View {
 
 // MARK: - offline (CONTRACT-OFFLINE decision 11)
 
+/// A tile's or row's VoiceOver value: `before`, the offline state, `after`, joined by commas. The offline state ticks with
+/// every download update, so it is read here, in a body of its own, and not in the tile's.
+struct OfflineSpokenValue: ViewModifier {
+    let item: MediaItem
+    let model: AppModel
+    var before: [String] = []
+    var after: [String] = []
+
+    func body(content: Content) -> some View {
+        let offline = OfflineMark(item: item, model: model).spoken
+        return content.accessibilityValue((before + (offline.map { [$0] } ?? []) + after).joined(separator: ", "))
+    }
+}
+
 /// What the library draws for one media's offline state. `none` and `cached` draw nothing, so the default stays
 /// quiet: the cache is plumbing, and a file that may leave on its own is not "offline".
 enum OfflineMark: Equatable {
@@ -411,18 +425,36 @@ enum OfflineMark: Equatable {
     /// A download beats a failure, a failure beats a wait, and a wait beats the settled state.
     @MainActor
     init(item: MediaItem, model: AppModel) {
-        let state = model.offlineState(of: item)
-        let each = item.renditions.map { model.offlineState(of: $0) }
-        // the item's `downloading` is also set while a rendition only waits, so look at the renditions
-        let running = each.contains { if case .downloading = $0 { return true } else { return false } }
-        if running, let progress = state.downloading {
-            self = .downloading(OfflineWords.fraction(progress))
-        } else if state.failed {
+        // each rendition's state once; the sums are `AppModel.offlineState(of: MediaItem)`'s, over the same states
+        var running = false, waiting = false, failed = false
+        var bytes: Int64 = 0
+        var total: Int64? = 0
+        for rendition in item.renditions {
+            switch model.offlineState(of: rendition) {
+            case .downloading(let p):
+                running = true
+                bytes += p.bytes
+                total = total.flatMap { a in (p.total ?? rendition.bytes).map { a + $0 } }
+            case .waiting:
+                waiting = true
+                total = total.flatMap { a in rendition.bytes.map { a + $0 } }
+            case .failed:
+                failed = true
+            default:
+                break
+            }
+        }
+        // the item's progress also counts renditions that only wait, so a download needs one that runs
+        if running {
+            // `OfflineWords.fraction`: 0...1 when the total is known and positive
+            let fraction: Double? = total.flatMap { t -> Double? in t > 0 ? min(1, max(0, Double(bytes) / Double(t))) : nil }
+            self = .downloading(fraction)
+        } else if failed {
             self = .failed
-        } else if each.contains(.waiting) {
+        } else if waiting {
             self = .waiting
         } else {
-            switch state.offline {
+            switch item.offline {
             case .all: self = .kept
             case .some: self = .partly
             case .none: self = .quiet
