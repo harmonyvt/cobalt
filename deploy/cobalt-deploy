@@ -15,7 +15,10 @@
 #   ios testflight [testflight.sh options] [--commit <ref>]
 #                      archive the iOS app signed for App Store Connect and upload it to TestFlight
 #                      (deploy/apple/testflight.sh; --dry-run exports a signed ipa and uploads nothing)
-#   mac                build, sign and install the Mac app (deploy/apple/mac-install.sh)
+#   mac                build, sign and install the Mac app locally, unsandboxed (deploy/apple/mac-install.sh)
+#   mac testflight [testflight.sh options] [--commit <ref>]
+#                      archive the sandboxed Mac app for App Store Connect and upload it to TestFlight
+#                      (deploy/apple/testflight.sh --mac; --dry-run exports a signed pkg and uploads nothing)
 #   api [--dry-run]    deploy the API Worker + container (prepare-git-info.sh, then cf deploy)
 #   web [--dry-run]    build the web app and deploy the web Worker (build-web.sh, then cf deploy)
 #
@@ -31,7 +34,7 @@ FEATHER_CONFIG="${COBALT_FEATHER_CONFIG:-$HOME/.config/cobalt/feather.json}"
 IPA_ARCHIVE="${COBALT_IPA_ARCHIVE:-$HOME/cobalt-ipas}"
 
 die() { echo "cobalt-deploy: $*" >&2; exit 1; }
-usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 feather_source_url() {
     [ -f "$FEATHER_CONFIG" ] || die "missing $FEATHER_CONFIG (see deploy/apple/README.md)"
@@ -124,7 +127,12 @@ case "$target" in
             *) ios_release release.sh "$@" ;;
         esac
         ;;
-    mac) exec "$HERE/apple/mac-install.sh" "$@" ;;
+    mac)
+        case "${1:-}" in
+            testflight) shift; ios_release testflight.sh --mac "$@" ;;
+            *) exec "$HERE/apple/mac-install.sh" "$@" ;;
+        esac
+        ;;
     api)
         "$HERE/cloudflare/api/prepare-git-info.sh"
         cf_deploy "$HERE/cloudflare/api" "$@"

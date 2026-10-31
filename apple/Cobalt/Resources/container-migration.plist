@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS only (iOS ignores it). The first launch of the sandboxed Mac app (TestFlight) gets the store the old
+  unsandboxed install (deploy/apple/mac-install.sh) kept in ~/Library/Application Support, and its preferences, copied into
+  the app's container, where AppGroup.location now finds them. Runs once, when the container is created; a path that
+  does not exist is skipped; the originals stay put. ~/Movies/cobalt is not copied: the Movies entitlement reaches it.
+-->
+<plist version="1.0">
+<dict>
+	<key>Move</key>
+	<array>
+		<string>${ApplicationSupport}/Videos</string>
+		<string>${ApplicationSupport}/Sync</string>
+		<string>${ApplicationSupport}/Jobs</string>
+		<string>${ApplicationSupport}/Saves</string>
+		<string>${ApplicationSupport}/Telemetry</string>
+		<string>${ApplicationSupport}/upload-answers</string>
+		<string>${Library}/Preferences/com.capybaraharmony.cobalt.plist</string>
+	</array>
+</dict>
+</plist>

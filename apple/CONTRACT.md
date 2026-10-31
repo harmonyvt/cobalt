@@ -113,7 +113,7 @@ apple/
 | extension activation | `NSExtensionActivationSupportsWebURLWithMaxCount = 1`, `NSExtensionActivationSupportsMovieWithMaxCount = 1`, `NSExtensionActivationSupportsText = true` (shared text with a link in it) |
 | Info.plist keys (app) | `NSPhotoLibraryAddUsageDescription` = "cobalt saves videos you choose to your photos.", `NSAppTransportSecurity.NSAllowsLocalNetworking = true` (plain cobalt on the LAN), `CFBundleURLTypes` (`cobalt-apple`), `UILaunchScreen` = {} , `LSApplicationCategoryType` = `public.app-category.utilities` |
 | Info.plist keys (extension) | `NSExtension` (point `com.apple.share-services`, principal class `$(PRODUCT_MODULE_NAME).ShareViewController`), `NSPhotoLibraryAddUsageDescription` (same text) |
-| macOS entitlements | app sandbox, `network.client`, `files.user-selected.read-write`, `personal-information.photos-library`, the app group, keychain group |
+| macOS entitlements | app sandbox, `network.client`, `files.user-selected.read-write`, `files.bookmarks.app-scope`, `assets.movies.read-write` (~/Movies/cobalt), `personal-information.photos-library`, the app group, keychain group; used as-is by the TestFlight build (`deploy/cobalt-deploy mac testflight`), stripped by the local install (`mac-install.sh`) |
 
 **Signing.** Nothing in git names a team. `Config/Signing.xcconfig` (committed) sets
 `CODE_SIGN_STYLE = Automatic`, `DEVELOPMENT_TEAM =` (empty) and ends with

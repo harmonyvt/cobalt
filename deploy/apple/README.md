@@ -98,6 +98,39 @@ A TestFlight install replaces a Feather install of the same bundle id. If iOS re
 by a different team, delete the Feather copy first: that loses the videos kept on the phone and the saved API key (type
 it again after). The keychain and app group are keyed by team id, so moving teams never carries them over.
 
+### TestFlight for the Mac
+
+`deploy/cobalt-deploy mac testflight [--dry-run] [--commit <ref>]` (`testflight.sh --mac`) archives the Mac app and uploads
+a signed `.pkg` the same way. It replaces `deploy/cobalt-deploy mac` (the local, unsandboxed `/Applications` install,
+which still works). The Mac target shares the iOS bundle id, so it is the same app record: adding macOS to it makes one
+universal purchase, and the build number comes from the same rising sequence (`testflight.tsv` column 5 says
+`ios`/`mac`). The archive is refused unless it is sandboxed, has the Movies entitlement and carries the container
+migration manifest.
+
+What the sandbox changes (`apple/Config/Cobalt-macOS.entitlements`):
+
+- **~/Movies/cobalt** keeps working through `com.apple.security.assets.movies.read-write`. A kept-files folder chosen
+  elsewhere was bookmarked by the unsandboxed app; if it shows as missing, pick it again in Settings (that makes a
+  sandbox bookmark, `files.bookmarks.app-scope`).
+- **The store** (`~/Library/Application Support/{Videos,Sync,Jobs,Saves,Telemetry,upload-answers}`) and the preferences
+  are copied into `~/Library/Containers/com.capybaraharmony.cobalt/` on the first sandboxed launch
+  (`apple/Cobalt/Resources/container-migration.plist`; it runs once, when the container is made). The originals stay;
+  delete them by hand once the TestFlight app looks right.
+- **The API key**: the old one sits in the login keychain under the Developer ID signature. The TestFlight app may ask
+  for the login password to read it ("Always Allow"), or open with no key: make a new key in the web UI and paste it.
+- **Studio wallpaper**, the open/save panels, Photos export and Finder reveal need nothing extra.
+
+One-time setup (owner):
+
+1. App Store Connect > Apps > capystore > the **+** next to the iOS platform in the sidebar (Add Platform) > **macOS**.
+   It uses the same bundle id, so it becomes a universal purchase; no new app record and no new SKU.
+2. `deploy/cobalt-deploy mac testflight --dry-run`: makes the Mac distribution and installer certificates and the Mac
+   profile through the team key, and exports a pkg without uploading.
+3. Install **TestFlight** from the Mac App Store and sign in with the same Apple ID as the internal tester. The internal
+   group already has automatic distribution; check the new Mac build appears under TestFlight > macOS builds.
+4. Quit capystore, drag `/Applications/cobalt.app` (the local install) to the Bin, then install from TestFlight.
+5. Then each Mac release: `deploy/cobalt-deploy mac testflight` (production: needs the owner's go).
+
 ### Live Activities on TestFlight
 
 The Dynamic Island and Lock Screen activity (`apple/CONTRACT-LIVE.md`) is already in the app. A TestFlight build has no

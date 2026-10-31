@@ -162,5 +162,8 @@ backend routes it uses; nothing under `api/` changes). Design source: `apple/moc
 - TestFlight: `deploy/cobalt-deploy ios testflight [--dry-run]` (`deploy/apple/testflight.sh`): automatic signing via an
   App Store Connect API key in `~/.config/cobalt/appstoreconnect.json`, internal testing only, shares the Feather build
   number sequence (`~/cobalt-ipas/testflight.tsv`). Setup: `deploy/apple/README.md` (TestFlight).
+- Mac TestFlight: `deploy/cobalt-deploy mac testflight [--dry-run]` (`testflight.sh --mac`): sandboxed pkg, same app
+  record as iOS (universal purchase; macOS platform added once in App Store Connect). `deploy/cobalt-deploy mac` still
+  does the old unsandboxed /Applications install. Sandbox notes: `deploy/apple/README.md` (TestFlight for the Mac).
 - Previews and tests run on `PreviewClient` / `AppModel.preview(<scenario>)`, which replay
   the mockup's real data and timings without network.

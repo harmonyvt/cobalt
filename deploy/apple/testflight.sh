@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Archive the capystore iOS app signed for App Store Connect and upload it to TestFlight.
+# Archive the capystore app signed for App Store Connect and upload it to TestFlight (iOS, or the Mac with --mac).
 #
-# Usage: deploy/apple/testflight.sh [--dry-run] [--build <n>] [--keep-archive]
+# Usage: deploy/apple/testflight.sh [--mac] [--dry-run] [--build <n>] [--keep-archive]
 #
-#   --dry-run        archive and export a signed App Store ipa into apple/.build/testflight/; upload nothing
+#   --mac            the Mac app (sandboxed, a signed .pkg) instead of the iOS app; same app record (universal purchase)
+#   --dry-run        archive and export a signed App Store ipa (or pkg) into apple/.build/testflight/; upload nothing
 #   --build <n>      use this build number (default: one past the newest build of the Feather source, the TestFlight
 #                    log and apple/project.yml, so both channels share one rising build number)
 #   --keep-archive   keep the .xcarchive (default: deleted after the export to save disk; the dSYMs are copied first)
@@ -18,6 +19,7 @@
 #   {"keyId": "<key id>", "issuerId": "<uuid>", "keyPath": "~/.config/cobalt/AuthKey_<keyId>.p8", "teamId": "<10 chars>"}
 # The key needs the Admin role (cloud-managed distribution signing). "teamId" may be left out when
 # apple/Config/Local.xcconfig sets DEVELOPMENT_TEAM. Fork-only; see deploy/apple/README.md ("TestFlight").
+# The Mac needs the macOS platform added to the app record once; see deploy/apple/README.md ("TestFlight for the Mac").
 # Never prints the key or its path's contents.
 
 set -euo pipefail
@@ -32,11 +34,13 @@ TF_LOG="$IPA_ARCHIVE/testflight.tsv"
 
 DRY_RUN=0
 KEEP_ARCHIVE=0
+PLATFORM=ios
 BUILD_ARG=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
+        --mac|--macos) PLATFORM=mac ;;
         --keep-archive) KEEP_ARCHIVE=1 ;;
         --build)
             [ $# -ge 2 ] || { echo "testflight.sh: --build needs a number" >&2; exit 2; }
@@ -44,7 +48,7 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         -h|--help)
-            sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -128,14 +132,20 @@ else
     echo "build $BUILD (newest Feather $FEATHER_MAX, newest TestFlight $TF_MAX, project.yml ${YML_BUILD:-?})"
 fi
 
+if [ "$PLATFORM" = mac ]; then
+    DESTINATION='generic/platform=macOS'; LABEL="Mac"; KIND=pkg; TAG="mac-"
+else
+    DESTINATION='generic/platform=iOS'; LABEL="iOS"; KIND=ipa; TAG=""
+fi
+
 OUT="$APPLE/.build/testflight"
-ARCHIVE="$OUT/cobalt-$VERSION-$BUILD.xcarchive"
-EXPORT_DIR="$OUT/export-$VERSION-$BUILD"
+ARCHIVE="$OUT/cobalt-$TAG$VERSION-$BUILD.xcarchive"
+EXPORT_DIR="$OUT/export-$TAG$VERSION-$BUILD"
 LOG="$OUT/xcodebuild.log"
 mkdir -p "$OUT"
 rm -rf "$ARCHIVE" "$EXPORT_DIR"
 
-step "capystore $VERSION ($BUILD) for TestFlight$([ "$DRY_RUN" -eq 1 ] && echo ", DRY RUN: nothing will be uploaded")"
+step "capystore $LABEL $VERSION ($BUILD) for TestFlight$([ "$DRY_RUN" -eq 1 ] && echo ", DRY RUN: nothing will be uploaded")"
 
 # --- archive --------------------------------------------------------------------------------------
 
@@ -147,7 +157,7 @@ if ! xcodebuild \
     -project "$APPLE/Cobalt.xcodeproj" \
     -scheme Cobalt \
     -configuration Release \
-    -destination 'generic/platform=iOS' \
+    -destination "$DESTINATION" \
     -archivePath "$ARCHIVE" \
     "${AUTH[@]}" \
     DEVELOPMENT_TEAM="$TEAM_ID" \
@@ -158,11 +168,27 @@ if ! xcodebuild \
     die "archive failed; full log: $LOG"
 fi
 tail -n 2 "$LOG"
-[ -d "$ARCHIVE/Products/Applications/cobalt.app" ] || die "archive finished but cobalt.app is missing from it"
+APP="$ARCHIVE/Products/Applications/cobalt.app"
+[ -d "$APP" ] || die "archive finished but cobalt.app is missing from it"
+
+if [ "$PLATFORM" = mac ]; then
+    # DEBUG-only launch switches must not ship, and a Mac App Store build must be sandboxed (TestFlight refuses it
+    # otherwise); the Movies entitlement is what lets the sandboxed app keep using ~/Movies/cobalt.
+    if strings "$APP/Contents/MacOS/cobalt" | grep -q cobaltSandboxRoot; then
+        die "Release binary still contains -cobaltSandboxRoot (DEBUG-only); refusing to upload"
+    fi
+    ents="$(codesign -d --entitlements - --xml "$APP" 2>/dev/null || true)"
+    for want in com.apple.security.app-sandbox com.apple.security.assets.movies.read-write; do
+        grep -q "$want" <<<"$ents" || die "the archived Mac app is not signed with $want"
+    done
+    [ -f "$APP/Contents/Resources/container-migration.plist" ] \
+        || die "container-migration.plist is missing from the Mac app (the old unsandboxed data would not move)"
+    echo "sandboxed, Movies folder entitlement and container migration manifest present"
+fi
 
 # --- dSYMs (they symbolicate MetricKit stacks later; TestFlight gets its own copy via uploadSymbols) ---
 
-DSYM_DIR="$DSYM_ROOT/$VERSION-$BUILD"
+DSYM_DIR="$DSYM_ROOT/$TAG$VERSION-$BUILD"
 mkdir -p "$DSYM_DIR"
 count=0
 for d in "$ARCHIVE"/dSYMs/*.dSYM; do
@@ -206,14 +232,15 @@ fi
 tail -n 3 "$LOG"
 
 if [ "$DRY_RUN" -eq 1 ]; then
-    ipa="$(ls "$EXPORT_DIR"/*.ipa 2>/dev/null | head -n 1 || true)"
-    [ -n "$ipa" ] || die "export finished but no ipa in $EXPORT_DIR"
-    echo "signed App Store ipa (not uploaded): $ipa"
+    file="$(ls "$EXPORT_DIR"/*."$KIND" 2>/dev/null | head -n 1 || true)"
+    [ -n "$file" ] || die "export finished but no $KIND in $EXPORT_DIR"
+    echo "signed App Store $KIND (not uploaded): $file"
 else
     mkdir -p "$IPA_ARCHIVE"
-    printf '%s\t%s\t%s\t%s\n' "$VERSION" "$BUILD" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo -)" >>"$TF_LOG"
-    echo "uploaded capystore $VERSION ($BUILD); App Store Connect takes about 5 to 15 minutes to process it,"
+    # One log for both platforms (column 5 says which), so iOS and the Mac share one rising build number.
+    printf '%s\t%s\t%s\t%s\t%s\n' "$VERSION" "$BUILD" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo -)" "$PLATFORM" >>"$TF_LOG"
+    echo "uploaded capystore $LABEL $VERSION ($BUILD); App Store Connect takes about 5 to 15 minutes to process it,"
     echo "then it appears in TestFlight for the internal testing group. Logged in ${TF_LOG/#"$HOME"/\~}."
 fi
 
