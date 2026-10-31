@@ -701,6 +701,44 @@ final class LibraryController {
         }
     }
 
+    /// The select panel's trash, after its sheet: each pick's plan, one post at a time. A post with work in flight is
+    /// skipped and counted as not deleted; select mode ends when everything went.
+    func deletePicks(_ plans: [DeletePick]) {
+        guard !plans.isEmpty else { return }
+        Task {
+            showStatus(Copy.Media.deleting)
+            var failed = 0
+            var partial = 0
+            for plan in plans {
+                if model.isBusy(plan.item) { failed += 1; continue }
+                do {
+                    switch try await model.delete(plan) {
+                    case .done:
+                        if plan.plan == .everything, let id = plan.item.post?.id {
+                            picked.remove(id)
+                            if selection == id { selection = nil }
+                        }
+                    case .partial, .leftOnServer:
+                        partial += 1
+                    }
+                } catch {
+                    failed += 1
+                }
+            }
+            if failed > 0 {
+                showStatus(Copy.DeletePicks.someFailed(failed))
+                failTick += 1
+            } else if partial > 0 {
+                showStatus(Copy.Media.stillOnServer)
+                warnTick += 1
+            } else {
+                showStatus(Copy.DeletePicks.deleted(plans.count))
+                doneTick += 1
+                withAnimation(Motion.rows) { endSelecting() }
+            }
+        }
+    }
+
     /// A button's failure in plain words.
     static func words(_ error: Error) -> String {
         if let failure = error as? PipelineFailure { return Copy.failure(failure) }

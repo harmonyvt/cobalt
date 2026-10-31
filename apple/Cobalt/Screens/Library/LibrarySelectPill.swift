@@ -11,7 +11,7 @@ import SwiftUI
 ///
 /// With `features.hidden` the row ends with `status…` (a menu: hidden, off, public link, private link; one request for
 /// every pick, APP-API-CONTRACT 37.7). In the hidden album the row is `unhide` and `status…` only: nothing hidden can be
-/// shared, filed or edited.
+/// shared, filed or edited. Last comes the trash circle (`LibraryDeleteSheet`): what goes, with a post's files to choose.
 struct LibrarySelectPill: View {
     let model: AppModel
     let controller: LibraryController
@@ -32,6 +32,8 @@ struct LibrarySelectPill: View {
     @State private var openedLink: LinkRoute?
     @State private var addedToken = 0
     @State private var addFailedToken = 0
+    /// The trash circle's sheet is up.
+    @State private var deleting = false
     @Environment(\.shell) private var shell
 
     private var store: ShareSetStore { model.shareSets }
@@ -60,6 +62,11 @@ struct LibrarySelectPill: View {
         .frame(maxWidth: .infinity)
         .sheet(isPresented: $pickingCollection) {
             CollectionPickerSheet(store: store, picks: controller.pickedRows(rows), file: file)
+        }
+        .sheet(isPresented: $deleting) {
+            LibraryDeleteSheet(
+                picks: controller.pickedRows(rows).map(\.item).filter { controller.canDelete($0) },
+                delete: controller.deletePicks)
         }
         .modifier(AddToLinkPresentations(
             model: model, picks: controller.pickedRows(rows).map { ShareSetPick(item: $0.item) },
@@ -142,6 +149,7 @@ struct LibrarySelectPill: View {
                     shareActions(picks, ready: ready)
                 }
                 if offersStatus { statusMenu(picks) }
+                if deletes(picks) { trashButton(picks) }
             }
         }
         .padding(12)
@@ -185,6 +193,24 @@ struct LibrarySelectPill: View {
         .help(Copy.HiddenAlbum.status)
         .accessibilityLabel(Copy.HiddenAlbum.status)
         .accessibilityHint(Copy.HiddenAlbum.statusHint)
+    }
+
+    /// The trash circle (last, in the error red): the sheet that says what goes, and lets a post's files be chosen.
+    private func trashButton(_ picks: [LibraryRow]) -> some View {
+        Button { deleting = true } label: {
+            Label(Copy.DeletePicks.delete, systemImage: Symbol.Library.deleteEverything)
+        }
+        .buttonStyle(.cobaltIcon(tint: CobaltColor.errorText))
+        .disabled(picks.isEmpty || busy)
+        .accessibilityHint(Copy.DeletePicks.deleteHint)
+        #if os(macOS)
+        .keyboardShortcut(.delete, modifiers: [.command])
+        #endif
+    }
+
+    /// The trash is offered when a pick has something the server can delete.
+    private func deletes(_ picks: [LibraryRow]) -> Bool {
+        picks.contains { controller.canDelete($0.item) }
     }
 
     /// One circle of the action row: the `.cobaltIcon()` diameter, for the controls that are not icon buttons.
