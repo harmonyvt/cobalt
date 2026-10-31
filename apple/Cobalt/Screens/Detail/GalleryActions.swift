@@ -76,12 +76,14 @@ struct GalleryActions: View {
                 GallerySelectionBar(c: c, share: share)
             } else {
                 let plan = plan
-                GlassEffectContainer(spacing: 0) {
-                    VStack(spacing: 8) {
-                        if let missing = c.missingIndex { missingNote(missing) }
-                        if let primary = plan.primary { primaryButton(primary) }
-                        if !plan.secondary.isEmpty { secondaryRow(plan.secondary) }
+                VStack(spacing: 10) {
+                    GlassEffectContainer(spacing: 0) {
+                        VStack(spacing: 8) {
+                            if let missing = c.missingIndex { missingNote(missing) }
+                            if let primary = plan.primary { primaryButton(primary) }
+                        }
                     }
+                    if !plan.secondary.isEmpty { secondaryRow(plan.secondary) }
                 }
                 .disabled(locked)
             }
@@ -188,49 +190,40 @@ struct GalleryActions: View {
 
     // MARK: secondary
 
+    /// The secondary row: one icon circle per choice (icon-first controls).
     private func secondaryRow(_ items: [Choice]) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { ForEach(items, id: \.self) { secondary($0, .stacked) } }
-            VStack(spacing: 8) {
-                ForEach(Array(stride(from: 0, to: items.count, by: 2)), id: \.self) { i in
-                    HStack(spacing: 8) {
-                        ForEach(Array(items[i..<min(i + 2, items.count)]), id: \.self) { secondary($0, .stacked) }
-                    }
-                }
-            }
-            VStack(spacing: 8) { ForEach(items, id: \.self) { secondary($0, .inline) } }
-        }
+        IconRow { ForEach(items, id: \.self) { secondary($0) } }
     }
 
     @ViewBuilder
-    private func secondary(_ choice: Choice, _ layout: DetailChoiceLayout) -> some View {
+    private func secondary(_ choice: Choice) -> some View {
         switch choice {
         case .share:
-            DetailChoiceButton(
-                title: Copy.Media.share, symbol: Symbol.Media.share, working: controller.preparingShare, layout: layout
-            ) { share([r]) }
+            DetailChoiceButton(title: Copy.Media.share, symbol: Symbol.Media.share, working: controller.preparingShare) {
+                share([r])
+            }
         case .savePhotos:
             let state = controller.photos[r.id] ?? .idle
             switch placement {
             case .inAlbum:
-                DetailChoiceButton(title: Copy.Sync.inAlbum, symbol: Symbol.Sync.inPhotos, inert: true, layout: layout) {}
+                DetailChoiceButton(title: Copy.Sync.inAlbum, symbol: Symbol.Sync.inPhotos, inert: true) {}
             case .inLibrary:
-                DetailChoiceButton(title: Copy.Sync.inLibrary, symbol: Symbol.Sync.inPhotos, inert: true, layout: layout) {}
+                DetailChoiceButton(title: Copy.Sync.inLibrary, symbol: Symbol.Sync.inPhotos, inert: true) {}
             case .none:
                 DetailChoiceButton(
-                    title: Self.saveTitle(done: state == .done), symbol: state == .done ? Symbol.checkmark : Self.saveSymbol,
-                    working: state == .working, layout: layout
+                    title: Self.saveTitle(done: false), symbol: state == .done ? Symbol.checkmark : Self.saveSymbol,
+                    working: state == .working, done: state == .done ? Self.saveTitle(done: true) : nil
                 ) { Task { await controller.savePhotos(r, in: item) } }
             }
         case .makeWebp:
-            DetailChoiceButton(title: Copy.Gallery.makeAWebp, symbol: Symbol.Media.makeWebp, layout: layout) {
+            DetailChoiceButton(title: Copy.Gallery.makeAWebp, symbol: Symbol.Media.makeWebp) {
                 if controller.makeWebp(ofItem: r, in: item) { leave() }
             }
         case .animatedWebp:
             let state = controller.animating[r.id] ?? .idle
             DetailChoiceButton(
                 title: Copy.Gallery.animatedWebp, symbol: state == .done ? Symbol.checkmark : Symbol.Gallery.animatedWebp,
-                working: state == .working, layout: layout
+                working: state == .working, done: state == .done ? Copy.saved : nil
             ) { Task { await controller.makeAnimatedWebp(of: r, in: item) } }
             .accessibilityHint(Copy.Gallery.animatedWebpHint)
         }
@@ -255,40 +248,46 @@ struct GallerySelectionBar: View {
         let none = chosen.isEmpty
         let all = !c.item.items.isEmpty && chosen.count == c.item.items.filter { $0.itemIndex != nil }.count
         VStack(spacing: 10) {
-            HStack {
+            HStack(spacing: 10) {
                 Text(DetailWords.selected(chosen.count))
                     .font(Font.cobalt(13, .medium, relativeTo: .footnote))
                     .contentTransition(.numericText())
                 Spacer()
-                Button(all ? DetailWords.selectNone : DetailWords.selectAll) {
+                Button {
                     withAnimation(Motion.rows) { controller.toggleAll(in: c.item) }
+                } label: {
+                    Label(
+                        all ? DetailWords.selectNone : DetailWords.selectAll,
+                        systemImage: all ? Symbol.Library.selectNone : Symbol.Library.selectAll
+                    )
                 }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                Button(DetailWords.doneSelecting) { withAnimation(Motion.rows) { controller.endSelecting() } }
-                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-            }
-            GlassEffectContainer(spacing: 0) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { buttons(chosen, .stacked) }
-                    VStack(spacing: 8) { buttons(chosen, .inline) }
+                .buttonStyle(.cobaltIcon(.small))
+                Button {
+                    withAnimation(Motion.rows) { controller.endSelecting() }
+                } label: {
+                    Label(DetailWords.stopSelecting, systemImage: Symbol.close)
                 }
+                .buttonStyle(.cobaltIcon(.small))
             }
-            .disabled(none || controller.isDeleting)
+            IconRow { buttons(chosen) }
+                .disabled(none || controller.isDeleting)
         }
         .accessibilityElement(children: .contain)
         .haptic(.selection, trigger: chosen.count, enabled: haptics)
     }
 
     @ViewBuilder
-    private func buttons(_ chosen: [Rendition], _ layout: DetailChoiceLayout) -> some View {
+    private func buttons(_ chosen: [Rendition]) -> some View {
+        DetailChoiceButton(title: Copy.Media.share, symbol: Symbol.Media.share, working: controller.preparingShare) {
+            share(chosen)
+        }
         DetailChoiceButton(
-            title: Copy.Media.share, symbol: Symbol.Media.share, working: controller.preparingShare, layout: layout
-        ) { share(chosen) }
-        DetailChoiceButton(
-            title: DetailWords.toPhotos, symbol: GalleryActions.saveSymbol, working: controller.batchPhotos == .working,
-            layout: layout
+            title: DetailWords.toPhotos, symbol: GalleryActions.saveSymbol, working: controller.batchPhotos == .working
         ) { Task { await controller.saveToPhotos(chosen, of: c.item) } }
-        DetailChoiceButton(title: DetailWords.deleteN(chosen.count), symbol: Symbol.Media.deleteWebp, layout: layout) {
+        DetailChoiceButton(
+            title: DetailWords.deleteN(chosen.count), symbol: Symbol.Media.deleteWebp, tint: CobaltColor.errorText,
+            role: .destructive
+        ) {
             let indices = chosen.compactMap(\.itemIndex).sorted()
             controller.confirm = indices.count == 1 ? .deletePhoto(indices[0]) : .deletePhotos(indices)
         }

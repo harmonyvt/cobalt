@@ -176,9 +176,8 @@ struct AboutSection: View {
                         commit(nil)
                     } label: {
                         Label(Copy.Search.resetTags, systemImage: Symbol.SearchIndex.resetTags)
-                            .font(CobaltType.captionSmall)
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.cobaltIcon(.small))
                     .accessibilityHint(Copy.Search.resetTagsA11yHint)
                 }
             }

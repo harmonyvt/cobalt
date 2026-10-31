@@ -153,10 +153,9 @@ struct RepostSheet: View {
     private var pager: some View {
         HStack(spacing: 12) {
             if photos.count > 1 {
-                Button { step(-1) } label: { Image(systemName: "chevron.left") }
-                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                Button { step(-1) } label: { Label(ToolsCopy.previous, systemImage: "chevron.left") }
+                    .buttonStyle(.cobaltIcon(.small))
                     .disabled(draft.index == 0 || draft.isWorking)
-                    .accessibilityLabel(ToolsCopy.previous)
             }
             Text(place)
                 .font(CobaltType.captionSmall)
@@ -164,10 +163,9 @@ struct RepostSheet: View {
                 .monospacedDigit()
                 .frame(maxWidth: .infinity)
             if photos.count > 1 {
-                Button { step(1) } label: { Image(systemName: "chevron.right") }
-                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                Button { step(1) } label: { Label(ToolsCopy.next, systemImage: "chevron.right") }
+                    .buttonStyle(.cobaltIcon(.small))
                     .disabled(draft.index >= photos.count - 1 || draft.isWorking)
-                    .accessibilityLabel(ToolsCopy.next)
             }
         }
     }
@@ -268,11 +266,14 @@ struct RepostSheet: View {
                 .buttonStyle(.cobaltPrimary())
                 .keyboardShortcut(.defaultAction)
                 .disabled(busy)
-            ButtonRow {
+            // "save this one" keeps its word; the rest are icons under it
+            IconRow {
                 if photos.count > 1 {
-                    Button(Copy.Gallery.saveAllFrames(photos.count), systemImage: Symbol.Gallery.saveToPhotos) { saveAll() }
-                        .buttonStyle(.cobaltSecondary())
-                        .disabled(busy)
+                    Button { saveAll() } label: {
+                        Label(Copy.Gallery.saveAllFrames(photos.count), systemImage: Symbol.Gallery.saveToPhotos)
+                    }
+                    .buttonStyle(.cobaltIcon())
+                    .disabled(busy)
                 }
                 if let shown {
                     ShareLink(
@@ -281,12 +282,12 @@ struct RepostSheet: View {
                     ) {
                         Label(Copy.Media.share, systemImage: Symbol.Media.share)
                     }
-                    .buttonStyle(.cobaltSecondary())
+                    .buttonStyle(.cobaltIcon())
                     .disabled(busy)
                 }
                 if let shown, model.canStoreCrop(of: shown) {
-                    Button(Copy.Gallery.keepInCobalt, systemImage: Symbol.Gallery.crop) { keep(shown) }
-                        .buttonStyle(.cobaltSecondary())
+                    Button { keep(shown) } label: { Label(Copy.Gallery.keepInCobalt, systemImage: Symbol.Gallery.crop) }
+                        .buttonStyle(.cobaltIcon())
                         .disabled(busy)
                 }
             }

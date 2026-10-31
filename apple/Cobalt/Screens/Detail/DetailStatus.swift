@@ -66,15 +66,17 @@ struct DetailStatus: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity)
             if retry {
-                Button(Copy.Media.tryAgain, systemImage: Symbol.Media.retry) {
+                Button {
                     Task {
                         if case .popWithStatus(let message) = await controller.tryAgain(item) {
                             shell.showStatus(message)
                             leave()
                         }
                     }
+                } label: {
+                    Label(Copy.Media.tryAgain, systemImage: Symbol.Media.retry)
                 }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                .buttonStyle(.cobaltIcon())
             }
         }
         .accessibilityElement(children: .contain)

@@ -70,10 +70,8 @@ struct ChatCollageView: View {
                     model.openInLibrary(search: query)
                 } label: {
                     Label(Copy.Chat.openInLibrary, systemImage: Symbol.chatCollageLibrary)
-                        .font(CobaltType.caption)
-                        .lineLimit(1)
                 }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                .buttonStyle(.cobaltIcon(.small))
             }
         }
     }

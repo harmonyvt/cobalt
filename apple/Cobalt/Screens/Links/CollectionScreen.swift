@@ -49,6 +49,7 @@ struct CollectionScreen: View {
                         Button(Copy.Collections.copyAll, systemImage: Symbol.collectionCopyAll) {
                             controller.copyAll(collection, shell: shell)
                         }
+                        .labelStyle(.iconOnly)
                         .disabled(controller.store.linksText(in: collection) == nil)
                         .help(Copy.Collections.copyAll)
                     }
@@ -71,7 +72,9 @@ struct CollectionScreen: View {
                         }
                     } label: {
                         Label(Copy.Collections.menu, systemImage: Symbol.collectionMenu)
+                            .labelStyle(.iconOnly)
                     }
+                    .accessibilityLabel(Copy.Collections.menu)
                     #if os(macOS)
                     .help(Copy.Collections.menu)
                     #endif

@@ -35,20 +35,26 @@ struct StorageSettingsSection: View {
                 }
                 MacFolderRows(model: model)
                 row(Copy.Offline.rowOffline, Symbol.offlineAll) {
-                    value(offlineLine(usage.offline)).monospacedDigit()
+                    HStack(spacing: 8) {
+                        value(offlineLine(usage.offline)).monospacedDigit()
+                        #if os(iOS)
+                        if let url = model.showInFilesURL(nil) {
+                            Button { openURL(url) } label: { Label(Copy.Offline.openInFiles, systemImage: Symbol.showInFiles) }
+                                .buttonStyle(.cobaltIcon(.small))
+                        }
+                        #endif
+                    }
                 }
-                #if os(iOS)
-                if let url = model.showInFilesURL(nil) {
-                    Button(Copy.Offline.openInFiles, systemImage: Symbol.showInFiles) { openURL(url) }
-                }
-                #endif
                 pullRow
                 if downloads.left > 0 {
                     row(Copy.Offline.rowDownloading, Symbol.keepOffline) {
-                        value(Copy.Offline.queueLine(left: downloads.left, bytes: downloads.bytes, total: downloads.total))
-                            .monospacedDigit()
+                        HStack(spacing: 8) {
+                            value(Copy.Offline.queueLine(left: downloads.left, bytes: downloads.bytes, total: downloads.total))
+                                .monospacedDigit()
+                            Button { stopAll() } label: { Label(Copy.Offline.stopAll, systemImage: Symbol.stopDownloading) }
+                                .buttonStyle(.cobaltIcon(.small))
+                        }
                     }
-                    Button(Copy.Offline.stopAll, systemImage: Symbol.stopDownloading) { stopAll() }
                 }
             }
             Picker(selection: Binding(get: { settings.storageLimit }, set: chooseLimit)) {
@@ -70,24 +76,30 @@ struct StorageSettingsSection: View {
                 }
                 Button(Copy.keep, role: .cancel) { pendingLimit = nil }
             }
-            VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label(Copy.Offline.rowCache, systemImage: Symbol.cache)
-                    Text(cacheLine(usage.cache, limit: limit))
-                        .font(Font.cobalt(12.5))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .padding(.leading, 34)
+            // the row keeps its words; "clear cache" is a small red icon beside it (it still asks first)
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label(Copy.Offline.rowCache, systemImage: Symbol.cache)
+                        Text(cacheLine(usage.cache, limit: limit))
+                            .font(Font.cobalt(12.5))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .padding(.leading, 34)
+                    }
+                    if let limit, limit > 0 {
+                        ProgressView(value: min(Double(usage.cache.bytes), Double(limit)), total: Double(limit))
+                            .progressViewStyle(.linear)
+                            .tint(CobaltColor.text)
+                            .accessibilityHidden(true)
+                    }
                 }
-                if let limit, limit > 0 {
-                    ProgressView(value: min(Double(usage.cache.bytes), Double(limit)), total: Double(limit))
-                        .progressViewStyle(.linear)
-                        .tint(CobaltColor.text)
-                        .accessibilityHidden(true)
+                .accessibilityElement(children: .combine)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button(role: .destructive) { confirmClear = true } label: {
+                    Label(Copy.Offline.clearCache, systemImage: Symbol.clearOffline)
                 }
-            }
-            .accessibilityElement(children: .combine)
-            Button(Copy.Offline.clearCache, systemImage: Symbol.clearOffline, role: .destructive) { confirmClear = true }
+                .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.errorText))
                 .disabled(usage.cache.count == 0)
                 .haptic(.success, trigger: clearedTick)
                 .confirmationDialog(Copy.Offline.clearCacheTitle, isPresented: $confirmClear, titleVisibility: .visible) {
@@ -101,6 +113,7 @@ struct StorageSettingsSection: View {
                 } message: {
                     Text(Copy.Offline.clearCacheMessage)
                 }
+            }
         } header: {
             Text(Copy.Storage.group).font(CobaltType.caption).textCase(nil)
         } footer: {

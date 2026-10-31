@@ -99,9 +99,14 @@ struct HiddenPostSection: View {
                 } icon: {
                     Image(systemName: Symbol.HiddenRules.hidden)
                 }
-                HiddenByRow(model: model, post: post)
-                Button(Copy.Hidden.unhide, systemImage: Symbol.HiddenRules.unhide) { asking = true }
+                HStack(spacing: 10) {
+                    HiddenByRow(model: model, post: post)
+                    Button { asking = true } label: {
+                        Label(Copy.Hidden.unhide, systemImage: Symbol.HiddenRules.unhide)
+                    }
+                    .buttonStyle(.cobaltIcon(.small))
                     .disabled(changing || controller.isDeleting)
+                }
             } else {
                 Button(Copy.Hidden.hidePost, systemImage: Symbol.HiddenRules.hidden) { asking = true }
                     .disabled(changing || controller.isDeleting)

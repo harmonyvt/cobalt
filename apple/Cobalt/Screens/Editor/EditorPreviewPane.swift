@@ -51,17 +51,15 @@ struct EditorTransport: View {
             Text(Copy.Editor.clockTenths(session.playheadSeconds))
                 .frame(minWidth: 52, alignment: .trailing)
                 .accessibilityLabel(Copy.Editor.transportTime)
-            stepButton(Symbol.Editor.back, Copy.Editor.backOneFrame, key: "left") { session.step(frames: -1) }
+            stepButton(Symbol.Editor.back, Copy.Editor.backOneFrame) { session.step(frames: -1) }
             Button { session.togglePlay() } label: {
-                Image(systemName: session.isPlaying ? Symbol.Editor.pause : Symbol.Editor.play)
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 44, height: Platform.isMac ? 30 : 44)
+                Label(
+                    session.isPlaying ? Copy.Editor.pause : Copy.Editor.play,
+                    systemImage: session.isPlaying ? Symbol.Editor.pause : Symbol.Editor.play)
             }
-            .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
+            .buttonStyle(.cobaltIcon(.small, prominent: true))
             .disabled(!session.isPlayerReady)
-            .help("\(session.isPlaying ? Copy.Editor.pause : Copy.Editor.play) · space")
-            .accessibilityLabel(session.isPlaying ? Copy.Editor.pause : Copy.Editor.play)
-            stepButton(Symbol.Editor.forward, Copy.Editor.forwardOneFrame, key: "right") { session.step(frames: 1) }
+            stepButton(Symbol.Editor.forward, Copy.Editor.forwardOneFrame) { session.step(frames: 1) }
             Text(Copy.Editor.clockTenths(session.timing.seconds))
                 .frame(minWidth: 52, alignment: .leading)
                 .accessibilityLabel(Copy.Editor.a11yPlayheadValue(
@@ -72,19 +70,11 @@ struct EditorTransport: View {
         .monospacedDigit()
     }
 
-    private func stepButton(_ symbol: String, _ label: String, key: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .semibold))
-                .frame(width: Platform.isMac ? 30 : 44, height: Platform.isMac ? 30 : 44)
-                .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(CobaltColor.text)
-        .disabled(!session.isPlayerReady)
-        .help("\(label) · \(key == "left" ? "←" : "→")")
-        .accessibilityLabel(label)
+    /// Space and ← → still play and step (EditorKeyboard); the icons' names are the plain actions.
+    private func stepButton(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Label(label, systemImage: symbol) }
+            .buttonStyle(.cobaltIcon(.small))
+            .disabled(!session.isPlayerReady)
     }
 }
 

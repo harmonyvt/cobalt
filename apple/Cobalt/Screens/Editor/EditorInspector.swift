@@ -2,8 +2,8 @@ import CobaltKit
 import SwiftUI
 
 /// The right column (apple/CONTRACT-EDITOR.md 4.3, 272 pt): driven by the selection. A main clip shows trim, speed, crop and
-/// fit, volume, `split at playhead` and `delete clip`; an overlay shows start, length, trim (video), position, size, opacity,
-/// volume and `delete overlay`; with nothing selected it says so and summarises the project.
+/// fit, volume, and the `split at playhead` / `delete clip` icons; an overlay shows start, length, trim (video), position, size,
+/// opacity, volume and a `delete overlay` icon; with nothing selected it says so and summarises the project.
 struct EditorInspector: View {
     let session: EditSession
     /// `limits.editPitch` of the server; false hides every pitch control.
@@ -104,7 +104,7 @@ private struct MainClipInspector: View {
                 setVolume: { session.setVolume($0, clip: clip.id) }, setMuted: { session.setMuted($0, clip: clip.id) },
                 onEnd: { session.endGesture() })
         }
-        VStack(spacing: 8) {
+        IconRow(alignment: .leading) {
             MainClipSplitButton(session: session, clipID: clip.id)
             EditorInspectorButton(title: Copy.Editor.deleteClip, symbol: Symbol.Editor.delete, destructive: true) {
                 session.remove(.main(clip.id))
@@ -143,8 +143,8 @@ private struct MainClipInspector: View {
             Label(Copy.Editor.sourceFailed, systemImage: Symbol.Editor.missing)
                 .font(CobaltType.captionSmall)
                 .foregroundStyle(CobaltColor.errorText)
-            Button(Copy.Editor.tryAgain, systemImage: Symbol.Editor.retry) { session.retrySource(clip.item) }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+            Button { session.retrySource(clip.item) } label: { Label(Copy.Editor.tryAgain, systemImage: Symbol.Editor.retry) }
+                .buttonStyle(.cobaltIcon(.small))
         }
     }
 
@@ -248,8 +248,10 @@ private struct OverlayInspector: View {
                     set: { session.setOverlayPitch($0, overlay: overlay.id) }, onEnd: { session.endGesture() })
             }
         }
-        EditorInspectorButton(title: Copy.Editor.deleteOverlay, symbol: Symbol.Editor.delete, destructive: true) {
-            session.remove(.overlay(overlay.id))
+        IconRow(alignment: .leading) {
+            EditorInspectorButton(title: Copy.Editor.deleteOverlay, symbol: Symbol.Editor.delete, destructive: true) {
+                session.remove(.overlay(overlay.id))
+            }
         }
     }
 

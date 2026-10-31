@@ -246,13 +246,15 @@ private struct StageHeader: View {
 
     @ViewBuilder
     private var copyButton: some View {
-        if controller.copied == .obs {
-            Button(Copy.Stage.copied, systemImage: Symbol.checkmark) {}
-                .buttonStyle(.cobaltDone(fullWidth: false, compact: true))
-        } else {
-            Button(Copy.Stage.copyObsLink, systemImage: Symbol.stageCopy) { controller.copyObsLink(shell: shell) }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+        // an icon: green with a checkmark for a moment once copied ("go live" / "stop" is the header's word)
+        let copied = controller.copied == .obs
+        Button {
+            if !copied { controller.copyObsLink(shell: shell) }
+        } label: {
+            Label(Copy.Stage.copyObsLink, systemImage: copied ? Symbol.checkmark : Symbol.stageCopy)
         }
+        .buttonStyle(.cobaltIcon(state: copied ? .done : .idle))
+        .accessibilityValue(copied ? Copy.Stage.copied : "")
     }
 
     @ViewBuilder

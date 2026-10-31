@@ -97,10 +97,15 @@ struct AlertsPromptSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(Copy.AlertsPrompt.title)
-                .font(Font.cobalt(18, .semibold, relativeTo: .headline))
-                .foregroundStyle(CobaltColor.text)
-                .accessibilityAddTraits(.isHeader)
+            HStack(alignment: .top, spacing: 12) {
+                Text(Copy.AlertsPrompt.title)
+                    .font(Font.cobalt(18, .semibold, relativeTo: .headline))
+                    .foregroundStyle(CobaltColor.text)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                // "not now" is the sheet's close, top right (closing snoozes it for a week)
+                CloseButton(cancels: true, action: notNow)
+            }
             Text(Copy.AlertsPrompt.body)
                 .font(CobaltType.body)
                 .foregroundStyle(CobaltColor.caption)
@@ -116,12 +121,9 @@ struct AlertsPromptSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
-            ButtonRow {
-                Button(notifications == .notAsked ? Copy.AlertsPrompt.turnOn : Copy.AlertsPrompt.openSettings, action: turnOn)
-                    .buttonStyle(.cobaltPrimary(compact: true))
-                Button(Copy.AlertsPrompt.notNow, action: notNow)
-                    .buttonStyle(.cobaltSecondary(compact: true))
-            }
+            // "turn on" keeps its word; "not now" is the close in the top-right corner
+            Button(notifications == .notAsked ? Copy.AlertsPrompt.turnOn : Copy.AlertsPrompt.openSettings, action: turnOn)
+                .buttonStyle(.cobaltPrimary(compact: true))
         }
         .padding(.horizontal, 16)
         .padding(.top, 24)

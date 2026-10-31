@@ -15,6 +15,11 @@ extension Symbol {
     static let chatMenu = "ellipsis.circle"
     /// Send.
     static let chatSend = "arrow.up.circle.fill"
+    /// Send, inside the composer's filled icon circle (the circle is the button, so no `.circle.fill`).
+    static let chatSendArrow = "arrow.up"
+    /// A box card's "show all" / "show less".
+    static let chatShowAll = "chevron.down"
+    static let chatShowLess = "chevron.up"
     /// A code step.
     static let chatCode = "chevron.left.forwardslash.chevron.right"
     /// A step that failed.

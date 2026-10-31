@@ -181,15 +181,19 @@ struct PasteReviewSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(request.title)
-                    .font(Font.cobalt(16, .semibold, relativeTo: .headline))
-                    .foregroundStyle(CobaltColor.text)
-                    .accessibilityAddTraits(.isHeader)
-                Text(request.capNote.map { "\($0) · \(Copy.Jobs.reviewNote)" } ?? Copy.Jobs.reviewNote)
-                    .font(CobaltType.caption)
-                    .foregroundStyle(CobaltColor.caption)
-                    .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(request.title)
+                        .font(Font.cobalt(16, .semibold, relativeTo: .headline))
+                        .foregroundStyle(CobaltColor.text)
+                        .accessibilityAddTraits(.isHeader)
+                    Text(request.capNote.map { "\($0) · \(Copy.Jobs.reviewNote)" } ?? Copy.Jobs.reviewNote)
+                        .font(CobaltType.caption)
+                        .foregroundStyle(CobaltColor.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                CloseButton(cancels: true, action: cancel)  // cancel is the sheet's close, top right
             }
             ScrollView {
                 VStack(spacing: 0) {
@@ -202,15 +206,11 @@ struct PasteReviewSheet: View {
             .frame(maxHeight: .infinity, alignment: .top)
             .scrollBounceBehavior(.basedOnSize)
             .haptic(.selection, trigger: count)
-            ButtonRow {
-                Button(Copy.Jobs.reviewCancel) { cancel() }
-                    .buttonStyle(.cobaltSecondary())
-                    .keyboardShortcut(.cancelAction)
-                Button(Copy.Jobs.reviewSave(count)) { save(request.tickedURLs) }
-                    .buttonStyle(.cobaltPrimary())
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(count == 0)
-            }
+            // "save n" keeps its word; cancel is the close in the top-right corner
+            Button(Copy.Jobs.reviewSave(count)) { save(request.tickedURLs) }
+                .buttonStyle(.cobaltPrimary())
+                .keyboardShortcut(.defaultAction)
+                .disabled(count == 0)
         }
         .padding(.horizontal, 16)
         .padding(.top, 20)

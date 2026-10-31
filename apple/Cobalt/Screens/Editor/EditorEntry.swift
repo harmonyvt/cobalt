@@ -30,15 +30,10 @@ struct EditPicksButton: View {
 
     var body: some View {
         Button(action: create) {
-            if creating {
-                ProgressView().controlSize(.small)
-            } else {
-                Label(Copy.Editor.edit, systemImage: Symbol.Editor.edit)
-            }
+            Label(Copy.Editor.edit, systemImage: Symbol.Editor.edit)
         }
-        .buttonStyle(.selectAction(.edit))
+        .buttonStyle(.cobaltIcon(tint: CobaltColor.collectionSet, state: creating ? .working : .idle))
         .disabled(!enabled)
-        .help(picks.isEmpty ? Copy.Editor.editNoVideo : Copy.Editor.editLine)
         .accessibilityLabel(creating ? Copy.Editor.creating : Copy.Editor.edit)
         .accessibilityHint(enabled ? Copy.Editor.editLine : Copy.Editor.editNoVideo)
         .onChange(of: picks.map(\.id)) { _, _ in note = nil }

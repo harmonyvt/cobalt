@@ -108,10 +108,14 @@ struct StageRewardSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(Copy.Stage.editTitle(kind))
-                .font(Font.cobalt(16, .semibold, relativeTo: .headline))
-                .foregroundStyle(CobaltColor.text)
-                .accessibilityAddTraits(.isHeader)
+            HStack(alignment: .top, spacing: 12) {
+                Text(Copy.Stage.editTitle(kind))
+                    .font(Font.cobalt(16, .semibold, relativeTo: .headline))
+                    .foregroundStyle(CobaltColor.text)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                CloseButton(cancels: true) { dismiss() }    // cancel is the sheet's close, top right
+            }
             numberField(title: Copy.Stage.editCost, unit: Copy.Stage.editPoints, hint: Copy.Stage.costRange(), text: $cost, field: .cost)
             numberField(
                 title: Copy.Stage.editCooldown, unit: Copy.Stage.editSeconds, hint: Copy.Stage.cooldownRange(), text: $cooldown,
@@ -176,15 +180,11 @@ struct StageRewardSheet: View {
     }
 
     private var buttons: some View {
-        ButtonRow {
-            Button(Copy.Stage.editSave) { save() }
-                .buttonStyle(.cobaltPrimary(compact: true))
-                .disabled(!canSave)
-                .keyboardShortcut(.defaultAction)
-            Button(Copy.Stage.editCancel) { dismiss() }
-                .buttonStyle(.cobaltSecondary(compact: true))
-                .keyboardShortcut(.cancelAction)
-        }
+        // "save" keeps its word; cancel is the close in the top-right corner
+        Button(Copy.Stage.editSave) { save() }
+            .buttonStyle(.cobaltPrimary(compact: true))
+            .disabled(!canSave)
+            .keyboardShortcut(.defaultAction)
     }
 
     private func save() {

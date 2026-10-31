@@ -69,6 +69,9 @@ struct LinkScreen: View {
         .navigationBarBackButtonHidden(editing)
         .interactiveDismissDisabled(editing)
         .toolbar { toolbarItems }
+        // in a sheet: close and edit sit in its top-right corner (a Mac sheet would draw toolbar items at the bottom)
+        .sheetCorner { if canEdit { editButton.labelStyle(.iconOnly) } }
+        .environment(\.sheetClose, inSheet && !editing ? SheetCloseAction { dismiss() } : nil)
         .safeAreaInset(edge: .bottom, spacing: 0) { saveBar }
         .modifier(LinkScreenPresentations(
             model: model, link: link, draft: $draft, askingDiscard: $askingDiscard, pickingFiles: $pickingFiles,
@@ -88,22 +91,19 @@ struct LinkScreen: View {
                 Button(Copy.LinkEdit.cancel) { cancelEdit() }
             }
         } else {
-            if inSheet {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(Copy.LinkEdit.done) { dismiss() }
-                }
-            }
-            if canEdit {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(Copy.LinkEdit.edit) { startEdit() }
-                        .disabled(link == nil)
-                        #if os(macOS)
-                        .keyboardShortcut("e", modifiers: .command)
-                        .help(Copy.LinkEdit.edit)
-                        #endif
-                }
+            if canEdit, !inSheet {
+                ToolbarItem(placement: .primaryAction) { editButton }
             }
         }
+    }
+
+    private var editButton: some View {
+        Button(Copy.LinkEdit.edit, systemImage: "pencil") { startEdit() }
+            .disabled(link == nil)
+            #if os(macOS)
+            .keyboardShortcut("e", modifiers: .command)
+            .help(Copy.LinkEdit.edit)
+            #endif
     }
 
     @ViewBuilder

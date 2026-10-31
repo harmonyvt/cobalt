@@ -128,8 +128,8 @@ struct TitleField: View {
 
 // MARK: - the sheet (the app)
 
-/// `name it`: the heading, the field with the default selected, the upload's own progress line, `skip` and
-/// `done`. iPhone and iPad: a short sheet with the keyboard up and the card behind it still alive; Mac: the same
+/// `name it`: the heading, the field with the default selected, the upload's own progress line, `done`, and
+/// `skip` as the close in the top-right corner. iPhone and iPad: a short sheet with the keyboard up and the card behind it still alive; Mac: the same
 /// view, 420 pt wide. Return is done, swipe down (or escape) is skip. If the run is reset behind it, it closes.
 struct TitleSheet: View {
     let pipeline: Pipeline
@@ -157,10 +157,16 @@ struct TitleSheet: View {
         let line = pipeline.waitsForTitle && !failed
             ? Copy.Media.waitsForName : TitleText.liveLine(story: pipeline.progressStory, failed: failed)
         VStack(alignment: .leading, spacing: 12) {
-            Text(Copy.Library2.nameIt)
-                .font(Font.cobalt(16, .semibold, relativeTo: .headline))
-                .foregroundStyle(CobaltColor.text)
-                .accessibilityAddTraits(.isHeader)
+            HStack(alignment: .top, spacing: 12) {
+                Text(Copy.Library2.nameIt)
+                    .font(Font.cobalt(16, .semibold, relativeTo: .headline))
+                    .foregroundStyle(CobaltColor.text)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                // skip is the sheet's close, top right
+                CloseButton(cancels: true, action: dismiss)
+                    .accessibilityLabel(Copy.Library2.skip)
+            }
             TitleField(text: $draft, autofocus: true, onSubmit: done)
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(line)
@@ -178,14 +184,10 @@ struct TitleSheet: View {
                 }
             }
             .frame(minHeight: 16, alignment: .top)
-            ProportionalPair {
-                Button(Copy.Library2.skip) { dismiss() }
-                    .buttonStyle(.cobaltSecondary())
-                    .keyboardShortcut(.cancelAction)
-                Button(Copy.Library2.done) { done() }
-                    .buttonStyle(.cobaltPrimary())
-                    .keyboardShortcut(.defaultAction)
-            }
+            // "done" keeps its word; skip is the close in the top-right corner
+            Button(Copy.Library2.done) { done() }
+                .buttonStyle(.cobaltPrimary())
+                .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 16)
         .padding(.top, 20)
@@ -214,35 +216,6 @@ struct TitleSheet: View {
     }
 }
 
-/// Two children side by side, a third and two thirds of the width: `skip` stays small, `done` leads.
-private struct ProportionalPair: Layout {
-    var spacing: CGFloat = 8
-
-    private func widths(_ total: CGFloat) -> (CGFloat, CGFloat) {
-        let usable = max(0, total - spacing)
-        let first = usable / 3
-        return (first, usable - first)
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard subviews.count == 2 else { return .zero }
-        let total = proposal.width ?? 320
-        let (a, b) = widths(total)
-        let height = max(
-            subviews[0].sizeThatFits(ProposedViewSize(width: a, height: nil)).height,
-            subviews[1].sizeThatFits(ProposedViewSize(width: b, height: nil)).height)
-        return CGSize(width: total, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard subviews.count == 2 else { return }
-        let (a, b) = widths(bounds.width)
-        subviews[0].place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: a, height: bounds.height))
-        subviews[1].place(
-            at: CGPoint(x: bounds.minX + a + spacing, y: bounds.minY), anchor: .topLeading,
-            proposal: ProposedViewSize(width: b, height: bounds.height))
-    }
-}
 
 // MARK: - the inline row (the share sheet)
 

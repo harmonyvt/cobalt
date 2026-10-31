@@ -169,7 +169,7 @@ struct AppShell: View {
                             MediaDetail(model: model, item: item, initial: DetailDebug.initial(item))
                         }
                     }
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { CloseButton { debugDetail = nil } } }
+                    .sheetClose { debugDetail = nil }
                 }
                 .cobaltRoot(model: model)
                 .transformEnvironment(\.dynamicTypeSize) { if DetailDebug.ax5 { $0 = .accessibility5 } }
@@ -179,7 +179,7 @@ struct AppShell: View {
             .sheet(item: $debugDetail) { item in
                 NavigationStack {
                     MediaDetail(model: model, item: item, initial: DetailDebug.initial(item))
-                        .toolbar { ToolbarItem(placement: .cancellationAction) { CloseButton(cancels: true) { debugDetail = nil } } }
+                        .sheetClose { debugDetail = nil }
                 }
                 .modifier(MacSheetSize())
             }
@@ -385,7 +385,8 @@ struct AppShell: View {
     private var queueSheet: some View {
         NavigationStack {
             QueueScreen(model: model)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { CloseButton { model.queueShown = false } } }
+                .sheetCorner()
+                .sheetClose { model.queueShown = false }
         }
         .presentationDetents([.large])
         .cobaltRoot(model: model)

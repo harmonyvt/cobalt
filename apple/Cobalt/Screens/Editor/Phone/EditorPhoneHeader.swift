@@ -71,13 +71,14 @@ struct EditorPhoneHeader: View {
                 .accessibilityLabel(session.project.title)
                 .accessibilityHint(Copy.Editor.renameTitle)
                 Menu { menuItems } label: {
-                    Image(systemName: Symbol.Editor.more)
+                    Label(Copy.Editor.moreOptions, systemImage: Symbol.Editor.more)
+                        .labelStyle(.iconOnly)
                         .font(.system(size: 14, weight: .regular))
                         .foregroundStyle(CobaltColor.caption)
                         .frame(width: 30, height: 28)
                         .contentShape(Rectangle())
                 }
-                .accessibilityLabel(Copy.Editor.moreOptions)
+                .iconName(Copy.Editor.moreOptions)
             }
             saveLine
         }
@@ -185,7 +186,7 @@ struct EditorPhoneHeader: View {
     }
 }
 
-/// A 44 pt round icon button of the header; the label is what VoiceOver reads.
+/// A small `.cobaltIcon()` circle of the header (44 pt to touch); the label is its name on a long press and for VoiceOver.
 struct EditorPhoneIconButton: View {
     let symbol: String
     let label: String
@@ -193,19 +194,9 @@ struct EditorPhoneIconButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(CobaltColor.text)
-                .frame(width: 34, height: 34)
-                .background(CobaltColor.elevated, in: Circle())
-                .frame(width: Metrics.hit, height: Metrics.hit)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.4)
-        .accessibilityLabel(label)
+        Button(action: action) { Label(label, systemImage: symbol) }
+            .buttonStyle(.cobaltIcon(.small))
+            .disabled(!enabled)
     }
 }
 

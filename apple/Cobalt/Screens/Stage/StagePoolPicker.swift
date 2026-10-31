@@ -171,8 +171,8 @@ struct StagePoolPicker: View {
                     .frame(maxWidth: .infinity, minHeight: Metrics.hit)
                     .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: Metrics.radius, style: .continuous))
                     .accessibilityLabel(Copy.Stage.searchPlaceholder)
-                Button(Copy.Stage.searchUse) { useWords() }
-                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                Button { useWords() } label: { Label(Copy.Stage.searchUse, systemImage: Symbol.stagePoolSearch) }
+                    .buttonStyle(.cobaltIcon())
                     .disabled(cleanWords == nil || busy)
             }
             Text(Copy.Stage.searchNote)

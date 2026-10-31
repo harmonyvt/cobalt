@@ -379,6 +379,10 @@ extension Copy {
             }
         }
 
+        // MARK: icon names (added for the icon-first controls: what a long press shows and VoiceOver reads)
+
+        static let lengthShorter = "a tenth shorter", lengthLonger = "a tenth longer"
+
         // MARK: numbers
 
         private static func twoDigits(_ n: Int) -> String { n < 10 ? "0\(n)" : "\(n)" }

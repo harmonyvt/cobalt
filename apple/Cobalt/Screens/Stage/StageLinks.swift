@@ -52,10 +52,10 @@ struct StageLinksCard: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .accessibilityLabel(Copy.Stage.obsLink)
-            ButtonRow {
-                copyButton(.obs, title: Copy.Stage.copy) { controller.copyObsLink(shell: shell) }
-                Button(Copy.Stage.rotate, systemImage: Symbol.stageRotate) { controller.confirmingRotate = true }
-                    .buttonStyle(.cobaltSecondary(compact: true))
+            IconRow(alignment: .leading) {
+                copyButton(.obs, title: Copy.Stage.copyObsLink) { controller.copyObsLink(shell: shell) }
+                Button { controller.confirmingRotate = true } label: { Label(Copy.Stage.rotate, systemImage: Symbol.stageRotate) }
+                    .buttonStyle(.cobaltIcon(state: controller.isBusy("rotate") ? .working : .idle))
                     .disabled(controller.isBusy("rotate"))
             }
         }
@@ -82,7 +82,7 @@ struct StageLinksCard: View {
                 .foregroundStyle(CobaltColor.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            ButtonRow {
+            IconRow(alignment: .leading) {
                 copyButton(.store, title: Copy.Stage.copyStoreLink) { controller.copyStoreLink(shell: shell) }
             }
             Toggle(isOn: Binding(
@@ -106,14 +106,13 @@ struct StageLinksCard: View {
 
     // MARK: shared
 
-    @ViewBuilder
+    /// A copy icon: green with a checkmark for a moment once copied; its name stays the action's.
     private func copyButton(_ what: StageController.Copied, title: String, action: @escaping () -> Void) -> some View {
-        if controller.copied == what {
-            Button(Copy.Stage.copied, systemImage: Symbol.checkmark, action: action)
-                .buttonStyle(.cobaltDone(compact: true))
-        } else {
-            Button(title, systemImage: Symbol.stageCopy, action: action)
-                .buttonStyle(.cobaltSecondary(compact: true))
+        let copied = controller.copied == what
+        return Button(action: action) {
+            Label(title, systemImage: copied ? Symbol.checkmark : Symbol.stageCopy)
         }
+        .buttonStyle(.cobaltIcon(state: copied ? .done : .idle))
+        .accessibilityValue(copied ? Copy.Stage.copied : "")
     }
 }

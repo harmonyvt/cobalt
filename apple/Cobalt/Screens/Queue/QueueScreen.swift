@@ -369,8 +369,8 @@ struct QueueRow: View {
                     .help(Copy.Queue.cancel)
                     #endif
                 } else if actions.contains(.open) && !f.isError {
-                    Button(Copy.Queue.open) { perform(.open) }
-                        .buttonStyle(QueuePillStyle(compact: true))
+                    Button { perform(.open) } label: { Label(Copy.Queue.open, systemImage: Symbol.openApp) }
+                        .buttonStyle(.cobaltIcon(.small))
                         .accessibilityLabel("\(Copy.Queue.open) \(f.title)")
                 }
             }
@@ -399,15 +399,15 @@ struct QueueRow: View {
                     .truncationMode(.middle)
             }
             if actions.contains(.retry) || (actions.contains(.dismiss) && f.isError) {
-                HStack(spacing: 6) {
+                IconRow(spacing: 6, alignment: .leading) {
                     if actions.contains(.retry) {
                         Button { perform(.retry) } label: { Label(Copy.Queue.tryAgain, systemImage: Symbol.retry) }
-                            .buttonStyle(QueuePillStyle())
+                            .buttonStyle(.cobaltIcon(.small))
                             .accessibilityLabel("\(Copy.Queue.tryAgain), \(f.title)")
                     }
                     if actions.contains(.dismiss) {
-                        Button(Copy.Queue.dismiss) { perform(.dismiss) }
-                            .buttonStyle(QueuePillStyle())
+                        Button { perform(.dismiss) } label: { Label(Copy.Queue.dismiss, systemImage: Symbol.keep) }
+                            .buttonStyle(.cobaltIcon(.small))
                             .accessibilityLabel("\(Copy.Queue.dismiss) \(f.title)")
                     }
                 }
@@ -445,21 +445,6 @@ struct QueueRow: View {
         case .dismiss: return Copy.Queue.dismiss
         case .open: return Copy.Queue.open
         }
-    }
-}
-
-/// "open", "try again" and "dismiss" on a row: the tray's pill, in the queue's own file.
-private struct QueuePillStyle: ButtonStyle {
-    var compact = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Font.cobalt(11, .medium, relativeTo: .caption2))
-            .foregroundStyle(CobaltColor.text)
-            .padding(.horizontal, compact ? 10 : 12)
-            .frame(minHeight: compact ? 28 : 32)
-            .background(CobaltColor.text.opacity(configuration.isPressed ? 0.16 : 0.08), in: Capsule())
-            .contentShape(Capsule())
     }
 }
 

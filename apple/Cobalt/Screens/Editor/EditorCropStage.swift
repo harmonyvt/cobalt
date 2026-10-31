@@ -29,8 +29,8 @@ struct EditorCropStage: View {
                     .frame(width: geo.size.width, height: geo.size.height)
             }
             HStack(spacing: 8) {
-                Button(Copy.Editor.cropReset) { reset() }
-                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                Button { reset() } label: { Label(Copy.Editor.cropReset, systemImage: Symbol.reset) }
+                    .buttonStyle(.cobaltIcon(.small))
                 Button(Copy.Editor.cropDone) { session.tool = .select }
                     .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
             }

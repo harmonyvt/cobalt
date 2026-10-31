@@ -67,10 +67,10 @@ struct CropPanel: View {
         }
     }
 
+    /// "done" keeps its word; reset is an icon beside it.
     private var buttons: some View {
-        ViewThatFits(in: .horizontal) {
+        GlassEffectContainer(spacing: 10) {
             HStack(spacing: 10) { doneButton; resetButton }
-            VStack(spacing: 10) { doneButton; resetButton }
         }
     }
 
@@ -82,10 +82,12 @@ struct CropPanel: View {
     }
 
     private var resetButton: some View {
-        Button(CropCopy.reset, systemImage: Symbol.reset) {
+        Button {
             withAnimation(reduceMotion ? nil : Motion.rows) { model.reset() }
+        } label: {
+            Label(CropCopy.reset, systemImage: Symbol.reset)
         }
-        .buttonStyle(.cobaltSecondary(fullWidth: false))
+        .buttonStyle(.cobaltIcon())
     }
 }
 

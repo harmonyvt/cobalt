@@ -158,15 +158,11 @@ struct CropSheet: View {
             }
             readout(crop)
             status(crop)
-            ButtonRow {
-                Button(ToolsCopy.cancel) { dismiss() }
-                    .buttonStyle(.cobaltSecondary())
-                    .disabled(busy)
-                Button(ToolsCopy.cropPrimary(stores: stores), systemImage: stores ? Symbol.Gallery.crop : GalleryActions.saveSymbol) { save(crop) }
-                    .buttonStyle(.cobaltPrimary())
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(busy || !crop.isValid)
-            }
+            // the sheet's one word is its primary; cancel is the header's close, top right
+            Button(ToolsCopy.cropPrimary(stores: stores), systemImage: stores ? Symbol.Gallery.crop : GalleryActions.saveSymbol) { save(crop) }
+                .buttonStyle(.cobaltPrimary())
+                .keyboardShortcut(.defaultAction)
+                .disabled(busy || !crop.isValid)
             Text(stores ? ToolsCopy.cropIsNew : (Platform.isMac ? ToolsCopy.cropNotKeptMac : ToolsCopy.cropNotKept))
                 .font(CobaltType.captionSmall)
                 .foregroundStyle(CobaltColor.caption)

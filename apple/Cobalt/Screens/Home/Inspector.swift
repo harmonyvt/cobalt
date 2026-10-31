@@ -85,7 +85,7 @@ struct InspectorColumn: View {
         .sheet(item: $opened) { open in
             NavigationStack {
                 MediaDetail(model: model, item: open.item, initial: open.rendition)
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { CloseButton(cancels: true) { opened = nil } } }
+                    .sheetClose { opened = nil }
             }
             #if os(macOS)
             .modifier(MacSheetSize())
@@ -150,19 +150,23 @@ struct InspectorColumn: View {
                 Text("\(Format.bytes(bytes)) · \(Copy.publicLink)")
                     .font(CobaltType.caption).foregroundStyle(CobaltColor.caption)
                 if let url, pipeline.shareLink(for: url) != url {
-                    HStack(spacing: 6) {
+                    IconRow(spacing: 6, alignment: .leading) {
                         ForEach(LinkForm.allCases, id: \.self) { form in
-                            Button(form.copyTitle, systemImage: form.symbol) {
+                            Button {
                                 Pasteboard.copy((form == .share ? pipeline.shareLink(for: url) : url).absoluteString)
+                            } label: {
+                                Label(form.menuTitle, systemImage: form.symbol)
                             }
-                            .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                            .buttonStyle(.cobaltIcon(.small))
                         }
                     }
                     .padding(.top, 4)
                 } else if let url {
-                    Button(Copy.copyLink, systemImage: Symbol.copyLink) { Pasteboard.copy(pipeline.shareLink(for: url).absoluteString) }
-                        .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                        .padding(.top, 4)
+                    Button { Pasteboard.copy(pipeline.shareLink(for: url).absoluteString) } label: {
+                        Label(Copy.copyLink, systemImage: Symbol.copyLink)
+                    }
+                    .buttonStyle(.cobaltIcon(.small))
+                    .padding(.top, 4)
                 }
             }
         }

@@ -2,7 +2,8 @@ import CobaltKit
 import SwiftUI
 
 /// The kind chips (apple/CONTRACT-GALLERY.md 1.21, board `Library-Mixed`): `all · videos · photos · galleries · webps`,
-/// each with how many there are (a video with webps counts under videos and webps). Its own row, so it combines with `show` (public, kept on this device) and with the sort;
+/// each its icon with how many there are (a video with webps counts under videos and webps; icon-first controls: the
+/// kind's word is the chip's name, for VoiceOver and the Mac's hover). Its own row, so it combines with `show` (public, kept on this device) and with the sort;
 /// the same state the `kind` list of the sort and show menu sets (`LibraryModel.kindFilter`). Only on a server that has
 /// photos and galleries (`features.gallery`).
 ///
@@ -81,18 +82,26 @@ struct LibraryKindChips: View, Equatable {
             library.showingHidden = false
             library.kindFilter = kind
         } label: {
-            Text(Copy.Library2.chip(kind, count: count))
-                .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
-                .monospacedDigit()
-                .foregroundStyle(selected ? CobaltColor.onText : Color.primary)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, 12)
-                .frame(minHeight: 30)
-                .background(Capsule().fill(selected ? CobaltColor.text : CobaltColor.elevated))
-                .contentShape(Capsule())
+            // icon-first controls: the kind's icon and its count; the word is the chip's name (VoiceOver, Mac hover)
+            HStack(spacing: 5) {
+                Image(systemName: Symbol.Library.kind(kind))
+                    .font(.system(size: 12, weight: .semibold))
+                if let count {
+                    Text("\(count)")
+                        .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
+                        .monospacedDigit()
+                }
+            }
+            .foregroundStyle(selected ? CobaltColor.onText : Color.primary)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 12)
+            .frame(minWidth: 40, minHeight: 30)
+            .background(Capsule().fill(selected ? CobaltColor.text : CobaltColor.elevated))
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .help(Copy.Library2.name(kind))
         .contextMenu {
             // galleries are not shared, so their chip offers neither
             if let pickAll, count != 0, kind != .galleries {
@@ -119,19 +128,26 @@ struct LibraryKindChips: View, Equatable {
         return Button {
             library.showingHidden.toggle()
         } label: {
-            Text(Copy.HiddenAlbum.chip(count: hiddenCount))
-                .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
-                .monospacedDigit()
-                .foregroundStyle(selected ? Color.white : Color.primary)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, 12)
-                .frame(minHeight: 30)
-                .background(Capsule().fill(selected ? Color.black : CobaltColor.elevated))
-                .overlay(Capsule().strokeBorder(Color.white.opacity(selected ? 0.28 : 0), lineWidth: 1))
-                .contentShape(Capsule())
+            HStack(spacing: 5) {
+                Image(systemName: Symbol.HiddenRules.hidden)
+                    .font(.system(size: 12, weight: .semibold))
+                if let hiddenCount {
+                    Text("\(hiddenCount)")
+                        .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
+                        .monospacedDigit()
+                }
+            }
+            .foregroundStyle(selected ? Color.white : Color.primary)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 12)
+            .frame(minWidth: 40, minHeight: 30)
+            .background(Capsule().fill(selected ? Color.black : CobaltColor.elevated))
+            .overlay(Capsule().strokeBorder(Color.white.opacity(selected ? 0.28 : 0), lineWidth: 1))
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .help(Copy.HiddenAlbum.chipName)
         .accessibilityLabel(Copy.HiddenAlbum.chipName)
         .accessibilityValue(hiddenCount.map { "\($0)" } ?? "")
         .accessibilityHint(Copy.HiddenAlbum.chipHint)

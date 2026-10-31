@@ -166,32 +166,26 @@ struct WideDetail: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Button { c.controller.copy(file, for: c.rendition.id) } label: {
-                    Image(systemName: copied ? Symbol.Media.copied : Symbol.Media.copyLink)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
+                    Label(
+                        caps.hasLinkPair(file) ? Copy.LinkPair.copyShareLink : Copy.copyLink,
+                        systemImage: copied ? Symbol.Media.copied : Symbol.Media.copyLink
+                    )
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.cobaltIcon(.small, state: copied ? .done : .idle))
                 .symbolBounce(on: copied)
-                .accessibilityLabel(caps.hasLinkPair(file) ? Copy.LinkPair.copyShareLink : Copy.copyLink)
-                .help(caps.hasLinkPair(file) ? Copy.LinkPair.copyShareLink : Copy.copyLink)
+                .accessibilityValue(Text(copied ? Copy.Media.copied : ""))
                 if caps.hasLinkPair(file) {
                     Button { c.controller.copy(file, for: c.rendition.id, form: .direct) } label: {
-                        Image(systemName: copiedDirect ? Symbol.Media.copied : Symbol.LinkPair.direct)
-                            .frame(width: 28, height: 28)
-                            .contentShape(Rectangle())
+                        Label(Copy.LinkPair.copyDirectLink, systemImage: copiedDirect ? Symbol.Media.copied : Symbol.LinkPair.direct)
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.cobaltIcon(.small, state: copiedDirect ? .done : .idle))
                     .symbolBounce(on: copiedDirect)
-                    .accessibilityLabel(Copy.LinkPair.copyDirectLink)
-                    .help(Copy.LinkPair.copyDirectLink)
+                    .accessibilityValue(Text(copiedDirect ? Copy.Media.copied : ""))
                 }
                 ShareLink(item: url) {
-                    Image(systemName: Symbol.Media.share)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
+                    Label(Copy.share, systemImage: Symbol.Media.share)
                 }
-                .buttonStyle(.borderless)
-                .accessibilityLabel(Copy.share)
+                .buttonStyle(.cobaltIcon(.small))
             }
         }
         .font(CobaltType.body)

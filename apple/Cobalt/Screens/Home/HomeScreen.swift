@@ -575,7 +575,7 @@ struct HomeScreen: View {
             if let media = model.store.media(id: baseID(item.id)) {
                 NavigationStack {
                     MediaDetail(model: model, item: model.mediaItem(for: media))
-                        .toolbar { ToolbarItem(placement: .cancellationAction) { CloseButton(cancels: true) { openedSheet = nil } } }
+                        .sheetClose { openedSheet = nil }
                 }
                 .modifier(MacSheetSize())
             }
@@ -703,7 +703,7 @@ struct HomeScreen: View {
             if let story = pipeline.progressStory { ProgressCard(story: story) }
         case .failed(let f) where !keepsFocus(f) && !isBlocking(f):
             InlineStatus(message: TrayCopy.failure(f, lineMax: model.capabilities.limits.lineMax)) {
-                Button(Copy.ok, systemImage: Symbol.checkmark) { pipeline.reset() }.buttonStyle(.cobaltSecondary(fullWidth: false))
+                Button { pipeline.reset() } label: { Label(Copy.ok, systemImage: Symbol.checkmark) }.buttonStyle(.cobaltIcon(.small))
             }
         case .image(let info):
             ImageCardContent(pipeline: pipeline, info: info) { pipeline.reset() }
@@ -720,12 +720,12 @@ struct HomeScreen: View {
         case .loading(let fraction):
             VStack(alignment: .leading, spacing: 10) {
                 ProgressCard(story: .photoImport(fraction: fraction))
-                Button(Copy.cancel, systemImage: Symbol.close) { photoImport.cancel() }
-                    .buttonStyle(.cobaltSecondary(fullWidth: false))
+                Button { photoImport.cancel() } label: { Label(Copy.cancel, systemImage: Symbol.close) }
+                    .buttonStyle(.cobaltIcon(.small))
             }
         case .failed(let f):
             InlineStatus(message: Copy.failure(f)) {
-                Button(Copy.ok, systemImage: Symbol.checkmark) { photoImport.dismissFailure() }.buttonStyle(.cobaltSecondary(fullWidth: false))
+                Button { photoImport.dismissFailure() } label: { Label(Copy.ok, systemImage: Symbol.checkmark) }.buttonStyle(.cobaltIcon(.small))
             }
         case .idle:
             EmptyView()

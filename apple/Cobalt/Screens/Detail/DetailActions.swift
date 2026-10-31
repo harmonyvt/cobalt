@@ -2,7 +2,7 @@ import CobaltKit
 import SwiftUI
 
 /// The buttons under the hero (CONTRACT-MEDIA 1.10, CONTRACT-ORBIT 2b): EXACTLY ONE prominent button for the
-/// tab, then the secondary row (icon over word, 52 pt, like the focus's choices), then the state of whatever is
+/// tab, then the secondary row (icon circles, icon-first controls: the name shows on a long press), then the state of whatever is
 /// running or failed. What does not apply is not shown (plain cobalt has no webp, no link, no public share; a
 /// private file has no link to copy). The public/private switch is `VisibilitySection`, next to this.
 struct DetailActions: View {
@@ -85,11 +85,11 @@ struct DetailActions: View {
         let plan = plan
         let locked = controller.isDeleting
         VStack(spacing: 12) {
-            GlassEffectContainer(spacing: 0) {
-                VStack(spacing: 8) {
-                    if let primary = plan.primary { primaryButton(primary) }
-                    if !plan.secondary.isEmpty { secondaryRow(plan.secondary) }
+            VStack(spacing: 10) {
+                if let primary = plan.primary {
+                    GlassEffectContainer(spacing: 0) { primaryButton(primary) }
                 }
+                if !plan.secondary.isEmpty { secondaryRow(plan.secondary) }
             }
             .disabled(locked)
             DetailStatus(controller: controller, item: item, leave: leave)
@@ -173,62 +173,52 @@ struct DetailActions: View {
 
     // MARK: secondary
 
+    /// The secondary row: one icon circle per choice (icon-first controls); each one's name shows on a long press.
     private func secondaryRow(_ items: [Choice]) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { ForEach(items, id: \.self) { secondary($0, .stacked) } }
-            VStack(spacing: 8) {
-                ForEach(Array(stride(from: 0, to: items.count, by: 2)), id: \.self) { i in
-                    HStack(spacing: 8) {
-                        ForEach(Array(items[i..<min(i + 2, items.count)]), id: \.self) { secondary($0, .stacked) }
-                    }
-                }
-            }
-            VStack(spacing: 8) { ForEach(items, id: \.self) { secondary($0, .inline) } }
-        }
+        IconRow { ForEach(items, id: \.self) { secondary($0) } }
     }
 
     @ViewBuilder
-    private func secondary(_ choice: Choice, _ layout: DetailChoiceLayout) -> some View {
+    private func secondary(_ choice: Choice) -> some View {
         switch choice {
         case .share:
             if let url = shareURL {
                 ShareLink(item: url) {
-                    DetailChoiceLabel(title: Copy.Media.share, symbol: Symbol.Media.share, layout: layout)
+                    Label(Copy.Media.share, systemImage: Symbol.Media.share)
                 }
-                .detailChoiceStyle()
+                .buttonStyle(.cobaltIcon())
             }
         case .savePhotos:
             let state = controller.photos[rendition.id] ?? .idle
             switch controller.placement(of: rendition) {
             case .inAlbum:
-                DetailChoiceButton(title: Copy.Sync.inAlbum, symbol: Symbol.Sync.inPhotos, inert: true, layout: layout) {}
+                DetailChoiceButton(title: Copy.Sync.inAlbum, symbol: Symbol.Sync.inPhotos, inert: true) {}
             case .inLibrary:
-                DetailChoiceButton(title: Copy.Sync.inLibrary, symbol: Symbol.Sync.inPhotos, inert: true, layout: layout) {}
+                DetailChoiceButton(title: Copy.Sync.inLibrary, symbol: Symbol.Sync.inPhotos, inert: true) {}
             case .none:
                 DetailChoiceButton(
-                    title: Self.saveTitle(done: state == .done), symbol: state == .done ? Symbol.checkmark : Self.saveSymbol,
-                    working: state == .working, layout: layout
+                    title: Self.saveTitle(done: false), symbol: state == .done ? Symbol.checkmark : Self.saveSymbol,
+                    working: state == .working, done: state == .done ? Self.saveTitle(done: true) : nil
                 ) { Task { await controller.savePhotos(rendition) } }
             }
         case .anotherWebp:
-            DetailChoiceButton(title: Copy.Media.anotherWebp, symbol: Symbol.Media.makeWebp, layout: layout) { makeWebp() }
+            DetailChoiceButton(title: Copy.Media.anotherWebp, symbol: Symbol.Media.makeWebp) { makeWebp() }
         case .publicShare:
             DetailChoiceButton(
-                title: Copy.Media.publicShare, symbol: Symbol.Media.publicShare,
-                working: controller.hosting == .working, layout: layout
+                title: Copy.Media.publicShare, symbol: Symbol.Media.publicShare, working: controller.hosting == .working
             ) { Task { await controller.publicShare(rendition) } }
         case .copyVideoLink:
             let paired = videoLink.map(model.capabilities.hasLinkPair) ?? false
             let done = paired ? copiedForm == .share : controller.copiedID == rendition.id
             DetailChoiceButton(
-                title: done ? Copy.Media.copied : (paired ? Copy.LinkPair.copyShare : Copy.Media.copyVideoLink),
-                symbol: done ? Symbol.Media.copied : Symbol.Media.copyLink, layout: layout
+                title: paired ? Copy.LinkPair.copyShareLink : Copy.Media.copyVideoLink,
+                symbol: done ? Symbol.Media.copied : Symbol.Media.copyLink, done: done ? Copy.Media.copied : nil
             ) { if let url = videoLink { controller.copy(url, for: rendition.id) } }
         case .copyVideoDirect:
             let done = copiedForm == .direct
             DetailChoiceButton(
-                title: done ? Copy.Media.copied : Copy.LinkPair.copyDirect,
-                symbol: done ? Symbol.Media.copied : Symbol.LinkPair.direct, layout: layout
+                title: Copy.LinkPair.copyDirectLink, symbol: done ? Symbol.Media.copied : Symbol.LinkPair.direct,
+                done: done ? Copy.Media.copied : nil
             ) { if let url = videoLink { controller.copy(url, for: rendition.id, form: .direct) } }
         case .copyWebpLink, .makeWebp:
             EmptyView()
@@ -247,75 +237,36 @@ struct DetailActions: View {
 
 // MARK: - buttons
 
-/// An icon over its word (`stacked`), or beside it (`inline`, the fallback when the words do not fit side by
-/// side). The word is one line, always: it sets the choice's width instead of wrapping.
-enum DetailChoiceLayout { case stacked, inline }
-
-/// The compact secondary choice: 52 pt tall in both layouts so a row is even.
-struct DetailChoiceLabel: View {
-    let title: String
-    let symbol: String
-    var working = false
-    var layout: DetailChoiceLayout = .stacked
-
-    private var word: some View {
-        Text(title)
-            .font(Font.cobalt(11.5, .medium, relativeTo: .caption))
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private var icon: some View {
-        Image(systemName: symbol)
-            .font(.system(size: layout == .stacked ? 19 : 17, weight: .medium))
-            .frame(height: 22)
-            .symbolEffect(.pulse, isActive: working)
-    }
-
-    var body: some View {
-        Group {
-            switch layout {
-            case .stacked: VStack(spacing: 3) { icon; word }
-            case .inline: HStack(spacing: 8) { icon; word }
-            }
-        }
-        .foregroundStyle(CobaltColor.text)
-        .padding(.horizontal, layout == .stacked ? 8 : 14)
-        .frame(maxWidth: .infinity, minHeight: 52)
-        .contentShape(.capsule)
-    }
-}
-
-extension View {
-    /// The secondary choice's skin: a glass capsule on iOS, the platform's bordered button on the Mac (a glass
-    /// button over a grouped form washes out there).
-    @ViewBuilder
-    func detailChoiceStyle(inert: Bool = false) -> some View {
-        #if os(macOS)
-        self.buttonStyle(.bordered).controlSize(.large).buttonBorderShape(.capsule)
-        #else
-        self.buttonStyle(.plain).glassEffect(inert ? .regular : .regular.interactive(), in: .capsule)
-        #endif
-    }
-}
-
+/// A secondary choice (icon-first controls): a `.cobaltIcon()` circle whose name is `title` (shown on a long press,
+/// on hover on the Mac, read by VoiceOver). Its state is the circle, not its words: green once it has done its job,
+/// pulsing while it works.
 struct DetailChoiceButton: View {
+    /// The action's name; it stays the same when the button is done ("copy share link", not "copied").
     let title: String
     let symbol: String
     var working = false
-    /// A statement, not an action ("in your cobalt album"): never tappable.
+    /// Set once the choice has done its job: the word VoiceOver reads after the name ("copied", "saved").
+    var done: String?
+    /// A statement, not an action ("in your cobalt album"): a done circle, never tappable.
     var inert = false
-    var layout: DetailChoiceLayout = .stacked
+    var tint: Color?
+    var role: ButtonRole?
     let action: () -> Void
 
+    private var state: IconButtonState {
+        if inert || done != nil { return .done }
+        return working ? .working : .idle
+    }
+
     var body: some View {
-        Button(action: action) {
-            DetailChoiceLabel(title: title, symbol: symbol, working: working, layout: layout)
+        Button(role: role, action: action) {
+            Label(title, systemImage: symbol)
         }
-        .detailChoiceStyle(inert: inert)
-        .disabled(working)
+        .buttonStyle(.cobaltIcon(tint: tint, state: state))
+        .symbolBounce(on: done != nil)
         .allowsHitTesting(!inert)
         .accessibilityRemoveTraits(inert ? .isButton : [])
+        .accessibilityValue(Text(done ?? ""))
     }
 }
 

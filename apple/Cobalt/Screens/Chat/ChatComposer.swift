@@ -75,26 +75,15 @@ struct ChatComposer: View {
     }
 
     private var sendButton: some View {
+        // the composer's one filled icon: an arrow in a solid circle; while a reply comes it pulses and stays off
         Button(action: submit) {
-            ZStack {
-                if busy {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: Symbol.chatSend)
-                        .font(.system(size: 30))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(CobaltColor.onText, canSend ? CobaltColor.text : CobaltColor.captionOnElevated.opacity(0.5))
-                }
-            }
-            .frame(width: 36, height: 36)
-            .contentShape(Circle())
+            Label(Copy.Chat.send, systemImage: Symbol.chatSendArrow)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.cobaltIcon(.small, prominent: true, state: busy ? .working : .idle))
         .disabled(!canSend)
         .keyboardShortcut(.return, modifiers: .command)
         .accessibilityLabel(busy ? Copy.Chat.sending : Copy.Chat.send)
         .accessibilityHint(Copy.Chat.sendA11yHint)
-        .help(Copy.Chat.send)
     }
 
     private func submit() {

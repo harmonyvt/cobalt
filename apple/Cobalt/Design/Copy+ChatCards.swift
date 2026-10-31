@@ -161,6 +161,9 @@ extension Copy {
         static let copy = "copy"
         static let open = "open"
         static let copied = "link copied"
+        /// The link card's icon names (held, hovered, read by VoiceOver).
+        static let copyLink = "copy share link"
+        static let openLink = "open share link"
         static func folder(_ c: ChatToolCard.Folder) -> String { c.isSet ? "set" : "collection" }
         static func folderChange(_ c: ChatToolCard.Folder) -> String {
             switch c.change {

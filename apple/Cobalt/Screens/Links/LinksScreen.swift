@@ -48,6 +48,7 @@ struct LinksScreen: View {
                 #endif
                 ToolbarItem(placement: .primaryAction) {
                     Button(Copy.Links.refresh, systemImage: Symbol.retry) { Task { await store.refresh() } }
+                        .labelStyle(.iconOnly)
                         .disabled(store.state == .loading)
                         #if os(macOS)
                         .keyboardShortcut("r", modifiers: .command)
@@ -438,52 +439,57 @@ struct LinkRow: View {
     @ViewBuilder
     private var buttons: some View {
         #if os(iOS)
-        // copy is what a link is for: a labelled button on every row, not only in the swipe and the menu
+        // copy is what a link is for: the row's one filled icon, on every row, not only in the swipe and the menu; a copy
+        // turns it into the green tick (the name stays "copy share link")
         Button { controller.copy(link, shell: shell) } label: {
-            Text(copied ? Copy.Media.copied : Copy.Links.copy)
-                .font(CobaltType.buttonSmall.weight(.semibold))
-                .foregroundStyle(copied ? CobaltColor.text : CobaltColor.onText)
-                .padding(.horizontal, 14)
-                .frame(minHeight: 40)
-                .background(copied ? CobaltColor.elevated : CobaltColor.text, in: Capsule())
-                .contentTransition(.opacity)
+            Label(Copy.Links.copyLink, systemImage: copied ? Symbol.Library.copied : Symbol.copyLink)
         }
-        .buttonStyle(.borderless)
-        .accessibilityLabel(copied ? Copy.Media.copied : Copy.Links.copyLink)
-        .animation(Motion.fade, value: copied)
+        .buttonStyle(.cobaltIcon(.small, prominent: true, state: copied ? .done : .idle))
         #else
-        HStack(spacing: 2) {
-            Button(Copy.Links.copyLink, systemImage: Symbol.copyLink) { controller.copy(link, shell: shell) }
+        IconRow(spacing: 6, alignment: .trailing) {
+            Button { controller.copy(link, shell: shell) } label: {
+                Label(Copy.Links.copyLink, systemImage: copied ? Symbol.Library.copied : Symbol.copyLink)
+            }
+            .buttonStyle(.cobaltIcon(.small, prominent: true, state: copied ? .done : .idle))
             ShareLink(item: link.url) { Label(Copy.Links.share, systemImage: Symbol.share) }
+                .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.linkBlue))
             if controller.privateLinksEnabled {
                 Menu {
                     LinkPrivacyItems(link: link, controller: controller)
                 } label: {
                     Label(Copy.PrivateLinks.privacy,
                           systemImage: link.isPrivate ? Symbol.PrivateLinks.lock : Symbol.PrivateLinks.makePrivate)
+                        .labelStyle(.iconOnly)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help(Copy.PrivateLinks.privacy)
+                .foregroundStyle(CobaltColor.text)
+                .iconName(Copy.PrivateLinks.privacy)
             }
             if controller.collectionsEnabled {
+                // the menu's label is shared with the context menu's submenu (words there), so the icon-only style goes
+                // on the menu here
                 CollectionMenu(link: link, controller: controller)
+                    .labelStyle(.iconOnly)
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .fixedSize()
+                    .foregroundStyle(CobaltColor.collection)
+                    .iconName(Copy.Collections.addTo)
                 if let collection {
-                    Button(Copy.Collections.removeFrom, systemImage: Symbol.collectionRemove) {
-                        controller.remove(link, from: collection, shell: shell)
+                    Button { controller.remove(link, from: collection, shell: shell) } label: {
+                        Label(Copy.Collections.removeFrom, systemImage: Symbol.collectionRemove)
                     }
+                    .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.collection))
                 }
             }
-            Button(Copy.Links.revoke, systemImage: Symbol.revokeLink, role: .destructive) { controller.revoking = link }
+            Button(role: .destructive) { controller.revoking = link } label: {
+                Label(Copy.Links.revoke, systemImage: Symbol.revokeLink)
+            }
+            .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.errorText))
         }
-        .labelStyle(.iconOnly)
-        .buttonStyle(.borderless)
-        .foregroundStyle(CobaltColor.text)
-        .help(Copy.Links.copyLink)
+        .fixedSize()
         #endif
     }
 }

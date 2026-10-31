@@ -2,7 +2,7 @@
 import CobaltKit
 import SwiftUI
 
-/// The overlay sheet (apple/CONTRACT-EDITOR.md 4.5): `cancel` · `overlay` · `done`; how long it stays up (a stepper and a
+/// The overlay sheet (apple/CONTRACT-EDITOR.md 4.5): `overlay` · `done` · the close (cancel) top right; how long it stays up (a stepper and a
 /// slider, 0.1 s to the room it has), its size and opacity, its volume (a video only), and `delete overlay`. Where it sits is
 /// set by dragging on the preview above, which stays in view at the medium height. `cancel` puts the overlay back as it was.
 struct EditorPhoneOverlaySheet: View {
@@ -38,9 +38,11 @@ struct EditorPhoneOverlaySheet: View {
                         opacitySection(overlay)
                         volumeSection(overlay)
                         if pitchEnabled && session.source(for: overlay.item)?.kind == .video { pitchSection(overlay) }
-                        EditorInspectorButton(title: Copy.Editor.deleteOverlay, symbol: Symbol.Editor.delete, destructive: true) {
-                            session.remove(.overlay(overlay.id))
-                            dismiss()
+                        IconRow(alignment: .leading) {
+                            EditorInspectorButton(title: Copy.Editor.deleteOverlay, symbol: Symbol.Editor.delete, destructive: true) {
+                                session.remove(.overlay(overlay.id))
+                                dismiss()
+                            }
                         }
                     }
                 }
@@ -61,15 +63,14 @@ struct EditorPhoneOverlaySheet: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Button(Copy.Editor.cancel) { cancel() }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
             Text(Copy.Editor.overlay)
                 .font(Font.cobalt(12.5, .semibold, relativeTo: .subheadline))
                 .foregroundStyle(CobaltColor.text)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityAddTraits(.isHeader)
             Button(Copy.Editor.done) { dismiss() }
                 .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
+            CloseButton(cancels: true) { cancel() }     // cancel is the sheet's close, top right
         }
         .padding(.horizontal, Metrics.gutter)
         .padding(.top, 14)
@@ -104,7 +105,7 @@ struct EditorPhoneOverlaySheet: View {
         let most = longest(overlay)
         return EditorSection(Copy.Editor.length, trailing: Copy.Editor.clockTenths(overlay.length)) {
             HStack(spacing: 6) {
-                stepButton("minus") { setLength(overlay.length - 0.1) }
+                stepButton("minus", Copy.Editor.lengthShorter) { setLength(overlay.length - 0.1) }
                 Slider(
                     value: Binding(get: { min(most, max(0.1, overlay.length)) }, set: { setLength($0) }),
                     in: 0.1...most, step: 0.1
@@ -113,7 +114,7 @@ struct EditorPhoneOverlaySheet: View {
                 }
                 .accessibilityLabel(Copy.Editor.length)
                 .accessibilityValue(Copy.Editor.clockTenths(overlay.length))
-                stepButton("plus") { setLength(overlay.length + 0.1) }
+                stepButton("plus", Copy.Editor.lengthLonger) { setLength(overlay.length + 0.1) }
             }
         }
     }
@@ -123,18 +124,11 @@ struct EditorPhoneOverlaySheet: View {
         session.endGesture()
     }
 
-    private func stepButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(CobaltColor.text)
-                .frame(width: 34, height: 34)
-                .background(EditorColor.field, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .frame(width: Metrics.hit, height: Metrics.hit)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityHidden(true)
+    /// VoiceOver adjusts the slider instead, so these stay hidden from it; the name is the long press's tag.
+    private func stepButton(_ symbol: String, _ name: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Label(name, systemImage: symbol) }
+            .buttonStyle(.cobaltIcon(.small))
+            .accessibilityHidden(true)
     }
 
     // MARK: size, opacity, volume

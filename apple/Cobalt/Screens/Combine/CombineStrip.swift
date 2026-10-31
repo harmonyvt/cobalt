@@ -62,18 +62,17 @@ struct CombineStrip: View {
                         .font(CobaltType.captionSmall)
                         .foregroundStyle(CobaltColor.caption)
                         .lineLimit(1)
-                    HStack(spacing: 8) {
+                    IconRow(spacing: 8, alignment: .leading) {
                         Button { combine.shift(by: -1) } label: {
                             Label(Copy.Gallery.moveEarlier, systemImage: Symbol.Gallery.moveEarlier)
                         }
-                        .buttonStyle(.cobaltSecondary(compact: true))
+                        .buttonStyle(.cobaltIcon(.small))
                         .disabled(!combine.canMoveEarlier)
                         .accessibilityLabel(Copy.Combine.moveA11y(combine.name(id), earlier: true))
                         Button { combine.shift(by: 1) } label: {
                             Label(Copy.Gallery.moveLater, systemImage: Symbol.Gallery.moveLater)
-                                .labelStyle(TrailingIconLabelStyle())
                         }
-                        .buttonStyle(.cobaltSecondary(compact: true))
+                        .buttonStyle(.cobaltIcon(.small))
                         .disabled(!combine.canMoveLater)
                         .accessibilityLabel(Copy.Combine.moveA11y(combine.name(id), earlier: false))
                     }
@@ -97,16 +96,6 @@ struct CombineStrip: View {
         }
         let ticked = combine.tickedIDs.count
         return ticked < 2 ? Copy.Gallery.tickAtLeastTwo : Copy.Combine.tickLine(ticked: ticked, of: ids.count, skipped: 0)
-    }
-}
-
-/// The text first, then the icon (the `move later` arrow points forward).
-private struct TrailingIconLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 6) {
-            configuration.title
-            configuration.icon
-        }
     }
 }
 

@@ -308,8 +308,9 @@ struct ChatConfirmCard: View {
         .accessibilityLabel(Copy.Chat.confirmA11y(summary: card.summary, effect: effect))
     }
 
+    /// The worded yes ("delete 3") is the card's one word; "cancel" is an x beside it.
     private var buttons: some View {
-        ButtonRow {
+        HStack(spacing: 10) {
             Button(role: .destructive) { answer(true) } label: {
                 if answering {
                     Label(Copy.Chat.confirmAnswering, systemImage: Symbol.chatConfirm)
@@ -318,8 +319,10 @@ struct ChatConfirmCard: View {
                 }
             }
             .buttonStyle(.cobaltDestructive(fullWidth: false, compact: true))
-            Button(Copy.Chat.confirmCancel, role: .cancel) { answer(false) }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+            Button(role: .cancel) { answer(false) } label: {
+                Label(Copy.Chat.confirmCancel, systemImage: Symbol.close)
+            }
+            .buttonStyle(.cobaltIcon(.small))
         }
         .disabled(answering)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -417,7 +420,7 @@ struct ChatStepRow: View {
                 if step.status == .running {
                     ProgressView().controlSize(.mini)
                 } else {
-                    Image(systemName: step.status == .error ? Symbol.chatCodeFailed : Symbol.chatCode)
+                    Image(systemName: step.status == .error ? Symbol.chatCodeFailed : step.kind == "job" ? ChatCardTone.job.symbol : Symbol.chatCode)
                         .font(.system(size: 12))
                         .foregroundStyle(step.status == .error ? CobaltColor.errorText : CobaltColor.caption)
                         .accessibilityHidden(true)

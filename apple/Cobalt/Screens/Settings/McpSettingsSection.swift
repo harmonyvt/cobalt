@@ -70,8 +70,12 @@ struct McpSettingsSection: View {
                 Text(Copy.Mcp.how).foregroundStyle(.secondary)
             }
         case .failed:
-            Text(Copy.Mcp.loadFailed).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
-            Button(Copy.Mcp.retry, systemImage: Symbol.Mcp.rotate) { Task { await reload() } }
+            HStack(spacing: 8) {
+                Text(Copy.Mcp.loadFailed).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button { Task { await reload() } } label: { Label(Copy.Mcp.retry, systemImage: Symbol.Mcp.rotate) }
+                    .buttonStyle(.cobaltIcon(.small))
+            }
         case let .ready(s):
             Picker(selection: Binding(get: { s.mode }, set: { ask(.mode($0)) })) {
                 modeRow(Copy.Mcp.off, Copy.Mcp.offDetail, Symbol.Mcp.off).tag(McpSettings.Mode.off)
@@ -85,21 +89,32 @@ struct McpSettingsSection: View {
 
             if s.mode == .public {
                 LabeledContent {
-                    Text(s.publicUrl).font(Font.cobalt(12)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                        .textSelection(.enabled)
+                    HStack(spacing: 8) {
+                        Text(s.publicUrl).font(Font.cobalt(12)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            .textSelection(.enabled)
+                        Button {
+                            Pasteboard.copy(s.publicUrl)
+                            copiedPublic = true
+                        } label: {
+                            Label(Copy.Mcp.copyURL, systemImage: copiedPublic ? Symbol.checkmark : Symbol.Mcp.copy)
+                        }
+                        .buttonStyle(.cobaltIcon(.small, state: copiedPublic ? .done : .idle))
+                        .accessibilityValue(copiedPublic ? Copy.Mcp.copied : "")
+                    }
                 } label: {
                     Label(Copy.Mcp.url, systemImage: Symbol.Mcp.publicURL)
-                }
-                Button(copiedPublic ? Copy.Mcp.copied : Copy.Mcp.copyURL, systemImage: Symbol.Mcp.copy) {
-                    Pasteboard.copy(s.publicUrl)
-                    copiedPublic = true
                 }
                 Text(Copy.Mcp.header).font(CobaltType.captionSmall).foregroundStyle(.secondary)
             }
 
             if s.mode == .private, let link = s.link {
                 LabeledContent {
-                    Text(link.hint).font(Font.cobalt(12)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                    HStack(spacing: 8) {
+                        Text(link.hint).font(Font.cobalt(12)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                        Button { ask(.rotate) } label: { Label(Copy.Mcp.rotate, systemImage: Symbol.Mcp.rotate) }
+                            .buttonStyle(.cobaltIcon(.small, state: working ? .working : .idle))
+                            .disabled(working)
+                    }
                 } label: {
                     Label(Copy.Mcp.link, systemImage: Symbol.Mcp.privateLink)
                 }
@@ -107,8 +122,6 @@ struct McpSettingsSection: View {
                 fact(Copy.Mcp.usedBy, Symbol.Mcp.usedBy, link.usedBy ?? "\u{2014}")
                 fact(Copy.Mcp.requestsToday, Symbol.Mcp.requests, "\(link.callsToday)")
                 fact(Copy.Mcp.made, Symbol.Mcp.made, Self.when(link.madeAt))
-                Button(working ? Copy.Mcp.working : Copy.Mcp.rotate, systemImage: Symbol.Mcp.rotate) { ask(.rotate) }
-                    .disabled(working)
                 Text(Copy.Mcp.steps).font(CobaltType.captionSmall).foregroundStyle(.secondary)
             }
 
@@ -251,7 +264,7 @@ struct McpSettingsSection: View {
     }
 }
 
-/// The new private link, shown once: copy it, then done.
+/// The new private link, shown once: copy it, then close (top right).
 private struct McpLinkRevealSheet: View {
     let url: String
     let isNew: Bool
@@ -261,7 +274,11 @@ private struct McpLinkRevealSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(isNew ? Copy.Mcp.revealTitleNew : Copy.Mcp.revealTitle).font(CobaltType.sheetTitle)
+            HStack(alignment: .top, spacing: 12) {
+                Text(isNew ? Copy.Mcp.revealTitleNew : Copy.Mcp.revealTitle).font(CobaltType.sheetTitle)
+                Spacer(minLength: 0)
+                CloseButton(cancels: true, action: done)    // done is the sheet's close, top right
+            }
             Text(Copy.Mcp.revealWarning).font(CobaltType.body).foregroundStyle(.secondary)
             Text(url)
                 .font(Font.cobalt(13))
@@ -270,15 +287,12 @@ private struct McpLinkRevealSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             Text(Copy.Mcp.steps).font(CobaltType.captionSmall).foregroundStyle(.secondary)
-            HStack(spacing: 10) {
-                Button(copied ? Copy.Mcp.copied : Copy.Mcp.copyLink, systemImage: Symbol.Mcp.copy) {
-                    Pasteboard.copy(url)
-                    copied = true
-                }
-                .buttonStyle(.borderedProminent)
-                .haptic(.success, trigger: copied) { $0 }
-                Button(Copy.Mcp.done, action: done).buttonStyle(.bordered)
+            Button(copied ? Copy.Mcp.copied : Copy.Mcp.copyLink, systemImage: Symbol.Mcp.copy) {
+                Pasteboard.copy(url)
+                copied = true
             }
+            .buttonStyle(.borderedProminent)
+            .haptic(.success, trigger: copied) { $0 }
             .controlSize(.large)
         }
         .padding(24)

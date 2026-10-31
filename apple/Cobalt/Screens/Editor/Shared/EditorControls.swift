@@ -56,11 +56,13 @@ struct EditorFieldRow<Trailing: View>: View {
 
 // MARK: - segmented
 
-/// A row (or grid) of exclusive choices: the board's `.seg`. The selected one is the text-ink pill.
+/// A row (or grid) of exclusive choices: the board's `.seg`. The selected one is the text-ink pill. An option with a `symbol`
+/// shows only its symbol (the title is its name: VoiceOver, the Mac's hover tag); values like `1.5×` or `9:16` keep their text.
 struct EditorSegmented<Value: Hashable>: View {
     struct Option: Identifiable {
         let value: Value
         let title: String
+        var symbol: String?
         var id: String { title }
     }
 
@@ -83,8 +85,7 @@ struct EditorSegmented<Value: Hashable>: View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: max(1, columns)), spacing: 4) {
             ForEach(options) { option in
                 Button { onSelect(option.value) } label: {
-                    Text(option.title)
-                        .font(Font.cobalt(11, .regular, relativeTo: .caption2))
+                    optionLabel(option)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                         .frame(maxWidth: .infinity, minHeight: Platform.isMac ? 28 : 36)
@@ -95,12 +96,34 @@ struct EditorSegmented<Value: Hashable>: View {
                         .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .modifier(OptionName(name: option.symbol == nil ? nil : option.title))
                 .accessibilityAddTraits(option.value == selected ? .isSelected : [])
             }
         }
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.5)
         .haptic(.selection, trigger: selected)
+    }
+
+    @ViewBuilder
+    private func optionLabel(_ option: Option) -> some View {
+        if let symbol = option.symbol {
+            Label(option.title, systemImage: symbol)
+                .labelStyle(.iconOnly)
+                .font(.system(size: 13, weight: .semibold))
+        } else {
+            Text(option.title)
+                .font(Font.cobalt(11, .regular, relativeTo: .caption2))
+        }
+    }
+}
+
+/// `iconName` for an icon-only option of `EditorSegmented`; a worded one needs nothing.
+private struct OptionName: ViewModifier {
+    let name: String?
+
+    func body(content: Content) -> some View {
+        if let name { content.iconName(name) } else { content }
     }
 }
 
@@ -297,7 +320,7 @@ struct EditorSpeedRow: View {
 }
 
 /// Pitch: a -12...12 semitone slider in steps of a half (so 0 is a natural stop), `changes the voice, not the speed`, and a
-/// `reset` button when it is not 0. The value itself is the section's trailing text.
+/// `reset` icon when it is not 0. The value itself is the section's trailing text.
 struct EditorPitchRow: View {
     let pitch: Double
     let set: (Double) -> Void
@@ -318,15 +341,13 @@ struct EditorPitchRow: View {
                     .foregroundStyle(CobaltColor.caption)
                 Spacer(minLength: 8)
                 if abs(pitch) > 0.001 {
-                    Button(Copy.Editor.pitchReset) {
+                    Button {
                         set(0)
                         onEnd()
+                    } label: {
+                        Label(Copy.Editor.pitchReset, systemImage: Symbol.reset)
                     }
-                    .buttonStyle(.plain)
-                    .font(Font.cobalt(11.5, .medium, relativeTo: .caption))
-                    .foregroundStyle(CobaltColor.text)
-                    .frame(minHeight: Platform.isMac ? 24 : Metrics.hit)
-                    .accessibilityLabel(Copy.Editor.pitchReset)
+                    .buttonStyle(.cobaltIcon(.small))
                 }
             }
         }
@@ -339,7 +360,7 @@ struct EditorPitchRow: View {
     }
 }
 
-/// Crop and fit: `full free 9:16 1:1 4:5 16:9` (three by two), `edit crop` when a crop is set, then `fill` / `fit`. Presets
+/// Crop and fit: `full free 9:16 1:1 4:5 16:9` (three by two), an `edit crop` icon when a crop is set, then the `fill` / `fit` icons. Presets
 /// need the file's display size; without it the crop row is disabled (the server still has it as it was).
 struct EditorCropRows: View {
     let crop: EditCrop?
@@ -366,19 +387,17 @@ struct EditorCropRows: View {
                 isEnabled: display != nil,
                 onSelect: choose)
             if crop != nil, let onEditCrop {
-                Button(action: onEditCrop) {
-                    Label(Copy.Editor.editCrop, systemImage: Symbol.Editor.toolCrop)
-                        .font(Font.cobalt(11.5, .medium, relativeTo: .caption))
-                        .frame(maxWidth: .infinity, minHeight: Platform.isMac ? 28 : 36)
-                        .background(EditorColor.field, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                IconRow(alignment: .leading) {
+                    Button(action: onEditCrop) { Label(Copy.Editor.editCrop, systemImage: Symbol.Editor.toolCrop) }
+                        .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.linkBlue))
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(CobaltColor.linkBlue)
             }
             EditorSection(Copy.Editor.fit) {
                 EditorSegmented(
-                    options: [.init(value: EditFit.fill, title: Copy.Editor.fitFill), .init(value: .fit, title: Copy.Editor.fitFit)],
+                    options: [
+                        .init(value: EditFit.fill, title: Copy.Editor.fitFill, symbol: Symbol.Editor.fill),
+                        .init(value: .fit, title: Copy.Editor.fitFit, symbol: Symbol.Editor.fit),
+                    ],
                     selected: fit, onSelect: onFit)
             }
         }
@@ -413,17 +432,10 @@ struct EditorVolumeRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Button { setMuted(!muted) } label: {
-                Image(systemName: muted ? Symbol.Editor.muted : Symbol.Editor.volume)
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 30, height: 30)
-                    .background(EditorColor.field, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                Label(muted ? Copy.Editor.unmute : Copy.Editor.mute, systemImage: muted ? Symbol.Editor.muted : Symbol.Editor.volume)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(muted ? CobaltColor.errorText : CobaltColor.text)
-            .accessibilityLabel(muted ? Copy.Editor.unmute : Copy.Editor.mute)
+            .buttonStyle(.cobaltIcon(.small, tint: muted ? CobaltColor.errorText : nil))
             .accessibilityAddTraits(muted ? .isSelected : [])
-            .frame(minWidth: Metrics.hit, minHeight: Platform.isMac ? 30 : Metrics.hit)
             if silent {
                 Text(Copy.Editor.noSound)
                     .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
@@ -443,7 +455,8 @@ struct EditorVolumeRow: View {
     }
 }
 
-/// A destructive text button in the inspector (`delete clip`, `delete overlay`).
+/// An inspector action as a small icon (`split at playhead`, `delete clip`, `delete overlay`, `remove background`): its name
+/// shows on a long press or the Mac's hover and is what VoiceOver reads. A destructive one is drawn in the error colour.
 struct EditorInspectorButton: View {
     let title: String
     let symbol: String
@@ -452,16 +465,8 @@ struct EditorInspectorButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(role: destructive ? .destructive : nil, action: action) {
-            Label(title, systemImage: symbol)
-                .font(Font.cobalt(12, .medium, relativeTo: .caption))
-                .frame(maxWidth: .infinity, minHeight: Platform.isMac ? 30 : 40)
-                .background(EditorColor.field, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(destructive ? CobaltColor.errorText : CobaltColor.text)
-        .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.45)
+        Button(role: destructive ? .destructive : nil, action: action) { Label(title, systemImage: symbol) }
+            .buttonStyle(.cobaltIcon(.small, tint: destructive ? CobaltColor.errorText : nil))
+            .disabled(!isEnabled)
     }
 }
