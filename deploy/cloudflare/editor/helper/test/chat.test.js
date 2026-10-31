@@ -127,3 +127,41 @@ test("a chat renders through the container API: frames, the played video's sound
         rmSync(work, { recursive: true, force: true });
     }
 });
+
+// Every card type of section 38.2 (and an unknown one, and one with odd fields) is drawn without breaking the render:
+// prod's first chat video died on a job card that named a post.
+test("every tool card draws, including a job with its post and broken cards", { skip: can ? false : "no ffmpeg or Chromium", timeout: 240_000 }, async () => {
+    const { renderChat } = await import("../chat/render.js");
+    const work = mkdtempSync(path.join(process.env.EDIT_TEST_TMP || tmpdir(), "chat-cards-"));
+    try {
+        const poster = path.join(work, "p.jpg");
+        ff(["-f", "lavfi", "-i", "color=c=teal:s=120x160", "-frames:v", "1", poster]);
+        const card = (type, extra) => ({ op: `x.${type}`, ms: 5, status: "done", card: { type, ...extra } });
+        const cards = [
+            card("search", { query: "q", within: "a set", total: 2, hits: [{ post_id: "p", score: 0.8 }, { post_id: "gone", score: null }] }),
+            card("look", { post_ids: ["p", "gone"] }),
+            card("emotes", { query: "cat", sort: null, saved: true, emotes: [{ id: "e1", name: "catJAM", animated: true, url: "https://cdn.7tv.app/x.webp", library_id: null }] }),
+            card("edit", { project_id: "P", title: "edit", revision: 2, duration: 12.5, width: 1080, height: 1920, change: "updated", tracks: [{ name: "main", index: 0, clips: [{ id: "c", item: "i", post_id: "p", kind: "video", title: "t", picture: null, at: 0, length: 3, in: 0, out: 3, speed: 1, pitch: null, is_new: true }] }], render: null }),
+            card("job", { op: "make.webp", job: "j1", status: "done", progress: 1, error: null, post_id: "p", kind: "webp", seconds: 3, width: 480, height: 480, bytes: 1000, share_url: null, watching: false }),
+            card("job", { op: "edits.render", job: "j2", status: "running", progress: 0.4, error: null, post_id: null }),
+            card("box", { cmd: "ffmpeg -i a b", code: 0, timed_out: false, stdout: "done\n", stderr: "" }),
+            card("files", { direction: "in", files: [{ name: "a.mp4", bytes: 10 }], post_id: "p" }),
+            card("link", { id: "abc", url: "https://share.capybaraharmony.com/abc", title: "t", files: 1, private: false }),
+            card("collection", { of: "set", id: "s", name: "faves", count: 3, change: "added" }),
+            card("saved", { post_ids: ["p"], title: "saved", status: "done" }),
+            card("facts", { title: "renamed", rows: [["title", "new"]], post_ids: ["p"] }),
+            card("agents", { change: "started", agents: [], message: null, mail: [] }),
+            card("brand-new-type", {}),
+            card("search", { query: null, hits: "not a list" }),
+            card("edit", { tracks: [{ clips: null }] }),
+        ];
+        const s = snap([msg("1", "user", "go"), msg("2", "assistant", "done", { steps: [{ id: "s", kind: "code", status: "done", duration_ms: 10, calls: cards }] })], {
+            p: { id: "p", title: "p", kind: "photo", poster: "p.jpg", files: [{ kind: "image", url: "p.jpg", width: 120, height: 160 }] },
+        });
+        const r = await renderChat({ snap: s, mediaDir: work, out: path.join(work, "out.mp4"), work: path.join(work, "w"), shape: "square", speed: 2, chromium });
+        assert.ok(r && r.frames > 0);
+        assert.equal(videoFacts(path.join(work, "out.mp4")).width, 1080);
+    } finally {
+        rmSync(work, { recursive: true, force: true });
+    }
+});
