@@ -173,6 +173,13 @@ struct LibraryTable: View {
                 controller.open(row)
             }
         }
+        // A row click only moves the inspector selection (one row): a shift- or ⌘-click there ticks instead, as in
+        // Finder, and starts select mode (Mac, iPad with a keyboard). ⌘ on the lit row clears it (`new` is nil).
+        .onChange(of: controller.selection) { old, new in
+            let click = LibraryController.Click.current(controller)
+            guard click != .plain, let id = new ?? old, let row = rows.first(where: { $0.id == id }) else { return }
+            withAnimation(Motion.rows) { controller.click(row, click) }
+        }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             LibraryFooterView(state: footer) { controller.loadMoreAgain() }
@@ -277,12 +284,13 @@ struct LibraryList: View {
                     ForEach(rows) { row in
                         let selecting = controller.selecting
                         Button {
-                            if selecting {
-                                // the touch that ended a hold-to-peek is not a tick
-                                if controller.takeSwallowedTap() { return }
-                                withAnimation(Motion.rows) { controller.togglePick(row) }
-                            } else {
+                            // the touch that ended a hold-to-peek is not a tick
+                            if selecting, controller.takeSwallowedTap() { return }
+                            let click = LibraryController.Click.current(controller)
+                            if click == .plain, !selecting {
                                 controller.open(row)
+                            } else {
+                                withAnimation(Motion.rows) { controller.click(row, click) }
                             }
                         } label: {
                             LibraryListRow(

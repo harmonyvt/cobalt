@@ -302,6 +302,7 @@ private struct LibraryContent: View {
             #endif
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { controller.decideInspector(width: $0) }
             .onChange(of: tier, initial: true) { controller.compact = tier == .compact }
+            .modifier(LibraryClickRows(controller: controller, rows: rows))
             .background { GalleryFileShare(fileURLs: $filesToShare) }
             // centred over a light scrim: at the bottom it sat under the floating tab bar
             .overlay {
@@ -934,3 +935,14 @@ private struct LibraryAddMenu: View {
     }
 }
 #endif
+
+/// What a shift-click range runs through: the posts on screen, in order. Its own modifier: the screen's chain is
+/// already at the type-checker's limit on iOS.
+private struct LibraryClickRows: ViewModifier {
+    let controller: LibraryController
+    let rows: [LibraryRow]
+
+    func body(content: Content) -> some View {
+        content.onChange(of: rows, initial: true) { controller.shownRows = rows }
+    }
+}
