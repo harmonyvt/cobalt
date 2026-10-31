@@ -14,19 +14,51 @@ export async function hashKey(key: string): Promise<string> {
     );
 }
 
-// One statement: it checks that the key exists and is not revoked AND records
-// the use. Returns the key's id (api_keys.id), or null for an unknown or
-// revoked key. Throws if D1 is unavailable.
+// A device session (APP-API-CONTRACT.md section 42) lives this long after its last use: every accepted lookup slides
+// its expires_at to now + SESSION_TTL_MS. Keys (kind = 'key') have no expiry.
+export const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
+// One statement (section 42.2): it checks that the key exists, is not revoked and has not expired, AND records the use
+// (last_used_at, last_country when known, and for a session the sliding expiry). Returns the key's id (api_keys.id), or
+// null for an unknown, revoked or expired key (all three answer 401 error.api.auth.key.invalid). Throws if D1 is
+// unavailable.
 export async function lookupKey(
     db: D1Database,
     key: string,
     now: number,
+    country?: string | null,
 ): Promise<string | null> {
-    const res = await db
-        .prepare(
-            "UPDATE api_keys SET last_used_at = ?1 WHERE key_hash = ?2 AND revoked_at IS NULL RETURNING id",
-        )
-        .bind(now, await hashKey(key))
-        .all<{ id: string }>();
+    const hash = await hashKey(key);
+    let res: D1Result<{ id: string }>;
+    try {
+        res = await db
+            .prepare(
+                `UPDATE api_keys SET last_used_at = ?1,
+                    last_country = COALESCE(?3, last_country),
+                    expires_at = CASE WHEN kind = 'session' THEN ?1 + ?4 ELSE expires_at END
+                 WHERE key_hash = ?2 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?1)
+                 RETURNING id`,
+            )
+            .bind(now, hash, countryCode(country), SESSION_TTL_MS)
+            .all<{ id: string }>();
+    } catch (e) {
+        // A Worker deployed before migration 0026 was applied: the key check as it was, so the API stays up.
+        if (!/no such column/i.test(e instanceof Error ? e.message : String(e))) throw e;
+        res = await db
+            .prepare("UPDATE api_keys SET last_used_at = ?1 WHERE key_hash = ?2 AND revoked_at IS NULL RETURNING id")
+            .bind(now, hash)
+            .all<{ id: string }>();
+    }
     return res.results[0]?.id ?? null;
+}
+
+// cf.country is a two-letter code (or "XX"/"T1"); anything else is not stored.
+export function countryCode(country: unknown): string | null {
+    return typeof country === "string" && /^[A-Z0-9]{2}$/.test(country) ? country : null;
+}
+
+// The request's cf.country, when the runtime gave one.
+export function countryOf(request: Request | undefined): string | null {
+    const cf = (request as { cf?: { country?: unknown } } | undefined)?.cf;
+    return countryCode(cf?.country);
 }

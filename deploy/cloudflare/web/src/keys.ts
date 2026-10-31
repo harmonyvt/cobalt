@@ -1,4 +1,5 @@
-// /api/keys: the owner's API key management, served by the web Worker.
+// /api/keys: the owner's API key management, served by the web Worker. Only kind = 'key' rows: device sessions
+// (APP-API-CONTRACT.md section 42, kind = 'session') are listed, counted and revoked by the API's /auth/* routes.
 // Authentication happens before anything else touches D1: a valid Cloudflare
 // Access JWT for the owner's email. Only SHA-256 hashes are stored; the
 // plaintext key is returned once, by POST.
@@ -122,7 +123,7 @@ export async function handleKeys(request: Request, env: Env, deps?: Partial<Deps
 
 async function list(env: Env): Promise<Response> {
     const { results } = await env.DB.prepare(
-        "SELECT id, name, prefix, created_at, last_used_at FROM api_keys WHERE revoked_at IS NULL ORDER BY created_at DESC, id DESC",
+        "SELECT id, name, prefix, created_at, last_used_at FROM api_keys WHERE kind = 'key' AND revoked_at IS NULL ORDER BY created_at DESC, id DESC",
     ).all<KeyRow>();
     return jsonResponse(200, { keys: results });
 }
@@ -163,7 +164,7 @@ async function create(request: Request, env: Env, now: number): Promise<Response
     const res = await env.DB.prepare(
         `INSERT INTO api_keys (id, name, key_hash, prefix, created_at)
          SELECT ?1, ?2, ?3, ?4, ?5
-         WHERE (SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL) < ?6
+         WHERE (SELECT COUNT(*) FROM api_keys WHERE kind = 'key' AND revoked_at IS NULL) < ?6
          RETURNING id`,
     )
         .bind(id, name, await hashKey(key), prefix, now, MAX_KEYS)
@@ -183,7 +184,7 @@ async function create(request: Request, env: Env, now: number): Promise<Response
 async function revoke(env: Env, id: string, now: number): Promise<Response> {
     if (!ID_REGEX.test(id)) return error(404, "not_found");
     const res = await env.DB.prepare(
-        "UPDATE api_keys SET revoked_at = ?1 WHERE id = ?2 AND revoked_at IS NULL RETURNING id",
+        "UPDATE api_keys SET revoked_at = ?1 WHERE id = ?2 AND kind = 'key' AND revoked_at IS NULL RETURNING id",
     )
         .bind(now, id)
         .all<{ id: string }>();

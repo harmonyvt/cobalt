@@ -106,9 +106,15 @@ enum PreviewData {
             caps.titles = false
         case .revokedKey:
             caps.key = .invalid; caps.keyName = nil
+        case .signedOut:
+            caps.key = .invalid; caps.keyName = nil
+        case .firstLaunch:
+            caps.key = .missing; caps.keyName = nil
         default:
             break
         }
+        // accounts (APP-API-CONTRACT 42; `PreviewAccount.swift`)
+        caps.accounts = scenario.hasAccounts && caps.kind == .fork
         if scenario.hasShareLinks && caps.kind == .fork {
             caps.shareBaseURL = shareBase
             caps.shareSets = true

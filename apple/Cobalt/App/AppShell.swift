@@ -86,7 +86,7 @@ struct AppShell: View {
     }
 
     var body: some View {
-        navigation
+        gatedNavigation
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .modifier(EditorPresenter(model: model))
             .cobaltRoot(model: model)
@@ -310,6 +310,29 @@ struct AppShell: View {
     #endif
 
     // MARK: navigation
+
+    /// Accounts (APP-API-CONTRACT 42.6): with no token on a device that never signed in, the sign-in screen stands in for
+    /// the shell. Otherwise the shell, with "sign in again" pinned while signed out (floating on iPhone and iPad, in the
+    /// window toolbar on the Mac) and the move-over offered once to a device with a pasted key.
+    @ViewBuilder
+    private var gatedNavigation: some View {
+        if model.needsFirstSignIn {
+            SignInScreen(model: model)
+                .transition(.opacity)
+        } else {
+            navigation
+                #if os(iOS)
+                .modifier(SignInAgainPin(model: model, overTabBar: tier == .compact))
+                #else
+                .toolbar {
+                    if model.signInPinned {
+                        ToolbarItem(placement: .primaryAction) { SignInAgainButton(model: model) }
+                    }
+                }
+                #endif
+                .modifier(MoveOverPresenter(model: model))
+        }
+    }
 
     @ViewBuilder
     private var navigation: some View {

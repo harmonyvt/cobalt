@@ -9,7 +9,7 @@
 //  - upload.begin (MCP only): mints that link.
 import * as z from "zod";
 import { MAX_UPLOAD_BYTES, studioUpload, UPLOAD_TYPES, uploadLogInfo } from "../../app-routes";
-import { lookupKey } from "../../keys";
+import { countryOf, lookupKey } from "../../keys";
 import { mcpAuthorization, mcpMessage, signUploadToken, UPLOAD_TOKEN_REGEX, UPLOAD_TOKEN_TTL_MS, verifyUploadToken, type McpCaller } from "../../mcp";
 import {
     linkClientId,
@@ -103,7 +103,7 @@ export const mcpOp = defineOp({
         if (!("key" in auth)) return json(401, errBody(auth.errorCode));
         let clientKeyId: string | null;
         try {
-            clientKeyId = await lookupKey(ctx.db, auth.key, Date.now());
+            clientKeyId = await lookupKey(ctx.db, auth.key, Date.now(), countryOf(request));
         } catch {
             return json(503, errBody("error.api.generic"));
         }

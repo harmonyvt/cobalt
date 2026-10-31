@@ -72,6 +72,8 @@ export type OpContext = {
     url?: URL;
     query: URLSearchParams;
     params: Record<string, string>;
+    // HTTP calls only: the original request's cf.country, when the runtime gave one (section 42.2)
+    country?: string | null;
     // The main Durable Object, with this call's key id set (the client's Authorization never travels).
     durableObject(path: string, init?: RequestInit): Promise<Response>;
     // chat calls only

@@ -1,0 +1,37 @@
+{
+    "title": "account",
+    "description": "this browser signs itself in through cloudflare access. each device you sign in gets its own session.",
+
+    "loading": "loading your account...",
+    "load_failed": "couldn't load your account.",
+    "retry": "try again",
+    "signed_in_as": "signed in as",
+    "through_access": "through cloudflare access",
+    "no_email": "this browser",
+
+    "devices.title": "devices",
+    "devices.empty": "no devices signed in.",
+    "devices.this_browser": "this browser",
+    "devices.last_used": "last used {{value}}",
+    "devices.sign_out": "sign out",
+    "devices.sign_out.confirm": "sign out {{value}}? it's signed out on its next request.",
+    "devices.hint": "a device that's been away 90 days is signed out by itself.",
+    "devices.others": "sign out all other devices",
+    "devices.others.confirm": "sign out every other device? tool keys and private links keep working.",
+    "devices.others.done": "other devices signed out.",
+    "time.now": "just now",
+
+    "cancel": "cancel",
+    "confirm": "sign out",
+
+    "sign_out": "sign out",
+    "sign_out.confirm": "sign out of this browser? you'll sign in again through cloudflare access to come back.",
+
+    "signed_out.bar": "signed out · sign in again",
+    "signed_out.button": "sign in again",
+    "signed_out.working": "signing in...",
+
+    "error.signed_out": "you're signed out. sign in again to see this.",
+    "error.network": "couldn't reach the server.",
+    "error.unknown": "something went wrong."
+}

@@ -11,6 +11,13 @@ extension PipelineContext {
         defaults.removePersistentDomain(forName: suite)
         let settings = Settings(defaults: defaults, keychain: .memory())
         try? settings.setAPIKey(pasted: "7c1f2a60-4b0e-4d2f-9a53-3f1d8e9b6a21")
+        // accounts (APP-API-CONTRACT 42): no token yet on first launch; a key pasted before accounts for the move-over;
+        // every other server with accounts holds a session this device signed in for
+        switch scenario {
+        case .firstLaunch: settings.clearAPIKey()
+        case .moveOver: break
+        default: if scenario.hasAccounts { settings.markPreviewSession() }
+        }
 
         let client = PreviewClient(scenario: scenario, timeScale: timeScale, clock: clock)
         let tools = PreviewMediaTools(clock: clock, clip: PreviewData.clip(for: scenario))

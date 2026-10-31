@@ -1137,3 +1137,31 @@ moves the bytes to `cobalt-originals/webps/<name>`; ON copies back to the same n
   `remaining: 0`. Rollback: `undo=1&dry_run=0` until `remaining: 0`, THEN redeploy the old Workers.
 - **`scripts/backfill-library.mjs`** treats an object as covered when a row names it in `r2_key` or `public_key`, or its metadata says
   `mirror: "1"` (else it would re-add mirrors as webp rows).
+
+## Accounts: signing in through Cloudflare Access (`APP-API-CONTRACT.md` section 42)
+
+Instead of pasting a key, a device signs in through Access and gets its own **device session**: an `api_keys` row with
+`kind = 'session'` whose token has the shape of a client key (lowercase UUIDv4), so every route, `key_id` and MCP thread
+works unchanged. Only the token's SHA-256 is stored. A session expires 90 days after its last use (`SESSION_TTL_MS`,
+slid by every accepted lookup in `api/src/keys.ts`, which also records `last_country`); at most 50 are active, and
+minting one more revokes the least recently used. An expired or revoked session answers 401 `error.api.auth.key.invalid`
+like an unknown key.
+
+- **Apps** (42.3): `GET /api/auth/app?platform=&device=&challenge=` on the web Worker (`web/src/auth.ts`, behind Access,
+  JWT checked like `/api/keys`) stores a one-time code (D1 `auth_handoffs`, hash only, 2 minutes, PKCE S256) and answers
+  302 to the fixed `cobalt-apple://signed-in?code=...`; the app trades it at the API's `POST /auth/exchange` (open, no
+  CORS; marked used in the same statement; every failure is the same 400 `error.api.auth.code.invalid`). `old_key` marks
+  the pasted key it replaces (`replaced_by`, "old paste"); that key keeps working until revoked.
+- **Web** (42.4): `POST /api/auth/web` (Access JWT + `Origin`) mints a `web` session named from the User-Agent ("safari on
+  mac"); `replace` revokes the browser's previous session.
+- **Owner routes** (42.5, `api/src/registry/ops/auth.ts`, tier hidden): `GET /auth/me`, `GET /auth/sessions`,
+  `DELETE /auth/sessions/<id>`, `POST /auth/signout`, `POST /auth/signout-others`, `GET /auth/keys`,
+  `DELETE /auth/keys/<id>`. `/api/keys` on the web lists, counts (cap 50) and revokes `kind = 'key'` rows only.
+- Session minting lives in `api/src/sessions.ts` and is duplicated in `web/src/sessions.ts` (the web Worker cannot import
+  the API package); `web/test/sessions.test.ts` imports both and pins the SQL as identical.
+- **Deploy order** (owner): apply migration 0026, deploy the API, then the web Worker (its `runWorkerFirst` gains
+  `/api/auth` and `/api/auth/*`). The API's lookup falls back to the old statement while the columns are missing, so keys
+  keep working if the order slips; the auth routes need the migration.
+- Accepted trade-off: anything that can open a link in the owner's browser while Access is signed in can start
+  `/api/auth/app`; the code only goes to whatever handles `cobalt-apple://` on that device, and it is useless without the
+  verifier the app made.

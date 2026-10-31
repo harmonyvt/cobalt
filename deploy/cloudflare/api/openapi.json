@@ -59,6 +59,458 @@
         }
       }
     },
+    "/auth/exchange": {
+      "post": {
+        "operationId": "auth.exchange",
+        "summary": "Trade a sign-in code for a device session (POST /auth/exchange).",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "verifier": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "old_key": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 256
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "code",
+                  "verifier"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "key": {
+                      "type": "string",
+                      "description": "the session token: send it as Api-Key"
+                    },
+                    "session": {
+                      "$ref": "#/components/schemas/AuthSessionRow"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "key",
+                    "session"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "open",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/auth/keys": {
+      "get": {
+        "operationId": "auth.keys.list",
+        "summary": "The active keys for tools, newest first (GET /auth/keys).",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AuthKeyRow"
+                      }
+                    }
+                  },
+                  "required": [
+                    "keys"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/auth/keys/{id}": {
+      "delete": {
+        "operationId": "auth.keys.delete",
+        "summary": "Revoke a key for tools, never a session (DELETE /auth/keys/<id>).",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "operationId": "auth.me",
+        "summary": "Who is calling (a key or a device session) and how many sessions and keys are active (GET /auth/me).",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "caller": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "key",
+                            "session"
+                          ]
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "device": {
+                          "type": "string"
+                        },
+                        "platform": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string"
+                        },
+                        "expires_at": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "sessions": {
+                      "type": "integer",
+                      "description": "active sessions"
+                    },
+                    "keys": {
+                      "type": "integer",
+                      "description": "active keys"
+                    }
+                  },
+                  "required": [
+                    "caller",
+                    "sessions",
+                    "keys"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/auth/sessions": {
+      "get": {
+        "operationId": "auth.sessions.list",
+        "summary": "The active device sessions, most recently used first (GET /auth/sessions).",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AuthSessionRow"
+                      }
+                    }
+                  },
+                  "required": [
+                    "sessions"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/auth/sessions/{id}": {
+      "delete": {
+        "operationId": "auth.sessions.delete",
+        "summary": "Sign a device out (DELETE /auth/sessions/<id>); the caller's own session too.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/auth/signout": {
+      "post": {
+        "operationId": "auth.signout",
+        "summary": "Sign the calling device out; a key is left alone (POST /auth/signout).",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "signed_out": {
+                      "type": "boolean",
+                      "description": "false: the caller is a key, which is never revoked here"
+                    }
+                  },
+                  "required": [
+                    "signed_out"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/auth/signout-others": {
+      "post": {
+        "operationId": "auth.signout_others",
+        "summary": "Sign out every other device (POST /auth/signout-others).",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "count": {
+                      "type": "integer",
+                      "description": "sessions signed out"
+                    }
+                  },
+                  "required": [
+                    "count"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/capabilities": {
       "get": {
         "operationId": "capabilities",
@@ -5598,6 +6050,99 @@
   },
   "components": {
     "schemas": {
+      "AuthKeyRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "the key's first 8 characters"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "old_paste": {
+            "type": "boolean",
+            "description": "a device that used this pasted key has signed in since (replaced_by set)"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "created_at",
+          "last_used_at",
+          "old_paste"
+        ],
+        "additionalProperties": false
+      },
+      "AuthSessionRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "ipados",
+              "mac",
+              "web"
+            ]
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "last_used_at": {
+            "type": "integer"
+          },
+          "expires_at": {
+            "type": "integer",
+            "description": "ms; slides 90 days on each use"
+          },
+          "country": {
+            "description": "cf.country of the last use",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current": {
+            "type": "boolean",
+            "description": "this is the caller's own session"
+          }
+        },
+        "required": [
+          "id",
+          "device",
+          "platform",
+          "created_at",
+          "last_used_at",
+          "expires_at",
+          "country",
+          "current"
+        ],
+        "additionalProperties": false
+      },
       "HiddenRule": {
         "type": "object",
         "properties": {

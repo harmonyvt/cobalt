@@ -86,6 +86,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
 
     func apiError(_ data: Data, status: Int) -> CobaltError {
         if let env = try? JSONDecoder().decode(ErrorEnvelope.self, from: data), let code = env.error?.code {
+            // an ended session or a revoked key, on any route: the app re-reads `/capabilities` (APP-API-CONTRACT 42.6)
+            if status == 401, code == "error.api.auth.key.invalid" { AuthSignal.keyRejected() }
             return .api(code: code, httpStatus: status)
         }
         return .invalidResponse(httpStatus: status)
@@ -215,6 +217,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var hidden: Bool?
                 var cutout: Bool?
                 var cutoutAuto: Bool?
+                var accounts: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -306,6 +309,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.hidden = f?.hidden ?? false
         caps.cutout = f?.cutout ?? false
         caps.cutoutAuto = (f?.cutoutAuto ?? false) && caps.cutout
+        caps.accounts = f?.accounts ?? false
         return caps
     }
 

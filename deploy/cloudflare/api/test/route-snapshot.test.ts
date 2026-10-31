@@ -165,6 +165,18 @@ export const PATHS: string[] = [
     "/mcp",
     `/mcp/upload/eyJrIjoia2V5LTEiLCJ0IjoiQUFBQUFBQUFBQUFBQUFBQSIsImUiOjF9.${"A".repeat(43)}`,
     "/mcp/upload/bad",
+    // added with accounts (section 42): device sessions and the owner's keys
+    "/auth/exchange",
+    "/auth/me",
+    "/auth/sessions",
+    "/auth/sessions/0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a99",
+    "/auth/sessions/bad",
+    "/auth/signout",
+    "/auth/signout-others",
+    "/auth/keys",
+    "/auth/keys/0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a99",
+    "/auth/keys/bad",
+    "/auth/other",
     "/nope",
 ];
 
