@@ -30,6 +30,7 @@ struct MediaDetail: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
     @Environment(\.sheetClose) private var sheetClose
 
     /// Shown in a Mac sheet (its presenter set `sheetClose`): the menu goes in the sheet's top-right corner.
@@ -40,7 +41,6 @@ struct MediaDetail: View {
         return false
         #endif
     }
-    #endif
 
     /// The tabbed detail's entry point (CONTRACT-MEDIA 4.2): one media, opening on the rendition `initial` names
     /// (`Rendition.ID`; nil = the face).
