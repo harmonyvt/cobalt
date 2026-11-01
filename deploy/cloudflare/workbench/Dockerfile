@@ -9,7 +9,7 @@ FROM debian:trixie-slim
 ARG YT_DLP_VERSION=2026.10.26
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg python3 python3-venv file jq unzip xz-utils \
+    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg tini python3 python3-venv file jq unzip xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp from PyPI (Debian's copy lags the sites it reads), without certifi so it trusts the system bundle, which
@@ -29,4 +29,6 @@ RUN set -e; curl --version | head -1; ffmpeg -hide_banner -version | head -1; py
 
 ENV PATH=/opt/ytdlp/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /workspace
+# tini is PID 1 so the stop signal (SIGTERM) reaches `sleep`: as PID 1, `sleep` ignored it and the box never slept.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["sleep", "infinity"]

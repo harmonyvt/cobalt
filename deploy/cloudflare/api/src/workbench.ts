@@ -43,6 +43,14 @@ export class Workbench extends Container<WorkbenchEnv> {
         });
     }
 
+    // The library's default only sends SIGTERM, which an older image ignored, so the box stayed awake for good.
+    // The box is wiped on sleep anyway, so kill it outright.
+    override async onActivityExpired(): Promise<void> {
+        if (!this.ctx.container?.running) return;
+        console.log("[workbench] idle, destroying the box");
+        await this.destroy();
+    }
+
     override async onStop(): Promise<void> {
         await this.core.stopped();
     }
