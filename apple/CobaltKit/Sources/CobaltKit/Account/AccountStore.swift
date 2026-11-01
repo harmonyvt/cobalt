@@ -84,6 +84,42 @@ public final class AccountStore {
         return count
     }
 
+    /// Only a signed-in device (a session) makes and renames keys; one on a pasted key lists and revokes.
+    public var canMakeKeys: Bool { me?.caller.kind == .session }
+
+    /// The longest key name the server takes (APP-API-CONTRACT 50).
+    public nonisolated static let maxKeyNameLength = 40
+
+    /// `POST /auth/keys`: the new key goes on top of the list. The answer holds the whole key; nothing here keeps it.
+    public func create(name: String) async throws -> AccountKeyCreated {
+        let made: AccountKeyCreated
+        do {
+            made = try await ctx.client.createAccountKey(name: name.trimmingCharacters(in: .whitespacesAndNewlines))
+        } catch {
+            noteRejection(error)
+            throw AccountError.from(error)
+        }
+        keys.removeAll { $0.id == made.item.id }
+        keys.insert(made.item, at: 0)
+        if let m = me { me = AccountMe(caller: m.caller, sessions: m.sessions, keys: m.keys + 1) }
+        return made
+    }
+
+    /// `PATCH /auth/keys/<id>`. A key revoked elsewhere drops out of the list and throws `.notFound`.
+    public func rename(_ key: AccountKey, to name: String) async throws {
+        let renamed: AccountKey
+        do {
+            renamed = try await ctx.client.renameAccountKey(id: key.id, name: name.trimmingCharacters(in: .whitespacesAndNewlines))
+        } catch AccountError.notFound {
+            keys.removeAll { $0.id == key.id }
+            throw AccountError.notFound
+        } catch {
+            noteRejection(error)
+            throw AccountError.from(error)
+        }
+        if let at = keys.firstIndex(where: { $0.id == key.id }) { keys[at] = renamed }
+    }
+
     /// `DELETE /auth/keys/<id>`. Already gone counts as done.
     public func revoke(_ key: AccountKey) async throws {
         do {

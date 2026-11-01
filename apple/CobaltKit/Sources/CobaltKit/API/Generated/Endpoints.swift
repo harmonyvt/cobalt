@@ -761,6 +761,16 @@ enum Endpoints {
         APIEndpoint(op: "auth.keys.list", method: "GET", path: "/auth/keys", auth: .key)
     }
 
+    /// `POST /auth/keys` (op `auth.keys.create`, auth key): Make a key for tools; the key is in this answer only (POST /auth/keys, signed-in devices only).
+    static func authKeysCreate() -> APIEndpoint<AuthKeysCreateResponse> {
+        APIEndpoint(op: "auth.keys.create", method: "POST", path: "/auth/keys", auth: .key)
+    }
+
+    /// `PATCH /auth/keys/:id` (op `auth.keys.update`, auth key): Rename a key for tools (PATCH /auth/keys/<id> {name}, signed-in devices only).
+    static func authKeysUpdate(id: String) -> APIEndpoint<AuthKeysUpdateResponse> {
+        APIEndpoint(op: "auth.keys.update", method: "PATCH", path: "/auth/keys/\(HTTPCobaltClient.encode(id))", auth: .key)
+    }
+
     /// `DELETE /auth/keys/:id` (op `auth.keys.delete`, auth key): Revoke a key for tools, never a session (DELETE /auth/keys/<id>).
     static func authKeysDelete(id: String) -> APIEndpoint<AuthKeysDeleteResponse> {
         APIEndpoint(op: "auth.keys.delete", method: "DELETE", path: "/auth/keys/\(HTTPCobaltClient.encode(id))", auth: .key)
@@ -1446,6 +1456,18 @@ struct AuthKeyRow: Decodable, Sendable {
 
 struct AuthKeysListResponse: Decodable, Sendable {
     var keys: [AuthKeyRow]
+}
+
+struct AuthKeysCreateResponse: Decodable, Sendable {
+    var status: String
+    /// the new key, shown this once: only its SHA-256 is stored
+    var key: String
+    var item: AuthKeyRow
+}
+
+struct AuthKeysUpdateResponse: Decodable, Sendable {
+    var status: String
+    var item: AuthKeyRow
 }
 
 struct AuthKeysDeleteResponse: Decodable, Sendable {

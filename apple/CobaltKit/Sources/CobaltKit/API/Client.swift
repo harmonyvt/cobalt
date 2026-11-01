@@ -205,6 +205,10 @@ public protocol CobaltClient: Sendable {
     func accountKeys() async throws -> [AccountKey]
     /// `DELETE /auth/keys/<id>`: revokes a key (never a session).
     func deleteAccountKey(id: String) async throws
+    /// `POST /auth/keys {name}` (APP-API-CONTRACT 50; a signed-in device only): the new key, shown once, and its row.
+    func createAccountKey(name: String) async throws -> AccountKeyCreated
+    /// `PATCH /auth/keys/<id> {name}` (a signed-in device only): the key's row after the rename.
+    func renameAccountKey(id: String, name: String) async throws -> AccountKey
     // Share link collections (APP-API-CONTRACT 26; keyed; only when `features.share_collections`). Defaulted below
     // (`.unsupported`) so older fakes compile. All throw `ShareCollectionError` for the server's refusals.
     /// `GET /share/collections`: the collections, most recently changed first.

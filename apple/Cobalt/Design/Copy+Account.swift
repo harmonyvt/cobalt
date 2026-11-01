@@ -57,7 +57,32 @@ extension Copy {
         static let oldPaste = "old paste"
         static let revoke = "revoke"
         static let noKeys = "no keys yet"
-        static let keysFooter = "for things that can't sign in: claude code's mcp, shortcuts, curl. make keys on the web: capystore → settings → api keys."
+        static let keysFooter = "for things that can't sign in: claude code's mcp, shortcuts, curl. each key can do everything your account can, so give each tool its own and revoke it when you're done."
+        static let newKey = "new key"
+        static let rename = "rename"
+        static let signInToMake = "sign in to make keys"
+
+        // MARK: new key, rename (APP-API-CONTRACT 50)
+
+        static let newKeyTitle = "new key for a tool"
+        static let keyNamePrompt = "what's it for?"
+        static let keyNamePlaceholder = "claude code, shortcuts…"
+        static let keyNameHint = "up to 40 characters. only you see the name."
+        static let make = "make key"
+        static let making = "making…"
+        static func madeTitle(_ name: String) -> String { "\(name) is ready" }
+        static let madeWarning = "copy it now: this is the only time capystore shows the whole key. lose it and you make a new one."
+        static let copyKey = "copy key"
+        static let copied = "copied"
+        static let claudeCode = "claude code"
+        static let copyCommand = "copy command"
+        static let done = "done"
+        static func claudeCommand(base: String, key: String) -> String {
+            "claude mcp add --transport http capystore \(base)/mcp --header \"Authorization: Bearer \(key)\""
+        }
+        static let renameTitle = "rename key"
+        static let save = "save"
+        static func renamed(_ name: String) -> String { "renamed to \(name)" }
         static func oldPasteNote(_ n: Int) -> String {
             n == 1
                 ? "1 key was pasted into an app before accounts. that app uses your account now: revoke the old key when you're ready."
@@ -120,6 +145,9 @@ extension Copy {
             case .codeInvalid: return "that sign-in ran out. try again."
             case .couldNotSave: return "couldn't keep the sign-in on this \(Copy.device). try again."
             case .notFound: return "that's already gone."
+            case .tooManyKeys: return "you have 50 keys already. revoke one to make another."
+            case .badName: return "give it a name of up to 40 characters, on one line."
+            case .needsSession: return "sign in to make or rename keys."
             case .offline: return "can't reach capystore. check your connection."
             case .failed: return "that didn't work. try again."
             }

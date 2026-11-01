@@ -90,6 +90,24 @@ public struct AccountKey: Sendable, Equatable, Identifiable, Decodable {
     }
 }
 
+/// `POST /auth/keys` (APP-API-CONTRACT 50): the new key, in this answer only, and its row.
+public struct AccountKeyCreated: Sendable, Equatable {
+    /// The whole key: shown once, never stored by the app or the server.
+    public var key: String
+    public var item: AccountKey
+
+    public init(key: String, item: AccountKey) {
+        self.key = key
+        self.item = item
+    }
+
+    static func decode(_ data: Data) throws -> AccountKeyCreated {
+        struct Wire: Decodable { var key: String; var item: AccountKey }
+        let w = try CobaltJSON.decoder().decode(Wire.self, from: data)
+        return AccountKeyCreated(key: w.key, item: w.item)
+    }
+}
+
 /// `GET /auth/me`: who made the request, and how many sessions and keys are live.
 public struct AccountMe: Sendable, Equatable, Decodable {
     public struct Caller: Sendable, Equatable, Decodable {
@@ -155,6 +173,12 @@ public enum AccountError: Error, Sendable, Equatable {
     case couldNotSave
     /// `404`: the session or key is already gone.
     case notFound
+    /// `409 error.api.auth.key.too_many`: 50 keys for tools are live already.
+    case tooManyKeys
+    /// `400 error.api.auth.key.name_invalid`: empty, longer than 40 characters, or more than one line.
+    case badName
+    /// `403 error.api.auth.session_required`: only a signed-in device makes or renames keys, not one on a pasted key.
+    case needsSession
     /// No network.
     case offline
     /// Anything else (a 5xx, an answer that did not decode).
@@ -166,6 +190,9 @@ public enum AccountError: Error, Sendable, Equatable {
         switch error as? CobaltError {
         case .api(let code, _)? where code == "error.api.auth.code.invalid": return .codeInvalid
         case .api(let code, _)? where code == "error.api.auth.session.not_found": return .notFound
+        case .api(let code, _)? where code == "error.api.auth.key.too_many": return .tooManyKeys
+        case .api(let code, _)? where code == "error.api.auth.key.name_invalid": return .badName
+        case .api(let code, _)? where code == "error.api.auth.session_required": return .needsSession
         case .network?: return .offline
         case .cancelled?: return .cancelled
         default: return .failed
@@ -181,6 +208,12 @@ extension AccountSession {
 }
 
 extension AccountKey {
+    /// `{ "item": <key> }` (`PATCH /auth/keys/<id>`).
+    static func decodeItem(_ data: Data) throws -> AccountKey {
+        struct Wire: Decodable { var item: AccountKey }
+        return try CobaltJSON.decoder().decode(Wire.self, from: data).item
+    }
+
     static func decodeList(_ data: Data) throws -> [AccountKey] {
         struct Wire: Decodable { var keys: [Lossy<AccountKey>]? }
         return (try CobaltJSON.decoder().decode(Wire.self, from: data).keys ?? []).compactMap(\.value)

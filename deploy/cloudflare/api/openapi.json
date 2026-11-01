@@ -187,9 +187,154 @@
           "input": "read by the handler",
           "ai": "hidden"
         }
+      },
+      "post": {
+        "operationId": "auth.keys.create",
+        "summary": "Make a key for tools; the key is in this answer only (POST /auth/keys, signed-in devices only).",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 400
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "key": {
+                      "type": "string",
+                      "description": "the new key, shown this once: only its SHA-256 is stored"
+                    },
+                    "item": {
+                      "$ref": "#/components/schemas/AuthKeyRow"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "key",
+                    "item"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
       }
     },
     "/auth/keys/{id}": {
+      "patch": {
+        "operationId": "auth.keys.update",
+        "summary": "Rename a key for tools (PATCH /auth/keys/<id> {name}, signed-in devices only).",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 400
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "item": {
+                      "$ref": "#/components/schemas/AuthKeyRow"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "item"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
       "delete": {
         "operationId": "auth.keys.delete",
         "summary": "Revoke a key for tools, never a session (DELETE /auth/keys/<id>).",
