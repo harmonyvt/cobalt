@@ -222,6 +222,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var imageCrop: Bool?
                 var chatVideo: Bool?
                 var names: Bool?
+                var ytdlp: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -318,6 +319,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.imageCrop = f?.imageCrop ?? false
         caps.chatVideo = (f?.chatVideo ?? false) && caps.chat
         caps.names = (f?.names ?? false) && caps.search
+        caps.ytdlp = f?.ytdlp ?? false
         return caps
     }
 
@@ -382,7 +384,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     /// `public` is sent when `makePublic` (Settings "make new saves public", on by default); off leaves the
     /// field out and the save stays private.
     public func shareSaveRequest(
-        link: URL, label: String, public makePublic: Bool = true, live: ShareLiveStart? = nil
+        link: URL, label: String, public makePublic: Bool = true, live: ShareLiveStart? = nil, engine: String? = nil
     ) throws -> (request: URLRequest, body: Data) {
         var req = try makeRequest("POST", "/studio", keyed: true, timeout: 60)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -392,6 +394,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         ]
         if makePublic { fields["public"] = true }
         if let live { fields["live"] = live.wire }
+        // "save links with yt-dlp" (APP-API-CONTRACT 49.7)
+        if let engine { fields["engine"] = engine }
         guard let body = Self.jsonBody(fields) else { throw CobaltError.invalidResponse(httpStatus: 0) }
         return (req, body)
     }

@@ -198,6 +198,9 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// server's migration 0031 is applied; the app also needs `search`. False when absent: no "names" in the library's menu,
     /// no names row in the detail, no "this is…" in a post's menu.
     public var names: Bool = false
+    /// `features.ytdlp` (APP-API-CONTRACT 49): the server has the yt-dlp box: `engine` on `POST /studio`. False when absent:
+    /// no "save links with yt-dlp" setting.
+    public var ytdlp: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.
