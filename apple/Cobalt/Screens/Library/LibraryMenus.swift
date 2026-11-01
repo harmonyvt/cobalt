@@ -5,7 +5,7 @@ import SwiftUI
 // switcher.
 
 /// The context menu (long press; right click on the Mac), in this order: open, the links (copy webp link, copy video
-/// link; a photo's `copy photo link`; a gallery's `copy all links`), share, `ask about this` (with chat), save to photos (a gallery: `save all to
+/// link; a photo's `copy photo link`; a gallery's `copy all links`), share, `add to link…` (APP-API-CONTRACT 41.4), `ask about this` (with chat), save to photos (a gallery: `save all to
 /// photos`), `make from this post…` (a gallery), the offline items (CONTRACT-OFFLINE decision 11), make public / make
 /// private…, rename, then `delete everything…` last and destructive. What the media cannot
 /// do is not shown (plain cobalt has no links; a media with nothing on the server cannot be deleted
@@ -56,6 +56,13 @@ struct LibraryMenuItems: View {
             ShareLink(item: url) {
                 Label(Copy.Library2.share, systemImage: Symbol.Library.share)
             }
+        }
+        if controller.canAddToLink(row) {
+            Button(Copy.LinkEdit.addToLinkMenu, systemImage: Symbol.LinkEdit.addToLink) {
+                controller.addToLink(row, also: selected)
+            }
+            .disabled(controller.appendingToLink)
+            .accessibilityHint(Copy.LinkEdit.addToLinkMenuHint)
         }
         if controller.canAskAbout(item) {
             Button(Copy.Chat.askAbout, systemImage: Symbol.chatAsk) { controller.askAbout(item) }

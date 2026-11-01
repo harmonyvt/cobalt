@@ -308,6 +308,7 @@ private struct LibraryContent: View {
             }
             .renameAlert(item: $controller.renaming, model: model)
             .modifier(LibraryCombineSheet(model: model, controller: controller))
+            .modifier(LibraryAddToLinkPresenter(model: model, controller: controller))
             .modifier(LibraryImageCropPresenter(
                 model: model, target: $controller.croppingPicture, done: { line in controller.showStatus(line) }))
             .confirmationDialog(

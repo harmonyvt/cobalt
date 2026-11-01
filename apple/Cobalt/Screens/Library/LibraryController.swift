@@ -135,6 +135,10 @@ final class LibraryController {
     var croppingPicture: LibraryImageCropTarget?
     /// The sky map (`SkyMap/LibrarySkyMapHook.swift`) is open.
     var showingSkyMap = false
+    /// The posts `add to link` is picking a link for (`LibraryAddToLinkHook.swift`): the link picker is up.
+    var addingToLink: LibraryLinkPicks?
+    /// An append to a link is on its way: a second one waits.
+    var appendingToLink = false
 
     // The hidden album (APP-API-CONTRACT 37.7; `LibraryController+Hidden.swift`). All in memory: nothing here is stored.
     /// The owner passed the lock for this visit to the album. Dropped by `relockHidden()`.

@@ -125,6 +125,10 @@ extension Copy {
 
         static let addToLink = "add to link"
         static let addToLinkHint = "adds the picked files to one of your links"
+        /// The context menu's item: one post, or the table's selection when the row is part of it.
+        static let addToLinkMenu = "add to link…"
+        static let addToLinkMenuHint = "adds this to one of your share links"
+        static let loadingLinks = "loading your links…"
         static func pickLinkTitle(_ n: Int) -> String { "add \(n) to a link" }
         static let pickLinkFoot = "a link holds up to 10 files. public links take public files only."
         static let noLinksYet = "no links yet: make one with make share link"
