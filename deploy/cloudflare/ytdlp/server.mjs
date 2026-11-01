@@ -162,7 +162,7 @@ export function codeFor(text) {
     if (/Sign in to confirm you.?re not a bot|confirm you are not a bot/i.test(t)) return "error.api.youtube.login";
     if (/private video|video is private|This video is private|account is private/i.test(t)) return "error.api.content.video.private";
     if (/live event will begin|is not live|Premieres in/i.test(t)) return "error.api.content.video.live";
-    if (/No video formats found|Requested format is not available|There is no video in this/i.test(t)) return "error.webp.no_video";
+    if (/No video formats found|Requested format is not available|There is no video in this|No video could be found|does not contain a video|no video in/i.test(t)) return "error.webp.no_video";
     if (/Video unavailable|not available|has been removed|does not exist|404: Not Found|HTTP Error 404/i.test(t)) {
         return "error.api.content.video.unavailable";
     }

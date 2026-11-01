@@ -826,6 +826,9 @@ export const parseSaveEngineMode = (v: unknown): SaveEngineMode => (v === "first
 // The failures one engine hands to the other (section 49.2): what it says about the LINK (cobalt's `error.api.*`, the
 // helper's own source errors, the yt-dlp box's mapped codes). Never a size, a timeout, a busy box or a lost save.
 const FALLBACK_CODES = new Set(["error.webp.bad_source", "error.webp.upstream", "error.webp.download_failed", "error.webp.unsupported", "error.webp.no_video"]);
+// A save of "all" or "first-video" items may well be one file (the app asks `items: "all"` for every link): yt-dlp can save
+// that file. Picked indices are a gallery the client saw: cobalt's alone.
+const singleFileOk = (items: ItemsChoice | undefined): boolean => items === undefined || items === "all" || items === "first-video";
 export const fallsBack = (code: string): boolean => code.startsWith("error.api.") || FALLBACK_CODES.has(code);
 
 // A save's public copy is retried by the sweep this many times, then it is 'failed'.
@@ -2049,11 +2052,11 @@ export class StudioService {
         if (engineField !== undefined && engineField !== null && engineField !== "cobalt" && engineField !== "ytdlp") {
             return studioErr(400, "error.studio.invalid_params");
         }
-        if (engineField === "ytdlp" && (!this.d.ytdlp || items !== undefined)) return studioErr(400, "error.studio.invalid_params");
+        if (engineField === "ytdlp" && (!this.d.ytdlp || !singleFileOk(items) || make !== null)) return studioErr(400, "error.studio.invalid_params");
         const engine: SaveEngine =
             engineField === "ytdlp" || engineField === "cobalt"
                 ? engineField
-                : items === undefined && this.d.ytdlp && this.d.saveEngine === "first"
+                : singleFileOk(items) && make === null && this.d.ytdlp && this.d.saveEngine === "first"
                   ? "ytdlp"
                   : "cobalt";
         const extra = {
@@ -2464,7 +2467,14 @@ export class StudioService {
     private async failOrSwitch(sid: string, rec: SaveRecord, code: string): Promise<number> {
         const engine: SaveEngine = rec.engine ?? "cobalt";
         const canSwitch =
-            !!this.d.ytdlp && !rec.pinned && rec.items === undefined && !rec.retry && rec.fellBack === undefined && fallsBack(code);
+            !!this.d.ytdlp &&
+            singleFileOk(rec.items) &&
+            !rec.retry &&
+            rec.fellBack === undefined &&
+            fallsBack(code) &&
+            // an asked-for engine is the only one, except a link sent to yt-dlp with items "all" (the app's toggle) that
+            // turns out to have no video: a photo post, which only cobalt saves
+            (!rec.pinned || (engine === "ytdlp" && rec.items !== undefined && code === "error.webp.no_video"));
         if (!canSwitch) {
             const final = engine === "ytdlp" && rec.fellBack !== undefined && code !== "error.studio.too_large" ? rec.fellBack : code;
             return await this.fail(sid, final);

@@ -5704,13 +5704,16 @@ for the current model and meaning), "created_at", "updated_at" }`. `yes`/`no` ne
 
 A save (`POST /studio`, the chat's and MCP's `library.save`) can download its link with yt-dlp instead of cobalt. yt-dlp
 runs in its own container behind its own Durable Object, the **yt-dlp box**. cobalt stays: it is still the first
-downloader by default and the only one for a post's items (photo posts, galleries).
+downloader by default and the only one for picked items of a post (`items` as an index list) and for make saves.
+`items` `"all"` and `"first-video"` count as a plain link save (the app sends `"all"` on every link save).
 
 ### 49.1 `engine` on POST /studio
 
 - `engine`: `"cobalt"` | `"ytdlp"` | absent. Absent = the server's `SAVE_ENGINE` order with the fallback (49.2). Given =
   **that engine only** (the app's "yt-dlp" toggle; owner: "a direct yt-dlp toggle"): no switch, and its own error code.
-  Anything else is `400 error.studio.invalid_params`; so is `"ytdlp"` with `items`, or while the box is not deployed.
+  Anything else is `400 error.studio.invalid_params`; so is `"ytdlp"` with picked `items` (an index list) or `make`, or
+  while the box is not deployed. One exception to "that engine only": `"ytdlp"` with `items` `"all"` or `"first-video"`
+  that yt-dlp answers `error.webp.no_video` (a photo post) switches to cobalt, which saves photos.
 - The chat's and MCP's `library.save` take the same `engine` and pass it on.
 - Nothing else in any answer changes: the session saves, polls, stores and becomes a library post exactly as before
   (`source 'saved'`, `originals/<sid>.<ext>` in `cobalt-originals`).
@@ -5718,7 +5721,8 @@ downloader by default and the only one for a post's items (photo posts, gallerie
 ### 49.2 Which engine runs
 
 - `SAVE_ENGINE` (API text var): `"fallback"` (default) = cobalt first, then yt-dlp; `"first"` = yt-dlp first, then cobalt.
-  A save of items is always cobalt's.
+  A save of picked items (an index list) or a make save is always cobalt's; `items` `"all"` / `"first-video"` is not
+  (fix 2026-11-01: the app sends `"all"` on every link save, so before it yt-dlp never ran for the app).
 - A save that did not ask for an engine switches **at most once**, and only when the failure is about the link: cobalt's `error.api.*`, or
   `error.webp.bad_source | upstream | download_failed | unsupported | no_video`. Never on `error.studio.too_large`,
   `error.webp.timeout`, `error.studio.unavailable | busy | save_lost | cancelled`.
@@ -5774,8 +5778,9 @@ Tier free, no route.
 
 ### 49.7 App: the yt-dlp toggle
 
-The save-a-link screen gets a "yt-dlp" toggle (off by default, remembered). On, a link save sends `engine: "ytdlp"`;
-a gallery's items save ignores it (cobalt only). Shown only while `GET /capabilities` has `features.ytdlp`.
+The save-a-link screen gets a "yt-dlp" toggle (off by default, remembered). On, a link save sends `engine: "ytdlp"`,
+also with `items` `"all"` / `"first-video"`; a save of picked items leaves `engine` out (cobalt only). A photo post
+still saves: yt-dlp finds no video and the server hands it to cobalt (49.1). Shown only while `GET /capabilities` has `features.ytdlp`.
 
 ### 49.5 Files, tests, deploy
 
