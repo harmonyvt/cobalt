@@ -452,12 +452,7 @@ private struct NewKeySheet: View {
         .frame(minWidth: 320, idealWidth: 460)
         #if os(iOS)
         .presentationDetents([.medium, .large])
-        #Preview("new key sheet") {
-    PreviewHost(.happy, tab: .settings) { model in
-        NewKeySheet(store: model.account, base: "https://api.capybaraharmony.com") { _ in }
-    }
-}
-#endif
+        #endif
         .interactiveDismissDisabled(made != nil && !copiedKey && !copiedCommand)
         .haptic(.success, trigger: made?.item.id) { $0 != nil }
     }
@@ -472,12 +467,7 @@ private struct NewKeySheet: View {
                 .onSubmit { Task { await make() } }
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
-                #Preview("new key sheet") {
-    PreviewHost(.happy, tab: .settings) { model in
-        NewKeySheet(store: model.account, base: "https://api.capybaraharmony.com") { _ in }
-    }
-}
-#endif
+                #endif
             Text(error ?? Copy.Account.keyNameHint)
                 .font(CobaltType.captionSmall)
                 .foregroundStyle(error == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(CobaltColor.errorText))
