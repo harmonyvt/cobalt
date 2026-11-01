@@ -109,8 +109,10 @@ extension Pipeline {
         let makePublic = publicFlag                              // read here: the closures below are not on the main actor
         let title = jobOptions.title
         let key = lineKey
-        // yt-dlp has no items: a gallery's save is always cobalt's (49.1)
-        let engine = gallery == nil ? engineFlag : nil
+        // yt-dlp saves one file: a link save (items "all" / "first-video", which the app sends for every link) may ask for
+        // it; picked items of a gallery the app already saw are cobalt's (49.1)
+        let oneFile = gallery.map { $0.choice == .all || $0.choice == .firstVideo } ?? true
+        let engine: String? = oneFile ? engineFlag : nil
         // A gallery asks for every item at once (APP-API-CONTRACT 18.2); the count is what the client saw, when it saw one.
         func options(queue: Bool) -> StudioCreateOptions {
             var o = StudioCreateOptions(

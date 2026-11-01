@@ -143,11 +143,11 @@ describe("fallback mode (cobalt first)", () => {
         expect(s.box.calls).toEqual([]);
     });
 
-    it("a save of a post's items stays with cobalt", async () => {
+    it("a save of picked items stays with cobalt", async () => {
         const s = setup();
         s.helper.gallery = [{ type: "photo" }, { type: "photo" }];
         s.helper.fetchError = "error.api.fetch.fail";
-        const id = idOf(await create(s, { items: "all" }));
+        const id = idOf(await create(s, { items: [0, 1] }));
         expect(body(await s.studio.advance(id, 30))).toMatchObject({ status: "error", error: { code: "error.api.fetch.fail" } });
         expect(s.box.calls).toEqual([]);
     });
@@ -234,23 +234,23 @@ describe("engine on POST /studio and the \"first\" mode", () => {
         expect(s.box.calls).toEqual([]);
     });
 
-    it("\"first\" mode sends a plain save to the box, but never a save of items", async () => {
+    it("\"first\" mode sends a plain save to the box, but never a save of picked items", async () => {
         const s = setup({ mode: "first" });
         const id = idOf(await create(s));
         expect(body(await s.studio.advance(id, 0))).toMatchObject({ status: "ready" });
         expect(s.helper.calls).toEqual([]);
         const s2 = setup({ mode: "first" });
         s2.helper.gallery = [{ type: "photo" }];
-        idOf(await create(s2, { items: "all" }));
+        idOf(await create(s2, { items: [0] }));
         expect(s2.box.calls).toEqual([]);
     });
 
-    it("refuses an unknown engine, and yt-dlp with items", async () => {
+    it("refuses an unknown engine, and yt-dlp with picked items", async () => {
         const s = setup();
         for (const engine of ["youtube-dl", 1, true, "YTDLP"]) {
             expect(await create(s, { engine })).toMatchObject({ status: 400, body: { error: { code: "error.studio.invalid_params" } } });
         }
-        expect(await create(s, { engine: "ytdlp", items: "all" })).toMatchObject({ status: 400 });
+        expect(await create(s, { engine: "ytdlp", items: [0, 1] })).toMatchObject({ status: 400 });
     });
 
     it("a queued save keeps its engine through the line", async () => {
@@ -264,5 +264,47 @@ describe("engine on POST /studio and the \"first\" mode", () => {
         expect(body(await s.studio.advance(idOf(queued), 30)).status).toBe("ready");
         expect(s.box.fetchBodies.map((b) => b.id)).toEqual([idOf(queued)]);
         expect(s.helper.fetchBodies.map((b) => b.id)).toEqual([first]);
+    });
+});
+
+describe("link saves the app sends with items \"all\" (every app link save)", () => {
+    it("cobalt failing hands the save to yt-dlp, which saves it as one file", async () => {
+        const s = setup();
+        s.helper.fetchError = "error.webp.bad_source";
+        const id = idOf(await create(s, { items: "all", queue: true }));
+        expect(body(await s.studio.advance(id, 30))).toMatchObject({ status: "ready", title: "Me at the zoo", bytes: 3000 });
+        expect(s.box.fetchBodies.map((b) => b.id)).toEqual([id]);
+        expect(s.items()).toHaveLength(1);
+    });
+
+    it("picked items stay cobalt's", async () => {
+        const s = setup();
+        s.helper.gallery = [{ type: "photo" }, { type: "photo" }];
+        s.helper.fetchError = "error.api.fetch.fail";
+        const id = idOf(await create(s, { items: [0, 1] }));
+        expect(body(await s.studio.advance(id, 30))).toMatchObject({ status: "error" });
+        expect(s.box.calls).toEqual([]);
+        expect(await create(s, { items: [0], engine: "ytdlp" })).toMatchObject({ status: 400 });
+    });
+
+    it("the toggle (engine ytdlp) with items \"all\" saves with yt-dlp only", async () => {
+        const s = setup();
+        const id = idOf(await create(s, { items: "all", engine: "ytdlp" }));
+        expect(body(await s.studio.advance(id, 30))).toMatchObject({ status: "ready" });
+        expect(s.helper.calls).toEqual([]);
+        const s2 = setup();
+        s2.box.fetchError = "error.api.content.video.unavailable";
+        const id2 = idOf(await create(s2, { items: "all", engine: "ytdlp" }));
+        expect(body(await s2.studio.advance(id2, 30))).toMatchObject({ status: "error", error: { code: "error.api.content.video.unavailable" } });
+        expect(s2.helper.calls).toEqual([]);
+    });
+
+    it("the toggle on a photo post (yt-dlp: no video) goes on with cobalt", async () => {
+        const s = setup();
+        s.box.fetchError = "error.webp.no_video";
+        s.helper.gallery = [{ type: "photo" }, { type: "photo" }];
+        const id = idOf(await create(s, { items: "all", engine: "ytdlp" }));
+        expect(body(await s.studio.advance(id, 30))).toMatchObject({ status: "ready" });
+        expect(s.helper.fetchBodies[0]).toMatchObject({ id, items: "all" });
     });
 });
