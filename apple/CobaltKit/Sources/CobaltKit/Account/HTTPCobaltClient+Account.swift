@@ -60,6 +60,25 @@ extension HTTPCobaltClient {
         do { return try AccountKey.decodeList(data) } catch { throw CobaltError.invalidResponse(httpStatus: http.statusCode) }
     }
 
+    /// `POST /auth/keys {name}` → `{key, item}` (APP-API-CONTRACT 50). The key is in this answer only.
+    public func createAccountKey(name: String) async throws -> AccountKeyCreated {
+        let req = try makeRequest("POST", "/auth/keys", keyed: true, timeout: 20)
+        let (data, http) = try await send(req, body: Self.jsonBody(["name": name]))
+        guard (200..<300).contains(http.statusCode) else { throw accountError(data, status: http.statusCode, deleting: false) }
+        guard let made = try? AccountKeyCreated.decode(data), !made.key.isEmpty else {
+            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+        }
+        return made
+    }
+
+    /// `PATCH /auth/keys/<id> {name}` → `{item}`; anything but a live key is `AccountError.notFound`.
+    public func renameAccountKey(id: String, name: String) async throws -> AccountKey {
+        let req = try makeRequest("PATCH", "/auth/keys/\(Self.encode(id))", keyed: true, timeout: 20)
+        let (data, http) = try await send(req, body: Self.jsonBody(["name": name]))
+        guard (200..<300).contains(http.statusCode) else { throw accountError(data, status: http.statusCode, deleting: true) }
+        do { return try AccountKey.decodeItem(data) } catch { throw CobaltError.invalidResponse(httpStatus: http.statusCode) }
+    }
+
     /// `DELETE /auth/keys/<id>` → `{status}`; anything but a live key is `AccountError.notFound`.
     public func deleteAccountKey(id: String) async throws {
         let req = try makeRequest("DELETE", "/auth/keys/\(Self.encode(id))", keyed: true, timeout: 20)
@@ -77,6 +96,9 @@ extension HTTPCobaltClient {
         switch code {
         case "error.api.auth.code.invalid": return AccountError.codeInvalid
         case "error.api.auth.session.not_found": return AccountError.notFound
+        case "error.api.auth.key.too_many": return AccountError.tooManyKeys
+        case "error.api.auth.key.name_invalid": return AccountError.badName
+        case "error.api.auth.session_required": return AccountError.needsSession
         // `DELETE /auth/keys/<id>` for an unknown key; on any other route this code is the caller's own key being unknown
         case "error.api.auth.key.not_found" where deleting: return AccountError.notFound
         case let code? where code.hasPrefix("error.api.auth."): return apiError(data, status: status)
@@ -99,4 +121,6 @@ extension CobaltClient {
     public func signOutOtherSessions() async throws -> Int { throw PipelineFailure.unsupported }
     public func accountKeys() async throws -> [AccountKey] { throw PipelineFailure.unsupported }
     public func deleteAccountKey(id: String) async throws { throw PipelineFailure.unsupported }
+    public func createAccountKey(name: String) async throws -> AccountKeyCreated { throw PipelineFailure.unsupported }
+    public func renameAccountKey(id: String, name: String) async throws -> AccountKey { throw PipelineFailure.unsupported }
 }

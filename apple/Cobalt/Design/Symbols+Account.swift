@@ -19,6 +19,9 @@ extension Symbol {
         static let devices = "laptopcomputer.and.iphone"
         static let keyStays = "key"
         static let paste = "doc.on.clipboard"
+        static let newKey = "plus"
+        static let rename = "pencil"
+        static let copy = "doc.on.doc"
 
         static func platform(_ p: AccountPlatform) -> String {
             switch p {

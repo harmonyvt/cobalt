@@ -198,6 +198,50 @@ struct AccountClientTests {
         await #expect(throws: CobaltError.api(code: "error.api.generic", httpStatus: 503)) { try await c.accountKeys() }
     }
 
+    @Test func makingAndRenamingKeysSendTheNameAndDecode() async throws {
+        let server = try await LoopbackServer.start { req in
+            switch (req.method, req.path) {
+            case ("POST", "/auth/keys"):
+                return .json(#"{"status":"success","key":"3f9a1c2e-0000-4000-8000-000000000009","item":{"id":"k9","name":"claude code","prefix":"3f9a1c2e","created_at":1,"last_used_at":null,"old_paste":false}}"#, status: 201)
+            case ("PATCH", "/auth/keys/k9"):
+                return .json(#"{"status":"success","item":{"id":"k9","name":"mac shortcuts","prefix":"3f9a1c2e","created_at":1,"old_paste":false}}"#)
+            default: return .json(#"{"status":"error","error":{"code":"error.api.generic"}}"#, status: 500)
+            }
+        }
+        defer { server.stop() }
+        let c = client(server)
+        let made = try await c.createAccountKey(name: "claude code")
+        #expect(made.key == "3f9a1c2e-0000-4000-8000-000000000009")
+        #expect(made.item.id == "k9" && made.item.prefix == "3f9a1c2e" && made.item.lastUsedAt == nil)
+        let renamed = try await c.renameAccountKey(id: "k9", name: "mac shortcuts")
+        #expect(renamed.name == "mac shortcuts")
+        #expect(try bodyJSON(server.requests[0])["name"] as? String == "claude code")
+        #expect(try bodyJSON(server.requests[1])["name"] as? String == "mac shortcuts")
+        #expect(server.requests.allSatisfy { $0.headers["authorization"] == "Api-Key \(stored)" })
+    }
+
+    @Test func keyRefusalsAreMapped() async throws {
+        let server = try await LoopbackServer.start { req in
+            switch (req.method, req.path) {
+            case ("POST", "/auth/keys"):
+                let name = (try? JSONSerialization.jsonObject(with: req.body) as? [String: Any])?["name"] as? String
+                switch name {
+                case "full": return .json(#"{"status":"error","error":{"code":"error.api.auth.key.too_many"}}"#, status: 409)
+                case "pasted": return .json(#"{"status":"error","error":{"code":"error.api.auth.session_required"}}"#, status: 403)
+                default: return .json(#"{"status":"error","error":{"code":"error.api.auth.key.name_invalid"}}"#, status: 400)
+                }
+            case ("PATCH", "/auth/keys/gone"): return .json(#"{"status":"error","error":{"code":"error.api.auth.key.not_found"}}"#, status: 404)
+            default: return .json(#"{"status":"error","error":{"code":"error.api.generic"}}"#, status: 503)
+            }
+        }
+        defer { server.stop() }
+        let c = client(server)
+        await #expect(throws: AccountError.tooManyKeys) { try await c.createAccountKey(name: "full") }
+        await #expect(throws: AccountError.needsSession) { try await c.createAccountKey(name: "pasted") }
+        await #expect(throws: AccountError.badName) { try await c.createAccountKey(name: "") }
+        await #expect(throws: AccountError.notFound) { try await c.renameAccountKey(id: "gone", name: "x") }
+    }
+
     @Test func noTokenThrowsBeforeAnyRequest() async throws {
         let server = try await LoopbackServer.start { _ in .json("{}") }
         defer { server.stop() }
@@ -294,6 +338,29 @@ struct AccountAppTests {
 
         #expect(try await store.signOutOthers() == 3)
         #expect(store.sessions.count == 1 && store.otherSessions.isEmpty)
+    }
+
+    @Test func theStoreMakesAndRenamesKeys() async throws {
+        let app = app(.happy)
+        let store = app.account
+        await store.refresh()
+        #expect(store.canMakeKeys)
+        let made = try await store.create(name: "  claude code  ")
+        #expect(made.item.name == "claude code" && made.key.hasPrefix(made.item.prefix))
+        #expect(store.keys.count == 5 && store.keys.first?.id == made.item.id)
+        #expect(store.me?.keys == 5)
+
+        try await store.rename(made.item, to: "mac shortcuts")
+        #expect(store.keys.first?.name == "mac shortcuts")
+
+        await #expect(throws: AccountError.badName) { try await store.create(name: "   ") }
+        await #expect(throws: AccountError.badName) { try await store.create(name: String(repeating: "x", count: 41)) }
+        #expect(store.keys.count == 5)
+
+        let gone = store.keys[1]
+        try await store.revoke(gone)
+        await #expect(throws: AccountError.notFound) { try await store.rename(gone, to: "back") }
+        #expect(!store.keys.contains { $0.id == gone.id })
     }
 
     @Test func aRefusedTokenFromTheStoreSignsTheAppOut() async {

@@ -4,8 +4,9 @@ import SwiftUI
 
 /// Settings › account (APP-API-CONTRACT 42.6), in place of the api key row on a server with `features.accounts`: who is
 /// signed in (the Access email, "through cloudflare access"), the signed-in devices (sign out each, or every other one),
-/// the keys for tools (revoke; "old paste" tags the keys apps used before accounts; keys are made on the web), a line on
-/// private links, and sign out. Every sign-out and revoke asks first. Grouped rows like settings › mcp, on the Mac too.
+/// the keys for tools (make, rename, revoke; APP-API-CONTRACT 50; "old paste" tags the keys apps used before accounts), a
+/// line on private links, and sign out. Every sign-out and revoke asks first. Grouped rows like settings › mcp, on the Mac
+/// too. A new key is shown once, in `NewKeySheet`.
 struct AccountSettingsSection: View {
     let model: AppModel
 
@@ -21,6 +22,9 @@ struct AccountSettingsSection: View {
     @State private var actionError: String?
     @State private var doneTick = 0
     @State private var failTick = 0
+    @State private var makingKey = false
+    @State private var renaming: AccountKey?
+    @State private var newName = ""
     @Environment(\.webAuthenticationSession) private var webAuthentication
     @Environment(\.shell) private var shell
 
@@ -38,6 +42,19 @@ struct AccountSettingsSection: View {
                     Button(Copy.Account.cancel, role: .cancel) { pending = nil }
                 } message: {
                     Text(dialogBody)
+                }
+                .sheet(isPresented: $makingKey) {
+                    NewKeySheet(store: store, base: Self.base(model.settings.serverURL)) { made in
+                        if let made { shell.showStatus(Copy.Account.madeTitle(made.item.name)) }
+                    }
+                }
+                .alert(Copy.Account.renameTitle, isPresented: renameShown) {
+                    TextField(Copy.Account.keyNamePlaceholder, text: $newName)
+                    Button(Copy.Account.save) { Task { await saveRename() } }
+                        .disabled(!Self.nameFits(newName))
+                    Button(Copy.Account.cancel, role: .cancel) { renaming = nil }
+                } message: {
+                    Text(Copy.Account.keyNameHint)
                 }
                 .haptic(.success, trigger: doneTick)
                 .haptic(.error, trigger: failTick)
@@ -167,11 +184,20 @@ struct AccountSettingsSection: View {
             }
             ForEach(store.keys) { key in
                 LabeledContent {
-                    Button(role: .destructive) { ask(.revoke(key)) } label: {
-                        Label(Copy.Account.revoke, systemImage: Symbol.reset)
+                    HStack(spacing: 6) {
+                        if store.canMakeKeys {
+                            Button { startRename(key) } label: {
+                                Label(Copy.Account.rename, systemImage: Symbol.Account.rename)
+                            }
+                            .buttonStyle(.cobaltIcon(.small))
+                            .disabled(working)
+                        }
+                        Button(role: .destructive) { ask(.revoke(key)) } label: {
+                            Label(Copy.Account.revoke, systemImage: Symbol.reset)
+                        }
+                        .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.errorText))
+                        .disabled(working)
                     }
-                    .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.errorText))
-                    .disabled(working)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
@@ -186,6 +212,20 @@ struct AccountSettingsSection: View {
                     }
                 }
                 .accessibilityElement(children: .combine)
+                .contextMenu {
+                    if store.canMakeKeys {
+                        Button(Copy.Account.rename, systemImage: Symbol.Account.rename) { startRename(key) }
+                    }
+                    Button(Copy.Account.revoke, systemImage: Symbol.reset, role: .destructive) { ask(.revoke(key)) }
+                }
+            }
+            if store.canMakeKeys {
+                Button { actionError = nil; makingKey = true } label: {
+                    Label(Copy.Account.newKey, systemImage: Symbol.Account.newKey)
+                }
+                .disabled(working)
+            } else {
+                Text(Copy.Account.signInToMake).font(Font.cobalt(12.5)).foregroundStyle(.secondary)
             }
         } header: {
             header(Copy.Account.keysGroup)
@@ -319,6 +359,49 @@ struct AccountSettingsSection: View {
         }
     }
 
+    // MARK: rename
+
+    private var renameShown: Binding<Bool> {
+        Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })
+    }
+
+    private func startRename(_ key: AccountKey) {
+        guard !working else { return }
+        actionError = nil
+        newName = key.name
+        renaming = key
+    }
+
+    private func saveRename() async {
+        guard let key = renaming, !working else { return }
+        renaming = nil
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name != key.name else { return }
+        working = true
+        defer { working = false }
+        do {
+            try await store.rename(key, to: name)
+            shell.showStatus(Copy.Account.renamed(name))
+            doneTick += 1
+        } catch {
+            actionError = Copy.Account.message(for: error) ?? Copy.Account.message(for: AccountError.failed)
+            failTick += 1
+        }
+    }
+
+    /// 1...40 characters after trimming (the server checks again).
+    static func nameFits(_ raw: String) -> Bool {
+        let n = raw.trimmingCharacters(in: .whitespacesAndNewlines).count
+        return n >= 1 && n <= AccountStore.maxKeyNameLength && !raw.contains(where: \.isNewline)
+    }
+
+    /// "https://api.example.com" (no trailing slash) for the claude code line.
+    static func base(_ url: URL) -> String {
+        var s = url.absoluteString
+        while s.hasSuffix("/") { s.removeLast() }
+        return s
+    }
+
     private func signIn() {
         actionError = nil
         Task {
@@ -336,6 +419,120 @@ struct AccountSettingsSection: View {
     }
 }
 
+/// Make a key for a tool: name it, then the key once, with copy and a ready `claude mcp add` line. Closing forgets the
+/// key (only its first 8 characters stay in the list). Close top right; it can't be swiped away before copying.
+private struct NewKeySheet: View {
+    let store: AccountStore
+    let base: String
+    let finished: (AccountKeyCreated?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var made: AccountKeyCreated?
+    @State private var working = false
+    @State private var error: String?
+    @State private var copiedKey = false
+    @State private var copiedCommand = false
+    @FocusState private var nameFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Text(made.map { Copy.Account.madeTitle($0.item.name) } ?? Copy.Account.newKeyTitle).font(CobaltType.sheetTitle)
+                Spacer(minLength: 0)
+                CloseButton(cancels: made == nil) { close() }
+            }
+            if let made {
+                reveal(made)
+            } else {
+                form
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 320, idealWidth: 460)
+        #if os(iOS)
+        .presentationDetents([.medium, .large])
+        #endif
+        .interactiveDismissDisabled(made != nil && !copiedKey && !copiedCommand)
+        .haptic(.success, trigger: made?.item.id) { $0 != nil }
+    }
+
+    private var form: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(Copy.Account.keyNamePrompt).font(CobaltType.body).foregroundStyle(.secondary)
+            TextField(Copy.Account.keyNamePlaceholder, text: $name)
+                .textFieldStyle(.roundedBorder)
+                .focused($nameFocused)
+                .submitLabel(.done)
+                .onSubmit { Task { await make() } }
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+            Text(error ?? Copy.Account.keyNameHint)
+                .font(CobaltType.captionSmall)
+                .foregroundStyle(error == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(CobaltColor.errorText))
+            Button { Task { await make() } } label: {
+                Label(working ? Copy.Account.making : Copy.Account.make, systemImage: Symbol.Account.newKey)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(working || !AccountSettingsSection.nameFits(name))
+        }
+        .onAppear { nameFocused = true }
+    }
+
+    private func reveal(_ made: AccountKeyCreated) -> some View {
+        let command = Copy.Account.claudeCommand(base: base, key: made.key)
+        return VStack(alignment: .leading, spacing: 12) {
+            Text(Copy.Account.madeWarning).font(CobaltType.body).foregroundStyle(.secondary)
+            Text(made.key)
+                .font(.system(size: 13, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Button(copiedKey ? Copy.Account.copied : Copy.Account.copyKey, systemImage: Symbol.Account.copy) {
+                Pasteboard.copy(made.key)
+                copiedKey = true
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .haptic(.success, trigger: copiedKey) { $0 }
+            Text(Copy.Account.claudeCode).font(CobaltType.caption).foregroundStyle(.secondary).padding(.top, 4)
+            Text(command)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .lineLimit(4)
+            Button(copiedCommand ? Copy.Account.copied : Copy.Account.copyCommand, systemImage: Symbol.Account.copy) {
+                Pasteboard.copy(command)
+                copiedCommand = true
+            }
+            .buttonStyle(.bordered)
+            .haptic(.success, trigger: copiedCommand) { $0 }
+        }
+    }
+
+    private func make() async {
+        guard !working, made == nil, AccountSettingsSection.nameFits(name) else { return }
+        working = true
+        error = nil
+        defer { working = false }
+        do {
+            made = try await store.create(name: name)
+        } catch {
+            self.error = Copy.Account.message(for: error) ?? Copy.Account.message(for: AccountError.failed)
+        }
+    }
+
+    private func close() {
+        finished(made)
+        made = nil
+        dismiss()
+    }
+}
+
 #if DEBUG
 #Preview("settings · account") {
     PreviewHost(.happy, tab: .settings) { model in
@@ -350,6 +547,11 @@ struct AccountSettingsSection: View {
 #Preview("settings · account move-over") {
     PreviewHost(.moveOver, tab: .settings) { model in
         Form { AccountSettingsSection(model: model) }.formStyle(.grouped)
+    }
+}
+#Preview("new key sheet") {
+    PreviewHost(.happy, tab: .settings) { model in
+        NewKeySheet(store: model.account, base: "https://api.capybaraharmony.com") { _ in }
     }
 }
 #endif

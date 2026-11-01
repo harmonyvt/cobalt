@@ -9,6 +9,7 @@ import * as z from "zod";
 import { countryOf, hashKey } from "../../keys";
 import {
     ACTIVE_SESSION_SQL,
+    cleanDevice,
     mintSession,
     PLATFORMS,
     SESSION_COLUMNS,
@@ -21,6 +22,12 @@ import { defineOp, ok, OpError, type OpContext } from "../op";
 const CODE_INVALID = "error.api.auth.code.invalid";
 const SESSION_NOT_FOUND = "error.api.auth.session.not_found";
 const KEY_NOT_FOUND = "error.api.auth.key.not_found";
+const KEY_NAME_INVALID = "error.api.auth.key.name_invalid";
+const KEY_TOO_MANY = "error.api.auth.key.too_many";
+const SESSION_REQUIRED = "error.api.auth.session_required";
+
+// Keys for tools (section 50): the same cap and name length as the web Worker's /api/keys (web/src/keys.ts).
+export const MAX_KEYS = 50;
 
 // 32 random bytes, base64url without padding: 43 characters.
 const CODE_REGEX = /^[A-Za-z0-9_-]{43}$/;
@@ -83,11 +90,24 @@ async function callerRow(ctx: OpContext): Promise<CallerRow | null> {
         .first<CallerRow>();
 }
 
+// Making and renaming keys needs a signed-in device (a session): a key for tools never mints or renames keys, so a leaked
+// one can't make itself a spare.
+async function requireSession(ctx: OpContext): Promise<void> {
+    const row = await callerRow(ctx);
+    if (row?.kind !== "session") throw new OpError(403, SESSION_REQUIRED);
+}
+
+// A key name: 1..40 printable characters after trimming (the same rule as a device name), else null.
+const cleanKeyName = (raw: unknown): string | null => cleanDevice(raw);
+
+const KeyNameInput = z.object({ name: z.string().max(400) });
+
 const route = <I>(o: {
     name: string;
-    method: "GET" | "POST" | "DELETE";
+    method: "GET" | "POST" | "PATCH" | "DELETE";
     path: string;
     input?: z.ZodType<I>;
+    badRequest?: string;
     output: z.ZodType;
     summary: string;
     run: (ctx: OpContext, input: I) => Promise<{ status: number; body: unknown }>;
@@ -101,6 +121,7 @@ const route = <I>(o: {
         noStore: true,
         input: (o.input ?? NoInput) as z.ZodType<I>,
         ...(o.input ? {} : { http: none }),
+        ...(o.badRequest ? { badRequest: o.badRequest } : {}),
         output: o.output,
         ai: { tier: "hidden", summary: o.summary },
         handler: (ctx, input) => o.run(ctx, input),
@@ -277,6 +298,70 @@ const ROUTES = [
                     last_used_at: r.last_used_at,
                     old_paste: r.replaced_by !== null,
                 })),
+            });
+        },
+    }),
+    route({
+        name: "auth.keys.create",
+        method: "POST",
+        path: "/auth/keys",
+        input: KeyNameInput,
+        badRequest: KEY_NAME_INVALID,
+        output: z.object({
+            status: z.literal("success"),
+            key: z.string().describe("the new key, shown this once: only its SHA-256 is stored"),
+            item: KeyShape,
+        }),
+        summary: "Make a key for tools; the key is in this answer only (POST /auth/keys, signed-in devices only).",
+        run: async (ctx, input) => {
+            await requireSession(ctx);
+            const name = cleanKeyName(input.name);
+            if (name === null) throw new OpError(400, KEY_NAME_INVALID);
+            const now = ctx.now();
+            const key = crypto.randomUUID();
+            const id = crypto.randomUUID();
+            const prefix = key.slice(0, 8);
+            // The cap is checked inside the INSERT, so two racing creates can't pass it.
+            const made = await ctx.db
+                .prepare(
+                    `INSERT INTO api_keys (id, name, key_hash, prefix, created_at)
+                     SELECT ?1, ?2, ?3, ?4, ?5
+                     WHERE (SELECT COUNT(*) FROM api_keys WHERE ${ACTIVE_KEY_SQL}) < ?6
+                     RETURNING id`,
+                )
+                .bind(id, name, await hashKey(key), prefix, now, MAX_KEYS)
+                .first<{ id: string }>();
+            if (!made) throw new OpError(409, KEY_TOO_MANY);
+            return ok(
+                { status: "success", key, item: { id, name, prefix, created_at: now, last_used_at: null, old_paste: false } },
+                201,
+            );
+        },
+    }),
+    route({
+        name: "auth.keys.update",
+        method: "PATCH",
+        path: "/auth/keys/:id",
+        input: z.object({ id: z.string(), name: z.string().max(400) }),
+        badRequest: KEY_NAME_INVALID,
+        output: z.object({ status: z.literal("success"), item: KeyShape }),
+        summary: "Rename a key for tools (PATCH /auth/keys/<id> {name}, signed-in devices only).",
+        run: async (ctx, input) => {
+            await requireSession(ctx);
+            if (!UUID_REGEX.test(input.id)) throw new OpError(404, KEY_NOT_FOUND);
+            const name = cleanKeyName(input.name);
+            if (name === null) throw new OpError(400, KEY_NAME_INVALID);
+            const r = await ctx.db
+                .prepare(
+                    `UPDATE api_keys SET name = ?1 WHERE id = ?2 AND ${ACTIVE_KEY_SQL}
+                     RETURNING id, name, prefix, created_at, last_used_at, replaced_by`,
+                )
+                .bind(name, input.id)
+                .first<{ id: string; name: string; prefix: string; created_at: number; last_used_at: number | null; replaced_by: string | null }>();
+            if (!r) throw new OpError(404, KEY_NOT_FOUND);
+            return ok({
+                status: "success",
+                item: { id: r.id, name: r.name, prefix: r.prefix, created_at: r.created_at, last_used_at: r.last_used_at, old_paste: r.replaced_by !== null },
             });
         },
     }),

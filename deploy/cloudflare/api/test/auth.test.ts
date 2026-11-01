@@ -367,6 +367,77 @@ describe("GET /auth/keys and DELETE /auth/keys/<id>", () => {
     });
 });
 
+describe("POST /auth/keys and PATCH /auth/keys/<id> (section 50)", () => {
+    it("a signed-in device makes a key: shown once, stored hashed, and it works", async () => {
+        const s = await signIn();
+        const r = await call("POST", "/auth/keys", { token: s.key, origin: WEB, body: { name: "  claude code  " } });
+        expect(r.status).toBe(201);
+        expect(r.headers.get("cache-control")).toBe("no-store");
+        expect(r.headers.get("access-control-allow-origin")).toBe(WEB);
+        const b = await json(r);
+        expect(b.status).toBe("success");
+        expect(b.key).toMatch(UUID_V4);
+        expect(b.item).toEqual({ id: b.item.id, name: "claude code", prefix: b.key.slice(0, 8), created_at: clock, last_used_at: null, old_paste: false });
+        const stored = row(b.item.id);
+        expect(stored.kind).toBe("key");
+        expect(stored.key_hash).toBe(await hashKey(b.key));
+        expect(JSON.stringify(stored)).not.toContain(b.key);
+        // the new key is a client key like any other
+        const me = await json(await call("GET", "/auth/me", { token: b.key }));
+        expect(me.caller).toEqual({ kind: "key", id: b.item.id });
+        const listed = (await json(await call("GET", "/auth/keys", { token: s.key }))).keys.map((k: any) => k.name);
+        expect(listed).toEqual(["claude code", "shortcut"]);
+    });
+    it("a key can't make or rename keys", async () => {
+        const made = await call("POST", "/auth/keys", { body: { name: "spare" } });
+        expect(made.status).toBe(403);
+        expect(await json(made)).toEqual({ status: "error", error: { code: "error.api.auth.session_required" } });
+        const renamed = await call("PATCH", `/auth/keys/${KEY_ID}`, { body: { name: "spare" } });
+        expect(renamed.status).toBe(403);
+        expect(row(KEY_ID).name).toBe("shortcut");
+    });
+    it("refuses an empty, long or multi-line name", async () => {
+        const s = await signIn();
+        for (const name of ["", "   ", "x".repeat(41), "a\nb", 5, undefined]) {
+            const r = await call("POST", "/auth/keys", { token: s.key, body: name === undefined ? {} : { name } });
+            expect(r.status).toBe(400);
+            expect(await json(r)).toEqual({ status: "error", error: { code: "error.api.auth.key.name_invalid" } });
+        }
+        expect((await call("POST", "/auth/keys", { token: s.key, body: { name: "x".repeat(40) } })).status).toBe(201);
+    });
+    it("stops at 50 active keys; a revoked one frees a place", async () => {
+        const s = await signIn();
+        for (let i = 1; i < 50; i++) {
+            db.raw.prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)").run(`k${i}`, `k${i}`, `h${i}`, "abcd1234", i);
+        }
+        const full = await call("POST", "/auth/keys", { token: s.key, body: { name: "one more" } });
+        expect(full.status).toBe(409);
+        expect(await json(full)).toEqual({ status: "error", error: { code: "error.api.auth.key.too_many" } });
+        db.raw.prepare("UPDATE api_keys SET revoked_at = 1 WHERE id = 'k1'").run();
+        expect((await call("POST", "/auth/keys", { token: s.key, body: { name: "one more" } })).status).toBe(201);
+    });
+    it("renames a key, never a session or a revoked key", async () => {
+        const s = await signIn();
+        const r = await call("PATCH", "/auth/keys/0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a99", { token: s.key, body: { name: "x" } });
+        expect(r.status).toBe(404);
+        const id = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a98";
+        db.raw.prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, "old", "h2", "abcd1234", 5, 9);
+        const ok = await call("PATCH", `/auth/keys/${id}`, { token: s.key, body: { name: " mac shortcuts " } });
+        expect(ok.status).toBe(200);
+        expect(await json(ok)).toEqual({
+            status: "success",
+            item: { id, name: "mac shortcuts", prefix: "abcd1234", created_at: 5, last_used_at: 9, old_paste: false },
+        });
+        expect(row(id).name).toBe("mac shortcuts");
+        expect((await call("PATCH", `/auth/keys/${s.id}`, { token: s.key, body: { name: "x" } })).status).toBe(404);
+        expect(row(s.id).name).toBe("harmony's iphone");
+        expect((await call("PATCH", `/auth/keys/${id}`, { token: s.key, body: { name: "" } })).status).toBe(400);
+        db.raw.prepare("UPDATE api_keys SET revoked_at = 1 WHERE id = ?").run(id);
+        expect((await call("PATCH", `/auth/keys/${id}`, { token: s.key, body: { name: "y" } })).status).toBe(404);
+        expect((await call("PATCH", "/auth/keys/bad", { token: s.key, body: { name: "y" } })).status).toBe(404);
+    });
+});
+
 describe("the session cap (42.2)", () => {
     it(`minting session ${MAX_SESSIONS + 1} revokes the least recently used`, async () => {
         const made: { key: string; id: string }[] = [];

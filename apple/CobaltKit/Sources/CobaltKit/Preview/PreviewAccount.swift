@@ -135,6 +135,25 @@ final class PreviewAccountState: Sendable {
         }
     }
 
+    func createKey(name: String, now: Date) -> AccountKeyCreated {
+        state.withLock { s in
+            let key = UUID().uuidString.lowercased()
+            let item = AccountKey(id: UUID().uuidString.lowercased(), name: name, prefix: String(key.prefix(8)), createdAt: now)
+            s.keys.insert(item, at: 0)
+            return AccountKeyCreated(key: key, item: item)
+        }
+    }
+
+    func renameKey(_ id: String, name: String) -> AccountKey? {
+        state.withLock { s in
+            guard let at = s.keys.firstIndex(where: { $0.id == id }) else { return nil }
+            s.keys[at].name = name
+            return s.keys[at]
+        }
+    }
+
+    var keyCount: Int { state.withLock { $0.keys.count } }
+
     func deleteKey(_ id: String) -> Bool {
         state.withLock { s in
             guard let at = s.keys.firstIndex(where: { $0.id == id }) else { return false }
@@ -207,5 +226,32 @@ extension PreviewClient {
         try await clock.sleep(seconds: 0.3 * timeScale)
         if let refusal = accountRefusal() { throw refusal }
         guard accountState.deleteKey(id) else { throw AccountError.notFound }
+    }
+
+    public func createAccountKey(name: String) async throws -> AccountKeyCreated {
+        guard scenario.hasAccounts else { throw PipelineFailure.unsupported }
+        try await clock.sleep(seconds: 0.4 * timeScale)
+        if let refusal = accountRefusal() { throw refusal }
+        guard let clean = Self.keyName(name) else { throw AccountError.badName }
+        guard accountState.keyCount < 50 else { throw AccountError.tooManyKeys }
+        return accountState.createKey(name: clean, now: clock.now())
+    }
+
+    public func renameAccountKey(id: String, name: String) async throws -> AccountKey {
+        guard scenario.hasAccounts else { throw PipelineFailure.unsupported }
+        try await clock.sleep(seconds: 0.3 * timeScale)
+        if let refusal = accountRefusal() { throw refusal }
+        guard let clean = Self.keyName(name) else { throw AccountError.badName }
+        guard let renamed = accountState.renameKey(id, name: clean) else { throw AccountError.notFound }
+        return renamed
+    }
+
+    /// The server's name rule (APP-API-CONTRACT 50): 1...40 characters after trimming, one line.
+    static func keyName(_ raw: String) -> String? {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (1...40).contains(s.count),
+              !s.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0) })
+        else { return nil }
+        return s
     }
 }
