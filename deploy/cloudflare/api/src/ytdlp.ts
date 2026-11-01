@@ -36,7 +36,26 @@ export class YtDlpBox extends Container<YtDlpEnv> {
         return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
     }
 
+    private stopAsked = false;
+
+    // SIGTERM first; if the box is still up at the next expiry (an image that ignores the signal), kill it.
+    override async onActivityExpired(): Promise<void> {
+        if (!this.ctx.container?.running) {
+            this.stopAsked = false;
+            return;
+        }
+        if (this.stopAsked) {
+            console.log("[ytdlp] still running after SIGTERM, destroying");
+            this.stopAsked = false;
+            await this.destroy();
+            return;
+        }
+        this.stopAsked = true;
+        await this.stop();
+    }
+
     override async onStart(): Promise<void> {
+        this.stopAsked = false;
         await this.ctx.storage.put("envFingerprint", await this.envFingerprint());
     }
 

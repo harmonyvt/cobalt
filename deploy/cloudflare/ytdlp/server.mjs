@@ -510,7 +510,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         bin: process.env.YTDLP_BIN ?? "yt-dlp",
         jsRuntime: process.env.YTDLP_JS_RUNTIME ?? "node",
     });
-    createServer((req, res) => void handle(req, res)).listen(PORT, "0.0.0.0", () => {
+    const server = createServer((req, res) => void handle(req, res));
+    // node as PID 1 ignores SIGTERM unless it handles it, which kept the box awake after its sleep signal
+    for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => { server.close(); process.exit(0); });
+    server.listen(PORT, "0.0.0.0", () => {
         console.log(`[ytdlp] listening on ${PORT} (deploy ${process.env.YTDLP_DEPLOY_VERSION ?? "unknown"})`);
     });
 }
