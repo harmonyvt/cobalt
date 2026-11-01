@@ -5730,8 +5730,9 @@ downloader by default and the only one for a post's items (photo posts, gallerie
 
 ### 49.3 The box
 
-- Image `deploy/cloudflare/ytdlp` (node 24 on Debian trixie, ffmpeg/ffprobe, yt-dlp `[default]` pinned by
-  `YT_DLP_VERSION`, node as its JavaScript runtime for YouTube). Container app `cobalt-api-ytdlp`, `basic`, one instance;
+- Image `deploy/cloudflare/ytdlp` (node 24 on Debian trixie, Debian's ffmpeg/ffprobe, yt-dlp's standalone
+  `yt-dlp_linux` from its GitHub release, pinned by `YT_DLP_VERSION` and `YT_DLP_SHA256`; node as its JavaScript runtime
+  for YouTube). Container app `cobalt-api-ytdlp`, `basic`, one instance;
   Durable Object `YtDlpBox` (`api/src/ytdlp.ts`), bound as `YTDLP`, one object `"main"`. Sleeps 2 minutes after its last
   call and keeps nothing. Its own internet (yt-dlp reads the sites), no secret but the internal key (`YTDLP_INTERNAL_KEY`
   = `COBALT_API_KEY`, through envVars; the deploy id restarts it once per deploy).

@@ -158,7 +158,11 @@ export function makeHandler(opts) {
         await mkdir(dir, { recursive: true });
         const j = { id, dir, status: "pending", stage: "downloading", bytes: null, total: null, startedAt: now(), stderr: "", lastLine: "", info: null };
         jobs.set(id, j);
-        const proc = spawn(BIN, ytdlpArgs(url, dir, { maxBytes: MAX, jsRuntime: opts.jsRuntime }), { stdio: ["ignore", "pipe", "pipe"] });
+        const proc = spawn(BIN, ytdlpArgs(url, dir, { maxBytes: MAX, jsRuntime: opts.jsRuntime }), {
+            stdio: ["ignore", "pipe", "pipe"],
+            // a pipe makes Python buffer its stdout: the progress lines would only arrive at the end
+            env: { ...process.env, PYTHONUNBUFFERED: "1" },
+        });
         j.proc = proc;
         j.timer = setTimeout(() => {
             finish(j, { status: "error", error: "error.webp.timeout" });

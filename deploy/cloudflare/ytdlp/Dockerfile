@@ -7,22 +7,24 @@
 # ffprobe measures the file.
 FROM node:24-trixie-slim
 
+# yt-dlp's own standalone Linux build from its GitHub release (https://github.com/yt-dlp/yt-dlp/releases): one binary
+# with Python and the extras inside (yt-dlp-ejs, the YouTube signature solver, included). Pinned by version AND sha256
+# (from the release's SHA2-256SUMS): a bump changes both lines. Bump and redeploy the API when a site breaks.
 ARG YT_DLP_VERSION=2026.10.26
+ARG YT_DLP_SHA256=767ba9dce7052aa196f8b12652f433d76de128ba168966fa84b6394d5e6c6795
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates ffmpeg python3 python3-venv \
+    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# yt-dlp from PyPI (Debian's copy lags the sites it reads). `[default]` brings yt-dlp-ejs (the YouTube signature
-# solver), certifi, brotli and websockets. Bump YT_DLP_VERSION and redeploy when a site breaks.
-RUN python3 -m venv /opt/ytdlp \
-    && /opt/ytdlp/bin/pip install --no-cache-dir "yt-dlp[default]==${YT_DLP_VERSION}" \
-    && /opt/ytdlp/bin/yt-dlp --version
+RUN curl -fsSL -o /usr/local/bin/yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/yt-dlp_linux" \
+    && echo "${YT_DLP_SHA256}  /usr/local/bin/yt-dlp" | sha256sum -c - \
+    && chmod 755 /usr/local/bin/yt-dlp \
+    && yt-dlp --version
 
 # Fail the build, not a save, when a tool is missing.
 RUN set -e; ffmpeg -hide_banner -version | head -1; ffprobe -hide_banner -version | head -1; node --version
 
-ENV PATH=/opt/ytdlp/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /app
 COPY server.mjs /app/server.mjs
 USER node
