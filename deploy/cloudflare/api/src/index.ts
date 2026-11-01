@@ -8,6 +8,7 @@ import { ChatLiveService, handleChatLiveRoute, isChatLiveRoute } from "./chat-li
 import { handleNotifyRoute, harkConfigFrom, isNotifyRoute, NotifyService } from "./notify";
 import { handleStudioRoute, isStudioRoute, parseSaveEngineMode, StudioService, type YtDlpDeps } from "./studio";
 import { YTDLP_START_PATH } from "./ytdlp-path";
+import { fetchWithStartRetry } from "./start-retry";
 import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
 import { purgeFrom } from "./visibility";
@@ -415,7 +416,8 @@ export class CobaltContainer extends Container<Env> {
                 headers: stripInternalHeaders(request.headers),
             });
         }
-        return super.fetch(request);
+        // A start that fails right after a deploy is tried again instead of answering 500/503 (src/start-retry.ts).
+        return fetchWithStartRetry(request, (r) => super.fetch(r));
     }
 }
 
