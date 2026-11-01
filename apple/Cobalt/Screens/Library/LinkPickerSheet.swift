@@ -1,8 +1,8 @@
 import CobaltKit
 import SwiftUI
 
-/// The select panel's `add to link` opens this (APP-API-CONTRACT 41.4, mockup step 7): every gallery link as a row with
-/// its cover, its title, its badge and what adding would do ("6 → 8 files"). A link that cannot take the picks is dimmed
+/// The select panel's `add to link` and the context menu's `add to link…` open this (APP-API-CONTRACT 41.4, mockup
+/// step 7): every gallery link as a row with its cover, its title, its badge and what adding would do ("6 → 8 files"). A link that cannot take the picks is dimmed
 /// with the reason: "already in it" (it holds every pick), "room for 1", "has a private file" (a public link and a pick
 /// with no public file). A tap on a link that can closes the sheet and appends the picks (`choose`). iPhone and iPad: a
 /// sheet; Mac: the same view, 420 pt wide.
@@ -15,13 +15,29 @@ struct LinkPickerSheet: View {
     let choose: (ShareSet, [String]) -> Void
 
     @Environment(\.dismiss) private var dismiss
+
     @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// Why the links could not be listed, when they could not.
+    private var failure: String? {
+        if case .failed(let message) = store.state { return message }
+        return nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
-            if store.sets.isEmpty {
-                Text(Copy.LinkEdit.noLinksYet)
+            if store.sets.isEmpty, store.state == .loading || store.state == .idle {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(Copy.LinkEdit.loadingLinks)
+                        .font(CobaltType.caption)
+                        .foregroundStyle(CobaltColor.caption)
+                }
+                .padding(.vertical, 8)
+                Spacer(minLength: 0)
+            } else if store.sets.isEmpty {
+                Text(failure ?? Copy.LinkEdit.noLinksYet)
                     .font(CobaltType.caption)
                     .foregroundStyle(CobaltColor.caption)
                     .padding(.vertical, 8)
@@ -62,6 +78,8 @@ struct LinkPickerSheet: View {
         .presentationDragIndicator(.visible)
         #endif
         .background(CobaltColor.bg)
+        // the links tab may never have been opened: list the links now (a running refresh is not doubled)
+        .task { await store.refresh() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.LinkEdit.pickLinkTitle(picks.count))
     }

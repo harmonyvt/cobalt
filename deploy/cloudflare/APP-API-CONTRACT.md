@@ -5014,7 +5014,10 @@ with the library service credential and answers its body and status.
   continue the link's (8, 9, 10) and stop at the room left.
 - **Library select bar**: "add to link" opens a list of links (cover, title, n → m files); a link without room, already
   holding every pick, or public while a pick is private is dimmed with the reason. Picking one appends and toasts "added
-  to <title>" with "open".
+  to <title>" with "open". The list loads itself when it opens, so it works before the links tab was ever visited.
+- **Library context menu** (long press; right click on the Mac; addendum 2026-11-01, owner: "when i right click or
+  select a video i need a button to add it an existing share"): "add to link…" on any shareable, not hidden post with a
+  file opens the same list for that post (on the Mac table, for the whole selection when the row is part of it).
 - **Web library** (links view): a click on a link card opens the same screen as a panel (drag tiles, an x on each, add
   files from the library grid in a dialog, the title field, save/cancel).
 - Shown only with `features.share_set_edit`.
