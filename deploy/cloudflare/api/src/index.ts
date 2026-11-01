@@ -6,7 +6,8 @@ import { handleLiveRoute, isLiveRoute, LiveService } from "./live";
 import { EditLiveService, handleEditLiveRoute, isEditLiveRoute } from "./edit-live";
 import { ChatLiveService, handleChatLiveRoute, isChatLiveRoute } from "./chat-live";
 import { handleNotifyRoute, harkConfigFrom, isNotifyRoute, NotifyService } from "./notify";
-import { handleStudioRoute, isStudioRoute, StudioService } from "./studio";
+import { handleStudioRoute, isStudioRoute, parseSaveEngineMode, StudioService, type YtDlpDeps } from "./studio";
+import { YTDLP_START_PATH } from "./ytdlp";
 import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
 import { purgeFrom } from "./visibility";
@@ -30,6 +31,8 @@ import { handleChatBudgetRoute, isChatBudgetRoute } from "./registry/budget";
 import { handleChatPendingRoute, isChatPendingRoute } from "./registry/pending";
 export { ModelRelay } from "./model-relay";
 export { EditRenderer } from "./edit-renderer";
+// The yt-dlp box (APP-API-CONTRACT.md section 49): the studio save's second downloader.
+export { YtDlpBox } from "./ytdlp";
 export { StageRoom } from "./stage-room";
 // The chat's workbench box (APP-API-CONTRACT.md section 33.11) and the Containers library's outbound proxy, which carries
 // every request the box makes to its outbound rule (the library finds it in ctx.exports).
@@ -58,6 +61,29 @@ export interface Env extends WorkerEnv {
     STAGE_ROOM?: DurableObjectNamespace;
     // The editor's render containers (src/edit-renderer.ts, APP-API-CONTRACT.md section 31): two instances, "r0" and "r1".
     // Declared on WorkerEnv (src/worker.ts), which this interface extends: the Worker needs it for the routes and the flag.
+    // The yt-dlp box (src/ytdlp.ts, section 49): one object, "main". Absent: every save uses cobalt.
+    YTDLP?: DurableObjectNamespace;
+    // "fallback" (default): cobalt first, yt-dlp when cobalt cannot; "first": yt-dlp first (section 49.2).
+    SAVE_ENGINE?: string;
+}
+
+// The studio's view of the yt-dlp box (section 49): its one object, "main". A failed start rejects (the save counts a miss).
+function ytdlpDeps(ns: DurableObjectNamespace): YtDlpDeps {
+    const box = () => ns.get(ns.idFromName("main"));
+    return {
+        helper: (path, init) =>
+            box().fetch(
+                new Request(`http://ytdlp${path}`, {
+                    ...init,
+                    ...(init?.body instanceof ReadableStream ? { duplex: "half" } : {}),
+                } as RequestInit),
+            ),
+        ensureRunning: async () => {
+            const res = await box().fetch(`http://ytdlp${YTDLP_START_PATH}`, { method: "POST" });
+            await res.body?.cancel().catch(() => {});
+            if (!res.ok) throw new Error(`ytdlp start answered ${res.status}`);
+        },
+    };
 }
 
 // cobalt's API port and the webp helper's port (helper/supervisor.js).
@@ -257,6 +283,9 @@ export class CobaltContainer extends Container<Env> {
             mediaRead: env.MEDIA,
             // edge-cache purge for `public: true` hosting (section 16)
             purge: purgeFrom(env),
+            // the second downloader (section 49)
+            ytdlp: env.YTDLP ? ytdlpDeps(env.YTDLP) : undefined,
+            saveEngine: parseSaveEngineMode(env.SAVE_ENGINE),
         });
     }
 

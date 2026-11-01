@@ -109,6 +109,10 @@ the files and a real run before anything is called done.
   `Workbench` DO (`api/src/workbench*.ts`) on container app `cobalt-api-workbench` (`deploy/cloudflare/workbench/`, standard-1,
   one instance). No secrets, no own internet: every HTTP(S) request passes the Worker's outbound rule (19.2 + our own zone
   refused). Wiped on sleep (2 min) and between threads; `WORKBENCH_DAILY_MINUTES` caps awake time (default 60, 0 = off).
+- yt-dlp box (`APP-API-CONTRACT.md` section 49): a second downloader for saves, the `YtDlpBox` DO (`api/src/ytdlp.ts`) on
+  container app `cobalt-api-ytdlp` (`deploy/cloudflare/ytdlp/`, basic, one instance), same single-file `/fetch` routes as
+  the helper. `SAVE_ENGINE` "fallback" = cobalt first and yt-dlp when cobalt fails on the link; "first" = yt-dlp first.
+  `engine` on POST /studio and `library.save` picks one. Items saves stay cobalt's. Bump `YT_DLP_VERSION` when a site breaks.
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.

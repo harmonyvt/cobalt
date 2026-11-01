@@ -351,6 +351,10 @@ export const librarySaveOp = defineOp({
         public: z.boolean().optional().describe("also give it a public link (default: private)"),
         title: z.string().max(80).optional().describe("a custom title"),
         wait: z.number().min(0).max(SAVE_WAIT_MAX_S).optional().describe(`seconds to wait for it, default and max ${SAVE_WAIT_MAX_S}`),
+        engine: z
+            .enum(["cobalt", "ytdlp"])
+            .optional()
+            .describe('which downloader goes first: "ytdlp" (yt-dlp) for a site cobalt cannot save; default: cobalt, then yt-dlp when cobalt fails. Not with items'),
     }),
     output: SaveResult,
     ai: {
@@ -374,6 +378,7 @@ export const librarySaveOp = defineOp({
         if (input.items !== undefined) body.items = input.items;
         if (input.public !== undefined) body.public = input.public;
         if (input.title !== undefined) body.title = input.title;
+        if (input.engine !== undefined) body.engine = input.engine;
         const res = await ctx.durableObject("/studio", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
         const created = (await res.json().catch(() => null)) as { id?: unknown; queued?: unknown; error?: { code?: unknown } } | null;
         if (res.status !== 201 || typeof created?.id !== "string") throw refused({ status: res.status, body: created }, "cobalt.library.save");

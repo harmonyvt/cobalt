@@ -51,6 +51,18 @@ const workbenchContainer = defineContainer({
 	maxInstances: 1,
 });
 
+// The yt-dlp box (APP-API-CONTRACT.md section 49, src/ytdlp.ts): the studio save's second downloader, next to cobalt. Image:
+// ../ytdlp (its directory alone). One instance on basic (1/4 vCPU, 1 GiB, 4 GB disk: one save of at most 200 MB at a time);
+// it sleeps 2 minutes after its last call and keeps nothing. It has its own internet (yt-dlp reads the sites itself) and
+// holds only the internal key.
+const ytdlpContainer = defineContainer({
+	name: "cobalt-api-ytdlp",
+	image: { dockerfile: "../ytdlp/Dockerfile", buildContext: "../ytdlp" },
+	instanceType: "basic",
+	observability: { enabled: true, logs: { enabled: true } },
+	maxInstances: 1,
+});
+
 export default defineConfig({
 	worker: {
 		name: "cobalt-api",
@@ -227,6 +239,15 @@ export default defineConfig({
 				worker: "cobalt-api",
 				exportName: "Workbench",
 			}),
+			// The yt-dlp box (src/ytdlp.ts, APP-API-CONTRACT.md section 49): one object, "main". Without this binding every
+			// save uses cobalt alone. No secret, no migration.
+			YTDLP: bindings.durableObject({
+				worker: "cobalt-api",
+				exportName: "YtDlpBox",
+			}),
+			// Which downloader a save tries first (section 49.2): "fallback" = cobalt, then yt-dlp when cobalt cannot save the
+			// link; "first" = yt-dlp, then cobalt. A save can still ask for one with `engine`.
+			SAVE_ENGINE: bindings.text("fallback"),
 			// Awake minutes a day across all chat threads; "0" turns the box off (the model stops seeing cobalt.box).
 			WORKBENCH_DAILY_MINUTES: bindings.text("60"),
 			// The chat's job hooks (src/chat-jobs-do.ts, APP-API-CONTRACT.md section 33.14): one object per chat thread
@@ -257,9 +278,13 @@ export default defineConfig({
 				storage: "sqlite",
 				container: workbenchContainer,
 			}),
+			YtDlpBox: exports.durableObject({
+				storage: "sqlite",
+				container: ytdlpContainer,
+			}),
 			ChatJobs: exports.durableObject({ storage: "sqlite" }),
 			ChatAgent: exports.durableObject({ storage: "sqlite" }),
 		},
 	},
-	containers: [cobaltContainer, editContainer, workbenchContainer],
+	containers: [cobaltContainer, editContainer, workbenchContainer, ytdlpContainer],
 });

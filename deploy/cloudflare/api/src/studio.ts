@@ -805,7 +805,28 @@ export type StudioDeps = {
     purge?: PurgeFn;
     // How long a save, upload or render waits for a poster being made (POSTER_IDLE_WAIT_MS).
     posterIdleMs?: number;
+    // The yt-dlp box (section 49, src/ytdlp.ts): the same single-file /fetch routes as the helper, on its own container.
+    // Absent: every save uses cobalt, and `engine: "ytdlp"` is refused.
+    ytdlp?: YtDlpDeps;
+    // Which engine a save tries first (section 49.2): "fallback" (default) = cobalt, then yt-dlp when cobalt cannot;
+    // "first" = yt-dlp, then cobalt.
+    saveEngine?: SaveEngineMode;
 };
+
+// Section 49: which downloader a save uses.
+export type SaveEngine = "cobalt" | "ytdlp";
+export type SaveEngineMode = "fallback" | "first";
+export type YtDlpDeps = {
+    helper: (path: string, init?: RequestInit) => Promise<Response>;
+    // starts the box (and waits for its port); rejects when it cannot
+    ensureRunning: () => Promise<void>;
+};
+export const parseSaveEngineMode = (v: unknown): SaveEngineMode => (v === "first" ? "first" : "fallback");
+
+// The failures one engine hands to the other (section 49.2): what it says about the LINK (cobalt's `error.api.*`, the
+// helper's own source errors, the yt-dlp box's mapped codes). Never a size, a timeout, a busy box or a lost save.
+const FALLBACK_CODES = new Set(["error.webp.bad_source", "error.webp.upstream", "error.webp.download_failed", "error.webp.unsupported", "error.webp.no_video"]);
+export const fallsBack = (code: string): boolean => code.startsWith("error.api.") || FALLBACK_CODES.has(code);
 
 // A save's public copy is retried by the sweep this many times, then it is 'failed'.
 export const MAX_PUBLIC_ATTEMPTS = 4;
@@ -879,6 +900,10 @@ type SaveRecord = {
     items?: ItemsChoice;
     itemCount?: number;
     retry?: boolean;
+    // section 49: the downloader of the current fetch (absent = cobalt), and the code of the engine that failed first
+    // (set once: a save switches engines at most once)
+    engine?: SaveEngine;
+    fellBack?: string;
 };
 
 // What holds the helper right now (section 17.2). `owner` is an api_keys.id when the record
@@ -907,6 +932,32 @@ export class StudioService {
         return Promise.race([this.d.helper(path, init).then((res) => this.noteHelper(res)), timeout]).finally(() => {
             if (timer !== undefined) clearTimeout(timer);
         });
+    }
+
+    // A /fetch call to the engine of this save (section 49): the yt-dlp box is raced against the same ceiling, but its
+    // answers say nothing about the helper's capabilities (no noteHelper).
+    private fetchCall(engine: SaveEngine, path: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
+        const box = this.d.ytdlp;
+        if (engine !== "ytdlp" || !box) return this.callHelper(path, init, timeoutMs);
+        const ms = timeoutMs ?? this.d.helperTimeoutMs ?? 20_000;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`ytdlp ${path} timed out after ${ms} ms`)), ms);
+        });
+        return Promise.race([box.helper(path, init), timeout]).finally(() => {
+            if (timer !== undefined) clearTimeout(timer);
+        });
+    }
+
+    // the engine of a save in flight, from its record (read from storage when the caller has none)
+    private async engineOf(sid: string, rec?: SaveRecord): Promise<SaveEngine> {
+        if (rec) return rec.engine ?? "cobalt";
+        const stored = await Promise.resolve(this.d.storage.get<SaveRecord>(`save:${sid}`)).catch(() => undefined);
+        return stored?.engine === "ytdlp" ? "ytdlp" : "cobalt";
+    }
+
+    private ensureEngine(engine: SaveEngine): Promise<void> {
+        return engine === "ytdlp" && this.d.ytdlp ? this.d.ytdlp.ensureRunning() : this.d.ensureRunning();
     }
 
     // What the container's helper says it can do (APP-API-CONTRACT.md 18.8): every answer carries it, and the last
@@ -1514,6 +1565,7 @@ export class StudioService {
                         ...(entry.items !== undefined ? { items: entry.items } : {}),
                         ...(entry.itemCount !== undefined ? { itemCount: entry.itemCount } : {}),
                         ...(entry.retry ? { retry: true } : {}),
+                        ...(entry.engine === "ytdlp" ? { engine: "ytdlp" as const } : {}),
                     };
                     await this.d.storage.put(`save:${entry.sid}`, rec);
                     await this.line.remove(key);
@@ -1905,6 +1957,7 @@ export class StudioService {
         let slideshowField: unknown;
         let galleryImageField: unknown;
         let liveField: unknown;
+        let engineField: unknown;
         try {
             if (rawBody.length <= MAX_BODY_BYTES) {
                 const parsed = JSON.parse(rawBody);
@@ -1920,6 +1973,7 @@ export class StudioService {
                     slideshowField = (parsed as { slideshow?: unknown }).slideshow;
                     galleryImageField = (parsed as { gallery_image?: unknown }).gallery_image;
                     liveField = (parsed as { live?: unknown }).live;
+                    engineField = (parsed as { engine?: unknown }).engine;
                 }
             }
         } catch {
@@ -1988,6 +2042,21 @@ export class StudioService {
             }
         }
         const makeJob = make ? mintId(this.d.randomBytes) : null;
+        // `engine` (section 49.1): which downloader goes first. A save of a post's items is cobalt's (yt-dlp has no items).
+        if (engineField !== undefined && engineField !== null && engineField !== "cobalt" && engineField !== "ytdlp") {
+            return studioErr(400, "error.studio.invalid_params");
+        }
+        if (engineField === "ytdlp" && (!this.d.ytdlp || items !== undefined)) return studioErr(400, "error.studio.invalid_params");
+        const engine: SaveEngine =
+            engineField === "ytdlp" || engineField === "cobalt"
+                ? engineField
+                : items === undefined && this.d.ytdlp && this.d.saveEngine === "first"
+                  ? "ytdlp"
+                  : "cobalt";
+        const extra = {
+            ...(items !== undefined || itemCount !== undefined ? { items, itemCount } : {}),
+            ...(engine === "ytdlp" ? { engine: "ytdlp" as const } : {}),
+        };
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.about.idle(this.d.posterIdleMs);
@@ -2002,7 +2071,7 @@ export class StudioService {
             busyCode: "error.studio.busy",
             adopt: false,
             origin: fromShare ? "share" : null,
-            ...(items !== undefined || itemCount !== undefined ? { extra: { items, itemCount } } : {}),
+            ...(Object.keys(extra).length > 0 ? { extra } : {}),
             insert: async (sid, now) => {
                 await this.d.db
                     .prepare(
@@ -2086,7 +2155,7 @@ export class StudioService {
         origin: "share" | null;
         insert: (sid: string, now: number) => Promise<void>;
         // a save of a post's items (section 18.2): carried by the `save:` record, or by the entry that waits
-        extra?: { items?: ItemsChoice; itemCount?: number; retry?: boolean };
+        extra?: { items?: ItemsChoice; itemCount?: number; retry?: boolean; engine?: "ytdlp" };
     }): Promise<
         | { ok: true; sid: string; now: number; free: boolean; ahead: number | null }
         | { ok: false; reply: StudioReply }
@@ -2350,9 +2419,9 @@ export class StudioService {
         }
     }
 
-    private async dropHelperCopy(sid: string): Promise<void> {
+    private async dropHelperCopy(sid: string, engine?: SaveEngine): Promise<void> {
         try {
-            await this.callHelper(`/fetch/${sid}`, { method: "DELETE" });
+            await this.fetchCall(engine ?? (await this.engineOf(sid)), `/fetch/${sid}`, { method: "DELETE" });
         } catch {
             // the helper expires finished fetches on its own
         }
@@ -2384,6 +2453,33 @@ export class StudioService {
     }
 
     // Ends the save with an error: the row, the helper copy and the record.
+    // A fetch that failed (section 49.2): the other engine gets one try when the failure is about the link and this save
+    // has not switched yet; else the save fails, with cobalt's code when cobalt ran (the app knows its words), except a
+    // file too large for the save.
+    private async failOrSwitch(sid: string, rec: SaveRecord, code: string): Promise<number> {
+        const engine: SaveEngine = rec.engine ?? "cobalt";
+        const canSwitch =
+            !!this.d.ytdlp && rec.items === undefined && !rec.retry && rec.fellBack === undefined && fallsBack(code);
+        if (!canSwitch) {
+            const final = engine === "ytdlp" && rec.fellBack !== undefined && code !== "error.studio.too_large" ? rec.fellBack : code;
+            return await this.fail(sid, final);
+        }
+        const next: SaveEngine = engine === "cobalt" ? "ytdlp" : "cobalt";
+        console.log("[studio] save switches engine", sid, engine, "->", next, code);
+        await this.dropHelperCopy(sid, engine);
+        const { engine: _old, busySince: _b, missSince: _m, ...rest } = rec;
+        await this.d.storage.put(`save:${sid}`, {
+            ...rest,
+            ...(next === "ytdlp" ? { engine: next } : {}),
+            fellBack: code,
+            phase: "starting",
+            attempts: 0,
+            startedAt: this.d.now(),
+        } satisfies SaveRecord);
+        await this.setProgress(sid, { step: "fetching", bytes: null, total: null, waking: false });
+        return 0;
+    }
+
     private async fail(sid: string, code: string, records?: ItemRecord[]): Promise<number> {
         const rec = await this.d.storage.get<SaveRecord>(`save:${sid}`).catch(() => undefined);
         if (rec?.retry) return await this.failRetry(sid, rec, code, records);
@@ -2540,15 +2636,18 @@ export class StudioService {
     }
 
     private async startFetch(sid: string, row: SessionRow, rec: SaveRecord): Promise<number> {
+        // a yt-dlp save whose box is gone (the binding was removed) goes on with cobalt
+        if (rec.engine === "ytdlp" && !this.d.ytdlp) rec = { ...rec, engine: undefined };
+        const engine: SaveEngine = rec.engine ?? "cobalt";
         // `waking`: this save is waiting for the container to start
         await this.setProgress(sid, {
             step: "fetching",
             bytes: null,
             total: null,
-            waking: this.d.isRunning ? !this.d.isRunning() : false,
+            waking: engine === "cobalt" && this.d.isRunning ? !this.d.isRunning() : false,
         });
         try {
-            await this.d.ensureRunning();
+            await this.ensureEngine(engine);
         } catch {
             await this.setProgress(sid, { step: "fetching", bytes: null, total: null, waking: false });
             return await this.miss(sid, rec);
@@ -2556,7 +2655,7 @@ export class StudioService {
         await this.setProgress(sid, { step: "fetching", bytes: null, total: null, waking: false });
         let res: Response;
         try {
-            res = await this.callHelper("/fetch", {
+            res = await this.fetchCall(engine, "/fetch", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify({
@@ -2576,7 +2675,7 @@ export class StudioService {
             // Busy: either another job, or this very fetch (an earlier accept
             // whose answer got lost). The helper knows our id.
             try {
-                accepted = (await this.callHelper(`/fetch/${sid}`)).status === 200;
+                accepted = (await this.fetchCall(engine, `/fetch/${sid}`)).status === 200;
             } catch {
                 accepted = false;
             }
@@ -2591,7 +2690,7 @@ export class StudioService {
         } else if (!accepted) {
             const body = await this.readJson(res);
             const code = body?.error?.code;
-            return await this.fail(sid, typeof code === "string" ? code : "error.studio.unavailable");
+            return await this.failOrSwitch(sid, rec, typeof code === "string" ? code : "error.studio.unavailable");
         }
 
         await this.d.storage.put(`save:${sid}`, {
@@ -2608,13 +2707,14 @@ export class StudioService {
     private async pollFetch(sid: string, row: SessionRow, rec: SaveRecord): Promise<number> {
         if (this.d.now() - rec.startedAt > SAVE_BUDGET_MS) return await this.fail(sid, "error.webp.timeout");
 
+        const engine: SaveEngine = rec.engine === "ytdlp" && this.d.ytdlp ? "ytdlp" : "cobalt";
         let res: Response | null = null;
         try {
-            res = await this.callHelper(`/fetch/${sid}`);
+            res = await this.fetchCall(engine, `/fetch/${sid}`);
         } catch {
             // The container may have slept or died: wake it so the next poll
             // finds out whether the fetch survived.
-            await this.d.ensureRunning().catch(() => {});
+            await this.ensureEngine(engine).catch(() => {});
             return await this.miss(sid, rec);
         }
         if (res.status === 404) {
@@ -2627,7 +2727,7 @@ export class StudioService {
         if (!body || typeof body.status !== "string") return await this.miss(sid, rec);
         if (body.status === "error") {
             const code = body.error?.code;
-            return await this.fail(sid, typeof code === "string" ? code : "error.studio.unavailable");
+            return await this.failOrSwitch(sid, rec, typeof code === "string" ? code : "error.studio.unavailable");
         }
         if (body.status !== "done") {
             if (rec.missSince !== undefined) await this.d.storage.put(`save:${sid}`, { ...rec, missSince: undefined });
@@ -2680,8 +2780,9 @@ export class StudioService {
         const keepAwake = this.d.renew ? setInterval(this.d.renew, 20_000) : undefined;
         try {
             this.d.renew?.();
-            const file = await this.callHelper(`/fetch/${sid}/file`);
-            const declared = Number(file.headers.get("content-length"));
+            const file = await this.fetchCall(await this.engineOf(sid, rec), `/fetch/${sid}/file`);
+            // the yt-dlp box also says it in x-file-bytes (a Durable Object hop may drop content-length)
+            const declared = Number(file.headers.get("content-length") ?? file.headers.get("x-file-bytes"));
             if (!file.ok || !file.body || declared !== bytes) {
                 await file.body?.cancel().catch(() => {});
                 return await this.fail(sid, "error.studio.storage");
