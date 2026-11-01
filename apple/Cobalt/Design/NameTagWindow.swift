@@ -22,15 +22,17 @@ final class NameTagAnchor {
     @MainActor var accessibleName: String? {
         guard let (rect, window) = placement, let root = window.contentView else { return nil }
         var element = root.accessibilityHitTest(NSPoint(x: rect.midX, y: rect.midY))
+        // SwiftUI's accessibility nodes answer these methods but are not NSAccessibilityProtocol, so ask through
+        // Objective-C dispatch instead of a cast.
         for _ in 0..<6 {
-            guard let current = element as? NSAccessibilityProtocol else { return nil }
-            if current.accessibilityRole() == .button || current.accessibilityRole() == .popUpButton
-                || current.accessibilityRole() == .menuButton {
-                let name = current.accessibilityLabel() ?? current.accessibilityTitle()
+            guard let current = element.map({ $0 as AnyObject }) else { return nil }
+            let role = current.accessibilityRole?() ?? nil
+            if role == .button || role == .popUpButton || role == .menuButton {
+                let name = (current.accessibilityLabel?() ?? nil) ?? (current.accessibilityTitle?() ?? nil)
                 if let name, !name.isEmpty { return name }
                 return nil
             }
-            element = current.accessibilityParent()
+            element = current.accessibilityParent?() ?? nil
         }
         return nil
     }
