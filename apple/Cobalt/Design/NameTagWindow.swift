@@ -16,6 +16,24 @@ final class NameTagAnchor {
         let inWindow = view.convert(view.bounds, to: nil)
         return (window.convertToScreen(inWindow), window)
     }
+
+    /// The button's name as VoiceOver reads it (the Label's title). A style's `configuration.label` draws nothing once
+    /// it leaves its own hosting view, so the tag window cannot show the label itself; it shows this text instead.
+    @MainActor var accessibleName: String? {
+        guard let (rect, window) = placement, let root = window.contentView else { return nil }
+        var element = root.accessibilityHitTest(NSPoint(x: rect.midX, y: rect.midY))
+        for _ in 0..<6 {
+            guard let current = element as? NSAccessibilityProtocol else { return nil }
+            if current.accessibilityRole() == .button || current.accessibilityRole() == .popUpButton
+                || current.accessibilityRole() == .menuButton {
+                let name = current.accessibilityLabel() ?? current.accessibilityTitle()
+                if let name, !name.isEmpty { return name }
+                return nil
+            }
+            element = current.accessibilityParent()
+        }
+        return nil
+    }
 }
 
 struct NameTagAnchorView: NSViewRepresentable {
@@ -36,6 +54,25 @@ struct NameTagAnchorView: NSViewRepresentable {
     }
 }
 
+/// The Mac name tag: the button's name on the elevated grey, styled like the in-window tag on iPhone and iPad.
+struct NameTag: View {
+    let text: Text
+
+    var body: some View {
+        text
+            .font(CobaltType.captionSmall)
+            .foregroundStyle(CobaltColor.text)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .shadow(color: .black.opacity(0.3), radius: 8, y: 3)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 /// The one name tag window. Only one tag shows at a time; the button that showed it is the only one that can hide it.
 @MainActor
 final class NameTagWindow {
@@ -50,10 +87,10 @@ final class NameTagWindow {
     private var host: NSHostingView<AnyView>?
     private var owner: UUID?
 
-    func show(_ tag: AnyView, for anchor: NameTagAnchor, owner: UUID) {
-        guard let (rect, window) = anchor.placement else { return }
+    func show(for anchor: NameTagAnchor, owner: UUID) {
+        guard let (rect, window) = anchor.placement, let name = anchor.accessibleName else { return }
         let panel = makePanelIfNeeded()
-        let content = AnyView(tag.padding(shadowRoom))
+        let content = AnyView(NameTag(text: Text(name)).padding(shadowRoom))
         if let host {
             host.rootView = content
         } else {

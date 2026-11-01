@@ -64,7 +64,6 @@ private struct IconButtonBody: View {
     @State private var taps = 0
     @State private var named = 0
     #if os(macOS)
-    @Environment(\.colorScheme) private var colorScheme
     @State private var tagAnchor = NameTagAnchor()
     @State private var tagID = UUID()
     #endif
@@ -153,8 +152,7 @@ private struct IconButtonBody: View {
         }
         .onChange(of: naming) { _, shown in
             if shown {
-                NameTagWindow.shared.show(
-                    AnyView(nameTag.environment(\.colorScheme, colorScheme)), for: tagAnchor, owner: tagID)
+                NameTagWindow.shared.show(for: tagAnchor, owner: tagID)
             } else {
                 NameTagWindow.shared.hide(owner: tagID)
             }
@@ -171,7 +169,7 @@ private struct IconButtonBody: View {
         }
     }
 
-    /// The button's name in a small tag: above the button on a long press (and on hover on the Mac).
+    /// The button's name in a small tag above it on a long press (iPhone, iPad; the Mac uses NameTagWindow).
     private var nameTag: some View {
         configuration.label
             .labelStyle(.titleOnly)
