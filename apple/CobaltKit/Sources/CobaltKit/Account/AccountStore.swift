@@ -105,33 +105,42 @@ public final class AccountStore {
         return made
     }
 
-    /// `PATCH /auth/keys/<id>`. A key revoked elsewhere drops out of the list and throws `.notFound`.
+    /// `PATCH /auth/keys/<id>`. The new name shows at once and goes back if the server says no. A key deleted elsewhere
+    /// drops out of the list and throws `.notFound`.
     public func rename(_ key: AccountKey, to name: String) async throws {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let before = keys.first(where: { $0.id == key.id })?.name ?? key.name
+        if let at = keys.firstIndex(where: { $0.id == key.id }) { keys[at].name = clean }
         let renamed: AccountKey
         do {
-            renamed = try await ctx.client.renameAccountKey(id: key.id, name: name.trimmingCharacters(in: .whitespacesAndNewlines))
+            renamed = try await ctx.client.renameAccountKey(id: key.id, name: clean)
         } catch AccountError.notFound {
             keys.removeAll { $0.id == key.id }
             throw AccountError.notFound
         } catch {
+            if let at = keys.firstIndex(where: { $0.id == key.id }), keys[at].name == clean { keys[at].name = before }
             noteRejection(error)
             throw AccountError.from(error)
         }
-        if let at = keys.firstIndex(where: { $0.id == key.id }) { keys[at] = renamed }
+        if let at = keys.firstIndex(where: { $0.id == key.id }), keys[at].name == clean { keys[at] = renamed }
     }
 
-    /// `DELETE /auth/keys/<id>`. Already gone counts as done.
+    /// `DELETE /auth/keys/<id>`. The row leaves at once and comes back if the server says no. Already gone counts as done.
     public func revoke(_ key: AccountKey) async throws {
+        let at = keys.firstIndex(where: { $0.id == key.id })
+        let row = at.map { keys[$0] } ?? key
+        keys.removeAll { $0.id == key.id }
+        if let m = me { me = AccountMe(caller: m.caller, sessions: m.sessions, keys: max(0, m.keys - 1)) }
         do {
             try await ctx.client.deleteAccountKey(id: key.id)
         } catch AccountError.notFound {
-            // revoked elsewhere: drop the row
+            // deleted elsewhere: it stays gone
         } catch {
+            if !keys.contains(where: { $0.id == key.id }) { keys.insert(row, at: min(at ?? 0, keys.count)) }
+            if let m = me { me = AccountMe(caller: m.caller, sessions: m.sessions, keys: m.keys + 1) }
             noteRejection(error)
             throw AccountError.from(error)
         }
-        keys.removeAll { $0.id == key.id }
-        if let m = me { me = AccountMe(caller: m.caller, sessions: m.sessions, keys: max(0, m.keys - 1)) }
     }
 
     /// This device's own token was refused: the app goes to the signed-out state.

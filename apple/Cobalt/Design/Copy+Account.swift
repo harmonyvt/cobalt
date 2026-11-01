@@ -30,7 +30,7 @@ extension Copy {
         static var moveBody: String { "this \(Copy.device) uses a pasted api key. switch it to your account and you'll never paste a key again." }
         static let moveLibrary = "your library stays exactly as it is"
         static var moveDevices: String { "this \(Copy.device) shows up in devices, so you can sign it out from anywhere" }
-        static let moveOldKey = "the old key keeps working until you revoke it in keys for tools"
+        static let moveOldKey = "the old key keeps working until you delete it in keys for tools"
         static let moveSwitch = "sign in to switch"
         static let moveLater = "later"
         static var switched: String { "this \(Copy.device) now uses your account" }
@@ -55,9 +55,9 @@ extension Copy {
 
         static let keysGroup = "keys for tools"
         static let oldPaste = "old paste"
-        static let revoke = "revoke"
+        static let delete = "delete"
         static let noKeys = "no keys yet"
-        static let keysFooter = "for things that can't sign in: claude code's mcp, shortcuts, curl. each key can do everything your account can, so give each tool its own and revoke it when you're done."
+        static let keysFooter = "for things that can't sign in: claude code's mcp, shortcuts, curl. each key can do everything your account can, so give each tool its own and delete it when you're done."
         static let newKey = "new key"
         static let rename = "rename"
         static let signInToMake = "sign in to make keys"
@@ -85,8 +85,8 @@ extension Copy {
         static func renamed(_ name: String) -> String { "renamed to \(name)" }
         static func oldPasteNote(_ n: Int) -> String {
             n == 1
-                ? "1 key was pasted into an app before accounts. that app uses your account now: revoke the old key when you're ready."
-                : "\(n) keys were pasted into apps before accounts. those apps use your account now: revoke the old keys when you're ready."
+                ? "1 key was pasted into an app before accounts. that app uses your account now: delete the old key when you're ready."
+                : "\(n) keys were pasted into apps before accounts. those apps use your account now: delete the old keys when you're ready."
         }
 
         static let privateLinks = "private links don't need an account: the link is the key. signing out doesn't stop them; rotate a link to cut it off."
@@ -125,16 +125,16 @@ extension Copy {
         static var signOutSelfTitle: String { "sign out of this \(Copy.device)?" }
         static let signOutSelfBody = "you'll sign in through cloudflare access to come back. files kept offline stay on this device."
         static func signOutOthersTitle(_ n: Int) -> String { n == 1 ? "sign out 1 other device?" : "sign out \(n) other devices?" }
-        static let signOutOthersBody = "tool keys and private links keep working: revoke those separately."
+        static let signOutOthersBody = "tool keys and private links keep working: delete or rotate those separately."
         static func signOutOthersAction(_ n: Int) -> String { n == 1 ? "sign out 1 device" : "sign out \(n) devices" }
-        static func revokeTitle(_ name: String) -> String { "revoke \(name)?" }
-        static let revokeBody = "anything using it stops working at once. this can't be undone."
+        static func deleteTitle(_ name: String) -> String { "delete \(name)?" }
+        static let deleteBody = "anything using it stops working at once. this can't be undone."
 
         // MARK: results
 
         static func signedOutDevice(_ name: String) -> String { "\(name) signed out" }
         static func signedOutOthers(_ n: Int) -> String { n == 1 ? "1 device signed out" : "\(n) devices signed out" }
-        static func revoked(_ name: String) -> String { "\(name) revoked" }
+        static func deleted(_ name: String) -> String { "\(name) deleted" }
         static let signedOut = "signed out"
 
         /// Why signing in or an account change did not happen. Nil for a closed sheet: the owner meant it.
@@ -145,7 +145,7 @@ extension Copy {
             case .codeInvalid: return "that sign-in ran out. try again."
             case .couldNotSave: return "couldn't keep the sign-in on this \(Copy.device). try again."
             case .notFound: return "that's already gone."
-            case .tooManyKeys: return "you have 50 keys already. revoke one to make another."
+            case .tooManyKeys: return "you have 50 keys already. delete one to make another."
             case .badName: return "give it a name of up to 40 characters, on one line."
             case .needsSession: return "sign in to make or rename keys."
             case .offline: return "can't reach capystore. check your connection."
