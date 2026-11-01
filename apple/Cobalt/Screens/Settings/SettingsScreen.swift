@@ -10,6 +10,7 @@ struct SettingsScreen: View {
     @State private var keyError: String?
     @State private var serverError: String?
     @State private var featuresOpen = false
+    @State private var account = AccountSettingsState()
     @Environment(\.scenePhase) private var scenePhase
 
     private var settings: CobaltKit.Settings { model.settings }
@@ -31,7 +32,7 @@ struct SettingsScreen: View {
         Form {
             serverSection
             // accounts (APP-API-CONTRACT 42.6): replaces the api key row on a server with `features.accounts`
-            AccountSettingsSection(model: model)
+            AccountSettingsSection(model: model, state: account)
             // made again when a key is pasted or reset, so it asks the server with the new key
             McpSettingsSection(model: model).id(settings.hasAPIKey)
             makingSection
@@ -51,6 +52,8 @@ struct SettingsScreen: View {
         .labelStyle(SettingsRowLabelStyle())
         .font(CobaltType.body)
         .navigationTitle(Copy.settings)
+        // the account section's confirm, new key sheet and rename (on the form: a section's rows come and go)
+        .accountSettingsPresentations(model: model, state: account)
         // back from system Settings (the owner may have changed photos access there) and first appearance
         .task { await model.photosSync.refresh() }
         // a key pasted since the library last refused it: opening Settings lifts the pull's auth pause and asks once more (13.8)

@@ -21,6 +21,7 @@ extension Symbol {
         static let paste = "doc.on.clipboard"
         static let newKey = "plus"
         static let rename = "pencil"
+        static let delete = "trash"
         static let copy = "doc.on.doc"
 
         static func platform(_ p: AccountPlatform) -> String {

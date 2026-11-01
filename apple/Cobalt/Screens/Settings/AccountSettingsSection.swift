@@ -4,27 +4,15 @@ import SwiftUI
 
 /// Settings › account (APP-API-CONTRACT 42.6), in place of the api key row on a server with `features.accounts`: who is
 /// signed in (the Access email, "through cloudflare access"), the signed-in devices (sign out each, or every other one),
-/// the keys for tools (make, rename, revoke; APP-API-CONTRACT 50; "old paste" tags the keys apps used before accounts), a
-/// line on private links, and sign out. Every sign-out and revoke asks first. Grouped rows like settings › mcp, on the Mac
+/// the keys for tools (make, rename, delete; APP-API-CONTRACT 50; "old paste" tags the keys apps used before accounts), a
+/// line on private links, and sign out. Every sign-out and delete asks first. Grouped rows like settings › mcp, on the Mac
 /// too. A new key is shown once, in `NewKeySheet`.
 struct AccountSettingsSection: View {
     let model: AppModel
 
-    private enum Pending: Equatable {
-        case signOutSelf
-        case signOut(AccountSession)
-        case signOutOthers(Int)
-        case revoke(AccountKey)
-    }
-
-    @State private var pending: Pending?
-    @State private var working = false
-    @State private var actionError: String?
-    @State private var doneTick = 0
-    @State private var failTick = 0
-    @State private var makingKey = false
-    @State private var renaming: AccountKey?
-    @State private var newName = ""
+    /// Owned by the settings screen, so the confirm, the new key sheet and the rename hang off the whole form, not off
+    /// rows that come and go (a sheet on a section is copied onto every row, and two copies close each other).
+    @Bindable var state: AccountSettingsState
     @Environment(\.webAuthenticationSession) private var webAuthentication
     @Environment(\.shell) private var shell
 
@@ -36,28 +24,6 @@ struct AccountSettingsSection: View {
     var body: some View {
         if model.capabilities.accounts {
             accountSection
-                .task(id: model.settings.hasAPIKey) { await store.refresh() }
-                .confirmationDialog(dialogTitle, isPresented: dialogShown, titleVisibility: .visible) {
-                    Button(dialogAction, role: .destructive) { Task { await confirm() } }
-                    Button(Copy.Account.cancel, role: .cancel) { pending = nil }
-                } message: {
-                    Text(dialogBody)
-                }
-                .sheet(isPresented: $makingKey) {
-                    NewKeySheet(store: store, base: Self.base(model.settings.serverURL)) { made in
-                        if let made { shell.showStatus(Copy.Account.madeTitle(made.item.name)) }
-                    }
-                }
-                .alert(Copy.Account.renameTitle, isPresented: renameShown) {
-                    TextField(Copy.Account.keyNamePlaceholder, text: $newName)
-                    Button(Copy.Account.save) { Task { await saveRename() } }
-                        .disabled(!Self.nameFits(newName))
-                    Button(Copy.Account.cancel, role: .cancel) { renaming = nil }
-                } message: {
-                    Text(Copy.Account.keyNameHint)
-                }
-                .haptic(.success, trigger: doneTick)
-                .haptic(.error, trigger: failTick)
             if signedIn && !usesPastedKey && store.phase == .ready {
                 devicesSection
             }
@@ -106,7 +72,7 @@ struct AccountSettingsSection: View {
                     }
                 }
             }
-            if let actionError {
+            if let actionError = state.actionError {
                 Text(actionError).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
             }
         } header: {
@@ -135,7 +101,7 @@ struct AccountSettingsSection: View {
                             Label(Copy.Account.signOutDevice, systemImage: Symbol.Account.signOut)
                         }
                         .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.errorText))
-                        .disabled(working)
+                        .disabled(state.working)
                     }
                 } label: {
                     Label {
@@ -159,7 +125,7 @@ struct AccountSettingsSection: View {
                     Label(Copy.Account.signOutOthers, systemImage: Symbol.Account.signOut)
                         .foregroundStyle(CobaltColor.errorText)
                 }
-                .disabled(working)
+                .disabled(state.working)
             }
         } header: {
             header(Copy.Account.devicesGroup)
@@ -190,13 +156,11 @@ struct AccountSettingsSection: View {
                                 Label(Copy.Account.rename, systemImage: Symbol.Account.rename)
                             }
                             .buttonStyle(.cobaltIcon(.small))
-                            .disabled(working)
                         }
-                        Button(role: .destructive) { ask(.revoke(key)) } label: {
-                            Label(Copy.Account.revoke, systemImage: Symbol.reset)
+                        Button(role: .destructive) { ask(.delete(key)) } label: {
+                            Label(Copy.Account.delete, systemImage: Symbol.Account.delete)
                         }
                         .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.errorText))
-                        .disabled(working)
                     }
                 } label: {
                     Label {
@@ -216,14 +180,25 @@ struct AccountSettingsSection: View {
                     if store.canMakeKeys {
                         Button(Copy.Account.rename, systemImage: Symbol.Account.rename) { startRename(key) }
                     }
-                    Button(Copy.Account.revoke, systemImage: Symbol.reset, role: .destructive) { ask(.revoke(key)) }
+                    Button(Copy.Account.delete, systemImage: Symbol.Account.delete, role: .destructive) { ask(.delete(key)) }
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) { ask(.delete(key)) } label: {
+                        Label(Copy.Account.delete, systemImage: Symbol.Account.delete)
+                    }
+                    .tint(.red)
+                    if store.canMakeKeys {
+                        Button { startRename(key) } label: {
+                            Label(Copy.Account.rename, systemImage: Symbol.Account.rename)
+                        }
+                    }
                 }
             }
             if store.canMakeKeys {
-                Button { actionError = nil; makingKey = true } label: {
+                Button { state.actionError = nil; state.makingKey = true } label: {
                     Label(Copy.Account.newKey, systemImage: Symbol.Account.newKey)
                 }
-                .disabled(working)
+                .disabled(state.working)
             } else {
                 Text(Copy.Account.signInToMake).font(Font.cobalt(12.5)).foregroundStyle(.secondary)
             }
@@ -243,7 +218,7 @@ struct AccountSettingsSection: View {
                     Label(Copy.Account.signOut, systemImage: Symbol.Account.signOut)
                         .foregroundStyle(CobaltColor.errorText)
                 }
-                .disabled(working)
+                .disabled(state.working)
             }
         } footer: {
             Label {
@@ -289,104 +264,18 @@ struct AccountSettingsSection: View {
         Text(text).font(CobaltType.captionSmall).lineSpacing(2)
     }
 
-    // MARK: the confirm
-
-    private var dialogShown: Binding<Bool> {
-        Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })
-    }
-
-    private var dialogTitle: String {
-        switch pending {
-        case .signOutSelf: return Copy.Account.signOutSelfTitle
-        case .signOut(let s): return Copy.Account.signOutDeviceTitle(s.device)
-        case .signOutOthers(let n): return Copy.Account.signOutOthersTitle(n)
-        case .revoke(let k): return Copy.Account.revokeTitle(k.name)
-        case nil: return ""
-        }
-    }
-
-    private var dialogBody: String {
-        switch pending {
-        case .signOutSelf: return Copy.Account.signOutSelfBody
-        case .signOut: return Copy.Account.signOutDeviceBody
-        case .signOutOthers: return Copy.Account.signOutOthersBody
-        case .revoke: return Copy.Account.revokeBody
-        case nil: return ""
-        }
-    }
-
-    private var dialogAction: String {
-        switch pending {
-        case .signOutSelf, .signOut: return Copy.Account.signOutDevice
-        case .signOutOthers(let n): return Copy.Account.signOutOthersAction(n)
-        case .revoke: return Copy.Account.revoke
-        case nil: return ""
-        }
-    }
-
     // MARK: actions
 
-    private func ask(_ next: Pending) {
-        guard !working else { return }
-        actionError = nil
-        pending = next
-    }
-
-    private func confirm() async {
-        guard let next = pending, !working else { return }
-        pending = nil
-        working = true
-        defer { working = false }
-        do {
-            switch next {
-            case .signOutSelf:
-                await model.signOut()
-                shell.showStatus(Copy.Account.signedOut)
-            case .signOut(let session):
-                try await store.signOut(session)
-                shell.showStatus(Copy.Account.signedOutDevice(session.device))
-            case .signOutOthers:
-                let n = try await store.signOutOthers()
-                shell.showStatus(Copy.Account.signedOutOthers(n))
-            case .revoke(let key):
-                try await store.revoke(key)
-                shell.showStatus(Copy.Account.revoked(key.name))
-            }
-            doneTick += 1
-        } catch {
-            actionError = Copy.Account.message(for: error) ?? Copy.Account.message(for: AccountError.failed)
-            failTick += 1
-        }
-    }
-
-    // MARK: rename
-
-    private var renameShown: Binding<Bool> {
-        Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })
+    private func ask(_ next: AccountSettingsState.Pending) {
+        if case .delete = next {} else if state.working { return }
+        state.actionError = nil
+        state.pending = next
     }
 
     private func startRename(_ key: AccountKey) {
-        guard !working else { return }
-        actionError = nil
-        newName = key.name
-        renaming = key
-    }
-
-    private func saveRename() async {
-        guard let key = renaming, !working else { return }
-        renaming = nil
-        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard name != key.name else { return }
-        working = true
-        defer { working = false }
-        do {
-            try await store.rename(key, to: name)
-            shell.showStatus(Copy.Account.renamed(name))
-            doneTick += 1
-        } catch {
-            actionError = Copy.Account.message(for: error) ?? Copy.Account.message(for: AccountError.failed)
-            failTick += 1
-        }
+        state.actionError = nil
+        state.newName = key.name
+        state.renaming = key
     }
 
     /// 1...40 characters after trimming (the server checks again).
@@ -403,19 +292,187 @@ struct AccountSettingsSection: View {
     }
 
     private func signIn() {
-        actionError = nil
+        state.actionError = nil
         Task {
             switch await AccountSignIn.run(model, session: webAuthentication) {
             case .signedIn:
-                doneTick += 1
+                state.doneTick += 1
                 shell.showStatus(Copy.Account.signedInAgain)
             case .cancelled:
                 break
             case .failed(let line):
-                actionError = line
-                failTick += 1
+                state.actionError = line
+                state.failTick += 1
             }
         }
+    }
+}
+
+/// Settings › account's passing state: the confirm, the new key sheet, the rename and the last error. `SettingsScreen`
+/// owns it and hangs `accountSettingsPresentations` on its `Form`.
+@MainActor @Observable
+final class AccountSettingsState {
+    enum Pending: Equatable {
+        case signOutSelf
+        case signOut(AccountSession)
+        case signOutOthers(Int)
+        case delete(AccountKey)
+    }
+
+    var pending: Pending?
+    /// A sign-out is running (deletes and renames show at once and never block the screen).
+    var working = false
+    var actionError: String?
+    var doneTick = 0
+    var failTick = 0
+    var makingKey = false
+    var renaming: AccountKey?
+    var newName = ""
+}
+
+extension View {
+    /// The account section's confirm, new key sheet and rename, on one stable view (the settings `Form`), plus its load.
+    func accountSettingsPresentations(model: AppModel, state: AccountSettingsState) -> some View {
+        modifier(AccountSettingsPresentations(model: model, state: state))
+    }
+}
+
+private struct AccountSettingsPresentations: ViewModifier {
+    let model: AppModel
+    @Bindable var state: AccountSettingsState
+    @Environment(\.shell) private var shell
+
+    private var store: AccountStore { model.account }
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: model.capabilities.accounts && model.settings.hasAPIKey) {
+                if model.capabilities.accounts { await store.refresh() }
+            }
+            .confirmationDialog(dialogTitle, isPresented: dialogShown, titleVisibility: .visible) {
+                Button(dialogAction, role: .destructive) { confirm() }
+                Button(Copy.Account.cancel, role: .cancel) { state.pending = nil }
+            } message: {
+                Text(dialogBody)
+            }
+            .sheet(isPresented: $state.makingKey) {
+                NewKeySheet(store: store, base: AccountSettingsSection.base(model.settings.serverURL)) { made in
+                    if let made { shell.showStatus(Copy.Account.madeTitle(made.item.name)) }
+                }
+            }
+            .alert(Copy.Account.renameTitle, isPresented: renameShown) {
+                TextField(Copy.Account.keyNamePlaceholder, text: $state.newName)
+                Button(Copy.Account.save) { saveRename() }
+                    .disabled(!AccountSettingsSection.nameFits(state.newName))
+                Button(Copy.Account.cancel, role: .cancel) { state.renaming = nil }
+            } message: {
+                Text(Copy.Account.keyNameHint)
+            }
+            .haptic(.success, trigger: state.doneTick)
+            .haptic(.error, trigger: state.failTick)
+    }
+
+    // MARK: the confirm
+
+    private var dialogShown: Binding<Bool> {
+        Binding(get: { state.pending != nil }, set: { if !$0 { state.pending = nil } })
+    }
+
+    private var dialogTitle: String {
+        switch state.pending {
+        case .signOutSelf: return Copy.Account.signOutSelfTitle
+        case .signOut(let s): return Copy.Account.signOutDeviceTitle(s.device)
+        case .signOutOthers(let n): return Copy.Account.signOutOthersTitle(n)
+        case .delete(let k): return Copy.Account.deleteTitle(k.name)
+        case nil: return ""
+        }
+    }
+
+    private var dialogBody: String {
+        switch state.pending {
+        case .signOutSelf: return Copy.Account.signOutSelfBody
+        case .signOut: return Copy.Account.signOutDeviceBody
+        case .signOutOthers: return Copy.Account.signOutOthersBody
+        case .delete: return Copy.Account.deleteBody
+        case nil: return ""
+        }
+    }
+
+    private var dialogAction: String {
+        switch state.pending {
+        case .signOutSelf, .signOut: return Copy.Account.signOutDevice
+        case .signOutOthers(let n): return Copy.Account.signOutOthersAction(n)
+        case .delete: return Copy.Account.delete
+        case nil: return ""
+        }
+    }
+
+    private func confirm() {
+        guard let next = state.pending else { return }
+        state.pending = nil
+        // A key leaves the list at once (the store puts it back if the server says no); nothing waits on it.
+        if case .delete(let key) = next {
+            Task {
+                do {
+                    try await store.revoke(key)
+                    shell.showStatus(Copy.Account.deleted(key.name))
+                    state.doneTick += 1
+                } catch {
+                    fail(error)
+                }
+            }
+            return
+        }
+        guard !state.working else { return }
+        state.working = true
+        Task {
+            defer { state.working = false }
+            do {
+                switch next {
+                case .signOutSelf:
+                    await model.signOut()
+                    shell.showStatus(Copy.Account.signedOut)
+                case .signOut(let session):
+                    try await store.signOut(session)
+                    shell.showStatus(Copy.Account.signedOutDevice(session.device))
+                case .signOutOthers:
+                    let n = try await store.signOutOthers()
+                    shell.showStatus(Copy.Account.signedOutOthers(n))
+                case .delete:
+                    break
+                }
+                state.doneTick += 1
+            } catch {
+                fail(error)
+            }
+        }
+    }
+
+    // MARK: rename
+
+    private var renameShown: Binding<Bool> {
+        Binding(get: { state.renaming != nil }, set: { if !$0 { state.renaming = nil } })
+    }
+
+    /// The new name shows at once; the store puts the old one back if the server says no.
+    private func saveRename() {
+        guard let key = state.renaming else { return }
+        state.renaming = nil
+        let name = state.newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name != key.name, AccountSettingsSection.nameFits(name) else { return }
+        Task {
+            do {
+                try await store.rename(key, to: name)
+                state.doneTick += 1
+            } catch {
+                fail(error)
+            }
+        }
+    }
+
+    private func fail(_ error: Error) {
+        state.actionError = Copy.Account.message(for: error) ?? Copy.Account.message(for: AccountError.failed)
+        state.failTick += 1
     }
 }
 
@@ -534,19 +591,30 @@ private struct NewKeySheet: View {
 }
 
 #if DEBUG
+private struct AccountSettingsPreview: View {
+    let model: AppModel
+    @State private var state = AccountSettingsState()
+
+    var body: some View {
+        Form { AccountSettingsSection(model: model, state: state) }
+            .formStyle(.grouped)
+            .accountSettingsPresentations(model: model, state: state)
+    }
+}
+
 #Preview("settings · account") {
     PreviewHost(.happy, tab: .settings) { model in
-        Form { AccountSettingsSection(model: model) }.formStyle(.grouped)
+        AccountSettingsPreview(model: model)
     }
 }
 #Preview("settings · account signed out") {
     PreviewHost(.signedOut, tab: .settings) { model in
-        Form { AccountSettingsSection(model: model) }.formStyle(.grouped)
+        AccountSettingsPreview(model: model)
     }
 }
 #Preview("settings · account move-over") {
     PreviewHost(.moveOver, tab: .settings) { model in
-        Form { AccountSettingsSection(model: model) }.formStyle(.grouped)
+        AccountSettingsPreview(model: model)
     }
 }
 #Preview("new key sheet") {
