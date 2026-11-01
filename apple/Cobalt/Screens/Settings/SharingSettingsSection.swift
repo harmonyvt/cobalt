@@ -11,16 +11,28 @@ struct SharingSettingsSection: View {
     private var settings: CobaltKit.Settings { model.settings }
 
     var body: some View {
-        if model.capabilities.publicDefault {
+        if model.capabilities.publicDefault || model.capabilities.ytdlp {
             Section {
-                Toggle(isOn: Binding(get: { settings.newSavesPublic }, set: { settings.newSavesPublic = $0 })) {
-                    Label(Copy.Media.newSavesPublic, systemImage: settings.newSavesPublic ? Symbol.Media.isPublic : Symbol.Media.isPrivate)
-                        .contentTransition(.symbolEffect(.replace))
+                if model.capabilities.publicDefault {
+                    Toggle(isOn: Binding(get: { settings.newSavesPublic }, set: { settings.newSavesPublic = $0 })) {
+                        Label(Copy.Media.newSavesPublic, systemImage: settings.newSavesPublic ? Symbol.Media.isPublic : Symbol.Media.isPrivate)
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                }
+                // "save links with yt-dlp" (APP-API-CONTRACT 49.7): yt-dlp only, no cobalt; galleries still go to cobalt
+                if model.capabilities.ytdlp {
+                    Toggle(isOn: Binding(get: { settings.saveWithYtdlp }, set: { settings.saveWithYtdlp = $0 })) {
+                        Label(Copy.Media.saveWithYtdlp, systemImage: "arrow.down.circle")
+                    }
                 }
             } header: {
                 Text(Copy.Media.saveGroup).font(CobaltType.caption).textCase(nil)
             } footer: {
-                Text(Copy.Media.newSavesPublicFooter).font(CobaltType.captionSmall).lineSpacing(2)
+                VStack(alignment: .leading, spacing: 4) {
+                    if model.capabilities.publicDefault { Text(Copy.Media.newSavesPublicFooter) }
+                    if model.capabilities.ytdlp { Text(Copy.Media.saveWithYtdlpFooter) }
+                }
+                .font(CobaltType.captionSmall).lineSpacing(2)
             }
         }
     }

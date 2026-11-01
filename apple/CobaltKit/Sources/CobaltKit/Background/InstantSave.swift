@@ -81,6 +81,8 @@ struct InstantShareEngine: Sendable {
     var registerWait: Double = 0.6
     /// Settings "make new saves public": the request carries `public: true` (on by default).
     var makePublic = true
+    /// Settings "save links with yt-dlp" (APP-API-CONTRACT 49.7): the request carries `engine: "ytdlp"`.
+    var ytdlp = false
     /// This build's push environment: the request asks the server to push-start the share's Live Activity (8.10).
     var liveEnvironment: LiveEnvironment? = LiveEnvironment.current
 
@@ -89,7 +91,7 @@ struct InstantShareEngine: Sendable {
         do {
             built = try client.shareSaveRequest(
                 link: link.url, label: Self.label(for: link), public: makePublic,
-                live: ShareLiveStart(job: job, link: link, environment: liveEnvironment))
+                live: ShareLiveStart(job: job, link: link, environment: liveEnvironment), engine: ytdlp ? "ytdlp" : nil)
         } catch CobaltError.noAPIKey {
             return .failed(.noKey)
         } catch {

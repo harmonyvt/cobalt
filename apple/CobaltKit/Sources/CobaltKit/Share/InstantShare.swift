@@ -151,6 +151,7 @@ extension InstantShare {
         let transport = URLSessionSaveTransport.current
         var engine = InstantShareEngine(transport: transport, directory: AppGroup.directory("Saves"))
         engine.makePublic = settings.newSavesPublic
+        engine.ytdlp = settings.saveWithYtdlp
         let job = UUID()
         let label = InstantShareEngine.label(for: link)
         // The notification is a local write; it runs beside the request, never in front of it.

@@ -64,6 +64,13 @@ private func json(_ any: Any) -> String {
         #expect(image["items"] as? [Int] == [0, 1] && image["layout"] as? String == "grid3")
     }
 
+    @Test func theCreateCarriesTheEngineOnlyWhenAsked() {
+        var options = StudioCreateOptions(makePublic: true, queue: true)
+        #expect(options.body(link: URL(string: "https://youtu.be/x")!)["engine"] == nil)
+        options.engine = "ytdlp"
+        #expect(options.body(link: URL(string: "https://youtu.be/x")!)["engine"] as? String == "ytdlp")
+    }
+
     @Test func lengthAndTheCaps() {
         // 10 photos at 2 s = 20 s: both formats take it
         let ten = photos(10)

@@ -316,7 +316,7 @@ type SessionPeek = { status?: string; step?: string | null; error?: { code?: str
 
 const PostId = z.string().min(1).max(2048).describe("a post id (from library.list, search or post)");
 
-const SaveResult = z
+export const SaveResult = z
     .object({
         status: z.enum(["ready", "saving", "queued", "error"]).describe('"saving"/"queued": still going after the wait; check later with cobalt.queue()'),
         save_id: z.string().describe("the save (studio session) id"),
@@ -332,6 +332,76 @@ const SaveResult = z
 
 // cobalt.library.save(url, { items, public, title, wait }): the app's POST /studio as the chat (key id chat:<thread>,
 // always queued so a busy helper never refuses it), then up to `wait` seconds of the save's own long-poll.
+// The chat's save (library.save and ytdlp.save, section 49.6): POST /studio as the chat, then the save's own long-poll.
+export type ChatSaveInput = {
+    url: string;
+    items?: "all" | "first-video" | number[];
+    public?: boolean;
+    title?: string;
+    wait?: number;
+    engine?: "cobalt" | "ytdlp";
+};
+export async function chatSave(ctx: OpContext, input: ChatSaveInput): Promise<OpReply> {
+    chatOnly(ctx);
+    const keyId = ctx.keyId!;
+    const cap = dailySaves(ctx.env);
+    const since = ctx.now() - DAY_MS;
+    const used =
+        (await ctx.db.prepare("SELECT COUNT(*) AS n FROM studio_sessions WHERE key_id = ?1 AND created_at > ?2").bind(keyId, since).first<{ n: number }>())?.n ?? 0;
+    if (used >= cap) {
+        throw new OpError(429, "error.chat.save_cap", `this thread already saved ${used} links today (the cap is ${cap}); tell Harmony to save it in the app or try tomorrow`);
+    }
+    const body: Record<string, unknown> = { url: input.url.trim(), queue: true };
+    if (input.items !== undefined) body.items = input.items;
+    if (input.public !== undefined) body.public = input.public;
+    if (input.title !== undefined) body.title = input.title;
+    if (input.engine !== undefined) body.engine = input.engine;
+    const res = await ctx.durableObject("/studio", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = (await res.json().catch(() => null)) as { id?: unknown; queued?: unknown; error?: { code?: unknown } } | null;
+    if (res.status !== 201 || typeof created?.id !== "string") throw refused({ status: res.status, body: created }, "cobalt.library.save");
+    const sid = created.id;
+
+    // the save's own long-poll (GET /studio/<sid>?wait=N), as the app polls it
+    let session: SessionPeek | null = null;
+    const waitS = input.wait ?? SAVE_WAIT_MAX_S;
+    const deadline = ctx.now() + waitS * 1000;
+    for (let left = waitS; ; ) {
+        const step = Math.min(SAVE_POLL_S, Math.max(0, left));
+        const r = await studioStatus(ctx.db, ctx.container, sid, step, ctx.edge);
+        session = r.ok ? ((await r.json().catch(() => null)) as SessionPeek | null) : null;
+        if (!session || session.status !== "saving") break;
+        left -= SAVE_POLL_S;
+        if (left <= 0 || ctx.now() >= deadline) break;
+    }
+    const left = Math.max(0, cap - used - 1);
+    const st = session?.status;
+    if (st === "ready") {
+        const [post] = await loadPosts({ db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl }, [sid]);
+        return ok({
+            status: "ready",
+            save_id: sid,
+            post_id: post ? post.record.id : null,
+            title: post?.record.title ?? null,
+            kind: post?.record.kind ?? null,
+            files: post?.record.files ?? null,
+            public: post?.record.public ?? null,
+            error: null,
+            saves_left_today: left,
+        });
+    }
+    return ok({
+        status: st === "error" || st === "expired" ? "error" : session?.step === "queued" || created.queued === true ? "queued" : "saving",
+        save_id: sid,
+        post_id: null,
+        title: null,
+        kind: null,
+        files: null,
+        public: null,
+        error: st === "error" || st === "expired" ? (session?.error?.code ?? "error.api.generic") : null,
+        saves_left_today: left,
+    });
+}
+
 export const librarySaveOp = defineOp({
     name: "library.save",
     auth: "key",
@@ -351,6 +421,10 @@ export const librarySaveOp = defineOp({
         public: z.boolean().optional().describe("also give it a public link (default: private)"),
         title: z.string().max(80).optional().describe("a custom title"),
         wait: z.number().min(0).max(SAVE_WAIT_MAX_S).optional().describe(`seconds to wait for it, default and max ${SAVE_WAIT_MAX_S}`),
+        engine: z
+            .enum(["cobalt", "ytdlp"])
+            .optional()
+            .describe('which downloader goes first: "ytdlp" (yt-dlp) for a site cobalt cannot save; default: cobalt, then yt-dlp when cobalt fails. Not with items'),
     }),
     output: SaveResult,
     ai: {
@@ -360,65 +434,7 @@ export const librarySaveOp = defineOp({
         params: ["url"],
         options: true,
     },
-    handler: async (ctx, input) => {
-        chatOnly(ctx);
-        const keyId = ctx.keyId!;
-        const cap = dailySaves(ctx.env);
-        const since = ctx.now() - DAY_MS;
-        const used =
-            (await ctx.db.prepare("SELECT COUNT(*) AS n FROM studio_sessions WHERE key_id = ?1 AND created_at > ?2").bind(keyId, since).first<{ n: number }>())?.n ?? 0;
-        if (used >= cap) {
-            throw new OpError(429, "error.chat.save_cap", `this thread already saved ${used} links today (the cap is ${cap}); tell Harmony to save it in the app or try tomorrow`);
-        }
-        const body: Record<string, unknown> = { url: input.url.trim(), queue: true };
-        if (input.items !== undefined) body.items = input.items;
-        if (input.public !== undefined) body.public = input.public;
-        if (input.title !== undefined) body.title = input.title;
-        const res = await ctx.durableObject("/studio", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-        const created = (await res.json().catch(() => null)) as { id?: unknown; queued?: unknown; error?: { code?: unknown } } | null;
-        if (res.status !== 201 || typeof created?.id !== "string") throw refused({ status: res.status, body: created }, "cobalt.library.save");
-        const sid = created.id;
-
-        // the save's own long-poll (GET /studio/<sid>?wait=N), as the app polls it
-        let session: SessionPeek | null = null;
-        const waitS = input.wait ?? SAVE_WAIT_MAX_S;
-        const deadline = ctx.now() + waitS * 1000;
-        for (let left = waitS; ; ) {
-            const step = Math.min(SAVE_POLL_S, Math.max(0, left));
-            const r = await studioStatus(ctx.db, ctx.container, sid, step, ctx.edge);
-            session = r.ok ? ((await r.json().catch(() => null)) as SessionPeek | null) : null;
-            if (!session || session.status !== "saving") break;
-            left -= SAVE_POLL_S;
-            if (left <= 0 || ctx.now() >= deadline) break;
-        }
-        const left = Math.max(0, cap - used - 1);
-        const st = session?.status;
-        if (st === "ready") {
-            const [post] = await loadPosts({ db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl }, [sid]);
-            return ok({
-                status: "ready",
-                save_id: sid,
-                post_id: post ? post.record.id : null,
-                title: post?.record.title ?? null,
-                kind: post?.record.kind ?? null,
-                files: post?.record.files ?? null,
-                public: post?.record.public ?? null,
-                error: null,
-                saves_left_today: left,
-            });
-        }
-        return ok({
-            status: st === "error" || st === "expired" ? "error" : session?.step === "queued" || created.queued === true ? "queued" : "saving",
-            save_id: sid,
-            post_id: null,
-            title: null,
-            kind: null,
-            files: null,
-            public: null,
-            error: st === "error" || st === "expired" ? (session?.error?.code ?? "error.api.generic") : null,
-            saves_left_today: left,
-        });
-    },
+    handler: (ctx, input) => chatSave(ctx, input),
 });
 
 // cobalt.library.title(id, title): the post's custom title (section 15); null clears it.

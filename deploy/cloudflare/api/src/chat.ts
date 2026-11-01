@@ -814,7 +814,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
     const workbench = !!d.registry && !!d.base && workbenchOn(d.base.env);
     // sub-agents (section 43): the calls while the agents binding is there; a sub-agent never starts its own
     const agentsOn = !!d.registry && !!d.agents;
-    const flags = { search, box: workbench, agents: agentsOn, subagent: !!d.agentOf };
+    const flags = { search, box: workbench, agents: agentsOn, subagent: !!d.agentOf, ytdlp: !!d.registry && !!d.base?.env.YTDLP };
     const who = whoOf(c.thread.id, d.agentOf);
     // its unread mail as a note for the next model turn
     const mailFor = () => (agentsOn ? pullMail(d.db, who, now()) : Promise.resolve(null));

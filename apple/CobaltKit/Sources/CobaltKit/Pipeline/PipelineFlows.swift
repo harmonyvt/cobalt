@@ -68,6 +68,11 @@ extension Pipeline {
         return (jobOptions.makePublic ?? ctx.settings.newSavesPublic) ? true : nil
     }
 
+    /// `engine: "ytdlp"` (APP-API-CONTRACT 49.7) while the owner keeps "save links with yt-dlp" on and the server has the box.
+    var engineFlag: String? {
+        ctx.capabilities.ytdlp && ctx.settings.saveWithYtdlp ? "ytdlp" : nil
+    }
+
     // MARK: - The line (CONTRACT-PARALLEL.md 3.1, 3.2)
 
     /// The server holds the line (`features.line`): the create and the render carry `queue: true`, never wait here.
@@ -104,10 +109,14 @@ extension Pipeline {
         let makePublic = publicFlag                              // read here: the closures below are not on the main actor
         let title = jobOptions.title
         let key = lineKey
+        // yt-dlp has no items: a gallery's save is always cobalt's (49.1)
+        let engine = gallery == nil ? engineFlag : nil
         // A gallery asks for every item at once (APP-API-CONTRACT 18.2); the count is what the client saw, when it saw one.
         func options(queue: Bool) -> StudioCreateOptions {
-            StudioCreateOptions(
+            var o = StudioCreateOptions(
                 makePublic: makePublic, queue: queue, title: title, items: gallery?.choice, itemCount: gallery?.count)
+            o.engine = engine
+            return o
         }
         if let line = ctx.line, ctx.capabilities.line {
             try await line.enter(key, kind: .save, priority: .batch)          // returns at once on a server line
@@ -131,7 +140,7 @@ extension Pipeline {
                 let created = try await watched {
                     if let item { return try await client.openStudio(item: item) }
                     guard let link else { throw PipelineFailure.noLink }
-                    if gallery != nil { return try await client.createStudio(url: link, options: opts) }
+                    if gallery != nil || engine != nil { return try await client.createStudio(url: link, options: opts) }
                     return try await client.createStudio(link: link, public: makePublic)
                 }
                 if managed { ctx.line?.clearBusyElsewhere() }

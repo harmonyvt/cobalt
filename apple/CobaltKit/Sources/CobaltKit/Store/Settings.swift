@@ -310,6 +310,19 @@ public final class Settings {
 
     nonisolated static let newSavesPublicKey = "save.newSavesPublic"
 
+    /// "save links with yt-dlp" (APP-API-CONTRACT 49.7): a link save asks the server for yt-dlp only (`engine: "ytdlp"`)
+    /// instead of cobalt. OFF by default. App-group defaults, key `save.ytdlp`, so the share sheet reads it too. Used only
+    /// while the server has `features.ytdlp`; a gallery's items always go to cobalt.
+    public var saveWithYtdlp: Bool {
+        get {
+            access(keyPath: \.saveWithYtdlp)
+            return defaults.object(forKey: Settings.saveWithYtdlpKey) as? Bool ?? false
+        }
+        set { withMutation(keyPath: \.saveWithYtdlp) { defaults.set(newValue, forKey: Settings.saveWithYtdlpKey) } }
+    }
+
+    nonisolated static let saveWithYtdlpKey = "save.ytdlp"
+
     // MARK: share sheet and photos album (CONTRACT-SYNC.md section 4)
 
     /// "continue in background automatically": a link shared into the sheet closes it by itself after

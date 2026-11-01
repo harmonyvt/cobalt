@@ -96,6 +96,9 @@ export interface WorkerEnv {
     // cap of awake minutes (default 60, "0" turns it off). Absent: the chat AI is never offered cobalt.box.*.
     WORKBENCH?: DurableObjectNamespace;
     WORKBENCH_DAILY_MINUTES?: string;
+    // The yt-dlp box (section 49, src/ytdlp.ts): one object, "main". Absent: every save uses cobalt and the chat/MCP are
+    // never offered cobalt.ytdlp.*.
+    YTDLP?: DurableObjectNamespace;
     // The chat's job hooks (section 33.14): the ChatJobs Durable Object namespace (one object per chat thread). Absent:
     // cobalt.jobs.onDone only looks at the job, it never continues the chat.
     CHAT_JOBS?: DurableObjectNamespace;

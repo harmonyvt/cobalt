@@ -164,4 +164,6 @@ extension Copy.Media {
     static let saveGroup = "saving"
     static let newSavesPublic = "make new saves public"
     static let newSavesPublicFooter = "new saves, uploads and shares get a public link right away. you can turn it off for each one."
+    static let saveWithYtdlp = "save links with yt-dlp"
+    static let saveWithYtdlpFooter = "on: links and shares download with yt-dlp only. off: cobalt goes first and yt-dlp steps in when cobalt can't. photo posts and galleries always use cobalt."
 }

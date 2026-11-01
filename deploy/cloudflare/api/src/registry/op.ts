@@ -127,7 +127,8 @@ export type AiSpec<I> = {
 // search: meaning search is configured; box: the workbench is on (section 33.11); mcp: the caller is the MCP server
 // (section 35), which also sees the MCP-only ops (`when: (f) => f.mcp === true`)
 // agents: sub-agents are on (the CHAT_AGENTS binding, section 43); subagent: the caller is a sub-agent itself
-export type AiFlags = { search: boolean; box?: boolean; mcp?: boolean; agents?: boolean; subagent?: boolean };
+// ytdlp: the yt-dlp box is deployed (the YTDLP binding, section 49)
+export type AiFlags = { search: boolean; box?: boolean; mcp?: boolean; agents?: boolean; subagent?: boolean; ytdlp?: boolean };
 
 // The hosts the Worker answers: the API (the default), the share host's link pages (section 22), the stage host
 // (section 30.4), and any other studio.* host (a 404 page while the stage is off or elsewhere).

@@ -83,6 +83,10 @@ export type LineEntry = {
     items?: ItemsChoice;
     itemCount?: number;
     retry?: boolean;
+    // a save that asked for the yt-dlp box first (APP-API-CONTRACT.md section 49); absent = cobalt
+    engine?: "ytdlp";
+    // the save asked for its engine: no switch to the other one (section 49.1)
+    pinned?: boolean;
     // a render whose upload into the helper began at this time
     starting: number | null;
     // starts that met a foreign 429
