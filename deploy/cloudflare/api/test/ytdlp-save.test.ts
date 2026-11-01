@@ -193,13 +193,37 @@ describe("fallback mode (cobalt first)", () => {
 });
 
 describe("engine on POST /studio and the \"first\" mode", () => {
-    it("engine: \"ytdlp\" goes to the box first; cobalt only when yt-dlp cannot", async () => {
+    it("engine: \"ytdlp\" (the toggle) uses yt-dlp only: no cobalt, its own code when it fails", async () => {
         const s = setup();
         s.box.fetchError = "error.api.content.video.unavailable";
         const id = idOf(await create(s, { engine: "ytdlp" }));
         expect(s.box.calls[0]).toBe("POST /fetch");
+        expect(await s.kv.get(`save:${id}`)).toMatchObject({ engine: "ytdlp", pinned: true });
+        expect(body(await s.studio.advance(id, 30))).toMatchObject({ status: "error", error: { code: "error.api.content.video.unavailable" } });
+        expect(s.helper.calls).toEqual([]);
+        expect(s.starts).toEqual(["ytdlp"]);
+    });
+
+    it("engine: \"ytdlp\" saves with yt-dlp", async () => {
+        const s = setup();
+        const id = idOf(await create(s, { engine: "ytdlp" }));
+        expect(body(await s.studio.advance(id, 30))).toMatchObject({ status: "ready", title: "Me at the zoo" });
+        expect(s.helper.calls).toEqual([]);
+    });
+
+    it("engine: \"cobalt\" uses cobalt only", async () => {
+        const s = setup();
+        s.helper.fetchError = "error.api.fetch.fail";
+        const id = idOf(await create(s, { engine: "cobalt" }));
+        expect(body(await s.studio.advance(id, 30))).toMatchObject({ status: "error", error: { code: "error.api.fetch.fail" } });
+        expect(s.box.calls).toEqual([]);
+    });
+
+    it("\"first\" mode without an engine still falls back to cobalt", async () => {
+        const s = setup({ mode: "first" });
+        s.box.fetchError = "error.api.content.video.unavailable";
+        const id = idOf(await create(s));
         expect(body(await s.studio.advance(id, 30))).toMatchObject({ status: "ready" });
-        expect(s.helper.calls).toContain("POST /fetch");
         expect(s.starts).toEqual(["ytdlp", "cobalt"]);
     });
 
@@ -239,5 +263,6 @@ describe("engine on POST /studio and the \"first\" mode", () => {
         await s.studio.sweep(); // the line starts the next save
         expect(body(await s.studio.advance(idOf(queued), 30)).status).toBe("ready");
         expect(s.box.fetchBodies.map((b) => b.id)).toEqual([idOf(queued)]);
+        expect(s.helper.fetchBodies.map((b) => b.id)).toEqual([first]);
     });
 });

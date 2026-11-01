@@ -904,6 +904,8 @@ type SaveRecord = {
     // (set once: a save switches engines at most once)
     engine?: SaveEngine;
     fellBack?: string;
+    // the save asked for its engine (`engine` on POST /studio, the app's yt-dlp toggle): that engine only, no switch
+    pinned?: boolean;
 };
 
 // What holds the helper right now (section 17.2). `owner` is an api_keys.id when the record
@@ -1566,6 +1568,7 @@ export class StudioService {
                         ...(entry.itemCount !== undefined ? { itemCount: entry.itemCount } : {}),
                         ...(entry.retry ? { retry: true } : {}),
                         ...(entry.engine === "ytdlp" ? { engine: "ytdlp" as const } : {}),
+                        ...(entry.pinned ? { pinned: true } : {}),
                     };
                     await this.d.storage.put(`save:${entry.sid}`, rec);
                     await this.line.remove(key);
@@ -2056,6 +2059,8 @@ export class StudioService {
         const extra = {
             ...(items !== undefined || itemCount !== undefined ? { items, itemCount } : {}),
             ...(engine === "ytdlp" ? { engine: "ytdlp" as const } : {}),
+            // an engine the save asked for is the only one it uses (49.1)
+            ...(engineField === "ytdlp" || engineField === "cobalt" ? { pinned: true } : {}),
         };
 
         await this.posters?.idle(this.d.posterIdleMs);
@@ -2155,7 +2160,7 @@ export class StudioService {
         origin: "share" | null;
         insert: (sid: string, now: number) => Promise<void>;
         // a save of a post's items (section 18.2): carried by the `save:` record, or by the entry that waits
-        extra?: { items?: ItemsChoice; itemCount?: number; retry?: boolean; engine?: "ytdlp" };
+        extra?: { items?: ItemsChoice; itemCount?: number; retry?: boolean; engine?: "ytdlp"; pinned?: boolean };
     }): Promise<
         | { ok: true; sid: string; now: number; free: boolean; ahead: number | null }
         | { ok: false; reply: StudioReply }
@@ -2453,13 +2458,13 @@ export class StudioService {
     }
 
     // Ends the save with an error: the row, the helper copy and the record.
-    // A fetch that failed (section 49.2): the other engine gets one try when the failure is about the link and this save
-    // has not switched yet; else the save fails, with cobalt's code when cobalt ran (the app knows its words), except a
+    // A fetch that failed (section 49.2): the other engine gets one try when the failure is about the link, the save did
+    // not ask for its engine, and it has not switched yet; else the save fails, with cobalt's code when cobalt ran (the app knows its words), except a
     // file too large for the save.
     private async failOrSwitch(sid: string, rec: SaveRecord, code: string): Promise<number> {
         const engine: SaveEngine = rec.engine ?? "cobalt";
         const canSwitch =
-            !!this.d.ytdlp && rec.items === undefined && !rec.retry && rec.fellBack === undefined && fallsBack(code);
+            !!this.d.ytdlp && !rec.pinned && rec.items === undefined && !rec.retry && rec.fellBack === undefined && fallsBack(code);
         if (!canSwitch) {
             const final = engine === "ytdlp" && rec.fellBack !== undefined && code !== "error.studio.too_large" ? rec.fellBack : code;
             return await this.fail(sid, final);

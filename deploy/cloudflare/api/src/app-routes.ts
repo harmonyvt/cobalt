@@ -202,6 +202,8 @@ export async function capabilities(
     aboutSound = false,
     // the Cloudflare Images binding is there: POST /library/items/<id>/cutout makes cutouts itself (section 39.5)
     cutoutAuto = false,
+    // the YTDLP binding is there: `engine` on POST /studio, the app's yt-dlp toggle (section 49)
+    ytdlp = false,
 ): Promise<StudioReply> {
     const state = await resolveKeyState(d.db, auth, key, d.now());
     const version: unknown = apiVersion;
@@ -309,6 +311,8 @@ export async function capabilities(
                 // cutouts); `cutout_auto` = the server makes them too (auto, white, color) through Cloudflare Images
                 cutout: true,
                 cutout_auto: cutoutAuto === true,
+                // the yt-dlp box (APP-API-CONTRACT.md section 49): `engine` on POST /studio, the app's yt-dlp toggle
+                ytdlp: ytdlp === true,
                 // POST /library/items/<id>/crop (section 44.1): the app's own crops always; server crops of non-PNG
                 // pictures and crop + auto cutout need `cutout_auto` (the Images binding)
                 image_crop: true,

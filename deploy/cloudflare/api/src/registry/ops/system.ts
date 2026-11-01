@@ -98,6 +98,8 @@ export const capabilitiesOp = defineOp({
             !!env.AI,
             // section 39.5: cutouts by the server (auto lifts the subject) need the Cloudflare Images binding
             !!env.IMAGES,
+            // section 49: the yt-dlp box
+            !!env.YTDLP,
         );
         return { status: r.status, body: r.body };
     },

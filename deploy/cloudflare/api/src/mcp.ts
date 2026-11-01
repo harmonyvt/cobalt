@@ -46,7 +46,7 @@ export const mcpToolName = (callName: string) => callName.replace(/\./g, "_");
 // What the MCP offers: the chat's tools (free and ask, with the same feature switches), minus the chat-only ones, plus the
 // MCP-only ops (`when: f => f.mcp`).
 export function mcpFlags(ctx: Pick<OpContext, "env" | "embed">): AiFlags {
-    return { search: ctx.embed() !== null, box: workbenchOn(ctx.env), mcp: true, agents: agentsOn(ctx.env) };
+    return { search: ctx.embed() !== null, box: workbenchOn(ctx.env), mcp: true, agents: agentsOn(ctx.env), ytdlp: !!ctx.env.YTDLP };
 }
 
 export function mcpOps(registry: Registry, flags: AiFlags): Op[] {

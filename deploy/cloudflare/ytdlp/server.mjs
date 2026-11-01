@@ -13,6 +13,11 @@
 //   GET    /fetch/:id/file  -> the bytes, with content-length (once done)
 //   GET    /fetch/:id/thumb -> 404 (videos only: the studio's poster job makes the poster)
 //   DELETE /fetch/:id       -> kills a running download and removes its files
+//   POST   /info {url}      -> 200 what yt-dlp knows about the link, nothing downloaded (section 49.6):
+//                              {title, duration, uploader, channel, extractor, webpage_url, thumbnail, upload_date,
+//                               view_count, like_count, description, is_live, playlist: {title, count, entries} | null,
+//                               formats: [{id, ext, width, height, fps, vcodec, acodec, size, note}]} | 400 | 422 {code}
+//                              | 429 (one look-up at a time; a running fetch does not block it)
 //   GET    /health          -> 200 (no key: the platform's port check)
 
 import { spawn } from "node:child_process";
@@ -46,6 +51,74 @@ const TYPES = {
 
 // ≤ 720p like cobalt's `videoQuality: "720"` (helper/lib.js resolveSource), H.264 + AAC in mp4 first: the files the app
 // and the studio's ffmpeg read everywhere. A post with no video (a SoundCloud track) still saves its audio.
+export const INFO_TIMEOUT_MS = 60_000;
+const INFO_MAX_OUT = 16 * 1024 * 1024;
+
+export function infoArgs(url, o = {}) {
+    return [
+        "-J",
+        "--flat-playlist",
+        "--no-warnings",
+        "--socket-timeout",
+        "20",
+        ...(o.jsRuntime ? ["--js-runtimes", o.jsRuntime] : []),
+        "--cache-dir",
+        o.cacheDir ?? "/tmp/ytdlp-cache",
+        "--",
+        url,
+    ];
+}
+
+const str = (v, n = 300) => (typeof v === "string" && v.trim() ? v.trim().slice(0, n) : null);
+const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+// yt-dlp's -J answer cut to what an agent needs: no URLs of formats (they are signed for this box's address)
+export function trimInfo(j) {
+    const playlist =
+        j?._type === "playlist"
+            ? {
+                  title: str(j.title),
+                  count: num(j.playlist_count) ?? (Array.isArray(j.entries) ? j.entries.length : null),
+                  entries: (Array.isArray(j.entries) ? j.entries : []).slice(0, 25).map((e) => ({
+                      title: str(e?.title),
+                      url: str(e?.url ?? e?.webpage_url, 2048),
+                      duration: num(e?.duration),
+                  })),
+              }
+            : null;
+    // a direct file has no list: the answer itself is its one format
+    const formats = (Array.isArray(j?.formats) ? j.formats : j?._type !== "playlist" && j?.ext ? [j] : [])
+        .filter((f) => f && (f.vcodec !== "none" || f.acodec !== "none") && !/^(mhtml|storyboard)/.test(String(f.ext ?? f.format_note ?? "")))
+        .slice(-40)
+        .map((f) => ({
+            id: str(f.format_id, 40),
+            ext: str(f.ext, 10),
+            width: num(f.width),
+            height: num(f.height),
+            fps: num(f.fps),
+            vcodec: f.vcodec === "none" ? null : str(f.vcodec, 40),
+            acodec: f.acodec === "none" ? null : str(f.acodec, 40),
+            size: num(f.filesize) ?? num(f.filesize_approx),
+            note: str(f.format_note, 60),
+        }));
+    return {
+        title: str(j?.title),
+        duration: num(j?.duration),
+        uploader: str(j?.uploader ?? j?.creator),
+        channel: str(j?.channel),
+        extractor: str(j?.extractor_key ?? j?.extractor, 60),
+        webpage_url: str(j?.webpage_url, 2048),
+        thumbnail: str(j?.thumbnail, 2048),
+        upload_date: str(j?.upload_date, 8),
+        view_count: num(j?.view_count),
+        like_count: num(j?.like_count),
+        description: str(j?.description, 2000),
+        is_live: j?.is_live === true,
+        playlist,
+        formats,
+    };
+}
+
 export function ytdlpArgs(url, dir, o = {}) {
     return [
         "--no-playlist",
@@ -287,6 +360,47 @@ export function makeHandler(opts) {
         });
     }
 
+    let looking = false;
+    // POST /info: yt-dlp -J, answered at the end of the request
+    function info(url) {
+        return new Promise((resolve) => {
+            let out = "";
+            let err = "";
+            let p;
+            try {
+                p = spawn(BIN, infoArgs(url, { jsRuntime: opts.jsRuntime }), {
+                    stdio: ["ignore", "pipe", "pipe"],
+                    env: { ...process.env, PYTHONUNBUFFERED: "1" },
+                });
+            } catch {
+                return resolve({ status: 422, body: { status: "error", error: { code: "error.api.fetch.fail" } } });
+            }
+            const timer = setTimeout(() => p.kill("SIGKILL"), opts.infoTimeoutMs ?? INFO_TIMEOUT_MS);
+            p.stdout.setEncoding("utf8");
+            p.stdout.on("data", (d) => {
+                out += d;
+                if (out.length > INFO_MAX_OUT) p.kill("SIGKILL");
+            });
+            p.stderr.setEncoding("utf8");
+            p.stderr.on("data", (d) => (err = (err + d).slice(-8000)));
+            const fail = (code) => resolve({ status: 422, body: { status: "error", error: { code } } });
+            p.on("error", () => {
+                clearTimeout(timer);
+                fail("error.api.fetch.fail");
+            });
+            p.on("close", (exit, signal) => {
+                clearTimeout(timer);
+                if (signal) return fail("error.webp.timeout");
+                if (exit !== 0) return fail(codeFor(err));
+                try {
+                    resolve({ status: 200, body: { status: "success", ...trimInfo(JSON.parse(out)) } });
+                } catch {
+                    fail("error.api.fetch.fail");
+                }
+            });
+        });
+    }
+
     async function readBody(req) {
         let size = 0;
         const parts = [];
@@ -324,6 +438,26 @@ export function makeHandler(opts) {
             if (p === "/health") return send(res, 200, { status: "ok" });
             if (!KEY || req.headers["x-internal-key"] !== KEY) return err(res, 403, "error.api.auth.key.invalid");
             await reap();
+
+            if (method === "POST" && p === "/info") {
+                const raw = await readBody(req);
+                let b = null;
+                try {
+                    b = raw === null ? null : JSON.parse(raw);
+                } catch {}
+                const link = b?.url;
+                if (typeof link !== "string" || link.length > 2048 || !/^https?:\/\/[^\s]+$/i.test(link)) {
+                    return err(res, 400, "error.studio.no_link");
+                }
+                if (looking) return err(res, 429, "error.webp.busy");
+                looking = true;
+                try {
+                    const r = await info(link);
+                    return send(res, r.status, r.body);
+                } finally {
+                    looking = false;
+                }
+            }
 
             if (method === "POST" && p === "/fetch") {
                 const raw = await readBody(req);

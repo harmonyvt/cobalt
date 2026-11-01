@@ -17,6 +17,15 @@ const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
 const url = args[args.length - 1];
+if (args.includes("-J")) {
+    if (url.includes("unsupported")) { console.error("ERROR: Unsupported URL: " + url); process.exit(1); }
+    if (url.includes("list")) { console.log(JSON.stringify({ _type: "playlist", title: "Mix", playlist_count: 2, entries: [{ title: "a", url: "https://a.test/1", duration: 3 }, { title: "b", url: "https://a.test/2" }] })); process.exit(0); }
+    console.log(JSON.stringify({ title: "Me at the zoo", duration: 19, uploader: "jawed", extractor_key: "Youtube", webpage_url: url, upload_date: "20050424", view_count: 5, formats: [
+        { format_id: "sb0", ext: "mhtml", vcodec: "none", acodec: "none" },
+        { format_id: "18", ext: "mp4", width: 320, height: 240, fps: 30, vcodec: "avc1.42001E", acodec: "mp4a.40.2", filesize: 791000, url: "https://signed.test/x" },
+    ] }));
+    process.exit(0);
+}
 const out = args[args.indexOf("-o") + 1];
 const file = out.replace("%(ext)s", "mp4");
 if (url.includes("unsupported")) { console.error("ERROR: Unsupported URL: " + url); process.exit(1); }
@@ -133,5 +142,21 @@ describe("yt-dlp box", () => {
         expect(await poll("s1")).toEqual({ status: "error", error: { code: "error.webp.timeout" } });
         expect((await start("s2", "https://www.youtube.com/watch?v=ok")).status).toBe(202);
         expect((await poll("s2")).status).toBe("done");
+    });
+
+    it("POST /info answers what yt-dlp knows, without format URLs; a playlist lists its entries", async () => {
+        const ask = (url: string) => fetch(`${base}/info`, { method: "POST", headers: H, body: JSON.stringify({ url }) });
+        const r = await ask("https://www.youtube.com/watch?v=jNQXAC9IVRw");
+        expect(r.status).toBe(200);
+        const b = (await r.json()) as any;
+        expect(b).toMatchObject({ status: "success", title: "Me at the zoo", duration: 19, uploader: "jawed", extractor: "Youtube", upload_date: "20050424", playlist: null, is_live: false });
+        expect(b.formats).toEqual([{ id: "18", ext: "mp4", width: 320, height: 240, fps: 30, vcodec: "avc1.42001E", acodec: "mp4a.40.2", size: 791000, note: null }]);
+        expect(JSON.stringify(b)).not.toContain("signed.test");
+        const list = (await (await ask("https://a.test/list")).json()) as any;
+        expect(list.playlist).toEqual({ title: "Mix", count: 2, entries: [{ title: "a", url: "https://a.test/1", duration: 3 }, { title: "b", url: "https://a.test/2", duration: null }] });
+        const bad = await ask("https://a.test/unsupported");
+        expect(bad.status).toBe(422);
+        expect(await bad.json()).toEqual({ status: "error", error: { code: "error.api.link.unsupported" } });
+        expect((await ask("file:///etc/passwd")).status).toBe(400);
     });
 });

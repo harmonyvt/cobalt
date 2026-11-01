@@ -176,7 +176,7 @@ Response (streams, uploads, file bytes, forwarding). Chat: the op is also a chat
 | ANY | `stage host /*` | `host.stage` | open |  |  | Worker | yes |  |
 | ANY | `studio host /*` | `host.studio` | open |  |  | Worker | yes |  |
 
-The chat AI's calls (80): `cobalt.library.list`, `cobalt.library.search`, `cobalt.library.post`, `cobalt.look`,
+The chat AI's calls (82): `cobalt.library.list`, `cobalt.library.search`, `cobalt.library.post`, `cobalt.look`,
 `cobalt.show`, `cobalt.collage`, `cobalt.rank`, `cobalt.links.list`, `cobalt.collections.list`, `cobalt.library.about`,
 `cobalt.library.about.set` (asks first), `cobalt.library.transcript`, `cobalt.queue`, `cobalt.library.save`,
 `cobalt.library.title`, `cobalt.library.visibility` (asks first), `cobalt.library.delete` (asks first),
@@ -194,8 +194,8 @@ The chat AI's calls (80): `cobalt.library.list`, `cobalt.library.search`, `cobal
 `cobalt.hidden.rules.delete` (asks first), `cobalt.hidden.rules.preview`, `cobalt.names.list`, `cobalt.names.preview`,
 `cobalt.names.set` (asks first), `cobalt.names.delete` (asks first), `cobalt.stage.get`, `cobalt.stage.set`,
 `cobalt.stage.store` (asks first), `cobalt.stage.pool`, `cobalt.stage.items`, `cobalt.stage.action`,
-`cobalt.emotes.find`, `cobalt.emotes.save`, `cobalt.box.run`, `cobalt.box.pull`, `cobalt.box.save`,
-`cobalt.make.frames`.
+`cobalt.emotes.find`, `cobalt.emotes.save`, `cobalt.box.run`, `cobalt.box.pull`, `cobalt.box.save`, `cobalt.ytdlp.save`,
+`cobalt.ytdlp.info`, `cobalt.make.frames`.
 
 <!-- routes:end -->
 
@@ -5706,7 +5706,8 @@ downloader by default and the only one for a post's items (photo posts, gallerie
 
 ### 49.1 `engine` on POST /studio
 
-- `engine`: `"cobalt"` | `"ytdlp"` | absent. Which downloader goes first. Absent = the server's `SAVE_ENGINE` (49.2).
+- `engine`: `"cobalt"` | `"ytdlp"` | absent. Absent = the server's `SAVE_ENGINE` order with the fallback (49.2). Given =
+  **that engine only** (the app's "yt-dlp" toggle; owner: "a direct yt-dlp toggle"): no switch, and its own error code.
   Anything else is `400 error.studio.invalid_params`; so is `"ytdlp"` with `items`, or while the box is not deployed.
 - The chat's and MCP's `library.save` take the same `engine` and pass it on.
 - Nothing else in any answer changes: the session saves, polls, stores and becomes a library post exactly as before
@@ -5716,7 +5717,7 @@ downloader by default and the only one for a post's items (photo posts, gallerie
 
 - `SAVE_ENGINE` (API text var): `"fallback"` (default) = cobalt first, then yt-dlp; `"first"` = yt-dlp first, then cobalt.
   A save of items is always cobalt's.
-- A save switches engines **at most once**, and only when the failure is about the link: cobalt's `error.api.*`, or
+- A save that did not ask for an engine switches **at most once**, and only when the failure is about the link: cobalt's `error.api.*`, or
   `error.webp.bad_source | upstream | download_failed | unsupported | no_video`. Never on `error.studio.too_large`,
   `error.webp.timeout`, `error.studio.unavailable | busy | save_lost | cancelled`.
 - On a switch the first engine's copy is dropped, the save record (`save:<sid>` in DO storage) gets
@@ -5757,11 +5758,28 @@ downloader by default and the only one for a post's items (photo posts, gallerie
   internal key (in its env, never sent with a request) and nothing of the library.
 - A site that changes breaks yt-dlp until `YT_DLP_VERSION` is bumped and the API redeployed.
 
+### 49.6 Chat and MCP tools (owner: "agent and mcp need tools for yt-dlp right direct too")
+
+Offered to the chat AI (`cobalt.ytdlp.*`) and the MCP (`ytdlp_save`, `ytdlp_info`) while the `YTDLP` binding is there.
+Tier free, no route.
+- `ytdlp.save(url, { public, title, wait })`: `library.save` with `engine: "ytdlp"` (yt-dlp only), same answer and the
+  same daily cap. `library.save` also takes `engine`.
+- `ytdlp.info(url)`: what yt-dlp knows about a link, nothing saved (box `POST /info`, `yt-dlp -J --flat-playlist`, 60 s,
+  one look-up at a time, 429 otherwise; a running save does not block it). Answer: `title, duration, uploader, channel,
+  extractor, webpage_url, thumbnail, upload_date, view_count, like_count, description` (2000 chars), `is_live`,
+  `playlist: {title, count, entries: [{title, url, duration}] (first 25)} | null`, `formats: [{id, ext, width, height,
+  fps, vcodec, acodec, size, note}]` (the last 40, never their URLs). A failure is the box's code (49.3).
+
+### 49.7 App: the yt-dlp toggle
+
+The save-a-link screen gets a "yt-dlp" toggle (off by default, remembered). On, a link save sends `engine: "ytdlp"`;
+a gallery's items save ignores it (cobalt only). Shown only while `GET /capabilities` has `features.ytdlp`.
+
 ### 49.5 Files, tests, deploy
 
 - Files: `ytdlp/Dockerfile`, `ytdlp/server.mjs`, `api/src/ytdlp.ts`, `api/src/studio.ts` (engines), `api/src/line.ts`,
   `api/src/index.ts`, `api/cloudflare.config.ts` (container, binding `YTDLP`, `SAVE_ENGINE`),
   `api/src/registry/ops/library-writes.ts` (`engine`).
 - Tests: `api/test/ytdlp-save.test.ts` (the studio with the box), `api/test/ytdlp-server.test.ts` (the box's API with a
-  stand-in yt-dlp).
+  stand-in yt-dlp), `api/test/ytdlp-ops.test.ts` (the chat/MCP tools).
 - **Deploy**: the API only (a new container image is built and pushed). No migration, no secret. The app needs nothing.

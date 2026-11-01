@@ -964,6 +964,7 @@ describe("GET /capabilities", () => {
                 crop: true,
                 cutout: true,
                 cutout_auto: false,
+                ytdlp: false,
                 image_crop: true,
                 source_wait: true,
                 delete_post: true,

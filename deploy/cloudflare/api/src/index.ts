@@ -7,7 +7,7 @@ import { EditLiveService, handleEditLiveRoute, isEditLiveRoute } from "./edit-li
 import { ChatLiveService, handleChatLiveRoute, isChatLiveRoute } from "./chat-live";
 import { handleNotifyRoute, harkConfigFrom, isNotifyRoute, NotifyService } from "./notify";
 import { handleStudioRoute, isStudioRoute, parseSaveEngineMode, StudioService, type YtDlpDeps } from "./studio";
-import { YTDLP_START_PATH } from "./ytdlp";
+import { YTDLP_START_PATH } from "./ytdlp-path";
 import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
 import { purgeFrom } from "./visibility";
@@ -61,8 +61,6 @@ export interface Env extends WorkerEnv {
     STAGE_ROOM?: DurableObjectNamespace;
     // The editor's render containers (src/edit-renderer.ts, APP-API-CONTRACT.md section 31): two instances, "r0" and "r1".
     // Declared on WorkerEnv (src/worker.ts), which this interface extends: the Worker needs it for the routes and the flag.
-    // The yt-dlp box (src/ytdlp.ts, section 49): one object, "main". Absent: every save uses cobalt.
-    YTDLP?: DurableObjectNamespace;
     // "fallback" (default): cobalt first, yt-dlp when cobalt cannot; "first": yt-dlp first (section 49.2).
     SAVE_ENGINE?: string;
 }
