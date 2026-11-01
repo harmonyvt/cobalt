@@ -7,6 +7,7 @@ import { POST_KEY_SQL } from "./app-routes";
 import { searchPosts, type EmbedClient } from "./embed";
 import { effectiveVisibility } from "./visibility";
 import { liveLinksFor } from "./private-links";
+import { privateFileUrl } from "./share-private";
 import { hiddenPostKeys } from "./hidden-store";
 import { collectionPostIds, resolveWithin, WithinError, WITHIN_POSTS_MAX, type WithinSpec } from "./within";
 
@@ -36,6 +37,7 @@ type FileRow = {
     url: string | null;
     content_type: string | null;
     bucket: string;
+    r2_key: string;
     source: string;
     role: string | null;
     item_index: number | null;
@@ -94,7 +96,7 @@ export async function loadPosts(d: Pick<ChatToolDeps, "db" | "mediaBaseUrl">, on
     if (onlyIds && onlyIds.length === 0) return [];
     const where = onlyIds ? ` WHERE post_key IN (${onlyIds.map((_, i) => `?${i + 1}`).join(", ")})` : "";
     const stmt = d.db.prepare(
-        `SELECT * FROM (SELECT m.id, m.name, m.link, m.poster, m.url, m.content_type, m.bucket, m.source, m.role, m.item_index,
+        `SELECT * FROM (SELECT m.id, m.name, m.link, m.poster, m.url, m.content_type, m.bucket, m.r2_key, m.source, m.role, m.item_index,
                                m.duration, m.width, m.height, m.bytes, m.visibility, m.created_at, ${POST_KEY_SQL} AS post_key
                         FROM media_items m WHERE m.deleted_at IS NULL)${where}
          ORDER BY created_at DESC, id DESC`,
@@ -305,6 +307,8 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
             const p = (await everything()).find((x) => x.record.id === id);
             if (!p) throw new Error(`no post with id ${id}`);
             const share = d.shareBaseUrl ? withSlash(d.shareBaseUrl) : null;
+            // section 36: a file's own private link, its page and its direct file (share.../p/<key>/1.<ext>)
+            const priv = share ? await liveLinksFor(d.db, "item", p.rows.filter((f) => !isPublic(f)).map((f) => f.id)) : new Map();
             return {
                 ...p.record,
                 ...((await hiddenKeys()).has(p.record.id) ? { hidden: true } : {}),
@@ -324,6 +328,7 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
                         public: pub,
                         url: pub ? f.url : null,
                         share_url: share && name ? `${share}${name}` : null,
+                        ...(share && priv.has(f.id) ? { private_url: `${share}p/${priv.get(f.id)!.key}`, private_file_url: privateFileUrl(share, priv.get(f.id)!.key, 1, f) } : {}),
                     };
                 }),
             };
@@ -399,6 +404,8 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
             const share = d.shareBaseUrl ? withSlash(d.shareBaseUrl) : null;
             // section 36: a private link's live URL is its share.../p/<key>
             const priv = await liveLinksFor(d.db, "set", results.map((s) => s.id));
+            const rowOf = new Map<string, FileRow>();
+            if (share && priv.size > 0) for (const p of await all()) for (const f of p.rows) rowOf.set(f.id, f);
             return results.map((s) => {
                 let items: string[] = [];
                 try {
@@ -414,6 +421,8 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
                     title: s.title,
                     created_at: new Date(s.created_at).toISOString(),
                     post_ids: [...new Set(items.map((i) => postOf.get(i)).filter((x): x is string => !!x))],
+                    // a private link's direct files (share.../p/<key>/<n>.<ext>), in its order; null for one that is gone
+                    ...(share && key ? { file_urls: items.map((id, i) => (rowOf.has(id) ? privateFileUrl(share, key, i + 1, rowOf.get(id)!) : null)) } : {}),
                 };
             });
         },

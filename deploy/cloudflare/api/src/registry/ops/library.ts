@@ -44,6 +44,11 @@ const PostFileSchema = z
     public: z.boolean(),
     url: z.string().nullable(),
     share_url: z.string().nullable(),
+    private_url: z.string().optional().describe("the file's own private link (share.../p/<key>), while it has one"),
+    private_file_url: z
+        .string()
+        .optional()
+        .describe("that private link's direct file (share.../p/<key>/1.<ext>, the bytes, for a download or an import); anyone holding it can download the file"),
     })
     .meta({ id: "PostFile" });
 
@@ -54,6 +59,10 @@ const LinkSchema = z.object({
     title: z.string().nullable(),
     created_at: z.string(),
     post_ids: z.array(z.string()),
+    file_urls: z
+        .array(z.string().nullable())
+        .optional()
+        .describe("a private link's direct file links (share.../p/<key>/<n>.<ext>), in its order; null for a file that is gone"),
 });
 const CollectionSchema = z.object({
     id: z.string(),
@@ -168,7 +177,7 @@ export const libraryPostOp = defineOp({
     ai: {
         tier: "free",
         only: true,
-        summary: "One post with its files (public url and share_url when public).",
+        summary: "One post with its files (public url and share_url when public; private_url and private_file_url, its direct file, when it has its own private link).",
         aliases: ["post"],
         params: ["id"],
     },

@@ -23,6 +23,7 @@ import {
 } from "../../private-actions";
 import { COLLECTION_ID_REGEX } from "../../share-collections";
 import { HIDDEN_HINT } from "../../hidden";
+import { privateFileUrls } from "../../share-private";
 import { listShareSets, liveSetRow, SET_ID_REGEX } from "../../share-sets";
 import type { StudioReply } from "../../studio";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
@@ -221,11 +222,22 @@ async function targetOf(ctx: OpContext, ref: string): Promise<Target> {
     return { kind: "item", id: found.files[0]!.id, label: `file ${found.files[0]!.id}` };
 }
 
+const FileUrls = z
+    .array(z.string().nullable())
+    .describe("while private: each file's direct link (share.../p/<key>/<n>.<ext>, the bytes, for a download or an import), in the link's order; null for a file that is gone. Anyone holding one can download that file");
+
+// The direct file links of the private link at `url` (share.../p/<key>).
+async function fileUrlsOf(ctx: OpContext, d: PrivateDeps, t: Target, url: string): Promise<(string | null)[]> {
+    const key = /\/p\/([A-Za-z0-9]{22})$/.exec(url)?.[1];
+    return key ? privateFileUrls(ctx.db, d.shareBaseUrl, { kind: t.kind, target_id: t.id, key }) : [];
+}
+
 const PrivateOut = z.object({
     link: z.string().describe("what was changed: a gallery link id or a file id"),
     kind: z.enum(["item", "set"]),
     private: z.boolean(),
     url: z.string().nullable().describe("the link that works now: the private one, the gallery link's public one, or null for a file with no link"),
+    file_urls: FileUrls.optional(),
 });
 
 const PRIVATE_MESSAGES: Record<string, string> = {
@@ -249,7 +261,7 @@ export const linksPrivateOp = defineOp({
         asks: (input) => input.private === false,
         only: true,
         summary:
-            "Make a gallery link or a file private (only a secret share.../p/<key> URL opens it; the public URL becomes a 404; a public file stops being public) or revoke that private link (a gallery link is public again, a file stays not public). Returns the URL that works now.",
+            "Make a gallery link or a file private (only a secret share.../p/<key> URL opens it; the public URL becomes a 404; a public file stops being public) or revoke that private link (a gallery link is public again, a file stays not public). Returns the URL that works now, and while private each file's direct link (file_urls).",
         params: ["link", "private"],
         preview: async (ctx, input) => {
             const t = await targetOf(ctx, input.link);
@@ -265,7 +277,7 @@ export const linksPrivateOp = defineOp({
         const publicUrl = t.kind === "set" ? `${d.shareBaseUrl.replace(/\/?$/, "/")}g/${t.id}` : null;
         if (input.private) {
             const body = unwrap<{ link: { url: string } }>(t.kind === "item" ? await itemOn(d, t.id) : await setOn(d, t.id), PRIVATE_MESSAGES);
-            return ok({ link: t.id, kind: t.kind, private: true, url: body.link.url });
+            return ok({ link: t.id, kind: t.kind, private: true, url: body.link.url, file_urls: await fileUrlsOf(ctx, d, t, body.link.url) });
         }
         unwrap(await linkOff(d, t.kind, t.id), PRIVATE_MESSAGES);
         return ok({ link: t.id, kind: t.kind, private: false, url: publicUrl });
@@ -278,7 +290,7 @@ export const linksRotateOp = defineOp({
     runs: "worker",
     cors: false,
     input: z.object({ link: z.string().min(1).max(2048).describe("a private link URL, or its gallery link id or file id") }),
-    output: z.object({ link: z.string(), kind: z.enum(["item", "set"]), url: z.string().describe("the new private URL") }),
+    output: z.object({ link: z.string(), kind: z.enum(["item", "set"]), url: z.string().describe("the new private URL"), file_urls: FileUrls }),
     ai: {
         tier: "ask",
         only: true,
@@ -299,7 +311,7 @@ export const linksRotateOp = defineOp({
             ...PRIVATE_MESSAGES,
             "error.private.not_found": `${t.label} has no private link to rotate`,
         });
-        return ok({ link: t.id, kind: t.kind, url: body.link.url });
+        return ok({ link: t.id, kind: t.kind, url: body.link.url, file_urls: await fileUrlsOf(ctx, d, t, body.link.url) });
     },
 });
 
