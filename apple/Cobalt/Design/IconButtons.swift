@@ -63,6 +63,10 @@ private struct IconButtonBody: View {
     @State private var hoverTask: Task<Void, Never>?
     @State private var taps = 0
     @State private var named = 0
+    #if os(macOS)
+    @State private var tagAnchor = NameTagAnchor()
+    @State private var tagID = UUID()
+    #endif
 
     private var diameter: CGFloat { size == .regular ? 50 : 34 }
     private var symbolSize: CGFloat { size == .regular ? 20 : 15 }
@@ -86,6 +90,11 @@ private struct IconButtonBody: View {
                 swallowNextTap = false
                 return
             }
+            #if os(macOS)
+            // like a Mac tooltip, a click puts the name away
+            hoverTask?.cancel()
+            naming = false
+            #endif
             guard state != .working else { return }
             taps += 1
             configuration.trigger()
@@ -104,27 +113,22 @@ private struct IconButtonBody: View {
         .background { if let fill { Capsule().fill(fill) } }
         .glassEffect(isEnabled ? .regular.interactive() : .regular, in: .capsule)
         .opacity(isEnabled ? 1 : 0.45)
+        #if os(macOS)
+        // the Mac's tag is a window of its own (NameTagWindow), so nothing in the app's window can cover it
+        .background { NameTagAnchorView(anchor: tagAnchor) }
+        #endif
         .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
         .animation(Motion.copy, value: state)
+        #if !os(macOS)
         .overlay(alignment: .top) {
             if naming {
-                configuration.label
-                    .labelStyle(.titleOnly)
-                    .font(CobaltType.captionSmall)
-                    .foregroundStyle(CobaltColor.text)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    .shadow(color: .black.opacity(0.3), radius: 8, y: 3)
+                nameTag
                     .alignmentGuide(.top) { $0[.bottom] + 8 }
                     .transition(.scale(scale: 0.85, anchor: .bottom).combined(with: .opacity))
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
                     .zIndex(10)
             }
         }
+        #endif
         .zIndex(naming ? 10 : 0)
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.35).onEnded { _ in
@@ -146,13 +150,39 @@ private struct IconButtonBody: View {
                 withAnimation(Motion.fade) { naming = false }
             }
         }
+        .onChange(of: naming) { _, shown in
+            if shown {
+                NameTagWindow.shared.show(for: tagAnchor, owner: tagID)
+            } else {
+                NameTagWindow.shared.hide(owner: tagID)
+            }
+        }
         #endif
         .haptic(.impact(weight: .light, intensity: 0.7), trigger: taps)
         .haptic(.selection, trigger: named)
         .onDisappear {
             hideTask?.cancel()
             hoverTask?.cancel()
+            #if os(macOS)
+            NameTagWindow.shared.hide(owner: tagID)
+            #endif
         }
+    }
+
+    /// The button's name in a small tag above it on a long press (iPhone, iPad; the Mac uses NameTagWindow).
+    private var nameTag: some View {
+        configuration.label
+            .labelStyle(.titleOnly)
+            .font(CobaltType.captionSmall)
+            .foregroundStyle(CobaltColor.text)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .shadow(color: .black.opacity(0.3), radius: 8, y: 3)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     @ViewBuilder
