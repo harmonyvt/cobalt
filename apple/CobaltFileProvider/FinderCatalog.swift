@@ -9,34 +9,32 @@ import UniformTypeIdentifiers
 actor FinderCatalog {
     private var snapshot: FinderLibrary.Snapshot?
     private var fetchedAt: Date?
-    private var loading = false
-    private var waiters: [CheckedContinuation<FinderLibrary.Snapshot, Error>] = []
+    /// One walk shared by the requests Finder makes together. Unstructured, so awaiting it suspends
+    /// this actor and the walk can run; a continuation closure here would be `@Sendable` and could
+    /// not touch this actor's state.
+    private var inFlight: Task<FinderLibrary.Snapshot, Error>?
 
     /// How long a listing may answer `item` and `fetchContents` before the next walk.
-    static let freshInterval: TimeInterval = 20
+    /// `nonisolated` so the extension can read it without hopping onto this actor.
+    nonisolated static let freshInterval: TimeInterval = 20
 
     func snapshot(maxAge: TimeInterval) async throws -> FinderLibrary.Snapshot {
         if maxAge > 0, let snapshot, let fetchedAt, Date().timeIntervalSince(fetchedAt) < maxAge {
             return snapshot
         }
-        if loading {
-            return try await withCheckedThrowingContinuation { waiters.append($0) }
+        if let inFlight {
+            return try await inFlight.value
         }
-        loading = true
+        let task = Task { try await Self.fetch() }
+        inFlight = task
         do {
-            let value = try await Self.fetch()
+            let value = try await task.value
             snapshot = value
             fetchedAt = Date()
-            loading = false
-            let waiting = waiters
-            waiters = []
-            for waiter in waiting { waiter.resume(returning: value) }
+            inFlight = nil
             return value
         } catch {
-            loading = false
-            let waiting = waiters
-            waiters = []
-            for waiter in waiting { waiter.resume(throwing: error) }
+            inFlight = nil
             throw error
         }
     }
@@ -123,7 +121,9 @@ actor FinderCatalog {
 
     // MARK: -
 
-    private static func client() throws -> HTTPCobaltClient {
+    /// Off this actor: the walk only needs the keychain and the network, and the in-flight `Task` must
+    /// not have to re-enter the actor to run it.
+    nonisolated private static func client() throws -> HTTPCobaltClient {
         guard let record = FinderBridge.saved(), record.enabled, let url = record.url else {
             throw FinderLibrary.Failure.unauthorized
         }
@@ -132,7 +132,7 @@ actor FinderCatalog {
         return HTTPCobaltClient(baseURL: url, apiKey: { Settings.apiKey(in: keychain, forServer: url) })
     }
 
-    private static func fetch() async throws -> FinderLibrary.Snapshot {
+    nonisolated private static func fetch() async throws -> FinderLibrary.Snapshot {
         let client = try client()
         do {
             let posts = try await FinderLibrary.collect { cursor in

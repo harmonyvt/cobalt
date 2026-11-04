@@ -24,7 +24,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             completionHandler(FinderRootItem(), nil)
             return Progress()
         }
-        let catalog = catalog
+        let catalog = self.catalog
         return work { try await catalog.snapshot(maxAge: FinderCatalog.freshInterval) } result: { snapshot in
             guard let node = snapshot.node(identifier.rawValue) else { throw FinderLibrary.Failure.notFound }
             return FinderItem(node)
@@ -35,7 +35,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         for itemIdentifier: NSFileProviderItemIdentifier, version requestedVersion: NSFileProviderItemVersion?,
         request: NSFileProviderRequest, completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void
     ) -> Progress {
-        let catalog = catalog
+        let catalog = self.catalog
         nonisolated(unsafe) let completion = completionHandler
         let progress = Progress()
         let task = Task {
@@ -91,7 +91,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         perThumbnailCompletionHandler: @escaping (NSFileProviderItemIdentifier, Data?, Error?) -> Void,
         completionHandler: @escaping (Error?) -> Void
     ) -> Progress {
-        let catalog = catalog
+        let catalog = self.catalog
         nonisolated(unsafe) let each = perThumbnailCompletionHandler
         nonisolated(unsafe) let done = completionHandler
         let progress = Progress()

@@ -35,7 +35,10 @@ final class FinderEnumerator: NSObject, NSFileProviderEnumerator {
                 }
                 let end = min(offset + Self.pageSize, ids.count)
                 let slice = offset < end ? ids[offset..<end] : []
-                let items = slice.compactMap { snapshot.node($0).map(FinderItem.init) }
+                let items: [any NSFileProviderItem] = slice.compactMap { raw in
+                    guard let node = snapshot.node(raw) else { return nil }
+                    return FinderItem(node)
+                }
                 observer.didEnumerate(items)
                 if end < ids.count {
                     observer.finishEnumerating(upTo: NSFileProviderPage(rawValue: Data(String(end).utf8)))
@@ -63,10 +66,13 @@ final class FinderEnumerator: NSObject, NSFileProviderEnumerator {
                     observer.finishEnumeratingWithError(NSError(
                         domain: NSFileProviderErrorDomain, code: NSFileProviderError.Code.syncAnchorExpired.rawValue))
                 case .apply(let delta, let snapshot):
-                    let updated: [NSFileProviderItem] = delta.updated.compactMap { snapshot.node($0).map(FinderItem.init) }
+                    let updated: [any NSFileProviderItem] = delta.updated.compactMap { raw in
+                        guard let node = snapshot.node(raw) else { return nil }
+                        return FinderItem(node)
+                    }
                     if !updated.isEmpty { observer.didUpdate(updated) }
                     if !delta.deleted.isEmpty {
-                        observer.didDeleteItems(withIdentifiers: delta.deleted.map(NSFileProviderItemIdentifier.init))
+                        observer.didDeleteItems(withIdentifiers: delta.deleted.map { NSFileProviderItemIdentifier(rawValue: $0) })
                     }
                     observer.finishEnumeratingChanges(upTo: NSFileProviderSyncAnchor(rawValue: snapshot.anchor), moreComing: false)
                 }

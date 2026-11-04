@@ -11,10 +11,10 @@ final class FinderItem: NSObject, NSFileProviderItem, @unchecked Sendable {
         self.node = node
     }
 
-    var itemIdentifier: NSFileProviderItemIdentifier { NSFileProviderItemIdentifier(node.raw) }
+    var itemIdentifier: NSFileProviderItemIdentifier { NSFileProviderItemIdentifier(rawValue: node.raw) }
     var parentItemIdentifier: NSFileProviderItemIdentifier {
         guard let parent = node.parent else { return .rootContainer }
-        return NSFileProviderItemIdentifier(parent.raw)
+        return NSFileProviderItemIdentifier(rawValue: parent.raw)
     }
     var filename: String { node.name }
     var contentType: UTType {

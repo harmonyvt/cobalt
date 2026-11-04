@@ -186,11 +186,12 @@ public enum FinderLibrary {
         }
         let anchor = token(root.flatMap { raw -> [String] in
             guard let node = nodes[raw] else { return [] }
-            let kids = children[raw] ?? []
-            return [raw, node.name] + kids.flatMap { id in
-                guard let file = nodes[id] else { return [] }
-                return [id, file.name, hex(file.contentVersion), hex(file.metadataVersion)]
+            var parts = [raw, node.name]
+            for id in children[raw] ?? [] {
+                guard let file = nodes[id] else { continue }
+                parts.append(contentsOf: [id, file.name, hex(file.contentVersion), hex(file.metadataVersion)])
             }
+            return parts
         })
         return Snapshot(nodes: nodes, rootChildren: root, children: children, anchor: anchor)
     }
@@ -198,7 +199,12 @@ public enum FinderLibrary {
     public static func delta(from old: Snapshot, to new: Snapshot) -> Delta {
         var updated: [String] = []
         var deleted: [String] = []
-        for raw in new.rootChildren + new.rootChildren.flatMap({ new.children[$0] ?? [] }) {
+        var ids: [String] = []
+        for raw in new.rootChildren {
+            ids.append(raw)
+            ids.append(contentsOf: new.children[raw] ?? [])
+        }
+        for raw in ids {
             guard let node = new.nodes[raw] else { continue }
             if let was = old.nodes[raw], was.name == node.name, was.parent == node.parent,
                was.contentVersion == node.contentVersion, was.metadataVersion == node.metadataVersion,
@@ -256,7 +262,7 @@ public enum FinderLibrary {
         case "image/gif": return "com.compuserve.gif"
         case "image/webp": return "org.webmproject.webp"
         case "image/heic", "image/heif": return "public.heic"
-            default: return typeIdentifier(fileExtension: (filename as NSString).pathExtension)
+        default: return typeIdentifier(fileExtension: (filename as NSString).pathExtension)
         }
     }
 
@@ -374,7 +380,7 @@ public enum FinderLibrary {
             for byte in part.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
             hash = (hash ^ 0xff) &* 0x100000001b3
         }
-        var big = hash.bigEndian
+        let big = hash.bigEndian
         return withUnsafeBytes(of: big) { Data($0) }
     }
 

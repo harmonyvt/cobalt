@@ -7,7 +7,7 @@ import Foundation
 @MainActor
 enum FinderDomain {
     static let domain = NSFileProviderDomain(
-        identifier: NSFileProviderDomainIdentifier(FinderBridge.domainIdentifier),
+        identifier: NSFileProviderDomainIdentifier(rawValue: FinderBridge.domainIdentifier),
         displayName: FinderBridge.displayName)
 
     /// The live model, so a sign-out on a nonisolated hook can reach it without capturing the class.
@@ -18,8 +18,10 @@ enum FinderDomain {
         guard model.managesFinderDomain else { return }
         liveModel = model
         model.finderSidebar = model.settings.finderSidebarEnabled
-        FinderLibraryEvents.setRefreshHook { Self.signal() }
-        FinderLibraryEvents.setSignOutHook { Self.signedOut() }
+        // Function references, not closures: a closure made here would be main-actor isolated and
+        // would not match the nonisolated `@Sendable () -> Void` hooks.
+        FinderLibraryEvents.setRefreshHook(signal)
+        FinderLibraryEvents.setSignOutHook(signedOut)
         Task { await reconcile(model) }
     }
 
@@ -91,7 +93,12 @@ enum FinderDomain {
         }
     }
 
+    /// Not isolated to the main actor: the library-refresh hook calls it off the model's actor, and
+    /// `domain` above is main-actor state. The identifier and the display name are plain constants.
     nonisolated static func signal() {
+        let domain = NSFileProviderDomain(
+            identifier: NSFileProviderDomainIdentifier(rawValue: FinderBridge.domainIdentifier),
+            displayName: FinderBridge.displayName)
         guard let manager = NSFileProviderManager(for: domain) else { return }
         manager.signalEnumerator(for: .rootContainer) { _ in }
         manager.signalEnumerator(for: .workingSet) { _ in }
