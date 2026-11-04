@@ -46,9 +46,12 @@ targets:
       - target: CobaltKeyboard
         embed: true
         platformFilter: iOS
+      # Native macOS only. `platformFilter: macOS` is XcodeGen's Catalyst filter (`maccatalyst`),
+      # which a macosx build skips, so the appex never lands in Contents/PlugIns.
+      # `destinationFilters` writes `platformFilters = (macos, )`.
       - target: CobaltFileProvider
         embed: true
-        platformFilter: macOS
+        destinationFilters: [macOS]
     info:
       path: Config/Cobalt-Info.plist
       properties:
