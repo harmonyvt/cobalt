@@ -98,6 +98,10 @@ struct CobaltApp: App {
         MenuBarPresence.shared.staysRunning = model.settings.menuBarExtra
         #endif
         _model = State(initialValue: model)
+        #if os(macOS)
+        FinderDomain.install(model)
+        MenuBarFinderWiring.connect(model)
+        #endif
         // Shortcuts, Siri and Spotlight run in this process, before any scene (CONTRACT-PARALLEL 15.2)
         IntentDependencies.register(model)
         #if os(macOS)

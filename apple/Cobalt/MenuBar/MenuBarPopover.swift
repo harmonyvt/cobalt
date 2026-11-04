@@ -45,8 +45,15 @@ struct MenuBarPopover: View {
         .cobaltRoot(model: model)
         .onAppear {
             arm()
+            model.menuBarFinder.reload()
             model.unifiedQueue.setVisible(true)
             if model.capabilities.accounts { Task { await model.account.refresh() } }
+        }
+        .onChange(of: model.finderSidebar) { _, _ in model.menuBarFinder.reload() }
+        .onChange(of: model.finderSidebarNote) { _, _ in model.menuBarFinder.reload() }
+        .onChange(of: model.library.isLoading) { _, _ in model.menuBarFinder.reload() }
+        .onChange(of: model.library.loadingAll.map { "\($0.loaded)/\($0.total)" }) { _, _ in
+            model.menuBarFinder.reload()
         }
         .onDisappear {
             if model.selectedTab != .queue { model.unifiedQueue.setVisible(false) }
@@ -456,7 +463,7 @@ struct MenuBarPopover: View {
         return Double(downloads.bytes) / Double(total)
     }
 
-    // MARK: finder (hidden until #109 connects a provider)
+    // MARK: finder (read-only location; hidden until the live app connects the provider)
 
     @ViewBuilder
     private var finder: some View {
@@ -467,10 +474,10 @@ struct MenuBarPopover: View {
                 VStack(alignment: .leading, spacing: 8) {
                     sectionHead(Copy.MenuBar.finderTitle, finderMeta(status), open: finderOpen, toggle: { finderOpen.toggle() })
                     if finderOpen {
-                        toggleRow(Copy.MenuBar.finderToggle, on: status.enabled) { on in
+                        toggleRow(Copy.Folder.finderToggle, on: status.enabled) { on in
                             Task { await finder.setEnabled(on) }
                         }
-                        Text(status.note ?? Copy.MenuBar.finderReadOnly)
+                        Text(status.note ?? Copy.Folder.finderFooter)
                             .font(CobaltType.badge)
                             .foregroundStyle(CobaltColor.caption)
                             .fixedSize(horizontal: false, vertical: true)

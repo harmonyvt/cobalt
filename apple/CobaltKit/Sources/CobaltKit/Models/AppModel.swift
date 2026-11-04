@@ -125,8 +125,14 @@ public final class AppModel {
     public let macFolder: MacFolder
     /// The Mac's pull of saves made anywhere (13.8): unavailable on iOS and in previews.
     public let savePull: SavePull
-    /// The menu bar's read-only Finder location. Unavailable until a File Provider connects (`MenuBarFinderModel`).
+    /// The menu bar's read-only Finder location. Hidden until `MenuBarFinderWiring` connects it on the Mac.
     public let menuBarFinder = MenuBarFinderModel()
+    /// The Finder sidebar switch (Mac). The app target adds and removes the domain; this is the remembered choice.
+    public var finderSidebar = false
+    /// Why the sidebar could not be added, or why the switch is unavailable. Nil when there is nothing to say.
+    public var finderSidebarNote: String?
+    /// True only for `AppModel.live()`, so a preview never registers a Finder domain.
+    public internal(set) var managesFinderDomain = false
     /// "keep offline" (CONTRACT-OFFLINE.md decision 9): the background downloads and their states.
     public let offlineDownloads: OfflineDownloads
     public internal(set) var capabilities: Capabilities
@@ -297,6 +303,7 @@ public final class AppModel {
             Task { @MainActor in model.serverRefusedKey() }
         }
         pull.start()                             // the 5 minute tick (a no-op without the Mac folder)
+        model.managesFinderDomain = true
         model.watchOwnUploads()
         fetcher.isActive = { [unowned ctx] in ctx.background.activity.isActive }
         fetcher.serverHoldsRequests = { [unowned model] in model.capabilities.sourceWait }

@@ -20,13 +20,10 @@ extension Copy {
         static let collapse = "collapse"
         static let expand = "expand"
 
-        // the read-only Finder location. hidden until the File Provider from #109 is connected.
-        // the toggle's words match that branch's `Copy.Folder.finderToggle`, so the two can fold together.
+        // the read-only Finder location. the switch and the footnote are `Copy.Folder`'s.
         static let finderTitle = "library in finder"
-        static let finderToggle = "show library in finder"
         static let finderUpToDate = "up to date"
         static let finderUpdating = "updating"
-        static let finderReadOnly = "read-only · a file downloads when you open it. finder can't change the library."
         static let openInFinder = "open in finder"
 
         static let shortcutPaste = "⌘V"

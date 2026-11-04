@@ -66,6 +66,14 @@ extension Copy {
         }
 
         static let footer = "offline files stay in this folder until you remove them, here or in finder. while capystore is open, saves from your iphone, the share sheet, shortcuts and the web download here too. the cache makes room by itself."
+
+        // the Finder sidebar (a File Provider domain). Read-only: opening a file downloads it.
+        static let finderHeader = "finder"
+        static let finderToggle = "show library in finder"
+        static let finderFooter = "a capystore location in the finder sidebar. each folder is a post, and a file downloads when you open it. finder can't change the library."
+        static let finderNeedsSignIn = "sign in to show the library in finder."
+        static let finderFailed = "capystore couldn't show the library in finder."
+        static let finderUserDisabled = "capystore is switched off in system settings. turn it on under general, login items & extensions, file providers."
     }
 }
 
@@ -76,5 +84,6 @@ extension Symbol {
         static let showInFinder = "folder"
         static let reset = "arrow.uturn.backward"
         static let pull = "arrow.triangle.2.circlepath"
+        static let finder = "sidebar.left"
     }
 }

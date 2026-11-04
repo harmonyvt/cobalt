@@ -4,36 +4,9 @@ import Observation
 /// The menu bar's "library in finder" line. Read-only: Finder can show the library, and a file
 /// downloads when it is opened. Nothing here syncs a change from Finder back into the library.
 ///
-/// On main there is no File Provider, so `status` stays `.unavailable` and the section is hidden.
-/// The File Provider work (harmonyvt/cobalt#109, `FinderDomain` / `FinderBridge` on
-/// `cursor/finder-file-provider-8895`) is what makes it available. Once that is on main, install
-/// the live source once, next to `FinderDomain.install(model)`:
-///
-/// ```
-/// model.menuBarFinder.connect(
-///     refresh: {
-///         let on = model.finderSidebar
-///         return MenuBarFinderStatus(
-///             available: true,
-///             enabled: on,
-///             phase: on ? .upToDate : .off,
-///             note: model.finderSidebarNote)
-///     },
-///     setEnabled: { on in
-///         await FinderDomain.setEnabled(on, model: model)
-///     },
-///     open: {
-///         // NSFileProviderManager(for: FinderDomain.domain)?
-///         //     .getUserVisibleURL(for: .rootContainer) { url, _ in
-///         //         guard let url else { return }
-///         //         NSWorkspace.shared.activateFileViewerSelecting([url])
-///         //     }
-///     })
-/// ```
-///
-/// Call `reload()` again when the domain changes (the switch, a sign-out, `signal()`).
-/// `phase: .updating(fraction:)` is reserved for an enumeration that is actually in progress.
-/// #109 does not report one; leave the phase `.upToDate` while the domain is on until a signal exists.
+/// `status` stays `.unavailable` (the section stays hidden) until the Mac app calls `connect`.
+/// That wiring is `MenuBarFinderWiring`, next to `FinderDomain.install`. The domain and the app
+/// group stay `FinderBridge`'s (`AppGroup.id`); this type does not name either.
 public struct MenuBarFinderStatus: Equatable, Sendable {
     public enum Phase: Equatable, Sendable {
         case off
@@ -90,6 +63,11 @@ public final class MenuBarFinderModel {
     }
 
     public func setEnabled(_ on: Bool) async {
+        // The domain add can take a moment. Say so before it returns; `reload` then reads the result.
+        if status.available {
+            status = MenuBarFinderStatus(
+                available: true, enabled: status.enabled, phase: .updating(fraction: nil), note: status.note)
+        }
         await apply?(on)
         reload()
     }

@@ -498,12 +498,27 @@ public final class Settings {
         defaults.set(url.absoluteString, forKey: "serverURL")
         serverURL = url
         hasAPIKey = Settings.apiKey(in: keychain, forServer: url) != nil
+        if defaults.bool(forKey: FinderBridge.enabledDefaultsKey) {
+            FinderBridge.noteServer(url)
+            FinderLibraryEvents.noteRefresh()
+        }
+    }
+
+    /// The Finder sidebar switch (Mac). Stored in this process's defaults, not the app group: opening the
+    /// group is what raises the macOS prompt, and that waits until the switch is turned on.
+    public var finderSidebarEnabled: Bool {
+        get { defaults.bool(forKey: FinderBridge.enabledDefaultsKey) }
+        set { defaults.set(newValue, forKey: FinderBridge.enabledDefaultsKey) }
     }
 
     public func resetServer() {
         defaults.removeObject(forKey: "serverURL")
         serverURL = Settings.defaultServer
         hasAPIKey = Settings.apiKey(in: keychain, forServer: serverURL) != nil
+        if defaults.bool(forKey: FinderBridge.enabledDefaultsKey) {
+            FinderBridge.noteServer(serverURL)
+            FinderLibraryEvents.noteRefresh()
+        }
     }
 }
 

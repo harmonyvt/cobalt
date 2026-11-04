@@ -25,6 +25,42 @@ struct StorageSettingsSection: View {
     private var settings: CobaltKit.Settings { model.settings }
 
     var body: some View {
+        Group {
+            #if os(macOS)
+            finderSection
+            #endif
+            storageSection
+        }
+    }
+
+    #if os(macOS)
+    /// The Capystore location in the Finder sidebar. On adds the domain; off (and sign-out) removes it.
+    private var finderSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { model.finderSidebar },
+                set: { on in Task { await FinderDomain.setEnabled(on, model: model) } }
+            )) {
+                Label(Copy.Folder.finderToggle, systemImage: Symbol.Folder.finder)
+            }
+            .disabled(!model.settings.hasAPIKey)
+        } header: {
+            Text(Copy.Folder.finderHeader).font(CobaltType.caption).textCase(nil)
+        } footer: {
+            Text(finderFooter).font(CobaltType.captionSmall).lineSpacing(2)
+        }
+    }
+
+    private var finderFooter: String {
+        if !model.settings.hasAPIKey { return Copy.Folder.finderNeedsSignIn }
+        return model.finderSidebarNote ?? Copy.Folder.finderFooter
+    }
+    #endif
+
+    /// `let`s before the `Section` need a result builder. `body` had one; a plain computed property does not,
+    /// so the `Section` was not a return.
+    @ViewBuilder
+    private var storageSection: some View {
         let usage = model.store.offlineUsage
         let limit = model.store.limitBytes
         let downloads = model.offlineDownloads.summary
