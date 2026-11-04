@@ -183,7 +183,20 @@ if [ "$PLATFORM" = mac ]; then
     done
     [ -f "$APP/Contents/Resources/container-migration.plist" ] \
         || die "container-migration.plist is missing from the Mac app (the old unsandboxed data would not move)"
-    echo "sandboxed, Movies folder entitlement and container migration manifest present"
+    grep -q "com.apple.security.application-groups" <<<"$ents" \
+        || die "the archived Mac app is not signed with the app group (the Finder extension cannot share the server URL)"
+    APPEX="$APP/Contents/PlugIns/CobaltFileProvider.appex"
+    [ -d "$APPEX" ] || die "the archived Mac app is missing Contents/PlugIns/CobaltFileProvider.appex"
+    ext_ents="$(codesign -d --entitlements - --xml "$APPEX" 2>/dev/null || true)"
+    for want in com.apple.security.app-sandbox com.apple.security.network.client com.apple.security.application-groups keychain-access-groups; do
+        grep -q "$want" <<<"$ext_ents" || die "the Finder extension is not signed with $want"
+    done
+    grep -q "group.com.capybaraharmony.cobalt" <<<"$ext_ents" \
+        || die "the Finder extension is not signed with group.com.capybaraharmony.cobalt"
+    point="$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$APPEX/Contents/Info.plist" 2>/dev/null || true)"
+    [ "$point" = "com.apple.fileprovider-nonui" ] \
+        || die "the Finder extension point is '${point:-missing}', expected com.apple.fileprovider-nonui"
+    echo "sandboxed, Movies folder entitlement, container migration manifest and Finder extension present"
 fi
 
 # --- dSYMs (they symbolicate MetricKit stacks later; TestFlight gets its own copy via uploadSymbols) ---

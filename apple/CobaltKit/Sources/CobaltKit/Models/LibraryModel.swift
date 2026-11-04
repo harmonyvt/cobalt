@@ -196,6 +196,7 @@ public final class LibraryModel {
             apply(page, replacing: true)
             if epoch == statusEpoch, !statusInFlight { recentlyHidden = []; recentlyUnhidden = [] }       // asked after the last change: it is the truth
             failure = nil
+            FinderLibraryEvents.noteRefresh()
             // quiet, and not waited for: the refresh is done when the library page is
             hiddenSyncTask = Task { [weak self] in await self?.syncHiddenIndex() }
         } catch {
@@ -263,7 +264,9 @@ public final class LibraryModel {
             }
         } catch {
             if let f = pipelineFailure(from: error, during: .saving) { failure = f }
+            return
         }
+        FinderLibraryEvents.noteRefresh()
     }
 
     // MARK: - Titles
