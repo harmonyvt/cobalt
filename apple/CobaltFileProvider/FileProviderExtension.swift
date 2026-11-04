@@ -25,10 +25,14 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             return Progress()
         }
         let catalog = self.catalog
-        return work { try await catalog.snapshot(maxAge: FinderCatalog.freshInterval) } result: { snapshot in
-            guard let node = snapshot.node(identifier.rawValue) else { throw FinderLibrary.Failure.notFound }
-            return FinderItem(node)
-        } completion: completionHandler
+        // `completion` is a function value, not a trailing closure, so it has to be a normal argument.
+        return work(
+            { try await catalog.snapshot(maxAge: FinderCatalog.freshInterval) },
+            result: { snapshot in
+                guard let node = snapshot.node(identifier.rawValue) else { throw FinderLibrary.Failure.notFound }
+                return FinderItem(node)
+            },
+            completion: completionHandler)
     }
 
     func fetchContents(
@@ -37,12 +41,15 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     ) -> Progress {
         let catalog = self.catalog
         nonisolated(unsafe) let completion = completionHandler
+        // `FileManager` is not `Sendable`. The local is the explicit opt-out so the task may delete a
+        // cancelled download.
+        nonisolated(unsafe) let files = FileManager.default
         let progress = Progress()
         let task = Task {
             do {
                 let (url, node) = try await catalog.contents(of: itemIdentifier.rawValue)
                 if Task.isCancelled {
-                    try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+                    try? files.removeItem(at: url.deletingLastPathComponent())
                     return
                 }
                 completion(url, FinderItem(node), nil)

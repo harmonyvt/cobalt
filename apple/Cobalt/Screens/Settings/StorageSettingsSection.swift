@@ -57,6 +57,9 @@ struct StorageSettingsSection: View {
     }
     #endif
 
+    /// `let`s before the `Section` need a result builder. `body` had one; a plain computed property does not,
+    /// so the `Section` was not a return.
+    @ViewBuilder
     private var storageSection: some View {
         let usage = model.store.offlineUsage
         let limit = model.store.limitBytes
