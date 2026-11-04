@@ -19,32 +19,36 @@ final class FinderEnumerator: NSObject, NSFileProviderEnumerator {
 
     func enumerateItems(for observer: any NSFileProviderEnumerationObserver, startingAt page: NSFileProviderPage) {
         let container = parent
-        let offset = Self.offset(of: page)
         let catalog = self.catalog
         let invalidated = self.invalidated
         nonisolated(unsafe) let observer = observer
         Task {
             do {
-                let snapshot = try await catalog.snapshot(maxAge: 0)
-                await catalog.remember(snapshot)
                 if invalidated.withLock({ $0 }) { return }
-                let ids = Self.children(in: snapshot, parent: container)
-                guard container == .rootContainer || container == .workingSet || snapshot.node(container.rawValue)?.isFolder == true else {
+                if container == .workingSet {
+                    observer.didEnumerate([])
+                    observer.finishEnumerating(upTo: nil)
+                    return
+                }
+                if container == .rootContainer {
+                    let listing = try await catalog.rootPage(cursor: Self.libraryCursor(of: page))
+                    if invalidated.withLock({ $0 }) { return }
+                    let items: [any NSFileProviderItem] = listing.folders.map { FinderItem($0) as any NSFileProviderItem }
+                    observer.didEnumerate(items)
+                    if let next = listing.nextCursor {
+                        observer.finishEnumerating(upTo: NSFileProviderPage(rawValue: FinderLibrary.RootPageToken(cursor: next).data))
+                    } else {
+                        observer.finishEnumerating(upTo: nil)
+                    }
+                    return
+                }
+                guard let files = await catalog.children(of: container.rawValue) else {
                     observer.finishEnumeratingWithError(finderError(FinderLibrary.Failure.notFound))
                     return
                 }
-                let end = min(offset + Self.pageSize, ids.count)
-                let slice = offset < end ? ids[offset..<end] : []
-                let items: [any NSFileProviderItem] = slice.compactMap { raw in
-                    guard let node = snapshot.node(raw) else { return nil }
-                    return FinderItem(node)
-                }
+                let items: [any NSFileProviderItem] = files.map { FinderItem($0) as any NSFileProviderItem }
                 observer.didEnumerate(items)
-                if end < ids.count {
-                    observer.finishEnumerating(upTo: NSFileProviderPage(rawValue: Data(String(end).utf8)))
-                } else {
-                    observer.finishEnumerating(upTo: nil)
-                }
+                observer.finishEnumerating(upTo: nil)
             } catch {
                 observer.finishEnumeratingWithError(finderError(error))
             }
@@ -52,11 +56,19 @@ final class FinderEnumerator: NSObject, NSFileProviderEnumerator {
     }
 
     func enumerateChanges(for observer: any NSFileProviderChangeObserver, from anchor: NSFileProviderSyncAnchor) {
+        let container = parent
         let catalog = self.catalog
         let invalidated = self.invalidated
         nonisolated(unsafe) let observer = observer
         Task {
             do {
+                // A full walk only for the working set. Root and folder changes stay on the pages
+                // already listed, so opening the location does not wait out the whole library.
+                guard container == .workingSet else {
+                    let current = await catalog.currentAnchor() ?? Data()
+                    observer.finishEnumeratingChanges(upTo: NSFileProviderSyncAnchor(rawValue: current), moreComing: false)
+                    return
+                }
                 let result = try await catalog.sync(from: anchor.rawValue)
                 if invalidated.withLock({ $0 }) { return }
                 switch result {
@@ -91,22 +103,13 @@ final class FinderEnumerator: NSObject, NSFileProviderEnumerator {
         }
     }
 
-    private static let pageSize = 200
-
-    private static func offset(of page: NSFileProviderPage) -> Int {
-        // There is no `initialPage`. The first page is one of the two sorted sentinels, or empty.
+    /// The API cursor for this file-provider page. The system's first-page sentinels and empty data
+    /// mean "no cursor". Anything else is the cursor the previous page handed back.
+    private static func libraryCursor(of page: NSFileProviderPage) -> String? {
         let byName = NSFileProviderPage(NSFileProviderPage.initialPageSortedByName as Data)
         let byDate = NSFileProviderPage(NSFileProviderPage.initialPageSortedByDate as Data)
-        if page == byName || page == byDate || page.rawValue.isEmpty { return 0 }
-        return Int(String(data: page.rawValue, encoding: .utf8) ?? "") ?? 0
-    }
-
-    private static func children(in snapshot: FinderLibrary.Snapshot, parent: NSFileProviderItemIdentifier) -> [String] {
-        if parent == .rootContainer { return snapshot.rootChildren }
-        // The working set stays empty. Changes still flow through it (signalEnumerator), which is how
-        // a refresh updates files that are already on screen, without pinning every original into Recents.
-        if parent == .workingSet { return [] }
-        return snapshot.children(of: parent.rawValue)
+        if page == byName || page == byDate || page.rawValue.isEmpty { return nil }
+        return FinderLibrary.RootPageToken(pageData: page.rawValue).cursor
     }
 }
 

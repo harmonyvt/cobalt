@@ -3,20 +3,61 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Walks `GET /library?v=3` for the extension and downloads one file or a poster. A snapshot younger
-/// than `freshInterval` is reused so Quick Look's thumbnail and content requests do not each re-list
-/// the library. Enumeration asks for a fresh walk (`maxAge: 0`); an in-flight walk is shared.
+/// One library page at a time for the root, and the cached posts for everything else. A full walk
+/// happens only for the working-set change path, and only when the cache is older than `freshInterval`.
 actor FinderCatalog {
     private var snapshot: FinderLibrary.Snapshot?
     private var fetchedAt: Date?
-    /// One walk shared by the requests Finder makes together. Unstructured, so awaiting it suspends
-    /// this actor and the walk can run; a continuation closure here would be `@Sendable` and could
-    /// not touch this actor's state.
+    /// Root pages already handed to Finder, keyed by the API cursor (`""` is the first page).
+    private var rootPages: [String: (page: FinderLibrary.ListingPage, at: Date)] = [:]
+    /// One full walk shared by change enumerations. Unstructured, so awaiting it suspends this actor
+    /// and the walk can run.
     private var inFlight: Task<FinderLibrary.Snapshot, Error>?
 
-    /// How long a listing may answer `item` and `fetchContents` before the next walk.
-    /// `nonisolated` so the extension can read it without hopping onto this actor.
-    nonisolated static let freshInterval: TimeInterval = 20
+    /// How long a root page or a full catalog may be reused.
+    nonisolated static let freshInterval: TimeInterval = FinderLibrary.freshInterval
+
+    /// One `GET /library` page. The first page uses a nil cursor. Later pages pass the API cursor
+    /// Finder handed back. Does not walk the rest of the library.
+    func rootPage(cursor: String?) async throws -> FinderLibrary.ListingPage {
+        let key = cursor ?? ""
+        if let cached = rootPages[key], Date().timeIntervalSince(cached.at) < Self.freshInterval {
+            return cached.page
+        }
+        let client = try Self.client()
+        let api: LibraryPage
+        do {
+            api = try await client.library(cursor: cursor, limit: FinderLibrary.pageLimit, v3: true)
+        } catch {
+            throw FinderLibrary.failure(from: error)
+        }
+        var taken = Set<String>()
+        if cursor != nil {
+            // Names from earlier pages only. This page's own previous folders are excluded so a refetch
+            // does not number "Cat" again against itself.
+            let own = Set(rootPages[key]?.page.folders.map(\.raw) ?? [])
+            taken = Set((snapshot?.rootChildren ?? []).filter { !own.contains($0) }.compactMap { snapshot?.nodes[$0]?.name.lowercased() })
+        }
+        let listing = FinderLibrary.listingPage(api, takenNames: &taken)
+        absorb(listing, resetRoot: cursor == nil)
+        if cursor == nil { rootPages = [:] }
+        rootPages[key] = (listing, Date())
+        return listing
+    }
+
+    /// A folder's files, from the pages already listed or the last full snapshot on disk. Nil when
+    /// this post has not been seen. Does not walk the library.
+    func children(of parent: String) -> [FinderLibrary.Node]? {
+        let snap = snapshot ?? remembered()
+        guard let snap, snap.nodes[parent]?.isFolder == true else { return nil }
+        return snap.children(of: parent).compactMap { snap.nodes[$0] }
+    }
+
+    /// One item from the cache or the disk snapshot. Nil when it has not been listed. No network.
+    func node(raw: String) -> FinderLibrary.Node? {
+        if let node = snapshot?.node(raw) { return node }
+        return remembered()?.node(raw)
+    }
 
     func snapshot(maxAge: TimeInterval) async throws -> FinderLibrary.Snapshot {
         if maxAge > 0, let snapshot, let fetchedAt, Date().timeIntervalSince(fetchedAt) < maxAge {
@@ -54,19 +95,20 @@ actor FinderCatalog {
     }
 
     /// The anchor the system last saw is `previous` on disk. A fresh walk is diffed against it.
+    /// Reuses a catalog younger than `freshInterval`.
     func sync(from anchor: Data?) async throws -> FinderLibrary.Sync {
-        let previous = remembered()
-        let current = try await snapshot(maxAge: 0)
+        let previous = remembered() ?? snapshot
+        let current = try await snapshot(maxAge: Self.freshInterval)
         let result = FinderLibrary.sync(anchor: anchor, previous: previous, current: current)
         remember(current)
+        rootPages = [:]
         return result
     }
 
     func currentAnchor() -> Data? { snapshot?.anchor }
 
     func contents(of raw: String) async throws -> (URL, FinderLibrary.Node) {
-        let listing = try await snapshot(maxAge: Self.freshInterval)
-        guard let node = listing.node(raw), !node.isFolder else { throw FinderLibrary.Failure.notFound }
+        guard let node = node(raw: raw), !node.isFolder else { throw FinderLibrary.Failure.notFound }
         let client = try Self.client()
         let remote: RemoteFile
         if let url = node.contentURL {
@@ -103,8 +145,7 @@ actor FinderCatalog {
     }
 
     func thumbnail(of raw: String, maxPixel: Int) async throws -> Data {
-        let listing = try await snapshot(maxAge: Self.freshInterval)
-        guard let url = listing.node(raw)?.thumbnailURL else { throw FinderLibrary.Failure.notFound }
+        guard let url = node(raw: raw)?.thumbnailURL else { throw FinderLibrary.Failure.notFound }
         let file: URL
         let response: URLResponse
         do {
@@ -130,6 +171,26 @@ actor FinderCatalog {
         let keychain = Keychain.shared
         guard Settings.apiKey(in: keychain, forServer: url) != nil else { throw FinderLibrary.Failure.unauthorized }
         return HTTPCobaltClient(baseURL: url, apiKey: { Settings.apiKey(in: keychain, forServer: url) })
+    }
+
+    /// Folds one root page into the cache. The first page replaces the root order; a later page appends.
+    private func absorb(_ listing: FinderLibrary.ListingPage, resetRoot: Bool) {
+        var snap = snapshot ?? FinderLibrary.Snapshot(nodes: [:], rootChildren: [], children: [:], anchor: Data())
+        if resetRoot { snap.rootChildren = [] }
+        var filesByParent: [String: [String]] = [:]
+        for file in listing.files {
+            snap.nodes[file.raw] = file
+            if let parent = file.parent?.raw {
+                filesByParent[parent, default: []].append(file.raw)
+            }
+        }
+        for folder in listing.folders {
+            snap.nodes[folder.raw] = folder
+            if !snap.rootChildren.contains(folder.raw) { snap.rootChildren.append(folder.raw) }
+            snap.children[folder.raw] = filesByParent[folder.raw] ?? []
+        }
+        snapshot = snap
+        fetchedAt = Date()
     }
 
     nonisolated private static func fetch() async throws -> FinderLibrary.Snapshot {

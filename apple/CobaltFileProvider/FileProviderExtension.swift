@@ -25,14 +25,18 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             return Progress()
         }
         let catalog = self.catalog
-        // `completion` is a function value, not a trailing closure, so it has to be a normal argument.
-        return work(
-            { try await catalog.snapshot(maxAge: FinderCatalog.freshInterval) },
-            result: { snapshot in
-                guard let node = snapshot.node(identifier.rawValue) else { throw FinderLibrary.Failure.notFound }
-                return FinderItem(node)
-            },
-            completion: completionHandler)
+        nonisolated(unsafe) let completion = completionHandler
+        let progress = Progress()
+        let task = Task {
+            // Listed pages and the disk snapshot only. A miss is not a reason to walk the library.
+            if let node = await catalog.node(raw: identifier.rawValue) {
+                completion(FinderItem(node), nil)
+            } else {
+                completion(nil, finderError(FinderLibrary.Failure.notFound))
+            }
+        }
+        progress.cancellationHandler = { task.cancel() }
+        return progress
     }
 
     func fetchContents(
@@ -120,26 +124,4 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     }
 
     private static let readOnly = NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError)
-
-    /// Runs `load`, then `result`, and always calls `completion` with either the item or the error.
-    private func work(
-        _ load: @escaping @Sendable () async throws -> FinderLibrary.Snapshot,
-        result: @escaping @Sendable (FinderLibrary.Snapshot) throws -> FinderItem,
-        completion: @escaping (NSFileProviderItem?, Error?) -> Void
-    ) -> Progress {
-        nonisolated(unsafe) let completion = completion
-        let progress = Progress()
-        let task = Task {
-            do {
-                let item = try result(try await load())
-                if Task.isCancelled { return }
-                completion(item, nil)
-            } catch {
-                if Task.isCancelled { return }
-                completion(nil, finderError(error))
-            }
-        }
-        progress.cancellationHandler = { task.cancel() }
-        return progress
-    }
 }

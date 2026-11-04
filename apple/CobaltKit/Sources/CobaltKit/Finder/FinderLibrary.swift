@@ -102,9 +102,43 @@ public enum FinderLibrary {
         case apply(Delta, Snapshot)
     }
 
+    /// `GET /library` rejects `limit` above `MAX_LIBRARY_LIMIT` (50) in `app-routes.ts`. This is that cap.
     public static let pageLimit = 50
-    /// A walk stops here so a cursor that never ends cannot pin the extension.
+    /// A full walk (changes only) stops here so a cursor that never ends cannot pin the extension.
     public static let postCap = 5_000
+    /// How long a fetched page or a full catalog may be reused. Root paging does not wait out a full walk.
+    public static let freshInterval: TimeInterval = 60
+
+    /// One `GET /library` page, turned into Finder folders. `nextCursor` is the API cursor for the next page.
+    public struct ListingPage: Equatable, Sendable {
+        public var folders: [Node]
+        public var files: [Node]
+        public var nextCursor: String?
+    }
+
+    /// The file-provider page token for the root. Empty data is the first page (no `cursor` query).
+    /// Anything else is the API cursor, UTF-8. The extension treats the system's sorted-page sentinels
+    /// as the first page before decoding.
+    public struct RootPageToken: Equatable, Sendable {
+        public var cursor: String?
+
+        public init(cursor: String?) {
+            self.cursor = cursor.flatMap { $0.isEmpty ? nil : $0 }
+        }
+
+        public init(pageData: Data) {
+            guard !pageData.isEmpty, let string = String(data: pageData, encoding: .utf8), !string.isEmpty else {
+                cursor = nil
+                return
+            }
+            cursor = string
+        }
+
+        public var data: Data {
+            guard let cursor else { return Data() }
+            return Data(cursor.utf8)
+        }
+    }
 
     /// Pages of `GET /library` (the caller asks for `v=3`) into one list. Hidden posts are dropped.
     /// A repeated cursor, an empty page, or `postCap` ends the walk.
@@ -127,6 +161,18 @@ public enum FinderLibrary {
             cursor = step
         }
         return posts
+    }
+
+    /// One library page, as Finder folders. `takenNames` is the lowercased folder names already shown
+    /// on earlier pages, so page two can disambiguate without re-reading page one. Hidden posts are skipped.
+    /// `nextCursor` is the API's `next`, including when this page contributed no folders.
+    public static func listingPage(_ page: LibraryPage, takenNames: inout Set<String>) -> ListingPage {
+        let built = make(posts: page.posts, takenNames: &takenNames)
+        let folders = built.rootChildren.compactMap { built.nodes[$0] }
+        let files = built.rootChildren.flatMap { parent in
+            (built.children[parent] ?? []).compactMap { built.nodes[$0] }
+        }
+        return ListingPage(folders: folders, files: files, nextCursor: page.next)
     }
 
     /// The originals Finder shows for one post. Empty when the post has nothing that can be opened.
@@ -156,10 +202,15 @@ public enum FinderLibrary {
     }
 
     public static func make(posts: [LibraryPost]) -> Snapshot {
+        var taken = Set<String>()
+        return make(posts: posts, takenNames: &taken)
+    }
+
+    static func make(posts: [LibraryPost], takenNames: inout Set<String>) -> Snapshot {
         var nodes: [String: Node] = [:]
         var root: [String] = []
         var children: [String: [String]] = [:]
-        var folderNames = Set<String>()
+        var folderNames = takenNames
         for post in posts where !post.hidden {
             let files = originals(in: post)
             guard !files.isEmpty else { continue }
@@ -193,6 +244,7 @@ public enum FinderLibrary {
             }
             return parts
         })
+        takenNames = folderNames
         return Snapshot(nodes: nodes, rootChildren: root, children: children, anchor: anchor)
     }
 

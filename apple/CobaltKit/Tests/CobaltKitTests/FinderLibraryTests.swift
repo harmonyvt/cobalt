@@ -174,6 +174,36 @@ struct FinderLibraryTests {
         #expect(delta.deleted.isEmpty)
     }
 
+    @Test func theLibraryPageSizeIsTheAPIMaximum() {
+        // GET /library answers 400 above 50 (`MAX_LIBRARY_LIMIT` in app-routes.ts).
+        #expect(FinderLibrary.pageLimit == 50)
+    }
+
+    @Test func aRootPageMapsTheAPICursorAndTheNextPageDisambiguatesTheName() {
+        var taken = Set<String>()
+        let first = FinderLibrary.listingPage(
+            page([post("a", custom: "Cat", files: [file("1", name: "a.mp4")])], next: "cursor-1"),
+            takenNames: &taken)
+        #expect(first.nextCursor == "cursor-1")
+        #expect(first.folders.map(\.name) == ["Cat"])
+        #expect(first.files.map(\.raw) == ["file:1"])
+        #expect(first.files.first?.parent == .post("a"))
+        let token = FinderLibrary.RootPageToken(cursor: first.nextCursor)
+        #expect(token.cursor == "cursor-1")
+        #expect(FinderLibrary.RootPageToken(pageData: token.data).cursor == "cursor-1")
+        #expect(FinderLibrary.RootPageToken(pageData: Data()).cursor == nil)
+
+        let second = FinderLibrary.listingPage(
+            page([
+                post("h", custom: "Hidden", files: [file("9", name: "h.mp4")], hidden: true),
+                post("b", custom: "Cat", files: [file("2", name: "b.mp4")]),
+            ], next: nil),
+            takenNames: &taken)
+        #expect(second.folders.map(\.name) == ["Cat (2)"])
+        #expect(second.nextCursor == nil)
+        #expect(second.files.map(\.parent) == [.post("b")])
+    }
+
     @Test func pagingDropsHiddenPostsAndStopsOnARepeatedCursor() async throws {
         let calls = Mutex<[String?]>([])
         let posts = try await FinderLibrary.collect { cursor in
