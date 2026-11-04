@@ -202,10 +202,11 @@ struct CobaltApp: App {
     /// The menu bar icon. `isInserted` is the settings switch (on unless the owner turns it off).
     /// `.window` is the popover, not a pull-down menu.
     private var menuBar: some Scene {
-        // Read in the body so the scene updates when the settings switch changes. A `Binding` get
-        // that is only called later would not subscribe.
+        // Read here, in the scene body, so the scene subscribes to the setting. A `Binding` get
+        // that is only called later would not. A statement before the scene means this property
+        // has to return explicitly (it is not a result builder).
         let show = model.settings.menuBarExtra
-        MenuBarExtra(isInserted: Binding(
+        return MenuBarExtra(isInserted: Binding(
             get: { show },
             set: { on in
                 model.settings.menuBarExtra = on

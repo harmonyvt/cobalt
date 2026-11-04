@@ -1,4 +1,5 @@
 import CobaltKit
+import Foundation
 
 /// The window's paste and the menu bar's paste share this. A single new link, and several files, are
 /// queued here. A review or a name-it sheet is returned for the window to present: the menu bar never
