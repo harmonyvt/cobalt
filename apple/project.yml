@@ -240,6 +240,8 @@ targets:
           NSExtensionPointIdentifier: com.apple.fileprovider-nonui
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
           NSExtensionFileProviderDocumentGroup: group.com.capybaraharmony.cobalt
+          # Without this, fileproviderd treats the appex as a legacy NSFileProviderExtension and refuses it.
+          NSExtensionFileProviderSupportsEnumeration: true
     settings:
       base:
         PRODUCT_NAME: CobaltFileProvider

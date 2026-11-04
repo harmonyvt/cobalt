@@ -1,9 +1,12 @@
 import CobaltKit
 @preconcurrency import FileProvider
 import Foundation
+import OSLog
 
 /// Adds and removes the Capystore Finder domain. The extension does the listing; this only registers
 /// the domain, drops it on sign-out, and signals it after the app refreshes the library.
+private let finderLog = Logger(subsystem: "com.capybaraharmony.cobalt", category: "finder")
+
 @MainActor
 enum FinderDomain {
     static let domain = NSFileProviderDomain(
@@ -55,6 +58,7 @@ enum FinderDomain {
                 try await add()
                 model.settings.finderSidebarEnabled = true
                 model.finderSidebar = true
+                await noteIfUserDisabled(model)
                 signal()
             } else {
                 model.settings.finderSidebarEnabled = false
@@ -63,6 +67,7 @@ enum FinderDomain {
                 await remove()
             }
         } catch {
+            finderLog.error("could not change the finder domain: \(error.localizedDescription, privacy: .public)")
             model.settings.finderSidebarEnabled = false
             model.finderSidebar = false
             model.finderSidebarNote = Copy.Folder.finderFailed
@@ -79,7 +84,9 @@ enum FinderDomain {
                 try FinderBridge.publish(serverURL: model.settings.serverURL, enabled: true)
                 try await add()
                 model.finderSidebarNote = nil
+                await noteIfUserDisabled(model)
             } catch {
+                finderLog.error("could not restore the finder domain: \(error.localizedDescription, privacy: .public)")
                 model.finderSidebar = false
                 model.settings.finderSidebarEnabled = false
                 model.finderSidebarNote = Copy.Folder.finderFailed
@@ -108,6 +115,17 @@ enum FinderDomain {
         let existing = try await NSFileProviderManager.domains()
         if existing.contains(where: { $0.identifier == domain.identifier }) { return }
         try await NSFileProviderManager.add(domain)
+    }
+
+    /// A domain removed and added again can stay off under System Settings → General → Login Items
+    /// & Extensions → File Providers. `domains()` is the system's copy; a domain we just built reports
+    /// `userEnabled` as true until the system says otherwise.
+    private static func noteIfUserDisabled(_ model: AppModel) async {
+        guard let listed = try? await NSFileProviderManager.domains(),
+              let live = listed.first(where: { $0.identifier == domain.identifier }),
+              !live.userEnabled
+        else { return }
+        model.finderSidebarNote = Copy.Folder.finderUserDisabled
     }
 
     private static func remove() async {

@@ -73,6 +73,7 @@ extension Copy {
         static let finderFooter = "a capystore location in the finder sidebar. each folder is a post, and a file downloads when you open it. finder can't change the library."
         static let finderNeedsSignIn = "sign in to show the library in finder."
         static let finderFailed = "capystore couldn't show the library in finder."
+        static let finderUserDisabled = "capystore is switched off in system settings. turn it on under general, login items & extensions, file providers."
     }
 }
 
