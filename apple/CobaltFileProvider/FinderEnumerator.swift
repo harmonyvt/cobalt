@@ -8,7 +8,7 @@ import Synchronization
 final class FinderEnumerator: NSObject, NSFileProviderEnumerator {
     let parent: NSFileProviderItemIdentifier
     let catalog: FinderCatalog
-    private let invalidated = Mutex(false)
+    private let invalidated = InvalidationFlag()
 
     init(parent: NSFileProviderItemIdentifier, catalog: FinderCatalog) {
         self.parent = parent
@@ -94,7 +94,10 @@ final class FinderEnumerator: NSObject, NSFileProviderEnumerator {
     private static let pageSize = 200
 
     private static func offset(of page: NSFileProviderPage) -> Int {
-        if page == .initialPage || page.rawValue.isEmpty { return 0 }
+        // There is no `initialPage`. The first page is one of the two sorted sentinels, or empty.
+        let byName = NSFileProviderPage(NSFileProviderPage.initialPageSortedByName as Data)
+        let byDate = NSFileProviderPage(NSFileProviderPage.initialPageSortedByDate as Data)
+        if page == byName || page == byDate || page.rawValue.isEmpty { return 0 }
         return Int(String(data: page.rawValue, encoding: .utf8) ?? "") ?? 0
     }
 
@@ -104,5 +107,14 @@ final class FinderEnumerator: NSObject, NSFileProviderEnumerator {
         // a refresh updates files that are already on screen, without pinning every original into Recents.
         if parent == .workingSet { return [] }
         return snapshot.children(of: parent.rawValue)
+    }
+}
+
+/// `Mutex` is not copyable, so a `Task` cannot take `let flag = self.invalidated`. This class is.
+private final class InvalidationFlag: Sendable {
+    private let state = Mutex(false)
+
+    func withLock<R>(_ body: (inout Bool) -> R) -> R {
+        state.withLock { body(&$0) }
     }
 }
