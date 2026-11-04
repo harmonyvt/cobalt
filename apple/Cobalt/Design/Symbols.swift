@@ -9,6 +9,7 @@ enum Symbol {
     static let save = "arrow.down.circle"
     static let library = "photo.on.rectangle.angled"
     static let settings = "gearshape"
+    static let menuBar = "menubar.rectangle"
 
     // actions
     static let paste = "doc.on.clipboard"

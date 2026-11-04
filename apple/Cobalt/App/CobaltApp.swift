@@ -94,6 +94,9 @@ struct CobaltApp: App {
         #endif
         CobaltFont.register()
         let model = LaunchConfig.makeModel()
+        #if os(macOS)
+        MenuBarPresence.shared.staysRunning = model.settings.menuBarExtra
+        #endif
         _model = State(initialValue: model)
         // Shortcuts, Siri and Spotlight run in this process, before any scene (CONTRACT-PARALLEL 15.2)
         IntentDependencies.register(model)
@@ -116,6 +119,7 @@ struct CobaltApp: App {
                 .frame(width: 560, height: 740)
         }
         EditorWindow(model: model)
+        menuBar
         #endif
     }
 
@@ -193,6 +197,26 @@ struct CobaltApp: App {
                     StageWallpaperCommand(model: model)
                 }
             }
+    }
+
+    /// The menu bar icon. `isInserted` is the settings switch (on unless the owner turns it off).
+    /// `.window` is the popover, not a pull-down menu.
+    private var menuBar: some Scene {
+        // Read in the body so the scene updates when the settings switch changes. A `Binding` get
+        // that is only called later would not subscribe.
+        let show = model.settings.menuBarExtra
+        MenuBarExtra(isInserted: Binding(
+            get: { show },
+            set: { on in
+                model.settings.menuBarExtra = on
+                MenuBarPresence.shared.staysRunning = on
+            }
+        )) {
+            MenuBarPopover(model: model)
+        } label: {
+            MenuBarLabel(model: model)
+        }
+        .menuBarExtraStyle(.window)
     }
     #endif
 }

@@ -75,7 +75,7 @@ extension Telemetry {
 
     /// `paste` {via, links, kept, duplicates, concurrent, line}: one paste or drop of links, once the owner has seen
     /// what was found (`links` = found, `kept` = sent on, `duplicates` = left out because they were already saved or
-    /// running). The paste code (`AppShell`, the review sheet) calls it; `JobQueue.add` logs the jobs themselves.
+    /// running). The paste code (`PasteRouter`, the review sheet) calls it; `JobQueue.add` logs the jobs themselves.
     public static func logPaste(via: JobVia, links: Int, kept: Int, duplicates: Int, concurrent: Int, line: LineMode) {
         log(.info, .pipeline, "paste", data: [
             "via": .string(via.rawValue), "links": .int(links), "kept": .int(kept), "duplicates": .int(duplicates),

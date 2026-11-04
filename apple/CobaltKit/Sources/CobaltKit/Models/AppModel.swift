@@ -125,6 +125,8 @@ public final class AppModel {
     public let macFolder: MacFolder
     /// The Mac's pull of saves made anywhere (13.8): unavailable on iOS and in previews.
     public let savePull: SavePull
+    /// The menu bar's read-only Finder location. Unavailable until a File Provider connects (`MenuBarFinderModel`).
+    public let menuBarFinder = MenuBarFinderModel()
     /// "keep offline" (CONTRACT-OFFLINE.md decision 9): the background downloads and their states.
     public let offlineDownloads: OfflineDownloads
     public internal(set) var capabilities: Capabilities
