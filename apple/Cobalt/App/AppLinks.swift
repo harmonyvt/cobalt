@@ -170,11 +170,20 @@ extension CobaltAppDelegate: NSApplicationDelegate {
         UNUserNotificationCenter.current().delegate = self
     }
 
-    /// Closing the main window quits the app (one `Window` scene), except while the studio wallpaper is on: the
-    /// wallpaper lives in this process, so the app stays (reopen the window from the Dock).
+    /// Closing the main window quits the app (one `Window` scene), except while the studio wallpaper is on
+    /// (it lives in this process) or the menu bar icon is showing: the icon is the app, and the Dock reopens the window.
     @MainActor
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        !StageWallpaper.shared.isOn
+        if StageWallpaper.shared.isOn { return false }
+        if MenuBarPresence.shared.staysRunning { return false }
+        return true
+    }
+
+    /// The window was closed and the menu bar (or the Dock) is what's left. Open the one window again.
+    @MainActor
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { MenuBarHandoff.shared.reveal?() }
+        return true
     }
 
     /// Quitting with work on the server: the shell's hook sends the line's one summary opt-in first (bounded to about a

@@ -294,6 +294,16 @@ public final class Settings {
         set { withMutation(keyPath: \.haptics) { defaults.set(newValue, forKey: "haptics") } }
     }
 
+    /// The Mac menu bar icon. On by default. The Mac settings row is the only control; iOS never reads it.
+    /// Closing the window leaves the app running while this is on (`MenuBarPresence`).
+    public var menuBarExtra: Bool {
+        get {
+            access(keyPath: \.menuBarExtra)
+            return defaults.object(forKey: "menuBarExtra") as? Bool ?? true
+        }
+        set { withMutation(keyPath: \.menuBarExtra) { defaults.set(newValue, forKey: "menuBarExtra") } }
+    }
+
     // MARK: sharing (CONTRACT-VISIBILITY.md decision 3)
 
     /// "make new saves public": a link save, an upload and the share sheet ask the server for a public link

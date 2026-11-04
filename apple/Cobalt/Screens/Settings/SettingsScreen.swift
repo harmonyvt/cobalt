@@ -45,6 +45,7 @@ struct SettingsScreen: View {
             StorageSettingsSection(model: model)
             PhotosSettingsSection(model: model)
             liveSection
+            menuBarSection
             TelemetrySettingsSection(model: model)
             feelSection
         }
@@ -181,6 +182,30 @@ struct SettingsScreen: View {
                 footer(Copy.Live.rowFooter)
             }
         }
+    }
+
+    /// The menu bar icon. Mac only: closing the window leaves capystore running while this is on.
+    @ViewBuilder
+    private var menuBarSection: some View {
+        #if os(macOS)
+        Section {
+            Toggle(isOn: Binding(
+                get: { settings.menuBarExtra },
+                set: { on in
+                    settings.menuBarExtra = on
+                    MenuBarPresence.shared.staysRunning = on
+                }
+            )) {
+                Label(Copy.MenuBar.showIcon, systemImage: Symbol.menuBar)
+            }
+        } header: {
+            header(Copy.MenuBar.section)
+        } footer: {
+            footer(Copy.MenuBar.showIconFooter)
+        }
+        #else
+        EmptyView()
+        #endif
     }
 
     private var feelSection: some View {

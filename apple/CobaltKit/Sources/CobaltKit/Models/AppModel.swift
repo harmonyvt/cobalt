@@ -125,6 +125,8 @@ public final class AppModel {
     public let macFolder: MacFolder
     /// The Mac's pull of saves made anywhere (13.8): unavailable on iOS and in previews.
     public let savePull: SavePull
+    /// The menu bar's read-only Finder location. Hidden until `MenuBarFinderWiring` connects it on the Mac.
+    public let menuBarFinder = MenuBarFinderModel()
     /// The Finder sidebar switch (Mac). The app target adds and removes the domain; this is the remembered choice.
     public var finderSidebar = false
     /// Why the sidebar could not be added, or why the switch is unavailable. Nil when there is nothing to say.

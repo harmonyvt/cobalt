@@ -151,6 +151,8 @@ struct AppShell: View {
                 }
                 .cobaltRoot(model: model)
             }
+            .onAppear { consumeMenuBarHandoff() }
+            .onChange(of: MenuBarHandoff.shared.token) { _, _ in consumeMenuBarHandoff() }
             .background { shortcuts }
             #if DEBUG
             .onAppear {
@@ -209,28 +211,23 @@ struct AppShell: View {
 
     // MARK: paste, drop and file intake
 
-    /// What was pasted (⌘V, Edit > Paste, the paste circle) or dropped. Files are uploads, web links and text are read
-    /// for links; nothing here is ever silent (CONTRACT-PARALLEL 4).
+    /// What was pasted (⌘V, Edit > Paste, the paste circle, the menu bar) or dropped. Files are uploads, web links
+    /// and text are read for links; nothing here is ever silent (CONTRACT-PARALLEL 4). The decision is `PasteRouter`,
+    /// which the menu bar uses too.
     private func handle(_ items: [PastedContent], via: JobVia, dropped: Bool) {
-        let files = items.compactMap(\.fileURL)
-        if !files.isEmpty {
-            addFiles(files, via: via)
-            return
-        }
-        let text = items.compactMap(\.text).joined(separator: "\n")
-        let source: PasteReviewRequest.Source = dropped ? .dropped : .clipboard
-        switch PasteIntake.outcome(for: text, source: source, model: model) {
-        case .none:
-            logPaste(via: via, found: 0, kept: 0, duplicates: 0)
-            showStatus(dropped ? Copy.Jobs.nothingDropped : Copy.Jobs.noLink)
-        case .duplicate:
-            logPaste(via: via, found: 1, kept: 0, duplicates: 1)
-            showStatus(Copy.Jobs.duplicate)
-        case .one(let url):
-            logPaste(via: via, found: 1, kept: 1, duplicates: 0)
-            addLinks([url], via: via)
+        apply(PasteRouter.perform(items, via: via, dropped: dropped, model: model), via: via)
+    }
+
+    private func apply(_ effect: PasteRouter.Effect, via: JobVia) {
+        switch effect {
+        case .status(let text):
+            showStatus(text)
+        case .queued(let message, _):
+            if let message { showStatus(message) }
         case .review(let request):
             review = request
+        case .nameFile(let url):
+            intake(url, via: via)
         }
     }
 
@@ -238,28 +235,11 @@ struct AppShell: View {
     private func finishReview(_ request: PasteReviewRequest, saving urls: [URL]) {
         review = nil
         let duplicates = request.rows.filter { $0.status != .new }.count
-        logPaste(via: .review, found: request.found, kept: urls.count, duplicates: duplicates)
+        PasteRouter.log(via: .review, found: request.found, kept: urls.count, duplicates: duplicates, model: model)
         guard !urls.isEmpty else { return }
-        addLinks(urls, via: .review)
-    }
-
-    /// Links go to the queue; whatever did not take the focus says where it went.
-    private func addLinks(_ urls: [URL], via: JobVia) {
-        model.selectedTab = .save
-        let jobs = model.queue.add(urls.map(JobInput.link), via: via)
-        let alongside = jobs.filter { $0.id != model.queue.focusedID }.count
-        if alongside > 0 { showStatus(Copy.Jobs.savingAlongside(alongside)) }
-    }
-
-    /// One file: the upload and its `name it` sheet, as always. Several files: several upload jobs alongside.
-    private func addFiles(_ urls: [URL], via: JobVia) {
-        if urls.count == 1 {
-            intake(urls[0], via: via)
-            return
+        if case .queued(let message, _) = PasteRouter.commitLinks(urls, via: .review, model: model), let message {
+            showStatus(message)
         }
-        model.selectedTab = .save
-        let jobs = model.queue.add(urls.map { JobInput.file($0, photosAssetID: nil) }, via: via)
-        showStatus(Copy.Jobs.uploadingAlongside(jobs.count))
     }
 
     /// Files from the picker, Photos, a paste and a drop come through here: the run starts (`importFile`: the file
@@ -284,13 +264,17 @@ struct AppShell: View {
         }
     }
 
-    /// `paste` (CONTRACT-PARALLEL 8): counts only, never a link.
-    private func logPaste(via: JobVia, found: Int, kept: Int, duplicates: Int) {
-        Telemetry.log(.info, .pipeline, "paste", data: [
-            "via": .string(via.rawValue), "links": .int(found), "kept": .int(kept), "duplicates": .int(duplicates),
-            "concurrent": .int(model.queue.live.count),
-            "line": .string(model.queue.lineMode == .server ? "server" : "device"),
-        ])
+    /// A paste the menu bar handed over, or a job it started that now needs a choice. The window may not have
+    /// existed when the menu bar staged it, so both appear and a later change take the one pending request.
+    private func consumeMenuBarHandoff() {
+        guard let request = MenuBarHandoff.shared.take() else { return }
+        if let id = request.focus {
+            guard model.queue.job(id) != nil else { return }
+            model.queue.focus(id)
+            model.selectedTab = .save
+            return
+        }
+        handle(request.items, via: .paste, dropped: false)
     }
 
     #if DEBUG

@@ -2,6 +2,7 @@ import CobaltKit
 @preconcurrency import FileProvider
 import Foundation
 import OSLog
+import Synchronization
 
 /// Adds and removes the Capystore Finder domain. The extension does the listing; this only registers
 /// the domain, drops it on sign-out, and signals it after the app refreshes the library.
@@ -9,6 +10,12 @@ private let finderLog = Logger(subsystem: "com.capybaraharmony.cobalt", category
 
 @MainActor
 enum FinderDomain {
+    /// `signalEnumerator` calls that have not called back yet. Nonisolated so `signal` can count them
+    /// before either callback, without hopping to the main actor first.
+    nonisolated private static let listings = Mutex(0)
+
+    nonisolated static var isSignalling: Bool { listings.withLock { $0 > 0 } }
+
     static let domain = NSFileProviderDomain(
         identifier: NSFileProviderDomainIdentifier(rawValue: FinderBridge.domainIdentifier),
         displayName: FinderBridge.displayName)
@@ -39,6 +46,7 @@ enum FinderDomain {
             // device that never used it must not raise the macOS app-group prompt.
             if wasOn { try? FinderBridge.publish(serverURL: model.settings.serverURL, enabled: false) }
             await remove()
+            model.menuBarFinder.reload()
         }
     }
 
@@ -49,6 +57,7 @@ enum FinderDomain {
             model.finderSidebar = false
             model.settings.finderSidebarEnabled = false
             model.finderSidebarNote = Copy.Folder.finderNeedsSignIn
+            model.menuBarFinder.reload()
             return
         }
         model.finderSidebarNote = nil
@@ -73,6 +82,7 @@ enum FinderDomain {
             model.finderSidebarNote = Copy.Folder.finderFailed
             await remove()
         }
+        model.menuBarFinder.reload()
     }
 
     /// After launch: put the domain back if the switch is on and there is a key, otherwise take it down
@@ -98,6 +108,7 @@ enum FinderDomain {
             }
             await remove()
         }
+        model.menuBarFinder.reload()
     }
 
     /// Not isolated to the main actor: the library-refresh hook calls it off the model's actor, and
@@ -107,8 +118,15 @@ enum FinderDomain {
             identifier: NSFileProviderDomainIdentifier(rawValue: FinderBridge.domainIdentifier),
             displayName: FinderBridge.displayName)
         guard let manager = NSFileProviderManager(for: domain) else { return }
-        manager.signalEnumerator(for: .rootContainer) { _ in }
-        manager.signalEnumerator(for: .workingSet) { _ in }
+        listings.withLock { $0 += 2 }
+        Task { @MainActor in liveModel?.menuBarFinder.reload() }
+        manager.signalEnumerator(for: .rootContainer) { _ in finishSignal() }
+        manager.signalEnumerator(for: .workingSet) { _ in finishSignal() }
+    }
+
+    nonisolated private static func finishSignal() {
+        listings.withLock { $0 = max(0, $0 - 1) }
+        Task { @MainActor in liveModel?.menuBarFinder.reload() }
     }
 
     private static func add() async throws {
