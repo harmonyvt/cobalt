@@ -95,6 +95,9 @@ struct CobaltApp: App {
         CobaltFont.register()
         let model = LaunchConfig.makeModel()
         _model = State(initialValue: model)
+        #if os(macOS)
+        FinderDomain.install(model)
+        #endif
         // Shortcuts, Siri and Spotlight run in this process, before any scene (CONTRACT-PARALLEL 15.2)
         IntentDependencies.register(model)
         #if os(macOS)

@@ -46,6 +46,8 @@ extension Settings {
     func forgetSession() {
         clearAPIKey()
         defaults.removeObject(forKey: Settings.sessionPrefixKey)
+        defaults.set(false, forKey: FinderBridge.enabledDefaultsKey)
+        FinderLibraryEvents.noteSignOut()
     }
 
     /// Previews: the stored preview key reads as a session this device signed in for.

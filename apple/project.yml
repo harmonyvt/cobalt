@@ -1,7 +1,8 @@
 name: Cobalt
 
 # One multiplatform SwiftUI app (iPhone, iPad, Mac) plus an iOS share extension, an iOS keyboard
-# extension, and an iOS widget extension (the Live Activity).
+# extension, an iOS widget extension (the Live Activity), and a Mac File Provider extension
+# (the Capystore location in the Finder sidebar).
 # Generated project is gitignored: `cd apple && xcodegen generate`.
 # Info.plists in Config/ are generated from this file and committed; the entitlements are hand-written.
 
@@ -45,6 +46,9 @@ targets:
       - target: CobaltKeyboard
         embed: true
         platformFilter: iOS
+      - target: CobaltFileProvider
+        embed: true
+        platformFilter: macOS
     info:
       path: Config/Cobalt-Info.plist
       properties:
@@ -211,3 +215,32 @@ targets:
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
         CODE_SIGN_ENTITLEMENTS: Config/CobaltKeyboard.entitlements
+
+  # The Capystore location in the Finder sidebar (macOS). Read-only: listing and download-on-open.
+  # Embedded in the Mac app only. The iOS archive does not build it.
+  CobaltFileProvider:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: CobaltFileProvider
+    dependencies:
+      - package: CobaltKit
+      - sdk: FileProvider.framework
+    info:
+      path: Config/CobaltFileProvider-Info.plist
+      properties:
+        CFBundleDisplayName: capystore
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.fileprovider-nonui
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
+          NSExtensionFileProviderDocumentGroup: group.com.capybaraharmony.cobalt
+    settings:
+      base:
+        PRODUCT_NAME: CobaltFileProvider
+        PRODUCT_BUNDLE_IDENTIFIER: com.capybaraharmony.cobalt.fileprovider
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        CODE_SIGN_ENTITLEMENTS: Config/CobaltFileProvider.entitlements
