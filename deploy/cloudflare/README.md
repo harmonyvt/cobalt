@@ -1040,7 +1040,8 @@ A 1080p stream canvas that OBS loads as a Browser Source, a public viewer store,
 
 - The spotlight is videos only. Background tiles still show pictures. An automatic spotlight is not drawn when the pool
   has no video. A summon that resolves to a picture, or to nothing, is refunded (`no_match`) with a toast. The live page
-  does not draw the caption bar under the spotlight; redemption toasts still show.
+  does not draw the caption bar under the spotlight; redemption toasts still show. "Play videos through" applies to the
+  spotlight too: off, it advances when `spotlight_seconds` ends; on, it waits until the video finishes.
 - Redemptions have no approval step: a valid one is `FULFILLED` right away; off air, a disabled action, a summon that
   matches nothing or matches a picture, or a skip while nothing is in the spotlight, is `CANCELED` (points refunded).
   Skip (200 points, 15 s cooldown, on, no typed input) sends the same canvas `skip` event as the owner's Skip button.

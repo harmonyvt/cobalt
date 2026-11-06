@@ -603,7 +603,9 @@ const LIVE_JS = String.raw`
     showPinned();
     if (spot.pinnedUntil > t) return;
     if (t < spot.base + num(cfg.spotlight_seconds, 20) * 1000) return;
-    if (spot.isVideo && !spot.playedOnce) {
+    // Tiles use tile_seconds. The spotlight uses spotlight_seconds. play_through is the only reason a
+    // video outlives that timer: on, wait until it has played once (15s grace if it never starts); off, move on.
+    if (cfg.play_through && spot.isVideo && !spot.playedOnce) {
       var started = spVid.readyState >= 2 || spVid.currentTime > 0;
       if (started || t - spot.shownAt < 15000) return;
     }

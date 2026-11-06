@@ -163,7 +163,7 @@ public final class StageStore {
     /// turning this on also turns `sound` on (one patch).
     public func setSoundAll(_ on: Bool) async throws { try await apply(StagePatch(sound: on ? true : nil, soundAll: on)) }
 
-    /// "play videos through": a playing video stays until it has played once, even past its tile life.
+    /// "play videos through": a playing video stays until it has played once, even past its time.
     public func setPlayThrough(_ on: Bool) async throws { try await apply(StagePatch(playThrough: on)) }
 
     // MARK: sliders (debounced)

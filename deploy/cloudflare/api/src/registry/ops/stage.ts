@@ -169,7 +169,7 @@ const Settings = z
         spotlight_seconds: z.number().optional().describe("10..120"),
         sound: z.boolean().optional().describe("the spotlight plays sound"),
         sound_all: z.boolean().optional().describe("every video plays sound"),
-        play_through: z.boolean().optional().describe("video tiles stay until played once"),
+        play_through: z.boolean().optional().describe("a playing video stays until it has played once"),
         video_max: z.number().optional().describe("videos on screen at once, 0..24"),
         store_hint: z.boolean().optional().describe("the canvas shows the store's link"),
     })

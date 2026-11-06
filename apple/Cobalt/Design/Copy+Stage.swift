@@ -112,7 +112,7 @@ extension Copy {
         static let flicker = "flicker"
         static let linger = "linger"
         static let playThrough = "play videos through"
-        static let playThroughNote = "a video stays until it has played once, even past its tile life"
+        static let playThroughNote = "a video stays until it has played once, even past its time"
         static let soundAll = "unmute all videos"
         static let soundAllNote = "every playing video has sound on stream, not only the spotlight"
         static let moreOptions = "more"

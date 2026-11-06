@@ -395,8 +395,12 @@ describe("livePage spotlight (videos only, no caption bar)", () => {
             parentNode: null as any,
             hidden: false,
             setAttribute() {},
-            getAttribute: () => null,
-            removeAttribute() {},
+            getAttribute(name: string) {
+                return name === "src" ? this.src || null : null;
+            },
+            removeAttribute(name: string) {
+                if (name === "src") this.src = "";
+            },
             addEventListener() {},
             play: () => Promise.resolve(),
             pause() {},
@@ -495,5 +499,119 @@ describe("livePage spotlight (videos only, no caption bar)", () => {
         expect(c.els.get("toast").style.display).toBe("flex");
         expect(c.els.get("tl2").textContent).toBe("no spotlight to skip, points refunded");
         expect(c.els.get("spcap").style.display ?? "").not.toBe("flex");
+    });
+
+    // spotlight_seconds is the spotlight's lifetime. tile_seconds is only the scatter. play_through is the
+    // only reason a started video stays up after the spotlight timer.
+    async function bootTimed(playThrough: boolean, pinnedUntil: number | null = null) {
+        let clock = 1_000_000;
+        const timers: { fn: () => void; ms: number }[] = [];
+        const els = new Map<string, any>();
+        for (const id of ["stage", "tiles", "spot", "spmedia", "spimg", "spvid", "spwho", "sppin", "sptitle", "spcap", "chaosrow", "chaostext", "toast", "tl1", "tl2", "hint"]) {
+            els.set(id, node());
+        }
+        const vid = els.get("spvid");
+        vid.readyState = 2;
+        vid.currentTime = 3;
+        const clip = { id: "vid", kind: "video", url: "https://media.example/clip.mp4", title: "clip", width: 640, height: 360 };
+        const sandbox: Record<string, unknown> = {
+            document: {
+                body: { getAttribute: () => null, setAttribute() {} },
+                getElementById: (id: string) => els.get(id) ?? node(),
+                createElement: () => node(),
+            },
+            location: { pathname: "/live/tok", search: "", protocol: "https:", host: "studio.capybaraharmony.com" },
+            window: { addEventListener() {}, innerWidth: 1920, innerHeight: 1080 },
+            WebSocket: class {
+                static OPEN = 1;
+                readyState = 0;
+                onopen: null | (() => void) = null;
+                onmessage: null | (() => void) = null;
+                onclose: null | (() => void) = null;
+                onerror: null | (() => void) = null;
+                send() {}
+                close() {}
+            },
+            fetch: async () => ({
+                ok: true,
+                status: 200,
+                headers: { get: () => "" },
+                json: async () => ({
+                    status: "success",
+                    stage: {
+                        on_air: true,
+                        spotlight_auto: false,
+                        spotlight_seconds: 20,
+                        tile_seconds: 3,
+                        play_through: playThrough,
+                        density: 5,
+                        sound: true,
+                        store_hint: false,
+                    },
+                    pool: [clip],
+                    spotlight: { item: clip, by: null, action: "summon", pinned_until: pinnedUntil, at: 1_000_000 },
+                    now: clock,
+                }),
+            }),
+            setTimeout: () => 1,
+            setInterval: (fn: () => void, ms = 0) => {
+                timers.push({ fn, ms });
+                return timers.length;
+            },
+            clearTimeout() {},
+            clearInterval() {},
+            requestAnimationFrame: () => 0,
+            Date: { now: () => clock, parse: Date.parse },
+            console,
+            Math,
+        };
+        vm.runInNewContext(scripts(livePage({ stageBaseUrl: BASE, preview: false }))[0]!, sandbox);
+        await new Promise((r) => setTimeout(r, 30));
+        return {
+            els,
+            vid,
+            advance(ms: number) {
+                clock += ms;
+            },
+            spotTick() {
+                for (const t of timers) if (t.ms === 500) t.fn();
+            },
+        };
+    }
+
+    it("with play_through off, advances after spotlight_seconds without waiting for the video to finish", async () => {
+        const c = await bootTimed(false);
+        expect(c.els.get("spot").style.display).toBe("block");
+        expect(c.vid.src).toBe("https://media.example/clip.mp4");
+        // past tile_seconds (3) and still inside spotlight_seconds (20): the file is playing and has not ended
+        c.advance(5_000);
+        c.spotTick();
+        expect(c.els.get("spot").style.display).toBe("block");
+        expect(c.vid.src).toBe("https://media.example/clip.mp4");
+        expect(c.vid.currentTime).toBe(3);
+        c.advance(16_000);
+        c.spotTick();
+        expect(c.els.get("spot").style.display).toBe("none");
+        expect(c.vid.src).toBe("");
+    });
+
+    it("with play_through on, a started video stays up past spotlight_seconds until it has played through", async () => {
+        const c = await bootTimed(true);
+        c.advance(21_000);
+        c.spotTick();
+        expect(c.els.get("spot").style.display).toBe("block");
+        expect(c.vid.src).toBe("https://media.example/clip.mp4");
+        expect(c.vid.currentTime).toBe(3);
+        c.vid.onended();
+        c.spotTick();
+        expect(c.els.get("spot").style.display).toBe("none");
+    });
+
+    it("a pin holds the spotlight past spotlight_seconds even when play_through is off", async () => {
+        const c = await bootTimed(false, 1_000_000 + 120_000);
+        c.advance(21_000);
+        c.spotTick();
+        expect(c.els.get("spot").style.display).toBe("block");
+        expect(c.vid.src).toBe("https://media.example/clip.mp4");
     });
 });

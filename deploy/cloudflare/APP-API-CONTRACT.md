@@ -3002,8 +3002,10 @@ connection a NAT or a sleeping machine killed never fires `close`, which is why.
   video, so tiles are not kept out of a strip under it). Pin still holds the video; it just is not drawn. It is the
   only tile with sound (when `sound` is on and not `preview`). With `spotlight_auto` a new random **video** every
   `spotlight_seconds` unless a summon or owner pick is newer or it is pinned. If the pool has no video there is no
-  automatic spotlight (pictures are not a fallback). Videos play to their end at least once before an auto replacement.
-  An image is never drawn in the spotlight, including one arriving on a summon event.
+  automatic spotlight (pictures are not a fallback). Its lifetime is `spotlight_seconds`, not `tile_seconds`. With
+  `play_through` off it moves on when that timer ends, even if the file is still playing. With `play_through` on, a
+  video that has started stays up until it has played through once (one that never starts lets go 15 s after it was
+  shown). An image is never drawn in the spotlight, including one arriving on a summon event.
 - Toast (bottom left, 5 s): "@name spent 500 on summon" and a second line (`"<words>" → <title>`, "100 things on
   screen for 30 seconds", "wiped the canvas and refilled it", "the spotlight stays up for 2 more minutes").
 - Chaos: density 100 until `until`, with an amber pill at the top "chaos mode · <s>s · thanks @name".
@@ -3191,7 +3193,8 @@ then empty). `<reward>` = `{ "action", "title", "cost", "cooldown_seconds", "ena
   click (OBS does not) gets the tile muted rather than stopped. The app's "unmute all videos" sends `sound: true` with it.
 - `play_through`: a playing video tile is not replaced until it has played to its end once (then it goes at once if it
   is past its tile life), at most 3 minutes, and one that never starts lets go after 15 s. Videos stop looping while it
-  is on.
+  is on. The spotlight follows the same switch on `spotlight_seconds` (not `tile_seconds`): off, it advances when that
+  timer ends; on, it waits until the video has played through once, with the same 15 s grace if playback never starts.
 - Pacing: a tile is never replaced before it has been up `tile_seconds` (before, the first beats after a fill or a
   shuffle replaced tiles a fraction of a second old).
 - Less black: the canvas is 1080 logical px tall and as wide as the window's shape (1920 in OBS at 16:9; 1728 on a
