@@ -78,6 +78,15 @@ export interface WorkerEnv {
     // Timed transcripts (section 47.1): the speech model, "assemblyai" (default) or "whisper".
     TRANSCRIBE_MODEL?: string;
     AI?: { run(model: string, inputs: Record<string, unknown>): Promise<unknown> };
+    // Safety ratings (section 51). Stage level cap, flag probabilities, how many Clef calls one cron makes
+    // (0 = off), "1" to rate the whole library, and how many hours back a new save is still queued.
+    SAFETY_STAGE_MAX?: string;
+    SAFETY_GORE_AT?: string;
+    SAFETY_MINOR_AT?: string;
+    SAFETY_DRAWN_AT?: string;
+    SAFETY_PER_RUN?: string;
+    SAFETY_BACKFILL?: string;
+    SAFETY_NEW_HOURS?: string;
     // Stage (section 30): https://<stage host>/ (a plain var; the Worker answers that host itself, before the gate) and
     // the three Twitch secrets. Absent or not https: no stage. Missing secrets: canvas and store only.
     STAGE_BASE_URL?: string;

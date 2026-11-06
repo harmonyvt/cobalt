@@ -160,6 +160,43 @@ describe("the about probe (34.2)", () => {
         expect(p.objects()).toEqual([]);
     });
 
+    it("stores a safety clip from the same answer and marks the file ready to rate", async () => {
+        const mp4 = b64(Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 1, 2, 3, 4]));
+        const p = probeWorld([{ status: 200, body: { ...answer(), safety: { clips: [mp4], audio: b64(MP3) } } }]);
+        const a = p.w.seed();
+        await p.kick();
+        await p.w.studio.sweep();
+        expect(p.row(a.sid).probe_state).toBe("done");
+        expect(p.objects()).toContain(`about/${a.itemId}/safety.mp4`);
+        expect(p.objects()).toContain(`about/${a.itemId}/safety-audio.mp3`);
+        const safety = p.w.db.raw.prepare("SELECT level, prep, clips, has_audio FROM media_safety WHERE item_id = ?").get(a.itemId) as any;
+        expect(safety).toMatchObject({ level: "pending", prep: "ready", clips: 1, has_audio: 1 });
+    });
+
+    it("a still gets its own safety job; a lead the about probe still has does not", async () => {
+        const calls: string[] = [];
+        const jpeg = b64(fakeJpeg(20, 1));
+        const w = world({
+            helperFn: async (path, init) => {
+                if (init?.body) await new Response(init.body as BodyInit).arrayBuffer();
+                calls.push(path.split("?")[0] + (path.includes("kind=") ? path.slice(path.indexOf("kind=")) : ""));
+                if (path.startsWith("/safety")) return new Response(JSON.stringify({ clips: [], audio: null, stills: [jpeg] }), { status: 200, headers: { "content-type": "application/json" } });
+                return new Response(JSON.stringify({ status: "error", error: { code: "error.webp.not_found" } }), { status: 404 });
+            },
+        });
+        const still = w.seed({ content_type: "image/jpeg", r2_key: "originals/still.jpg" });
+        const kicked = await w.studio.kickSafety(25, { newSince: 0 });
+        expect(kicked).toMatchObject({ status: 200, body: { status: "success", queued: 1 } });
+        await w.studio.sweep();
+        expect(calls.some((c) => c.startsWith("/safety") && c.includes("kind=still"))).toBe(true);
+        expect(w.db.raw.prepare("SELECT prep, stills, level FROM media_safety WHERE item_id = ?").get(still.itemId)).toMatchObject({ prep: "ready", stills: 1, level: "pending" });
+
+        const lead = probeWorld();
+        lead.w.seed();
+        await lead.kick();
+        expect(await lead.w.studio.kickSafety(25, { newSince: 0 })).toMatchObject({ body: { queued: 0 } });
+    });
+
     it("parseProbeAnswer accepts 1..3 JPEGs and an MP3 or null, nothing else", () => {
         expect(parseProbeAnswer(answer())).toMatchObject({ duration: 9.6 });
         expect(parseProbeAnswer(answer(1, false))!.audio).toBeNull();

@@ -42,7 +42,7 @@ import {
 import { NOTIFY_MAX_BODY_BYTES, isEmptyLineBody, parseOptIn, type LineOutcome, type MakeWhat, type NotifyHooks, type NotifyRenderEvent } from "./notify";
 import { MAX_POSTER_BYTES, PosterService, POSTER_BATCH, type MediaStore } from "./poster";
 import { LOOP_KICK_MAX, LoopService, type ReadBucket } from "./loops";
-import { ABOUT_KICK_MAX, AboutProbeService } from "./about-probe";
+import { ABOUT_KICK_MAX, SAFETY_KICK_MAX, AboutProbeService } from "./about-probe";
 import { publishStudio } from "./publish";
 import { atReady, sessionPostKey, type Gate } from "./hidden";
 import { hiddenRows } from "./hidden-store";
@@ -3401,6 +3401,17 @@ export class StudioService {
         }
     }
 
+    // POST /safety/kick (section 51.2): queues safety clips for files the about probe does not cover. Records only.
+    async kickSafety(limit?: number, opts: { backfill?: boolean; newSince?: number } = {}): Promise<StudioReply> {
+        try {
+            const r = await this.about.kickSafety(limit ?? SAFETY_KICK_MAX, opts);
+            return { status: 200, body: { status: "success", queued: r.queued, eligible: r.eligible } };
+        } catch (e) {
+            console.error("[studio] safety kick failed", String(e));
+            return studioErr(503, "error.api.generic");
+        }
+    }
+
     // POST /posters/kick (the Worker's call: the library read, the cron, the backfill route):
     // queues the posters still missing. Never wakes the container (the sweep does the work).
     async kickPosters(limit?: number): Promise<StudioReply> {
@@ -4976,6 +4987,7 @@ export const isStudioRoute = (pathname: string) =>
     pathname === "/posters/kick" ||
     pathname === "/loops/kick" ||
     pathname === "/about/kick" ||
+    pathname === "/safety/kick" ||
     pathname === "/helper/caps";
 
 const toResponse = (r: StudioReply) =>
@@ -5077,6 +5089,16 @@ export async function handleStudioRoute(
         const raw = url.searchParams.get("limit");
         const limit = raw !== null && /^\d{1,4}$/.test(raw) ? Number(raw) : undefined;
         return toResponse(await service.kickAbout(limit));
+    }
+
+    // POST /safety/kick?limit=N&backfill=1&hours=N: the 15-minute cron (section 51.2). Internal like /about/kick.
+    if (request.method === "POST" && p === "/safety/kick") {
+        if (!request.headers.get(KEY_ID_HEADER)) return new Response(null, { status: 403 });
+        const raw = url.searchParams.get("limit");
+        const limit = raw !== null && /^\d{1,4}$/.test(raw) ? Number(raw) : undefined;
+        const hours = Number(url.searchParams.get("hours"));
+        const newSince = Number.isFinite(hours) && hours > 0 ? Date.now() - hours * 60 * 60 * 1000 : undefined;
+        return toResponse(await service.kickSafety(limit, { backfill: url.searchParams.get("backfill") === "1", newSince }));
     }
 
     // POST /library/adopt: the web Worker's service call. The Worker only

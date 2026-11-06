@@ -97,10 +97,17 @@
 //                      frames at 15 %, 50 % and 85 % of the duration (one for a clip under 2 s), long side at most
 //                      768 px (never upscaled, rotation applied), and the first 600 s of sound as mono 16 kHz MP3 at
 //                      32 kbit/s; everything is deleted and the answer is JSON:
-//                      200 {frames: ["<base64 jpeg>", ...], audio: "<base64 mp3>" | null, duration: <s> | null}
-//                      (audio null: no audio stream, or silent: mean volume under -60 dB) | 400 error.studio.not_video
-//                      | 413 error.studio.too_large | 422 error.about.failed (no frame) | 429 busy (one job at a
-//                      time, like /poster) | 502 error.studio.upload_failed. 90 s wall for the cutting.
+//                      200 {frames, audio, duration, safety: { clips: ["<base64 mp4>", ...], audio: "<base64 mp3>" | null }}
+//                      (audio null: no audio stream, or silent: mean volume under -60 dB). safety is the Clef clip
+//                      (section 51.2): ~480p, 2 fps, no audio track, ≤60 s; two segments past 60 s; each half sped up
+//                      past 120 s. Its audio is the first 300 s of the same soundtrack. | 400 error.studio.not_video
+//                      | 413 error.studio.too_large | 422 error.about.failed (no frame, or the safety clip failed) | 429 busy
+//                      (one job at a time, like /poster) | 502 error.studio.upload_failed. 150 s wall for the cutting.
+//
+//   POST   /safety?id=&kind=clip|still
+//                      the same body, for a file that is not the post's lead (the lead's clip is cut inside /about).
+//                      kind=clip: the safety mp4s and the 300 s soundtrack. kind=still: one 768 px JPEG.
+//                      200 { clips, audio, stills } | 400 | 413 | 422 error.safety.failed | 429 | 502.
 
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
@@ -137,6 +144,10 @@ import {
     ABOUT_SILENCE_DB,
     aboutTimes,
     buildAboutAudioArgs,
+    SAFETY_AUDIO_SECONDS,
+    safetyPlan,
+    buildSafetyClipArgs,
+    buildSafetyAudioArgs,
     parseMeanVolume,
     checkPublicUrl,
     directHeadOk,
@@ -240,7 +251,7 @@ export function createHelper(opts = {}) {
     const POSTER_DIR = opts.posterDir ?? "/tmp/poster";
     const ABOUT_DIR = opts.aboutDir ?? "/tmp/about";
     // the whole cut (frames and sound) of one POST /about
-    const ABOUT_TIMEOUT_MS = opts.aboutTimeoutMs ?? 90_000;
+    const ABOUT_TIMEOUT_MS = opts.aboutTimeoutMs ?? 150_000;
     // one frame out of a local file: a second or two; the budget only stops a hung ffmpeg
     const POSTER_TIMEOUT_MS = opts.posterTimeoutMs ?? 30_000;
     const COBALT = opts.cobaltOrigin ?? COBALT_ORIGIN;
@@ -1139,9 +1150,41 @@ export function createHelper(opts = {}) {
             });
         });
 
-    // POST /about?id=: the body goes to disk, ffmpeg cuts the frames and the sound, everything is deleted, and the
-    // answer is JSON with them (a few hundred KB). One request, one answer; the helper is busy until the directory is
-    // gone (like /poster).
+    // The Clef clip: at most two mp4s covering the whole duration (section 51.2). Throws error.about.failed.
+    /** @param {string} input @param {string} dir @param {number | null} duration @param {number} deadline */
+    async function cutSafetyClips(input, dir, duration, deadline) {
+        const plan = safetyPlan(duration);
+        /** @type {string[]} */
+        const clips = [];
+        for (let i = 0; i < plan.parts.length; i++) {
+            const part = plan.parts[i];
+            const output = path.join(dir, `safety-${i + 1}.mp4`);
+            const r = await runFfmpegCapture(
+                buildSafetyClipArgs({ input, output, start: part.start, duration: part.duration, setpts: part.setpts }),
+                Math.max(1, deadline - Date.now()),
+            );
+            if (r.timedOut) throw new JobError("error.about.failed");
+            const size = (await stat(output).catch(() => null))?.size ?? 0;
+            if (r.code !== 0 || size <= 32) throw new JobError("error.about.failed");
+            clips.push((await readFile(output)).toString("base64"));
+        }
+        return clips;
+    }
+
+    // The first 300 s of sound, or `reuse` when the probe's MP3 is already within that cap.
+    /** @param {string} input @param {string} dir @param {number} deadline @param {string | null} reuse */
+    async function cutSafetyAudio(input, dir, deadline, reuse) {
+        if (reuse) return reuse;
+        const output = path.join(dir, "safety-audio.mp3");
+        const r = await runFfmpegCapture(buildSafetyAudioArgs({ input, output }), Math.max(1, deadline - Date.now()));
+        if (r.timedOut) throw new JobError("error.about.failed");
+        const size = (await stat(output).catch(() => null))?.size ?? 0;
+        if (r.code !== 0 || size <= 0) return null;
+        return (await readFile(output)).toString("base64");
+    }
+
+    // POST /about?id=: the body goes to disk, ffmpeg cuts the frames, the sound and the safety clip, everything is
+    // deleted, and the answer is JSON. One request, one answer; the helper is busy until the directory is gone.
     /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {URL} url */
     async function handleAbout(req, res, url) {
         if (req.method !== "POST") return fail(res, 405, "error.webp.bad_request");
@@ -1207,7 +1250,11 @@ export function createHelper(opts = {}) {
                 // silent (or no measurement): no sound worth transcribing
                 if (r.code === 0 && size > 0 && mean !== null && mean >= ABOUT_SILENCE_DB) audio = (await readFile(output)).toString("base64");
             }
-            answer = { frames, audio, duration: info.duration ?? null };
+            const clips = await cutSafetyClips(input, dir, info.duration, deadline);
+            const safetyAudio = audio
+                ? await cutSafetyAudio(input, dir, deadline, info.duration != null && info.duration <= SAFETY_AUDIO_SECONDS ? audio : null)
+                : null;
+            answer = { frames, audio, duration: info.duration ?? null, safety: { clips, audio: safetyAudio } };
         } catch (e) {
             code = e instanceof JobError ? e.code : "error.studio.upload_failed";
             if (code === "error.webp.timeout" || code === "error.webp.encode_failed") code = "error.about.failed";
@@ -1222,6 +1269,68 @@ export function createHelper(opts = {}) {
             req,
             res,
             code === "error.studio.too_large" ? 413 : code === "error.studio.not_video" ? 400 : code === "error.about.failed" ? 422 : 502,
+            code,
+        );
+    }
+
+    // POST /safety?id=&kind=clip|still: the same body as /about, for a file that is not the lead. A still is one 768 px
+    // JPEG (up to four of those fit in one Clef request; a single photo is one). A clip is the safety mp4s.
+    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {URL} url */
+    async function handleSafety(req, res, url) {
+        if (req.method !== "POST") return fail(res, 405, "error.webp.bad_request");
+        const id = url.searchParams.get("id") ?? "";
+        const kind = url.searchParams.get("kind");
+        if (!ID_RE.test(id) || (kind !== "clip" && kind !== "still")) return failAndClose(req, res, 400, "error.webp.invalid_params");
+        if (busy()) return failAndClose(req, res, 429, "error.webp.busy");
+        const declared = Number(req.headers["content-length"]);
+        if (Number.isFinite(declared) && declared > MAX_FETCH) return failAndClose(req, res, 413, "error.studio.too_large");
+
+        probing.add(id);
+        const dir = path.join(ABOUT_DIR, `s-${id}`);
+        const input = path.join(dir, "in");
+        let n = 0;
+        const counter = new Transform({
+            transform(chunk, _e, cb) {
+                n += chunk.length;
+                if (n > MAX_FETCH) cb(new JobError("error.studio.too_large"));
+                else cb(null, chunk);
+            },
+        });
+        /** @type {{ clips: string[], audio: string | null, stills: string[] } | null} */
+        let answer = null;
+        let code = "";
+        try {
+            await mkdir(dir, { recursive: true });
+            await pipeline(req, counter, createWriteStream(input));
+            if (n === 0) throw new JobError("error.studio.not_video");
+            const deadline = Date.now() + ABOUT_TIMEOUT_MS;
+            if (kind === "still") {
+                const output = path.join(dir, "still.jpg");
+                const r = await runFfmpegCapture(buildPosterArgs({ input, output, side: ABOUT_FRAME_SIDE }), Math.max(1, deadline - Date.now()));
+                if (r.timedOut) throw new JobError("error.safety.failed");
+                const size = (await stat(output).catch(() => null))?.size ?? 0;
+                if (r.code !== 0 || size <= 0 || size > MAX_POSTER_BYTES) throw new JobError("error.safety.failed");
+                answer = { clips: [], audio: null, stills: [(await readFile(output)).toString("base64")] };
+            } else {
+                const info = await probeAV(input);
+                if (info.width === null || info.height === null) throw new JobError("error.studio.not_video");
+                const clips = await cutSafetyClips(input, dir, info.duration, deadline);
+                const audio = info.hasAudio ? await cutSafetyAudio(input, dir, deadline, null) : null;
+                answer = { clips, audio, stills: [] };
+            }
+        } catch (e) {
+            code = e instanceof JobError ? e.code : "error.studio.upload_failed";
+            if (code === "error.about.failed") code = "error.safety.failed";
+            if (!(e instanceof JobError)) console.error("[webp-helper] safety failed:", e);
+        }
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+        probing.delete(id);
+        if (res.headersSent || res.destroyed) return;
+        if (answer) return send(res, 200, answer);
+        return failAndClose(
+            req,
+            res,
+            code === "error.studio.too_large" ? 413 : code === "error.studio.not_video" ? 400 : code === "error.safety.failed" ? 422 : 502,
             code,
         );
     }
@@ -1783,6 +1892,7 @@ export function createHelper(opts = {}) {
             if (pathname === "/probe") return await handleProbe(req, res, url);
             if (pathname === "/poster") return await handlePoster(req, res, url);
             if (pathname === "/about") return await handleAbout(req, res, url);
+            if (pathname === "/safety") return await handleSafety(req, res, url);
             if (pathname === "/fetch" || pathname.startsWith("/fetch/")) {
                 return await handleFetchRoute(req, res, url);
             }

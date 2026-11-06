@@ -173,6 +173,18 @@ export default defineConfig({
 			// sound (TRANSCRIBE_MODEL below). Without AI the words are written without the sound.
 			ABOUT_MODEL: bindings.text("claude-haiku-5-5"),
 			AI: bindings.ai(),
+			// Safety ratings (APP-API-CONTRACT.md section 51). The stage shows only files at or under SAFETY_STAGE_MAX
+			// (general | sensitive | questionable | explicit). Gore and minor_sexual probabilities at or above the
+			// thresholds block; both are re-read from the stored probs, so a change here does not re-rate. SAFETY_PER_RUN
+			// is how many Clef calls one 15-minute cron makes (0 turns the calls off). SAFETY_BACKFILL "1" queues the
+			// whole library; the default queues only saves from the last SAFETY_NEW_HOURS, plus the pilot list.
+			SAFETY_STAGE_MAX: bindings.text("general"),
+			SAFETY_GORE_AT: bindings.text("0.5"),
+			SAFETY_MINOR_AT: bindings.text("0.5"),
+			SAFETY_DRAWN_AT: bindings.text("0.5"),
+			SAFETY_PER_RUN: bindings.text("4"),
+			SAFETY_BACKFILL: bindings.text("0"),
+			SAFETY_NEW_HOURS: bindings.text("48"),
 			// Timed transcripts (APP-API-CONTRACT.md 47.1): the speech model. "assemblyai" (AssemblyAI Universal, most
 			// accurate) or "whisper" (Whisper turbo, about 7x cheaper). Changing it hears every post again.
 			TRANSCRIBE_MODEL: bindings.text("assemblyai"),

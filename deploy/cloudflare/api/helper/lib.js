@@ -660,6 +660,103 @@ export function buildAboutAudioArgs(j) {
  * @param {string} stderr
  * @returns {number | null}
  */
+// ---- the safety clip (APP-API-CONTRACT.md section 51.2) -----------------------------------------------------------
+// A private re-encode Clef watches: ~480p, 2 fps, no audio track, at most 60 s a piece. The soundtrack is the probe's
+// MP3, passed separately, first 300 s (Clef's per-clip audio cap). Over 60 s and up to 120 s: two segments. Over 120 s:
+// each half is sped up (setpts) so it still fits in 60 s and the whole clip is seen.
+
+/** Height of the safety clip (never upscaled) and how long one Clef video may be. */
+export const SAFETY_HEIGHT = 480;
+export const SAFETY_FPS = 2;
+export const SAFETY_MAX_SECONDS = 60;
+/** Clef's per-clip audio cap. The about probe's own MP3 stays 600 s for the transcript. */
+export const SAFETY_AUDIO_SECONDS = 300;
+
+/**
+ * How to cover `duration` seconds with at most two clips of SAFETY_MAX_SECONDS. `setpts` is the PTS multiplier
+ * (1 = normal speed, below 1 = faster). Unknown or non-positive duration: one 60 s clip from the start.
+ * @param {number | null | undefined} duration seconds
+ * @returns {{ mode: "whole" | "split" | "speed" | "unknown", parts: { start: number, duration: number, setpts: number }[] }}
+ */
+export function safetyPlan(duration) {
+    if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) {
+        return { mode: "unknown", parts: [{ start: 0, duration: SAFETY_MAX_SECONDS, setpts: 1 }] };
+    }
+    if (duration <= SAFETY_MAX_SECONDS) {
+        return { mode: "whole", parts: [{ start: 0, duration: +duration.toFixed(3), setpts: 1 }] };
+    }
+    if (duration <= SAFETY_MAX_SECONDS * 2) {
+        return {
+            mode: "split",
+            parts: [
+                { start: 0, duration: SAFETY_MAX_SECONDS, setpts: 1 },
+                { start: SAFETY_MAX_SECONDS, duration: +(duration - SAFETY_MAX_SECONDS).toFixed(3), setpts: 1 },
+            ],
+        };
+    }
+    const half = duration / 2;
+    const setpts = +(SAFETY_MAX_SECONDS / half).toFixed(6);
+    return {
+        mode: "speed",
+        parts: [
+            { start: 0, duration: +half.toFixed(3), setpts },
+            { start: +half.toFixed(3), duration: +half.toFixed(3), setpts },
+        ],
+    };
+}
+
+/**
+ * ffmpeg argv for one safety segment: no audio track, 2 fps, height at most SAFETY_HEIGHT (never upscaled), sped up
+ * by `setpts` when the half is longer than 60 s. `-ss`/`-t` select the source range before the speed change.
+ * @param {{ input: string, output: string, start: number, duration: number, setpts: number }} j
+ */
+export function buildSafetyClipArgs(j) {
+    const speed = j.setpts < 0.999 ? `setpts=PTS*${j.setpts}` : null;
+    const vf = [speed, `fps=${SAFETY_FPS}`, `scale=-2:'min(${SAFETY_HEIGHT},ih)':flags=lanczos`, "format=yuv420p"].filter(Boolean).join(",");
+    return [
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-protocol_whitelist", "file,pipe",
+        "-ss", String(j.start),
+        "-t", String(j.duration),
+        "-i", j.input,
+        "-an", "-sn", "-dn",
+        "-vf", vf,
+        "-c:v", "mpeg4",
+        "-q:v", "5",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-f", "mp4",
+        "-y",
+        j.output,
+    ];
+}
+
+/**
+ * The soundtrack Clef hears: the first SAFETY_AUDIO_SECONDS, same mono 16 kHz 32 kbit/s MP3 as the about probe.
+ * @param {{ input: string, output: string }} j
+ */
+export function buildSafetyAudioArgs(j) {
+    return [
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-protocol_whitelist", "file,pipe",
+        "-i", j.input,
+        "-t", String(SAFETY_AUDIO_SECONDS),
+        "-vn", "-sn", "-dn",
+        "-map", "0:a:0",
+        "-ac", "1",
+        "-ar", "16000",
+        "-c:a", "libmp3lame",
+        "-b:a", "32k",
+        "-f", "mp3",
+        "-y",
+        j.output,
+    ];
+}
+
 export function parseMeanVolume(stderr) {
     const m = /mean_volume:\s*(-?(?:\d+(?:\.\d+)?|inf))\s*dB/i.exec(stderr);
     if (!m) return null;

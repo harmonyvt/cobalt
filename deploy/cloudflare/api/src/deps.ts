@@ -4,6 +4,7 @@
 import type { AppDeps } from "./app-routes";
 import { spaceClient, type EmbedClient } from "./embed";
 import { KEY_ID_HEADER } from "./headers";
+import { safetyConfigFrom } from "./safety";
 import { noRoom, stageBaseFrom, twitchConfigFrom, type RoomPort, type StageDeps } from "./stage";
 import type { TwitchFetch } from "./stage-twitch";
 import type { EdgeDeps } from "./studio-edge";
@@ -103,5 +104,6 @@ export function stageDepsFrom(env: WorkerEnv, edge: Pick<EdgeDeps, "now" | "wait
         now: edge.now,
         waitUntil: edge.waitUntil,
         limits: se.stageLimits,
+        safety: safetyConfigFrom(env),
     };
 }
