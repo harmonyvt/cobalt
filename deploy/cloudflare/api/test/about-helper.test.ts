@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createHelper } from "../helper/server.js";
-import { ABOUT_AUDIO_SECONDS, ABOUT_FRAME_SIDE, aboutTimes, buildAboutAudioArgs, parseMeanVolume } from "../helper/lib.js";
+import { ABOUT_AUDIO_SECONDS, ABOUT_FRAME_SIDE, SAFETY_AUDIO_SECONDS, SAFETY_FPS, SAFETY_HEIGHT, SAFETY_MAX_SECONDS, aboutTimes, buildAboutAudioArgs, buildSafetyAudioArgs, buildSafetyClipArgs, parseMeanVolume, safetyPlan } from "../helper/lib.js";
 
 const KEY = "internal-key";
 const ID = "aB3dE6gH9jK2mN5pQ8sTuV";
@@ -100,6 +100,38 @@ describe("the about frames and sound (pure)", () => {
         expect(a[a.indexOf("-protocol_whitelist") + 1]).toBe("file,pipe");
         expect(a.at(-1)).toBe("/out.mp3");
     });
+    it("covers the whole clip: one piece up to 60 s, two pieces up to 120 s, and each half sped up after that", () => {
+        expect(safetyPlan(30)).toEqual({ mode: "whole", parts: [{ start: 0, duration: 30, setpts: 1 }] });
+        expect(safetyPlan(90)).toEqual({
+            mode: "split",
+            parts: [
+                { start: 0, duration: 60, setpts: 1 },
+                { start: 60, duration: 30, setpts: 1 },
+            ],
+        });
+        const fast = safetyPlan(180);
+        expect(fast.mode).toBe("speed");
+        expect(fast.parts).toHaveLength(2);
+        expect(fast.parts[0]).toMatchObject({ start: 0, duration: 90 });
+        expect(fast.parts[1]!.start).toBeCloseTo(90, 3);
+        expect(fast.parts[0]!.setpts).toBeCloseTo(60 / 90, 5);
+        expect(fast.parts[0]!.setpts).toBe(fast.parts[1]!.setpts);
+        expect(safetyPlan(null).mode).toBe("unknown");
+        expect(SAFETY_MAX_SECONDS).toBe(60);
+        const slow = buildSafetyClipArgs({ input: "/in", output: "/out.mp4", start: 90, duration: 90, setpts: fast.parts[0]!.setpts });
+        expect(slow[slow.indexOf("-ss") + 1]).toBe("90");
+        expect(slow[slow.indexOf("-t") + 1]).toBe("90");
+        expect(slow).toContain("-an");
+        expect(slow[slow.indexOf("-vf") + 1]).toContain(`setpts=PTS*${fast.parts[0]!.setpts}`);
+        expect(slow[slow.indexOf("-vf") + 1]).toContain(`fps=${SAFETY_FPS}`);
+        expect(slow[slow.indexOf("-vf") + 1]).toContain(`min(${SAFETY_HEIGHT},ih)`);
+        const normal = buildSafetyClipArgs({ input: "/in", output: "/out.mp4", start: 0, duration: 30, setpts: 1 });
+        expect(normal[normal.indexOf("-vf") + 1].startsWith("fps=")).toBe(true);
+        const audio = buildSafetyAudioArgs({ input: "/in", output: "/safety.mp3" });
+        expect(audio[audio.indexOf("-t") + 1]).toBe(String(SAFETY_AUDIO_SECONDS));
+        expect(SAFETY_AUDIO_SECONDS).toBe(300);
+        expect(audio).toContain("-vn");
+    });
     it("reads volumedetect's mean volume", () => {
         expect(parseMeanVolume("[Parsed_volumedetect_0 @ 0x1] mean_volume: -20.5 dB\n[..] max_volume: -3.0 dB")).toBe(-20.5);
         expect(parseMeanVolume("mean_volume: -91.0 dB")).toBe(-91);
@@ -126,6 +158,9 @@ describe.skipIf(!hasFfmpeg)("POST /about with the real ffmpeg", { timeout: 90_00
         const probe = spawnSync(FFMPEG, ["-hide_banner", "-f", "mp3", "-i", "pipe:0"], { input: mp3 }).stderr.toString();
         expect(probe).toMatch(/Audio: mp3.*16000 Hz, mono/);
         expect(b.duration).toBeCloseTo(6, 0);
+        expect(b.safety.clips).toHaveLength(1);
+        expect(Buffer.from(b.safety.clips[0], "base64").subarray(4, 8).toString()).toBe("ftyp");
+        expect(b.safety.audio).toBeTruthy();
         expect(left()).toEqual([]);
     });
 

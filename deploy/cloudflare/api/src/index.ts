@@ -19,6 +19,8 @@ import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
 import { refreshNames } from "./names";
 import { backfillCaptions, captionerFrom } from "./roast";
 import { ABOUT_RUN_BUDGET_MS, describerFrom, transcriberFrom, writeAbouts } from "./about-writer";
+import { rateSafety } from "./safety-clef";
+import { safetyConfigFrom } from "./safety";
 import { indexTerms } from "./about";
 import { indexMoments, MOMENTS_RUN_BUDGET_MS, timeTranscripts, TRANSCRIPT_RUN_BUDGET_MS } from "./transcripts";
 import { setRoastInput } from "./share-sets";
@@ -160,6 +162,7 @@ export class CobaltContainer extends Container<Env> {
                     path.startsWith("/probe") ||
                     path.startsWith("/poster") ||
                     path.startsWith("/about") ||
+                    path.startsWith("/safety") ||
                     (path.startsWith("/fetch/") && path.endsWith("/file"));
                 const timeout = bulk ? 300_000 : path.endsWith("/file") ? 60_000 : 15_000;
                 return this.containerFetch(
@@ -525,6 +528,28 @@ export default {
                     if (r.written || r.failed) console.log("[about] words", JSON.stringify(r));
                 } catch (e) {
                     console.error("[about] words failed", e instanceof Error ? e.name : "error");
+                }
+            }
+            // Safety clips and Clef ratings (section 51). The kick only writes records; the sweep cuts the clip.
+            // New files and the pilot list, unless SAFETY_BACKFILL=1. Clef runs here, on the Workers AI binding.
+            const safetyCfg = safetyConfigFrom(env);
+            try {
+                const q = new URLSearchParams({ limit: "25", hours: String(safetyCfg.newHours) });
+                if (safetyCfg.backfill) q.set("backfill", "1");
+                const res = await getContainer(env.COBALT, "main").fetch(
+                    new Request(`https://do.internal/safety/kick?${q}`, { method: "POST", headers: { [KEY_ID_HEADER]: "cron:safety" } }),
+                );
+                const body = await res.text().catch(() => "");
+                if (!res.ok || !body.includes('"queued":0')) console.log("[safety] kick", res.status, body.slice(0, 200));
+            } catch (e) {
+                console.error("[safety] kick failed", e instanceof Error ? e.name : "error");
+            }
+            if (env.AI) {
+                try {
+                    const r = await rateSafety({ db: env.DB, originals: env.ORIGINALS, ai: env.AI, now: () => Date.now(), cfg: safetyCfg });
+                    if (r.rated || r.failed || r.pilot) console.log("[safety] rated", JSON.stringify(r));
+                } catch (e) {
+                    console.error("[safety] rate failed", e instanceof Error ? e.name : "error");
                 }
             }
             // Hidden posts (section 37.3): saves held for an about rule are hidden or published once their words are

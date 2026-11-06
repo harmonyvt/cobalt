@@ -10,6 +10,8 @@
 // tables; only the host (studio.capybaraharmony.com) and the app's tab say "studio".
 
 import { notHiddenClause } from "./hidden-store";
+import type { SafetyConfig } from "./safety";
+import { stageSafeIds } from "./safety-store";
 import { POST_KEY_SQL } from "./app-routes";
 import { searchPosts, type EmbedClient, type SearchOutcome } from "./embed";
 import { randomBase62 } from "./ids";
@@ -180,6 +182,8 @@ export type StageDeps = {
     randomBytes?: (n: number) => Uint8Array;
     // the wall-clock budgets above, overridable (tests)
     limits?: { searchMs?: number; ownerSearchMs?: number; redeemMs?: number; settleMs?: number };
+    // section 51: what may reach Twitch. Absent: the defaults (general only, gore and minor_sexual blocked).
+    safety?: SafetyConfig;
 };
 
 // ---- config from the environment ------------------------------------------------------------------------
@@ -445,7 +449,15 @@ async function publicFiles(d: StageDeps, ids: string[]): Promise<FileHit[]> {
         .prepare(`SELECT ${MEDIA_COLS} FROM json_each(?1) j JOIN media_items m ON m.id = j.value WHERE m.deleted_at IS NULL${await notHiddenClause(d.db)} ORDER BY j.key`)
         .bind(JSON.stringify(ids))
         .all<MediaRow>();
-    return keepPublic(d, results);
+    return onlyStageSafe(d, keepPublic(d, results));
+}
+
+// Public and not hidden is not enough: unrated, pending, failed, gore, minor_sexual and anything past the
+// configured level stay off the stage (section 51.4). A read error fails closed inside stageSafeIds.
+async function onlyStageSafe(d: StageDeps, hits: FileHit[]): Promise<FileHit[]> {
+    if (hits.length === 0) return hits;
+    const ok = await stageSafeIds(d.db, hits.map((h) => h.row.id), d.safety);
+    return hits.filter((h) => ok.has(h.row.id));
 }
 
 function keepPublic(d: Pick<StageDeps, "mediaBaseUrl">, rows: MediaRow[]): FileHit[] {
@@ -486,9 +498,11 @@ export async function canvasItems(d: StageDeps, ids: string[]): Promise<Item[]> 
         const url = kind ? publicUrlOf(r, d.mediaBaseUrl) : null;
         if (kind && url) picked.push({ r, kind, url });
     }
-    const lacking = picked.filter((p) => !p.r.code).map((p) => p.r.id);
+    const allowed = await stageSafeIds(d.db, picked.map((p) => p.r.id), d.safety);
+    const shown = picked.filter((p) => allowed.has(p.r.id));
+    const lacking = shown.filter((p) => !p.r.code).map((p) => p.r.id);
     const minted = lacking.length > 0 ? await ensureCodes(d, lacking) : new Map<string, string>();
-    return picked.map(({ r, kind, url }) => ({
+    return shown.map(({ r, kind, url }) => ({
         id: r.id,
         code: r.code ?? minted.get(r.id) ?? "",
         title: fileTitle(r),
@@ -574,7 +588,7 @@ export async function resolvePool(d: StageDeps, spec: PoolSpec, searchMs: number
                   ORDER BY m.created_at DESC, m.id DESC LIMIT ${POOL_MAX * 2}`,
             )
             .all<MediaRow>();
-        return { ids: keepPublic(d, results).slice(0, POOL_MAX).map((f) => f.row.id) };
+        return { ids: (await onlyStageSafe(d, keepPublic(d, results))).slice(0, POOL_MAX).map((f) => f.row.id) };
     }
     if (spec.kind === "collection") {
         // every file of every live gallery link in it, in the collection's order (section 26)
@@ -621,7 +635,7 @@ export async function resolvePool(d: StageDeps, spec: PoolSpec, searchMs: number
         const files = (byPost.get(h.post_key) ?? []).sort(
             (a, b) => (a.item_index ?? 0) - (b.item_index ?? 0) || a.created_at - b.created_at || (a.id < b.id ? -1 : 1),
         );
-        for (const f of keepPublic(d, files)) ids.push(f.row.id);
+        for (const f of await onlyStageSafe(d, keepPublic(d, files))) ids.push(f.row.id);
     }
     return { ids: cap(ids) };
 }

@@ -5820,3 +5820,91 @@ chat or MCP tools). No migration, no new capability flag: a server with `feature
 - A device on an old pasted key sees the list and revoke only, with "sign in to make keys".
 - The footer drops "make keys on the web".
 
+## 51. Safety ratings: Clef-omni per file, and a stage that fails closed (addendum, 2026-11-06; owner approved the design review of 2026-11-05. Numbering: 50 belongs to the keys thread, migration 0031 is the previous one, so this is migration 0032)
+
+Every `media_items` row can be rated. Share links and the stage hold item ids, and the about probe only looks at a post's lead, so a rating on the post would leave the rest of a gallery unseen. Clef-omni (`@cf/cloudflare/clef-omni`, Workers AI, the `AI` binding) is the only automated gate. It watches a purpose-made clip of the whole file and returns probabilities. A second model was considered and declined: nothing in the about-writer's schema rates a file, and a disagreement is not recorded.
+
+The risky surface shipped here is the stage (Twitch). Unrated, pending, failed, gore, minor_sexual, and anything past the configured level never reach it. Other surfaces (share confirm, library blur, chat) are not in this pass.
+
+### 51.1 What is stored (migration 0032, `media_safety`)
+
+One row per item, keyed `item_id`.
+
+| column | meaning |
+|---|---|
+| `level` | `general` \| `sensitive` \| `questionable` \| `explicit` \| `pending` \| `failed`. Clef's 4-option `choice`, plus the two unrated states |
+| `probs` | JSON of every answer: the four level probabilities and the three `noul` probabilities. A threshold change re-reads this; it does not re-rate |
+| `gore`, `drawn`, `minor_sexual` | 0/1 snapshot at rate time. The stage uses `probs` when it is there, and these columns when it is not |
+| `user_level` | Harmony's override (`general` \| `sensitive` \| `questionable` \| `explicit`, or NULL). Wins over `level`, and over gore. Does not waive `minor_sexual` |
+| `model`, `questions_version`, `input_hash`, `rated_at`, `attempts` | `@cf/cloudflare/clef-omni`, the question set (`v1`), what was rated, when, and how many calls failed (3, then it waits until the questions change) |
+| `prep`, `prep_at`, `prep_attempts`, `clips`, `stills`, `has_audio` | the clip job, same shape as the about probe's own bookkeeping. `clips` is 0..2 mp4 parts, `stills` is 0..4 jpegs, `has_audio` is the 300 s soundtrack |
+
+There is no review column and no Haiku level.
+
+A post's level, computed when asked (`postSafetyLevel`), is the strictest content level among its items, or `pending` when any item is still unrated or failed. A derived file (edit, crop, still, webp, loop, chat video: `made_from`) with no rating of its own inherits the strictest rated source, and stays pending when any source is still unrated. Its own rating replaces that the moment it has one.
+
+`minor_sexual` means anyone who looks under 18 in a sexual or suggestive context. It hard-blocks the stage whatever `level` and `user_level` say. `drawn` is stored so a later policy can treat drawn art differently; it does not block on its own.
+
+### 51.2 The safety clip
+
+Clef takes no URLs, and a video in the request is at most 60 s and 16 MiB. The helper re-encodes instead of sending the original.
+
+- Folded into `POST /about` for the post's lead (the helper already holds the file). Stored privately at `about/<item id>/safety.mp4`, and `about/<item id>/safety-2.mp4` when there is a second segment. The about frames and the 600 s transcript MP3 are unchanged.
+- `POST /safety?id=&kind=clip|still` for everything else: a non-lead file, and a still whose about probe is `none`. The 15-minute cron's `POST /safety/kick` queues those. A lead the about probe still has, or has already finished, is not queued again.
+- Video and gif: height at most 480 (never upscaled), 2 fps, no audio track. Up to 60 s, the whole clip. 60–120 s, two segments in one Clef request. Over 120 s, each half is sped up with ffmpeg `setpts` so it fits in 60 s and the whole clip is still seen (`safetyPlan` in `helper/lib.js`).
+- Sound: the probe's MP3, passed to Clef as a separate audio clip, first 300 s (Clef's per-clip cap), at `about/<item id>/safety-audio.mp3`. A clip of 300 s or less reuses the about MP3.
+- A photo: one 768 px JPEG, the about frame's size, at `about/<item id>/safety-still-1.jpg`. Clef accepts four images a request; a single photo is one.
+
+New saves are `pending` until that clip is rated, including before the row exists, so they cannot reach the stage early. The cron queues saves from the last `SAFETY_NEW_HOURS` (default 48). It does not walk the existing library unless `SAFETY_BACKFILL` is `1` (Harmony runs that later; it is not this change). The pilot list is queued either way.
+
+Workers AI paid models are assumed at about 20 requests a minute; Clef's own limit is undocumented and may be lower. The cron default is 4 calls a run (`SAFETY_PER_RUN`, `0` turns the calls off), with at least 3 seconds between calls. The binding's max body size is also undocumented: the request is a base64 data URL, and `test/safety.test.ts` builds one ~3 MB clip plus an MP3 and checks the JSON stays under 12 MB.
+
+### 51.3 The questions (`questions_version` `v1`)
+
+One System One request, `model: "clef-omni"`:
+
+- `level`, type `choice`: general / sensitive / questionable / explicit, the Danbooru scale. Drawn sexual content uses the same scale.
+- `gore`, `drawn`, `minor_sexual`, type `noul`.
+
+The wording lives in `SAFETY_QUESTIONS` (`src/safety.ts`). Changing it means bumping `QUESTIONS_VERSION`: rated files are rated again. Changing `SAFETY_STAGE_MAX`, `SAFETY_GORE_AT` or `SAFETY_MINOR_AT` does not.
+
+A flag counts as yes at or above its threshold (default 0.5). The stage then allows a file only when all of these hold: it has a real level (its own, Harmony's override, or an inherited one), that level ranks at or under `SAFETY_STAGE_MAX` (default `general`, so only general), it is not gore unless Harmony set `user_level`, and it is not `minor_sexual`.
+
+### 51.4 The stage
+
+`stage.ts` used to keep a file that was public and not hidden. It now also asks `stageSafeIds`. That filter sits on the library pool, on collection and group pools, on a search pool, and on the canvas items read from a pool that was already stored, so a file that becomes unrated leaves the canvas on the next read. A missing table or a failed read fails closed: nothing from that set is shown.
+
+Until a file is rated, the stage does not show it. After migration 0032 is applied and before the pilot (or a later backfill), the stage is empty. That is the point.
+
+### 51.5 Config (plain vars, defaults in `cloudflare.config.ts`)
+
+| var | default | effect |
+|---|---|---|
+| `SAFETY_STAGE_MAX` | `general` | the strongest level that may reach the stage |
+| `SAFETY_GORE_AT` | `0.5` | gore probability that blocks |
+| `SAFETY_MINOR_AT` | `0.5` | minor_sexual probability that hard-blocks |
+| `SAFETY_DRAWN_AT` | `0.5` | stored only; drawn does not block |
+| `SAFETY_PER_RUN` | `4` | Clef calls per 15-minute cron; `0` leaves everything pending |
+| `SAFETY_BACKFILL` | `0` | `1` queues every visual file, not only new saves and the pilot |
+| `SAFETY_NEW_HOURS` | `48` | how far back a new save is still queued |
+
+`user_level` has no route in this pass. It is the column; set it in D1. NULL goes back to Clef's level.
+
+### 51.6 The pilot
+
+Label up to 60 item ids, deliberately including fursuits, cosplay, swimwear, drawn art, gore-ish memes and anything explicit. The example shape is `deploy/cloudflare/api/scripts/safety-pilot.labels.example.json`.
+
+```
+node deploy/cloudflare/api/scripts/safety-pilot.mjs labels.json --dry-run
+node deploy/cloudflare/api/scripts/safety-pilot.mjs labels.json
+node deploy/cloudflare/api/scripts/safety-pilot.mjs --report
+```
+
+The first command checks the file. The second uploads it to `cobalt-originals` at `about/pilot-labels.json` (Wrangler `r2 object put --remote`; `cf` remains the deploy tool). The 15-minute cron cuts a clip for each id, calls Clef (up to 20 a run), and writes `about/pilot-report.json`: Harmony's label beside Clef's level, the probabilities, and the three flags. `--report` prints that table. When every id has an answer, the labels object is removed.
+
+Pick the thresholds from that table, then set the vars above. No re-rate.
+
+### 51.7 Tests
+
+`test/migration-0032.test.ts`, `test/safety.test.ts` (rollup, override, minor_sexual, inheritance, the Clef body, a 3 MB clip), `test/safety-stage.test.ts` (unrated never on the stage), `test/about-helper.test.ts` (the ≤60 / 60–120 / >120 plan and the ffmpeg args), `test/about-probe.test.ts` (the clip stored from `POST /about`, and a still's own job). The >120 s path is the pure `safetyPlan` plus `buildSafetyClipArgs` (`setpts`, `fps=2`, no audio). A full multi-minute ffmpeg encode is left to the pilot's real files.
+

@@ -45,9 +45,21 @@ export type AboutRow = {
 
 export const frameKey = (itemId: string, n: number) => `${ABOUT_PREFIX}${itemId}/frame-${n}.jpg`;
 export const audioKey = (itemId: string) => `${ABOUT_PREFIX}${itemId}/audio.mp3`;
+// The Clef clip (section 51.2). Part 1 is safety.mp4; a second segment is safety-2.mp4. The soundtrack is separate.
+export const SAFETY_MAX_CLIPS = 2;
+export const SAFETY_MAX_STILLS = 4;
+export const safetyClipKey = (itemId: string, n: number) => (n <= 1 ? `${ABOUT_PREFIX}${itemId}/safety.mp4` : `${ABOUT_PREFIX}${itemId}/safety-${n}.mp4`);
+export const safetyAudioKey = (itemId: string) => `${ABOUT_PREFIX}${itemId}/safety-audio.mp3`;
+export const safetyStillKey = (itemId: string, n: number) => `${ABOUT_PREFIX}${itemId}/safety-still-${n}.jpg`;
+export const safetyObjectKeys = (itemId: string): string[] => [
+    ...Array.from({ length: SAFETY_MAX_CLIPS }, (_, i) => safetyClipKey(itemId, i + 1)),
+    safetyAudioKey(itemId),
+    ...Array.from({ length: SAFETY_MAX_STILLS }, (_, i) => safetyStillKey(itemId, i + 1)),
+];
 export const aboutObjectKeys = (itemId: string): string[] => [
     ...Array.from({ length: ABOUT_MAX_FRAMES }, (_, i) => frameKey(itemId, i + 1)),
     audioKey(itemId),
+    ...safetyObjectKeys(itemId),
 ];
 
 // The probe's objects of one file go (best effort: a failure is logged, never thrown).

@@ -327,12 +327,45 @@ export async function world(opts: WorldOpts = {}) {
         };
         delete r.private;
         delete r.ext;
+        const safety = r.safety;
+        const madeFrom = r.made_from;
+        delete r.safety;
+        delete r.made_from;
         db.raw
             .prepare(
                 `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, deleted_at, poster, visibility, public_key, public_id, post_key, role, item_index)
                  VALUES (@id,@kind,@source,@bucket,@r2_key,@url,@name,@content_type,@bytes,@width,@height,@duration,@link,@session_id,@key_id,@created_at,@deleted_at,@poster,@visibility,@public_key,@public_id,@post_key,@role,@item_index)`,
             )
             .run(r as any);
+        const id = r.id as string;
+        if (typeof madeFrom === "string") db.raw.prepare("UPDATE media_items SET made_from = ? WHERE id = ?").run(madeFrom, id);
+        // A general rating, so the existing stage tests keep their pools. `safety: "omit"` leaves the file unrated.
+        if (safety !== "omit") {
+            const spec = safety && typeof safety === "object" ? (safety as Record<string, unknown>) : { level: typeof safety === "string" ? safety : "general" };
+            const level = typeof spec.level === "string" ? spec.level : "general";
+            const gore = spec.gore === 1 || spec.gore === true ? 1 : 0;
+            const drawn = spec.drawn === 1 || spec.drawn === true ? 1 : 0;
+            const minor = spec.minor_sexual === 1 || spec.minor_sexual === true ? 1 : 0;
+            const user = typeof spec.user_level === "string" ? spec.user_level : null;
+            const ranked = ["general", "sensitive", "questionable", "explicit"];
+            const probs =
+                typeof spec.probs === "string"
+                    ? spec.probs
+                    : ranked.includes(level)
+                      ? JSON.stringify({
+                            level: Object.fromEntries(ranked.map((name) => [name, name === level ? 1 : 0])),
+                            gore,
+                            drawn,
+                            minor_sexual: minor,
+                        })
+                      : null;
+            db.raw
+                .prepare(
+                    `INSERT INTO media_safety (item_id, level, probs, gore, drawn, minor_sexual, user_level, model, questions_version, rated_at, attempts, prep, clips, stills, has_audio, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'test', 'v1', ?, 0, 'ready', 0, 0, 0, ?)`,
+                )
+                .run(id, level, probs, gore, drawn, minor, user, ranked.includes(level) ? T0 : null, T0);
+        }
         return r as { id: string; name: string; url: string | null; r2_key: string; created_at: number };
     };
     const video = (over: Partial<Record<string, unknown>> = {}) =>
