@@ -277,7 +277,7 @@ public protocol CobaltClient: Sendable {
     func stopChatShare(threadID: String) async throws
     // Stage, the studio tab (APP-API-CONTRACT 30.10; keyed; only when `features.stage`). Defaulted below
     // (`.unsupported`) so older fakes compile. The routes throw `StageError` for the server's refusals.
-    /// `GET /stage`: the stage and its four rewards. Also retries what Twitch refused earlier.
+    /// `GET /stage`: the stage and its five rewards. Also retries what Twitch refused earlier.
     func stage() async throws -> StageSnapshot
     /// `PATCH /stage` with the patch's fields (numbers clamped): the stage as it is now.
     func updateStage(_ patch: StagePatch) async throws -> StageSettings

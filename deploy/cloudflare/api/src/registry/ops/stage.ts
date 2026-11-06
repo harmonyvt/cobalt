@@ -13,7 +13,7 @@ import { createCollection, updateCollection } from "../../share-collections";
 import { SHARE_SET_MAX } from "../../share-sets";
 
 // /stage/rewards/<action>
-export const STAGE_ACTION_REGEX = /^(summon|chaos|shuffle|pin)$/;
+export const STAGE_ACTION_REGEX = /^(summon|chaos|shuffle|pin|skip)$/;
 
 const stageDeps = (ctx: OpContext): StageDeps | null => stageDepsFrom(ctx.env, ctx.edge, ctx.stageEdge);
 const offBody = { status: "error", error: { code: "error.stage.off" } };
@@ -91,6 +91,7 @@ const STAGE_MESSAGES: Record<string, string> = {
     "error.stage.off": "the studio (stage) is off on this server",
     "error.stage.off_air": "the studio is off air: cobalt.stage.set({ on_air: true }) first",
     "error.stage.not_found": "that file is not in the studio's pool (cobalt.stage.items() lists it)",
+    "error.stage.videos_only": "the spotlight is videos only: pick a video from cobalt.stage.items()",
     "error.stage.search_unavailable": "the meaning search is asleep or off, so a search pool cannot be made now: try again in a minute",
     "error.stage.bad_request": "the studio refused those settings",
 };

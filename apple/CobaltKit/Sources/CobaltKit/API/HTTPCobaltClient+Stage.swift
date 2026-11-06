@@ -4,7 +4,7 @@ import Foundation
 // grows the capability flags. Every route is keyed, answers `cache-control: no-store`, and refuses with `StageError`.
 
 extension HTTPCobaltClient {
-    /// `GET /stage` (keyed): the stage and its four rewards.
+    /// `GET /stage` (keyed): the stage and its five rewards.
     public func stage() async throws -> StageSnapshot {
         let req = try makeRequest("GET", "/stage", keyed: true, timeout: 20)
         let (data, http) = try await send(req)

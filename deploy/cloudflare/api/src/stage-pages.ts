@@ -37,7 +37,7 @@ body[data-preview="1"] #stage.off{background:#000}
 @keyframes spot{from{opacity:0;transform:scale(.7) rotate(-2deg)}to{opacity:1;transform:scale(1) rotate(0)}}
 #spmedia{position:relative;box-sizing:border-box;border:5px solid #2f8af9;background:#000;overflow:hidden}
 #spmedia img,#spmedia video{display:block;width:100%;height:100%;object-fit:cover}
-#spcap{background:#000;padding:14px 18px 16px;display:flex;flex-direction:column;gap:6px;border:5px solid #2f8af9;border-top:0}
+#spcap{display:none!important}
 #spby{display:flex;align-items:center;gap:10px;font-size:18px;color:#8f8f8f}
 #sppin{margin-left:auto;color:#f0b44c;display:none}
 #sptitle{font-size:24px;font-weight:500;color:#fff;line-height:1.25;word-break:break-word}
@@ -89,7 +89,7 @@ const LIVE_JS = String.raw`
   var PREVIEW = body.getAttribute('data-preview') === '1' || /[?&]preview=1(&|$)/.test(location.search);
   var CLEAR_BG = /[?&]bg=(clear|transparent)(&|$)/.test(location.search);
   // ambient: the wallpaper and screensaver mode. Silent, always playing (on air or not), only the tiles and the
-  // spotlight: no toast, store hint, chaos pill or spotlight caption.
+  // spotlight: no toast, store hint or chaos pill. The spotlight caption bar is never drawn, ambient or not.
   var AMBIENT = /[?&]ambient=1(&|$)/.test(location.search);
   var SILENT = PREVIEW || AMBIENT;
   // 1080 logical px tall; as wide as the window's shape (1920 at 16:9, what OBS uses), so no window is letterboxed
@@ -510,14 +510,14 @@ const LIVE_JS = String.raw`
     spotEl.style.display = 'none';
   }
   function setSpot(raw) {
-    if (!raw || !validItem(raw.item)) return;
+    if (!raw || !validItem(raw.item) || raw.item.kind !== 'video') return;
     var it = raw.item;
     var a = aspect(it);
     var w = Math.sqrt(560 * 640 * a), h = w / a;
     if (h > 700) { h = 700; w = h * a; }
     if (w > 900) { w = 900; h = w / a; }
     var x = rand(100, Math.max(101, W - w - 100));
-    var y = rand(60, Math.max(70, H - h - 250));
+    var y = rand(60, Math.max(70, H - h - 160));
     var at = num(raw.at, now());
     var me = {
       item: it, by: typeof raw.by === 'string' && raw.by ? raw.by : null, action: raw.action || null,
@@ -526,7 +526,7 @@ const LIVE_JS = String.raw`
     };
     clearSpot();
     spot = me;
-    spotRect = { x: x, y: y, w: w, h: h + (AMBIENT ? 0 : 90) };
+    spotRect = { x: x, y: y, w: w, h: h };
     spotEl.style.left = Math.round(x) + 'px';
     spotEl.style.top = Math.round(y) + 'px';
     spotEl.style.width = Math.round(w) + 'px';
@@ -566,7 +566,7 @@ const LIVE_JS = String.raw`
         var na = nw / nh, ww = Math.sqrt(560 * 640 * na), hh = ww / na;
         if (hh > 700) { hh = 700; ww = hh * na; }
         if (ww > 900) { ww = 900; hh = ww / na; }
-        spotRect = { x: x, y: y, w: ww, h: hh + (AMBIENT ? 0 : 90) };
+        spotRect = { x: x, y: y, w: ww, h: hh };
         spotEl.style.width = Math.round(ww) + 'px';
         spMedia.style.width = Math.round(ww) + 'px';
         spMedia.style.height = Math.round(hh) + 'px';
@@ -580,15 +580,20 @@ const LIVE_JS = String.raw`
   function showPinned() {
     spPin.style.display = spot && spot.pinnedUntil > now() ? 'block' : 'none';
   }
+  function videoPool() {
+    var out = [], i;
+    for (i = 0; i < pool.length; i++) if (pool[i].kind === 'video') out.push(pool[i]);
+    return out;
+  }
   function pickAutoSpot() {
-    var it = null, i;
-    if (pool.length) {
+    var videos = videoPool(), it = null, i;
+    if (videos.length) {
       for (i = 0; i < 8; i++) {
-        it = pool[Math.floor(Math.random() * pool.length)];
-        if (!spot || it.id !== spot.item.id || pool.length === 1) break;
+        it = videos[Math.floor(Math.random() * videos.length)];
+        if (!spot || it.id !== spot.item.id || videos.length === 1) break;
       }
     }
-    if (it) setSpot({ item: it, by: null, action: null, at: now() });
+    if (it && it.kind === 'video') setSpot({ item: it, by: null, action: null, at: now() });
     else clearSpot();
   }
   function spotTick() {
@@ -702,7 +707,7 @@ const LIVE_JS = String.raw`
     var ch = st && (st.chaos !== undefined ? st.chaos : (st.chaos_until !== undefined ? { until: st.chaos_until, by: st.chaos_by } : stg.chaos_until !== undefined ? { until: stg.chaos_until, by: stg.chaos_by } : undefined));
     if (ch && typeof ch === 'object') takeChaos(ch.until, ch.by); else if (typeof ch === 'number') takeChaos(ch, '');
     var sp = st && st.spotlight;
-    if (sp && validItem(sp.item) && cfg.on_air) {
+    if (sp && validItem(sp.item) && sp.item.kind === 'video' && cfg.on_air) {
       var key = sp.item.id + ':' + num(sp.at, 0);
       if (spot && spot.item.id + ':' + spot.at === key) {
         spot.pinnedUntil = num(sp.pinned_until, 0);
@@ -839,6 +844,7 @@ const LIVE_JS = String.raw`
         break;
       case 'skip':
         if (cfg.on_air) { if (cfg.spotlight_auto) pickAutoSpot(); else clearSpot(); }
+        showToast(ev.toast);
         break;
       case 'toast':
         // a refunded summon (nothing matched): just the toast, the canvas is unchanged
@@ -1072,7 +1078,8 @@ const STORE_JS = String.raw`
     summon: 'your pick takes the spotlight, big, with sound and your name.',
     chaos: '100 things on screen at once for 30 seconds.',
     shuffle: 'wipe the canvas and refill it from the pool.',
-    pin: 'keep the current spotlight up for 2 more minutes.'
+    pin: 'keep the current spotlight up for 2 more minutes.',
+    skip: 'clear the spotlight.'
   };
 
   // ---- rewards -----------------------------------------------------------------------------------------------

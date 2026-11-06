@@ -66,7 +66,7 @@ public enum PreviewScenario: String, Sendable, CaseIterable {
     /// harbour, guitar, skate). `.happy` and `.renditions` serve the same map but do not advertise `features.search`.
     case skyMap
     /// Stage, the studio tab (APP-API-CONTRACT 30; `PreviewStage.swift`): `.happy` and `.renditions` have `features.stage`
-    /// and `stage_twitch` with a connected, on-air stage (a spotlight, four rewards, a few redemptions). `.stageNotConnected`:
+    /// and `stage_twitch` with a connected, on-air stage (a spotlight, five rewards, a few redemptions). `.stageNotConnected`:
     /// off air, Twitch not connected yet (connecting works). `.stageFail`: `GET /stage` always fails (`503`), so the tab shows
     /// its failed state.
     case stageNotConnected, stageFail

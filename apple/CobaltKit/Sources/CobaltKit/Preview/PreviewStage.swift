@@ -2,7 +2,7 @@ import Foundation
 import Synchronization
 
 // Stage in previews (APP-API-CONTRACT 30): a server with `features.stage` and `stage_twitch`, a connected stage on air with
-// a spotlight, four rewards and a few redemptions, and 72 public files in the pool. Writes behave like the real routes:
+// a spotlight, five rewards and a few redemptions, and 72 public files in the pool. Writes behave like the real routes:
 // numbers are clamped, a pool must name a collection or set the preview links server has (or words), `409 off_air` while off
 // air, an item must be in the pool, and a reward patch updates the reward. `PreviewScenario.stageNotConnected` is the stage
 // before Twitch is connected (off air, whole library, no spotlight, no redemptions); "connect" works and the next read finds
@@ -68,13 +68,15 @@ extension PreviewData {
         }
     }
 
-    /// The four rewards (30.2): summon 500 / 30 s on, chaos 2,000 / 300 s on, shuffle 1,000 / 120 s on, pin 300 / 60 s off.
+    /// The five rewards (30.2): summon 500 / 30 s on, chaos 2,000 / 300 s on, shuffle 1,000 / 120 s on, pin 300 / 60 s off,
+    /// skip 200 / 15 s on.
     static func stageRewards(synced: Bool) -> [StageReward] {
         [
             StageReward(action: .summon, cost: 500, cooldownSeconds: 30, enabled: true, synced: synced),
             StageReward(action: .chaos, cost: 2_000, cooldownSeconds: 300, enabled: true, synced: synced),
             StageReward(action: .shuffle, cost: 1_000, cooldownSeconds: 120, enabled: true, synced: synced),
             StageReward(action: .pin, cost: 300, cooldownSeconds: 60, enabled: false, synced: synced),
+            StageReward(action: .skip, cost: 200, cooldownSeconds: 15, enabled: true, synced: synced),
         ]
     }
 
@@ -237,6 +239,7 @@ final class PreviewStageState: Sendable {
                 break
             case .spotlight(let id):
                 guard let item = pool.first(where: { $0.id == id }) else { throw StageError.notFound }
+                guard item.kind == .video else { throw StageError.videosOnly }
                 shown = item
                 s.stage.spotlight = StageSpotlight(item: item, by: nil, action: .owner, at: now)
             }

@@ -37,7 +37,8 @@ private let wireRewards = """
 [{"action":"summon","title":"summon","cost":500,"cooldown_seconds":30,"enabled":true,"synced":true},
  {"action":"chaos","title":"chaos","cost":2000,"cooldown_seconds":300,"enabled":true,"synced":true},
  {"action":"shuffle","title":"capystore shuffle","cost":1000,"cooldown_seconds":120,"enabled":true,"synced":false},
- {"action":"pin","title":"pin","cost":300,"cooldown_seconds":60,"enabled":false,"synced":true}]
+ {"action":"pin","title":"pin","cost":300,"cooldown_seconds":60,"enabled":false,"synced":true},
+ {"action":"skip","title":"skip","cost":200,"cooldown_seconds":15,"enabled":true,"synced":true}]
 """
 
 private let wireSnapshot = """
@@ -215,7 +216,7 @@ struct StageModelTests {
 
     @Test func rewardsKeepTheServersTitleAndSync() throws {
         let snapshot = try decode(StageSnapshot.self, wireSnapshot)
-        #expect(snapshot.rewards.map(\.action) == [.summon, .chaos, .shuffle, .pin])
+        #expect(snapshot.rewards.map(\.action) == [.summon, .chaos, .shuffle, .pin, .skip])
         let shuffle = snapshot.rewards[2]
         #expect(shuffle.title == "capystore shuffle" && shuffle.cost == 1000 && shuffle.cooldownSeconds == 120 && shuffle.enabled && !shuffle.synced)
         #expect(!snapshot.rewards[3].enabled)
@@ -244,7 +245,7 @@ struct StageModelTests {
         #expect(list[0].kind == .summon && !list[0].isOwner)
         #expect(list[0].createdAt == Date(timeIntervalSince1970: 1_790_000_800))
         #expect(list[1].status == .refunded && list[1].reason == .noMatch && list[1].item == nil)
-        #expect(list[2].isOwner && list[2].action == "skip" && list[2].kind == nil && list[2].userName == "you")
+        #expect(list[2].isOwner && list[2].action == "skip" && list[2].kind == .skip && list[2].userName == "you")
     }
 
     @Test func aPoolPageDecodes() throws {
@@ -378,6 +379,7 @@ struct StagePatchTests {
         #expect(StageError.from(CobaltError.network(.notConnectedToInternet)) == .offline)
         #expect(StageError.from(URLError(.timedOut)) == .offline)
         #expect(StageError.from(CobaltError.api(code: "error.stage.off_air", httpStatus: 409)) == .offAir)
+        #expect(StageError.from(CobaltError.api(code: "error.stage.videos_only", httpStatus: 409)) == .videosOnly)
         #expect(StageError.from(CobaltError.api(code: "error.api.generic", httpStatus: 503)) == .unavailable)
         #expect(StageError.from(CobaltError.api(code: "error.api.auth.key.invalid", httpStatus: 401)) == .other)
         #expect(StageError.from(CancellationError()) == .other)
@@ -408,7 +410,7 @@ struct StageHTTPTests {
         let snapshot = try await client(server).stage()
         let req = try #require(server.requests.first)
         #expect(req.headers["authorization"] == "Api-Key \(stageKey)" && req.body.isEmpty)
-        #expect(snapshot.stage.onAir && snapshot.rewards.count == 4)
+        #expect(snapshot.stage.onAir && snapshot.rewards.count == 5)
     }
 
     @Test func patchSendsOnlyWhatIsSetAndClamps() async throws {
@@ -608,7 +610,7 @@ struct StageStoreTests {
         #expect(stage.onAir && stage.pool.kind == .collection && stage.pool.name == "memes" && stage.density == 30)
         #expect(!stage.storeOpen, "the store starts locked")
         #expect(stage.twitch?.status == .ok && stage.spotlight?.by == "mochi")
-        #expect(app.stage.rewards.map(\.action) == [.summon, .chaos, .shuffle, .pin])
+        #expect(app.stage.rewards.map(\.action) == [.summon, .chaos, .shuffle, .pin, .skip])
         #expect(app.stage.reward(.pin)?.enabled == false && app.stage.reward(.summon)?.cost == 500)
     }
 
@@ -617,7 +619,7 @@ struct StageStoreTests {
         await app.stage.load()
         let stage = try #require(app.stage.stage)
         #expect(!stage.onAir && stage.twitch == nil && stage.spotlight == nil && stage.pool.kind == .library)
-        #expect(app.stage.rewards.count == 4 && app.stage.rewards.allSatisfy { !$0.synced })
+        #expect(app.stage.rewards.count == 5 && app.stage.rewards.allSatisfy { !$0.synced })
     }
 
     @Test func aFailingServerGivesTheFailedState() async {
@@ -631,7 +633,7 @@ struct StageStoreTests {
         await app.stage.load()
         try server(app).loadFails = true
         await app.stage.load()
-        #expect(app.stage.state == .failed(.unavailable) && app.stage.stage?.onAir == true && app.stage.rewards.count == 4)
+        #expect(app.stage.state == .failed(.unavailable) && app.stage.stage?.onAir == true && app.stage.rewards.count == 5)
     }
 
     @Test func aServerChangeForgetsTheStage() async {
@@ -799,12 +801,14 @@ struct StageStoreTests {
         let app = app()
         await app.stage.load()
         await app.stage.loadPool()
-        let pick = try #require(app.stage.poolItems.last)
+        let pick = try #require(app.stage.poolItems.last { $0.kind == .video })
         try await app.stage.perform(.spotlight(itemID: pick.id))
         let spotlight = try #require(app.stage.stage?.spotlight)
         #expect(spotlight.item.id == pick.id && spotlight.action == .owner && spotlight.by == nil)
         let first = try #require(app.stage.redemptions.first)
         #expect(first.isOwner && first.userName == "you" && first.action == "spotlight")
+        let picture = try #require(app.stage.poolItems.last { $0.kind == .image })
+        await #expect(throws: StageError.videosOnly) { try await app.stage.perform(.spotlight(itemID: picture.id)) }
         await #expect(throws: StageError.notFound) { try await app.stage.perform(.spotlight(itemID: "not in the pool")) }
     }
 
@@ -829,7 +833,7 @@ struct StageStoreTests {
         #expect(app.stage.reward(.pin)?.enabled == true)
         try await app.stage.updateReward(.shuffle, cost: 0, cooldownSeconds: 99_999_999)
         #expect(app.stage.reward(.shuffle)?.cost == 1 && app.stage.reward(.shuffle)?.cooldownSeconds == 604_800)
-        #expect(app.stage.rewards.map(\.action) == [.summon, .chaos, .shuffle, .pin], "the order holds")
+        #expect(app.stage.rewards.map(\.action) == [.summon, .chaos, .shuffle, .pin, .skip], "the order holds")
     }
 
     @Test func aRewardNotSyncedToTwitchSaysSo() async throws {
@@ -857,7 +861,7 @@ struct StageStoreTests {
         await app.stage.load()
         try await app.stage.disconnectTwitch()
         #expect(app.stage.stage?.twitch == nil)
-        #expect(app.stage.rewards.count == 4 && app.stage.rewards.allSatisfy { !$0.synced })
+        #expect(app.stage.rewards.count == 5 && app.stage.rewards.allSatisfy { !$0.synced })
     }
 
     @Test func theTwitchReturnLinkOpensTheStudioTab() async throws {

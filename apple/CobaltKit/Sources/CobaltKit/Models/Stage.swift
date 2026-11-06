@@ -325,9 +325,9 @@ extension StageTwitch: Decodable {
     }
 }
 
-/// The four rewards viewers spend channel points on (30.2). Also the `action` of a reward.
+/// The five rewards viewers spend channel points on (30.2). Also the `action` of a reward.
 public enum StageRewardKind: String, Sendable, Equatable, CaseIterable, Identifiable {
-    case summon, chaos, shuffle, pin
+    case summon, chaos, shuffle, pin, skip
 
     public var id: String { rawValue }
 }
@@ -419,7 +419,7 @@ public struct StageRedemption: Sendable, Equatable, Identifiable {
     /// The owner's own action, not a viewer's.
     public var isOwner: Bool { id.hasPrefix("owner:") }
 
-    /// The reward this is, when it is one of the four.
+    /// The reward this is, when it is one of the five. An owner skip is `.skip` too; `isOwner` tells them apart.
     public var kind: StageRewardKind? { StageRewardKind(rawValue: action) }
 }
 
@@ -573,7 +573,7 @@ extension StageSettings: Decodable {
     }
 }
 
-/// `GET /stage`: the stage and its four rewards.
+/// `GET /stage`: the stage and its five rewards.
 public struct StageSnapshot: Sendable, Equatable, Decodable {
     public var stage: StageSettings
     public var rewards: [StageReward]
@@ -774,6 +774,8 @@ public enum StageError: Error, Sendable, Equatable {
     case twitchOff
     /// `409 error.stage.off_air`: an action needs the stage on air.
     case offAir
+    /// `409 error.stage.videos_only`: the spotlight is videos only.
+    case videosOnly
     /// `503 error.stage.search_unavailable`: the meaning search is off or asleep; nothing changed.
     case searchUnavailable
     /// `503 error.api.generic`: the server cannot take it right now.
@@ -791,6 +793,7 @@ public enum StageError: Error, Sendable, Equatable {
         case "error.stage.not_found": self = .notFound
         case "error.stage.twitch_off": self = .twitchOff
         case "error.stage.off_air": self = .offAir
+        case "error.stage.videos_only": self = .videosOnly
         case "error.stage.search_unavailable": self = .searchUnavailable
         default: return nil
         }
