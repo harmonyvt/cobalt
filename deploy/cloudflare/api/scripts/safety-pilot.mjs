@@ -15,7 +15,9 @@
 // Deploy itself stays on the `cf` CLI; Wrangler is only how this script puts one object. The cron prepares a clip
 // for each id (even an old file) and then calls Clef, at most 20 files a run and no faster than one call every
 // 3 seconds. A file whose clip is not ready yet shows as "not_ready"; the next runs fill those in. When every id
-// has a Clef answer, the labels object is removed so the cron goes back to new saves only.
+// has a Clef answer (or a prep failure that will not be tried again), the labels object is removed so the cron
+// goes back to new saves only. A prep that failed before the current prep path (`prep_rev`) is tried again, and a
+// report row with no Clef level is still queued if the labels file is already gone.
 //
 //   node deploy/cloudflare/api/scripts/safety-pilot.mjs --report
 // prints id, Harmony's label, Clef's level, and the gore / drawn / minor_sexual flags.

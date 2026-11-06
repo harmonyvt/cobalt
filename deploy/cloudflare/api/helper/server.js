@@ -107,6 +107,9 @@
 //   POST   /safety?id=&kind=clip|still
 //                      the same body, for a file that is not the post's lead (the lead's clip is cut inside /about).
 //                      kind=clip: the safety mp4s and the 300 s soundtrack. kind=still: one 768 px JPEG.
+//                      An animated WebP is image/webp, so the kick asks for kind=still, but ffmpeg skips ANIM/ANMF.
+//                      Those bytes are composed here into up to four 768 px JPEGs (webp-anim.js). A file that still
+//                      will not decode is 422 error.safety.failed.
 //                      200 { clips, audio, stills } | 400 | 413 | 422 error.safety.failed | 429 | 502.
 
 import { spawn } from "node:child_process";
@@ -178,6 +181,7 @@ import {
     validateSlideshowStart,
     videoExt,
 } from "./lib.js";
+import { safetyStillsFromAnimatedWebp } from "./webp-anim.js";
 
 /** Sent on every answer (see `createServer`): the Durable Object's `features.gallery` follows it. */
 export const HELPER_CAPS_HEADER = "x-cobalt-helper";
@@ -1304,7 +1308,12 @@ export function createHelper(opts = {}) {
             await pipeline(req, counter, createWriteStream(input));
             if (n === 0) throw new JobError("error.studio.not_video");
             const deadline = Date.now() + ABOUT_TIMEOUT_MS;
-            if (kind === "still") {
+            // Animated WebP is asked for as kind=still (its content type is image/webp). ffmpeg cannot read
+            // ANIM/ANMF, so compose the frames first. null means it is not an animated WebP.
+            const webpStills = await safetyStillsFromAnimatedWebp({ ffmpeg: ffmpegPath(), input, dir, deadline });
+            if (webpStills) {
+                answer = { clips: [], audio: null, stills: webpStills.map((b) => b.toString("base64")) };
+            } else if (kind === "still") {
                 const output = path.join(dir, "still.jpg");
                 const r = await runFfmpegCapture(buildPosterArgs({ input, output, side: ABOUT_FRAME_SIDE }), Math.max(1, deadline - Date.now()));
                 if (r.timedOut) throw new JobError("error.safety.failed");

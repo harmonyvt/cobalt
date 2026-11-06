@@ -21,6 +21,21 @@ export const QUESTIONS_VERSION = "v1";
 
 export const SAFETY_MAX_ATTEMPTS = 3;
 export const SAFETY_RETRY_MS = 24 * 60 * 60 * 1000;
+// Not a threshold and not an environment variable. Bump when clip prep learns to read a file it used to
+// fail, so a row already marked prep=failed is tried again. The attempt cap and the day-long wait stay.
+// Rows written before the column existed are 0.
+export const SAFETY_PREP_REV = 1;
+
+// A failed prep is due for another attempt when the prep path is newer than the one that failed it, or
+// when an attempt remains and the day-long wait has passed. Matches the kick's SQL.
+export function prepFailedDue(
+    row: { prep_at: number | null; prep_attempts: number; prep_rev?: number | null },
+    now: number,
+): boolean {
+    if ((row.prep_rev ?? 0) < SAFETY_PREP_REV) return true;
+    if (row.prep_attempts >= SAFETY_MAX_ATTEMPTS) return false;
+    return row.prep_at == null || row.prep_at < now - SAFETY_RETRY_MS;
+}
 // The 15-minute cron's Clef calls. Workers AI paid models are assumed at 20 requests a minute; the default
 // stays far under that. 0 turns the calls off (files stay pending, so they stay off the stage).
 export const SAFETY_PER_RUN_DEFAULT = 4;
@@ -308,9 +323,8 @@ export function snapshotFlags(probs: SafetyProbs, cfg: SafetyConfig): { gore: nu
 }
 
 // clip | still | nothing the stage can show. HEIC stays unrated (the canvas cannot draw it either).
-// Animated WebP stays a still: it is `image/webp`, and the container's ffmpeg cannot decode an animated WebP
-// (poster.ts). kind=clip would call that same decoder and fail the same way, so prep of those files fails
-// until something other than ffmpeg can read them.
+// Animated WebP is `image/webp`, so the kick asks for kind=still. The helper composes those frames
+// (helper/webp-anim.js): ffmpeg itself skips ANIM/ANMF, and kind=clip would call that same decoder.
 export function safetyKind(contentType: string | null): "clip" | "still" | null {
     const t = (contentType ?? "").split(";")[0]!.trim().toLowerCase();
     if (t === "image/heic" || t === "image/heif") return null;

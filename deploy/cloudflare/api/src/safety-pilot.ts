@@ -57,6 +57,40 @@ async function readJson(bucket: ReadBucket, key: string): Promise<unknown> {
     }
 }
 
+// A report row Clef has not answered. A Clef failure still has a clef object (its level may be "failed").
+const awaitingClef = (r: PilotRow): boolean => r.clef == null && (r.error === "failed" || r.error === "not_ready");
+
+// Ids the kick should queue: the labels file, plus report rows that never got a Clef level. The labels
+// file is removed once a list looks settled, so the report is what still names those files.
+export function pilotPrepRetryIds(labels: PilotLabel[] | null, report: PilotReport | null): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const add = (id: string) => {
+        if (!ID_RE.test(id) || seen.has(id)) return;
+        seen.add(id);
+        out.push(id);
+    };
+    for (const l of labels ?? []) add(l.id);
+    for (const r of report?.rows ?? []) {
+        if (awaitingClef(r)) add(r.id);
+    }
+    return out;
+}
+
+// Report rows the rating pass may still finish when the labels file is already gone.
+export function reportPrepOpen(report: PilotReport | null): PilotLabel[] {
+    if (!report) return [];
+    const out: PilotLabel[] = [];
+    const seen = new Set<string>();
+    for (const r of report.rows) {
+        if (!awaitingClef(r)) continue;
+        if (typeof r.label !== "string" || !r.label || !ID_RE.test(r.id) || seen.has(r.id)) continue;
+        seen.add(r.id);
+        out.push({ id: r.id, label: r.label });
+    }
+    return out;
+}
+
 export async function readPilotLabels(bucket: ReadBucket): Promise<PilotLabel[] | null> {
     return parsePilotLabels(await readJson(bucket, PILOT_LABELS_KEY));
 }

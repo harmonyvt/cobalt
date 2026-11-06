@@ -13,6 +13,7 @@ import {
     SAFETY_QUESTIONS,
     SAFETY_RETRY_MS,
     SAFETY_STATE,
+    prepFailedDue,
     contentLevel,
     parseClefAnswer,
     safetyConfigFrom,
@@ -22,7 +23,7 @@ import {
     type SafetyConfig,
     type SafetyContentLevel,
 } from "./safety";
-import { PILOT_LABELS_KEY, readPilotLabels, readPilotReport, writePilotReport, type PilotClef, type PilotLabel, type PilotReport, type PilotRow } from "./safety-pilot";
+import { PILOT_LABELS_KEY, readPilotLabels, readPilotReport, reportPrepOpen, writePilotReport, type PilotClef, type PilotLabel, type PilotReport, type PilotRow } from "./safety-pilot";
 
 export const CLEF_IMAGE_MAX = 4;
 export const CLEF_VIDEO_MAX = 2;
@@ -184,6 +185,7 @@ type PilotState = {
     prep: string;
     prep_at: number | null;
     prep_attempts: number;
+    prep_rev: number | null;
     level: string;
     probs: string | null;
     gore: number;
@@ -196,7 +198,7 @@ async function pilotStates(d: SafetyRateDeps, ids: string[]): Promise<Map<string
     if (ids.length === 0) return new Map();
     const { results } = await d.db
         .prepare(
-            `SELECT s.item_id, s.prep, s.prep_at, s.prep_attempts, s.level, s.probs, s.gore, s.drawn, s.minor_sexual, s.model
+            `SELECT s.item_id, s.prep, s.prep_at, s.prep_attempts, s.prep_rev, s.level, s.probs, s.gore, s.drawn, s.minor_sexual, s.model
                FROM media_safety s JOIN media_items m ON m.id = s.item_id
               WHERE m.deleted_at IS NULL AND s.item_id IN (SELECT value FROM json_each(?1))`,
         )
@@ -205,11 +207,11 @@ async function pilotStates(d: SafetyRateDeps, ids: string[]): Promise<Map<string
     return new Map(results.map((r) => [r.item_id, r]));
 }
 
-// Kick will not queue this prep again until the day-long wait ends, or at all once the attempts are used.
-function prepNotDue(row: Pick<PilotState, "prep" | "prep_at" | "prep_attempts">, now: number): boolean {
+// Kick will not queue this prep again: the day-long wait has not passed, or the attempts are used, and the
+// failure was on the current prep path. An older prep_rev is due now (prepFailedDue).
+function prepNotDue(row: Pick<PilotState, "prep" | "prep_at" | "prep_attempts" | "prep_rev">, now: number): boolean {
     if (row.prep !== "failed") return false;
-    if (row.prep_attempts >= SAFETY_MAX_ATTEMPTS) return true;
-    return row.prep_at != null && row.prep_at >= now - SAFETY_RETRY_MS;
+    return !prepFailedDue(row, now);
 }
 
 function clefOf(row: Pick<PilotState, "level" | "probs" | "gore" | "drawn" | "minor_sexual" | "model">): PilotClef {
@@ -225,7 +227,7 @@ function clefOf(row: Pick<PilotState, "level" | "probs" | "gore" | "drawn" | "mi
 
 // A Clef answer settles an id. A recorded failure settles it only when prep will not be tried again: a prep
 // failure that still has a retry keeps the labels file, so the kick can cut the clip and a later run can rate it.
-function pilotSettled(labels: PilotLabel[], rows: PilotRow[], states: Map<string, PilotState>): boolean {
+function pilotSettled(labels: PilotLabel[], rows: PilotRow[], states: Map<string, PilotState>, now: number): boolean {
     const byId = new Map(rows.map((r) => [r.id, r]));
     return labels.every((l) => {
         const r = byId.get(l.id);
@@ -233,7 +235,7 @@ function pilotSettled(labels: PilotLabel[], rows: PilotRow[], states: Map<string
         if (r.clef && r.error == null) return true;
         const row = states.get(l.id);
         if (!row || row.prep === "pending") return false;
-        if (row.prep === "failed" && row.prep_attempts < SAFETY_MAX_ATTEMPTS) return false;
+        if (row.prep === "failed" && prepFailedDue(row, now)) return false;
         return true;
     });
 }
@@ -247,11 +249,32 @@ export async function rateSafety(d: SafetyRateDeps): Promise<SafetyRateResult> {
     const out: SafetyRateResult = { due: 0, rated: 0, failed: 0, pilot: 0 };
     if (!d.ai || typeof d.ai.run !== "function") return out;
     try {
-        const labels = await readPilotLabels(d.originals);
+        let labels = await readPilotLabels(d.originals);
+        // The labels file is removed once every id is settled. A prep that failed on an older path is not
+        // settled any more, but the file may already be gone. Those report rows (no Clef level) are the list.
+        let preserve: PilotReport | null = null;
+        if (!labels || labels.length === 0) {
+            const existing = await readPilotReport(d.originals);
+            const candidates = reportPrepOpen(existing);
+            if (existing && candidates.length > 0) {
+                const now = d.now();
+                const states = await pilotStates(d, candidates.map((l) => l.id));
+                const openRows = candidates.filter((l) => {
+                    const row = states.get(l.id);
+                    if (!row) return false;
+                    if (row.prep === "ready" && row.level === "pending") return true;
+                    return row.prep === "failed" && prepFailedDue(row, now);
+                });
+                if (openRows.length > 0) {
+                    labels = openRows;
+                    preserve = existing;
+                }
+            }
+        }
         if (labels && labels.length > 0) {
-            const report = await readPilotReport(d.originals);
-            const labelsHash = await hashLabels(labels);
-            const same = report && report.labels_hash === labelsHash ? report : null;
+            const report = preserve ?? (await readPilotReport(d.originals));
+            const labelsHash = preserve ? preserve.labels_hash : await hashLabels(labels);
+            const same = preserve ?? (report && report.labels_hash === labelsHash ? report : null);
             const byReport = new Map((same?.rows ?? []).map((r) => [r.id, r]));
             const open = labels.filter((l) => {
                 const r = byReport.get(l.id);
@@ -314,7 +337,7 @@ export async function rateSafety(d: SafetyRateDeps): Promise<SafetyRateResult> {
                     });
                 }
                 if (notes.length > 0 || todo.length > 0) await writePilotReport(d.originals, next);
-                if (pilotSettled(labels, next.rows, states)) await d.originals.delete?.(PILOT_LABELS_KEY).catch(() => {});
+                if (!preserve && pilotSettled(labels, next.rows, states, now)) await d.originals.delete?.(PILOT_LABELS_KEY).catch(() => {});
                 return out;
             }
         }
