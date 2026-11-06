@@ -186,7 +186,16 @@ struct CobaltApp: App {
     /// One window, not a `WindowGroup`: a group opens another window for every `cobalt-apple://` link
     /// (each with its own copy of the shell over the same model), and the Mac app has one model.
     private var mainWindow: some Scene {
-        Window("capystore", id: "main") { windowContent }
+        // Taken here, not inside `.commands`. `Scene.commands` runs the builder from the app body's
+        // update. An `@Observable` read in that builder (this used to read the wallpaper object and
+        // `model.capabilities` from the menu item) marks the graph dirty before the update finishes.
+        // Launch collides with a window being miniaturized or closed — the menu bar extra's window,
+        // or a restored minimized window — and `updateRootHost` flushes that graph, which builds the
+        // commands again, until the stack overflows.
+        let model = model
+        let wallpaper = StudioWallpaperMenu(
+            isOn: StageWallpaper.shared.isOn, stageAvailable: model.capabilities.stage)
+        return Window("capystore", id: "main") { windowContent }
             .defaultSize(width: 1280, height: 780)
             .defaultLaunchBehavior(.presented)
             // ⌘V is not a menu command here: the system's Paste reaches the window's paste destination, and a text field
@@ -198,7 +207,7 @@ struct CobaltApp: App {
                 }
                 // the studio canvas behind the desktop icons; off works without opening the tab
                 CommandGroup(after: .toolbar) {
-                    StageWallpaperCommand(model: model)
+                    StageWallpaperCommand(menu: wallpaper, model: model)
                 }
             }
     }
@@ -206,17 +215,18 @@ struct CobaltApp: App {
     /// The menu bar icon. `isInserted` is the settings switch (on unless the owner turns it off).
     /// `.window` is the popover, not a pull-down menu.
     private var menuBar: some Scene {
-        // Read here, in the scene body, so the scene subscribes to the setting. A `Binding` get
-        // that is only called later would not. A statement before the scene means this property
-        // has to return explicitly (it is not a result builder).
+        // Read here, in the scene body, so this scene updates when the settings row changes. A
+        // statement before the scene means this property has to return explicitly (it is not a
+        // result builder).
+        //
+        // The binding is constant. `MenuBarExtra` writes `isInserted` while it creates its window
+        // and again when that window is closed or miniaturized (launch does both). Writing that
+        // through `settings.menuBarExtra` used to publish an observation the body had just read,
+        // so the scene list and `.commands` rebuilt from inside `updateRootHost` and never settled.
+        // The settings row is the only control; the extra does not get to change the switch.
         let show = model.settings.menuBarExtra
-        return MenuBarExtra(isInserted: Binding(
-            get: { show },
-            set: { on in
-                model.settings.menuBarExtra = on
-                MenuBarPresence.shared.staysRunning = on
-            }
-        )) {
+        MenuBarPresence.shared.staysRunning = show
+        return MenuBarExtra(isInserted: .constant(show)) {
             MenuBarPopover(model: model)
         } label: {
             MenuBarLabel(model: model)
@@ -229,17 +239,21 @@ struct CobaltApp: App {
 #if os(macOS)
 /// View ▸ "studio wallpaper": a checkmark item. On reads the stage first when the tab has not; it can be turned on only
 /// while the server has the studio, and off always.
+///
+/// The checkmark is the snapshot the scene passed in. The menu writes that same value back while the
+/// menus are built; applying it would turn the wallpaper on or off from inside `Scene.commands`.
 private struct StageWallpaperCommand: View {
+    let menu: StudioWallpaperMenu
     let model: AppModel
 
     var body: some View {
-        let wallpaper = StageWallpaper.shared
         Toggle(Copy.Stage.wallpaperMenu, isOn: Binding(
-            get: { wallpaper.isOn },
+            get: { menu.isOn },
             set: { on in
-                if on { wallpaper.turnOn(model) } else { wallpaper.hide() }
+                guard menu.changes(to: on) else { return }
+                if on { StageWallpaper.shared.turnOn(model) } else { StageWallpaper.shared.hide() }
             }))
-            .disabled(!wallpaper.isOn && !model.capabilities.stage)
+            .disabled(!menu.canToggle)
     }
 }
 #endif
