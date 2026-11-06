@@ -3,7 +3,7 @@ import CobaltKit
 import SwiftUI
 
 // `#Preview`s of the studio tab on the preview server: the connected stage on air (a collection pool, a spotlight a viewer
-// summoned, four rewards, a few redemptions, the store locked), the stage before Twitch is connected, and a stage that cannot
+// summoned, five rewards, a few redemptions, the store locked), the stage before Twitch is connected, and a stage that cannot
 // load. Compact (iPhone), regular and wide (iPad on its side, the Mac). The OBS preview is a live web view, so it stays blank
 // in a canvas without network.
 

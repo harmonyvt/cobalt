@@ -66,10 +66,11 @@ extension Copy {
         static let pickTitle = "pick for the spotlight"
         static let pickLoading = "loading files…"
         static let pickEmpty = "nothing public in this pool"
+        static let pickVideosEmpty = "the spotlight is videos only"
         static let pickFailed = "can't load the pool"
         static let pickMore = "load more"
         static let done = "done"
-        static func pickCount(_ total: Int) -> String { "\(total) \(total == 1 ? "file" : "files")" }
+        static func pickCount(_ total: Int) -> String { "\(total) \(total == 1 ? "video" : "videos")" }
         static func pickItemA11y(title: String, kind: StageItem.Kind) -> String {
             "\(title), \(kind == .video ? "video" : "photo")"
         }
@@ -111,7 +112,7 @@ extension Copy {
         static let flicker = "flicker"
         static let linger = "linger"
         static let playThrough = "play videos through"
-        static let playThroughNote = "a video stays until it has played once, even past its tile life"
+        static let playThroughNote = "a video stays until it has played once, even past its time"
         static let soundAll = "unmute all videos"
         static let soundAllNote = "every playing video has sound on stream, not only the spotlight"
         static let moreOptions = "more"
@@ -140,7 +141,7 @@ extension Copy {
         static let disconnect = "disconnect"
         static let connecting = "waiting for twitch…"
         static let disconnectTitle = "disconnect twitch?"
-        static let disconnectMessage = "the four rewards leave your channel, and viewers can't redeem until you connect again."
+        static let disconnectMessage = "the five rewards leave your channel, and viewers can't redeem until you connect again."
         static let keep = "keep"
         static let needsReconnect = "twitch needs you to sign in again"
         static let notAffiliate = "channel points need an affiliate channel"
@@ -160,7 +161,7 @@ extension Copy {
 
         static let rewards = "rewards"
         static let rewardsNote = "these are real twitch rewards; changing a cost here changes it on twitch."
-        static let rewardsEmpty = "connect twitch to make the four rewards"
+        static let rewardsEmpty = "connect twitch to make the five rewards"
         static func rewardName(_ kind: StageRewardKind) -> String { kind.rawValue }
         static func rewardInfo(_ kind: StageRewardKind) -> String {
             switch kind {
@@ -168,6 +169,7 @@ extension Copy {
             case .chaos: return "100 on screen for 30 seconds"
             case .shuffle: return "wipe the canvas and refill it"
             case .pin: return "keep the spotlight up 2 more minutes"
+            case .skip: return "clear the spotlight"
             }
         }
         static func rewardLine(cost: Int, cooldownSeconds: Int) -> String {
@@ -308,6 +310,7 @@ extension Copy {
             case .notFound: return "that file isn't in the pool any more"
             case .twitchOff: return "twitch isn't set up on this server"
             case .offAir: return "go live first"
+            case .videosOnly: return "the spotlight is videos only"
             case .searchUnavailable: return searchUnavailable
             case .unavailable: return "the server can't do that right now"
             case .offline: return "can't reach the server"

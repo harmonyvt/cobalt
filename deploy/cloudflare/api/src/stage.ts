@@ -35,7 +35,7 @@ import {
 
 // ---- constants (30.2, 30.3, 30.9) ---------------------------------------------------------------------
 
-export const STAGE_ACTIONS = ["summon", "chaos", "shuffle", "pin"] as const;
+export const STAGE_ACTIONS = ["summon", "chaos", "shuffle", "pin", "skip"] as const;
 export type StageAction = (typeof STAGE_ACTIONS)[number];
 export const POOL_MAX = 2000;
 export const POOL_TTL_MS = 10 * 60 * 1000;
@@ -74,6 +74,7 @@ const REWARD_DEFAULTS: Record<StageAction, { cost: number; cooldown: number; ena
     chaos: { cost: 2000, cooldown: 300, enabled: 1, prompt: "the canvas fills up for 30 seconds" },
     shuffle: { cost: 1000, cooldown: 120, enabled: 1, prompt: "wipe the canvas and refill it" },
     pin: { cost: 300, cooldown: 60, enabled: 0, prompt: "keep the spotlight up for 2 minutes" },
+    skip: { cost: 200, cooldown: 15, enabled: 1, prompt: "clear the spotlight" },
 };
 
 // ---- deps ---------------------------------------------------------------------------------------------
@@ -86,7 +87,7 @@ export type CanvasEvent =
     | { type: "shuffle"; toast: Toast | null }
     | { type: "pin"; pinned_until: number; toast: Toast | null }
     | { type: "unpin" }
-    | { type: "skip" }
+    | { type: "skip"; toast?: Toast | null }
     | { type: "rotated" }
     // not in 30.6: a refunded summon's toast (30.9 asks for one but defines no event for it)
     | { type: "toast"; toast: Toast & { refunded: true } };
@@ -300,21 +301,47 @@ type SettingsRow = {
     updated_at: number;
 };
 
-// The single settings row, created with its defaults (and the four rewards) on first read.
+// One INSERT OR IGNORE per reward. A stage that already has its settings row still picks up a reward added later
+// (skip) the next time settings or rewards are read.
+function rewardSeeds(d: StageDeps, now: number) {
+    return STAGE_ACTIONS.map((a) =>
+        d.db
+            .prepare(
+                "INSERT OR IGNORE INTO stage_rewards (action, title, prompt, cost, cooldown_seconds, enabled, synced, updated_at) VALUES (?1, ?1, ?2, ?3, ?4, ?5, 0, ?6)",
+            )
+            .bind(a, REWARD_DEFAULTS[a].prompt, REWARD_DEFAULTS[a].cost, REWARD_DEFAULTS[a].cooldown, REWARD_DEFAULTS[a].enabled, now),
+    );
+}
+
+async function ensureRewards(d: StageDeps): Promise<void> {
+    const { results } = await d.db.prepare("SELECT action FROM stage_rewards").all<{ action: string }>();
+    const have = new Set(results.map((r) => r.action));
+    const missing = STAGE_ACTIONS.filter((a) => !have.has(a));
+    if (missing.length === 0) return;
+    // one statement at a time: a batch opens a transaction, and two reads at once (the connect callback) must not nest one
+    const now = d.now();
+    for (const a of missing) {
+        await d.db
+            .prepare(
+                "INSERT OR IGNORE INTO stage_rewards (action, title, prompt, cost, cooldown_seconds, enabled, synced, updated_at) VALUES (?1, ?1, ?2, ?3, ?4, ?5, 0, ?6)",
+            )
+            .bind(a, REWARD_DEFAULTS[a].prompt, REWARD_DEFAULTS[a].cost, REWARD_DEFAULTS[a].cooldown, REWARD_DEFAULTS[a].enabled, now)
+            .run();
+    }
+}
+
+// The single settings row, created with its defaults (and the rewards) on first read.
 export async function readSettings(d: StageDeps): Promise<SettingsRow> {
     const have = await d.db.prepare("SELECT * FROM stage_settings WHERE id = 'main'").first<SettingsRow>();
-    if (have) return have;
     const now = d.now();
-    await d.db.batch([
-        d.db.prepare("INSERT OR IGNORE INTO stage_settings (id, live_token, updated_at) VALUES ('main', ?1, ?2)").bind(randomBase62(32, rbytes(d)), now),
-        ...STAGE_ACTIONS.map((a) =>
-            d.db
-                .prepare(
-                    "INSERT OR IGNORE INTO stage_rewards (action, title, prompt, cost, cooldown_seconds, enabled, synced, updated_at) VALUES (?1, ?1, ?2, ?3, ?4, ?5, 0, ?6)",
-                )
-                .bind(a, REWARD_DEFAULTS[a].prompt, REWARD_DEFAULTS[a].cost, REWARD_DEFAULTS[a].cooldown, REWARD_DEFAULTS[a].enabled, now),
-        ),
-    ]);
+    if (!have) {
+        await d.db.batch([
+            d.db.prepare("INSERT OR IGNORE INTO stage_settings (id, live_token, updated_at) VALUES ('main', ?1, ?2)").bind(randomBase62(32, rbytes(d)), now),
+            ...rewardSeeds(d, now),
+        ]);
+    } else {
+        await ensureRewards(d);
+    }
     return (await d.db.prepare("SELECT * FROM stage_settings WHERE id = 'main'").first<SettingsRow>())!;
 }
 
@@ -728,6 +755,7 @@ type RewardRow = {
 const readTwitch = (d: StageDeps) => d.db.prepare("SELECT * FROM stage_twitch WHERE id = 'main'").first<TwitchRow>();
 
 async function readRewards(d: StageDeps): Promise<RewardRow[]> {
+    await ensureRewards(d);
     const { results } = await d.db.prepare("SELECT * FROM stage_rewards").all<RewardRow>();
     return STAGE_ACTIONS.map((a) => results.find((r) => r.action === a)).filter((r): r is RewardRow => !!r);
 }
@@ -850,7 +878,7 @@ async function manageableRewards(d: StageDeps, tw: TwitchClient): Promise<{ mine
     }
 }
 
-// Creates or updates the four rewards and the EventSub subscription; each step is logged and a failure
+// Creates or updates the rewards and the EventSub subscription; each step is logged and a failure
 // leaves the connection stored for the next GET /stage to retry (30.8). Never throws.
 export async function syncTwitch(d: StageDeps): Promise<void> {
     const tw = clientOf(d);
@@ -964,7 +992,9 @@ async function liveSpotlight(d: StageDeps, room: RoomState, seconds: number): Pr
     const sp = spotlightView(room, d.now(), seconds);
     if (!sp) return null;
     const [item] = await canvasItems(d, [sp.item.id]);
-    return item ? { ...sp, item } : null;
+    // pictures stay in the pool for the tiles; the spotlight is videos only
+    if (!item || item.kind !== "video") return null;
+    return { ...sp, item };
 }
 
 async function roomState(d: StageDeps): Promise<RoomState> {
@@ -1135,6 +1165,7 @@ async function ownerAction(d: StageDeps, request: Request): Promise<StudioReply>
         if (typeof b.item_id !== "string" || !parseIds(s.pool_ids).includes(b.item_id)) return err(404, "error.stage.not_found");
         const [item] = await canvasItems(d, [b.item_id]);
         if (!item) return err(404, "error.stage.not_found");
+        if (item.kind !== "video") return err(409, "error.stage.videos_only");
         itemId = item.id;
         await broadcast(d, { type: "summon", spotlight: { item, by: null, action: "owner", pinned_until: null, at: now }, toast: null });
     } else if (type === "skip") await broadcast(d, { type: "skip" });
@@ -1277,7 +1308,7 @@ async function ownerTwitchDelete(d: StageDeps): Promise<StudioReply> {
     return ok({ stage: await stageShape(d, s, null, await roomState(d)), ...(left ? { rewards_left_on_twitch: true } : {}) });
 }
 
-// Best effort on Twitch (the subscription, the four rewards, the tokens), then the row is gone. A reward that
+// Best effort on Twitch (the subscription, the rewards, the tokens), then the row is gone. A reward that
 // could not be deleted (tokens that no longer refresh, Twitch down) keeps its id, so a later connect adopts it
 // and the next reward change cleans it up; its redemptions are ignored meanwhile (no connection row). Returns
 // whether any reward is still on Twitch.
@@ -1675,6 +1706,7 @@ async function redeem(d: StageDeps, ev: RedemptionEvent, reward: RewardRow): Pro
         if (reward.action === "summon") {
             const item = await findSummon(d, s, input);
             if (!item) return await refund("no_match", "summon", `nothing matched "${input}", points refunded`);
+            if (item.kind !== "video") return await refund("no_match", "summon", "the spotlight is videos only, points refunded");
             await send({
                 type: "summon",
                 spotlight: { item, by, action: "summon", pinned_until: null, at: now },
@@ -1692,6 +1724,17 @@ async function redeem(d: StageDeps, ev: RedemptionEvent, reward: RewardRow): Pro
                 const secs = Math.round((until - now) / 1000);
                 await send({ type: "chaos", until, toast: { by, action: "chaos", cost, detail: `100 things on screen for ${secs} seconds` } });
             }
+            return { status: "done", reason: null, itemId: null };
+        }
+        if (reward.action === "skip") {
+            // a summon or the owner's pick is something to clear. with random spotlights on, the canvas has its own
+            // video up (the room never saw it) as long as the pool has a video; pictures are not a spotlight.
+            const up = await liveSpotlight(d, await roomState(d), s.spotlight_seconds);
+            // random spotlights: the canvas is already showing a video the room never stored, so skip still
+            // has something to clear. a pool of only pictures has nothing up.
+            const auto = !up && s.spotlight_auto === 1 && (await poolItems(d, s)).some((i) => i.kind === "video");
+            if (!up && !auto) return await refund("no_effect", "skip", "no spotlight to skip, points refunded");
+            await send({ type: "skip", toast: { by, action: "skip", cost, detail: "cleared the spotlight" } });
             return { status: "done", reason: null, itemId: null };
         }
         // pin: with random spotlights off there is only a summon (or the owner's pick) to hold, and none is up

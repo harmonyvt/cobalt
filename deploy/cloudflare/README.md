@@ -970,7 +970,7 @@ workerd.
 ## Stage (`APP-API-CONTRACT.md` section 30)
 
 A 1080p stream canvas that OBS loads as a Browser Source, a public viewer store, and Twitch channel-point redemptions
-(summon, chaos, shuffle, pin) that act on the canvas. In code, routes and tables it is **stage** (`src/stage.ts`,
+(summon, chaos, shuffle, pin, skip) that act on the canvas. In code, routes and tables it is **stage** (`src/stage.ts`,
 `src/stage-twitch.ts`, `src/stage-room.ts`, `src/stage-pages.ts`; D1 `stage_*`, migration 0019); only the host
 `studio.capybaraharmony.com` and the app's tab say "studio" (the save/trim `/studio/<sid>` stays as it was).
 
@@ -1012,8 +1012,10 @@ A 1080p stream canvas that OBS loads as a Browser Source, a public viewer store,
    `StageRoom` class). `GET /capabilities` then has `features.stage` (always, with the domain var) and `features.stage_twitch`
    (with all three secrets).
 5. **Connect Twitch** from the app's studio tab ("connect": a web sign-in for the channel owner, scope
-   `channel:manage:redemptions`). The callback stores the channel, makes the four rewards (`summon`, `chaos`, `shuffle`,
-   `pin`; a title Twitch already has becomes `capystore <word>`) and the webhook subscription. A step that fails is retried
+   `channel:manage:redemptions`). The callback stores the channel, makes the five rewards (`summon`, `chaos`, `shuffle`,
+   `pin`, `skip`; a title Twitch already has becomes `capystore <word>`, so a taken `skip` is `capystore skip`) and the
+   webhook subscription. No new OAuth scope: skip is another reward on the existing redemption subscription. Apply
+   migration `0034_stage_skip.sql` before the API that stores it (the same `cf d1 migrations apply` as 0019). A step that fails is retried
    by the next `GET /stage` (the app polls it); the status line says `setting up`, `ok`, `reconnect` or `not affiliate`.
 
 ### Testing with OBS
@@ -1024,7 +1026,8 @@ A 1080p stream canvas that OBS loads as a Browser Source, a public viewer store,
    (the page's background is transparent off air and black on air with tiles). Tick "Control audio via OBS" to put the
    spotlight's sound in the mixer; untick "Shutdown source when not visible" so a scene change does not drop the socket (it
    reconnects with backoff anyway). Right-click the source -> Refresh after rotating the link.
-3. Check without Twitch: in the app press "pick" on a pool item (the spotlight with its caption), the pin / skip buttons,
+3. Check without Twitch: in the app press "pick" on a pool video (the spotlight, with no caption bar under it; a picture
+   is refused), the pin / skip buttons,
    change "how crazy" and watch the tile count follow. `curl -H "Authorization: Api-Key <key>" -X POST -d '{"type":"chaos"}'
    -H 'content-type: application/json' https://api.capybaraharmony.com/stage/action` does the same by hand.
 4. Check the store: switch "store open" on, open `https://studio.capybaraharmony.com/store` in a private window, copy a code
@@ -1035,8 +1038,14 @@ A 1080p stream canvas that OBS loads as a Browser Source, a public viewer store,
 
 ### Behaviour worth knowing
 
-- Redemptions have no approval step: a valid one is `FULFILLED` right away; off air, a disabled action, or a summon that
-  matches nothing is `CANCELED` (points refunded). A Helix failure leaves the redemption in Twitch's queue (refund it there)
+- The spotlight is videos only. Background tiles still show pictures. An automatic spotlight is not drawn when the pool
+  has no video. A summon that resolves to a picture, or to nothing, is refunded (`no_match`) with a toast. The live page
+  does not draw the caption bar under the spotlight; redemption toasts still show. "Play videos through" applies to the
+  spotlight too: off, it advances when `spotlight_seconds` ends; on, it waits until the video finishes.
+- Redemptions have no approval step: a valid one is `FULFILLED` right away; off air, a disabled action, a summon that
+  matches nothing or matches a picture, or a skip while nothing is in the spotlight, is `CANCELED` (points refunded).
+  Skip (200 points, 15 s cooldown, on, no typed input) sends the same canvas `skip` event as the owner's Skip button.
+  A Helix failure leaves the redemption in Twitch's queue (refund it there)
   and the row `failed`. The webhook answers 204 at once and finishes in `waitUntil`; Twitch redeliveries are ignored by message
   id for 10 minutes (D1 `stage_seen`) and by redemption id forever (30 days of rows).
 - Summon order: a 3 or 4 character code in the pool, else the meaning search over the pool (a score under 0.2, `SEARCH_MIN_SCORE`

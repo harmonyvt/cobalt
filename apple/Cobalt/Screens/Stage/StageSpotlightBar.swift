@@ -133,8 +133,9 @@ struct StageMenuButton<Items: View>: View {
 
 // MARK: - the pick sheet
 
-/// "pick for the spotlight": the pool's public files, 60 at a time, newest first as the server lists them. A tap puts the file
-/// in the spotlight as the owner's own pick (`spotlight` action) and closes the sheet.
+/// "pick for the spotlight": the pool's public videos, 60 at a time, newest first as the server lists them. A tap puts the
+/// video in the spotlight as the owner's own pick (`spotlight` action) and closes the sheet. Pictures stay in the pool for
+/// the tiles; they are not offered here.
 struct StagePickSheet: View {
     let controller: StageController
 
@@ -142,6 +143,8 @@ struct StagePickSheet: View {
     @Environment(\.shell) private var shell
 
     private var store: StageStore { controller.store }
+    /// Pictures stay on the canvas as tiles. The spotlight is videos only.
+    private var videos: [StageItem] { store.poolItems.filter { $0.kind == .video } }
 
     var body: some View {
         NavigationStack {
@@ -186,6 +189,10 @@ struct StagePickSheet: View {
                     Label(Copy.Stage.pickEmpty, systemImage: Symbol.stagePoolLibrary).font(CobaltType.body)
                 }
             }
+        } else if videos.isEmpty, !store.poolHasMore, store.poolState != .loading {
+            ContentUnavailableView {
+                Label(Copy.Stage.pickVideosEmpty, systemImage: Symbol.stagePoolLibrary).font(CobaltType.body)
+            }
         } else {
             grid
         }
@@ -194,14 +201,14 @@ struct StagePickSheet: View {
     private var grid: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text(Copy.Stage.pickCount(store.poolTotal))
+                Text(Copy.Stage.pickCount(videos.count))
                     .font(CobaltType.captionSmall)
                     .foregroundStyle(CobaltColor.caption)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 10)], spacing: 12) {
-                    ForEach(store.poolItems) { item in
+                    ForEach(videos) { item in
                         PickTile(item: item) { controller.pickItem(item, shell: shell) }
                             .onAppear {
-                                if item.id == store.poolItems.last?.id { Task { await store.loadMorePool() } }
+                                if item.id == videos.last?.id { Task { await store.loadMorePool() } }
                             }
                     }
                 }

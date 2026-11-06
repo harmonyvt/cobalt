@@ -40,7 +40,7 @@ public final class StageStore {
     }
 
     public private(set) var stage: StageSettings?
-    /// The four rewards in the order summon, chaos, shuffle, pin (empty until the first load).
+    /// The five rewards in the order summon, chaos, shuffle, pin, skip (empty until the first load).
     public private(set) var rewards: [StageReward] = []
     /// The feed, newest first (empty until the first poll).
     public private(set) var redemptions: [StageRedemption] = []
@@ -163,7 +163,7 @@ public final class StageStore {
     /// turning this on also turns `sound` on (one patch).
     public func setSoundAll(_ on: Bool) async throws { try await apply(StagePatch(sound: on ? true : nil, soundAll: on)) }
 
-    /// "play videos through": a playing video stays until it has played once, even past its tile life.
+    /// "play videos through": a playing video stays until it has played once, even past its time.
     public func setPlayThrough(_ on: Bool) async throws { try await apply(StagePatch(playThrough: on)) }
 
     // MARK: sliders (debounced)
@@ -246,8 +246,8 @@ public final class StageStore {
     }
 
     /// An owner action on the canvas: skip, pin, unpin, shuffle, chaos, or a pick from the pool. Throws
-    /// `StageError.offAir` while the stage is off air and `.notFound` for an item that left the pool. The answer carries the
-    /// new spotlight; the feed is read again so the "you" line shows.
+    /// `StageError.offAir` while the stage is off air, `.notFound` for an item that left the pool, and `.videosOnly` for a
+    /// picture. The answer carries the new spotlight; the feed is read again so the "you" line shows.
     public func perform(_ action: StageAction) async throws {
         let started = generation
         let answer = try await ctx.client.stageAction(action)
@@ -293,7 +293,7 @@ public final class StageStore {
         try await ctx.client.connectStageTwitch()
     }
 
-    /// Takes Twitch off the stage: the webhook, the four rewards on Twitch and the connection (best effort on Twitch's side).
+    /// Takes Twitch off the stage: the webhook, the five rewards on Twitch and the connection (best effort on Twitch's side).
     public func disconnectTwitch() async throws {
         let started = generation
         let answer = try await ctx.client.disconnectStageTwitch()

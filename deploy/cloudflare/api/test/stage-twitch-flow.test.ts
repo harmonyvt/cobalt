@@ -11,7 +11,7 @@ void COLL;
 // a world that is on air, with Twitch connected and three public files
 async function live(opts: Parameters<typeof world>[0] = {}) {
     const w = await world(opts);
-    const files = [w.file({ name: "red cat.webp" }), w.file({ name: "blue dog.webp" }), w.video({ name: "green frog.mp4" })];
+    const files = [w.video({ name: "red cat.mp4" }), w.video({ name: "blue dog.mp4" }), w.video({ name: "green frog.mp4" })];
     await w.goLive();
     await w.connectTwitch();
     // the first read resolves the pool (and gives every file its code)
@@ -51,7 +51,7 @@ describe("connecting (30.8)", () => {
         expect(await cb.text()).toContain("twitch=failed&reason=off");
     });
 
-    it("the callback stores the channel with encrypted tokens, makes the four rewards and the subscription", async () => {
+    it("the callback stores the channel with encrypted tokens, makes the five rewards and the subscription", async () => {
         const w = await world();
         const { res } = await w.connectTwitch();
         expect(res.status).toBe(200);
@@ -70,12 +70,13 @@ describe("connecting (30.8)", () => {
 
         // one reward per action, as the rows say
         const rewards = [...w.twitch.rewards.values()];
-        expect(rewards.map((r) => r.title)).toEqual(["summon", "chaos", "shuffle", "pin"]);
+        expect(rewards.map((r) => r.title)).toEqual(["summon", "chaos", "shuffle", "pin", "skip"]);
         expect(rewards.map((r) => [r.cost, r.cooldown, r.is_enabled, r.input])).toEqual([
             [500, 30, true, true],
             [2000, 300, true, false],
             [1000, 120, true, false],
             [300, 60, false, false],
+            [200, 15, true, false],
         ]);
         const posts = w.twitch.called("POST", "/custom_rewards");
         for (const p of posts) expect(p.body.should_redemptions_skip_request_queue).toBe(false);
@@ -189,17 +190,18 @@ describe("connecting (30.8)", () => {
         await w.settle();
         const r = await w.owner("GET", "/stage");
         expect(r.body.stage.twitch.status).toBe("ok");
-        expect(w.twitch.rewards.size).toBe(4);
+        expect(w.twitch.rewards.size).toBe(5);
     });
 
     it("a title Twitch already has (not ours) gets the 'capystore ' prefix", async () => {
         const w = await world();
         w.twitch.takenTitles.add("summon");
         w.twitch.takenTitles.add("pin");
+        w.twitch.takenTitles.add("skip");
         await w.connectTwitch();
-        expect([...w.twitch.rewards.values()].map((r) => r.title).sort()).toEqual(["capystore pin", "capystore summon", "chaos", "shuffle"]);
+        expect([...w.twitch.rewards.values()].map((r) => r.title).sort()).toEqual(["capystore pin", "capystore skip", "capystore summon", "chaos", "shuffle"]);
         const r = await w.owner("GET", "/stage");
-        expect(r.body.rewards.map((x: any) => x.title)).toEqual(["capystore summon", "chaos", "shuffle", "capystore pin"]);
+        expect(r.body.rewards.map((x: any) => x.title)).toEqual(["capystore summon", "chaos", "shuffle", "capystore pin", "capystore skip"]);
     });
 
     it("rewards this app already made are adopted on a reconnect, not duplicated", async () => {
@@ -227,7 +229,7 @@ describe("connecting (30.8)", () => {
         await w.settle();
         expect((await w.owner("GET", "/stage")).body.stage.twitch.status).toBe("ok");
         expect(w.twitch.subs).toHaveLength(1);
-        expect(w.twitch.rewards.size).toBe(4);
+        expect(w.twitch.rewards.size).toBe(5);
     });
 
     it("connecting a different channel drops the old channel's subscription and rewards", async () => {
@@ -237,7 +239,7 @@ describe("connecting (30.8)", () => {
         await w.connectTwitch();
         expect(w.one("SELECT broadcaster_id FROM stage_twitch").broadcaster_id).toBe("b123");
         expect(w.twitch.subs).toHaveLength(1);
-        expect(w.twitch.rewards.size).toBe(4);
+        expect(w.twitch.rewards.size).toBe(5);
     });
 });
 
@@ -522,12 +524,12 @@ describe("summon (30.9)", () => {
         expect((await w.siteJson(`/live/${t}/state`)).body.spotlight).toMatchObject({ by: "Ann", item: { id: files[1]!.id } });
     });
 
-    it("by words: the meaning search over the pool, the best pool post's first file", async () => {
+    it("by words: the meaning search over the pool, the best pool post's first video", async () => {
         const { w, files } = await live({ search: true });
-        // a two-photo post: both files share a post key, the lower item_index is the first
-        const g2 = w.file({ name: "second.webp", post_key: "gallery-1", item_index: 1, role: "item" });
-        const g1 = w.file({ name: "first.webp", post_key: "gallery-1", item_index: 0, role: "item" });
-        w.space.axes = { "an animal that croaks": 2, "the pair of photos": 3 };
+        // a two-clip post: both files share a post key, the lower item_index is the first
+        const g2 = w.video({ name: "second clip.mp4", post_key: "gallery-1", item_index: 1, role: "item" });
+        const g1 = w.video({ name: "first clip.mp4", post_key: "gallery-1", item_index: 0, role: "item" });
+        w.space.axes = { "an animal that croaks": 2, "the pair of clips": 3 };
         w.embedding(files[0]!.id, 0);
         w.embedding(files[2]!.id, 2);
         w.embedding("gallery-1", 3);
@@ -536,9 +538,32 @@ describe("summon (30.9)", () => {
         expect(w.room.last("summon")!.spotlight.item.id).toBe(files[2]!.id);
         expect(w.room.last("summon")!.toast!.detail).toBe('"an animal that croaks" → green frog');
         expect(lastRow(w)).toMatchObject({ status: "done", input: "an animal that croaks", item_id: files[2]!.id });
-        await w.redeem("summon", "the pair of photos");
+        await w.redeem("summon", "the pair of clips");
         expect(w.room.last("summon")!.spotlight.item.id).toBe(g1.id);
         expect(w.room.last("summon")!.spotlight.item.id).not.toBe(g2.id);
+    });
+
+    it("a summon that resolves to an image is refunded: the spotlight is videos only", async () => {
+        const { w } = await live();
+        const picture = w.file({ name: "still life.webp" });
+        w.tick(11 * 60_000);
+        await w.siteJson(`/live/${await w.token()}/state`);
+        const code = itemCode(w, picture.id);
+        await w.redeem("summon", code, { user: "Ann", cost: 500 });
+        expect(w.room.last("summon")).toBeUndefined();
+        expect(w.room.last("toast")!.toast).toMatchObject({
+            by: "Ann",
+            action: "summon",
+            cost: 0,
+            refunded: true,
+            detail: "the spotlight is videos only, points refunded",
+        });
+        expect(w.twitch.redemptions.at(-1)!.status).toBe("CANCELED");
+        expect(lastRow(w)).toMatchObject({ status: "refunded", reason: "no_match", item_id: null, input: code });
+        await w.redeem("summon", "still life");
+        expect(w.room.types().filter((t) => t === "summon")).toEqual([]);
+        expect(lastRow(w)).toMatchObject({ status: "refunded", reason: "no_match", input: "still life" });
+        expect(w.room.last("toast")!.toast.detail).toBe("the spotlight is videos only, points refunded");
     });
 
     it("by words that look like a code but are not one still search", async () => {
@@ -604,10 +629,10 @@ describe("refunds (30.9)", () => {
         const { w, files } = await live();
         await w.owner("PATCH", "/stage", { on_air: false });
         w.room.events.length = 0;
-        for (const a of ["summon", "chaos", "shuffle", "pin"]) await w.redeem(a, itemCode(w, files[0]!.id));
+        for (const a of ["summon", "chaos", "shuffle", "pin", "skip"]) await w.redeem(a, itemCode(w, files[0]!.id));
         expect(w.room.events).toEqual([]);
-        expect(w.twitch.redemptions.map((r) => r.status)).toEqual(["CANCELED", "CANCELED", "CANCELED", "CANCELED"]);
-        expect(w.q("SELECT status, reason FROM stage_redemptions")).toEqual(Array(4).fill({ status: "refunded", reason: "off_air" }));
+        expect(w.twitch.redemptions.map((r) => r.status)).toEqual(["CANCELED", "CANCELED", "CANCELED", "CANCELED", "CANCELED"]);
+        expect(w.q("SELECT status, reason FROM stage_redemptions")).toEqual(Array(5).fill({ status: "refunded", reason: "off_air" }));
     });
 
     it("a disabled action is refunded with disabled (pin is off by default)", async () => {
@@ -669,6 +694,58 @@ describe("chaos, shuffle and pin (30.9)", () => {
         await w.owner("POST", "/stage/action", { type: "unpin" });
         expect((await w.siteJson(`/live/${t}/state`)).body.spotlight).toBeNull();
     });
+
+    it("skip clears the spotlight and its pin, and refunds when there is nothing to skip", async () => {
+        const { w, files } = await live();
+        await w.owner("PATCH", "/stage", { spotlight_auto: false });
+        await w.owner("PATCH", "/stage/rewards/pin", { enabled: true });
+        w.room.events.length = 0;
+        await w.redeem("skip", "", { user: "Ann", cost: 200 });
+        expect(lastRow(w)).toMatchObject({ action: "skip", status: "refunded", reason: "no_effect" });
+        expect(w.room.types()).toEqual(["toast"]);
+        expect(w.room.last("toast")!.toast).toMatchObject({ by: "Ann", action: "skip", cost: 0, refunded: true, detail: "no spotlight to skip, points refunded" });
+        expect(w.twitch.redemptions.at(-1)!.status).toBe("CANCELED");
+
+        await w.redeem("summon", itemCode(w, files[0]!.id), { user: "Bo" });
+        await w.redeem("pin", "", { user: "Cy", cost: 300 });
+        expect((await w.room.state()).pinned_until).toBeGreaterThan(w.now());
+        w.room.events.length = 0;
+        await w.redeem("skip", "", { user: "Ann", cost: 200 });
+        expect(lastRow(w)).toMatchObject({ action: "skip", status: "done", reason: null });
+        expect(w.room.last("skip")).toEqual({ type: "skip", toast: { by: "Ann", action: "skip", cost: 200, detail: "cleared the spotlight" } });
+        expect(w.twitch.redemptions.at(-1)!.status).toBe("FULFILLED");
+        expect((await w.room.state()).spotlight).toBeNull();
+        expect((await w.room.state()).pinned_until).toBe(0);
+        const t = await w.token();
+        expect((await w.siteJson(`/live/${t}/state`)).body.spotlight).toBeNull();
+    });
+
+    it("skip is refunded when it is turned off", async () => {
+        const { w, files } = await live();
+        await w.owner("PATCH", "/stage/rewards/skip", { enabled: false });
+        await w.redeem("summon", itemCode(w, files[0]!.id));
+        w.room.events.length = 0;
+        await w.redeem("skip");
+        expect(w.room.events).toEqual([]);
+        expect(lastRow(w)).toMatchObject({ action: "skip", status: "refunded", reason: "disabled" });
+        expect(w.twitch.redemptions.at(-1)!.status).toBe("CANCELED");
+    });
+
+    it("skip with random spotlights on clears the canvas's own video, and refunds when the pool has no video", async () => {
+        const w = await world();
+        w.file({ name: "only a picture.webp" });
+        await w.goLive();
+        await w.connectTwitch();
+        w.room.events.length = 0;
+        await w.redeem("skip", "", { user: "Ann", cost: 200 });
+        expect(lastRow(w)).toMatchObject({ action: "skip", status: "refunded", reason: "no_effect" });
+        expect(w.room.last("toast")!.toast.detail).toBe("no spotlight to skip, points refunded");
+        w.video({ name: "a clip.mp4" });
+        w.tick(11 * 60_000);
+        await w.redeem("skip", "", { user: "Ann", cost: 200 });
+        expect(lastRow(w)).toMatchObject({ action: "skip", status: "done" });
+        expect(w.room.last("skip")!.type).toBe("skip");
+    });
 });
 
 describe("reward edits adopt what is on the channel (30.8, 30.10)", () => {
@@ -678,7 +755,7 @@ describe("reward edits adopt what is on the channel (30.8, 30.10)", () => {
         w.db.raw.prepare("UPDATE stage_rewards SET twitch_reward_id = NULL, synced = 0 WHERE action = 'chaos'").run();
         const r = await w.owner("PATCH", "/stage/rewards/chaos", { cost: 2500 });
         expect(r.body.reward).toMatchObject({ action: "chaos", cost: 2500, synced: true, title: "chaos" });
-        expect(w.twitch.rewards.size).toBe(4);
+        expect(w.twitch.rewards.size).toBe(5);
         expect(w.rewardId("chaos")).toBe(id);
         expect(w.twitch.rewards.get(id)!.cost).toBe(2500);
     });
@@ -695,7 +772,7 @@ describe("reward edits adopt what is on the channel (30.8, 30.10)", () => {
         w.twitch.failList = false;
         await w.owner("GET", "/stage");
         await w.settle();
-        expect(w.twitch.rewards.size).toBe(4);
+        expect(w.twitch.rewards.size).toBe(5);
         expect((await w.owner("GET", "/stage")).body.stage.twitch.status).toBe("ok");
     });
 });

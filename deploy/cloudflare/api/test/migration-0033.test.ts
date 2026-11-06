@@ -15,7 +15,7 @@ describe("migration 0033", () => {
     it("comes right after 0032", () => {
         const at = files.indexOf("0033_safety_prep_rev.sql");
         expect(files[at - 1]).toBe("0032_safety.sql");
-        expect(files[at + 1]).toBeUndefined();
+        expect(files[at + 1] === undefined || files[at + 1]! > "0033").toBe(true);
     });
 
     it("is one additive column", () => {

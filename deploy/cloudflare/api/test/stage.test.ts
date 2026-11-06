@@ -103,7 +103,7 @@ describe("the owner routes (30.10, ops since APP-API-CONTRACT 33.10)", () => {
 });
 
 describe("settings (30.2, 30.10)", () => {
-    it("are created on first read with the documented defaults, a 32-char token and four seeded rewards", async () => {
+    it("are created on first read with the documented defaults, a 32-char token and five seeded rewards", async () => {
         const w = await world();
         const { body, status } = await w.owner("GET", "/stage");
         expect(status).toBe(200);
@@ -134,13 +134,25 @@ describe("settings (30.2, 30.10)", () => {
             { action: "chaos", title: "chaos", cost: 2000, cooldown_seconds: 300, enabled: true, synced: false },
             { action: "shuffle", title: "shuffle", cost: 1000, cooldown_seconds: 120, enabled: true, synced: false },
             { action: "pin", title: "pin", cost: 300, cooldown_seconds: 60, enabled: false, synced: false },
+            { action: "skip", title: "skip", cost: 200, cooldown_seconds: 15, enabled: true, synced: false },
         ]);
         expect(w.one("SELECT prompt FROM stage_rewards WHERE action = 'summon'").prompt).toBe("a code from the store, or a few words");
+        expect(w.one("SELECT prompt FROM stage_rewards WHERE action = 'skip'").prompt).toBe("clear the spotlight");
         // a second read changes nothing
         const token = w.stageRow().live_token;
         await w.owner("GET", "/stage");
         expect(w.stageRow().live_token).toBe(token);
-        expect(w.q("SELECT * FROM stage_rewards")).toHaveLength(4);
+        expect(w.q("SELECT * FROM stage_rewards")).toHaveLength(5);
+    });
+
+    it("a stage that already exists picks up the skip reward on the next read", async () => {
+        const w = await world();
+        await w.owner("GET", "/stage");
+        w.db.raw.prepare("DELETE FROM stage_rewards WHERE action = 'skip'").run();
+        expect(w.q("SELECT action FROM stage_rewards")).toHaveLength(4);
+        const r = await w.owner("GET", "/stage");
+        expect(r.body.rewards.map((x: { action: string }) => x.action)).toEqual(["summon", "chaos", "shuffle", "pin", "skip"]);
+        expect(r.body.rewards.at(-1)).toMatchObject({ action: "skip", cost: 200, cooldown_seconds: 15, enabled: true });
     });
 
     it("PATCH saves, clamps out-of-range numbers and answers the whole stage", async () => {
@@ -518,7 +530,7 @@ describe("the canvas token and pages (30.4)", () => {
 
     it("state returns the room's spotlight only while it is fresh or pinned, and the chaos that is still on", async () => {
         const w = await world();
-        const a = w.file();
+        const a = w.video();
         const t = await w.token();
         await w.goLive();
         const [item] = await poolOf(w);
@@ -548,8 +560,8 @@ describe("the canvas token and pages (30.4)", () => {
 describe("the room's spotlight is checked against the library (30.4, 30.10)", () => {
     it("a spotlight whose file went private or was deleted is dropped from /state and GET /stage", async () => {
         const w = await world();
-        const a = w.file({ name: "red cat.webp" });
-        const b = w.file({ name: "blue dog.webp" });
+        const a = w.video({ name: "red cat.mp4" });
+        const b = w.video({ name: "blue dog.mp4" });
         const t = await w.token();
         await w.goLive();
         const [item] = await poolOf(w);
@@ -572,13 +584,25 @@ describe("the room's spotlight is checked against the library (30.4, 30.10)", ()
 
     it("what the canvas gets is the file as it is now (a renamed post shows its new title)", async () => {
         const w = await world();
-        w.file({ name: "red cat.webp", post_key: "p1" });
+        w.video({ name: "red cat.mp4", post_key: "p1" });
         const t = await w.token();
         await w.goLive();
         const [item] = await poolOf(w);
         await w.room.send({ type: "summon", spotlight: { item, by: "Ann", action: "summon", pinned_until: null, at: w.now() }, toast: null });
         w.title("p1", "renamed");
         expect((await w.siteJson(`/live/${t}/state`)).body.spotlight.item.title).toBe("renamed");
+    });
+
+    it("an image left in the room is not a spotlight", async () => {
+        const w = await world();
+        const picture = w.file({ name: "still.webp" });
+        const t = await w.token();
+        await w.goLive();
+        const [item] = await poolOf(w);
+        expect(item).toMatchObject({ id: picture.id, kind: "image" });
+        await w.room.send({ type: "summon", spotlight: { item, by: "Ann", action: "summon", pinned_until: null, at: w.now() }, toast: null });
+        expect((await w.siteJson(`/live/${t}/state`)).body.spotlight).toBeNull();
+        expect((await w.owner("GET", "/stage")).body.stage.spotlight).toBeNull();
     });
 });
 
@@ -702,7 +726,7 @@ describe("the store and its lock (30.4)", () => {
         const r = (await w.siteJson("/store/api/rewards")).body;
         expect(r.channel).toBe("harmony");
         // pin is off by default
-        expect(r.rewards.map((x: any) => x.action)).toEqual(["summon", "chaos", "shuffle"]);
+        expect(r.rewards.map((x: any) => x.action)).toEqual(["summon", "chaos", "shuffle", "skip"]);
         expect(r.rewards[0]).toEqual({ action: "summon", title: "summon", cost: 500, cooldown_seconds: 30, prompt: "a code from the store, or a few words" });
     });
 
@@ -793,9 +817,10 @@ describe("owner actions (30.10)", () => {
         }
     });
 
-    it("spotlight needs a pool item, is the owner's own pick, and clears a pin", async () => {
+    it("spotlight needs a pool video, is the owner's own pick, and clears a pin", async () => {
         const w = await world();
-        const a = w.file({ name: "alpha.webp" });
+        const a = w.video({ name: "alpha.mp4" });
+        const picture = w.file({ name: "alpha.webp" });
         const hidden = w.file({ private: true });
         const other = w.file();
         await w.goLive({ pool: { kind: "library" } });
@@ -807,6 +832,11 @@ describe("owner actions (30.10)", () => {
             expect(r.body.error.code).toBe("error.stage.not_found");
         }
         expect((await w.owner("POST", "/stage/action", { type: "spotlight" })).status).toBe(404);
+        w.room.events.length = 0;
+        const picturePick = await w.owner("POST", "/stage/action", { type: "spotlight", item_id: picture.id });
+        expect(picturePick.status).toBe(409);
+        expect(picturePick.body.error.code).toBe("error.stage.videos_only");
+        expect(w.room.events).toEqual([]);
         await w.owner("POST", "/stage/action", { type: "pin" });
         const ok = await w.owner("POST", "/stage/action", { type: "spotlight", item_id: a.id });
         expect(ok.status).toBe(200);

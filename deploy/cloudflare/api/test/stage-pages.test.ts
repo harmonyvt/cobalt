@@ -95,6 +95,25 @@ describe("livePage", () => {
     it("parses", () => {
         expect(() => new Script(scripts(html)[0]!)).not.toThrow();
     });
+
+    it("does not draw the spotlight caption, and still draws toasts", () => {
+        const js = scripts(html)[0]!;
+        expect(html).toMatch(/#spcap\{display:none!important\}/);
+        expect(js).not.toContain("h + (AMBIENT");
+        expect(js).not.toContain("+ 90");
+        expect(js).toContain("H - h - 160");
+        expect(js).toContain("spotRect = { x: x, y: y, w: w, h: h }");
+        // ambient hides the toast; the caption rule does not, and a redemption still turns the toast on
+        expect(html).toContain('body[data-ambient="1"] #toast');
+        expect(html).not.toMatch(/#toast\{[^}]*display:\s*none\s*!important/);
+        expect(js).toContain("toastEl.style.display = 'flex'");
+        expect(html).toContain('id="toast"');
+        expect(html).toContain('id="chaosrow"');
+        expect(html).toContain('id="hint"');
+        expect(js).toContain("showToast(ev.toast)");
+        expect(js).toContain("function videoPool()");
+        expect(js).toContain("pool[i].kind === 'video'");
+    });
 });
 
 describe("storePage", () => {
@@ -361,5 +380,238 @@ describe("livePage heartbeat (30.5)", () => {
         c.advance(120_000);
         expect(c.sockets[0]!.sent).toEqual(["ping"]);
         expect(c.sockets[0]!.closed).toBe(false);
+    });
+});
+
+// The automatic spotlight and a redemption toast, run against the real page script.
+describe("livePage spotlight (videos only, no caption bar)", () => {
+    function node() {
+        const el: any = {
+            style: {},
+            className: "",
+            classList: { add() {}, remove() {}, contains: () => false },
+            textContent: "",
+            children: [] as any[],
+            parentNode: null as any,
+            hidden: false,
+            setAttribute() {},
+            getAttribute(name: string) {
+                return name === "src" ? this.src || null : null;
+            },
+            removeAttribute(name: string) {
+                if (name === "src") this.src = "";
+            },
+            addEventListener() {},
+            play: () => Promise.resolve(),
+            pause() {},
+            load() {},
+            offsetWidth: 1,
+            readyState: 0,
+            currentTime: 0,
+        };
+        el.appendChild = (c: any) => {
+            c.parentNode = el;
+            el.children.push(c);
+            return c;
+        };
+        el.removeChild = (c: any) => {
+            el.children = el.children.filter((x: any) => x !== c);
+            if (c) c.parentNode = null;
+        };
+        Object.defineProperty(el, "firstChild", { get: () => el.children[0] ?? null });
+        return el;
+    }
+
+    async function boot(pool: any[], spotlight: any = null) {
+        const els = new Map<string, any>();
+        for (const id of ["stage", "tiles", "spot", "spmedia", "spimg", "spvid", "spwho", "sppin", "sptitle", "spcap", "chaosrow", "chaostext", "toast", "tl1", "tl2", "hint"]) {
+            els.set(id, node());
+        }
+        const sockets: { onmessage: null | ((m: { data: string }) => void); onopen: null | (() => void) }[] = [];
+        const sandbox: Record<string, unknown> = {
+            document: {
+                body: { getAttribute: () => null, setAttribute() {} },
+                getElementById: (id: string) => els.get(id) ?? node(),
+                createElement: () => node(),
+            },
+            location: { pathname: "/live/tok", search: "", protocol: "https:", host: "studio.capybaraharmony.com" },
+            window: { addEventListener() {}, innerWidth: 1920, innerHeight: 1080 },
+            WebSocket: class {
+                static OPEN = 1;
+                readyState = 0;
+                onopen: null | (() => void) = null;
+                onmessage: null | ((m: { data: string }) => void) = null;
+                onclose: null | (() => void) = null;
+                onerror: null | (() => void) = null;
+                constructor() {
+                    sockets.push(this);
+                }
+                send() {}
+                close() {}
+            },
+            fetch: async () => ({
+                ok: true,
+                status: 200,
+                headers: { get: () => "" },
+                json: async () => ({
+                    status: "success",
+                    stage: { on_air: true, spotlight_auto: true, density: 5, tile_seconds: 10, sound: true, store_hint: true, store_url: "https://studio.capybaraharmony.com/store" },
+                    pool,
+                    spotlight,
+                    now: Date.now(),
+                }),
+            }),
+            setTimeout: () => 1,
+            setInterval: () => 1,
+            clearTimeout() {},
+            clearInterval() {},
+            requestAnimationFrame: () => 0,
+            Date,
+            console,
+            Math,
+        };
+        vm.runInNewContext(scripts(livePage({ stageBaseUrl: BASE, preview: false }))[0]!, sandbox);
+        await new Promise((r) => setTimeout(r, 30));
+        return { els, sockets };
+    }
+
+    const video = { id: "vid", kind: "video", url: "https://media.example/clip.mp4", title: "clip", width: 640, height: 360 };
+    const image = { id: "img", kind: "image", url: "https://media.example/still.webp", title: "still", width: 640, height: 360 };
+
+    it("picks a video and leaves an image-only pool with no spotlight", async () => {
+        const mixed = await boot([image, video]);
+        expect(mixed.els.get("spot").style.display).toBe("block");
+        expect(mixed.els.get("spvid").src).toBe(video.url);
+        expect(mixed.els.get("spimg").src ?? "").not.toBe(image.url);
+        const pictures = await boot([image]);
+        expect(pictures.els.get("spot").style.display).not.toBe("block");
+        expect(pictures.els.get("spvid").src ?? "").toBe("");
+    });
+
+    it("ignores an image summon and still shows a redemption toast", async () => {
+        const c = await boot([video]);
+        const sock = c.sockets[0]!;
+        sock.onmessage?.({ data: JSON.stringify({ type: "summon", spotlight: { item: image, by: "ann", action: "summon", at: Date.now() }, toast: null }) });
+        expect(c.els.get("spvid").src).toBe(video.url);
+        sock.onmessage?.({
+            data: JSON.stringify({ type: "toast", toast: { by: "ann", action: "skip", cost: 0, detail: "no spotlight to skip, points refunded", refunded: true } }),
+        });
+        expect(c.els.get("toast").style.display).toBe("flex");
+        expect(c.els.get("tl2").textContent).toBe("no spotlight to skip, points refunded");
+        expect(c.els.get("spcap").style.display ?? "").not.toBe("flex");
+    });
+
+    // spotlight_seconds is the spotlight's lifetime. tile_seconds is only the scatter. play_through is the
+    // only reason a started video stays up after the spotlight timer.
+    async function bootTimed(playThrough: boolean, pinnedUntil: number | null = null) {
+        let clock = 1_000_000;
+        const timers: { fn: () => void; ms: number }[] = [];
+        const els = new Map<string, any>();
+        for (const id of ["stage", "tiles", "spot", "spmedia", "spimg", "spvid", "spwho", "sppin", "sptitle", "spcap", "chaosrow", "chaostext", "toast", "tl1", "tl2", "hint"]) {
+            els.set(id, node());
+        }
+        const vid = els.get("spvid");
+        vid.readyState = 2;
+        vid.currentTime = 3;
+        const clip = { id: "vid", kind: "video", url: "https://media.example/clip.mp4", title: "clip", width: 640, height: 360 };
+        const sandbox: Record<string, unknown> = {
+            document: {
+                body: { getAttribute: () => null, setAttribute() {} },
+                getElementById: (id: string) => els.get(id) ?? node(),
+                createElement: () => node(),
+            },
+            location: { pathname: "/live/tok", search: "", protocol: "https:", host: "studio.capybaraharmony.com" },
+            window: { addEventListener() {}, innerWidth: 1920, innerHeight: 1080 },
+            WebSocket: class {
+                static OPEN = 1;
+                readyState = 0;
+                onopen: null | (() => void) = null;
+                onmessage: null | (() => void) = null;
+                onclose: null | (() => void) = null;
+                onerror: null | (() => void) = null;
+                send() {}
+                close() {}
+            },
+            fetch: async () => ({
+                ok: true,
+                status: 200,
+                headers: { get: () => "" },
+                json: async () => ({
+                    status: "success",
+                    stage: {
+                        on_air: true,
+                        spotlight_auto: false,
+                        spotlight_seconds: 20,
+                        tile_seconds: 3,
+                        play_through: playThrough,
+                        density: 5,
+                        sound: true,
+                        store_hint: false,
+                    },
+                    pool: [clip],
+                    spotlight: { item: clip, by: null, action: "summon", pinned_until: pinnedUntil, at: 1_000_000 },
+                    now: clock,
+                }),
+            }),
+            setTimeout: () => 1,
+            setInterval: (fn: () => void, ms = 0) => {
+                timers.push({ fn, ms });
+                return timers.length;
+            },
+            clearTimeout() {},
+            clearInterval() {},
+            requestAnimationFrame: () => 0,
+            Date: { now: () => clock, parse: Date.parse },
+            console,
+            Math,
+        };
+        vm.runInNewContext(scripts(livePage({ stageBaseUrl: BASE, preview: false }))[0]!, sandbox);
+        await new Promise((r) => setTimeout(r, 30));
+        return {
+            els,
+            vid,
+            advance(ms: number) {
+                clock += ms;
+            },
+            spotTick() {
+                for (const t of timers) if (t.ms === 500) t.fn();
+            },
+        };
+    }
+
+    it("with play_through off, advances after spotlight_seconds without waiting for the video to finish", async () => {
+        const c = await bootTimed(false);
+        expect(c.els.get("spot").style.display).toBe("block");
+        expect(c.vid.src).toBe("https://media.example/clip.mp4");
+        // past tile_seconds (3) and still inside spotlight_seconds (20): the file is playing and has not ended
+        c.advance(5_000);
+        c.spotTick();
+        expect(c.els.get("spot").style.display).toBe("block");
+        expect(c.vid.src).toBe("https://media.example/clip.mp4");
+        expect(c.vid.currentTime).toBe(3);
+        c.advance(16_000);
+        c.spotTick();
+        expect(c.els.get("spot").style.display).toBe("none");
+        expect(c.vid.src).toBe("");
+    });
+
+    it("with play_through on, a started video stays up past spotlight_seconds until it has played through", async () => {
+        const c = await bootTimed(true);
+        c.advance(21_000);
+        c.spotTick();
+        expect(c.els.get("spot").style.display).toBe("block");
+        expect(c.vid.src).toBe("https://media.example/clip.mp4");
+        expect(c.vid.currentTime).toBe(3);
+        c.vid.onended();
+        c.spotTick();
+        expect(c.els.get("spot").style.display).toBe("none");
+    });
+
+    it("a pin holds the spotlight past spotlight_seconds even when play_through is off", async () => {
+        const c = await bootTimed(false, 1_000_000 + 120_000);
+        c.advance(21_000);
+        c.spotTick();
+        expect(c.els.get("spot").style.display).toBe("block");
+        expect(c.vid.src).toBe("https://media.example/clip.mp4");
     });
 });
