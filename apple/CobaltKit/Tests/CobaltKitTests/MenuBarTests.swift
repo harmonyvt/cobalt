@@ -118,4 +118,72 @@ struct MenuBarSettingTests {
         settings.menuBarExtra = false
         #expect(Settings(defaults: defaults, keychain: .memory()).menuBarExtra == false)
     }
+
+    /// What used to overflow the stack at launch: the scene reads the switch, `MenuBarExtra` writes
+    /// that same value back while its window is closed or miniaturized, and the write publishes.
+    /// The scene body had read the property, so the publish rebuilt `.commands`, which flushed the
+    /// window, which wrote again.
+    @Test func anEchoedMenuBarWriteDoesNotPublish() {
+        let defaults = UserDefaults(suiteName: "cobaltkit.tests.menubar.echo.\(UUID().uuidString)")!
+        let settings = Settings(defaults: defaults, keychain: .memory())
+        final class Flag: @unchecked Sendable { var fired = false }
+        let echo = Flag()
+        let shown = settings.menuBarExtra
+        withObservationTracking { _ = settings.menuBarExtra } onChange: { echo.fired = true }
+        settings.menuBarExtra = shown
+        #expect(!echo.fired)
+        #expect(settings.menuBarExtra)
+
+        let turnedOff = Flag()
+        withObservationTracking { _ = settings.menuBarExtra } onChange: { turnedOff.fired = true }
+        settings.menuBarExtra = false
+        #expect(turnedOff.fired)
+        #expect(!settings.menuBarExtra)
+
+        let echoedOff = Flag()
+        withObservationTracking { _ = settings.menuBarExtra } onChange: { echoedOff.fired = true }
+        settings.menuBarExtra = false
+        #expect(!echoedOff.fired)
+    }
+
+    /// One scene pass reads the switch and applies the extra's write-back. An echo must end the
+    /// pass. Publishing it is the loop (the crash's 1700-deep `updateBody` / `Scene.commands` chain).
+    @Test func aLaunchWriteBackSettlesInOnePass() {
+        let defaults = UserDefaults(suiteName: "cobaltkit.tests.menubar.settle.\(UUID().uuidString)")!
+        let settings = Settings(defaults: defaults, keychain: .memory())
+        var passes = 0
+        while passes < 8 {
+            passes += 1
+            final class Flag: @unchecked Sendable { var fired = false }
+            let flag = Flag()
+            let shown = settings.menuBarExtra
+            withObservationTracking { _ = settings.menuBarExtra } onChange: { flag.fired = true }
+            settings.menuBarExtra = shown
+            if !flag.fired { break }
+        }
+        #expect(passes == 1)
+        #expect(settings.menuBarExtra)
+    }
+}
+
+struct StudioWallpaperMenuTests {
+    @Test func offAndNoStudioCannotTurnOn() {
+        let menu = StudioWallpaperMenu(isOn: false, stageAvailable: false)
+        #expect(!menu.canToggle)
+        #expect(!menu.changes(to: false))
+        #expect(menu.changes(to: true))
+    }
+
+    @Test func onCanTurnOffWithoutTheStudio() {
+        let menu = StudioWallpaperMenu(isOn: true, stageAvailable: false)
+        #expect(menu.canToggle)
+        #expect(!menu.changes(to: true))
+        #expect(menu.changes(to: false))
+    }
+
+    @Test func theStudioLetsTheOwnerTurnItOn() {
+        let menu = StudioWallpaperMenu(isOn: false, stageAvailable: true)
+        #expect(menu.canToggle)
+        #expect(menu.changes(to: true))
+    }
 }

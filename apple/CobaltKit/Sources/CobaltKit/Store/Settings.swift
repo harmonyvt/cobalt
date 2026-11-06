@@ -296,12 +296,26 @@ public final class Settings {
 
     /// The Mac menu bar icon. On by default. The Mac settings row is the only control; iOS never reads it.
     /// Closing the window leaves the app running while this is on (`MenuBarPresence`).
+    ///
+    /// The setter ignores the stored value written again. `MenuBarExtra` reports `isInserted` while
+    /// its window is created, closed, or miniaturized, including at launch. Notifying for that echo
+    /// invalidates the app scene from inside the update that is building `.commands`, and the scene
+    /// rebuilds until the main thread overflows its stack.
     public var menuBarExtra: Bool {
         get {
             access(keyPath: \.menuBarExtra)
-            return defaults.object(forKey: "menuBarExtra") as? Bool ?? true
+            return Self.storedMenuBarExtra(defaults)
         }
-        set { withMutation(keyPath: \.menuBarExtra) { defaults.set(newValue, forKey: "menuBarExtra") } }
+        set {
+            guard Self.storedMenuBarExtra(defaults) != newValue else { return }
+            withMutation(keyPath: \.menuBarExtra) { defaults.set(newValue, forKey: Self.menuBarExtraKey) }
+        }
+    }
+
+    private static let menuBarExtraKey = "menuBarExtra"
+
+    private static func storedMenuBarExtra(_ defaults: UserDefaults) -> Bool {
+        defaults.object(forKey: menuBarExtraKey) as? Bool ?? true
     }
 
     // MARK: sharing (CONTRACT-VISIBILITY.md decision 3)
