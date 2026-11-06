@@ -21,9 +21,9 @@ import {
     syncAboutRows,
 } from "./about-store";
 import { raceCeiling } from "./ceiling";
-import { SAFETY_MAX_ATTEMPTS, SAFETY_RETRY_MS, safetyKind } from "./safety";
+import { SAFETY_MAX_ATTEMPTS, SAFETY_PREP_REV, SAFETY_RETRY_MS, safetyKind } from "./safety";
 import { markSafetyPrepFailed, markSafetyReady, syncSafetyRows } from "./safety-store";
-import { readPilotLabels } from "./safety-pilot";
+import { pilotPrepRetryIds, readPilotLabels, readPilotReport } from "./safety-pilot";
 import type { KV } from "./webp";
 
 export const ABOUT_JOB_PREFIX = "about:";
@@ -193,24 +193,29 @@ export class AboutProbeService {
         const sync = await syncSafetyRows(this.d.db, now);
         for (const id of sync.removed) await deleteAboutObjects(this.d.originals, id);
         const labels = await readPilotLabels(this.d.originals).catch(() => null);
-        const pilot = JSON.stringify((labels ?? []).map((l) => l.id));
+        const report = await readPilotReport(this.d.originals).catch(() => null);
+        // The labels file, and report rows that failed prep with no Clef level. An old file is not a new upload;
+        // it is queued because it is on that list. SAFETY_BACKFILL is unchanged.
+        const pilot = JSON.stringify(pilotPrepRetryIds(labels, report));
         const since = opts.newSince ?? now - 48 * 60 * 60 * 1000;
         const backfill = opts.backfill ? 1 : 0;
         const prepSince = now - SAFETY_RETRY_MS;
         // Pilot ids and a backfill skip the "probe is not none" exclusion. Everyone else still does: a new lead's
         // about job is what cuts its clip, and an old lead stays untouched until Harmony turns backfill on.
+        // A failed prep is due again when prep_rev is behind SAFETY_PREP_REV (prepFailedDue in safety.ts), even
+        // if the attempt cap is already used. A failure on the current path still waits out the day and the cap.
         const where = `m.deleted_at IS NULL
             AND (lower(coalesce(m.content_type, '')) LIKE 'video/%' OR lower(coalesce(m.content_type, '')) LIKE 'image/%')
             AND lower(coalesce(m.content_type, '')) NOT IN ('image/heic', 'image/heif')
             AND (?3 = 1 OR m.id IN (SELECT value FROM json_each(?5)) OR NOT EXISTS (SELECT 1 FROM media_about a WHERE a.item_id = m.id AND a.probe_state != 'none'))
-            AND (s.item_id IS NULL OR s.prep = 'pending' OR (s.prep = 'failed' AND (s.prep_at IS NULL OR s.prep_at < ?1) AND s.prep_attempts < ?2))
+            AND (s.item_id IS NULL OR s.prep = 'pending' OR (s.prep = 'failed' AND (COALESCE(s.prep_rev, 0) < ?6 OR ((s.prep_at IS NULL OR s.prep_at < ?1) AND s.prep_attempts < ?2))))
             AND (?3 = 1 OR m.created_at >= ?4 OR m.id IN (SELECT value FROM json_each(?5)))`;
         const { results } = await this.d.db
             .prepare(
                 `SELECT m.id, m.content_type FROM media_items m LEFT JOIN media_safety s ON s.item_id = m.id
-                  WHERE ${where} ORDER BY m.created_at DESC, m.id DESC LIMIT ?6`,
+                  WHERE ${where} ORDER BY m.created_at DESC, m.id DESC LIMIT ?7`,
             )
-            .bind(prepSince, SAFETY_MAX_ATTEMPTS, backfill, since, pilot, n)
+            .bind(prepSince, SAFETY_MAX_ATTEMPTS, backfill, since, pilot, SAFETY_PREP_REV, n)
             .all<{ id: string; content_type: string | null }>();
         let queued = 0;
         for (const r of results) {
@@ -223,7 +228,7 @@ export class AboutProbeService {
         }
         const total = await this.d.db
             .prepare(`SELECT COUNT(*) AS n FROM media_items m LEFT JOIN media_safety s ON s.item_id = m.id WHERE ${where}`)
-            .bind(prepSince, SAFETY_MAX_ATTEMPTS, backfill, since, pilot)
+            .bind(prepSince, SAFETY_MAX_ATTEMPTS, backfill, since, pilot, SAFETY_PREP_REV)
             .first<{ n: number }>();
         if (queued > 0) await this.scheduleSweep();
         return { queued, eligible: total?.n ?? 0 };

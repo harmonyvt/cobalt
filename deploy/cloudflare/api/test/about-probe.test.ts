@@ -4,7 +4,8 @@
 // about-helper.test.ts.
 import { describe, expect, it } from "vitest";
 import { ABOUT_JOB_PREFIX, SAFETY_JOB_PREFIX, parseProbeAnswer } from "../src/about-probe";
-import { PILOT_LABELS_KEY } from "../src/safety-pilot";
+import { PILOT_LABELS_KEY, PILOT_REPORT_KEY } from "../src/safety-pilot";
+import { SAFETY_MAX_ATTEMPTS, SAFETY_PREP_REV } from "../src/safety";
 import { KEY_ID_HEADER } from "../src/headers";
 import { handleStudioRoute } from "../src/studio";
 import { auth, world, type World } from "./poster-world";
@@ -268,5 +269,62 @@ describe("the about probe (34.2)", () => {
         expect(parseProbeAnswer(null)).toBeNull();
         // an MP3 without an ID3 tag starts with a frame sync
         expect(parseProbeAnswer({ ...answer(), audio: b64(Uint8Array.from([0xff, 0xf3, 0x44])) })!.audio).not.toBeNull();
+    });
+
+    it("queues an old failed prep once the prep path can read it, from the labels or the report", async () => {
+        const w = world();
+        const oldAt = w.clock.t - 49 * 60 * 60 * 1000;
+        const failed = w.seed({ content_type: "image/webp", r2_key: "originals/a.webp" });
+        const stuck = w.seed({ content_type: "image/webp", r2_key: "originals/b.webp" });
+        const other = w.seed({ content_type: "image/webp", r2_key: "originals/c.webp" });
+        const clefFailed = w.seed();
+        for (const s of [failed, stuck, other, clefFailed]) {
+            w.db.raw.prepare("UPDATE media_items SET created_at = ? WHERE id = ?").run(oldAt, s.itemId);
+        }
+        const fail = (id: string, rev: number) => {
+            w.db.raw
+                .prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, prep_rev, updated_at) VALUES (?, 'pending', 'failed', ?, ?, ?, 1)")
+                .run(id, w.clock.t, SAFETY_MAX_ATTEMPTS, rev);
+        };
+        fail(failed.itemId, 0);
+        fail(stuck.itemId, SAFETY_PREP_REV);
+        fail(other.itemId, 0);
+        w.db.raw
+            .prepare("INSERT INTO media_safety (item_id, level, prep, clips, prep_rev, updated_at) VALUES (?, 'failed', 'ready', 1, ?, 1)")
+            .run(clefFailed.itemId, SAFETY_PREP_REV);
+        const put = (key: string, body: unknown) => {
+            w.originals.objects.set(key, { bytes: new TextEncoder().encode(JSON.stringify(body)), contentType: "application/json", meta: {} });
+        };
+        put(PILOT_LABELS_KEY, {
+            items: [
+                { id: failed.itemId, label: "anim" },
+                { id: stuck.itemId, label: "still broken" },
+            ],
+        });
+        const first = await w.studio.kickSafety(25);
+        expect(first).toMatchObject({ body: { queued: 1, eligible: 1 } });
+        expect(w.kv.m.get(`${SAFETY_JOB_PREFIX}${failed.itemId}`)).toMatchObject({ kind: "still" });
+        expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${stuck.itemId}`)).toBe(false);
+        expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${other.itemId}`)).toBe(false);
+        expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${clefFailed.itemId}`)).toBe(false);
+
+        w.originals.objects.delete(PILOT_LABELS_KEY);
+        w.kv.m.delete(`${SAFETY_JOB_PREFIX}${failed.itemId}`);
+        put(PILOT_REPORT_KEY, {
+            labels_hash: "h",
+            rows: [
+                { id: failed.itemId, label: "anim", clef: null, error: "failed" },
+                {
+                    id: clefFailed.itemId,
+                    label: "clef",
+                    clef: { level: "failed", probs: null, gore: false, drawn: false, minor_sexual: false, model: "@cf/cloudflare/clef-omni" },
+                    error: "failed",
+                },
+            ],
+        });
+        const second = await w.studio.kickSafety(25);
+        expect(second).toMatchObject({ body: { queued: 1, eligible: 1 } });
+        expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${failed.itemId}`)).toBe(true);
+        expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${clefFailed.itemId}`)).toBe(false);
     });
 });

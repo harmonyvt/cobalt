@@ -3,16 +3,18 @@
 import { describe, expect, it } from "vitest";
 import { safetyAudioKey, safetyClipKey, safetyStillKey } from "../src/about-store";
 import { buildClefRequest, loadSafetyMedia, rateSafety } from "../src/safety-clef";
-import { PILOT_LABELS_KEY, PILOT_REPORT_KEY, formatPilotReport, parsePilotLabels, readPilotLabels, readPilotReport } from "../src/safety-pilot";
-import { postSafetyLevel } from "../src/safety-store";
+import { PILOT_LABELS_KEY, PILOT_REPORT_KEY, formatPilotReport, parsePilotLabels, pilotPrepRetryIds, readPilotLabels, readPilotReport, reportPrepOpen } from "../src/safety-pilot";
+import { markSafetyPrepFailed, postSafetyLevel } from "../src/safety-store";
 import {
     CLEF_MODEL_ID,
     QUESTIONS_VERSION,
     SAFETY_MAX_ATTEMPTS,
     SAFETY_PILOT_PER_RUN,
+    SAFETY_PREP_REV,
     SAFETY_RETRY_MS,
     effectiveSafety,
     parseClefAnswer,
+    prepFailedDue,
     rollupLevels,
     safetyConfigFrom,
     stageAllows,
@@ -275,8 +277,8 @@ describe("the pilot rating queue", () => {
         visual(db, blocked);
         visual(db, retrying);
         visual(db, ready);
-        db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, updated_at) VALUES (?, 'pending', 'failed', ?, 1, 1)").run(blocked, NOW);
-        db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, updated_at) VALUES (?, 'pending', 'failed', ?, 1, 1)").run(retrying, NOW - SAFETY_RETRY_MS - 1);
+        db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, prep_rev, updated_at) VALUES (?, 'pending', 'failed', ?, 1, ?, 1)").run(blocked, NOW, SAFETY_PREP_REV);
+        db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, prep_rev, updated_at) VALUES (?, 'pending', 'failed', ?, 1, ?, 1)").run(retrying, NOW - SAFETY_RETRY_MS - 1, SAFETY_PREP_REV);
         db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, clips, has_audio, attempts, updated_at) VALUES (?, 'pending', 'ready', 1, 0, 0, 1)").run(ready);
         putClip(originals, ready);
         putLabels(originals, [
@@ -311,8 +313,8 @@ describe("the pilot rating queue", () => {
         const blocked = idN("b", 1);
         visual(db, blocked);
         db.raw
-            .prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, updated_at) VALUES (?, 'pending', 'failed', ?, ?, 1)")
-            .run(blocked, NOW, SAFETY_MAX_ATTEMPTS);
+            .prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, prep_rev, updated_at) VALUES (?, 'pending', 'failed', ?, ?, ?, 1)")
+            .run(blocked, NOW, SAFETY_MAX_ATTEMPTS, SAFETY_PREP_REV);
         putLabels(originals, [{ id: blocked, label: "gave up" }]);
         const calls: string[] = [];
         const r = await rate(db, originals, calls);
@@ -344,6 +346,58 @@ describe("the pilot rating queue", () => {
         expect(second).toMatchObject({ rated: 1, pilot: 1 });
         expect(await readPilotLabels(originals)).toBeNull();
     });
+
+    it("treats a prep that failed on an older path as not ready, even when the attempts are used", async () => {
+        const db = createFakeD1();
+        const originals = new MemoryOriginals();
+        const id = idN("o", 1);
+        visual(db, id);
+        db.raw
+            .prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, prep_rev, updated_at) VALUES (?, 'pending', 'failed', ?, ?, 0, 1)")
+            .run(id, NOW, SAFETY_MAX_ATTEMPTS);
+        putLabels(originals, [{ id, label: "old decoder" }]);
+        const calls: string[] = [];
+        const r = await rate(db, originals, calls);
+        expect(r).toMatchObject({ rated: 0, pilot: 0 });
+        expect(calls).toEqual([]);
+        expect((await readPilotReport(originals))?.rows).toEqual([{ id, label: "old decoder", clef: null, error: "not_ready" }]);
+        expect(await readPilotLabels(originals)).not.toBeNull();
+    });
+
+    it("rates a ready file from the report when the labels file is gone, and does not call Clef again for a Clef failure", async () => {
+        const db = createFakeD1();
+        const originals = new MemoryOriginals();
+        const ready = idN("r", 2);
+        const clefFailed = idN("c", 2);
+        visual(db, ready);
+        visual(db, clefFailed);
+        db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, clips, has_audio, attempts, prep_rev, updated_at) VALUES (?, 'pending', 'ready', 1, 0, 0, ?, 1)").run(ready, SAFETY_PREP_REV);
+        db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, clips, has_audio, attempts, prep_rev, updated_at) VALUES (?, 'failed', 'ready', 1, 0, 1, ?, 1)").run(clefFailed, SAFETY_PREP_REV);
+        putClip(originals, ready);
+        putClip(originals, clefFailed);
+        const clefObj = { level: "failed", probs: null, gore: false, drawn: false, minor_sexual: false, model: CLEF_MODEL_ID };
+        originals.objects.set(PILOT_REPORT_KEY, {
+            bytes: new TextEncoder().encode(JSON.stringify({
+                labels_hash: "kept",
+                rows: [
+                    { id: ready, label: "no clip yet", clef: null, error: "failed" },
+                    { id: clefFailed, label: "clef itself", clef: clefObj, error: "failed" },
+                ],
+            })),
+            contentType: "application/json",
+            meta: {},
+        });
+        const calls: string[] = [];
+        const r = await rate(db, originals, calls);
+        expect(r).toMatchObject({ rated: 1, pilot: 1 });
+        expect(calls).toEqual([CLEF_MODEL_ID]);
+        const report = await readPilotReport(originals);
+        expect(report?.labels_hash).toBe("kept");
+        expect(report?.rows.find((row) => row.id === ready)?.clef).toMatchObject({ level: "questionable", model: CLEF_MODEL_ID });
+        expect(report?.rows.find((row) => row.id === ready)?.error).toBeNull();
+        expect(report?.rows.find((row) => row.id === clefFailed)?.clef).toMatchObject({ level: "failed" });
+        expect(await readPilotLabels(originals)).toBeNull();
+    });
 });
 
 describe("the pilot list", () => {
@@ -358,5 +412,46 @@ describe("the pilot list", () => {
         expect(text).toContain("aaaabbbbccccdddd\tfursuit\tsensitive\tno\tyes\tno");
         expect(PILOT_LABELS_KEY).toBe("about/pilot-labels.json");
         expect(PILOT_REPORT_KEY).toBe("about/pilot-report.json");
+    });
+
+    it("queues a report row that never got a Clef level, and not one Clef already failed", () => {
+        const clefFailed = { level: "failed", probs: null, gore: false, drawn: false, minor_sexual: false, model: CLEF_MODEL_ID };
+        const report = {
+            labels_hash: "h",
+            rows: [
+                { id: "aaaabbbbccccdddd", label: "prep", clef: null, error: "failed" as const },
+                { id: "bbbbccccddddeeee", label: "waiting", clef: null, error: "not_ready" as const },
+                { id: "ccccddddeeeeffff", label: "clef", clef: clefFailed, error: "failed" as const },
+                { id: "not an id", label: "bad", clef: null, error: "failed" as const },
+            ],
+        };
+        expect(pilotPrepRetryIds(null, report)).toEqual(["aaaabbbbccccdddd", "bbbbccccddddeeee"]);
+        expect(reportPrepOpen(report).map((l) => l.id)).toEqual(["aaaabbbbccccdddd", "bbbbccccddddeeee"]);
+        expect(pilotPrepRetryIds([{ id: "aaaabbbbccccdddd", label: "prep" }], report)).toEqual(["aaaabbbbccccdddd", "bbbbccccddddeeee"]);
+    });
+});
+
+describe("a failed prep on an older path", () => {
+    it("is due even when the attempts are used, and a failure on this path is not", () => {
+        expect(SAFETY_MAX_ATTEMPTS).toBe(3);
+        expect(SAFETY_RETRY_MS).toBe(24 * 60 * 60 * 1000);
+        expect(prepFailedDue({ prep_at: NOW, prep_attempts: SAFETY_MAX_ATTEMPTS, prep_rev: 0 }, NOW)).toBe(true);
+        expect(prepFailedDue({ prep_at: NOW, prep_attempts: SAFETY_MAX_ATTEMPTS, prep_rev: SAFETY_PREP_REV }, NOW)).toBe(false);
+        expect(prepFailedDue({ prep_at: NOW - SAFETY_RETRY_MS - 1, prep_attempts: 1, prep_rev: SAFETY_PREP_REV }, NOW)).toBe(true);
+        expect(prepFailedDue({ prep_at: NOW, prep_attempts: 1, prep_rev: SAFETY_PREP_REV }, NOW)).toBe(false);
+        expect(prepFailedDue({ prep_at: null, prep_attempts: 0, prep_rev: SAFETY_PREP_REV }, NOW)).toBe(true);
+    });
+
+    it("stamps the next failure with this path, so the extra attempt happens once", async () => {
+        const db = createFakeD1();
+        db.raw.prepare("INSERT INTO media_safety (item_id, prep, prep_attempts, prep_rev, updated_at) VALUES ('aaaabbbbccccdddd', 'failed', 3, 0, 1)").run();
+        await markSafetyPrepFailed(db as unknown as D1Database, "aaaabbbbccccdddd", 50);
+        expect(db.raw.prepare("SELECT prep, prep_attempts, prep_rev, prep_at FROM media_safety").get()).toEqual({
+            prep: "failed",
+            prep_attempts: 4,
+            prep_rev: SAFETY_PREP_REV,
+            prep_at: 50,
+        });
+        expect(prepFailedDue({ prep_at: 50, prep_attempts: 4, prep_rev: SAFETY_PREP_REV }, 50)).toBe(false);
     });
 });
