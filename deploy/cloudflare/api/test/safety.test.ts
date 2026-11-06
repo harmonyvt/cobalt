@@ -3,11 +3,14 @@
 import { describe, expect, it } from "vitest";
 import { safetyAudioKey, safetyClipKey, safetyStillKey } from "../src/about-store";
 import { buildClefRequest, loadSafetyMedia, rateSafety } from "../src/safety-clef";
-import { PILOT_LABELS_KEY, PILOT_REPORT_KEY, formatPilotReport, parsePilotLabels } from "../src/safety-pilot";
+import { PILOT_LABELS_KEY, PILOT_REPORT_KEY, formatPilotReport, parsePilotLabels, readPilotLabels, readPilotReport } from "../src/safety-pilot";
 import { postSafetyLevel } from "../src/safety-store";
 import {
     CLEF_MODEL_ID,
     QUESTIONS_VERSION,
+    SAFETY_MAX_ATTEMPTS,
+    SAFETY_PILOT_PER_RUN,
+    SAFETY_RETRY_MS,
     effectiveSafety,
     parseClefAnswer,
     rollupLevels,
@@ -204,6 +207,142 @@ describe("rating and the post rollup", () => {
         expect(media).toMatchObject({ videos: [Uint8Array.from([1]), Uint8Array.from([2])], audio: null });
         expect(media!.images).toEqual([jpeg]);
         expect(await loadSafetyMedia(originals, "i", 1, 0, true)).toBeNull();
+    });
+});
+
+const NOW = 1_800_000_000_000;
+const idN = (prefix: string, n: number) => `${prefix}${String(n).padStart(16 - prefix.length, "0")}`;
+const mp4 = Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 1, 2, 3, 4]);
+
+const visual = (db: ReturnType<typeof createFakeD1>, id: string) => {
+    db.raw
+        .prepare("INSERT INTO media_items (id, kind, source, bucket, r2_key, name, content_type, created_at) VALUES (?, 'public', 'saved', 'originals', ?, ?, 'video/mp4', ?)")
+        .run(id, `originals/${id}.mp4`, `${id}.mp4`, 1);
+};
+
+const putLabels = (originals: MemoryOriginals, items: { id: string; label: string }[]) => {
+    originals.objects.set(PILOT_LABELS_KEY, {
+        bytes: new TextEncoder().encode(JSON.stringify({ items })),
+        contentType: "application/json",
+        meta: {},
+    });
+};
+
+const putClip = (originals: MemoryOriginals, id: string) => {
+    originals.objects.set(safetyClipKey(id, 1), { bytes: mp4, contentType: "video/mp4", meta: {} });
+};
+
+describe("the pilot rating queue", () => {
+    const rate = (db: ReturnType<typeof createFakeD1>, originals: MemoryOriginals, calls: string[]) =>
+        rateSafety({
+            db: db as unknown as D1Database,
+            originals: originals as never,
+            ai: { run: async (model) => (calls.push(model), clef()) },
+            now: () => NOW,
+            gapMs: 0,
+            cfg,
+        });
+
+    it("rates a ready file that sits behind clips that are not ready, and does not spend the cap on them", async () => {
+        const db = createFakeD1();
+        const originals = new MemoryOriginals();
+        const waiting = Array.from({ length: SAFETY_PILOT_PER_RUN }, (_, i) => idN("p", i));
+        const ready = idN("r", 1);
+        for (const id of waiting) {
+            visual(db, id);
+            db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, updated_at) VALUES (?, 'pending', 'pending', 1)").run(id);
+        }
+        visual(db, ready);
+        db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, clips, has_audio, attempts, updated_at) VALUES (?, 'pending', 'ready', 1, 0, 0, 1)").run(ready);
+        putClip(originals, ready);
+        putLabels(originals, [...waiting.map((id) => ({ id, label: "not yet" })), { id: ready, label: "ready" }]);
+        const calls: string[] = [];
+        const r = await rate(db, originals, calls);
+        expect(r).toMatchObject({ rated: 1, failed: 0, pilot: 1 });
+        expect(calls).toEqual([CLEF_MODEL_ID]);
+        const report = await readPilotReport(originals);
+        expect(report?.rows.find((row) => row.id === ready)?.clef).toMatchObject({ level: "questionable" });
+        expect(report?.rows.filter((row) => row.error === "not_ready").map((row) => row.id).sort()).toEqual([...waiting].sort());
+        expect(await readPilotLabels(originals)).not.toBeNull();
+    });
+
+    it("records a prep failure that is not due as failed, and rates the file once its clip is ready", async () => {
+        const db = createFakeD1();
+        const originals = new MemoryOriginals();
+        const blocked = idN("b", 1);
+        const retrying = idN("y", 1);
+        const ready = idN("r", 1);
+        visual(db, blocked);
+        visual(db, retrying);
+        visual(db, ready);
+        db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, updated_at) VALUES (?, 'pending', 'failed', ?, 1, 1)").run(blocked, NOW);
+        db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, updated_at) VALUES (?, 'pending', 'failed', ?, 1, 1)").run(retrying, NOW - SAFETY_RETRY_MS - 1);
+        db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, clips, has_audio, attempts, updated_at) VALUES (?, 'pending', 'ready', 1, 0, 0, 1)").run(ready);
+        putClip(originals, ready);
+        putLabels(originals, [
+            { id: blocked, label: "prep failed" },
+            { id: retrying, label: "retry due" },
+            { id: ready, label: "ready" },
+        ]);
+        const calls: string[] = [];
+        const first = await rate(db, originals, calls);
+        expect(first).toMatchObject({ rated: 1, pilot: 1 });
+        expect(calls).toEqual([CLEF_MODEL_ID]);
+        const report = await readPilotReport(originals);
+        expect(report?.rows.find((row) => row.id === blocked)).toMatchObject({ clef: null, error: "failed" });
+        expect(report?.rows.find((row) => row.id === retrying)).toMatchObject({ error: "not_ready" });
+        expect(report?.rows.find((row) => row.id === ready)?.clef).toMatchObject({ level: "questionable" });
+        // The blocked id still has a retry left, so the labels stay and the ordinary queue does not start.
+        expect(await readPilotLabels(originals)).not.toBeNull();
+
+        db.raw.prepare("UPDATE media_safety SET prep = 'ready', clips = 1, level = 'pending', prep_attempts = 0 WHERE item_id = ?").run(blocked);
+        putClip(originals, blocked);
+        const second = await rate(db, originals, calls);
+        expect(second).toMatchObject({ rated: 1, pilot: 1 });
+        expect(calls).toHaveLength(2);
+        const after = await readPilotReport(originals);
+        expect(after?.rows.find((row) => row.id === blocked)?.clef).toMatchObject({ level: "questionable" });
+        expect(after?.rows.find((row) => row.id === blocked)?.error).toBeNull();
+    });
+
+    it("drops the labels once a prep failure has no retries left and nothing else is waiting", async () => {
+        const db = createFakeD1();
+        const originals = new MemoryOriginals();
+        const blocked = idN("b", 1);
+        visual(db, blocked);
+        db.raw
+            .prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, updated_at) VALUES (?, 'pending', 'failed', ?, ?, 1)")
+            .run(blocked, NOW, SAFETY_MAX_ATTEMPTS);
+        putLabels(originals, [{ id: blocked, label: "gave up" }]);
+        const calls: string[] = [];
+        const r = await rate(db, originals, calls);
+        expect(r).toMatchObject({ rated: 0, failed: 0, pilot: 0 });
+        expect(calls).toEqual([]);
+        expect((await readPilotReport(originals))?.rows).toEqual([{ id: blocked, label: "gave up", clef: null, error: "failed" }]);
+        expect(await readPilotLabels(originals)).toBeNull();
+    });
+
+    it("rates at most the pilot cap of ready files, in label order", async () => {
+        const db = createFakeD1();
+        const originals = new MemoryOriginals();
+        const ids = Array.from({ length: SAFETY_PILOT_PER_RUN + 1 }, (_, i) => idN("q", i));
+        for (const id of ids) {
+            visual(db, id);
+            db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, clips, has_audio, attempts, updated_at) VALUES (?, 'pending', 'ready', 1, 0, 0, 1)").run(id);
+            putClip(originals, id);
+        }
+        putLabels(originals, ids.map((id) => ({ id, label: "ready" })));
+        const calls: string[] = [];
+        const first = await rate(db, originals, calls);
+        expect(first).toMatchObject({ rated: SAFETY_PILOT_PER_RUN, pilot: SAFETY_PILOT_PER_RUN });
+        const report = await readPilotReport(originals);
+        const rated = new Set((report?.rows ?? []).filter((row) => row.clef && row.error == null).map((row) => row.id));
+        expect(rated).toEqual(new Set(ids.slice(0, SAFETY_PILOT_PER_RUN)));
+        expect(rated.has(ids[SAFETY_PILOT_PER_RUN]!)).toBe(false);
+        expect(await readPilotLabels(originals)).not.toBeNull();
+        const second = await rate(db, originals, calls);
+        expect(second).toMatchObject({ rated: 1, pilot: 1 });
+        expect(await readPilotLabels(originals)).toBeNull();
     });
 });
 

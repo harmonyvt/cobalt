@@ -13,6 +13,7 @@ import {
     SAFETY_QUESTIONS,
     SAFETY_RETRY_MS,
     SAFETY_STATE,
+    contentLevel,
     parseClefAnswer,
     safetyConfigFrom,
     sha256,
@@ -21,7 +22,7 @@ import {
     type SafetyConfig,
     type SafetyContentLevel,
 } from "./safety";
-import { PILOT_LABELS_KEY, readPilotLabels, readPilotReport, writePilotReport, type PilotLabel, type PilotReport } from "./safety-pilot";
+import { PILOT_LABELS_KEY, readPilotLabels, readPilotReport, writePilotReport, type PilotClef, type PilotLabel, type PilotReport, type PilotRow } from "./safety-pilot";
 
 export const CLEF_IMAGE_MAX = 4;
 export const CLEF_VIDEO_MAX = 2;
@@ -178,8 +179,69 @@ async function pace(d: SafetyRateDeps, calls: number): Promise<void> {
     if (calls > 0 && gap > 0) await (d.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(gap);
 }
 
+type PilotState = {
+    item_id: string;
+    prep: string;
+    prep_at: number | null;
+    prep_attempts: number;
+    level: string;
+    probs: string | null;
+    gore: number;
+    drawn: number;
+    minor_sexual: number;
+    model: string | null;
+};
+
+async function pilotStates(d: SafetyRateDeps, ids: string[]): Promise<Map<string, PilotState>> {
+    if (ids.length === 0) return new Map();
+    const { results } = await d.db
+        .prepare(
+            `SELECT s.item_id, s.prep, s.prep_at, s.prep_attempts, s.level, s.probs, s.gore, s.drawn, s.minor_sexual, s.model
+               FROM media_safety s JOIN media_items m ON m.id = s.item_id
+              WHERE m.deleted_at IS NULL AND s.item_id IN (SELECT value FROM json_each(?1))`,
+        )
+        .bind(JSON.stringify(ids))
+        .all<PilotState>();
+    return new Map(results.map((r) => [r.item_id, r]));
+}
+
+// Kick will not queue this prep again until the day-long wait ends, or at all once the attempts are used.
+function prepNotDue(row: Pick<PilotState, "prep" | "prep_at" | "prep_attempts">, now: number): boolean {
+    if (row.prep !== "failed") return false;
+    if (row.prep_attempts >= SAFETY_MAX_ATTEMPTS) return true;
+    return row.prep_at != null && row.prep_at >= now - SAFETY_RETRY_MS;
+}
+
+function clefOf(row: Pick<PilotState, "level" | "probs" | "gore" | "drawn" | "minor_sexual" | "model">): PilotClef {
+    return {
+        level: row.level,
+        probs: row.probs ? JSON.parse(row.probs) : null,
+        gore: row.gore === 1,
+        drawn: row.drawn === 1,
+        minor_sexual: row.minor_sexual === 1,
+        model: row.model,
+    };
+}
+
+// A Clef answer settles an id. A recorded failure settles it only when prep will not be tried again: a prep
+// failure that still has a retry keeps the labels file, so the kick can cut the clip and a later run can rate it.
+function pilotSettled(labels: PilotLabel[], rows: PilotRow[], states: Map<string, PilotState>): boolean {
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return labels.every((l) => {
+        const r = byId.get(l.id);
+        if (!r || r.error === "not_ready") return false;
+        if (r.clef && r.error == null) return true;
+        const row = states.get(l.id);
+        if (!row || row.prep === "pending") return false;
+        if (row.prep === "failed" && row.prep_attempts < SAFETY_MAX_ATTEMPTS) return false;
+        return true;
+    });
+}
+
 // Rates files whose clip is ready. When a pilot list is waiting, that list goes first and the ordinary queue waits
-// for the next run, so one cron never bursts past the pilot cap.
+// for the next run, so one cron never bursts past the pilot cap. The cap is spent on clips that are ready to rate.
+// An id whose clip is not ready stays `not_ready` and does not take a slot. A prep failure that kick will not retry
+// right now is recorded as `failed`, so it does not sit on `not_ready` for the whole wait.
 export async function rateSafety(d: SafetyRateDeps): Promise<SafetyRateResult> {
     const cfg = d.cfg ?? safetyConfigFrom({});
     const out: SafetyRateResult = { due: 0, rated: 0, failed: 0, pilot: 0 };
@@ -189,22 +251,52 @@ export async function rateSafety(d: SafetyRateDeps): Promise<SafetyRateResult> {
         if (labels && labels.length > 0) {
             const report = await readPilotReport(d.originals);
             const labelsHash = await hashLabels(labels);
-            const done = new Set((report?.rows ?? []).filter((r) => r.clef || r.error === "failed").map((r) => r.id));
-            const todo = labels.filter((l) => !done.has(l.id)).slice(0, SAFETY_PILOT_PER_RUN);
-            if (todo.length === 0) {
+            const same = report && report.labels_hash === labelsHash ? report : null;
+            const byReport = new Map((same?.rows ?? []).map((r) => [r.id, r]));
+            const open = labels.filter((l) => {
+                const r = byReport.get(l.id);
+                return !(r?.clef && r.error == null);
+            });
+            if (open.length === 0) {
                 await d.originals.delete?.(PILOT_LABELS_KEY).catch(() => {});
             } else {
-                out.pilot = todo.length;
-                const rows = await dueRows(d, todo.length, todo.map((l) => l.id));
-                const byId = new Map(rows.map((r) => [r.item_id, r]));
-                let calls = 0;
-                const next: PilotReport = report && report.labels_hash === labelsHash ? report : { labels_hash: labelsHash, rows: [] };
-                for (const label of todo) {
-                    const row = byId.get(label.id);
-                    if (!row) {
-                        next.rows = next.rows.filter((r) => r.id !== label.id).concat([{ id: label.id, label: label.label, clef: null, error: "not_ready" }]);
+                const now = d.now();
+                const states = await pilotStates(d, open.map((l) => l.id));
+                const due = await dueRows(d, open.length, open.map((l) => l.id));
+                const dueById = new Map(due.map((r) => [r.item_id, r]));
+                const rateLabels: PilotLabel[] = [];
+                const notes: PilotRow[] = [];
+                for (const label of open) {
+                    const row = states.get(label.id);
+                    const prev = byReport.get(label.id);
+                    // A Clef call that already failed this pilot id stays failed. A prep failure does not: its level
+                    // is still pending, so once the clip lands the id is rated.
+                    if (prev?.error === "failed" && row?.prep === "ready" && row.level === "failed") continue;
+                    if (row && dueById.has(label.id)) {
+                        rateLabels.push(label);
                         continue;
                     }
+                    if (row && contentLevel(row.level)) {
+                        notes.push({ id: label.id, label: label.label, clef: clefOf(row), error: null });
+                        continue;
+                    }
+                    if (row && (prepNotDue(row, now) || row.prep === "ready")) {
+                        notes.push({ id: label.id, label: label.label, clef: null, error: "failed" });
+                        continue;
+                    }
+                    notes.push({ id: label.id, label: label.label, clef: null, error: "not_ready" });
+                }
+                const todo = rateLabels.slice(0, SAFETY_PILOT_PER_RUN);
+                out.pilot = todo.length;
+                const next: PilotReport = same ? { labels_hash: labelsHash, rows: [...same.rows] } : { labels_hash: labelsHash, rows: [] };
+                const put = (row: PilotRow) => {
+                    next.rows = next.rows.filter((r) => r.id !== row.id).concat([row]);
+                };
+                for (const note of notes) put(note);
+                let calls = 0;
+                for (const label of todo) {
+                    const row = dueById.get(label.id);
+                    if (!row) continue;
                     await pace(d, calls);
                     calls++;
                     const result = await rateOne(d, row, cfg);
@@ -214,27 +306,15 @@ export async function rateSafety(d: SafetyRateDeps): Promise<SafetyRateResult> {
                         .prepare(`SELECT level, probs, gore, drawn, minor_sexual, model FROM media_safety WHERE item_id = ?1`)
                         .bind(label.id)
                         .first<{ level: string; probs: string | null; gore: number; drawn: number; minor_sexual: number; model: string | null }>();
-                    next.rows = next.rows.filter((r) => r.id !== label.id).concat([
-                        {
-                            id: label.id,
-                            label: label.label,
-                            clef: stored
-                                ? {
-                                      level: stored.level,
-                                      probs: stored.probs ? JSON.parse(stored.probs) : null,
-                                      gore: stored.gore === 1,
-                                      drawn: stored.drawn === 1,
-                                      minor_sexual: stored.minor_sexual === 1,
-                                      model: stored.model,
-                                  }
-                                : null,
-                            error: result === "rated" ? null : "failed",
-                        },
-                    ]);
+                    put({
+                        id: label.id,
+                        label: label.label,
+                        clef: stored ? clefOf(stored) : null,
+                        error: result === "rated" ? null : "failed",
+                    });
                 }
-                await writePilotReport(d.originals, next);
-                const settled = labels.every((l) => next.rows.some((r) => r.id === l.id && r.error !== "not_ready"));
-                if (settled) await d.originals.delete?.(PILOT_LABELS_KEY).catch(() => {});
+                if (notes.length > 0 || todo.length > 0) await writePilotReport(d.originals, next);
+                if (pilotSettled(labels, next.rows, states)) await d.originals.delete?.(PILOT_LABELS_KEY).catch(() => {});
                 return out;
             }
         }
