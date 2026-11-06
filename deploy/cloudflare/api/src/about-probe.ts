@@ -183,9 +183,10 @@ export class AboutProbeService {
         return { queued, eligible: total?.n ?? 0 };
     }
 
-    // Queues safety clips for files the about probe does not cover (section 51.2): stills, and anything that is not a
-    // lead whose probe is still to come or already done. New files (the last `newHours`) and the pilot list, unless
-    // `backfill` is set, in which case the whole library is queued. Newest first.
+    // Queues safety clips (section 51.2). A new save whose about probe is still to come, or already finished, is left
+    // to that probe: it stores the clip. A labelled pilot id is queued even when that probe is already done, and so
+    // is every visual file when `backfill` is set. Those probes ran before the safety clip existed, so the about job
+    // will not run again. Newest first. The ordinary library is not walked unless `backfill` is set.
     async kickSafety(limit: number = SAFETY_KICK_MAX, opts: { backfill?: boolean; newSince?: number } = {}): Promise<{ queued: number; eligible: number }> {
         const n = Math.max(1, Math.min(SAFETY_KICK_MAX, Math.floor(limit) || SAFETY_KICK_MAX));
         const now = this.d.now();
@@ -196,10 +197,12 @@ export class AboutProbeService {
         const since = opts.newSince ?? now - 48 * 60 * 60 * 1000;
         const backfill = opts.backfill ? 1 : 0;
         const prepSince = now - SAFETY_RETRY_MS;
+        // Pilot ids and a backfill skip the "probe is not none" exclusion. Everyone else still does: a new lead's
+        // about job is what cuts its clip, and an old lead stays untouched until Harmony turns backfill on.
         const where = `m.deleted_at IS NULL
             AND (lower(coalesce(m.content_type, '')) LIKE 'video/%' OR lower(coalesce(m.content_type, '')) LIKE 'image/%')
             AND lower(coalesce(m.content_type, '')) NOT IN ('image/heic', 'image/heif')
-            AND NOT EXISTS (SELECT 1 FROM media_about a WHERE a.item_id = m.id AND a.probe_state != 'none')
+            AND (?3 = 1 OR m.id IN (SELECT value FROM json_each(?5)) OR NOT EXISTS (SELECT 1 FROM media_about a WHERE a.item_id = m.id AND a.probe_state != 'none'))
             AND (s.item_id IS NULL OR s.prep = 'pending' OR (s.prep = 'failed' AND (s.prep_at IS NULL OR s.prep_at < ?1) AND s.prep_attempts < ?2))
             AND (?3 = 1 OR m.created_at >= ?4 OR m.id IN (SELECT value FROM json_each(?5)))`;
         const { results } = await this.d.db
@@ -448,6 +451,10 @@ export class AboutProbeService {
                 .first<{ id: string; bucket: string | null; r2_key: string | null; content_type: string | null; deleted_at: number | null }>();
             const kind = safetyKind(row?.content_type ?? null);
             if (!row || row.deleted_at !== null || !row.r2_key || !kind) return await this.dropSafety(itemId);
+            // The about probe may have stored the clip while this job waited (a pilot id whose probe was still
+            // pending). Cutting it again would clear a rating that had already landed.
+            const prep = await this.d.db.prepare(`SELECT prep FROM media_safety WHERE item_id = ?1`).bind(itemId).first<{ prep: string }>();
+            if (prep?.prep === "ready") return await this.dropSafety(itemId);
             const fail = async (why: string) => {
                 console.error("[safety] clip", itemId, why);
                 try {

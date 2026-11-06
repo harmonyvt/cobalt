@@ -3,7 +3,8 @@
 // private bucket the frames and sound land in, and the real SQL on node:sqlite. The helper itself (real ffmpeg) is in
 // about-helper.test.ts.
 import { describe, expect, it } from "vitest";
-import { ABOUT_JOB_PREFIX, parseProbeAnswer } from "../src/about-probe";
+import { ABOUT_JOB_PREFIX, SAFETY_JOB_PREFIX, parseProbeAnswer } from "../src/about-probe";
+import { PILOT_LABELS_KEY } from "../src/safety-pilot";
 import { KEY_ID_HEADER } from "../src/headers";
 import { handleStudioRoute } from "../src/studio";
 import { auth, world, type World } from "./poster-world";
@@ -195,6 +196,66 @@ describe("the about probe (34.2)", () => {
         lead.w.seed();
         await lead.kick();
         expect(await lead.w.studio.kickSafety(25, { newSince: 0 })).toMatchObject({ body: { queued: 0 } });
+    });
+
+    it("queues a safety clip for a pilot id whose about probe is already done, and leaves the rest of the library", async () => {
+        const calls: string[] = [];
+        const w = world({
+            helperFn: async (path, init) => {
+                if (init?.body) await new Response(init.body as BodyInit).arrayBuffer();
+                calls.push(path);
+                return new Response(JSON.stringify({ clips: [], audio: null, stills: [] }), { status: 200, headers: { "content-type": "application/json" } });
+            },
+        });
+        const oldAt = w.clock.t - 49 * 60 * 60 * 1000;
+        const seed = (old: boolean) => {
+            const s = w.seed();
+            if (old) w.db.raw.prepare("UPDATE media_items SET created_at = ? WHERE id = ?").run(oldAt, s.itemId);
+            return s;
+        };
+        const probe = (s: { sid: string; itemId: string }, state: string) => {
+            w.db.raw.prepare("INSERT INTO media_about (post_key, item_id, probe_state, updated_at) VALUES (?, ?, ?, ?)").run(s.sid, s.itemId, state, w.clock.t);
+        };
+        const donePilot = seed(true);
+        probe(donePilot, "done");
+        const doneOther = seed(true);
+        probe(doneOther, "done");
+        const recentDone = seed(false);
+        probe(recentDone, "done");
+        const pendingPilot = seed(true);
+        probe(pendingPilot, "pending");
+
+        // Probes that finished before the safety clip existed stay pending, and a new lead still waits for its about job.
+        expect(await w.studio.kickSafety(25)).toMatchObject({ body: { queued: 0, eligible: 0 } });
+
+        w.originals.objects.set(PILOT_LABELS_KEY, {
+            bytes: new TextEncoder().encode(
+                JSON.stringify({
+                    items: [
+                        { id: donePilot.itemId, label: "old lead" },
+                        { id: pendingPilot.itemId, label: "still probing" },
+                    ],
+                }),
+            ),
+            contentType: "application/json",
+            meta: {},
+        });
+        expect(await w.studio.kickSafety(25)).toMatchObject({ body: { queued: 2, eligible: 2 } });
+        expect(w.kv.m.get(`${SAFETY_JOB_PREFIX}${donePilot.itemId}`)).toMatchObject({ kind: "clip" });
+        expect(w.kv.m.get(`${SAFETY_JOB_PREFIX}${pendingPilot.itemId}`)).toMatchObject({ kind: "clip" });
+        expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${doneOther.itemId}`)).toBe(false);
+        expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${recentDone.itemId}`)).toBe(false);
+
+        // Backfill is the other door: it queues the already-probed library, not only the pilot list.
+        expect(await w.studio.kickSafety(25, { backfill: true })).toMatchObject({ body: { queued: 2, eligible: 4 } });
+
+        // The about probe can finish the clip while the safety job is still queued. The sweep must not cut it again.
+        w.kv.m.set(`${SAFETY_JOB_PREFIX}${donePilot.itemId}`, { at: 1, kind: "clip" });
+        w.db.raw.prepare("UPDATE media_safety SET prep = 'ready' WHERE item_id = ?").run(donePilot.itemId);
+        await w.studio.sweep();
+        expect(calls).toEqual([]);
+        expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${donePilot.itemId}`)).toBe(false);
+        expect(w.db.raw.prepare("SELECT prep, level FROM media_safety WHERE item_id = ?").get(donePilot.itemId)).toMatchObject({ prep: "ready", level: "pending" });
     });
 
     it("parseProbeAnswer accepts 1..3 JPEGs and an MP3 or null, nothing else", () => {

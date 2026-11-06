@@ -308,6 +308,9 @@ export function snapshotFlags(probs: SafetyProbs, cfg: SafetyConfig): { gore: nu
 }
 
 // clip | still | nothing the stage can show. HEIC stays unrated (the canvas cannot draw it either).
+// Animated WebP stays a still: it is `image/webp`, and the container's ffmpeg cannot decode an animated WebP
+// (poster.ts). kind=clip would call that same decoder and fail the same way, so prep of those files fails
+// until something other than ffmpeg can read them.
 export function safetyKind(contentType: string | null): "clip" | "still" | null {
     const t = (contentType ?? "").split(";")[0]!.trim().toLowerCase();
     if (t === "image/heic" || t === "image/heif") return null;
