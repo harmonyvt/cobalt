@@ -9,7 +9,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createHelper } from "../helper/server.js";
-import { ABOUT_AUDIO_SECONDS, ABOUT_FRAME_SIDE, SAFETY_AUDIO_SECONDS, SAFETY_FPS, SAFETY_HEIGHT, SAFETY_MAX_SECONDS, aboutTimes, buildAboutAudioArgs, buildSafetyAudioArgs, buildSafetyClipArgs, parseMeanVolume, safetyPlan } from "../helper/lib.js";
+import { ABOUT_AUDIO_SECONDS, ABOUT_FRAME_SIDE, SAFETY_AUDIO_SECONDS, SAFETY_ENCODE_MS, SAFETY_FPS, SAFETY_HEIGHT, SAFETY_MAX_CLIP_BYTES, SAFETY_MAX_SECONDS, SAFETY_UPLOAD_MS, aboutTimes, buildAboutAudioArgs, buildSafetyAudioArgs, buildSafetyClipArgs, parseMeanVolume, safetyPlan } from "../helper/lib.js";
+import { ABOUT_CALL_MS, MAX_SAFETY_CLIP_BYTES, SAFETY_CALL_MS, SAFETY_ENCODE_MS as WORKER_ENCODE_MS, SAFETY_FETCH_MS, SAFETY_UPLOAD_MS as WORKER_UPLOAD_MS } from "../src/about-probe";
 
 const KEY = "internal-key";
 const ID = "aB3dE6gH9jK2mN5pQ8sTuV";
@@ -122,6 +123,7 @@ describe("the about frames and sound (pure)", () => {
         expect(slow[slow.indexOf("-ss") + 1]).toBe("90");
         expect(slow[slow.indexOf("-t") + 1]).toBe("90");
         expect(slow).toContain("-an");
+        expect(slow[slow.indexOf("-threads") + 1]).toBe("1");
         expect(slow[slow.indexOf("-vf") + 1]).toContain(`setpts=PTS*${fast.parts[0]!.setpts}`);
         expect(slow[slow.indexOf("-vf") + 1]).toContain(`fps=${SAFETY_FPS}`);
         expect(slow[slow.indexOf("-vf") + 1]).toContain(`min(${SAFETY_HEIGHT},ih)`);
@@ -131,6 +133,16 @@ describe("the about frames and sound (pure)", () => {
         expect(audio[audio.indexOf("-t") + 1]).toBe(String(SAFETY_AUDIO_SECONDS));
         expect(SAFETY_AUDIO_SECONDS).toBe(300);
         expect(audio).toContain("-vn");
+    });
+    it("keeps the about call at 180 s and gives a clip a longer budget the worker outlives", () => {
+        expect(ABOUT_CALL_MS).toBe(180_000);
+        expect(WORKER_ENCODE_MS).toBe(SAFETY_ENCODE_MS);
+        expect(WORKER_UPLOAD_MS).toBe(SAFETY_UPLOAD_MS);
+        expect(SAFETY_ENCODE_MS).toBe(480_000);
+        expect(SAFETY_UPLOAD_MS).toBe(120_000);
+        expect(SAFETY_CALL_MS).toBe(SAFETY_UPLOAD_MS + SAFETY_ENCODE_MS + 30_000);
+        expect(SAFETY_FETCH_MS).toBeGreaterThan(SAFETY_CALL_MS);
+        expect(MAX_SAFETY_CLIP_BYTES).toBe(SAFETY_MAX_CLIP_BYTES);
     });
     it("reads volumedetect's mean volume", () => {
         expect(parseMeanVolume("[Parsed_volumedetect_0 @ 0x1] mean_volume: -20.5 dB\n[..] max_volume: -3.0 dB")).toBe(-20.5);
@@ -220,6 +232,118 @@ describe.skipIf(!hasFfmpeg)("POST /about with the real ffmpeg", { timeout: 90_00
         expect(res.status).toBe(422);
         expect(((await res.json()) as any).error.code).toBe("error.about.failed");
         expect(Date.now() - t0).toBeLessThan(5_000);
+        expect(left()).toEqual([]);
+    });
+
+    it("a safety cut that does not fit the about budget still returns the frames", async () => {
+        helper.close();
+        await start({ safetyTimeoutMs: 1 });
+        const res = await about(readFileSync(clips["tone.mp4"]!));
+        expect(res.status).toBe(200);
+        const b = (await res.json()) as any;
+        expect(b.frames.length).toBeGreaterThan(0);
+        expect(b.safety).toBeUndefined();
+        expect(b.safety_deferred).toMatch(/timed out|prep/);
+        expect(left()).toEqual([]);
+    });
+
+    it("POST /safety kind=clip returns a clip and leaves nothing on disk", async () => {
+        const res = await fetch(`${base}/safety?id=${ID}&kind=clip`, {
+            method: "POST",
+            body: readFileSync(clips["tone.mp4"]!),
+            headers: { "content-type": "application/octet-stream", "x-internal-key": KEY },
+            duplex: "half",
+        } as RequestInit);
+        expect(res.status).toBe(200);
+        const b = (await res.json()) as any;
+        expect(b.clips).toHaveLength(1);
+        expect(Buffer.from(b.clips[0], "base64").subarray(4, 8).toString()).toBe("ftyp");
+        expect(b.stills).toEqual([]);
+        expect(left()).toEqual([]);
+    });
+
+    it("a clip that overruns the safety budget names the timeout and frees the helper", async () => {
+        const sleeper = path.join(root, "safety-sleep.sh");
+        const { writeFileSync, chmodSync } = await import("node:fs");
+        writeFileSync(
+            sleeper,
+            `#!/bin/sh\ncase "$*" in *mpeg4*) exec sleep 30;; *) echo "Stream #0:0: Video: h264, yuv420p, 640x360" >&2; echo "Duration: 00:00:06.00" >&2; exit 1;; esac\n`,
+        );
+        chmodSync(sleeper, 0o755);
+        helper.close();
+        await start({ ffmpegPath: () => sleeper, safetyTimeoutMs: 400 });
+        const t0 = Date.now();
+        const res = await fetch(`${base}/safety?id=${ID}&kind=clip`, {
+            method: "POST",
+            body: readFileSync(FIX + "clip-landscape.mp4"),
+            headers: { "content-type": "application/octet-stream", "x-internal-key": KEY },
+            duplex: "half",
+        } as RequestInit);
+        expect(res.status).toBe(422);
+        expect((await res.json()) as any).toMatchObject({ error: { code: "error.safety.failed", detail: "safety prep timed out" } });
+        expect(Date.now() - t0).toBeLessThan(5_000);
+        expect(left()).toEqual([]);
+        const again = await fetch(`${base}/safety?id=${ID}bbbb&kind=clip`, {
+            method: "POST",
+            body: readFileSync(FIX + "clip-landscape.mp4"),
+            headers: { "content-type": "application/octet-stream", "x-internal-key": KEY },
+            duplex: "half",
+        } as RequestInit);
+        expect(again.status).toBe(422);
+        await again.json();
+    });
+
+    it("aborting the client kills the encode and the next clip is not busy", async () => {
+        const sleeper = path.join(root, "safety-abort.sh");
+        const { writeFileSync, chmodSync } = await import("node:fs");
+        writeFileSync(
+            sleeper,
+            `#!/bin/sh\ncase "$*" in *mpeg4*) exec sleep 5;; *) echo "Stream #0:0: Video: h264, yuv420p, 640x360" >&2; echo "Duration: 00:00:06.00" >&2; exit 1;; esac\n`,
+        );
+        chmodSync(sleeper, 0o755);
+        helper.close();
+        await start({ ffmpegPath: () => sleeper, safetyTimeoutMs: 20_000 });
+        const ctrl = new AbortController();
+        const pending = fetch(`${base}/safety?id=${ID}&kind=clip`, {
+            method: "POST",
+            body: readFileSync(FIX + "clip-landscape.mp4"),
+            headers: { "content-type": "application/octet-stream", "x-internal-key": KEY },
+            signal: ctrl.signal,
+            duplex: "half",
+        } as RequestInit);
+        await new Promise((r) => setTimeout(r, 80));
+        ctrl.abort();
+        await pending.catch(() => {});
+        for (let i = 0; i < 30 && left().length > 0; i++) await new Promise((r) => setTimeout(r, 50));
+        expect(left()).toEqual([]);
+        const second = await fetch(`${base}/safety?id=${ID}bbbb&kind=clip`, {
+            method: "POST",
+            body: readFileSync(FIX + "clip-landscape.mp4"),
+            headers: { "content-type": "application/octet-stream", "x-internal-key": KEY },
+            duplex: "half",
+        } as RequestInit);
+        expect(second.status).toBe(422);
+        await second.json();
+    });
+
+    it("an upload that overruns the clip budget says so and frees the helper", async () => {
+        helper.close();
+        await start({ safetyUploadMs: 40 });
+        const body = new ReadableStream({
+            async start(c) {
+                c.enqueue(new Uint8Array(64));
+                await new Promise((r) => setTimeout(r, 400));
+                c.close();
+            },
+        });
+        const res = await fetch(`${base}/safety?id=${ID}&kind=clip`, {
+            method: "POST",
+            body,
+            headers: { "content-type": "application/octet-stream", "x-internal-key": KEY },
+            duplex: "half",
+        } as RequestInit);
+        expect(res.status).toBe(422);
+        expect((await res.json()) as any).toMatchObject({ error: { code: "error.safety.failed", detail: "safety upload timed out" } });
         expect(left()).toEqual([]);
     });
 });

@@ -100,9 +100,11 @@
 //                      200 {frames, audio, duration, safety: { clips: ["<base64 mp4>", ...], audio: "<base64 mp3>" | null }}
 //                      (audio null: no audio stream, or silent: mean volume under -60 dB). safety is the Clef clip
 //                      (section 51.2): ~480p, 2 fps, no audio track, ≤60 s; two segments past 60 s; each half sped up
-//                      past 120 s. Its audio is the first 300 s of the same soundtrack. | 400 error.studio.not_video
-//                      | 413 error.studio.too_large | 422 error.about.failed (no frame, or the safety clip failed) | 429 busy
-//                      (one job at a time, like /poster) | 502 error.studio.upload_failed. 150 s wall for the cutting.
+//                      past 120 s. Its audio is the first 300 s of the same soundtrack. The safety cut uses only the
+//                      time this request has left. If it does not fit, the frames and sound are still returned and
+//                      `safety_deferred` names why. | 400 error.studio.not_video | 413 error.studio.too_large
+//                      | 422 error.about.failed (no frame) | 429 busy (one job at a time, like /poster)
+//                      | 502 error.studio.upload_failed. 150 s wall for the cutting.
 //
 //   POST   /safety?id=&kind=clip|still
 //                      the same body, for a file that is not the post's lead (the lead's clip is cut inside /about).
@@ -110,7 +112,10 @@
 //                      An animated WebP is image/webp, so the kick asks for kind=still, but ffmpeg skips ANIM/ANMF.
 //                      Those bytes are composed here into up to four 768 px JPEGs (webp-anim.js). A file that still
 //                      will not decode is 422 error.safety.failed.
-//                      200 { clips, audio, stills } | 400 | 413 | 422 error.safety.failed | 429 | 502.
+//                      200 { clips, audio, stills } | 400 | 413 | 422 error.safety.failed (detail: a short sanitized reason)
+//                      | 429 | 502. kind=clip has its own encode budget (SAFETY_ENCODE_MS, after the file is on disk) and an
+//                      upload cap (SAFETY_UPLOAD_MS). A still, including an animated WebP, keeps the about budget.
+//                      The client leaving kills ffmpeg and the temp dir is removed before the helper is free.
 
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
@@ -148,9 +153,13 @@ import {
     aboutTimes,
     buildAboutAudioArgs,
     SAFETY_AUDIO_SECONDS,
+    SAFETY_ENCODE_MS,
+    SAFETY_MAX_CLIP_BYTES,
+    SAFETY_UPLOAD_MS,
     safetyPlan,
     buildSafetyClipArgs,
     buildSafetyAudioArgs,
+    prepDetail,
     parseMeanVolume,
     checkPublicUrl,
     directHeadOk,
@@ -228,6 +237,7 @@ export const APNS_DEFAULT_TIMEOUT_MS = 2000;
  * @param {{
  *   appDir?: string, internalKey?: string, workDir?: string, fetchDir?: string, probeDir?: string,
  *   posterDir?: string, posterTimeoutMs?: number, aboutDir?: string, aboutTimeoutMs?: number,
+ *   safetyTimeoutMs?: number, safetyUploadMs?: number,
  *   cobaltOrigin?: string, apiOrigin?: string,
  *   ffmpegTimeoutMs?: number, downloadTimeoutMs?: number, fetchTimeoutMs?: number,
  *   maxFetchBytes?: number, maxJobBytes?: number, keepJobs?: number, jobTtlMs?: number,
@@ -254,8 +264,12 @@ export function createHelper(opts = {}) {
     const PROBE_DIR = opts.probeDir ?? "/tmp/probe";
     const POSTER_DIR = opts.posterDir ?? "/tmp/poster";
     const ABOUT_DIR = opts.aboutDir ?? "/tmp/about";
-    // the whole cut (frames and sound) of one POST /about
+    // the whole cut (frames and sound) of one POST /about. Safety clips inside /about use only what is left of this.
     const ABOUT_TIMEOUT_MS = opts.aboutTimeoutMs ?? 150_000;
+    // POST /safety kind=clip, after the file is on disk. Not the about budget: a multi-minute decode does not fit in 150 s
+    // on the basic instance, and the about probe must not grow to match.
+    const SAFETY_TIMEOUT_MS = opts.safetyTimeoutMs ?? SAFETY_ENCODE_MS;
+    const SAFETY_UPLOAD_TIMEOUT_MS = opts.safetyUploadMs ?? SAFETY_UPLOAD_MS;
     // one frame out of a local file: a second or two; the budget only stops a hung ffmpeg
     const POSTER_TIMEOUT_MS = opts.posterTimeoutMs ?? 30_000;
     const COBALT = opts.cobaltOrigin ?? COBALT_ORIGIN;
@@ -417,15 +431,15 @@ export function createHelper(opts = {}) {
             ff.stderr.on("data", (d) => {
                 if (err.length < 65536) err += d;
             });
+            ffmpegChild = ff;
             const timer = setTimeout(() => ff.kill("SIGKILL"), 15_000);
-            ff.on("error", () => {
+            const finish = (text) => {
                 clearTimeout(timer);
-                resolve("");
-            });
-            ff.on("close", () => {
-                clearTimeout(timer);
-                resolve(err);
-            });
+                if (ffmpegChild === ff) ffmpegChild = null;
+                resolve(text);
+            };
+            ff.on("error", () => finish(""));
+            ff.on("close", () => finish(err));
         });
 
     /**
@@ -869,16 +883,25 @@ export function createHelper(opts = {}) {
         });
         res.end(body);
     };
-    /** @param {http.ServerResponse} res @param {number} code @param {string} errCode */
-    const fail = (res, code, errCode) =>
-        send(res, code, { status: "error", error: { code: errCode } });
+    /**
+     * @param {string} errCode
+     * @param {string} [detail]
+     */
+    const errorBody = (errCode, detail) => {
+        const error = { code: errCode };
+        const clean = typeof detail === "string" ? prepDetail(detail) : "";
+        if (clean) error.detail = clean;
+        return { status: "error", error };
+    };
+    /** @param {http.ServerResponse} res @param {number} code @param {string} errCode @param {string} [detail] */
+    const fail = (res, code, errCode, detail) => send(res, code, errorBody(errCode, detail));
 
     // Answer without reading the request body (busy, too large, bad params): the
     // response goes out with `connection: close`, then the socket is torn down
     // so an in-flight upload stops instead of being drained.
-    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {number} code @param {string} errCode */
-    function failAndClose(req, res, code, errCode) {
-        const body = JSON.stringify({ status: "error", error: { code: errCode } });
+    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {number} code @param {string} errCode @param {string} [detail] */
+    function failAndClose(req, res, code, errCode, detail) {
+        const body = JSON.stringify(errorBody(errCode, detail));
         res.writeHead(code, {
             "content-type": "application/json",
             "content-length": Buffer.byteLength(body),
@@ -1120,6 +1143,32 @@ export function createHelper(opts = {}) {
         );
     }
 
+    /** @type {import("node:child_process").ChildProcess | null} */
+    let ffmpegChild = null;
+    // The client going away (the worker gave up, or the container fetch was aborted) must not leave ffmpeg
+    // running and the helper busy. One job at a time, so one child is enough. probeRaw and the clip encode both
+    // publish their child here.
+    const killFfmpeg = () => {
+        const child = ffmpegChild;
+        if (child && child.exitCode === null && !child.killed) child.kill("SIGKILL");
+    };
+    /**
+     * Stop ffmpeg if the client leaves before the response is finished.
+     * @param {http.IncomingMessage} req
+     * @param {http.ServerResponse} res
+     */
+    function watchClient(req, res) {
+        const onGone = () => {
+            if (!res.writableEnded) killFfmpeg();
+        };
+        req.on("aborted", onGone);
+        res.on("close", onGone);
+        return () => {
+            req.off("aborted", onGone);
+            res.off("close", onGone);
+        };
+    }
+
     /**
      * ffmpeg with its stderr kept (the head and the tail: volumedetect prints at the end), inside `timeoutMs`.
      * Resolves with the exit code (null: killed) and the stderr.
@@ -1135,23 +1184,26 @@ export function createHelper(opts = {}) {
             } catch {
                 return resolve({ code: null, stderr: "", timedOut: false });
             }
+            ffmpegChild = child;
             let err = "";
             child.stderr?.on("data", (d) => {
                 err = (err + d).slice(-16384);
             });
             let timedOut = false;
+            let settled = false;
             const timer = setTimeout(() => {
                 timedOut = true;
                 child.kill("SIGKILL");
             }, timeoutMs);
-            child.on("error", () => {
+            const finish = (code) => {
+                if (settled) return;
+                settled = true;
                 clearTimeout(timer);
-                resolve({ code: null, stderr: err, timedOut });
-            });
-            child.on("close", (code) => {
-                clearTimeout(timer);
+                if (ffmpegChild === child) ffmpegChild = null;
                 resolve({ code, stderr: err, timedOut });
-            });
+            };
+            child.on("error", () => finish(null));
+            child.on("close", (code) => finish(code));
         });
 
     // The Clef clip: at most two mp4s covering the whole duration (section 51.2). Throws error.about.failed.
@@ -1167,9 +1219,10 @@ export function createHelper(opts = {}) {
                 buildSafetyClipArgs({ input, output, start: part.start, duration: part.duration, setpts: part.setpts }),
                 Math.max(1, deadline - Date.now()),
             );
-            if (r.timedOut) throw new JobError("error.about.failed");
+            if (r.timedOut) throw new JobError("error.about.failed", "safety prep timed out");
             const size = (await stat(output).catch(() => null))?.size ?? 0;
-            if (r.code !== 0 || size <= 32) throw new JobError("error.about.failed");
+            if (size > SAFETY_MAX_CLIP_BYTES) throw new JobError("error.about.failed", "safety clip too large");
+            if (r.code !== 0 || size <= 32) throw new JobError("error.about.failed", "safety clip encode failed");
             clips.push((await readFile(output)).toString("base64"));
         }
         return clips;
@@ -1181,7 +1234,7 @@ export function createHelper(opts = {}) {
         if (reuse) return reuse;
         const output = path.join(dir, "safety-audio.mp3");
         const r = await runFfmpegCapture(buildSafetyAudioArgs({ input, output }), Math.max(1, deadline - Date.now()));
-        if (r.timedOut) throw new JobError("error.about.failed");
+        if (r.timedOut) throw new JobError("error.about.failed", "safety prep timed out");
         const size = (await stat(output).catch(() => null))?.size ?? 0;
         if (r.code !== 0 || size <= 0) return null;
         return (await readFile(output)).toString("base64");
@@ -1202,6 +1255,7 @@ export function createHelper(opts = {}) {
         }
 
         probing.add(id);
+        const unwatch = watchClient(req, res);
         const dir = path.join(ABOUT_DIR, id);
         const input = path.join(dir, "in");
         let n = 0;
@@ -1254,17 +1308,48 @@ export function createHelper(opts = {}) {
                 // silent (or no measurement): no sound worth transcribing
                 if (r.code === 0 && size > 0 && mean !== null && mean >= ABOUT_SILENCE_DB) audio = (await readFile(output)).toString("base64");
             }
-            const clips = await cutSafetyClips(input, dir, info.duration, deadline);
-            const safetyAudio = audio
-                ? await cutSafetyAudio(input, dir, deadline, info.duration != null && info.duration <= SAFETY_AUDIO_SECONDS ? audio : null)
-                : null;
-            answer = { frames, audio, duration: info.duration ?? null, safety: { clips, audio: safetyAudio } };
+            // Safety uses only the time the about probe has left. It does not extend this request. When the cut
+            // does not fit, the frames and sound still succeed and the worker queues a safety job of its own.
+            const safetyLeft = Math.min(deadline - Date.now(), SAFETY_TIMEOUT_MS);
+            /** @type {string | null} */
+            let safetyDeferred = null;
+            /** @type {{ clips: string[], audio: string | null } | null} */
+            let safety = null;
+            if (safetyLeft < 1000) {
+                safetyDeferred = "safety prep timed out";
+            } else {
+                const safetyDeadline = Date.now() + safetyLeft;
+                try {
+                    const clips = await cutSafetyClips(input, dir, info.duration, safetyDeadline);
+                    const safetyAudio = audio
+                        ? await cutSafetyAudio(
+                              input,
+                              dir,
+                              safetyDeadline,
+                              info.duration != null && info.duration <= SAFETY_AUDIO_SECONDS ? audio : null,
+                          )
+                        : null;
+                    safety = { clips, audio: safetyAudio };
+                } catch (e) {
+                    if (!(e instanceof JobError) || e.code !== "error.about.failed") throw e;
+                    safetyDeferred = e.detail || "safety prep failed";
+                }
+            }
+            answer = {
+                frames,
+                audio,
+                duration: info.duration ?? null,
+                ...(safety ? { safety } : {}),
+                ...(safetyDeferred ? { safety_deferred: safetyDeferred } : {}),
+            };
         } catch (e) {
             code = e instanceof JobError ? e.code : "error.studio.upload_failed";
             if (code === "error.webp.timeout" || code === "error.webp.encode_failed") code = "error.about.failed";
             if (!(e instanceof JobError)) console.error("[webp-helper] about failed:", e);
         }
         // files first, then the answer (and the helper stays busy until both)
+        killFfmpeg();
+        unwatch();
         await rm(dir, { recursive: true, force: true }).catch(() => {});
         probing.delete(id);
         if (res.headersSent || res.destroyed) return;
@@ -1290,6 +1375,7 @@ export function createHelper(opts = {}) {
         if (Number.isFinite(declared) && declared > MAX_FETCH) return failAndClose(req, res, 413, "error.studio.too_large");
 
         probing.add(id);
+        const unwatch = watchClient(req, res);
         const dir = path.join(ABOUT_DIR, `s-${id}`);
         const input = path.join(dir, "in");
         let n = 0;
@@ -1303,37 +1389,67 @@ export function createHelper(opts = {}) {
         /** @type {{ clips: string[], audio: string | null, stills: string[] } | null} */
         let answer = null;
         let code = "";
+        /** @type {string} */
+        let detail = "";
+        let uploadTimedOut = false;
+        // Clips only. A still (including an animated WebP) keeps the about budget and has no upload cap of its own.
+        const uploadTimer =
+            kind === "clip"
+                ? setTimeout(() => {
+                      uploadTimedOut = true;
+                      // Fail the copy without destroying the socket, so the 422 can still be sent.
+                      counter.destroy(new Error("safety upload timed out"));
+                  }, SAFETY_UPLOAD_TIMEOUT_MS)
+                : undefined;
         try {
             await mkdir(dir, { recursive: true });
-            await pipeline(req, counter, createWriteStream(input));
+            try {
+                await pipeline(req, counter, createWriteStream(input));
+            } finally {
+                if (uploadTimer !== undefined) clearTimeout(uploadTimer);
+            }
+            if (uploadTimedOut) throw new JobError("error.safety.failed", "safety upload timed out");
             if (n === 0) throw new JobError("error.studio.not_video");
-            const deadline = Date.now() + ABOUT_TIMEOUT_MS;
             // Animated WebP is asked for as kind=still (its content type is image/webp). ffmpeg cannot read
-            // ANIM/ANMF, so compose the frames first. null means it is not an animated WebP.
-            const webpStills = await safetyStillsFromAnimatedWebp({ ffmpeg: ffmpegPath(), input, dir, deadline });
+            // ANIM/ANMF, so compose the frames first. null means it is not an animated WebP. That path keeps
+            // the about budget: the eight pilot WebPs already rate, and this must not slow them down.
+            const stillDeadline = Date.now() + ABOUT_TIMEOUT_MS;
+            const webpStills = await safetyStillsFromAnimatedWebp({ ffmpeg: ffmpegPath(), input, dir, deadline: stillDeadline });
             if (webpStills) {
                 answer = { clips: [], audio: null, stills: webpStills.map((b) => b.toString("base64")) };
             } else if (kind === "still") {
                 const output = path.join(dir, "still.jpg");
-                const r = await runFfmpegCapture(buildPosterArgs({ input, output, side: ABOUT_FRAME_SIDE }), Math.max(1, deadline - Date.now()));
-                if (r.timedOut) throw new JobError("error.safety.failed");
+                const r = await runFfmpegCapture(buildPosterArgs({ input, output, side: ABOUT_FRAME_SIDE }), Math.max(1, stillDeadline - Date.now()));
+                if (r.timedOut) throw new JobError("error.safety.failed", "safety prep timed out");
                 const size = (await stat(output).catch(() => null))?.size ?? 0;
-                if (r.code !== 0 || size <= 0 || size > MAX_POSTER_BYTES) throw new JobError("error.safety.failed");
+                if (r.code !== 0 || size <= 0 || size > MAX_POSTER_BYTES) throw new JobError("error.safety.failed", "safety still encode failed");
                 answer = { clips: [], audio: null, stills: [(await readFile(output)).toString("base64")] };
             } else {
                 const info = await probeAV(input);
                 if (info.width === null || info.height === null) throw new JobError("error.studio.not_video");
-                const clips = await cutSafetyClips(input, dir, info.duration, deadline);
-                const audio = info.hasAudio ? await cutSafetyAudio(input, dir, deadline, null) : null;
+                const encodeDeadline = Date.now() + SAFETY_TIMEOUT_MS;
+                const clips = await cutSafetyClips(input, dir, info.duration, encodeDeadline);
+                const audio = info.hasAudio ? await cutSafetyAudio(input, dir, encodeDeadline, null) : null;
                 answer = { clips, audio, stills: [] };
             }
         } catch (e) {
-            code = e instanceof JobError ? e.code : "error.studio.upload_failed";
-            if (code === "error.about.failed") code = "error.safety.failed";
-            if (!(e instanceof JobError)) console.error("[webp-helper] safety failed:", e);
+            if (uploadTimedOut) {
+                code = "error.safety.failed";
+                detail = "safety upload timed out";
+            } else if (e instanceof JobError) {
+                code = e.code === "error.about.failed" ? "error.safety.failed" : e.code;
+                detail = e.detail || "";
+            } else {
+                code = "error.studio.upload_failed";
+                console.error("[webp-helper] safety failed:", e);
+            }
+        } finally {
+            if (uploadTimer !== undefined) clearTimeout(uploadTimer);
+            killFfmpeg();
+            unwatch();
+            await rm(dir, { recursive: true, force: true }).catch(() => {});
+            probing.delete(id);
         }
-        await rm(dir, { recursive: true, force: true }).catch(() => {});
-        probing.delete(id);
         if (res.headersSent || res.destroyed) return;
         if (answer) return send(res, 200, answer);
         return failAndClose(
@@ -1341,6 +1457,7 @@ export function createHelper(opts = {}) {
             res,
             code === "error.studio.too_large" ? 413 : code === "error.studio.not_video" ? 400 : code === "error.safety.failed" ? 422 : 502,
             code,
+            detail,
         );
     }
 

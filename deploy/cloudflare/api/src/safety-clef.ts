@@ -14,6 +14,7 @@ import {
     SAFETY_RETRY_MS,
     SAFETY_STATE,
     prepFailedDue,
+    sanitizePrepError,
     contentLevel,
     parseClefAnswer,
     safetyConfigFrom,
@@ -192,13 +193,14 @@ type PilotState = {
     drawn: number;
     minor_sexual: number;
     model: string | null;
+    prep_error: string | null;
 };
 
 async function pilotStates(d: SafetyRateDeps, ids: string[]): Promise<Map<string, PilotState>> {
     if (ids.length === 0) return new Map();
     const { results } = await d.db
         .prepare(
-            `SELECT s.item_id, s.prep, s.prep_at, s.prep_attempts, s.prep_rev, s.level, s.probs, s.gore, s.drawn, s.minor_sexual, s.model
+            `SELECT s.item_id, s.prep, s.prep_at, s.prep_attempts, s.prep_rev, s.prep_error, s.level, s.probs, s.gore, s.drawn, s.minor_sexual, s.model
                FROM media_safety s JOIN media_items m ON m.id = s.item_id
               WHERE m.deleted_at IS NULL AND s.item_id IN (SELECT value FROM json_each(?1))`,
         )
@@ -304,7 +306,8 @@ export async function rateSafety(d: SafetyRateDeps): Promise<SafetyRateResult> {
                         continue;
                     }
                     if (row && (prepNotDue(row, now) || row.prep === "ready")) {
-                        notes.push({ id: label.id, label: label.label, clef: null, error: "failed" });
+                        const prepError = row.prep === "failed" && row.prep_error ? sanitizePrepError(row.prep_error) : null;
+                        notes.push({ id: label.id, label: label.label, clef: null, error: "failed", ...(prepError ? { prep_error: prepError } : {}) });
                         continue;
                     }
                     notes.push({ id: label.id, label: label.label, clef: null, error: "not_ready" });

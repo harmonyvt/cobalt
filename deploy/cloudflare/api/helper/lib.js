@@ -41,12 +41,33 @@ export const PROGRESS_MS = 250;
 export const HEAD_BYTES = 64;
 
 // An error that carries the public error code the DO passes on to the client.
+// `detail` is a short sanitized reason (no paths, no stderr). The worker stores it on prep failure.
 export class JobError extends Error {
-    /** @param {string} code */
-    constructor(code) {
+    /**
+     * @param {string} code
+     * @param {string} [detail]
+     */
+    constructor(code, detail) {
         super(code);
         this.code = code;
+        /** @type {string | undefined} */
+        this.detail = detail ? prepDetail(detail) : undefined;
     }
+}
+
+/** How long a stored reason may be. The worker allows a little more once it adds the error code. */
+export const PREP_DETAIL_MAX = 160;
+
+/**
+ * One line, no controls, no filesystem paths, truncated. Empty becomes "".
+ * @param {unknown} raw
+ */
+export function prepDetail(raw) {
+    let s = typeof raw === "string" ? raw : raw instanceof Error ? raw.message : String(raw ?? "");
+    s = s.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+    s = s.replace(/(?:\/|[A-Za-z]:\\)[^\s]+/g, "[path]").replace(/\?[^ ]*/g, "");
+    s = s.replace(/\s+/g, " ").trim();
+    return s.slice(0, PREP_DETAIL_MAX);
 }
 
 // --- auth -------------------------------------------------------------------
@@ -669,6 +690,15 @@ export function buildAboutAudioArgs(j) {
 export const SAFETY_HEIGHT = 480;
 export const SAFETY_FPS = 2;
 export const SAFETY_MAX_SECONDS = 60;
+// One safety clip, after the bytes are on disk. The about probe keeps its own 150 s. This is headroom
+// for a full-frame 480p/2fps cut on the basic container (1/4 vCPU, 1 GiB), not a measured production
+// time. A local one-thread cut of each pilot file's first half finished in under 20 s and under 8 MB.
+// 480 s is about 12x the heavier of those two full jobs (142 s of 1080p60, both halves, plus sound).
+export const SAFETY_ENCODE_MS = 480_000;
+// Streaming the original to disk. 120 s is the 200 MB cap at about 1.7 MB/s. The encode clock starts after.
+export const SAFETY_UPLOAD_MS = 120_000;
+// The worker refuses a larger clip (MAX_SAFETY_CLIP_BYTES). Checked here so the failure has a reason.
+export const SAFETY_MAX_CLIP_BYTES = 8 * 1024 * 1024;
 /** Clef's per-clip audio cap. The about probe's own MP3 stays 600 s for the transcript. */
 export const SAFETY_AUDIO_SECONDS = 300;
 
@@ -718,6 +748,7 @@ export function buildSafetyClipArgs(j) {
         "-hide_banner",
         "-loglevel", "error",
         "-protocol_whitelist", "file,pipe",
+        "-threads", "1",
         "-ss", String(j.start),
         "-t", String(j.duration),
         "-i", j.input,

@@ -7,6 +7,7 @@ import {
     effectiveSafety,
     rollupLevels,
     SAFETY_PREP_REV,
+    sanitizePrepError,
     safetyConfigFrom,
     safetyKind,
     stageAllows,
@@ -72,7 +73,7 @@ export async function markSafetyReady(db: D1Database, u: ReadyUpdate): Promise<v
              VALUES (?1, 'pending', 'ready', ?2, ?3, ?4, ?5, 0, ?6, NULL, NULL, NULL, ?5)
              ON CONFLICT(item_id) DO UPDATE SET
                 prep = 'ready', clips = ?2, stills = ?3, has_audio = ?4, prep_at = ?5, prep_attempts = 0, prep_rev = ?6,
-                input_hash = NULL, probs = NULL, rated_at = NULL,
+                prep_error = NULL, input_hash = NULL, probs = NULL, rated_at = NULL,
                 level = CASE WHEN media_safety.user_level IS NULL THEN 'pending' ELSE media_safety.level END,
                 updated_at = ?5`,
         )
@@ -80,14 +81,15 @@ export async function markSafetyReady(db: D1Database, u: ReadyUpdate): Promise<v
         .run();
 }
 
-export async function markSafetyPrepFailed(db: D1Database, itemId: string, now: number): Promise<void> {
+export async function markSafetyPrepFailed(db: D1Database, itemId: string, now: number, reason?: string | null): Promise<void> {
+    const prepError = reason ? sanitizePrepError(reason) : null;
     await db
         .prepare(
-            `INSERT INTO media_safety (item_id, prep, prep_at, prep_attempts, prep_rev, updated_at)
-             VALUES (?1, 'failed', ?2, 1, ?3, ?2)
-             ON CONFLICT(item_id) DO UPDATE SET prep = 'failed', prep_at = ?2, prep_attempts = media_safety.prep_attempts + 1, prep_rev = ?3, updated_at = ?2`,
+            `INSERT INTO media_safety (item_id, prep, prep_at, prep_attempts, prep_rev, prep_error, updated_at)
+             VALUES (?1, 'failed', ?2, 1, ?3, ?4, ?2)
+             ON CONFLICT(item_id) DO UPDATE SET prep = 'failed', prep_at = ?2, prep_attempts = media_safety.prep_attempts + 1, prep_rev = ?3, prep_error = ?4, updated_at = ?2`,
         )
-        .bind(itemId, now, SAFETY_PREP_REV)
+        .bind(itemId, now, SAFETY_PREP_REV, prepError)
         .run();
 }
 

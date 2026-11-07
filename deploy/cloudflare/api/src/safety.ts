@@ -24,7 +24,21 @@ export const SAFETY_RETRY_MS = 24 * 60 * 60 * 1000;
 // Not a threshold and not an environment variable. Bump when clip prep learns to read a file it used to
 // fail, so a row already marked prep=failed is tried again. The attempt cap and the day-long wait stay.
 // Rows written before the column existed are 0.
-export const SAFETY_PREP_REV = 1;
+// 2: a video clip has its own bounded encode budget (the about probe stays at 150 s) and a failed prep
+// keeps a sanitized prep_error. Rows that failed on rev 1, including the two large pilot MP4s, are due once.
+export const SAFETY_PREP_REV = 2;
+
+// A stored prep failure, one line. No controls, no paths, no query strings. Empty becomes "prep failed".
+export const PREP_ERROR_MAX = 180;
+
+export function sanitizePrepError(raw: unknown): string {
+    let s = typeof raw === "string" ? raw : raw instanceof Error ? raw.message : String(raw ?? "");
+    s = s.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+    s = s.replace(/(?:\/|[A-Za-z]:\\)[^\s]+/g, "[path]").replace(/\?[^ ]*/g, "");
+    s = s.replace(/\s+/g, " ").trim();
+    if (!s) return "prep failed";
+    return s.slice(0, PREP_ERROR_MAX);
+}
 
 // A failed prep is due for another attempt when the prep path is newer than the one that failed it, or
 // when an attempt remains and the day-long wait has passed. Matches the kick's SQL.

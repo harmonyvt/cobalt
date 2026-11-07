@@ -16,6 +16,7 @@ import {
     parseClefAnswer,
     prepFailedDue,
     rollupLevels,
+    sanitizePrepError,
     safetyConfigFrom,
     stageAllows,
     type SafetyConfig,
@@ -277,7 +278,7 @@ describe("the pilot rating queue", () => {
         visual(db, blocked);
         visual(db, retrying);
         visual(db, ready);
-        db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, prep_rev, updated_at) VALUES (?, 'pending', 'failed', ?, 1, ?, 1)").run(blocked, NOW, SAFETY_PREP_REV);
+        db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, prep_rev, prep_error, updated_at) VALUES (?, 'pending', 'failed', ?, 1, ?, ?, 1)").run(blocked, NOW, SAFETY_PREP_REV, "safety prep timed out\n/tmp/in");
         db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, prep_rev, updated_at) VALUES (?, 'pending', 'failed', ?, 1, ?, 1)").run(retrying, NOW - SAFETY_RETRY_MS - 1, SAFETY_PREP_REV);
         db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, clips, has_audio, attempts, updated_at) VALUES (?, 'pending', 'ready', 1, 0, 0, 1)").run(ready);
         putClip(originals, ready);
@@ -291,7 +292,8 @@ describe("the pilot rating queue", () => {
         expect(first).toMatchObject({ rated: 1, pilot: 1 });
         expect(calls).toEqual([CLEF_MODEL_ID]);
         const report = await readPilotReport(originals);
-        expect(report?.rows.find((row) => row.id === blocked)).toMatchObject({ clef: null, error: "failed" });
+        expect(report?.rows.find((row) => row.id === blocked)).toMatchObject({ clef: null, error: "failed", prep_error: "safety prep timed out [path]" });
+        expect(formatPilotReport([{ id: blocked, label: "prep failed" }], report)).toContain("failed: safety prep timed out [path]");
         expect(report?.rows.find((row) => row.id === retrying)).toMatchObject({ error: "not_ready" });
         expect(report?.rows.find((row) => row.id === ready)?.clef).toMatchObject({ level: "questionable" });
         // The blocked id still has a retry left, so the labels stay and the ordinary queue does not start.
@@ -440,12 +442,16 @@ describe("a failed prep on an older path", () => {
         expect(prepFailedDue({ prep_at: NOW - SAFETY_RETRY_MS - 1, prep_attempts: 1, prep_rev: SAFETY_PREP_REV }, NOW)).toBe(true);
         expect(prepFailedDue({ prep_at: NOW, prep_attempts: 1, prep_rev: SAFETY_PREP_REV }, NOW)).toBe(false);
         expect(prepFailedDue({ prep_at: null, prep_attempts: 0, prep_rev: SAFETY_PREP_REV }, NOW)).toBe(true);
+        expect(sanitizePrepError("safety prep timed out")).toBe("safety prep timed out");
+        expect(sanitizePrepError("bad\n/tmp/secret.mp4?sig=1")).toBe("bad [path]");
+        expect(sanitizePrepError("")).toBe("prep failed");
+        expect(sanitizePrepError("x".repeat(500)).length).toBe(180);
     });
 
     it("stamps the next failure with this path, so the extra attempt happens once", async () => {
         const db = createFakeD1();
         db.raw.prepare("INSERT INTO media_safety (item_id, prep, prep_attempts, prep_rev, updated_at) VALUES ('aaaabbbbccccdddd', 'failed', 3, 0, 1)").run();
-        await markSafetyPrepFailed(db as unknown as D1Database, "aaaabbbbccccdddd", 50);
+        await markSafetyPrepFailed(db as unknown as D1Database, "aaaabbbbccccdddd", 50, "safety prep timed out\n/var/tmp/x");
         expect(db.raw.prepare("SELECT prep, prep_attempts, prep_rev, prep_at FROM media_safety").get()).toEqual({
             prep: "failed",
             prep_attempts: 4,
@@ -453,5 +459,6 @@ describe("a failed prep on an older path", () => {
             prep_at: 50,
         });
         expect(prepFailedDue({ prep_at: 50, prep_attempts: 4, prep_rev: SAFETY_PREP_REV }, 50)).toBe(false);
+        expect(db.raw.prepare("SELECT prep_error FROM media_safety").get()).toEqual({ prep_error: "safety prep timed out [path]" });
     });
 });
