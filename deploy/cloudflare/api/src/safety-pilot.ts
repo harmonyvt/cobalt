@@ -15,7 +15,14 @@ export type PilotClef = {
     model: string | null;
 };
 
-export type PilotRow = { id: string; label: string; clef: PilotClef | null; error: "not_ready" | "failed" | null };
+export type PilotRow = {
+    id: string;
+    label: string;
+    clef: PilotClef | null;
+    error: "not_ready" | "failed" | null;
+    // Set when prep failed and the row kept a reason. Absent on older reports.
+    prep_error?: string | null;
+};
 
 export type PilotReport = { labels_hash: string; rows: PilotRow[] };
 
@@ -114,7 +121,8 @@ export function formatPilotReport(labels: PilotLabel[], report: PilotReport | nu
     for (const l of labels) {
         const row = byId.get(l.id);
         if (!row || !row.clef) {
-            lines.push([l.id, l.label, "", "", "", "", row?.error ?? "waiting"].join("\t"));
+            const note = row?.error === "failed" && row.prep_error ? `failed: ${row.prep_error.replace(/\t/g, " ")}` : (row?.error ?? "waiting");
+            lines.push([l.id, l.label, "", "", "", "", note].join("\t"));
             continue;
         }
         lines.push([l.id, l.label, row.clef.level, row.clef.gore ? "yes" : "no", row.clef.drawn ? "yes" : "no", row.clef.minor_sexual ? "yes" : "no", row.error ?? ""].join("\t"));

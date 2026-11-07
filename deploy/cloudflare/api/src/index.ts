@@ -21,6 +21,7 @@ import { backfillCaptions, captionerFrom } from "./roast";
 import { ABOUT_RUN_BUDGET_MS, describerFrom, transcriberFrom, writeAbouts } from "./about-writer";
 import { rateSafety } from "./safety-clef";
 import { safetyConfigFrom } from "./safety";
+import { SAFETY_FETCH_MS } from "./about-probe";
 import { indexTerms } from "./about";
 import { indexMoments, MOMENTS_RUN_BUDGET_MS, timeTranscripts, TRANSCRIPT_RUN_BUDGET_MS } from "./transcripts";
 import { setRoastInput } from "./share-sets";
@@ -164,7 +165,9 @@ export class CobaltContainer extends Container<Env> {
                     path.startsWith("/about") ||
                     path.startsWith("/safety") ||
                     (path.startsWith("/fetch/") && path.endsWith("/file"));
-                const timeout = bulk ? 300_000 : path.endsWith("/file") ? 60_000 : 15_000;
+                // A clip's own signal sits past the worker's SAFETY_CALL_MS. Stills and /about stay on 300 s.
+                const safetyClip = path.startsWith("/safety") && path.includes("kind=clip");
+                const timeout = safetyClip ? SAFETY_FETCH_MS : bulk ? 300_000 : path.endsWith("/file") ? 60_000 : 15_000;
                 return this.containerFetch(
                     new Request(`http://helper${path}`, {
                         ...init,
@@ -276,6 +279,8 @@ export class CobaltContainer extends Container<Env> {
                 return fls.readable;
             },
             renew: () => this.renewActivityTimeout(),
+            // The sweep stops waiting after 30 s. This holds the about/safety job until it records the clip or the error.
+            keep: (p) => this.ctx.waitUntil(p),
             live: this.live,
             notify: this.notify,
             // server-made posters and `public: true` hosting (APP-API-CONTRACT.md section 13)

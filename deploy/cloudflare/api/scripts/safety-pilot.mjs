@@ -59,7 +59,8 @@ function printReport(body) {
     console.log(["id", "label", "clef", "gore", "drawn", "minor_sexual", "note"].join("\t"));
     for (const row of body.rows ?? []) {
         const c = row.clef;
-        console.log([row.id, row.label, c?.level ?? "", c ? (c.gore ? "yes" : "no") : "", c ? (c.drawn ? "yes" : "no") : "", c ? (c.minor_sexual ? "yes" : "no") : "", row.error ?? ""].join("\t"));
+        const note = row.error === "failed" && typeof row.prep_error === "string" && row.prep_error ? `failed: ${row.prep_error.replace(/\t/g, " ")}` : (row.error ?? "");
+        console.log([row.id, row.label, c?.level ?? "", c ? (c.gore ? "yes" : "no") : "", c ? (c.drawn ? "yes" : "no") : "", c ? (c.minor_sexual ? "yes" : "no") : "", note].join("\t"));
     }
     if ((body.rows ?? []).length === 0) console.log("(no rows yet; the cron has not rated this list)");
 }

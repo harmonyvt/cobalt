@@ -26,7 +26,14 @@ export const svc = { [SERVICE_HEADER]: INTERNAL };
 export const json = (o: unknown) => JSON.stringify(o);
 export const asBody = (r: { body: unknown }) => r.body as any;
 
-export function world(opts: { media?: boolean; helperFn?: (path: string, init?: RequestInit) => Promise<Response> } = {}) {
+export function world(
+    opts: {
+        media?: boolean;
+        helperFn?: (path: string, init?: RequestInit) => Promise<Response>;
+        safetyCallMs?: number;
+        keep?: (p: Promise<unknown>) => void;
+    } = {},
+) {
     const withMedia = opts.media !== false;
     const db: FakeD1 = createBatchD1();
     const clock = new Clock();
@@ -60,6 +67,8 @@ export function world(opts: { media?: boolean; helperFn?: (path: string, init?: 
             scheduleSweep: () => {
                 sweepsArmed++;
             },
+            ...(opts.safetyCallMs !== undefined ? { safetyCallMs: opts.safetyCallMs } : {}),
+            ...(opts.keep ? { keep: opts.keep } : {}),
             ...(withMedia ? { media, mediaBaseUrl: MEDIA_BASE } : {}),
             ...over,
         });

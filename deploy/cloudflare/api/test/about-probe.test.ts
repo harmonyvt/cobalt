@@ -327,4 +327,103 @@ describe("the about probe (34.2)", () => {
         expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${failed.itemId}`)).toBe(true);
         expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${clefFailed.itemId}`)).toBe(false);
     });
+
+    it("an about probe that defers the clip queues one safety job and still finishes", async () => {
+        const p = probeWorld([{ status: 200, body: { ...answer(), safety_deferred: "safety prep timed out" } }]);
+        const a = p.w.seed();
+        await p.kick();
+        await p.w.studio.sweep();
+        expect(p.row(a.sid).probe_state).toBe("done");
+        expect(p.w.kv.m.get(`${SAFETY_JOB_PREFIX}${a.itemId}`)).toMatchObject({ kind: "clip" });
+        expect(p.objects().some((k) => k.includes("safety"))).toBe(false);
+        // a second sweep does not queue another copy of the same job
+        expect(p.w.kv.m.size).toBeGreaterThan(0);
+        const before = [...p.w.kv.m.keys()];
+        await p.w.studio.kickSafety(25, { newSince: 0 });
+        expect([...p.w.kv.m.keys()].filter((k) => k.startsWith(SAFETY_JOB_PREFIX))).toEqual(before.filter((k) => k.startsWith(SAFETY_JOB_PREFIX)));
+    });
+
+    it("stores a safety clip from its own job and clears a previous prep error", async () => {
+        const mp4 = b64(Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 1, 2, 3, 4]));
+        const kept: Promise<unknown>[] = [];
+        const w = world({
+            keep: (p) => {
+                kept.push(p);
+            },
+            helperFn: async (path, init) => {
+                if (init?.body) await new Response(init.body as BodyInit).arrayBuffer();
+                if (path.startsWith("/safety")) return new Response(JSON.stringify({ clips: [mp4], audio: null, stills: [] }), { status: 200, headers: { "content-type": "application/json" } });
+                return new Response(JSON.stringify({ status: "error", error: { code: "error.webp.not_found" } }), { status: 404 });
+            },
+        });
+        const a = w.seed();
+        w.db.raw.prepare("INSERT INTO media_safety (item_id, level, prep, prep_error, prep_attempts, updated_at) VALUES (?, 'pending', 'failed', 'old', 2, 1)").run(a.itemId);
+        expect(await w.studio.kickSafety(25, { newSince: 0 })).toMatchObject({ body: { queued: 1 } });
+        expect(await w.studio.kickSafety(25, { newSince: 0 })).toMatchObject({ body: { queued: 0 } });
+        await w.studio.sweep();
+        expect(kept.length).toBeGreaterThan(0);
+        expect(w.db.raw.prepare("SELECT prep, clips, prep_rev, prep_error, prep_attempts FROM media_safety WHERE item_id = ?").get(a.itemId)).toMatchObject({
+            prep: "ready",
+            clips: 1,
+            prep_rev: SAFETY_PREP_REV,
+            prep_error: null,
+            prep_attempts: 0,
+        });
+        expect(w.originals.objects.has(`about/${a.itemId}/safety.mp4`)).toBe(true);
+        expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${a.itemId}`)).toBe(false);
+    });
+
+    it("persists a sanitized helper failure", async () => {
+        const w = world({
+            helperFn: async (path, init) => {
+                if (init?.body) await new Response(init.body as BodyInit).arrayBuffer();
+                return new Response(JSON.stringify({ status: "error", error: { code: "error.safety.failed", detail: "safety prep timed out\n/tmp/secret.mp4" } }), {
+                    status: 422,
+                    headers: { "content-type": "application/json" },
+                });
+            },
+        });
+        const a = w.seed();
+        await w.studio.kickSafety(25, { newSince: 0 });
+        await w.studio.sweep();
+        const row = w.db.raw.prepare("SELECT prep, prep_attempts, prep_rev, prep_error, clips FROM media_safety WHERE item_id = ?").get(a.itemId) as any;
+        expect(row).toMatchObject({ prep: "failed", prep_attempts: 1, prep_rev: SAFETY_PREP_REV, clips: 0 });
+        expect(row.prep_error).toContain("error.safety.failed");
+        expect(row.prep_error).toContain("safety prep timed out");
+        expect(row.prep_error).not.toContain("/tmp");
+        expect(row.prep_error).toContain("[path]");
+        expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${a.itemId}`)).toBe(false);
+    });
+
+    it("a helper that never answers records a timeout and drops the job", async () => {
+        const w = world({
+            safetyCallMs: 40,
+            helperFn: () => new Promise(() => {}),
+        });
+        const a = w.seed();
+        await w.studio.kickSafety(25, { newSince: 0 });
+        await w.studio.sweep();
+        const row = w.db.raw.prepare("SELECT prep, prep_attempts, prep_error FROM media_safety WHERE item_id = ?").get(a.itemId) as any;
+        expect(row).toMatchObject({ prep: "failed", prep_attempts: 1, prep_error: "safety call timed out" });
+        expect(w.kv.m.has(`${SAFETY_JOB_PREFIX}${a.itemId}`)).toBe(false);
+    });
+
+    it("retries a prep that failed on the previous rev once, and not again at the cap on this rev", async () => {
+        const w = world();
+        const old = w.seed();
+        w.db.raw.prepare("UPDATE media_items SET created_at = ? WHERE id = ?").run(w.clock.t - 49 * 60 * 60 * 1000, old.itemId);
+        w.db.raw
+            .prepare("INSERT INTO media_safety (item_id, level, prep, prep_at, prep_attempts, prep_rev, prep_error, updated_at) VALUES (?, 'pending', 'failed', ?, ?, ?, 'safety call timed out', 1)")
+            .run(old.itemId, w.clock.t, SAFETY_MAX_ATTEMPTS, SAFETY_PREP_REV - 1);
+        w.originals.objects.set(PILOT_LABELS_KEY, {
+            bytes: new TextEncoder().encode(JSON.stringify({ items: [{ id: old.itemId, label: "large" }] })),
+            contentType: "application/json",
+            meta: {},
+        });
+        expect(await w.studio.kickSafety(25)).toMatchObject({ body: { queued: 1 } });
+        expect(await w.studio.kickSafety(25)).toMatchObject({ body: { queued: 0 } });
+        w.kv.m.delete(`${SAFETY_JOB_PREFIX}${old.itemId}`);
+        w.db.raw.prepare("UPDATE media_safety SET prep_rev = ?, prep_attempts = ? WHERE item_id = ?").run(SAFETY_PREP_REV, SAFETY_MAX_ATTEMPTS, old.itemId);
+        expect(await w.studio.kickSafety(25)).toMatchObject({ body: { queued: 0, eligible: 0 } });
+    });
 });

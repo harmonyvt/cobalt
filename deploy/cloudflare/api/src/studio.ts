@@ -785,6 +785,11 @@ export type StudioDeps = {
     probeTimeoutMs?: number;
     // Renews the container's sleepAfter timer (long streams make no helper calls).
     renew?: () => void;
+    // Holds a promise past the end of the sweep pass. The about/safety job is raced at SWEEP_ITEM_MS
+    // so the alarm returns, and the job itself keeps running (a large clip is longer than 30 s).
+    keep?: (p: Promise<unknown>) => void;
+    // Tests. A clip's helper call otherwise uses SAFETY_CALL_MS.
+    safetyCallMs?: number;
     // Live Activity push (APP-API-CONTRACT.md section 8). Every call is awaited but
     // raced against `livePushMs` (LIVE_PUSH_MS): it can never fail or stall a poll.
     live?: LiveHooks;
@@ -1079,6 +1084,7 @@ export class StudioService {
             helperBusy: async () => (await this.held({ ignoreAbout: true })) !== null || (await this.line.size()) > 0,
             scheduleSweep: () => this.scheduleSweep(),
             renew: d.renew,
+            safetyCallMs: d.safetyCallMs,
         });
         if (d.media && d.mediaBaseUrl) {
             this.posters = new PosterService({
@@ -4957,6 +4963,8 @@ export class StudioService {
                 this.aboutRuns--;
             };
             void run.then(done, done);
+            // The pass stops waiting at itemMs. keep() is what lets a clip finish after that and record its result.
+            this.d.keep?.(run);
             pending += await raceCeiling(run, itemMs, "sweep of about probes");
         } catch (e) {
             console.error("[studio] sweep: about probe failed", String(e));
