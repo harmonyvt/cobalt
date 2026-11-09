@@ -6074,3 +6074,51 @@ width); a taller video is shown whole inside it with black bars at the sides, so
 
 Apply `deploy/cloudflare/d1/migrations/0036_post_details.sql`, then deploy the API (the editor image changes: new
 `helper/post/`). No new secret. Optional vars: `POST_DETAILS_PER_RUN`, `POST_DETAILS_NEW_HOURS`. Then the apps.
+
+## 53. AI video titles: MiniMax watches each video and names it (addendum, 2026-11-09; owner: "having video titles be created by minimax-m3.1-flash and its once reading the video and outputting title ... if i backlogged and rewrite all the titles in prod", then, after a 10-clip test of video alone vs video + transcript, "implement your suggestion". Numbering: 52 + 0036 are the post frames, so this is migration 0037)
+
+### 53.1 What it does
+
+The API Worker's 15-minute cron (`src/ai-titles.ts`, `titleVideos`) sends each public video post to
+`minimax/minimax-m3.1-flash` on OpenRouter and stores the answer as the post's title. New saves are titled within about
+15 minutes; the backlog (about 700 videos, 8 hours of footage) is worked through at up to 24 posts a run, newest first.
+
+- Input: the lead video's public media URL (`video_url`, OpenRouter fetches it), and the text "Title this video." Videos
+  longer than 2 minutes with a transcript (section 47) also get the transcript, at most 4000 characters (the test: it named
+  the topics of long talky videos better, and made short clips worse by copying transcription mistakes).
+- Settings: reasoning effort `low` and `max_tokens` 1000 (the model always reasons; with its default "max" effort and a
+  small limit the title came back empty), temperature 0.3, provider pinned to Together with no fallbacks (StreamLake
+  counted the same video at about twice the tokens).
+- The answer is cut to one plain line of at most 80 code points (section 15.2's rules): no wrapping quotes, no final full
+  stop.
+
+### 53.2 Which posts
+
+A post is titled when its lead file is a video, public, not hidden, the post is not a gallery, and the owner has not set a
+title. Private videos are left alone in this version (the model can only fetch public URLs); they are titled once made
+public. Each post is titled once per lead file, model and style (`AI_TITLE_STYLE`; bumping it rewrites every AI title). A
+failed call is retried after a day, at most 3 times.
+
+### 53.3 Where the title goes
+
+`media_titles` (section 15) with `key_id = 'ai:titles'`, so the apps, share pages, search, chat and MCP all show it with no
+other change. A title the owner sets (any other `key_id`) is never replaced, including one set while the model was
+watching (the write is an upsert guarded by `key_id`). Clearing a title in the app removes the row; the AI does not write
+it again for that file. The file names are untouched, so all AI titles can be undone with
+`DELETE FROM media_titles WHERE key_id = 'ai:titles'`.
+
+`media_ai_titles` (migration 0037) keeps one row per post: the file watched, `done` / `failed` / `skipped` (the owner's title
+won), the title written, model, style, whether the transcript was sent, prompt and completion tokens, cost in USD as
+OpenRouter reported it, attempts and the last error.
+
+### 53.4 Cost
+
+About 175 prompt tokens per second of video on Together, so about $0.0016 a minute at $0.15 per million input tokens (half
+price 15:00-01:00 UTC). The 10-clip test cost $0.022; the whole backlog about $0.80. `SELECT SUM(cost) FROM media_ai_titles`
+gives the real total.
+
+### 53.5 Rollout
+
+Add `OPENROUTER_API_KEY` to `~/.config/cobalt/secrets.json` (without it titles are off; the key must exist in the file for
+`cf deploy`), apply `deploy/cloudflare/d1/migrations/0037_ai_titles.sql`, then deploy the API. Vars: `AI_TITLE_MODEL`
+(default `minimax/minimax-m3.1-flash`), `AI_TITLES` ("0" turns titles off). No app change.

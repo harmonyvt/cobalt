@@ -165,6 +165,12 @@ export default defineConfig({
 			ANTHROPIC_API_KEY: bindings.secret(),
 			ROAST_BASE_URL: bindings.secret(),
 			ROAST_MODEL: bindings.text("claude-haiku-5-5"),
+			// AI video titles (APP-API-CONTRACT.md section 53): MiniMax M3.1 Flash on OpenRouter watches each public video
+			// post and writes its title (never over one the owner set), from the 15-minute cron. OPENROUTER_API_KEY is a
+			// SECRET from ~/.config/cobalt/secrets.json; missing or empty turns titles off. AI_TITLES "0" also turns them off.
+			OPENROUTER_API_KEY: bindings.secret(),
+			AI_TITLE_MODEL: bindings.text("minimax/minimax-m3.1-flash"),
+			AI_TITLES: bindings.text("1"),
 			// Chat (APP-API-CONTRACT.md section 27): the model (same key as the captions), and the Worker
 			// Loader the model's code runs in (a fresh Dynamic Worker per run, no network: src/chat-loader.ts).
 			CHAT_MODEL: bindings.text("claude-haiku-5-5"),

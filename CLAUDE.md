@@ -113,6 +113,10 @@ the files and a real run before anything is called done.
   container app `cobalt-api-ytdlp` (`deploy/cloudflare/ytdlp/`, basic, one instance), same single-file `/fetch` routes as
   the helper. `SAVE_ENGINE` "fallback" = cobalt first and yt-dlp when cobalt fails on the link; "first" = yt-dlp first.
   `engine` on POST /studio and `library.save` picks one. Items saves stay cobalt's. Bump `YT_DLP_VERSION` + `YT_DLP_SHA256` (GitHub release) when a site breaks.
+- AI video titles (`APP-API-CONTRACT.md` section 53): MiniMax M3.1 Flash on OpenRouter watches each public video post
+  from the 15-minute cron (`api/src/ai-titles.ts`) and writes its title into `media_titles` with `key_id = 'ai:titles'`
+  (never over an owner's title); cost and state in D1 `media_ai_titles` (migration 0037). Off unless `OPENROUTER_API_KEY`
+  is in the secrets file.
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.
