@@ -11,7 +11,7 @@ extension Pipeline {
     }
 
     /// The item and page a ready session would frame; nil for a gallery, a picture, an upload or a session without its row.
-    static func postFrameTarget(_ s: StudioSession) -> (itemID: String, link: URL)? {
+    nonisolated static func postFrameTarget(_ s: StudioSession) -> (itemID: String, link: URL)? {
         guard s.status == .ready, s.items.isEmpty, let item = s.itemID, !item.isEmpty,
               let duration = s.duration, duration > 0,
               let raw = s.link, !raw.hasPrefix("upload:"), let link = URL(string: raw),
