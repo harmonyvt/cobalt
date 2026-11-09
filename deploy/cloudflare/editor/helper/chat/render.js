@@ -31,7 +31,7 @@ async function sniff(file) {
 }
 
 /** A loopback file server for the page (Chromium will not load module scripts from file://). / page, /m/ media, /w/ work. */
-function serve(/** @type {Record<string, string>} */ roots) {
+export function serve(/** @type {Record<string, string>} */ roots) {
     const srv = createServer(async (req, res) => {
         try {
             const u = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
@@ -52,7 +52,7 @@ function serve(/** @type {Record<string, string>} */ roots) {
 }
 
 /** @param {string} bin @param {string[]} args @param {{stdin?: boolean, onChild?: (c: any) => void}} [o] */
-function run(bin, args, o = {}) {
+export function run(bin, args, o = {}) {
     const p = spawn(bin, args, { stdio: [o.stdin ? "pipe" : "ignore", "ignore", "pipe"] });
     o.onChild?.(p);
     let err = "";
@@ -163,7 +163,7 @@ export async function renderChat(o) {
 }
 
 /** @param {string} ff @param {string} file */
-async function hasAudio(ff, file) {
+export async function hasAudio(ff, file) {
     const probe = ff.replace(/ffmpeg$/, "ffprobe");
     return await new Promise((resolve) => {
         const p = spawn(probe, ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", file], { stdio: ["ignore", "pipe", "ignore"] });

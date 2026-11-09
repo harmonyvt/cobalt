@@ -331,6 +331,26 @@ enum Endpoints {
         APIEndpoint(op: "library.crop", method: "POST", path: "/library/items/\(HTTPCobaltClient.encode(id))/crop", auth: .key)
     }
 
+    /// `GET /library/items/:id/post-details` (op `library.postDetails`, auth key): Who posted a saved video, when, what they wrote (52.2).
+    static func libraryPostDetails(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library.postDetails", method: "GET", path: "/library/items/\(HTTPCobaltClient.encode(id))/post-details", auth: .key)
+    }
+
+    /// `GET /library/items/:id/post-details/avatar` (op `library.postAvatar`, auth key): The stored avatar of a saved post (52.2).
+    static func libraryPostAvatar(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library.postAvatar", method: "GET", path: "/library/items/\(HTTPCobaltClient.encode(id))/post-details/avatar", auth: .key)
+    }
+
+    /// `PATCH /library/items/:id/post-details` (op `library.setPostDetails`, auth key): Fix a saved post's details for its post frames (52.3).
+    static func librarySetPostDetails(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library.setPostDetails", method: "PATCH", path: "/library/items/\(HTTPCobaltClient.encode(id))/post-details", auth: .key)
+    }
+
+    /// `POST /library/items/:id/post-frame` (op `library.postFrame`, auth key): Make a framed copy of a saved video inside its post (52.2); the chat uses make.postFrame.
+    static func libraryPostFrame(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library.postFrame", method: "POST", path: "/library/items/\(HTTPCobaltClient.encode(id))/post-frame", auth: .key)
+    }
+
     /// `GET /share/sets` (op `share_sets.list`, auth key): GET /share/sets
     static func shareSetsList() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "share_sets.list", method: "GET", path: "/share/sets", auth: .key)

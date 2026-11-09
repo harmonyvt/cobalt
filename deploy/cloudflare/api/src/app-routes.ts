@@ -23,6 +23,7 @@
 import { SHARE_SET_MAX } from "./share-sets";
 import { deleteAboutObjects } from "./about-store";
 import { chatVideoReady } from "./chat-video";
+import { postFrameReady } from "./post-frame";
 import { EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_MAX_SECONDS, EDIT_OVERLAY_TRACKS } from "../../editor/helper/timeline.js";
 import { version as apiVersion } from "../../../../api/package.json";
 
@@ -319,6 +320,9 @@ export async function capabilities(
                 // POST /chat/threads/<id>/video, cobalt.chat.video: a chat replayed as an mp4 by the render containers
                 // (APP-API-CONTRACT.md section 45): chat and the editor on, and migration 0028 applied
                 chat_video: chat === true && editor === true && (await chatVideoReady(d.db)),
+                // GET/PATCH /library/items/<id>/post-details, POST /library/items/<id>/post-frame: a saved video inside a
+                // drawn card of its post (APP-API-CONTRACT.md section 52): the editor on and migration 0036 applied
+                post_frame: editor === true && (await postFrameReady(d.db)),
                 // PUT /live/edits/<rid>: the server keeps an editor render's Live Activity current (section 32)
                 edit_live_push: editor === true && livePush === true,
                 // PUT /live/chat-start-token: a chat reply sent from another device shows on this one (section 27.9)

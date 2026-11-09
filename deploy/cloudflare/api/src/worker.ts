@@ -90,6 +90,9 @@ export interface WorkerEnv {
     // Stage (section 30): https://<stage host>/ (a plain var; the Worker answers that host itself, before the gate) and
     // the three Twitch secrets. Absent or not https: no stage. Missing secrets: canvas and store only.
     STAGE_BASE_URL?: string;
+    // post frames (APP-API-CONTRACT.md section 52.1): the 15-minute cron's lookups of new saves' details
+    POST_DETAILS_PER_RUN?: string;
+    POST_DETAILS_NEW_HOURS?: string;
     TWITCH_CLIENT_ID?: string;
     TWITCH_CLIENT_SECRET?: string;
     TWITCH_EVENTSUB_SECRET?: string;

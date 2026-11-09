@@ -9,6 +9,7 @@ import { CHAT_VIDEO_OPS } from "./ops/chat-video";
 import { CHAT_SHARE_OPS } from "./ops/chat-share";
 import { EDITOR_OPS } from "./ops/editor";
 import { FRAME_OPS } from "./ops/frames";
+import { POST_FRAME_OPS } from "./ops/post-frame";
 import { HIDDEN_OPS } from "./ops/hidden";
 import { HOST_OPS } from "./ops/hosts";
 import { LIBRARY_OPS } from "./ops/library";
@@ -36,6 +37,7 @@ export const REGISTRY = new Registry([
     ...CHAT_VIDEO_OPS,
     ...AGENT_OPS,
     ...EDITOR_OPS,
+    ...POST_FRAME_OPS,
     ...SHARE_OPS,
     ...PRIVATE_OPS,
     ...HIDDEN_OPS,

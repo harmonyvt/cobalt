@@ -211,7 +211,7 @@ type ProjectRow = {
 
 export type RenderRow = {
     id: string;
-    // 'edit' | 'chat' (section 45, migration 0028)
+    // 'edit' | 'chat' (section 45, migration 0028) | 'post' (section 52)
     kind?: string | null;
     thread_id?: string | null;
     project_id: string;
@@ -266,7 +266,8 @@ export function renderProgress(r: Pick<RenderRow, "status" | "sent_bytes" | "inp
 export function renderShape(r: RenderRow) {
     return {
         id: r.id,
-        kind: r.kind === "chat" ? "chat" : "edit",
+        // 'post' (section 52.5): a framed copy, project_id "post:<item id>"
+        kind: r.kind === "chat" ? "chat" : r.kind === "post" ? "post" : "edit",
         thread_id: r.kind === "chat" ? (r.thread_id ?? null) : null,
         project_id: r.project_id,
         revision: r.revision,

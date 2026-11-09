@@ -1,4 +1,6 @@
 import { Container, getContainer } from "@cloudflare/containers";
+import { backfillPostDetails, postDetailsConfigFrom } from "./post-details";
+import { lookupDepsFrom } from "./registry/ops/post-frame";
 import { PORT_HEADER, stripInternalHeaders, KEY_ID_HEADER, SERVICE_HEADER } from "./headers";
 import { handleWebpRoute, isWebpRoute, WebpService, type WebpDeps } from "./webp";
 import { ApnsClient, apnsConfigFrom, fetchTransport, helperTransport } from "./apns";
@@ -573,6 +575,14 @@ export default {
                 if (r.hidden || r.published) console.log("[hidden] held", JSON.stringify(r));
             } catch (e) {
                 console.error("[hidden] held failed", e instanceof Error ? e.name : "error");
+            }
+            // Post frames (section 52.1): the details of new saves, looked up while the post is still there. D1, the
+            // yt-dlp box (only when there is a new save) and the sites' public lookups.
+            try {
+                const r = await backfillPostDetails(lookupDepsFrom(env, env.DB, () => Date.now()), postDetailsConfigFrom(env));
+                if (r.looked) console.log("[post] details", JSON.stringify(r));
+            } catch (e) {
+                console.error("[post] details failed", e instanceof Error ? e.name : "error");
             }
             if (!client) return;
             // Keep the Space awake: a free Space sleeps after 48 h without traffic, a sleeping one answers the

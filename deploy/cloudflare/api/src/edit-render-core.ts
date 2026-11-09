@@ -26,6 +26,7 @@ import { insertMediaItem } from "./library";
 import { formatBytes } from "./live";
 import { HARK_MAX_BODY, JOBS_URL, plainReason } from "./notify";
 import { MAX_POSTER_BYTES } from "./poster";
+import { postSpecInputs, postStartSpec, type PostSpec } from "./post-frame";
 import type { PublishBucket } from "./publish";
 import { upsertTitle, type OriginalsBucket } from "./studio";
 import { MEDIA_NAME_LENGTH, type KV } from "./webp";
@@ -126,6 +127,8 @@ export type StepRecord = {
     // a chat video (section 45): the inputs come from the frozen spec; one that is gone is skipped (listed here)
     chat?: boolean;
     missing?: number[];
+    // a post frame (section 52.5): input 0 the video, input 1 the avatar (skipped when gone)
+    post?: boolean;
 };
 
 // ---- chat videos (section 45) ----------------------------------------------------------------------------------------
@@ -494,10 +497,11 @@ export class EditRenderCore {
             deadline: 0,
             retried: false,
         };
-        if (row.kind === "chat") {
-            const inputs = chatSpecInputs(row.timeline);
+        if (row.kind === "chat" || row.kind === "post") {
+            const inputs = row.kind === "chat" ? chatSpecInputs(row.timeline) : postSpecInputs(row.timeline);
             if (!inputs) return await this.end(rec, "error", "error.edit.render_failed");
-            rec.chat = true;
+            if (row.kind === "chat") rec.chat = true;
+            else rec.post = true;
             rec.inputs = inputs;
             await this.d.storage.put(RENDER_KEY, rec);
             if (!(await this.ensure(rec))) {
@@ -644,7 +648,7 @@ export class EditRenderCore {
         } catch (e) {
             return await this.retry(rec, `R2 get: ${String(e)}`);
         }
-        if (!obj && rec.chat) {
+        if (!obj && (rec.chat || (rec.post && inp.n > 0))) {
             // a chat video draws a file that is gone without its picture (45.4)
             rec.missing = [...(rec.missing ?? []), inp.n];
             rec.n += 1;
@@ -713,7 +717,9 @@ export class EditRenderCore {
         const sent = rec.inputs.filter((i) => !(rec.missing ?? []).includes(i.n)).map((i) => ({ n: i.n, item: i.item, kind: i.kind }));
         const startBody = rec.chat
             ? { chat: { snapshot: (timeline as ChatSpec).snapshot, options: (timeline as ChatSpec).options }, inputs: sent }
-            : { timeline, inputs: sent };
+            : rec.post
+              ? { post: postStartSpec(timeline as PostSpec), inputs: sent }
+              : { timeline, inputs: sent };
         let res: Response;
         try {
             res = await this.call(
@@ -969,11 +975,14 @@ export class EditRenderCore {
         }
         // the title cleaned like an upload name: no `/`, no control characters, at most 120 characters
         const name = cleanName(`${row.title}.mp4`, "mp4");
-        const madeFrom = JSON.stringify(rec.chat ? [...new Set(rec.inputs.map((i) => i.item))] : timelineItems(timeline));
+        const post = rec.post ? (timeline as unknown as PostSpec) : null;
+        const madeFrom = JSON.stringify(rec.chat ? [...new Set(rec.inputs.map((i) => i.item))] : post ? [post.item] : timelineItems(timeline));
         const madeSpec = JSON.stringify(
             rec.chat
                 ? { kind: "chat", thread: (timeline as unknown as ChatSpec).thread_id, render: rec.rid }
-                : { kind: "edit", project: row.project_id, render: rec.rid, revision: row.revision },
+                : post
+                  ? { kind: "post", item: post.item, style: post.style, render: rec.rid }
+                  : { kind: "edit", project: row.project_id, render: rec.rid, revision: row.revision },
         );
         // insertMediaItem inserts unless the object is already named by a row (a retried tick), and swallows D1 errors
         await insertMediaItem(

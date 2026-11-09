@@ -19,7 +19,7 @@ export function chromiumPath() {
 
 /**
  * @param {{bin?: string, timeoutMs?: number}} [o]
- * @returns {Promise<{newPage: (w: number, h: number, scale: number) => Promise<Page>, close: () => Promise<void>}>}
+ * @returns {Promise<{newPage: (w: number, h: number, scale: number, po?: {transparent?: boolean}) => Promise<Page>, close: () => Promise<void>}>}
  */
 export async function launch(o = {}) {
     const profile = await mkdtemp(path.join(os.tmpdir(), "chat-chromium-"));
@@ -69,14 +69,15 @@ export async function launch(o = {}) {
         });
 
     return {
-        async newPage(w, h, scale) {
+        /** @param {number} w @param {number} h @param {number} scale @param {{transparent?: boolean}} [po] */
+        async newPage(w, h, scale, po = {}) {
             const { targetId } = await send("Target.createTarget", { url: "about:blank" });
             const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
             const s = (/** @type {string} */ m, /** @type {object} */ p) => send(m, p, sessionId);
             await s("Page.enable", {});
             await s("Runtime.enable", {});
             await s("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: scale, mobile: false });
-            await s("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 1 } });
+            await s("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: po.transparent ? 0 : 1 } });
             return {
                 async goto(url) {
                     await s("Page.navigate", { url });
@@ -91,6 +92,15 @@ export async function launch(o = {}) {
                 async jpeg(quality = 90) {
                     const r = await s("Page.captureScreenshot", { format: "jpeg", quality, optimizeForSpeed: true });
                     return Buffer.from(r.data, "base64");
+                },
+                /** One PNG of a region in CSS pixels, at device pixels (kept transparent on a transparent page). */
+                async png(clip) {
+                    const r = await s("Page.captureScreenshot", { format: "png", clip: { ...clip, scale: 1 }, captureBeyondViewport: true });
+                    return Buffer.from(r.data, "base64");
+                },
+                /** Changes the viewport (CSS pixels) and the device scale. */
+                async resize(w2, h2, scale2) {
+                    await s("Emulation.setDeviceMetricsOverride", { width: w2, height: h2, deviceScaleFactor: scale2, mobile: false });
                 },
                 async close() {
                     await send("Target.closeTarget", { targetId }).catch(() => {});
@@ -107,4 +117,6 @@ export async function launch(o = {}) {
     };
 }
 
-/** @typedef {{goto: (url: string) => Promise<void>, evaluate: (expr: string) => Promise<any>, jpeg: (q?: number) => Promise<Buffer>, close: () => Promise<void>}} Page */
+/** @typedef {{goto: (url: string) => Promise<void>, evaluate: (expr: string) => Promise<any>, jpeg: (q?: number) => Promise<Buffer>,
+ *   png: (clip: {x: number, y: number, width: number, height: number}) => Promise<Buffer>, resize: (w: number, h: number, scale: number) => Promise<void>,
+ *   close: () => Promise<void>}} Page */
