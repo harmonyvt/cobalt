@@ -48,6 +48,10 @@ struct SettingsScreen: View {
             PhotosSettingsSection(model: model)
             liveSection
             menuBarSection
+            #if os(macOS)
+            // the "paste from anywhere" keys and the right-click service
+            QuickSaveSettingsSection(model: model)
+            #endif
             TelemetrySettingsSection(model: model)
             feelSection
         }
