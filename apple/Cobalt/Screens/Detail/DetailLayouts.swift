@@ -255,6 +255,10 @@ struct DetailControls: View {
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
             }
+            // "from the post" and the framed copies (APP-API-CONTRACT 52.6), on a video saved from a post
+            if c.rendition.kind == .video, c.model.canPostFrame(c.item) {
+                PostFrameDetailSection(controller: c.controller, item: c.item)
+            }
             OfflineCopySection(model: c.model, item: c.item, rendition: c.rendition)
         }
         // how the post sits in the server's search index (APP-API-CONTRACT 21), last: read-only

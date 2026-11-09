@@ -223,6 +223,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var chatVideo: Bool?
                 var names: Bool?
                 var ytdlp: Bool?
+                var postFrame: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -320,6 +321,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.chatVideo = (f?.chatVideo ?? false) && caps.chat
         caps.names = (f?.names ?? false) && caps.search
         caps.ytdlp = f?.ytdlp ?? false
+        caps.postFrame = f?.postFrame ?? false
         return caps
     }
 

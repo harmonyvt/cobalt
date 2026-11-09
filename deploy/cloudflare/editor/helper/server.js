@@ -5,6 +5,7 @@
 //   PUT    /renders/<rid>/inputs/<n>     body = the source bytes (content-length required, n 0..49)
 //                                        -> 204 | 409 error.edit.busy | 413 error.edit.too_large | 400 | 411
 //   POST   /renders/<rid>/start          {"timeline": <canonical>, "inputs": [{"n","item","kind"}]}
+//                                        (or {"chat": …} for a chat video, section 45; {"post": <spec>} for a post frame, 52.5)
 //                                        -> 202 | 409 error.edit.input_missing | 400 {error:{code},path[,items]} (parseTimeline,
 //                                        the probe, checkSources, the crop size) | 409 error.edit.busy
 //   GET    /renders/<rid>                -> {"status":"receiving"|"probing"|"encoding"|"poster"|"done"|"error","seconds_done",
@@ -26,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import { renderChat } from "./chat/render.js";
+import { renderPost } from "./post/render.js";
 import { compile } from "./compile.js";
 import { ffmpegInfo, parseInfo, probeSource } from "./probe.js";
 import { EDIT_MAX_CLIPS, EDIT_MAX_INPUT_BYTES, EDIT_MAX_OUTPUT_BYTES, checkSources, parseTimeline, sourceKind } from "./timeline.js";
@@ -237,6 +239,7 @@ export function createEditServer(opts = {}) {
         }
         if (typeof body !== "object" || body === null || !Array.isArray(body.inputs)) return err(res, 400, "error.edit.bad_request", { path: "inputs" });
         if (body.chat !== undefined) return startChat(r, res, body);
+        if (body.post !== undefined) return startPost(r, res, body);
         const parsed = parseTimeline(body.timeline);
         if (!parsed.ok) return err(res, 400, parsed.code, { path: parsed.path });
         const timeline = parsed.timeline;
@@ -423,6 +426,52 @@ export function createEditServer(opts = {}) {
             })
             .catch((e) => {
                 log(`chat render ${r.rid}: ${e?.message ?? e}`);
+                if (!r.gone) {
+                    r.status = "error";
+                    r.error = "error.edit.render_failed";
+                }
+            });
+    }
+
+    // ---- POST /renders/<rid>/start with {"post": <spec>, "inputs"} (section 52.5): input 0 the video, 1 the avatar
+    /** @param {Render} r @param {http.ServerResponse} res @param {any} body */
+    function startPost(r, res, body) {
+        const spec = body.post;
+        if (typeof spec !== "object" || spec === null || Array.isArray(spec)) return err(res, 400, "error.edit.bad_request", { path: "post" });
+        if (!r.inputs.has(0)) return err(res, 409, "error.edit.input_missing", { path: "inputs" });
+        const s = { ...spec, avatar: r.inputs.has(1) ? "1" : null };
+        const output = path.join(r.dir, "out.mp4");
+        r.status = "encoding";
+        r.secondsDone = 0;
+        res.writeHead(202, { "cache-control": "no-store", "content-length": 2, "content-type": "application/json" });
+        res.end("{}");
+        renderPost({
+            spec: s,
+            mediaDir: path.join(r.dir, "in"),
+            out: output,
+            work: path.join(r.dir, "post"),
+            ffmpeg: FFMPEG,
+            chromium: opts.chromium,
+            gone: () => r.gone,
+            onChild: (c) => {
+                r.child = c;
+            },
+            onProgress: (done, total) => {
+                r.secondsTotal = total;
+                r.secondsDone = Math.min(total, done);
+                r.touched = Date.now();
+            },
+        })
+            .then(async (made) => {
+                r.child = undefined;
+                if (r.gone || !made) return;
+                r.width = made.width;
+                r.height = made.height;
+                await rm(path.join(r.dir, "post"), { recursive: true, force: true }).catch(() => {});
+                await finish(r, output);
+            })
+            .catch((e) => {
+                log(`post render ${r.rid}: ${e?.message ?? e}`);
                 if (!r.gone) {
                     r.status = "error";
                     r.error = "error.edit.render_failed";

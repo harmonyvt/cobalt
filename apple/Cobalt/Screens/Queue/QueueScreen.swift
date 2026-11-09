@@ -298,8 +298,9 @@ struct QueueRowFacts: Equatable {
             }
         case .edit(let render):
             // a chat video (APP-API-CONTRACT 45.3) is a render too, named after its thread
-            symbol = render.isChat ? Symbol.chatVideo : Symbol.Editor.render
-            title = render.isChat ? Copy.Chat.videoQueueTitle(render.title) : Copy.Editor.queueTitle(render.title)
+            symbol = render.isChat ? Symbol.chatVideo : render.isPost ? Symbol.PostFrame.frame : Symbol.Editor.render
+            title = render.isChat ? Copy.Chat.videoQueueTitle(render.title)
+                : render.isPost ? Copy.PostFrame.queueTitle(render.title) : Copy.Editor.queueTitle(render.title)
             poster = render.posterURL
             switch render.status {
             case .done:

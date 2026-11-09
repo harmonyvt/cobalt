@@ -116,6 +116,8 @@ public final class AppModel {
     public let account: AccountStore
     /// The video editor (APP-API-CONTRACT 31): the projects, this key's renders and the open project. Idle until `refresh()`.
     public let editor: EditorStore
+    /// Post frames (APP-API-CONTRACT 52): the details of the posts asked about and the framed copies being watched.
+    public let postFrames: PostFrameStore
     /// The library as a sky map (APP-API-CONTRACT 21, `GET /library/map`). Idle until `load()`.
     public let skyMap: SkyMapModel
     /// The photos album (CONTRACT-SYNC.md): `PhotosSync.preview(_:)` in previews.
@@ -215,6 +217,7 @@ public final class AppModel {
         self.chat = ChatStore(context: context)
         self.stage = StageStore(context: context)
         self.editor = EditorStore(context: context)
+        self.postFrames = PostFrameStore(context: context)
         self.skyMap = SkyMapModel(context: context)
         self.hiddenRules = HiddenRulesModel(context: context, library: library)
         self.searchNames = SearchNamesModel(context: context, library: library)
@@ -238,6 +241,8 @@ public final class AppModel {
             Task { await self.library.refresh() }
         }
         context.libraryDropped = { [weak self] ids in self?.library.drop(files: Set(ids)) }
+        // a video save finished: "post frame" on save, for the link's site (APP-API-CONTRACT 52.6)
+        context.postFrameAfterSave = { [weak self] itemID, link in self?.postFrameAfterSave(itemID: itemID, link: link) }
         // The Mac's pull reads this model (settings, capabilities, the library, the runs); previews have none to wire.
         self.savePull.wire(pullEnvironment())
     }
@@ -439,6 +444,7 @@ public final class AppModel {
         chat.reset()
         stage.reset()
         editor.reset()
+        postFrames.reset()
         skyMap.reset()
         hiddenRules.reset()
         searchNames.reset()

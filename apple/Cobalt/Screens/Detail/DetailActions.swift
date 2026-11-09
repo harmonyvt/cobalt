@@ -21,6 +21,8 @@ struct DetailActions: View {
         case copyWebpLink, copyVideoLink, makeWebp, anotherWebp, publicShare, savePhotos, share
         /// "copy direct" beside a secondary "copy video link" that became "copy share" (the file has a link page).
         case copyVideoDirect
+        /// "post frame" (APP-API-CONTRACT 52.6): the video framed in the post it came from.
+        case postFrame
     }
 
     // MARK: the plan
@@ -40,6 +42,11 @@ struct DetailActions: View {
             && !model.capabilities.visibility
     }
     private var placed: Bool { controller.placement(of: rendition) != .none }
+    /// What "post frame" frames: the video tab of a video saved from a post, on a server with post frames.
+    private var postFrameTarget: PostFrameTarget? {
+        guard rendition.kind == .video else { return nil }
+        return PostFrameTarget.item(item, model: model)
+    }
 
     /// One prominent choice and the secondary row, from what this tab can do.
     var plan: (primary: Choice?, secondary: [Choice]) {
@@ -70,6 +77,10 @@ struct DetailActions: View {
         // a secondary "copy video link" with a link page splits in two: "copy share", then "copy direct"
         if let video = videoLink, model.capabilities.hasLinkPair(video), let i = secondary.firstIndex(of: .copyVideoLink) {
             secondary.insert(.copyVideoDirect, at: i + 1)
+        }
+        // "post frame" beside link and share, on a video saved from a post (52.6)
+        if postFrameTarget != nil {
+            if let i = secondary.firstIndex(of: .share) { secondary.insert(.postFrame, at: i) } else { secondary.append(.postFrame) }
         }
         return (primary, secondary)
     }
@@ -132,7 +143,7 @@ struct DetailActions: View {
             ) { makeWebp() }
         case .savePhotos:
             savePrimary
-        case .publicShare, .share, .copyVideoDirect:
+        case .publicShare, .share, .copyVideoDirect, .postFrame:
             EmptyView()
         }
     }
@@ -220,6 +231,10 @@ struct DetailActions: View {
                 title: Copy.LinkPair.copyDirectLink, symbol: done ? Symbol.Media.copied : Symbol.LinkPair.direct,
                 done: done ? Copy.Media.copied : nil
             ) { if let url = videoLink { controller.copy(url, for: rendition.id, form: .direct) } }
+        case .postFrame:
+            DetailChoiceButton(title: Copy.PostFrame.postFrame, symbol: Symbol.PostFrame.frame) {
+                controller.postFrameTarget = postFrameTarget
+            }
         case .copyWebpLink, .makeWebp:
             EmptyView()
         }

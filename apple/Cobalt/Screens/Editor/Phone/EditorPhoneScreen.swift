@@ -9,6 +9,8 @@ enum EditorPhoneSheet: Identifiable, Equatable {
     case volume
     case add(EditorPhoneAddMode)
     case render
+    /// "post" (APP-API-CONTRACT 52.6): the post-frame sheet on the main clip.
+    case post(PostFrameTarget)
 
     var id: String {
         switch self {
@@ -17,6 +19,7 @@ enum EditorPhoneSheet: Identifiable, Equatable {
         case .volume: return "volume"
         case .add(let mode): return "add-\(mode.rawValue)"
         case .render: return "render"
+        case .post(let target): return "post-\(target.itemID)"
         }
     }
 }
@@ -52,7 +55,7 @@ struct EditorPhoneScreen: View {
             EditorPhoneProblemStrip(session: session)
             EditorPhoneTransport(session: session)
             EditorPhoneTimeline(session: session, scale: $scale, openAdd: { sheet = .add(.main) })
-            EditorPhoneToolTray(session: session, open: { sheet = $0 })
+            EditorPhoneToolTray(session: session, open: { sheet = $0 }, showsPost: model.canMakePostFrames)
         }
         .background(CobaltColor.bg.ignoresSafeArea())
         .sheet(item: $sheet) { current in
@@ -66,8 +69,14 @@ struct EditorPhoneScreen: View {
             sheet = .render
         }
         .modifier(EditorPhoneHaptics(session: session))
+        .modifier(PostToolAutoOpen(model: model, open: openPost))
         .motion(Motion.card, value: session.saveState == .saved)
         .accessibilityElement(children: .contain)
+    }
+
+    /// "open in editor for more" made this project: the post tool comes up on the main clip.
+    private func openPost() {
+        if let target = PostFrameTarget.editor(session) { sheet = .post(target) }
     }
 
     @ViewBuilder
@@ -116,6 +125,8 @@ private struct EditorPhoneSheetContent: View {
         case .render:
             EditorPhoneRenderSheet(model: model, session: session, close: close)
                 .presentationDetents([.medium])
+        case .post(let target):
+            PostFrameSheet(model: model, target: target)
         }
     }
 }

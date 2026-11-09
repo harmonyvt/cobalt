@@ -48,6 +48,9 @@ final class PipelineContext {
     /// What `GET /studio/recent` says (this key's share-sheet saves), for the relaunch pickup; the app wires its
     /// client's call, previews and tests wire a fake. Nil: nothing to adopt.
     var recentShares: (@MainActor () async -> [StudioSession])?
+    /// A video save finished on the server (its library item and the page it came from): the app asks for a framed copy when
+    /// "post frame" is on for that site (APP-API-CONTRACT 52.6). Nil in the share extension, previews' own contexts and tests.
+    var postFrameAfterSave: (@MainActor (_ itemID: String, _ link: URL) -> Void)?
 
     /// The background download of originals (CONTRACT-SYNC.md decision 6): the app's, or the sheet's
     /// own. Nil in previews and tests unless one is injected.

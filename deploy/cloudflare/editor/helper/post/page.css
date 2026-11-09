@@ -1,0 +1,77 @@
+/* Post frames (APP-API-CONTRACT.md section 52): original drawings in each site's layout; no site logos or artwork. */
+html, body { margin: 0; padding: 0; background: transparent; }
+* { box-sizing: border-box; }
+body { font-family: "Inter", "Noto Sans", "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+#card { display: inline-block; vertical-align: top; }
+
+.pf { position: relative; overflow: hidden; width: 360px; border-radius: 14px; font-size: 14px; line-height: 1.35;
+  --t: #0f1419; --s: #536471; --b: #fff; --ln: #e5e7eb; --hl: #1d9bf0; --card: #f3f4f6;
+  background: transparent; color: var(--t); overflow-wrap: anywhere; isolation: isolate; }
+/* the card's colour is a layer with a hole where the video goes (page.js sets the mask), so the PNG is see-through there */
+.pf > .bgl { position: absolute; inset: 0; background: var(--b); z-index: -1; }
+.pf.flat { border-radius: 0; }
+.pf.dark { --t: #e7e9ea; --s: #8b98a5; --b: #000; --ln: #2f3336; --card: #16181c; }
+.pf .av { border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; font-weight: 700;
+  color: #fff; overflow: hidden; }
+.pf .av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pf .muted { color: var(--s); }
+.pf svg { display: block; flex: none; }
+.pf .icons { display: flex; justify-content: space-between; color: var(--s); font-size: 12.5px; }
+.pf .icons span { display: flex; align-items: center; gap: 5px; }
+.pf .txt { white-space: pre-wrap; }
+/* the video's box: left transparent, the video is placed under it */
+.slot { position: relative; background: transparent; overflow: hidden; }
+.slot .dur { position: absolute; right: 8px; bottom: 8px; background: rgba(0, 0, 0, .6); color: #fff; font-size: 11px;
+  border-radius: 4px; padding: 1px 5px; }
+
+/* x */
+.pf.x { padding: 12px 14px 10px; }
+.pf.x .hd { display: flex; gap: 10px; }
+.pf.x .nm { font-weight: 700; }
+.pf.x .line { display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden; }
+.pf.x .line .muted { overflow: hidden; text-overflow: ellipsis; }
+.pf.x .txt { margin: 2px 0 10px; }
+.pf.x .slot { border-radius: 14px; box-shadow: 0 0 0 1px var(--ln); }
+.pf.x .icons { padding: 10px 4px 0; max-width: 300px; }
+
+/* instagram */
+.pf.ig { --t: #0a0a0a; --s: #737373; border-radius: 12px; }
+.pf.ig.dark { --t: #f5f5f5; --s: #a8a8a8; --b: #000; }
+.pf.ig .hd { display: flex; align-items: center; gap: 9px; padding: 10px 12px; }
+.pf.ig .ring { padding: 2px; border-radius: 50%; background: conic-gradient(from 200deg, #f5a524, #e9457a, #a855f7, #f5a524); flex: none; }
+.pf.ig .ring .av { border: 2px solid var(--b); }
+.pf.ig .bar { display: flex; align-items: center; gap: 14px; padding: 10px 12px 4px; }
+.pf.ig .bar .sp { flex: 1; }
+.pf.ig .body { padding: 0 12px 12px; font-size: 13.5px; }
+.pf.ig .body > div { margin-top: 2px; }
+
+/* twitch */
+.pf.tw { width: 420px; border-radius: 10px; --b: #f7f7f8; --t: #0e0e10; --s: #53535f; --hl: #8a5cf6; --card: #e6e6ea; }
+.pf.tw.dark { --b: #0e0e10; --t: #efeff1; --s: #adadb8; --card: #26262c; }
+.pf.tw .info { display: flex; gap: 12px; padding: 12px 14px 14px; }
+.pf.tw .ring { align-self: flex-start; padding: 2px; border-radius: 50%; border: 2px solid var(--hl); flex: none; }
+.pf.tw .ttl { font-weight: 700; font-size: 15px; }
+.pf.tw .ch { color: var(--hl); font-weight: 600; font-size: 13.5px; }
+.pf.tw .clip { position: absolute; left: 10px; top: 10px; background: rgba(0, 0, 0, .65); color: #fff; font-size: 11px;
+  font-weight: 700; border-radius: 4px; padding: 2px 6px; }
+
+/* youtube */
+.pf.yt { width: 420px; border-radius: 12px; padding-bottom: 12px; --b: #fff; --t: #0f0f0f; --s: #606060; --card: #f2f2f2; }
+.pf.yt.dark { --b: #0f0f0f; --t: #f1f1f1; --s: #aaa; --card: #272727; }
+.pf.yt .ttl { font-weight: 700; font-size: 16.5px; padding: 10px 12px 8px; line-height: 1.3; }
+.pf.yt .chrow { display: flex; align-items: center; gap: 10px; padding: 0 12px; }
+.pf.yt .chrow .sp { flex: 1; }
+.pf.yt .pillb { background: var(--card); border-radius: 999px; padding: 6px 12px; font-size: 12.5px; font-weight: 600;
+  display: flex; gap: 6px; align-items: center; }
+.pf.yt .sub { background: var(--t); color: var(--b); border-radius: 999px; padding: 6px 12px; font-size: 12.5px; font-weight: 600; }
+.pf.yt .desc { background: var(--card); border-radius: 10px; margin: 10px 12px 0; padding: 9px 11px; font-size: 13px; }
+
+/* generic */
+.pf.gen { padding: 12px; --b: #fff; --t: #1b1d24; --s: #6b7080; --ln: #e3e5ea; --card: #f4f5f8; box-shadow: inset 0 0 0 1px var(--ln); }
+.pf.gen.dark { --b: #141519; --t: #e9eaee; --s: #9196a4; --ln: #2a2c33; --card: #1d1f25; }
+.pf.gen .site { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--s); margin-bottom: 10px; }
+.pf.gen .fav { width: 18px; height: 18px; border-radius: 5px; background: var(--card); box-shadow: inset 0 0 0 1px var(--ln);
+  display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: var(--t); }
+.pf.gen .hd { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+.pf.gen .slot { border-radius: 10px; }
+.pf.gen .foot { display: flex; justify-content: space-between; font-size: 12px; color: var(--s); margin-top: 9px; gap: 10px; }

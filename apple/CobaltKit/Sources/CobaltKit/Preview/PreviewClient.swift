@@ -205,6 +205,8 @@ public struct PreviewClient: CobaltClient {
     let hiddenState = PreviewHiddenState()
     /// The devices, keys and sign-in of the "server" (`PreviewAccount.swift`).
     let accountState = PreviewAccountState()
+    /// The post details the "server" holds and Harmony's edits of them (`PreviewPostFrame.swift`).
+    let postFrameState = PreviewPostFrameState()
 
     public var baseURL: URL { PreviewData.base }
 

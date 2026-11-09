@@ -10,6 +10,8 @@ import SwiftUI
 struct EditorPhoneToolTray: View {
     let session: EditSession
     let open: (EditorPhoneSheet) -> Void
+    /// `post` (APP-API-CONTRACT 52.6) after `volume`, on a server with post frames.
+    var showsPost = false
 
     @Environment(EditorHost.self) private var host
     @State private var splitTick = 0
@@ -47,6 +49,11 @@ struct EditorPhoneToolTray: View {
             ToolButton(title: Copy.Editor.toolVolume, symbol: Symbol.Editor.volume, enabled: hasClip || session.selectedOverlay != nil) {
                 openVolume()
             }
+            if showsPost {
+                ToolButton(title: Copy.PostFrame.toolPost, symbol: Symbol.PostFrame.frame, enabled: !session.timeline.main.isEmpty) {
+                    openPost()
+                }
+            }
         }
     }
 
@@ -82,6 +89,14 @@ struct EditorPhoneToolTray: View {
         } else {
             open(.add(.overlay))
         }
+    }
+
+    private func openPost() {
+        guard let target = PostFrameTarget.editor(session) else {
+            host.show(Copy.PostFrame.notOnServer)
+            return
+        }
+        open(.post(target))
     }
 
     private func openVolume() {

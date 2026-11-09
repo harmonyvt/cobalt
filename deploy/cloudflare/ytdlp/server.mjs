@@ -15,7 +15,8 @@
 //   DELETE /fetch/:id       -> kills a running download and removes its files
 //   POST   /info {url}      -> 200 what yt-dlp knows about the link, nothing downloaded (section 49.6):
 //                              {title, duration, uploader, channel, extractor, webpage_url, thumbnail, upload_date,
-//                               view_count, like_count, description, is_live, playlist: {title, count, entries} | null,
+//                               view_count, like_count, description, is_live, uploader_id, channel_url, creator, timestamp,
+//                               comment_count, repost_count, channel_follower_count (52.1), playlist: {title, count, entries} | null,
 //                               formats: [{id, ext, width, height, fps, vcodec, acodec, size, note}]} | 400 | 422 {code}
 //                              | 429 (one look-up at a time; a running fetch does not block it)
 //   GET    /health          -> 200 (no key: the platform's port check)
@@ -114,6 +115,14 @@ export function trimInfo(j) {
         like_count: num(j?.like_count),
         description: str(j?.description, 2000),
         is_live: j?.is_live === true,
+        // what a post frame needs too (section 52.1); additive
+        uploader_id: str(j?.uploader_id, 200),
+        channel_url: str(j?.channel_url ?? j?.uploader_url, 2048),
+        creator: str(j?.creator),
+        timestamp: num(j?.timestamp),
+        comment_count: num(j?.comment_count),
+        repost_count: num(j?.repost_count),
+        channel_follower_count: num(j?.channel_follower_count),
         playlist,
         formats,
     };

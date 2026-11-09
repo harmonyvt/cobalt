@@ -160,7 +160,7 @@ public struct QueueItem: Identifiable {
         case .photos: return .settings
         case .edit(let render):
             if render.status == .done, let item = render.itemID { return .media("post:\(item)") }
-            if render.isChat { return nil }             // a chat video has no project to open (45.3)
+            if render.isProjectless { return nil }      // a chat video or a framed copy has no project to open (45.3, 52.5)
             return .edit(projectID: render.projectID)
         case .server, .download: return nil
         }
@@ -531,14 +531,14 @@ public final class UnifiedQueue {
         for (i, r) in edits.enumerated() where !dismissedEdits.contains(r.id) {
             let id = "edit:\(r.id)"
             switch r.status {
-            case .queued where r.isChat:
+            case .queued where r.isProjectless:
                 // a chat video (45.3): nothing to open until its post exists, and no project to try again from
                 let actions: [QueueAction] = r.cancelRequested ? [] : [.cancel]
                 waiting.append((QueueItem(id: id, section: .waiting, kind: .edit(r), actions: actions), (r.queueAhead ?? 0) + 1, jobs.count + 1_000 + i))
-            case .preparing where r.isChat, .rendering where r.isChat, .finishing where r.isChat:
+            case .preparing where r.isProjectless, .rendering where r.isProjectless, .finishing where r.isProjectless:
                 let actions: [QueueAction] = r.cancelRequested ? [] : [.cancel]
                 now_.append(QueueItem(id: id, section: .now, kind: .edit(r), actions: actions))
-            case .error where r.isChat:
+            case .error where r.isProjectless:
                 if now.timeIntervalSince(r.lastMoment) < finishedLinger {
                     failed.append(QueueItem(id: id, section: .failed, kind: .edit(r), actions: [.dismiss]))
                 }

@@ -20,6 +20,7 @@ struct EditorTopBar: View {
             Spacer(minLength: 8)
             undoRedo
             tools
+            PostToolButton(model: model, session: session)      // "post" (APP-API-CONTRACT 52.6), with post frames only
             Rectangle().fill(CobaltColor.border).frame(width: 1, height: 20)
             canvasMenu
             qualityMenu
