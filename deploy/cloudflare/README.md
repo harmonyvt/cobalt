@@ -1084,6 +1084,33 @@ the token, those links fail exactly as before. `GET /capabilities` shows `featur
 
 To turn it off, set the value to `""` and deploy again. To rotate, press **Reset Token** again and repeat steps 3 and 4.
 
+## AI video titles (`APP-API-CONTRACT.md` section 53)
+
+The 15-minute cron sends each public video post to MiniMax M3.1 Flash on OpenRouter (provider pinned to Together) and stores the
+answer as the post's title (`media_titles`, `key_id = 'ai:titles'`), never over a title the owner set. Cost and state per post:
+D1 `media_ai_titles` (migration 0037). About $0.0016 per minute of video; the first backlog about $0.80.
+
+### Owner steps (once)
+
+1. Make a key at <https://openrouter.ai/keys> (a credit limit of a few dollars is plenty).
+2. Put it in the secrets file without showing it (paste at the prompt, press return):
+
+       python3 - "$HOME/.config/cobalt/secrets.json" <<'PY'
+       import getpass, json, sys
+       p = sys.argv[1]
+       d = json.load(open(p))
+       d["OPENROUTER_API_KEY"] = getpass.getpass("openrouter key: ").strip()
+       json.dump(d, open(p, "w"), indent=2)
+       PY
+       chmod 600 ~/.config/cobalt/secrets.json
+
+   An empty string keeps titles off; the key itself must be in the file, because `cf deploy` refuses while a declared secret is
+   missing.
+3. Apply migration 0037 (`npx cf d1 migrations apply ...` as above), then deploy the API.
+
+Watch it: `SELECT state, COUNT(*), SUM(cost) FROM media_ai_titles GROUP BY state`. Turn it off with `AI_TITLES = "0"` in
+`api/cloudflare.config.ts` and a deploy. Undo every AI title: `DELETE FROM media_titles WHERE key_id = 'ai:titles'`.
+
 ## Editor (`APP-API-CONTRACT.md` section 31, `apple/CONTRACT-EDITOR.md`)
 
 Timeline projects saved in D1 (`edit_projects`, migration 0021) and rendered to an H.264 + AAC MP4 on a **separate render

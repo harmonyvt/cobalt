@@ -68,6 +68,10 @@ export interface WorkerEnv {
     ANTHROPIC_API_KEY?: string;
     ROAST_BASE_URL?: string;
     ROAST_MODEL?: string;
+    // AI video titles (section 53): the OpenRouter key (a secret), the model, and "0" to turn them off.
+    OPENROUTER_API_KEY?: string;
+    AI_TITLE_MODEL?: string;
+    AI_TITLES?: string;
     // Chat (section 27): the model (a plain var; the key is ANTHROPIC_API_KEY) and the Worker Loader
     // binding the model's code runs in. The runner itself comes in through EdgeDeps (index.ts).
     CHAT_MODEL?: string;

@@ -20,6 +20,7 @@ import { shareLinkFrom } from "./share";
 import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
 import { refreshNames } from "./names";
 import { backfillCaptions, captionerFrom } from "./roast";
+import { titlerFrom, titleVideos } from "./ai-titles";
 import { ABOUT_RUN_BUDGET_MS, describerFrom, transcriberFrom, writeAbouts } from "./about-writer";
 import { rateSafety } from "./safety-clef";
 import { safetyConfigFrom } from "./safety";
@@ -493,6 +494,17 @@ export default {
                     if (r.written || r.failed) console.log("[roast] captions", JSON.stringify(r));
                 } catch (e) {
                     console.error("[roast] backfill failed", e instanceof Error ? e.name : "error");
+                }
+            }
+            // AI video titles (section 53): new public videos and the backlog. OpenRouter and D1 only; up to
+            // AI_TITLE_RUN_BUDGET_MS. Before migration 0037 it just logs.
+            const titler = titlerFrom(env);
+            if (titler) {
+                try {
+                    const r = await titleVideos({ db: env.DB, titler, mediaBaseUrl: env.MEDIA_BASE_URL, now: () => Date.now() });
+                    if (r.written || r.kept || r.failed) console.log("[titles] run", JSON.stringify(r));
+                } catch (e) {
+                    console.error("[titles] run failed", e instanceof Error ? e.message.slice(0, 200) : "error");
                 }
             }
             const client = embedFrom(env);
