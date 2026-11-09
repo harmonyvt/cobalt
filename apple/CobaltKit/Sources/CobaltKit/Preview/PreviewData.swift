@@ -139,6 +139,7 @@ enum PreviewData {
             caps.cutout = true
             caps.cutoutAuto = true
             caps.imageCrop = true
+            caps.postFrame = true                 // framed copies are renders of the editor's containers (APP-API-CONTRACT 52.5)
         }
         if scenario.hasChat && scenario.hasEditor && caps.kind == .fork {
             caps.chatVideo = true                 // chat videos are made by the editor's render containers (APP-API-CONTRACT 45.6)

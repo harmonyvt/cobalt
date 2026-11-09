@@ -64,6 +64,8 @@ final class DetailController {
     var batchPhotos: Step = .idle
     /// `make from this post…` is open (lane A2's combine sheet).
     var showsMakeSheet = false
+    /// "post frame" is open on this video (APP-API-CONTRACT 52.6).
+    var postFrameTarget: PostFrameTarget?
     var confirm: Confirm?
     var phase: Phase = .idle
     /// What "try again" repeats after a failure or a partial delete.

@@ -137,8 +137,9 @@ extension EditProject: Decodable {
 /// `<render>` of 31.12: one revision of a project being made into an MP4.
 public struct EditRender: Sendable, Equatable, Identifiable {
     public enum Status: String, Sendable { case queued, preparing, rendering, finishing, done, error, cancelled }
-    /// What the render makes (APP-API-CONTRACT 45.3): an editor project's video, or a chat thread replayed as a video.
-    public enum Kind: String, Sendable { case edit, chat }
+    /// What the render makes (APP-API-CONTRACT 45.3, 52.5): an editor project's video, a chat thread replayed as a video, or a
+    /// saved video framed in its post.
+    public enum Kind: String, Sendable { case edit, chat, post }
 
     public var id: String
     /// `edit` for an editor project; `chat` for a chat video, whose `projectID` is `"chat:<thread id>"` (never a project).
@@ -217,6 +218,22 @@ public struct EditRender: Sendable, Equatable, Identifiable {
     /// The `project_id` the server gives a chat render (`"chat:<thread id>"`), which no editor project ever has.
     public static func isChatProjectID(_ id: String) -> Bool { id.hasPrefix("chat:") }
 
+    /// A framed copy (52.5): like a chat video, no editor project to open, only its library post once it is done.
+    public var isPost: Bool { kind == .post || Self.isPostProjectID(projectID) }
+
+    /// The `project_id` of a post-frame render (`"post:<item id>"`).
+    public static func isPostProjectID(_ id: String) -> Bool { id.hasPrefix("post:") }
+
+    /// The library item a post-frame render frames; nil for any other render.
+    public var postItemID: String? {
+        guard Self.isPostProjectID(projectID) else { return nil }
+        let id = String(projectID.dropFirst("post:".count))
+        return id.isEmpty ? nil : id
+    }
+
+    /// A render with no editor project behind it (a chat video, a framed copy): nothing to open or try again from.
+    public var isProjectless: Bool { isChat || isPost }
+
     /// The newest moment the render is known to have reached: when it ended, else when it started, else when it was asked for.
     public var lastMoment: Date { finishedAt ?? startedAt ?? createdAt }
 
@@ -255,9 +272,10 @@ extension EditRender: Decodable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         projectID = (try? c.decodeIfPresent(String.self, forKey: .projectID)) ?? ""
-        // absent (an older server) or unknown: an editor render, unless the project id says it is a chat's
+        // absent (an older server) or unknown: an editor render, unless the project id says it is a chat's or a framed copy
         let rawKind = try? c.decodeIfPresent(String.self, forKey: .kind)
-        kind = rawKind.flatMap(Kind.init(rawValue:)) ?? (Self.isChatProjectID(projectID) ? .chat : .edit)
+        kind = rawKind.flatMap(Kind.init(rawValue:))
+            ?? (Self.isChatProjectID(projectID) ? .chat : Self.isPostProjectID(projectID) ? .post : .edit)
         threadID = try? c.decodeIfPresent(String.self, forKey: .threadID)
         revision = (try? c.decodeIfPresent(Int.self, forKey: .revision)) ?? 0
         title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? ""

@@ -201,6 +201,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `features.ytdlp` (APP-API-CONTRACT 49): the server has the yt-dlp box: `engine` on `POST /studio`. False when absent:
     /// no "save links with yt-dlp" setting.
     public var ytdlp: Bool = false
+    /// `features.post_frame` (APP-API-CONTRACT 52.2): `/library/items/<id>/post-details` and `…/post-frame` exist: a saved video
+    /// can be framed in the post it came from (a render of kind `post` in the editor's containers). False when absent: no
+    /// "post frame" button, no "post" tool, no switch on save.
+    public var postFrame: Bool = false
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.

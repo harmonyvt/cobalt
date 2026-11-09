@@ -96,6 +96,9 @@ final class PreviewEditorState: Sendable {
         var cancelledAt: Date?
         /// A chat video's thread (APP-API-CONTRACT 45.3); nil for an editor render.
         var threadID: String? = nil
+        /// A framed copy's item and style (APP-API-CONTRACT 52.5); nil for any other render.
+        var postItem: String? = nil
+        var postStyle: String? = nil
     }
 
     /// How long a render takes, before `timeScale`.
@@ -194,8 +197,8 @@ final class PreviewEditorState: Sendable {
         let total = renderSeconds * max(0.01, timeScale)
         let t = max(0, now.timeIntervalSince(r.createdAt)) / total
         var out = EditRender(id: r.id, projectID: r.projectID, revision: r.revision, title: r.title, status: .queued,
-                             secondsTotal: r.secondsTotal, createdAt: r.createdAt, kind: r.threadID == nil ? .edit : .chat,
-                             threadID: r.threadID)
+                             secondsTotal: r.secondsTotal, createdAt: r.createdAt,
+                             kind: r.postItem != nil ? .post : r.threadID == nil ? .edit : .chat, threadID: r.threadID)
         let started = r.createdAt.addingTimeInterval(0.05 * total)
         if let cancelled = r.cancelledAt, now >= cancelled {
             out.status = .cancelled
@@ -268,13 +271,26 @@ final class PreviewEditorState: Sendable {
         let fresh = state.withLock { s in
             s.renderOrder.compactMap { id in s.running[id].map { Self.view($0, now: now, timeScale: timeScale, scenario: scenario) } }
         }
-        return fresh.compactMap { r in
+        // render id -> the item a framed copy frames, and its style
+        let posts: [String: [String]] = state.withLock { s in
+            var out: [String: [String]] = [:]
+            for r in s.running.values {
+                if let item = r.postItem { out[r.id] = [item, r.postStyle ?? "generic"] }
+            }
+            return out
+        }
+        return fresh.compactMap { r -> LibraryPost? in
             guard r.status == .done, let item = r.itemID else { return nil }
             let name = "\(r.title).mp4"
-            let file = LibraryFile(
+            var file = LibraryFile(
                 id: item, kind: .private, source: .saved, name: name, url: nil, contentType: "video/mp4", bytes: r.bytes,
                 width: r.width, height: r.height, duration: r.duration, createdAt: r.finishedAt ?? r.createdAt, mediaName: nil,
                 deletable: true, posterURL: r.posterURL)
+            // a framed copy (52.2): made from its item, with the post spec
+            if let post = posts[r.id], post.count == 2 {
+                file.madeFrom = [post[0]]
+                file.madeSpec = MadeSpec(object: ["kind": "post", "item": post[0], "style": post[1], "render": r.id])
+            }
             return LibraryPost(
                 id: item, service: "upload", link: nil, title: name, duration: r.duration, width: r.width, height: r.height,
                 createdAt: r.finishedAt ?? r.createdAt, session: nil, files: [file], customTitle: nil, posterURL: r.posterURL)
@@ -427,6 +443,26 @@ final class PreviewEditorState: Sendable {
             let running = Running(
                 id: rid, projectID: "chat:\(threadID)", revision: 0, title: title, secondsTotal: secondsTotal, createdAt: now,
                 fails: false, cancelledAt: nil, threadID: threadID)
+            s.running[rid] = running
+            s.renderOrder.append(rid)
+            return Self.view(running, now: now, timeScale: timeScale, scenario: scenario)
+        }
+    }
+
+    /// `POST /library/items/<id>/post-frame` (52.2): a framed copy, queued like an editor render (`project_id` `"post:<item>"`,
+    /// revision 0, the title `<original> (post)`). `queueFull` at 20 running.
+    func startPostRender(
+        itemID: String, title: String, style: PostFrameStyle, secondsTotal: Double, now: Date, timeScale: Double,
+        scenario: PreviewScenario
+    ) throws -> EditRender {
+        try state.withLock { s in
+            let active = Self.renders(s, now: now, timeScale: timeScale, scenario: scenario).filter(\.isActive).count
+            if active >= 20 { throw EditError.queueFull }
+            s.counter += 1
+            let rid = "PrEvIeWpfRnd" + String(format: "%04d", 100 + s.counter)
+            let running = Running(
+                id: rid, projectID: "post:\(itemID)", revision: 0, title: "\(title) (post)", secondsTotal: secondsTotal, createdAt: now,
+                fails: false, cancelledAt: nil, postItem: itemID, postStyle: style.rawValue)
             s.running[rid] = running
             s.renderOrder.append(rid)
             return Self.view(running, now: now, timeScale: timeScale, scenario: scenario)

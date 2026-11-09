@@ -37,6 +37,8 @@ struct SettingsScreen: View {
             McpSettingsSection(model: model).id(settings.hasAPIKey)
             makingSection
             SharingSettingsSection(model: model)
+            // "post frame" on save, per site (APP-API-CONTRACT 52.6)
+            PostFrameSettingsSection(model: model)
             // private links (APP-API-CONTRACT 36.6): what new gallery links start as, and rotating every key
             PrivateLinksSettingsSection(model: model).id(settings.hasAPIKey)
             // hidden posts and auto-hide rules (APP-API-CONTRACT 37.7)

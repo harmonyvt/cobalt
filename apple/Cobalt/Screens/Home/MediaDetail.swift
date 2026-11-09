@@ -193,6 +193,7 @@ struct MediaDetail: View {
         .sheetCorner { if !gone, inMacSheet { menu(item, selected) } }
         .detailDialogs(controller: controller, item: item) { ask in run(ask, item) }
         .makeSheet(controller: controller, item: item, model: model)
+        .postFrameSheet(controller: controller, model: model)
         .renameAlert(item: item, isPresented: $renaming, model: model) { controller.notice = $0 }
         .background { tabShortcuts(item) }
         .onChange(of: current) { old, now in

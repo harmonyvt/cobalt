@@ -267,6 +267,18 @@ public protocol CobaltClient: Sendable {
     func makeChatVideo(
         threadID: String, shape: ChatVideoShape?, theme: ChatVideoTheme?, speed: Double?, from: String?, to: String?, notify: Bool
     ) async throws -> EditRender
+    // Post frames (APP-API-CONTRACT 52; keyed; only when `features.post_frame`). Defaulted below (`.unsupported`) so older fakes
+    // compile. The routes throw `PostFrameError` for their own refusals.
+    /// `GET /library/items/<id>/post-details[?refresh=1]` (52.2): the post the file was saved from, looked up when the server
+    /// has no row yet (or `refresh`). `PostFrameError.noLink` for an upload or a render, `.notFound` for an unknown item.
+    func postDetails(item id: String, refresh: Bool) async throws -> PostDetails
+    /// `PATCH /library/items/<id>/post-details` with the patch's fields (52.3): the details as they are now, saved for good.
+    func setPostDetails(item id: String, _ patch: PostDetailsPatch) async throws -> PostDetails
+    /// `GET /library/items/<id>/post-details/avatar` (52.2): the stored avatar's bytes. `PostFrameError.notFound` without one.
+    func postAvatar(item id: String) async throws -> Data
+    /// `POST /library/items/<id>/post-frame` (52.2): `202` with the queued render (kind `post`); poll it like any editor render.
+    /// Refusals: `PostFrameError` (`.notVideo`, `.noLink`, `.notFound`, `.badRequest`), `EditError.queueFull` / `.off`.
+    func postFrame(item id: String, options: PostFrameOptions) async throws -> EditRender
     /// `GET /chat/threads/<id>/share` (46.2): the chat's live web page, or nil while it is not shared.
     func chatShare(threadID: String) async throws -> ChatShare?
     /// `PUT /chat/threads/<id>/share`: shares the chat (up to its latest message) or changes the live share.
@@ -461,6 +473,10 @@ extension CobaltClient {
     public func makeChatVideo(
         threadID: String, shape: ChatVideoShape?, theme: ChatVideoTheme?, speed: Double?, from: String?, to: String?, notify: Bool
     ) async throws -> EditRender { throw PipelineFailure.unsupported }
+    public func postDetails(item id: String, refresh: Bool) async throws -> PostDetails { throw PipelineFailure.unsupported }
+    public func setPostDetails(item id: String, _ patch: PostDetailsPatch) async throws -> PostDetails { throw PipelineFailure.unsupported }
+    public func postAvatar(item id: String) async throws -> Data { throw PipelineFailure.unsupported }
+    public func postFrame(item id: String, options: PostFrameOptions) async throws -> EditRender { throw PipelineFailure.unsupported }
     public func chatShare(threadID: String) async throws -> ChatShare? { throw PipelineFailure.unsupported }
     public func shareChat(threadID: String, _ change: ChatShareChange) async throws -> ChatShare { throw PipelineFailure.unsupported }
     public func rotateChatShare(threadID: String) async throws -> ChatShare { throw PipelineFailure.unsupported }

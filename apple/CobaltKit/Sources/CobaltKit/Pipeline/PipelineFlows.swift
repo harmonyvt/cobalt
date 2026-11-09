@@ -630,6 +630,7 @@ extension Pipeline {
             pacer.observe(s, clock: ctx.clock)
             switch s.status {
             case .ready:
+                notePostFrameSave(s)
                 return s
             case .error:
                 throw mapFailure(code: s.errorCode ?? "error.studio.unknown", during: .saving, limits: ctx.capabilities.limits)
