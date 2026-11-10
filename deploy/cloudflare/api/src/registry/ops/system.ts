@@ -10,6 +10,7 @@ import { editTablesPresent } from "../../edits";
 import { MEDIA_NAME_REGEX, parseAuthorization, TUNNEL_PARAMS, WEBP_ID_REGEX } from "../../gate";
 import { KEY_ID_HEADER } from "../../headers";
 import { harkConfigured } from "../../notify";
+import { background } from "../../background";
 import { describeBody, logRequest, normalizeUrlField, type BodyInfo } from "../../request-log";
 import { stageBaseFrom, twitchConfigFrom } from "../../stage";
 import { ingestTelemetry } from "../../telemetry";
@@ -158,7 +159,7 @@ export const cobaltOp = defineOp({
         const headers = new Headers(request.headers);
         headers.set("Authorization", `Api-Key ${ctx.env.COBALT_API_KEY}`);
         const res = await ctx.container.fetch(new Request(request, { headers }));
-        await logRequest(ctx.db, "POST /", ctx.keyId!, request, log, res);
+        await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "POST /", ctx.keyId!, request, log, res));
         return res;
     },
 });
@@ -210,7 +211,7 @@ export const webpCreateOp = defineOp({
     handler: async (ctx) => {
         const { request, log } = await loggedPost(ctx.request!);
         const res = await ctx.container.fetch(toDurableObject(request, ctx.keyId!));
-        await logRequest(ctx.db, "POST /webp", ctx.keyId!, request, log, res);
+        await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "POST /webp", ctx.keyId!, request, log, res));
         return res;
     },
 });

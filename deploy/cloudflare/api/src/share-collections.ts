@@ -4,7 +4,8 @@
 
 import { writeCaption, setSubject, type Captioner } from "./roast";
 import { linkInsert, liveLinksFor, revokeStmt } from "./private-links";
-import { mintSetId, parseItems, setRoastInput } from "./share-sets";
+import { captionSoon, mintSetId, parseItems, setRoastInput } from "./share-sets";
+import { readTogether, rowsOf, tryBatch } from "./share-reads";
 import { hiddenFileIds } from "./hidden-store";
 import type { StudioReply } from "./studio";
 
@@ -23,6 +24,8 @@ export type CollectionDeps = {
     shareBaseUrl?: string;
     captioner?: Captioner | null;
     captionWaitMs?: number;
+    // with it the reroll answers before its captions are written (captionSoon in share-sets.ts)
+    waitUntil?: (p: Promise<unknown>) => void;
     setRandomBytes?: (n: number) => Uint8Array;
 };
 
@@ -72,46 +75,38 @@ async function readBody(request: Request): Promise<Record<string, unknown> | nul
     }
 }
 
-// The live links among `ids`; the rest are answered as not found.
-async function liveSets(db: D1Database, ids: string[]): Promise<Set<string>> {
-    if (ids.length === 0) return new Set();
-    const marks = ids.map((_, i) => `?${i + 1}`).join(", ");
-    const { results } = await db
-        .prepare(`SELECT id FROM share_sets WHERE id IN (${marks}) AND revoked_at IS NULL`)
-        .bind(...ids)
-        .all<{ id: string }>();
-    return new Set(results.map((r) => r.id));
-}
+// The statements below are built apart from being run, so a route can send several of them as one batch: one round
+// trip to D1 where each used to be its own.
+type Member = { collection_id: string; set_id: string };
 
-// Each collection with its live links, newest added first.
-async function shapes(db: D1Database, rows: Row[]) {
-    if (rows.length === 0) return [];
-    const marks = rows.map((_, i) => `?${i + 1}`).join(", ");
-    const { results } = await db
-        .prepare(
-            `SELECT i.collection_id, i.set_id FROM share_collection_items i JOIN share_sets s ON s.id = i.set_id
-              WHERE i.collection_id IN (${marks}) AND s.revoked_at IS NULL
-              ORDER BY i.added_at DESC, i.set_id DESC`,
-        )
-        .bind(...rows.map((r) => r.id))
-        .all<{ collection_id: string; set_id: string }>();
+// The live links among `ids`; the rest are answered as not found.
+const liveSetsStmt = (db: D1Database, ids: string[]) =>
+    db.prepare("SELECT id FROM share_sets WHERE id IN (SELECT value FROM json_each(?1)) AND revoked_at IS NULL").bind(JSON.stringify(ids));
+
+// The live links of the collections named by `ids` (SQL: a list of collection ids), newest added first.
+const membersSql = (ids: string) =>
+    `SELECT i.collection_id, i.set_id FROM share_collection_items i JOIN share_sets s ON s.id = i.set_id
+      WHERE i.collection_id IN (${ids}) AND s.revoked_at IS NULL
+      ORDER BY i.added_at DESC, i.set_id DESC`;
+const membersStmt = (db: D1Database, id: string) => db.prepare(membersSql("?1")).bind(id);
+
+// Each collection with its live links, in the order `members` came.
+function shaped(rows: Row[], members: Member[]) {
     const by = new Map<string, string[]>();
-    for (const r of results) by.set(r.collection_id, [...(by.get(r.collection_id) ?? []), r.set_id]);
+    for (const r of members) by.set(r.collection_id, [...(by.get(r.collection_id) ?? []), r.set_id]);
     return rows.map((r) => ({ id: r.id, name: r.name, created_at: r.created_at, updated_at: r.updated_at, set_ids: by.get(r.id) ?? [] }));
 }
 
-async function one(db: D1Database, id: string): Promise<Row | null> {
-    return (
-        (await db.prepare("SELECT id, name, created_at, updated_at FROM share_collections WHERE id = ?1").bind(id).first<Row>()) ?? null
-    );
-}
+const oneStmt = (db: D1Database, id: string) => db.prepare("SELECT id, name, created_at, updated_at FROM share_collections WHERE id = ?1").bind(id);
+
+const LIST_SQL = `SELECT id, name, created_at, updated_at FROM share_collections ORDER BY updated_at DESC, id DESC LIMIT ${COLLECTION_MAX}`;
 
 export async function listCollections(d: CollectionDeps): Promise<StudioReply> {
     try {
-        const { results } = await d.db
-            .prepare(`SELECT id, name, created_at, updated_at FROM share_collections ORDER BY updated_at DESC, id DESC LIMIT ${COLLECTION_MAX}`)
-            .all<Row>();
-        return { status: 200, body: { status: "success", collections: await shapes(d.db, results) } };
+        // the collections and their links in one round trip: the second statement names the same collections by
+        // repeating the list
+        const res = await readTogether(d.db, [d.db.prepare(LIST_SQL), d.db.prepare(membersSql(`SELECT c.id FROM (${LIST_SQL}) c`))]);
+        return { status: 200, body: { status: "success", collections: shaped(rowsOf<Row>(res, 0), rowsOf<Member>(res, 1)) } };
     } catch {
         return err(503, "error.api.generic");
     }
@@ -123,14 +118,15 @@ export async function createCollection(d: CollectionDeps, request: Request, keyI
     const ids = setIds(b?.set_ids);
     if (!b || name === null || ids === null) return err(400, "error.collection.bad_request");
     try {
-        const count = await d.db.prepare("SELECT COUNT(*) AS n FROM share_collections").first<{ n: number }>();
-        if ((count?.n ?? 0) >= COLLECTION_MAX) return err(409, "error.collection.too_many");
-        const live = await liveSets(d.db, ids);
+        // two round trips: what is checked, then the writes with the answer read back behind them
+        const checks = await readTogether(d.db, [d.db.prepare("SELECT COUNT(*) AS n FROM share_collections"), liveSetsStmt(d.db, ids)]);
+        if ((rowsOf<{ n: number }>(checks, 0)[0]?.n ?? 0) >= COLLECTION_MAX) return err(409, "error.collection.too_many");
+        const live = new Set(rowsOf<{ id: string }>(checks, 1).map((r) => r.id));
         const missing = ids.filter((i) => !live.has(i));
         if (missing.length > 0) return err(409, "error.collection.link_not_found", { set_ids: missing });
         const now = d.now();
         const row: Row = { id: mintCollectionId(d.randomBytes), name, created_at: now, updated_at: now };
-        await d.db.batch([
+        const done = await d.db.batch([
             d.db
                 .prepare("INSERT INTO share_collections (id, name, key_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)")
                 .bind(row.id, row.name, keyId, now),
@@ -138,8 +134,9 @@ export async function createCollection(d: CollectionDeps, request: Request, keyI
                 // the first listed link is the newest added: it shows first
                 d.db.prepare("INSERT INTO share_collection_items (collection_id, set_id, added_at) VALUES (?1, ?2, ?3)").bind(row.id, s, now + ids.length - i),
             ),
+            membersStmt(d.db, row.id),
         ]);
-        const [shape] = await shapes(d.db, [row]);
+        const [shape] = shaped([row], rowsOf<Member>(done, done.length - 1));
         return { status: 201, body: { status: "success", collection: shape } };
     } catch {
         return err(503, "error.api.generic");
@@ -157,18 +154,19 @@ export async function updateCollection(d: CollectionDeps, request: Request, id: 
         return err(400, "error.collection.bad_request");
     }
     try {
-        const row = await one(d.db, id);
-        if (!row) return err(404, "error.collection.not_found");
-        const live = await liveSets(d.db, add);
+        // two round trips: what is checked, then the writes with the answer read back behind them
+        const checks = await readTogether(d.db, [
+            oneStmt(d.db, id),
+            liveSetsStmt(d.db, add),
+            d.db.prepare("SELECT COUNT(*) AS n FROM share_collection_items WHERE collection_id = ?1").bind(id),
+        ]);
+        if (rowsOf<Row>(checks, 0).length === 0) return err(404, "error.collection.not_found");
+        const live = new Set(rowsOf<{ id: string }>(checks, 1).map((r) => r.id));
         const missing = add.filter((i) => !live.has(i));
         if (missing.length > 0) return err(409, "error.collection.link_not_found", { set_ids: missing });
-        const have = await d.db
-            .prepare("SELECT COUNT(*) AS n FROM share_collection_items WHERE collection_id = ?1")
-            .bind(id)
-            .first<{ n: number }>();
-        if ((have?.n ?? 0) + add.length - remove.length > COLLECTION_SETS_MAX) return err(409, "error.collection.full");
+        if ((rowsOf<{ n: number }>(checks, 2)[0]?.n ?? 0) + add.length - remove.length > COLLECTION_SETS_MAX) return err(409, "error.collection.full");
         const now = d.now();
-        await d.db.batch([
+        const done = await d.db.batch([
             d.db.prepare("UPDATE share_collections SET name = COALESCE(?2, name), updated_at = ?3 WHERE id = ?1").bind(id, name ?? null, now),
             ...remove.map((s) => d.db.prepare("DELETE FROM share_collection_items WHERE collection_id = ?1 AND set_id = ?2").bind(id, s)),
             ...add.map((s, i) =>
@@ -176,8 +174,10 @@ export async function updateCollection(d: CollectionDeps, request: Request, id: 
                     .prepare("INSERT INTO share_collection_items (collection_id, set_id, added_at) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING")
                     .bind(id, s, now + add.length - i),
             ),
+            oneStmt(d.db, id),
+            membersStmt(d.db, id),
         ]);
-        const [shape] = await shapes(d.db, [(await one(d.db, id))!]);
+        const [shape] = shaped([rowsOf<Row>(done, done.length - 2)[0]!], rowsOf<Member>(done, done.length - 1));
         return { status: 200, body: { status: "success", collection: shape } };
     } catch {
         return err(503, "error.api.generic");
@@ -187,7 +187,18 @@ export async function updateCollection(d: CollectionDeps, request: Request, id: 
 // Deletes the folder only; its links stay live. Unknown id: 404 (already gone).
 export async function deleteCollection(d: CollectionDeps, id: string): Promise<StudioReply> {
     try {
-        const row = await one(d.db, id);
+        // One round trip: is there such a collection, delete it and its links' places, and take it out of every
+        // collection set (section 28). The deletes change nothing for an unknown id. Null: the batch failed (a database
+        // without collection_group_items fails all of it), so one after another as before, where that last delete is
+        // best effort.
+        const done = await tryBatch(d.db, [
+            oneStmt(d.db, id),
+            d.db.prepare("DELETE FROM share_collection_items WHERE collection_id = ?1").bind(id),
+            d.db.prepare("DELETE FROM share_collections WHERE id = ?1").bind(id),
+            d.db.prepare("DELETE FROM collection_group_items WHERE collection_id = ?1").bind(id),
+        ]);
+        if (done) return rowsOf<Row>(done, 0).length > 0 ? { status: 200, body: { status: "success" } } : err(404, "error.collection.not_found");
+        const row = await oneStmt(d.db, id).first<Row>();
         if (!row) return err(404, "error.collection.not_found");
         await d.db.batch([
             d.db.prepare("DELETE FROM share_collection_items WHERE collection_id = ?1").bind(id),
@@ -208,14 +219,16 @@ export async function deleteCollection(d: CollectionDeps, id: string): Promise<S
 // POST /share/collections/<id>/reroll: every live link in the collection gets a new URL (a new share set
 // with the same files and no typed title, so its title is a fresh caption), and the old URL is revoked.
 // Every collection holding an old link holds the new one instead, in the same place. Captions for the new
-// links are written now (bounded wait); the 15-minute cron fills any miss.
+// links are written as soon as the links are (after the answer when there is a waitUntil, else a bounded wait before
+// it); the 15-minute cron fills any miss.
 export const REROLL_CAPTION_WAIT_MS = 8000;
 
 export async function rerollCollection(d: CollectionDeps, id: string, keyId: string): Promise<StudioReply> {
     try {
-        const row = await one(d.db, id);
+        const first = await readTogether(d.db, [oneStmt(d.db, id), membersStmt(d.db, id)]);
+        const row = rowsOf<Row>(first, 0)[0];
         if (!row) return err(404, "error.collection.not_found");
-        const [shape] = await shapes(d.db, [row]);
+        const [shape] = shaped([row], rowsOf<Member>(first, 1));
         const old = shape!.set_ids;
         if (old.length === 0) return err(409, "error.collection.empty");
         const marks = old.map((_, i) => `?${i + 1}`).join(", ");
@@ -242,20 +255,22 @@ export async function rerollCollection(d: CollectionDeps, id: string, keyId: str
             if (priv.has(s.id)) stmts.push(revokeStmt(d.db, "set", s.id, now), linkInsert(d.db, "set", fresh, now).stmt);
         }
         stmts.push(d.db.prepare("UPDATE share_collections SET updated_at = ?2 WHERE id = ?1").bind(id, now));
-        await d.db.batch(stmts);
+        // the answer is read back behind the writes, in their round trip (the captions change nothing it says)
+        const done = await d.db.batch([...stmts, oneStmt(d.db, id), membersStmt(d.db, id)]);
 
         if (d.captioner && d.mediaBaseUrl) {
             const captioner = d.captioner;
             const media = d.mediaBaseUrl;
-            const work = Promise.all(
-                Object.values(replaced).map(async (sid) => {
-                    const input = await setRoastInput({ db: d.db, mediaBaseUrl: media }, sid).catch(() => null);
-                    if (input) await writeCaption({ db: d.db, captioner, now: d.now }, setSubject(sid), input);
-                }),
-            );
-            await Promise.race([work, new Promise((r) => setTimeout(r, d.captionWaitMs ?? REROLL_CAPTION_WAIT_MS))]);
+            const write = () =>
+                Promise.all(
+                    Object.values(replaced).map(async (sid) => {
+                        const input = await setRoastInput({ db: d.db, mediaBaseUrl: media }, sid).catch(() => null);
+                        if (input) await writeCaption({ db: d.db, captioner, now: d.now }, setSubject(sid), input);
+                    }),
+                );
+            await captionSoon(d.waitUntil, write, d.captionWaitMs ?? REROLL_CAPTION_WAIT_MS);
         }
-        const [after] = await shapes(d.db, [(await one(d.db, id))!]);
+        const [after] = shaped([rowsOf<Row>(done, done.length - 2)[0]!], rowsOf<Member>(done, done.length - 1));
         return { status: 200, body: { status: "success", collection: after, replaced } };
     } catch (e) {
         console.error("[collections] reroll failed", String(e));

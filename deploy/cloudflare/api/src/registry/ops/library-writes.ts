@@ -22,6 +22,7 @@ import { ITEM_ID_REGEX, STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "../../gate";
 import { KEY_ID_HEADER } from "../../headers";
 import { publishStudio } from "../../publish";
 import { HIDDEN_HINT, hiddenTargets } from "../../hidden";
+import { background } from "../../background";
 import { bodyLink, describeBody, logRequest, normalizeUrlField } from "../../request-log";
 import { studioErr } from "../../studio";
 import { studioStatus } from "../../studio-edge";
@@ -58,14 +59,14 @@ export const studioCreateOp = defineOp({
         if (logEntry.urlPrefix !== null && !/^https?:\/\//i.test(logEntry.urlPrefix)) logEntry.urlPrefix = null;
         if ((await bodyLink(request)) === null) {
             const res = json(400, studioErr(400, "error.studio.no_link").body);
-            await logRequest(ctx.db, "POST /studio", keyOf(ctx), request, logEntry, res);
+            await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "POST /studio", keyOf(ctx), request, logEntry, res));
             return res;
         }
         const headers = new Headers(request.headers);
         headers.delete("Authorization");
         headers.set(KEY_ID_HEADER, keyOf(ctx));
         const res = await ctx.container.fetch(new Request(request, { headers }));
-        await logRequest(ctx.db, "POST /studio", keyOf(ctx), request, logEntry, res);
+        await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "POST /studio", keyOf(ctx), request, logEntry, res));
         return res;
     },
 });
@@ -84,7 +85,7 @@ export const studioUploadOp = defineOp({
     handler: async (ctx) => {
         const r = await studioUpload(ctx.app(), ctx.request!, keyOf(ctx), ctx.query);
         const res = json(r.status, r.body);
-        await logRequest(ctx.db, "PUT /studio/upload", keyOf(ctx), ctx.request!, uploadLogInfo(ctx.request!), res);
+        await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "PUT /studio/upload", keyOf(ctx), ctx.request!, uploadLogInfo(ctx.request!), res));
         return res;
     },
 });

@@ -3,7 +3,8 @@
 // the Open Graph page, and the Mastodon-shaped status Discord reads to draw every file as attachments.
 // D1 only, the container is never involved. Free of Cloudflare imports so it runs under plain node.
 
-import { captionOf, fileOf, setSubject, writeCaption, type Caption, type Captioner, type RoastInput } from "./roast";
+import { background } from "./background";
+import { captionOf, captionState, fileOf, setSubject, writeCaption, type Caption, type Captioner, type RoastInput } from "./roast";
 import { ITEM_COLUMNS, effectiveVisibility, type MediaRow } from "./visibility";
 import { escapeHtml, pageHeaders } from "./share";
 import { loopUrls } from "./loops";
@@ -13,9 +14,11 @@ import {
     liveLinksFor,
     newLinksSetting,
     revokeLinkQuietly,
+    revokeStmt,
     setIsPrivate,
     type PrivateLinkRow,
 } from "./private-links";
+import { readForAdd, readForNewSet, readSetList, readSetParts, tryBatch } from "./share-reads";
 import { privateFileUrl, privatePosterUrl } from "./share-private";
 import { hiddenFileIds, notHiddenClause, shareGate } from "./hidden-store";
 import type { StudioReply } from "./studio";
@@ -35,9 +38,12 @@ export type ShareSetDeps = {
     shareBaseUrl: string;
     now: () => number;
     randomBytes?: (n: number) => Uint8Array;
-    // roast captions (section 25): written at creation, waiting at most captionWaitMs (the cron fills misses)
+    // roast captions (section 25): written as the link is made (the cron fills misses). With a waitUntil the route
+    // answers first and the link's page waits for the caption; without one the route waits, at most captionWaitMs.
+    // captionWaitMs is also how long after a link is made its page still waits for a caption that is on its way.
     captioner?: Captioner | null;
     captionWaitMs?: number;
+    waitUntil?: (p: Promise<unknown>) => void;
     // Queues the moving previews of a new link's videos in the Durable Object (section 29). Never awaited
     // for long: the Worker hands it to waitUntil.
     kickLoops?: () => Promise<void>;
@@ -49,6 +55,15 @@ export type ShareSetDeps = {
 };
 
 export const CAPTION_WAIT_MS = 6000;
+// How often a new link's page looks again for the caption that is being written.
+export const CAPTION_POLL_MS = 400;
+
+// A caption written without holding the answer (section 25). With a waitUntil the model call is handed to it and the
+// route answers at once; the link's page waits for the caption (pageCaption below). Without one (tests, a Durable
+// Object) nothing would keep the call alive after the answer, so it is awaited as it always was, for at most
+// `waitMs`: a slow model must not hold the link, and the cron fills a miss.
+export const captionSoon = (waitUntil: ShareSetDeps["waitUntil"], write: () => Promise<unknown>, waitMs: number): Promise<void> =>
+    background(waitUntil, () => (waitUntil ? write() : Promise.race([write(), new Promise((r) => setTimeout(r, waitMs))])));
 
 export type SetRow = { id: string; items: string; title: string | null; created_at: number; revoked_at: number | null };
 
@@ -203,12 +218,14 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
     if (b?.private !== undefined && typeof b.private !== "boolean") return err(400, "error.share.bad_request");
     const ids = items as string[];
     try {
+        // everything asked before the link is written, in one round trip (null: one statement after another, as before)
+        const read = await readForNewSet(d.db, ids, typeof b?.private !== "boolean");
         // a hidden post's files are never shared (section 37.2); a held one's wait ends here (the owner decided, 37.3)
-        const hidden = await shareGate(d.db, ids);
+        const hidden = read ? read.hidden : await shareGate(d.db, ids);
         if (hidden.length > 0) return err(409, "error.hidden", { ids: hidden });
         // section 36: absent = the owner's `new_links` setting
-        const makePrivate = typeof b?.private === "boolean" ? b.private : (await newLinksSetting(d.db)) === "private";
-        const rows = await rowsById(d.db, ids);
+        const makePrivate = typeof b?.private === "boolean" ? b.private : (read ? read.newLinks : await newLinksSetting(d.db)) === "private";
+        const rows = read ? read.rows : await rowsById(d.db, ids);
         const publicItems = itemsOf(ids, rows, d.mediaBaseUrl);
         // a private link may hold files that are not public: only missing or deleted ones are refused
         const bad = makePrivate ? ids.filter((id) => !rows.has(id)) : publicItems.filter((i) => i.url === null).map((i) => i.id);
@@ -234,13 +251,10 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
         }
         const shaped = itemsFor(d, ids, rows, link);
         if (d.captioner) {
+            const captioner = d.captioner;
             const input: RoastInput = { files: ids.map((id) => rows.get(id)!).map((r, i) => fileOf(r, publicItems[i]!.url)), userTitle: row.title };
-            const wait = d.captionWaitMs ?? CAPTION_WAIT_MS;
-            // our own timeout: a slow model must not hold the link (the row is recorded either way)
-            await Promise.race([
-                writeCaption({ db: d.db, captioner: d.captioner, now: d.now }, setSubject(row.id), input),
-                new Promise((r) => setTimeout(r, wait)),
-            ]);
+            // the link is recorded either way; the model never holds it
+            await captionSoon(d.waitUntil, () => writeCaption({ db: d.db, captioner, now: d.now }, setSubject(row.id), input), d.captionWaitMs ?? CAPTION_WAIT_MS);
         }
         if (d.kickLoops && shaped.some((i) => (i.content_type ?? "").startsWith("video/"))) {
             await d.kickLoops().catch(() => {});
@@ -251,21 +265,31 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
     }
 }
 
+// The list one statement after another, as it was read before readSetList: what a database without batch() or without
+// a newer migration still gets.
+async function setListInTurn(db: D1Database): Promise<{ sets: SetRow[]; rows: Map<string, MediaRow>; links: Map<string, PrivateLinkRow>; hidden: (ids: string[]) => Promise<string[]> }> {
+    const { results } = await db
+        .prepare(
+            `SELECT id, items, title, created_at, revoked_at FROM share_sets WHERE revoked_at IS NULL ORDER BY created_at DESC, id DESC LIMIT ${SHARE_LIST_MAX}`,
+        )
+        .all<SetRow>();
+    const all = [...new Set(results.flatMap((s) => parseItems(s.items)))];
+    const rows = new Map<string, MediaRow>();
+    for (let i = 0; i < all.length; i += 90) {
+        for (const [k, v] of await rowsById(db, all.slice(i, i + 90))) rows.set(k, v);
+    }
+    const links = await liveLinksFor(db, "set", results.map((s) => s.id));
+    return { sets: results, rows, links, hidden: (ids) => hiddenFileIds(db, ids) };
+}
+
 export async function listShareSets(d: ShareSetDeps): Promise<StudioReply> {
     try {
-        const { results } = await d.db
-            .prepare(
-                `SELECT id, items, title, created_at, revoked_at FROM share_sets WHERE revoked_at IS NULL ORDER BY created_at DESC, id DESC LIMIT ${SHARE_LIST_MAX}`,
-            )
-            .all<SetRow>();
+        // one round trip for the links, their files, their private links and the hidden files
+        const list = (await readSetList(d.db, SHARE_LIST_MAX)) ?? (await setListInTurn(d.db));
+        const { sets: results, rows, links } = list;
         const all = [...new Set(results.flatMap((s) => parseItems(s.items)))];
-        const rows = new Map<string, MediaRow>();
-        for (let i = 0; i < all.length; i += 90) {
-            for (const [k, v] of await rowsById(d.db, all.slice(i, i + 90))) rows.set(k, v);
-        }
-        const links = await liveLinksFor(d.db, "set", results.map((s) => s.id));
         // a hidden file is listed like a deleted one (url null), and says so (section 37.2)
-        const hidden = new Set(await hiddenFileIds(d.db, all));
+        const hidden = new Set(await list.hidden(all));
         const mark = (items: SetItem[]) => (hidden.size === 0 ? items : items.map((i) => (hidden.has(i.id) ? { ...i, hidden: true } : i)));
         return {
             status: 200,
@@ -281,13 +305,23 @@ export async function listShareSets(d: ShareSetDeps): Promise<StudioReply> {
 
 export async function revokeShareSet(d: ShareSetDeps, id: string): Promise<StudioReply> {
     try {
+        // One round trip: is there such a link, revoke it, and its private link with it (section 36; a repeat cleans up
+        // one left by a failed call). The two writes change nothing for an id that is no link: links are never deleted,
+        // so no private link names one. Null (no batch, or no private_links table): one after another, as before.
+        const now = d.now();
+        const done = await tryBatch(d.db, [
+            d.db.prepare("SELECT id, revoked_at FROM share_sets WHERE id = ?1").bind(id),
+            d.db.prepare("UPDATE share_sets SET revoked_at = ?2 WHERE id = ?1 AND revoked_at IS NULL").bind(id, now),
+            revokeStmt(d.db, "set", id, now),
+        ]);
+        if (done) return (done[0]?.results ?? []).length > 0 ? { status: 200, body: { status: "success" } } : err(404, "error.share.not_found");
         const row = await d.db.prepare("SELECT id, revoked_at FROM share_sets WHERE id = ?1").bind(id).first<{ id: string; revoked_at: number | null }>();
         if (!row) return err(404, "error.share.not_found");
         if (row.revoked_at === null) {
-            await d.db.prepare("UPDATE share_sets SET revoked_at = ?2 WHERE id = ?1 AND revoked_at IS NULL").bind(id, d.now()).run();
+            await d.db.prepare("UPDATE share_sets SET revoked_at = ?2 WHERE id = ?1 AND revoked_at IS NULL").bind(id, now).run();
         }
         // its private link goes with it (section 36); a repeat cleans up one left by a failed call
-        await revokeLinkQuietly(d.db, "set", id, d.now());
+        await revokeLinkQuietly(d.db, "set", id, now);
         return { status: 200, body: { status: "success" } };
     } catch {
         return err(503, "error.api.generic");
@@ -297,9 +331,11 @@ export async function revokeShareSet(d: ShareSetDeps, id: string): Promise<Studi
 // One live set as the list shows it (section 24.1, its private link 36, hidden files marked 37.2).
 export async function shapedSet(d: ShareSetDeps, s: SetRow): Promise<ReturnType<typeof setShape>> {
     const ids = parseItems(s.items);
-    const rows = await rowsById(d.db, ids);
-    const link = (await liveLinksFor(d.db, "set", [s.id])).get(s.id) ?? null;
-    const hidden = new Set(await hiddenFileIds(d.db, ids));
+    // one round trip (null: one statement after another, as before)
+    const read = await readSetParts(d.db, s.id, ids);
+    const rows = read ? read.rows : await rowsById(d.db, ids);
+    const link = read ? read.link : ((await liveLinksFor(d.db, "set", [s.id])).get(s.id) ?? null);
+    const hidden = new Set(read ? read.hidden : await hiddenFileIds(d.db, ids));
     const items = itemsFor(d, ids, rows, link).map((i) => (hidden.has(i.id) ? { ...i, hidden: true } : i));
     return setShape(d, s, items, link);
 }
@@ -343,11 +379,13 @@ export async function updateShareSet(d: ShareSetDeps, request: Request, id: stri
         const filesChanged = next.join(",") !== before.join(",");
         let rows: Map<string, MediaRow> | null = null;
         if (added.length > 0) {
+            // the three things asked about added files, in one round trip (null: one after another, as before)
+            const read = await readForAdd(d.db, id, added, next);
             // a hidden post's files never go into a link (section 37.2); a held one's wait ends here (37.3)
-            const hidden = await shareGate(d.db, added);
+            const hidden = read ? read.hidden : await shareGate(d.db, added);
             if (hidden.length > 0) return err(409, "error.hidden", { ids: hidden });
-            rows = await rowsById(d.db, next);
-            const isPrivate = await setIsPrivate(d.db, id);
+            rows = read ? read.rows : await rowsById(d.db, next);
+            const isPrivate = read ? read.isPrivate : await setIsPrivate(d.db, id);
             const bad = added.filter((x) => {
                 const r = rows!.get(x);
                 return !r || (!isPrivate && publicUrlOf(r, d.mediaBaseUrl) === null);
@@ -369,17 +407,22 @@ export async function updateShareSet(d: ShareSetDeps, request: Request, id: stri
         const row: SetRow = { ...set, items: JSON.stringify(next), title: newTitle };
         if (filesChanged && d.captioner) {
             // the caption describes the files, so new files get a new one (a typed title still wins on the page)
-            rows ??= await rowsById(d.db, next);
-            const files = next
-                .map((x) => rows!.get(x))
-                .filter((r): r is MediaRow => !!r)
-                .map((r) => fileOf(r, publicUrlOf(r, d.mediaBaseUrl)));
-            if (files.length > 0) {
-                const wait = d.captionWaitMs ?? CAPTION_WAIT_MS;
-                await Promise.race([
-                    writeCaption({ db: d.db, captioner: d.captioner, now: d.now }, setSubject(id), { files, userTitle: newTitle }),
-                    new Promise((r) => setTimeout(r, wait)),
-                ]);
+            const captioner = d.captioner;
+            const write = async (known: Map<string, MediaRow>) => {
+                const files = next
+                    .map((x) => known.get(x))
+                    .filter((r): r is MediaRow => !!r)
+                    .map((r) => fileOf(r, publicUrlOf(r, d.mediaBaseUrl)));
+                if (files.length > 0) await writeCaption({ db: d.db, captioner, now: d.now }, setSubject(id), { files, userTitle: newTitle });
+            };
+            if (d.waitUntil) {
+                // after the answer, the rows it needs included (files only taken out or moved: none were read yet)
+                const known = rows;
+                await background(d.waitUntil, async () => write(known ?? (await rowsById(d.db, next))));
+            } else {
+                rows ??= await rowsById(d.db, next);
+                const known = rows;
+                await captionSoon(undefined, () => write(known), d.captionWaitMs ?? CAPTION_WAIT_MS);
             }
         }
         if (d.kickLoops && added.length > 0 && added.some((x) => (rows?.get(x)?.content_type ?? "").startsWith("video/"))) {
@@ -406,8 +449,35 @@ export async function liveSetRow(db: D1Database, id: string): Promise<SetRow | n
     );
 }
 
+// What a link's page needs to find its caption: the database, and, to wait for one that is on its way, whether
+// captions are on at all, the wait, and the clock the link's created_at was read from.
+type CaptionWait = { db: D1Database; captioner?: Captioner | null; captionWaitMs?: number; now?: () => number };
+
+// The caption a link's page shows. The route that makes a link answers before its caption is written (captionSoon),
+// and the first to open the page is usually Discord, seconds after the link is pasted, which keeps the preview it
+// got. So while the link is younger than the caption wait, has no typed title (that would win anyway) and nothing is
+// stored for it yet, the page looks again every CAPTION_POLL_MS until the caption lands, a failure is recorded, or
+// the wait is over: no longer in all, from making the link to its first preview, than the route itself used to wait.
+// The page never asks the model: one call per link, made where the link was made, and the cron fills a miss. Nothing
+// stored says "on its way", so a link made with captions off for it would be waited on too: the only one (the stage's
+// picks) has a typed title.
+async function pageCaption(d: CaptionWait, set: SetRow): Promise<Caption | null> {
+    const subject = setSubject(set.id);
+    if (!d.captioner || set.title !== null) return captionOf(d.db, subject);
+    const wait = d.captionWaitMs ?? CAPTION_WAIT_MS;
+    // what is left of the link's wait, by the clock that stamped it; from here on by the time that really passes
+    const left = Math.min(wait, set.created_at + wait - (d.now ?? Date.now)());
+    const start = Date.now();
+    for (;;) {
+        const s = await captionState(d.db, subject);
+        const remaining = left - (Date.now() - start);
+        if (s.caption || s.tried || remaining <= 0) return s.caption;
+        await new Promise((r) => setTimeout(r, Math.min(CAPTION_POLL_MS, remaining)));
+    }
+}
+
 // A public gallery link's page data: its public files. A link with a live private link (section 36) has none here.
-async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "loops">, id: string): Promise<LiveSet | null> {
+async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "loops"> & CaptionWait, id: string): Promise<LiveSet | null> {
     const set = await liveSetRow(d.db, id);
     if (!set) return null;
     if (await setIsPrivate(d.db, id)) return null;
@@ -425,18 +495,18 @@ async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "loops">, i
     return {
         set,
         files: files.map((f) => ({ ...f, loop_url: loops.get(f.id) ?? null })),
-        caption: await captionOf(d.db, setSubject(set.id)),
+        caption: await pageCaption(d, set),
     };
 }
 
 // A private gallery link's page data (section 36): every live file, whatever its own state, at its address under
 // share.../p/<key>/ (files keep their place in the link, so file <n> never changes). No moving previews: they live on
 // the media domain. Null when no file is left.
-export async function privateLiveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "shareBaseUrl">, set: SetRow, key: string): Promise<LiveSet | null> {
+export async function privateLiveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "shareBaseUrl"> & CaptionWait, set: SetRow, key: string): Promise<LiveSet | null> {
     const ids = parseItems(set.items);
     const files = privateItemsOf(d, ids, await rowsById(d.db, ids), key).filter((i): i is SetItem & { url: string } => i.url !== null);
     if (files.length === 0) return null;
-    return { set, files: files.map((f) => ({ ...f, loop_url: null })), caption: await captionOf(d.db, setSubject(set.id)) };
+    return { set, files: files.map((f) => ({ ...f, loop_url: null })), caption: await pageCaption(d, set) };
 }
 
 // The roast model input for a live gallery link, or null when none of its files is public any more.

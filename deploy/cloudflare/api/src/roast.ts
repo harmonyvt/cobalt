@@ -3,9 +3,10 @@
 // Owner, 2026-10-18: "just make it one sentence summary of all the content ... a cute furry cat girl ...
 // don't announce urself", "furry anime girl ascii emoji cute funny", "the ai summary can just be the
 // title". The sentence is the preview title; the description is left empty and ignored.
-// Written once by Claude Haiku and stored in D1 (media_captions), so a share page never waits on the
-// model: new gallery links get theirs at creation (bounded wait), everything else from the
-// 15-minute cron backfill. Off unless ANTHROPIC_API_KEY is set.
+// Written once by Claude Haiku and stored in D1 (media_captions), so a share page never asks the
+// model twice: new gallery links get theirs as they are made (after the route has answered; the
+// link's page waits a moment for it, share-sets.ts), everything else from the 15-minute cron
+// backfill. Off unless ANTHROPIC_API_KEY is set.
 
 import { notHiddenClause } from "./hidden-store";
 import Anthropic from "@anthropic-ai/sdk";
@@ -221,6 +222,19 @@ export async function captionOf(db: D1Database, subject: string): Promise<Captio
         return r ? { title: r.title, description: "" } : null;
     } catch {
         return null; // before migration 0013, or D1 trouble: the page shows what it did before
+    }
+}
+
+// What is stored for a subject, in one statement: its caption, and whether one was ever tried (a row without a title is
+// a failure the cron retries). D1 trouble or no table reads as tried with no caption, so a caller neither waits for a
+// caption nor asks the model for one.
+export async function captionState(db: D1Database, subject: string): Promise<{ caption: Caption | null; tried: boolean }> {
+    try {
+        const r = await db.prepare("SELECT title FROM media_captions WHERE subject = ?1").bind(subject).first<{ title: string | null }>();
+        if (!r) return { caption: null, tried: false };
+        return { caption: r.title === null ? null : { title: r.title, description: "" }, tried: true };
+    } catch {
+        return { caption: null, tried: true };
     }
 }
 

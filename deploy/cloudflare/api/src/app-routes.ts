@@ -27,13 +27,25 @@ import { postFrameReady } from "./post-frame";
 import { EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_MAX_SECONDS, EDIT_OVERLAY_TRACKS } from "../../editor/helper/timeline.js";
 import { version as apiVersion } from "../../../../api/package.json";
 
+import { background } from "./background";
 import { LINE_MAX, LINE_WAIT_MS, parseQueryFlag } from "./line";
 import { POST_KEY_SQL } from "./post-key";
 import { atReady, STATUS_IDS_MAX, type Gate } from "./hidden";
-import { fileIsHidden, hiddenCount, hiddenReady, hiddenRows, NOT_HIDDEN_SQL, ONLY_HIDDEN_SQL } from "./hidden-store";
-import { lookupKey } from "./keys";
+import {
+    fileIsHidden,
+    hiddenCount,
+    hiddenCountStmt,
+    hiddenReady,
+    hiddenRows,
+    hiddenRowsStmt,
+    NOT_HIDDEN_SQL,
+    ONLY_HIDDEN_SQL,
+    type HiddenRow,
+} from "./hidden-store";
+import { hashKey, lookupKey, type KeyCache } from "./keys";
 import { namesReady } from "./names";
-import { SERVICE_KEY_ID, mintItemId, readCapped, releasePoster } from "./library";
+import { SERVICE_KEY_ID, mintItemId, readCapped, readTogether, releasePoster, writeTogether } from "./library";
+import { liveLinksInStmt, privateUrl, type PrivateLinkRow } from "./private-links";
 import { POSTER_COOLDOWN_MS, posterEligible } from "./poster";
 import type { PublishBucket } from "./publish";
 import {
@@ -124,6 +136,11 @@ export type AppDeps = {
     purge?: PurgeFn;
     // https://<share host>/ of the rich link pages (section 22); absent = not configured.
     shareBaseUrl?: string;
+    // The request's waitUntil, for work that must not hold the answer (src/background.ts). Absent in tests and in the
+    // Durable Objects: the work is then awaited.
+    waitUntil?: (p: Promise<unknown>) => void;
+    // The isolate's key cache (src/keys.ts), so GET /capabilities checks its key the way every other route does.
+    keyCache?: KeyCache;
 };
 
 // Re-exported for the callers that used to import it from here.
@@ -146,32 +163,41 @@ export async function resolveKeyState(
     auth: "service" | "missing" | "invalid" | "key",
     key: string | undefined,
     now: number,
+    cache?: KeyCache,
 ): Promise<{ key: KeyState; key_name: string | null }> {
     if (auth === "service") return { key: "valid", key_name: "service" };
     if (auth === "missing") return { key: "missing", key_name: null };
     if (auth === "invalid" || !key) return { key: "invalid", key_name: null };
+    // The name is asked for by the key's hash (unique, and what the check itself goes by), so it does not have to wait
+    // for the check to say which row it is: the two travel at the same time. Used only when the check accepts the key.
+    const named: Promise<{ name: string } | null> = hashKey(key)
+        .then((hash) => db.prepare("SELECT name FROM api_keys WHERE key_hash = ?1").bind(hash).first<{ name: string }>())
+        .catch(() => null); // valid, just unnamed
     let keyId: string | null;
     try {
-        keyId = await lookupKey(db, key, now);
+        keyId = await lookupKey(db, key, now, undefined, cache);
     } catch {
         return { key: "unknown", key_name: null };
     }
     if (keyId === null) return { key: "invalid", key_name: null };
-    let name: string | null = null;
-    try {
-        const row = await db
-            .prepare("SELECT name FROM api_keys WHERE id = ?1")
-            .bind(keyId)
-            .first<{ name: string }>();
-        name = row?.name ?? null;
-    } catch {
-        // valid, just unnamed
-    }
-    return { key: "valid", key_name: name };
+    return { key: "valid", key_name: (await named)?.name ?? null };
+}
+
+// A capability that is on once a migration is applied. An applied migration stays applied, so a yes is kept for the
+// isolate's life (per database binding, like hiddenReady) and costs no round trip after the first; a no is asked again
+// on the next request, as before.
+const applied = new WeakMap<object, Set<string>>();
+async function onceApplied(db: D1Database, what: string, ask: (db: D1Database) => Promise<boolean>): Promise<boolean> {
+    let yes = applied.get(db);
+    if (yes?.has(what)) return true;
+    if (!(await ask(db))) return false;
+    if (!yes) applied.set(db, (yes = new Set()));
+    yes.add(what);
+    return true;
 }
 
 export async function capabilities(
-    d: Pick<AppDeps, "db" | "mediaBaseUrl" | "now" | "shareBaseUrl">,
+    d: Pick<AppDeps, "db" | "mediaBaseUrl" | "now" | "shareBaseUrl" | "keyCache">,
     auth: "service" | "missing" | "invalid" | "key",
     key: string | undefined,
     // the three APNs secrets are configured (Live Activity push, section 8)
@@ -206,7 +232,15 @@ export async function capabilities(
     // the YTDLP binding is there: `engine` on POST /studio, the app's yt-dlp toggle (section 49)
     ytdlp = false,
 ): Promise<StudioReply> {
-    const state = await resolveKeyState(d.db, auth, key, d.now());
+    // The key's state and the four "is its migration applied" answers do not depend on each other: asked at the same
+    // time, not one after another (each is its own round trip to D1 until an isolate has learnt its answer).
+    const [state, hidden, names, chatVideo, postFrame] = await Promise.all([
+        resolveKeyState(d.db, auth, key, d.now(), d.keyCache),
+        hiddenReady(d.db),
+        namesReady(d.db),
+        chat === true && editor === true ? onceApplied(d.db, "chat_video", chatVideoReady) : false,
+        editor === true ? onceApplied(d.db, "post_frame", postFrameReady) : false,
+    ]);
     const version: unknown = apiVersion;
     return {
         status: 200,
@@ -293,10 +327,10 @@ export async function capabilities(
                 share_set_edit: !!d.shareBaseUrl,
                 // POST /library/status, /hidden/rules*, `hidden=1` and the `hidden` fields of GET /library: hidden posts
                 // and auto-hide rules (APP-API-CONTRACT.md section 37), once migration 0025 is applied
-                hidden: await hiddenReady(d.db),
+                hidden,
                 // /library/names*: search names, words taught to library search (APP-API-CONTRACT.md section 48), once
                 // migration 0031 is applied
-                names: await namesReady(d.db),
+                names,
                 // /chat/threads: threads with Claude about the library, code mode in a sandbox (APP-API-CONTRACT.md
                 // section 27): with the Anthropic key and the Worker Loader binding
                 chat: chat === true,
@@ -319,10 +353,10 @@ export async function capabilities(
                 image_crop: true,
                 // POST /chat/threads/<id>/video, cobalt.chat.video: a chat replayed as an mp4 by the render containers
                 // (APP-API-CONTRACT.md section 45): chat and the editor on, and migration 0028 applied
-                chat_video: chat === true && editor === true && (await chatVideoReady(d.db)),
+                chat_video: chat === true && editor === true && chatVideo,
                 // GET/PATCH /library/items/<id>/post-details, POST /library/items/<id>/post-frame: a saved video inside a
                 // drawn card of its post (APP-API-CONTRACT.md section 52): the editor on and migration 0036 applied
-                post_frame: editor === true && (await postFrameReady(d.db)),
+                post_frame: editor === true && postFrame,
                 // PUT /live/edits/<rid>: the server keeps an editor render's Live Activity current (section 32)
                 edit_live_push: editor === true && livePush === true,
                 // PUT /live/chat-start-token: a chat reply sent from another device shows on this one (section 27.9)
@@ -733,6 +767,8 @@ type SessionRowLite = {
 };
 // (`role` comes with ITEM_COLUMNS)
 const GALLERY_COLUMNS = "item_index, made_from, made_spec";
+// A file as GET /library reads it: its columns, the gallery columns and its post key, over `media_items m`.
+const FILE_COLUMNS = `${ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${GALLERY_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${POST_KEY_SQL} AS post_key`;
 
 // A JSON column as a value, null when it is not valid JSON (never throws)
 const parseJson = (raw: string | null | undefined): unknown => {
@@ -941,7 +977,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
         const hide = base + (ready ? NOT_HIDDEN_SQL : "");
         const pageHide = onlyHidden ? base + (ready ? ONLY_HIDDEN_SQL : " AND 0") : hide;
         // 1. the page of posts: newest file first, ties broken by the post key
-        const { results: keys } = await db
+        const pageStmt = db
             .prepare(
                 `WITH f AS (SELECT m.created_at AS created_at, ${POST_KEY_SQL} AS post_key
                             FROM media_items m WHERE m.deleted_at IS NULL${pageHide})
@@ -949,8 +985,21 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                  HAVING MAX(created_at) < ?1 OR (MAX(created_at) = ?1 AND post_key < ?2)
                  ORDER BY latest DESC, post_key DESC LIMIT ?3`,
             )
-            .bind(curMs, curKey, limit + 1)
-            .all<{ post_key: string; latest: number }>();
+            .bind(curMs, curKey, limit + 1);
+        // totals over the whole library, not the page (a public original is stored twice, so it counts
+        // in both byte totals; a file is one row)
+        const nFilesStmt = db.prepare(`SELECT COUNT(*) AS n FROM media_items m WHERE m.deleted_at IS NULL${hide}`);
+        const nPostsStmt = db.prepare(`SELECT COUNT(DISTINCT ${POST_KEY_SQL}) AS n FROM media_items m WHERE m.deleted_at IS NULL${hide}`);
+        const sumsStmt = db.prepare(
+            `SELECT COALESCE(SUM(CASE WHEN ${visSql()} = 'public' THEN bytes END), 0) AS pub,
+                    COALESCE(SUM(CASE WHEN bucket = 'originals' THEN bytes END), 0) AS priv
+               FROM media_items WHERE deleted_at IS NULL`,
+        );
+        // The totals do not depend on the page, so they travel with it: one round trip for the page and the four
+        // totals, a second (assemblePosts) for everything about the page's posts. Each used to be a round trip of its
+        // own, one after another. No batch, or a batch that failed: one by one, in the order they always ran.
+        const together = await readTogether(db, [pageStmt, nFilesStmt, nPostsStmt, sumsStmt, ...(ready ? [hiddenCountStmt(db)] : [])]);
+        const keys = together ? (together[0] as { post_key: string; latest: number }[]) : (await pageStmt.all<{ post_key: string; latest: number }>()).results;
         const more = keys.length > limit;
         const page = keys.slice(0, limit);
 
@@ -969,26 +1018,26 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                     (f.poster_at === null || f.poster_at < now - POSTER_COOLDOWN_MS),
             )
         ) {
-            await bounded(d.kickPosters().catch(() => null), 1500);
+            const kick = d.kickPosters;
+            // off the answer's path where the request can keep it alive (waitUntil); still bounded, still best effort
+            await background(d.waitUntil, () => bounded(kick().catch(() => null), 1500));
         }
 
-        // totals over the whole library, not the page (a public original is stored twice, so it counts
-        // in both byte totals; a file is one row)
-        const nFiles = await db
-            .prepare(`SELECT COUNT(*) AS n FROM media_items m WHERE m.deleted_at IS NULL${hide}`)
-            .first<{ n: number }>();
-        const nPosts = await db
-            .prepare(
-                `SELECT COUNT(DISTINCT ${POST_KEY_SQL}) AS n FROM media_items m WHERE m.deleted_at IS NULL${hide}`,
-            )
-            .first<{ n: number }>();
-        const sums = await db
-            .prepare(
-                `SELECT COALESCE(SUM(CASE WHEN ${visSql()} = 'public' THEN bytes END), 0) AS pub,
-                        COALESCE(SUM(CASE WHEN bucket = 'originals' THEN bytes END), 0) AS priv
-                   FROM media_items WHERE deleted_at IS NULL`,
-            )
-            .first<{ pub: number; priv: number }>();
+        let nFiles: { n: number } | null;
+        let nPosts: { n: number } | null;
+        let sums: { pub: number; priv: number } | null;
+        let nHidden: number;
+        if (together) {
+            nFiles = (together[1]![0] as { n: number } | undefined) ?? null;
+            nPosts = (together[2]![0] as { n: number } | undefined) ?? null;
+            sums = (together[3]![0] as { pub: number; priv: number } | undefined) ?? null;
+            nHidden = ready ? Number((together[4]![0] as { n: number } | undefined)?.n ?? 0) : 0;
+        } else {
+            nFiles = await nFilesStmt.first<{ n: number }>();
+            nPosts = await nPostsStmt.first<{ n: number }>();
+            sums = await sumsStmt.first<{ pub: number; priv: number }>();
+            nHidden = await hiddenCount(db);
+        }
         const usage = { public_bytes: sums?.pub ?? 0, private_bytes: sums?.priv ?? 0 };
 
         const last = page[page.length - 1];
@@ -998,7 +1047,7 @@ export async function libraryList(d: AppDeps, q: URLSearchParams): Promise<Studi
                 status: "success",
                 posts,
                 // the library without its hidden posts; `hidden`: how many posts are hidden (section 37.2)
-                counts: { posts: nPosts?.n ?? 0, files: nFiles?.n ?? 0, hidden: await hiddenCount(db) },
+                counts: { posts: nPosts?.n ?? 0, files: nFiles?.n ?? 0, hidden: nHidden },
                 usage,
                 next: more && last ? encodeCursor(last.latest, last.post_key) : null,
             },
@@ -1021,37 +1070,84 @@ export async function assemblePosts(
     let files: FileRow[] = [];
     let sessions: SessionRowLite[] = [];
     const titles = new Map<string, string>();
+    // legacy only: the retired host row of a merged pair keeps the old file's id and time
+    const tombs = new Map<string, Tomb>();
+    // the files' private links and the posts' hidden rows: read with the rest when one batch can carry them, else
+    // (null) asked for below, where they always were
+    let priv: Map<string, string> | null = null;
+    let hiddenOf: Map<string, HiddenRow> | null = null;
     if (page.length > 0) {
         const marks = placeholders(page.length);
         const binds = page.map((k) => k.post_key);
+        // the live files of these posts under `hide`; the statements below that need "the files of the page" select
+        // from it instead of waiting for the files to come back
+        const pageFiles = `(SELECT ${FILE_COLUMNS} FROM media_items m WHERE m.deleted_at IS NULL${hide}) WHERE post_key IN (${marks})`;
         // 2. every live file of those posts, and their sessions
-        files = (
-            await db
-                .prepare(
-                    `SELECT * FROM (SELECT ${ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${GALLERY_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${POST_KEY_SQL} AS post_key
-                                    FROM media_items m WHERE m.deleted_at IS NULL${hide})
-                     WHERE post_key IN (${marks}) ORDER BY created_at DESC, id DESC`,
-                )
-                .bind(...binds)
-                .all<FileRow>()
-        ).results;
-        sessions = (
-            await db
-                .prepare(
-                    `SELECT * FROM (SELECT s.id, s.status, s.service, s.expires_at, s.created_at, s.items,
-                                            CASE WHEN s.link LIKE 'upload:%' THEN substr(s.link, 8) ELSE s.id END AS post_key
-                                     FROM studio_sessions s)
-                     WHERE post_key IN (${marks}) ORDER BY created_at DESC, id DESC`,
-                )
-                .bind(...binds)
-                .all<SessionRowLite>()
-        ).results;
+        const filesStmt = db.prepare(`SELECT * FROM ${pageFiles} ORDER BY created_at DESC, id DESC`).bind(...binds);
+        const sessionsStmt = db
+            .prepare(
+                `SELECT * FROM (SELECT s.id, s.status, s.service, s.expires_at, s.created_at, s.items,
+                                        CASE WHEN s.link LIKE 'upload:%' THEN substr(s.link, 8) ELSE s.id END AS post_key
+                                 FROM studio_sessions s)
+                 WHERE post_key IN (${marks}) ORDER BY created_at DESC, id DESC`,
+            )
+            .bind(...binds);
         // 3. the posts' custom titles (section 15); a post with no row has none
-        const { results: custom } = await db
-            .prepare(`SELECT post_key, title FROM media_titles WHERE post_key IN (${marks})`)
-            .bind(...binds)
-            .all<{ post_key: string; title: string }>();
-        for (const t of custom) titles.set(t.post_key, t.title);
+        const titlesStmt = db.prepare(`SELECT post_key, title FROM media_titles WHERE post_key IN (${marks})`).bind(...binds);
+        const TOMB_COLUMNS = "id, name, content_type, bytes, width, height, duration, created_at, poster";
+
+        // Everything about these posts in ONE round trip: files, sessions, titles, and what used to wait for the files
+        // (the legacy tombs, the private links) or came after them (the hidden rows). No batch, or a batch that failed
+        // (a database without the private_links table fails it): one by one below, with the handling each always had.
+        const ready = await hiddenReady(db);
+        const tombsAt = v2 ? -1 : 3;
+        const privAt = d.shareBaseUrl ? (v2 ? 3 : 4) : -1;
+        const hiddenAt = ready ? 3 + (v2 ? 0 : 1) + (d.shareBaseUrl ? 1 : 0) : -1;
+        const together = await readTogether(db, () => [
+            filesStmt,
+            sessionsStmt,
+            titlesStmt,
+            ...(v2
+                ? []
+                : [
+                      db
+                          .prepare(
+                              `SELECT ${TOMB_COLUMNS} FROM media_items WHERE merged_into IS NOT NULL AND id IN (
+                                   SELECT public_id FROM ${pageFiles} AND bucket = 'originals' AND visibility = 'public' AND public_id IS NOT NULL)`,
+                          )
+                          .bind(...binds),
+                  ]),
+            ...(d.shareBaseUrl ? [liveLinksInStmt(db, "item", `SELECT id FROM ${pageFiles}`, binds)] : []),
+            ...(ready ? [hiddenRowsStmt(db, binds)] : []),
+        ]);
+        if (together) {
+            files = together[0] as unknown as FileRow[];
+            sessions = together[1] as unknown as SessionRowLite[];
+            for (const t of together[2] as { post_key: string; title: string }[]) titles.set(t.post_key, t.title);
+            if (tombsAt >= 0) for (const t of together[tombsAt] as unknown as Tomb[]) tombs.set(t.id, t);
+            // every file's live private link (section 36)
+            priv = new Map();
+            if (privAt >= 0 && d.shareBaseUrl) {
+                for (const r of together[privAt] as unknown as PrivateLinkRow[]) priv.set(r.target_id, privateUrl(d.shareBaseUrl, r.key));
+            }
+            hiddenOf = new Map();
+            if (hiddenAt >= 0) for (const r of together[hiddenAt] as unknown as HiddenRow[]) hiddenOf.set(r.post_key, r);
+        } else {
+            files = (await filesStmt.all<FileRow>()).results;
+            sessions = (await sessionsStmt.all<SessionRowLite>()).results;
+            const { results: custom } = await titlesStmt.all<{ post_key: string; title: string }>();
+            for (const t of custom) titles.set(t.post_key, t.title);
+            if (!v2) {
+                const pids = files.filter((f) => f.bucket === "originals" && f.visibility === "public" && f.public_id).map((f) => f.public_id!);
+                if (pids.length > 0) {
+                    const { results } = await db
+                        .prepare(`SELECT ${TOMB_COLUMNS} FROM media_items WHERE id IN (${placeholders(pids.length)}) AND merged_into IS NOT NULL`)
+                        .bind(...pids)
+                        .all<Tomb>();
+                    for (const t of results) tombs.set(t.id, t);
+                }
+            }
+        }
     }
 
     const filesByPost = new Map<string, FileRow[]>();
@@ -1065,21 +1161,6 @@ export async function assemblePosts(
         const list = sessionsByPost.get(s.post_key) ?? [];
         list.push(s);
         sessionsByPost.set(s.post_key, list);
-    }
-
-    // legacy only: the retired host row of a merged pair keeps the old file's id and time
-    const tombs = new Map<string, Tomb>();
-    if (!v2) {
-        const pids = files.filter((f) => f.bucket === "originals" && f.visibility === "public" && f.public_id).map((f) => f.public_id!);
-        if (pids.length > 0) {
-            const { results } = await db
-                .prepare(
-                    `SELECT id, name, content_type, bytes, width, height, duration, created_at, poster FROM media_items WHERE id IN (${placeholders(pids.length)}) AND merged_into IS NOT NULL`,
-                )
-                .bind(...pids)
-                .all<Tomb>();
-            for (const t of results) tombs.set(t.id, t);
-        }
     }
 
     const api = noSlash(d.apiUrl);
@@ -1130,10 +1211,10 @@ export async function assemblePosts(
         };
     });
     // every file's live private link (section 36); null when it has none
-    const priv = await privateUrlsOf(d, files.map((f) => f.id));
+    priv ??= await privateUrlsOf(d, files.map((f) => f.id));
     for (const p of posts) for (const f of p.files as { id: string; private_url?: string | null }[]) f.private_url = priv.get(f.id) ?? null;
     // section 37.2: whether the post is hidden, and by whom (a held or exempt post is not hidden)
-    const hiddenOf = await hiddenRows(db, page.map((k) => k.post_key));
+    hiddenOf ??= await hiddenRows(db, page.map((k) => k.post_key));
     for (const p of posts as Record<string, unknown>[]) {
         const h = hiddenOf.get(p.id as string);
         const on = h?.state === "hidden";
@@ -1285,17 +1366,10 @@ export async function libraryVisibility(
 
 // ---- 18.4 PATCH /library/items/<id>/visibility with "scope": "post" -------------------------------------
 
-// The file with the gallery columns and its post key (any live row; `id` may be a public_id).
-const FILE_COLUMNS = `${ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${GALLERY_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${POST_KEY_SQL} AS post_key`;
+// The file with the gallery columns and its post key (FILE_COLUMNS; any live row; `id` may be a public_id).
+const FILE_BY_ID = `SELECT ${FILE_COLUMNS} FROM media_items m WHERE (m.id = ?1 OR m.public_id = ?1) AND m.deleted_at IS NULL ORDER BY (m.id = ?1) DESC LIMIT 1`;
 async function getFile(db: D1Database, id: string): Promise<FileRow | null> {
-    return (
-        (await db
-            .prepare(
-                `SELECT ${FILE_COLUMNS} FROM media_items m WHERE (m.id = ?1 OR m.public_id = ?1) AND m.deleted_at IS NULL ORDER BY (m.id = ?1) DESC LIMIT 1`,
-            )
-            .bind(id)
-            .first<FileRow>()) ?? null
-    );
+    return (await db.prepare(FILE_BY_ID).bind(id).first<FileRow>()) ?? null;
 }
 // Every live file of a post (optionally only those of one bucket), in item_index then creation order.
 async function postFiles(db: D1Database, postKey: string, bucket?: "originals"): Promise<FileRow[]> {
@@ -1480,67 +1554,94 @@ const SESSION_POST_KEY_SQL = "CASE WHEN s.link LIKE 'upload:%' THEN substr(s.lin
 type PostSession = { id: string; status: string; r2_key: string | null; created_at: number };
 type PostFile = Pick<MediaRow, "id" | "bucket" | "r2_key" | "bytes" | "poster" | "url" | "public_key">;
 
+// The post key of the row an id (?1) names: the row with that id first, else the one whose public copy has it;
+// soft-deleted rows too. As a scalar subquery, so that the statements about "the post of this id" do not have to wait
+// for the post key to come back.
+const ANCHOR_POST = `SELECT ${POST_KEY_SQL} AS post_key FROM media_items m WHERE m.id = ?1 OR m.public_id = ?1 ORDER BY (m.id = ?1) DESC LIMIT 1`;
+
+// What a post delete reads of its post: the sessions, how many renders started since `since` are still running, the
+// live files. `postSql` names the post with ?1: "?1" itself (bound to the post key) or the anchor subquery (bound to
+// the id that was asked for), which lets the sessions and the renders be asked for together with the post key.
+const postDeleteReads = (db: D1Database, postSql: string, bound: string, since: number) => ({
+    sessions: db
+        .prepare(
+            `SELECT * FROM (SELECT s.id, s.status, s.r2_key, s.created_at, ${SESSION_POST_KEY_SQL} AS post_key
+                            FROM studio_sessions s)
+             WHERE post_key = ${postSql} ORDER BY created_at ASC, id ASC`,
+        )
+        .bind(bound),
+    pending: db
+        .prepare(
+            `SELECT COUNT(*) AS n FROM studio_renders
+             WHERE status = 'pending' AND created_at > ?2 AND session_id IN (
+                 SELECT s.id FROM studio_sessions s WHERE ${SESSION_POST_KEY_SQL} = ${postSql})`,
+        )
+        .bind(bound, since),
+    files: db
+        .prepare(
+            `SELECT id, bucket, r2_key, bytes, poster, url, public_key FROM (SELECT m.id, m.bucket, m.r2_key, m.bytes, m.poster, m.url, m.public_key, m.created_at, m.deleted_at,
+                                                           ${POST_KEY_SQL} AS post_key FROM media_items m)
+             WHERE post_key = ${postSql} AND deleted_at IS NULL ORDER BY created_at ASC, id ASC`,
+        )
+        .bind(bound),
+});
+
 // Deletes everything of the post the anchor file belongs to: the anchor is read including
 // soft-deleted rows, so the call is idempotent and any file id of the post works. Order
-// (each step safe to repeat): expire the post's sessions, delete each live file's R2 object
-// and soft-delete its row, then delete the sessions' stored originals.
+// (each step safe to repeat): expire the post's sessions, delete each live file's R2 object,
+// soft-delete the rows of the files whose objects went, then (off the answer's path where the
+// request can keep work alive) the leftovers nothing reports: probe objects, posters, the edge
+// copies, the sessions' stored originals.
+//
+// D1 is asked three times, each one batch: the post with its sessions and running renders, the
+// expiry with the files, and every row write. Each statement used to be a round trip of its own.
 export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioReply> {
     const now = d.now();
+    const since = now - POST_DELETE_BUSY_MS;
+    const busy = () => err(409, "error.library.busy");
+    const savingNow = (ss: PostSession[]) => ss.some((s) => s.status === "saving" && s.created_at > since);
     let post: string;
     let sessions: PostSession[];
     let files: PostFile[];
     try {
-        const anchor = await d.db
-            .prepare(`SELECT ${POST_KEY_SQL} AS post_key FROM media_items m WHERE m.id = ?1 OR m.public_id = ?1 ORDER BY (m.id = ?1) DESC LIMIT 1`)
-            .bind(id)
-            .first<{ post_key: string }>();
-        if (!anchor) return err(404, "error.library.not_found");
-        post = anchor.post_key;
-
-        sessions = (
-            await d.db
-                .prepare(
-                    `SELECT * FROM (SELECT s.id, s.status, s.r2_key, s.created_at, ${SESSION_POST_KEY_SQL} AS post_key
-                                    FROM studio_sessions s)
-                     WHERE post_key = ?1 ORDER BY created_at ASC, id ASC`,
-                )
-                .bind(post)
-                .all<PostSession>()
-        ).results;
-
-        const since = now - POST_DELETE_BUSY_MS;
-        if (sessions.some((s) => s.status === "saving" && s.created_at > since)) {
-            return err(409, "error.library.busy");
+        const anchorStmt = d.db.prepare(ANCHOR_POST).bind(id);
+        const byId = postDeleteReads(d.db, `(${ANCHOR_POST})`, id, since);
+        const together = await readTogether(d.db, [anchorStmt, byId.sessions, byId.pending]);
+        if (together) {
+            const anchor = together[0]![0] as { post_key: string } | undefined;
+            if (!anchor) return err(404, "error.library.not_found");
+            post = anchor.post_key;
+            sessions = together[1] as unknown as PostSession[];
+            if (savingNow(sessions)) return busy();
+            if (Number((together[2]![0] as { n: number } | undefined)?.n ?? 0) > 0) return busy();
+        } else {
+            // no batch (or it failed): one by one, in the order they always ran
+            const anchor = await anchorStmt.first<{ post_key: string }>();
+            if (!anchor) return err(404, "error.library.not_found");
+            post = anchor.post_key;
+            const byKey = postDeleteReads(d.db, "?1", post, since);
+            sessions = (await byKey.sessions.all<PostSession>()).results;
+            if (savingNow(sessions)) return busy();
+            const pending = await byKey.pending.first<{ n: number }>();
+            if ((pending?.n ?? 0) > 0) return busy();
         }
-        const pending = await d.db
-            .prepare(
-                `SELECT COUNT(*) AS n FROM studio_renders
-                 WHERE status = 'pending' AND created_at > ?1 AND session_id IN (
-                     SELECT s.id FROM studio_sessions s WHERE ${SESSION_POST_KEY_SQL} = ?2)`,
-            )
-            .bind(since, post)
-            .first<{ n: number }>();
-        if ((pending?.n ?? 0) > 0) return err(409, "error.library.busy");
 
-        // 1. no new render or source read can start from here on (they answer 410)
-        await d.db
+        // 1. no new render or source read can start from here on (they answer 410); and only then the files are
+        // read. One batch runs its statements in the order given, so the two stay in that order in one round trip.
+        const expireStmt = d.db
             .prepare(
                 `UPDATE studio_sessions SET expires_at = ?1
                  WHERE expires_at > ?1 AND id IN (SELECT s.id FROM studio_sessions s WHERE ${SESSION_POST_KEY_SQL} = ?2)`,
             )
-            .bind(now, post)
-            .run();
-
-        files = (
-            await d.db
-                .prepare(
-                    `SELECT id, bucket, r2_key, bytes, poster, url, public_key FROM (SELECT m.id, m.bucket, m.r2_key, m.bytes, m.poster, m.url, m.public_key, m.created_at, m.deleted_at,
-                                                                   ${POST_KEY_SQL} AS post_key FROM media_items m)
-                     WHERE post_key = ?1 AND deleted_at IS NULL ORDER BY created_at ASC, id ASC`,
-                )
-                .bind(post)
-                .all<PostFile>()
-        ).results;
+            .bind(now, post);
+        const filesStmt = postDeleteReads(d.db, "?1", post, since).files;
+        const expired = await readTogether(d.db, [expireStmt, filesStmt]);
+        if (expired) {
+            files = expired[1] as unknown as PostFile[];
+        } else {
+            await expireStmt.run();
+            files = (await filesStmt.all<PostFile>()).results;
+        }
     } catch (e) {
         console.error("[library] post delete lookup failed", id, String(e));
         return err(503, "error.api.generic");
@@ -1549,9 +1650,12 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
     // 2. every live file: the object first, then the row (a row whose object could not be
     // deleted stays live and is reported, so a retry finishes it)
     const deleted = { files: 0, bytes: 0 };
-    const remaining: string[] = [];
+    const failed = new Set<string>();
     const posters = new Set<string>();
     const purged: string[] = [];
+    // the files whose objects are gone, and of those the ones whose rows are marked
+    const gone: PostFile[] = [];
+    const marked: PostFile[] = [];
     for (const f of files) {
         try {
             await (f.bucket === "media" ? d.media : d.originals).delete(f.r2_key);
@@ -1560,53 +1664,84 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
                 await d.media.delete(f.public_key);
             }
             if (f.url) purged.push(f.url);
-            await d.db
-                .prepare("UPDATE media_items SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL")
-                .bind(now, f.id)
-                .run();
-            deleted.files += 1;
-            deleted.bytes += typeof f.bytes === "number" ? f.bytes : 0;
-            if (f.poster) posters.add(f.poster);
-            // the "what it's about" frames and sound cut from it (section 34.2), best effort
-            await deleteAboutObjects(d.originals, f.id);
+            gone.push(f);
         } catch (e) {
             console.error("[library] post delete file failed", f.id, f.bucket, String(e));
-            remaining.push(f.id);
+            failed.add(f.id);
         }
     }
-
-    // 2b. the posters of the rows just deleted (section 13): each object goes unless a live row
-    // still names it (an original and its public copy share one; a row that stayed live in
-    // `remaining` keeps the poster until the retry). A failed delete is logged, not reported.
-    for (const url of posters) await releasePoster(d.db, d.media, url);
-
-    // 2c. the public URLs of what was deleted, out of the edge cache (best effort: never changes the answer)
-    await purgeUrls(d, purged);
-
-    // 3. a session's stored original that has no row of its own (its session is already
-    // expired, so nothing can read it through any route: a failure is logged, not reported)
-    for (const s of sessions) {
-        if (!s.r2_key) continue;
-        try {
-            await d.originals.delete(s.r2_key);
-        } catch (e) {
-            console.error("[library] post delete session original failed", s.id, String(e));
-        }
-    }
-
+    const markStmt = (f: PostFile) => d.db.prepare("UPDATE media_items SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL").bind(now, f.id);
+    const count = (f: PostFile) => {
+        marked.push(f);
+        deleted.files += 1;
+        deleted.bytes += typeof f.bytes === "number" ? f.bytes : 0;
+        if (f.poster) posters.add(f.poster);
+    };
     // 4. the post's custom title (section 15). Only once every file is gone: a post that is
     // still partly live keeps its title until the retry finishes the delete. A failure is
     // logged, not reported (the title row of a post with no live file is invisible).
-    if (remaining.length === 0) {
-        try {
-            await d.db.prepare("DELETE FROM media_titles WHERE post_key = ?1").bind(post).run();
-        } catch (e) {
-            console.error("[library] post delete title failed", post, String(e));
+    const titleStmt = () => d.db.prepare("DELETE FROM media_titles WHERE post_key = ?1").bind(post);
+    // and what it was about (section 34; no table before migration 0022)
+    const aboutStmt = () => d.db.prepare("DELETE FROM media_about WHERE post_key = ?1").bind(post);
+
+    // The rows of the files whose objects went, and with every object gone the title and the about row: one batch.
+    // If it fails (media_about is missing before 0022, which fails all of it) nothing was written, and each is
+    // written on its own below, where a row that fails is reported and the rest still go.
+    const inOne = await writeTogether(d.db, () => [...gone.map(markStmt), ...(failed.size === 0 ? [titleStmt(), aboutStmt()] : [])]);
+    if (inOne) {
+        for (const f of gone) count(f);
+    } else {
+        for (const f of gone) {
+            try {
+                await markStmt(f).run();
+                count(f);
+            } catch (e) {
+                console.error("[library] post delete file failed", f.id, f.bucket, String(e));
+                failed.add(f.id);
+            }
         }
-        // and what it was about (section 34; no table before migration 0022)
-        await d.db.prepare("DELETE FROM media_about WHERE post_key = ?1").bind(post).run().catch(() => {});
+        if (failed.size === 0) {
+            try {
+                await titleStmt().run();
+            } catch (e) {
+                console.error("[library] post delete title failed", post, String(e));
+            }
+            try {
+                await aboutStmt().run();
+            } catch {
+                // no table before migration 0022: nothing to delete
+            }
+        }
     }
 
+    // What the answer does not report, so it does not wait for it either (all of it logs its own failures and never
+    // throws):
+    await background(d.waitUntil, async () => {
+        // the "what it's about" frames and sound cut from each deleted file (section 34.2), best effort
+        for (const f of marked) await deleteAboutObjects(d.originals, f.id);
+
+        // 2b. the posters of the rows just deleted (section 13): each object goes unless a live row
+        // still names it (an original and its public copy share one; a row that stayed live in
+        // `remaining` keeps the poster until the retry). A failed delete is logged, not reported.
+        for (const url of posters) await releasePoster(d.db, d.media, url);
+
+        // 2c. the public URLs of what was deleted, out of the edge cache (best effort: never changes the answer)
+        await purgeUrls(d, purged);
+
+        // 3. a session's stored original that has no row of its own (its session is already
+        // expired, so nothing can read it through any route: a failure is logged, not reported)
+        for (const s of sessions) {
+            if (!s.r2_key) continue;
+            try {
+                await d.originals.delete(s.r2_key);
+            } catch (e) {
+                console.error("[library] post delete session original failed", s.id, String(e));
+            }
+        }
+    });
+
+    // in the files' own order, whichever step a file failed at
+    const remaining = files.filter((f) => failed.has(f.id)).map((f) => f.id);
     if (remaining.length > 0) {
         return {
             status: 502,
@@ -1698,14 +1833,18 @@ export async function libraryPostersBackfill(d: AppDeps, limit?: number): Promis
 // Everything of one live row: its stored object (and the public mirror), the row, an unshared poster, the edge
 // copy. The object goes first and the row after it, so a row whose object could not be deleted stays live (the
 // caller answers 502 and a retry finishes it). Throws on a storage or D1 failure.
+// The poster, the edge copy and the probe's objects are what no answer reports (each logs its own failure and never
+// throws): they do not hold the answer where the request can keep work alive (waitUntil), and are awaited where not.
 async function removeFile(d: AppDeps, f: FileRow): Promise<{ bytes: number }> {
     await (f.bucket === "media" ? d.media : d.originals).delete(f.r2_key);
     if (f.public_key) await d.media.delete(f.public_key);
     await d.db.prepare("UPDATE media_items SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL").bind(d.now(), f.id).run();
-    if (f.poster) await releasePoster(d.db, d.media, f.poster);
-    if (f.url) await purgeUrls(d, [f.url]);
-    // the "what it's about" frames and sound cut from it (section 34.2); the row moves to the next lead on the next sync
-    await deleteAboutObjects(d.originals, f.id);
+    await background(d.waitUntil, async () => {
+        if (f.poster) await releasePoster(d.db, d.media, f.poster);
+        if (f.url) await purgeUrls(d, [f.url]);
+        // the "what it's about" frames and sound cut from it (section 34.2); the row moves to the next lead on the next sync
+        await deleteAboutObjects(d.originals, f.id);
+    });
     return { bytes: typeof f.bytes === "number" ? f.bytes : 0 };
 }
 
@@ -1713,8 +1852,26 @@ async function removeFile(d: AppDeps, f: FileRow): Promise<{ bytes: number }> {
 // deletable here (section 12 deletes the post); a webp or any row without a role keeps its own route.
 export async function libraryItemDelete(d: AppDeps, id: string): Promise<StudioReply> {
     let row: FileRow | null;
+    // how many other live items its post has; null = not asked yet
+    let others: number | null = null;
     try {
-        row = await getFile(d.db, id);
+        // The file and (for an item) how many other items its post has, in one round trip: the count names the file by
+        // the same lookup instead of waiting for its row. No batch: the file alone, and the count below as before.
+        const together = await readTogether(d.db, () => [
+            d.db.prepare(FILE_BY_ID).bind(id),
+            d.db
+                .prepare(
+                    `SELECT COUNT(*) AS n FROM media_items m JOIN (${FILE_BY_ID}) a
+                      WHERE m.deleted_at IS NULL AND m.role = 'item' AND m.id <> a.id AND ${POST_KEY_SQL} = a.post_key`,
+                )
+                .bind(id),
+        ]);
+        if (together) {
+            row = (together[0]![0] as unknown as FileRow | undefined) ?? null;
+            others = Number((together[1]![0] as { n: number } | undefined)?.n ?? 0);
+        } else {
+            row = await getFile(d.db, id);
+        }
     } catch {
         return err(503, "error.api.generic");
     }
@@ -1723,18 +1880,20 @@ export async function libraryItemDelete(d: AppDeps, id: string): Promise<StudioR
         return err(409, "error.library.not_deletable");
     }
     if (row.role === "item") {
-        let others: { n: number } | null;
-        try {
-            others = await d.db
-                .prepare(
-                    `SELECT COUNT(*) AS n FROM media_items m WHERE m.deleted_at IS NULL AND m.role = 'item' AND m.id <> ?1 AND ${POST_KEY_SQL} = ?2`,
-                )
-                .bind(row.id, row.post_key)
-                .first<{ n: number }>();
-        } catch {
-            return err(503, "error.api.generic");
+        if (others === null) {
+            try {
+                const n = await d.db
+                    .prepare(
+                        `SELECT COUNT(*) AS n FROM media_items m WHERE m.deleted_at IS NULL AND m.role = 'item' AND m.id <> ?1 AND ${POST_KEY_SQL} = ?2`,
+                    )
+                    .bind(row.id, row.post_key)
+                    .first<{ n: number }>();
+                others = n?.n ?? 0;
+            } catch {
+                return err(503, "error.api.generic");
+            }
         }
-        if ((others?.n ?? 0) === 0) return err(409, "error.library.last_item");
+        if (others === 0) return err(409, "error.library.last_item");
     }
     let deleted: { bytes: number };
     try {
@@ -1949,8 +2108,12 @@ export async function libraryMade(
         }
     }
 
-    // a JPEG gets a poster (queued in the Durable Object; the answer never waits for it)
-    if (ext === "jpg" && d.kickPosters) await bounded(d.kickPosters().catch(() => null), 1500);
+    // a JPEG gets a poster (queued in the Durable Object; the answer never waits for it: off its path where the request
+    // can keep the kick alive, bounded as before where it cannot)
+    if (ext === "jpg" && d.kickPosters) {
+        const kick = d.kickPosters;
+        await background(d.waitUntil, () => bounded(kick().catch(() => null), 1500));
+    }
 
     let item: ReturnType<typeof fileShape> | null = null;
     try {

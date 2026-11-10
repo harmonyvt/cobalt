@@ -1,15 +1,16 @@
 // One context for every op call (APP-API-CONTRACT.md 33): the deps worker.ts builds for its routes, built once per call.
 import { appDeps, embedFrom, shareBaseFrom, type ContainerStub, type StageEdge } from "../deps";
 import { KEY_ID_HEADER } from "../headers";
+import type { KeyCache } from "../keys";
 import type { EdgeDeps } from "../studio-edge";
 import type { WorkerEnv } from "../worker";
 import type { OpContext } from "./op";
 import type { Registry } from "./registry";
 
 // What every call shares; the caller-specific fields come on top (`forCall`).
-export type OpBase = Pick<OpContext, "env" | "db" | "now" | "mediaBaseUrl" | "shareBaseUrl" | "edge" | "container" | "registry" | "app" | "embed" | "stageEdge">;
+export type OpBase = Pick<OpContext, "env" | "db" | "now" | "mediaBaseUrl" | "shareBaseUrl" | "edge" | "container" | "registry" | "app" | "embed" | "stageEdge" | "keyCache">;
 
-export function opBase(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps, registry: Registry, stageEdge: StageEdge = {}): OpBase {
+export function opBase(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps, registry: Registry, stageEdge: StageEdge = {}, keyCache?: KeyCache): OpBase {
     let app: ReturnType<OpContext["app"]> | undefined;
     let embed: ReturnType<OpContext["embed"]> | undefined;
     return {
@@ -22,7 +23,8 @@ export function opBase(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps,
         container,
         registry,
         stageEdge,
-        app: () => (app ??= appDeps(env, container, edge)),
+        keyCache,
+        app: () => (app ??= appDeps(env, container, edge, keyCache)),
         embed: () => (embed === undefined ? (embed = embedFrom(env)) : embed),
     };
 }

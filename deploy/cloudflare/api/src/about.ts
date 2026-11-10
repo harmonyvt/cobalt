@@ -140,6 +140,15 @@ const aboutShape = (r: AboutRow | null) =>
           }
         : null;
 
+// A read whose answer may not be needed: its failure is thrown where the answer is taken, not where it was asked.
+const later = <T>(p: Promise<T>): Promise<() => T> =>
+    p.then(
+        (value) => () => value,
+        (error: unknown) => () => {
+            throw error;
+        },
+    );
+
 // Live post keys and when each was last added to (for the post shapes of the neighbours).
 async function livePostTimes(db: D1Database): Promise<Map<string, number>> {
     const leads = await postLeads(db);
@@ -152,23 +161,36 @@ export async function libraryAbout(d: AboutDeps, key: string): Promise<StudioRep
         const index = await librarySearchPost({ db: d.db, mediaBaseUrl: d.mediaBaseUrl, searchEnabled: d.searchEnabled }, new URLSearchParams({ key }));
         if (index.status !== 200) return index;
         const { status: _, ...indexBody } = index.body as Record<string, unknown>;
-        const row = await aboutRowOf(d.db, key);
-
+        let row: AboutRow | null;
         let words: { word: string; score: number }[] = [];
         let neighbours: { post_id: string; score: number }[] = [];
         let posts: Record<string, unknown> = {};
-        if (d.searchEnabled) {
-            const { results } = await d.db
-                .prepare("SELECT post_key, vector FROM media_embeddings WHERE model = ?1 AND dims = ?2 AND vector IS NOT NULL")
-                .bind(EMBED_MODEL, EMBED_DIMS)
-                .all<{ post_key: string; vector: string }>();
+        // The about row, every vector, the word list, the live posts and the hidden ones do not need each other's
+        // answers: asked at the same time, not one after another (each is a round trip to D1). The last two only count
+        // for a post that has a vector, so a failure of theirs is kept until then (`later`), as when they were only
+        // asked then.
+        const rowAsked = aboutRowOf(d.db, key);
+        if (!d.searchEnabled) {
+            row = await rowAsked;
+        } else {
+            const [aboutRow, { results }, terms, liveAsked, hiddenAsked] = await Promise.all([
+                rowAsked,
+                d.db
+                    .prepare("SELECT post_key, vector FROM media_embeddings WHERE model = ?1 AND dims = ?2 AND vector IS NOT NULL")
+                    .bind(EMBED_MODEL, EMBED_DIMS)
+                    .all<{ post_key: string; vector: string }>(),
+                termVectors(d.db),
+                later(livePostTimes(d.db)),
+                later(hiddenPostKeys(d.db)),
+            ]);
+            row = aboutRow;
             const mine = results.find((r) => r.post_key === key);
             const v = mine ? decodeVector(mine.vector) : null;
             if (v && v.length === EMBED_DIMS) {
-                words = nearestWords(v, await termVectors(d.db));
-                const live = await livePostTimes(d.db);
+                words = nearestWords(v, terms);
+                const live = liveAsked();
                 // a hidden post is nobody's neighbour (section 37.2)
-                for (const k of await hiddenPostKeys(d.db)) live.delete(k);
+                for (const k of hiddenAsked()) live.delete(k);
                 const near: { post_id: string; raw: number }[] = [];
                 for (const r of results) {
                     if (r.post_key === key || !live.has(r.post_key)) continue;

@@ -24,6 +24,7 @@ import {
     rotateMcpLink,
     setMcpMode,
 } from "../../mcp-link";
+import { background } from "../../background";
 import { logRequest } from "../../request-log";
 import { chatKeyId } from "../ai";
 import { defineOp, ok, OpError, type OpContext } from "../op";
@@ -103,7 +104,7 @@ export const mcpOp = defineOp({
         if (!("key" in auth)) return json(401, errBody(auth.errorCode));
         let clientKeyId: string | null;
         try {
-            clientKeyId = await lookupKey(ctx.db, auth.key, Date.now(), countryOf(request));
+            clientKeyId = await lookupKey(ctx.db, auth.key, Date.now(), countryOf(request), ctx.keyCache);
         } catch {
             return json(503, errBody("error.api.generic"));
         }
@@ -202,7 +203,7 @@ export const mcpUploadOp = defineOp({
         const keyId = chatKeyId(claims.t);
         const r = await studioUpload(ctx.app(), request, keyId, ctx.query);
         const res = json(r.status, r.body);
-        await logRequest(ctx.db, "PUT /mcp/upload", keyId, request, uploadLogInfo(request), res);
+        await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "PUT /mcp/upload", keyId, request, uploadLogInfo(request), res));
         return res;
     },
 });
