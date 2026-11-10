@@ -894,10 +894,11 @@ async function undoMerge(d: VisDeps, o: MigrateOptions): Promise<StudioReply> {
                 await db.batch([
                     db
                         .prepare(
-                            `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, poster)
+                            `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, poster, post_key)
                              SELECT o.public_id, 'public', 'host', 'media', o.public_key, o.url, ?2, o.content_type, o.bytes, o.width, o.height, o.duration, o.link,
                                     COALESCE(o.session_id, (SELECT s.id FROM studio_sessions s WHERE s.r2_key = o.r2_key ORDER BY s.created_at DESC LIMIT 1)),
-                                    o.key_id, ?3, o.poster
+                                    o.key_id, ?3, o.poster,
+                                    COALESCE(o.post_key, (SELECT substr(s.link, 8) FROM studio_sessions s WHERE s.id = o.session_id AND s.link LIKE 'upload:%'), o.session_id, o.link, o.public_id)
                                FROM media_items o
                               WHERE o.id = ?1 AND NOT EXISTS (SELECT 1 FROM media_items WHERE bucket = 'media' AND r2_key = o.public_key)`,
                         )

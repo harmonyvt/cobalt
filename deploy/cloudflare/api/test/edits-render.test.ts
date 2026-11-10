@@ -127,7 +127,7 @@ describe("a render from claim to done", () => {
             key_id: KEY_ID,
             role: null,
             item_index: null,
-            post_key: null,
+            post_key: r.id, // its own post: no session and no link, so the stored key is the file id
             visibility: "private",
             deleted_at: null,
             created_at: cw.row(id).finished_at,

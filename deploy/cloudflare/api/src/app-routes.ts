@@ -590,8 +590,8 @@ export async function studioUpload(
     try {
         await d.db
             .prepare(
-                `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, key_id, created_at, visibility)
-                 VALUES (?1, 'private', 'upload', 'originals', ?2, NULL, ?3, ?4, ?5, ?6, ?7, 'private')`,
+                `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, key_id, created_at, visibility, post_key)
+                 VALUES (?1, 'private', 'upload', 'originals', ?2, NULL, ?3, ?4, ?5, ?6, ?7, 'private', ?1)`,
             )
             .bind(id, key, name, type, size, keyId, now)
             .run();
@@ -781,7 +781,7 @@ type SessionRowLite = {
 // (`role` comes with ITEM_COLUMNS)
 const GALLERY_COLUMNS = "item_index, made_from, made_spec";
 // A file as GET /library reads it: its columns, the gallery columns and its post key, over `media_items m`.
-const FILE_COLUMNS = `${ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${GALLERY_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${POST_KEY_SQL} AS post_key`;
+export const FILE_COLUMNS = `${ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${GALLERY_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ")}, ${POST_KEY_SQL} AS post_key`;
 
 // A JSON column as a value, null when it is not valid JSON (never throws)
 const parseJson = (raw: string | null | undefined): unknown => {
@@ -1163,14 +1163,38 @@ export async function assemblePosts(
         }
     }
 
+    // every file's live private link (section 36); null when it has none
+    priv ??= await privateUrlsOf(d, files.map((f) => f.id));
+    // section 37.2: whether the post is hidden, and by whom (a held or exempt post is not hidden)
+    hiddenOf ??= await hiddenRows(db, page.map((k) => k.post_key));
+    const posts = shapeLibraryPosts(d, page, { files, sessions, titles, tombs, priv, hiddenOf }, { v2, v3, now });
+    return { posts, files };
+}
+
+// One library post object per key in `page`, in that order. GET /library and GET /sync both come through here, so a
+// synced post is the same object as GET /library (v=3 when the caller asks for it), including created_at and files.
+export function shapeLibraryPosts(
+    d: { apiUrl: string },
+    page: { post_key: string; latest: number }[],
+    rows: {
+        files: FileRow[];
+        sessions: SessionRowLite[];
+        titles: Map<string, string>;
+        tombs: Map<string, Tomb>;
+        priv: Map<string, string>;
+        hiddenOf: Map<string, HiddenRow>;
+    },
+    o: { v2: boolean; v3: boolean; now: number },
+): any[] {
+    const { v2, v3, now } = o;
     const filesByPost = new Map<string, FileRow[]>();
-    for (const f of files) {
+    for (const f of rows.files) {
         const list = filesByPost.get(f.post_key) ?? [];
         list.push(f);
         filesByPost.set(f.post_key, list);
     }
     const sessionsByPost = new Map<string, SessionRowLite[]>();
-    for (const s of sessions) {
+    for (const s of rows.sessions) {
         const list = sessionsByPost.get(s.post_key) ?? [];
         list.push(s);
         sessionsByPost.set(s.post_key, list);
@@ -1194,7 +1218,7 @@ export async function assemblePosts(
             link,
             title: meta?.name ?? null,
             // the owner's own title for the post (PATCH .../post), null = none (section 15)
-            custom_title: titles.get(k.post_key) ?? null,
+            custom_title: rows.titles.get(k.post_key) ?? null,
             duration: meta?.duration ?? null,
             width: meta?.width ?? null,
             height: meta?.height ?? null,
@@ -1210,7 +1234,7 @@ export async function assemblePosts(
                       source_url: `${api}/studio/${open.id}/source`,
                   }
                 : null,
-            files: listFiles(fs, v2, tombs, v3),
+            files: listFiles(fs, v2, rows.tombs, v3),
             ...(v2
                 ? {
                       visibility: original
@@ -1223,19 +1247,15 @@ export async function assemblePosts(
             ...(v3 ? postGalleryFields(fs, ss, original) : {}),
         };
     });
-    // every file's live private link (section 36); null when it has none
-    priv ??= await privateUrlsOf(d, files.map((f) => f.id));
-    for (const p of posts) for (const f of p.files as { id: string; private_url?: string | null }[]) f.private_url = priv.get(f.id) ?? null;
-    // section 37.2: whether the post is hidden, and by whom (a held or exempt post is not hidden)
-    hiddenOf ??= await hiddenRows(db, page.map((k) => k.post_key));
+    for (const p of posts) for (const f of p.files as { id: string; private_url?: string | null }[]) f.private_url = rows.priv.get(f.id) ?? null;
     for (const p of posts as Record<string, unknown>[]) {
-        const h = hiddenOf.get(p.id as string);
+        const h = rows.hiddenOf.get(p.id as string);
         const on = h?.state === "hidden";
         p.hidden = on;
         p.hidden_by = on ? h!.by : null;
         p.hidden_rule = on ? h!.rule_id : null;
     }
-    return { posts, files };
+    return posts;
 }
 
 // ---- 5b. GET|HEAD /library/items/<id>/file ------------------------------------------------

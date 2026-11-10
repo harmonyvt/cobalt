@@ -26,6 +26,7 @@ import {
 } from "../../hidden";
 import { HIDDEN_RULE_ID_REGEX } from "../../hidden-store";
 import type { StudioReply } from "../../studio";
+import { closeWrite, openWrite } from "../../sync";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
 import { PostSchema } from "./library";
 import { unwrap } from "./share";
@@ -82,6 +83,8 @@ const route = <I>(o: {
     badRequest?: string;
     output?: z.ZodType;
     summary: string;
+    // the app retries this route with Idempotency-Key; the answer carries the new change number
+    idempotent?: boolean;
     run: (ctx: OpContext, input: I) => Promise<StudioReply>;
 }) =>
     defineOp<I>({
@@ -96,7 +99,12 @@ const route = <I>(o: {
         ...(o.badRequest ? { badRequest: o.badRequest } : {}),
         ...(o.output ? { output: o.output } : {}),
         ai: { tier: "hidden", summary: o.summary },
-        handler: async (ctx, input) => reply(await o.run(ctx, input)),
+        handler: async (ctx, input) => {
+            if (!o.idempotent || !ctx.request) return reply(await o.run(ctx, input));
+            const gate = await openWrite(ctx.db, ctx.request);
+            if (gate.replay) return gate.replay;
+            return closeWrite(ctx.db, gate, reply(await o.run(ctx, input)));
+        },
     });
 
 const RuleParams = { id: HIDDEN_RULE_ID_REGEX };
@@ -110,6 +118,7 @@ const ROUTE_OPS = [
         badRequest: "error.library.bad_request",
         output: StatusReply,
         summary: "Many posts (file or post ids) to one status at once: off, public, private (each file's own private link) or hidden (POST /library/status).",
+        idempotent: true,
         run: (ctx, input) => setStatus(hiddenDeps(ctx), input.ids, input.status, byOf(ctx)),
     }),
     route({
