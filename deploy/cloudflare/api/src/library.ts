@@ -6,6 +6,7 @@
 // file, so every call here swallows (and logs) its errors.
 
 import { randomBase62 } from "./ids";
+import { postKeyInsertSql } from "./post-key";
 
 export const ITEM_ID_LENGTH = 16;
 
@@ -65,7 +66,7 @@ export async function insertMediaItem(
         const res = await db
             .prepare(
                 "INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, poster, visibility, role, item_index, made_from, made_spec, post_key) " +
-                    "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23 " +
+                    `SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ${postKeyInsertSql("?23", "?14", "?13", "?1")} ` +
                     "WHERE NOT EXISTS (SELECT 1 FROM media_items WHERE bucket = ?4 AND r2_key = ?5)",
             )
             .bind(

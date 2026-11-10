@@ -13,6 +13,7 @@ import { POST_FRAME_OPS } from "./ops/post-frame";
 import { HIDDEN_OPS } from "./ops/hidden";
 import { HOST_OPS } from "./ops/hosts";
 import { LIBRARY_OPS } from "./ops/library";
+import { SYNC_OPS } from "./ops/sync";
 import { LIBRARY_ADMIN_OPS } from "./ops/library-admin";
 import { LIVE_OPS } from "./ops/live";
 import { LIBRARY_WRITE_OPS } from "./ops/library-writes";
@@ -29,6 +30,7 @@ import type { AiFlags } from "./op";
 
 export const REGISTRY = new Registry([
     ...LIBRARY_OPS,
+    ...SYNC_OPS,
     ...LIBRARY_WRITE_OPS,
     ...LIBRARY_ADMIN_OPS,
     ...CHAT_OPS,

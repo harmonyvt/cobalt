@@ -420,7 +420,7 @@ describe("a single photo is saved as a photo (the 0.04 s mp4 fix)", () => {
         expect(done).not.toHaveProperty("item_count"); // a single file reads as it always did
         expect(done).not.toHaveProperty("items");
         const row = w.items()[0];
-        expect(row).toMatchObject({ source: "saved", bucket: "originals", r2_key: `originals/${sid}.jpg`, content_type: "image/jpeg", duration: null, role: null, item_index: null, post_key: null, width: 1080, height: 1350 });
+        expect(row).toMatchObject({ source: "saved", bucket: "originals", r2_key: `originals/${sid}.jpg`, content_type: "image/jpeg", duration: null, role: null, item_index: null, post_key: sid, width: 1080, height: 1350 });
         expect(row.poster).toMatch(POSTER_URL);
         expect(w.session(sid)).toMatchObject({ r2_key: `originals/${sid}.jpg`, content_type: "image/jpeg", duration: null, poster: row.poster });
         const obj = w.originals.objects.get(`originals/${sid}.jpg`)!;
@@ -462,7 +462,7 @@ describe("a single photo is saved as a photo (the 0.04 s mp4 fix)", () => {
         const sid = asBody(await w.studio.create(KEY_ID, json({ url: "https://x.com/a/status/1" }))).id as string;
         await w.settle(sid);
         expect(w.helper.thumbQueries).toEqual([]);
-        expect(w.items()[0]).toMatchObject({ content_type: "video/mp4", role: null, post_key: null });
+        expect(w.items()[0]).toMatchObject({ content_type: "video/mp4", role: null, post_key: sid });
         expect([...w.kv.m.keys()]).toContain(`poster:${w.items()[0].id}`);
     });
 });
@@ -474,7 +474,7 @@ describe("a save that is one file: the session reads as a single file", () => {
         await w.settle(sid);
         expect(w.helper.fetchBodies[0]).toEqual({ id: sid, url: POST, items: "first-video", item_count: 3 });
         expect(w.items()).toHaveLength(1);
-        expect(w.items()[0]).toMatchObject({ role: null, item_index: null, post_key: null, r2_key: `originals/${sid}.mp4` });
+        expect(w.items()[0]).toMatchObject({ role: null, item_index: null, post_key: sid, r2_key: `originals/${sid}.mp4` });
         expect(w.session(sid).item_count).toBeNull();
     });
 
@@ -483,7 +483,7 @@ describe("a save that is one file: the session reads as a single file", () => {
         const done = asBody(await w.settle(sid));
         expect(w.helper.fetchBodies[0]).toEqual({ id: sid, url: "https://x.com/a/status/1", items: "all" });
         expect(w.items()).toHaveLength(1);
-        expect(w.items()[0]).toMatchObject({ role: null, item_index: null, post_key: null, r2_key: `originals/${sid}.mp4`, source: "saved" });
+        expect(w.items()[0]).toMatchObject({ role: null, item_index: null, post_key: sid, r2_key: `originals/${sid}.mp4`, source: "saved" });
         expect(done).not.toHaveProperty("item_count");
         expect(done).not.toHaveProperty("items");
     });

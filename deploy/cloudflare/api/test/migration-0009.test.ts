@@ -109,7 +109,8 @@ describe("migration 0009", () => {
         r.prepare("UPDATE studio_sessions SET status = 'ready', error_code = NULL, r2_key = 'k', content_type = 'video/mp4', bytes = 1, duration = 1, width = 1, height = 1, title = 't' WHERE id = 'S1' AND status = 'saving'").run();
         r.prepare("UPDATE media_items SET deleted_at = 9 WHERE bucket = 'originals' AND r2_key = 'k' AND deleted_at IS NULL").run();
         expect(r.prepare("SELECT * FROM studio_renders WHERE session_id = 'S1' AND status = 'pending'").all()).toHaveLength(1);
-        expect(r.prepare("SELECT * FROM media_items WHERE id = 'M1'").get()).toMatchObject({ deleted_at: 9, role: null, item_index: null, made_from: null, made_spec: null, post_key: null });
+        // migration 0038 stores the post key the old expression computed (here the row's own id) instead of leaving it null
+        expect(r.prepare("SELECT * FROM media_items WHERE id = 'M1'").get()).toMatchObject({ deleted_at: 9, role: null, item_index: null, made_from: null, made_spec: null, post_key: "M1" });
         expect(r.prepare("SELECT * FROM studio_sessions WHERE id = 'S1'").get()).toMatchObject({ item_count: null, items: null });
     });
 

@@ -101,6 +101,7 @@ export const PATHS: string[] = [
     "/library/adopt",
     "/emotes",
     "/library",
+    "/sync",
     "/library?limit=5",
     "/library?v=3&limit=bad",
     "/library/search",

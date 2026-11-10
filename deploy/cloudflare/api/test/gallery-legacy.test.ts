@@ -120,7 +120,7 @@ describe("everything else from a client that sends no `items` is unchanged", () 
         for (let i = 0; i < 20; i++) if (asBody(await studio.advance(sid, 0)).status !== "saving") break;
         expect(w.helper.fetchBodies).toEqual([{ id: sid, url: LINK }]);
         expect(w.items()).toHaveLength(1);
-        expect(w.items()[0]).toMatchObject({ role: null, item_index: null, post_key: null, r2_key: `originals/${sid}.mp4`, content_type: "video/mp4" });
+        expect(w.items()[0]).toMatchObject({ role: null, item_index: null, post_key: sid, r2_key: `originals/${sid}.mp4`, content_type: "video/mp4" });
         expect(w.session(sid).item_count).toBeNull();
         const old = await listAll(w);
         expect(old.files).toHaveLength(1);
@@ -133,7 +133,7 @@ describe("everything else from a client that sends no `items` is unchanged", () 
         const sid = asBody(r).id as string;
         for (let i = 0; i < 20; i++) if (asBody(await studio.advance(sid, 0)).status !== "saving") break;
         expect(w.items()).toHaveLength(1);
-        expect(w.items()[0]).toMatchObject({ role: null, item_index: null, post_key: null, r2_key: `originals/${sid}.jpg`, content_type: "image/jpeg", duration: null });
+        expect(w.items()[0]).toMatchObject({ role: null, item_index: null, post_key: sid, r2_key: `originals/${sid}.jpg`, content_type: "image/jpeg", duration: null });
         expect(w.items()[0].poster.startsWith(MEDIA_BASE)).toBe(true);
     });
 });
