@@ -114,20 +114,16 @@ public struct SyncGlowFacts: Sendable, Equatable {
 }
 
 public enum SyncGlowResolve {
-    /// Steady state, with a short transient laid on top. A transient wins so a refusal, a 410 or a
-    /// nudge is visible even while a pass is still running. Offline wins over "syncing": a pass that
-    /// cannot reach the server should not light the sweep.
+    /// Steady state, with a one-shot event laid on top. `tick` clears that event when its moment
+    /// is over; until then it wins, so a refusal, a 410, or a nudge is still visible after a slow
+    /// pass. Offline wins over "syncing": a pass that cannot reach the server should not light the sweep.
     public static func state(_ facts: SyncGlowFacts) -> SyncGlowState {
         if !facts.engineEnabled || !facts.routeActive { return .off }
         switch facts.transient {
-        case .refused where facts.transientAge < SyncGlowTiming.refused:
-            return .refused
-        case .nudge where facts.transientAge < SyncGlowTiming.nudge:
-            return .nudge
-        case .repull where facts.passRunning || facts.transientAge < SyncGlowTiming.repull:
-            return .repull
-        default:
-            break
+        case .refused: return .refused
+        case .nudge: return .nudge
+        case .repull: return .repull
+        default: break
         }
         if !facts.reachable { return .offlinePending }
         if facts.passRunning || facts.pendingCount > 0 { return .syncing }

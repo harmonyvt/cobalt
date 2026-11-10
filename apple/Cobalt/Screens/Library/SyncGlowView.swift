@@ -146,9 +146,14 @@ final class SyncGlowMTKView: MTKView {
         #if os(iOS)
         isUserInteractionEnabled = false
         backgroundColor = .clear
-        #endif
         isOpaque = false
+        #endif
     }
+
+    #if os(macOS)
+    /// `NSView.isOpaque` has no setter. A clear Metal layer still needs the view to report transparent.
+    override var isOpaque: Bool { false }
+    #endif
 
     @available(*, unavailable)
     required init(coder: NSCoder) {
@@ -390,6 +395,7 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
 }
 
 #if DEBUG
+@MainActor
 enum SyncGlowDebugLaunch {
     /// `-previewSyncGlow upToDate|syncing|offline|refused|repull|nudge|off`
     /// `-previewSyncGlowPending N` (offline with no number shows three waiting stars)

@@ -238,12 +238,15 @@ struct SyncEngineTests {
         try await store.upsert(original)
         _ = try await store.commit(post: renamed(original, "new"), op: op(.title, post: original, title: "new"))
         let seen = Mutex<[SyncActivity]>([])
+        // The op is stamped `t0`. The engine's default clock is "now", which is years later, so the
+        // outbox would drop the edit as expired and never refuse it.
         let engine = SyncEngine(
             store: store,
             transport: ScriptedSync { _ in
                 SyncPage(seq: 1, more: false, posts: [original], links: [], collections: [], sets: [], names: [], rules: [], gone: [])
             },
-            sender: ScriptedSender(results: [.failure(SyncError.refused("error.library.bad_title"))]))
+            sender: ScriptedSender(results: [.failure(SyncError.refused("error.library.bad_title"))]),
+            clock: { t0 })
         await engine.setActivity { event in seen.withLock { $0.append(event) } }
         await engine.syncNow()
         let events = seen.withLock { $0 }
@@ -338,7 +341,7 @@ struct LibrarySyncGlowTests {
         try await store.upsert(original)
         let sync = LibrarySync(
             store: store,
-            transport: ScriptedSync { _ in
+            transport: QuietPull { _ in
                 SyncPage(seq: 3, more: false, posts: [original], links: [], collections: [], sets: [], names: [], rules: [], gone: [])
             },
             sender: ScriptedSender(results: [.failure(SyncError.refused("error.library.bad_title"))]))
@@ -351,7 +354,7 @@ struct LibrarySyncGlowTests {
 
     @Test func aNudgeMarksTheGlowAndStillPulls() async throws {
         let store = try SyncStore(fileURL: try tempDB())
-        let pulls = ScriptedSync { _ in
+        let pulls = QuietPull { _ in
             SyncPage(seq: 2, more: false, posts: [sample("a", title: "a")], links: [], collections: [], sets: [], names: [], rules: [], gone: [])
         }
         let sync = LibrarySync(store: store, transport: pulls, sender: ScriptedSender(results: []))
@@ -367,7 +370,7 @@ struct LibrarySyncGlowTests {
         try await store.upsert(sample("kept", title: "kept"))
         let sync = LibrarySync(
             store: store,
-            transport: ScriptedSync { _ in throw SyncError.notDeployed },
+            transport: QuietPull { _ in throw SyncError.notDeployed },
             sender: ScriptedSender(results: []))
         await sync.kick(.launch)
         #expect(!sync.isActive)
@@ -409,6 +412,22 @@ private func op(_ kind: SyncOp.Kind, post: LibraryPost, title: String?) -> SyncO
             anchor: post.files.first?.id ?? post.id, title: title, status: nil, makePublic: nil, fileID: nil,
             before: SyncPostCoding.encode(post)),
         createdAt: t0, tries: 0, nextAttemptAt: Date(timeIntervalSince1970: 0))
+}
+
+/// A pull double that does not call `#expect`. `ScriptedSync` does, and from a `@MainActor` test that
+/// is waiting on the engine, that record has to get back onto the main actor and the pass stalls.
+private final class QuietPull: SyncTransport, @unchecked Sendable {
+    private let handler: @Sendable (Int64) throws -> SyncPage
+    private let seen = Mutex<[Int64]>([])
+    var calls: [Int64] { seen.withLock { $0 } }
+
+    init(_ handler: @escaping @Sendable (Int64) throws -> SyncPage) { self.handler = handler }
+
+    func pull(since: Int64, limit: Int) async throws -> SyncPage {
+        seen.withLock { $0.append(since) }
+        _ = limit
+        return try handler(since)
+    }
 }
 
 private final class ScriptedSync: SyncTransport, @unchecked Sendable {

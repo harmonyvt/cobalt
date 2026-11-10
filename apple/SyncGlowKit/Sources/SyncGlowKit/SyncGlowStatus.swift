@@ -49,12 +49,13 @@ public final class SyncGlowStatus {
         enginePending = max(0, pending)
         guard forced == nil else { return }
         pendingCount = enginePending
-        let now = clock()
-        if !transientActive(at: now) {
-            transient = .none
+        // A refusal, a nudge, or a re-pull stays up when the pass returns. Wall time spent inside
+        // the pass (a slow pull, or a test whose main actor is busy) is not time the animation has
+        // already played. `tick` is what lets it end. A pass with no one-shot event just settles.
+        if transient == .none {
             lastEvent = steadyEvent()
         }
-        publish(now)
+        publish(clock())
     }
 
     public func refused(pending: Int) {

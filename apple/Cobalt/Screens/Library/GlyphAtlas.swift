@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreText
 import Metal
+import SyncGlowKit
 #if os(iOS)
 import UIKit
 #else
@@ -39,7 +40,7 @@ enum GlyphAtlasBaker {
         context.scaleBy(x: 1, y: -1)
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)
-        context.interpolationQuality = .high
+        context.interpolationQuality = CGInterpolationQuality.high
 
         let fontSize = CGFloat(layout.cell) * 0.62
         let cell = CGFloat(layout.cell)

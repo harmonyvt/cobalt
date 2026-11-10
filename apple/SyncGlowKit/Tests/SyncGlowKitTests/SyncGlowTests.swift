@@ -27,14 +27,11 @@ struct SyncGlowResolveTests {
         #expect(SyncGlowResolve.state(SyncGlowFacts(reachable: false)) == .offlinePending)
     }
 
-    @Test func aRefusalARepullAndANudgeCoverTheSteadyStateUntilTheyExpire() {
-        #expect(SyncGlowResolve.state(SyncGlowFacts(passRunning: true, transient: .refused, transientAge: 0.2)) == .refused)
-        #expect(SyncGlowResolve.state(SyncGlowFacts(passRunning: true, transient: .refused, transientAge: 1.2)) == .syncing)
-        #expect(SyncGlowResolve.state(SyncGlowFacts(transient: .nudge, transientAge: 0.4)) == .nudge)
-        #expect(SyncGlowResolve.state(SyncGlowFacts(transient: .nudge, transientAge: 1.8)) == .upToDate)
-        #expect(SyncGlowResolve.state(SyncGlowFacts(passRunning: true, transient: .repull, transientAge: 3)) == .repull)
-        #expect(SyncGlowResolve.state(SyncGlowFacts(passRunning: false, transient: .repull, transientAge: 1)) == .repull)
-        #expect(SyncGlowResolve.state(SyncGlowFacts(passRunning: false, transient: .repull, transientAge: 2.4)) == .upToDate)
+    @Test func aRefusalARepullAndANudgeCoverTheSteadyStateUntilTickClearsThem() {
+        #expect(SyncGlowResolve.state(SyncGlowFacts(passRunning: true, transient: .refused, transientAge: 5)) == .refused)
+        #expect(SyncGlowResolve.state(SyncGlowFacts(transient: .nudge, transientAge: 5)) == .nudge)
+        #expect(SyncGlowResolve.state(SyncGlowFacts(passRunning: false, transient: .repull, transientAge: 5)) == .repull)
+        #expect(SyncGlowResolve.state(SyncGlowFacts(passRunning: true, pendingCount: 2)) == .syncing)
     }
 }
 
@@ -88,6 +85,9 @@ struct SyncGlowStatusTests {
         status.tick()
         #expect(status.state == .repull)
         status.passEnded(pending: 0)
+        // The pass ending does not eat the redraw. The screen's tick does, now that the pass is over.
+        #expect(status.state == .repull)
+        status.tick()
         #expect(status.state == .upToDate)
     }
 
