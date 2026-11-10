@@ -28,6 +28,8 @@ settings:
 packages:
   CobaltKit:
     path: CobaltKit
+  SyncGlowKit:
+    path: SyncGlowKit
 
 targets:
   Cobalt:
@@ -37,6 +39,9 @@ targets:
       - path: Cobalt
     dependencies:
       - package: CobaltKit
+      - package: SyncGlowKit
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
       - target: CobaltShare
         embed: true
         platformFilter: iOS

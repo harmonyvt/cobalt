@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Synchronization
+import SyncGlowKit
 
 /// The library's copy of the engine. Created only when `SyncFeature` is on. Screens keep reading
 /// `LibraryModel`; this fills it from the store at launch and after every pass, so a filter, a sort
@@ -18,6 +19,8 @@ final class LibrarySync {
     private var connected = false
     /// False after `GET /sync` answers 404. Today's library loading takes over for this launch.
     private(set) var isActive = true
+    /// What the constellation glow draws. Updated as passes start and end; it does not decide them.
+    let status = SyncGlowStatus()
     var onApply: (@MainActor (SyncLibrarySnapshot, String) -> Void)?
     /// The route is missing and the cache, if any, must not be the only copy the screen keeps.
     var onLegacy: (@MainActor () async -> Void)?
@@ -40,9 +43,11 @@ final class LibrarySync {
         if await store.hasReadyMarker(), let snapshot = try? await store.snapshot(), !snapshot.visible.isEmpty || !snapshot.hidden.isEmpty {
             deliver(snapshot, source: "cache")
         }
-        paths.start { [weak self] in
+        paths.start({ [weak self] in
             Task { @MainActor in await self?.kick(.reconnect) }
-        }
+        }, onReachable: { [weak self] up in
+            Task { @MainActor in await self?.noteReachable(up) }
+        })
         await kick(.launch)
         if !isActive { await onLegacy?() }
     }
@@ -55,7 +60,11 @@ final class LibrarySync {
     }
 
     /// The ChangeFeed socket will call this. The nudge carries no rows; the pull does.
-    func nudge() async { await kick(.nudge) }
+    /// The glow plays a shooting star, then the same pass as any other kick.
+    func nudge() async {
+        status.nudged()
+        await kick(.nudge)
+    }
 
     func syncNow() async { await kick(.foreground) }
 
@@ -130,6 +139,29 @@ final class LibrarySync {
             refused: { [weak self] op in
                 await self?.refuse(op)
             })
+        await engine.setActivity { [weak self] signal in
+            await self?.receive(signal)
+        }
+    }
+
+    private func receive(_ signal: SyncActivity) {
+        switch signal {
+        case .passBegan:
+            status.passBegan()
+        case .passEnded(let pending):
+            status.passEnded(pending: pending)
+        case .refused(let pending):
+            status.refused(pending: pending)
+        case .repull:
+            status.repullBegan()
+        case .fellBack:
+            status.routeFellBack()
+        }
+    }
+
+    private func noteReachable(_ up: Bool) async {
+        let pending = (try? await store.pendingOps().count) ?? status.pendingCount
+        status.reachability(up, pending: pending)
     }
 
     private func apply(_ snapshot: SyncLibrarySnapshot, source: String) {
@@ -206,11 +238,13 @@ final class SyncPathWatch: @unchecked Sendable {
     private let wasDown = Mutex(false)
     private var started = false
 
-    func start(_ onReconnect: @escaping @Sendable () -> Void) {
+    func start(_ onReconnect: @escaping @Sendable () -> Void, onReachable: @escaping @Sendable (Bool) -> Void = { _ in }) {
         guard !started else { return }
         started = true
         monitor.pathUpdateHandler = { [wasDown] path in
-            if path.status != .satisfied {
+            let up = path.status == .satisfied
+            onReachable(up)
+            if !up {
                 wasDown.withLock { $0 = true }
                 return
             }
