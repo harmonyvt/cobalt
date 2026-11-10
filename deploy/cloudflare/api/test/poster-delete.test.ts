@@ -214,6 +214,7 @@ describe("a poster can not be deleted by hand, and nothing on a lifetime path or
                 // section 34.2: the probe's own private objects (about/<item id>/frame-N.jpg, audio.mp3), never a poster
                 "about-probe.ts:originals.delete(",
                 "about-store.ts:bucket.delete(",
+                "app-routes.ts:bucket.delete(", // post delete, one list per bucket (the file and its public mirror)
                 "app-routes.ts:media.delete(", // post delete (the file's mirror), poster release
                 "cutout.ts:originals.delete(", // section 39.5: a cutout png whose library row was not written
                 // section 31.9 "Ending a render": the editor's half-made mp4 (`edits/<rid>.mp4`, originals) and a poster no library

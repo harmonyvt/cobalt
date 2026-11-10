@@ -109,6 +109,11 @@ export async function linkByKey(db: D1Database, key: string): Promise<PrivateLin
     }
 }
 
+// Every live link, newest first, as a statement for a caller's batch (GET /share/private reads it with the gallery
+// list). Throws when run if the table is missing.
+export const allLiveLinksStmt = (db: D1Database): D1PreparedStatement =>
+    db.prepare(`SELECT ${COLUMNS} FROM private_links WHERE revoked_at IS NULL ORDER BY created_at DESC, key DESC`);
+
 // Every live link, newest first. Throws when the table is missing.
 export async function allLiveLinks(db: D1Database): Promise<PrivateLinkRow[]> {
     const { results } = await db

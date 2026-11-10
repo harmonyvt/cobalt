@@ -13,7 +13,7 @@
 // before. test/share-reads.test.ts holds the two paths to the same answers.
 import { hiddenReady, NOT_HIDDEN_SQL } from "./hidden-store";
 import { POST_KEY_SQL } from "./post-key";
-import { liveLinksInStmt, type NewLinks, type PrivateLinkRow } from "./private-links";
+import { allLiveLinksStmt, liveLinksInStmt, type NewLinks, type PrivateLinkRow } from "./private-links";
 import type { SetRow } from "./share-sets";
 import { ITEM_COLUMNS, type MediaRow } from "./visibility";
 
@@ -112,26 +112,103 @@ export type SetList = { sets: SetRow[]; rows: Map<string, MediaRow>; links: Map<
 // GET /share/sets: the newest `limit` live links with everything the list says about them, in one round trip. The
 // other statements name the same links by repeating the list as a subquery, so nothing has to come back first. A link
 // whose `items` is not JSON fails json_each and with it the batch: the sequential path reads such a row as no files.
-export async function readSetList(db: D1Database, limit: number): Promise<SetList | null> {
-    const gated = await hiddenReady(db);
+// The gallery-list statements and how to read them back, so GET /share/private can put them in its own batch.
+function setListPlan(db: D1Database, limit: number, gated: boolean): { statements: D1PreparedStatement[]; parse(res: D1Result<unknown>[], at: number): SetList } {
     const live = `SELECT id, items, title, created_at, revoked_at FROM share_sets WHERE revoked_at IS NULL ORDER BY created_at DESC, id DESC LIMIT ${limit}`;
     const files = `SELECT j.value FROM (${live}) l, json_each(l.items) j`;
+    return {
+        statements: [
+            db.prepare(live),
+            db.prepare(rowsSql(files, gated ? NOT_HIDDEN_SQL : "")),
+            liveLinksInStmt(db, "set", `SELECT l.id FROM (${live}) l`, []),
+            ...(gated ? [db.prepare(gateSql(files))] : []),
+        ],
+        parse(res, at) {
+            const links = new Map<string, PrivateLinkRow>();
+            for (const r of rowsOf<PrivateLinkRow>(res, at + 2)) links.set(r.target_id, r);
+            const gate = gated ? gateOf(rowsOf<GateRow>(res, at + 3)) : null;
+            return {
+                sets: rowsOf<SetRow>(res, at),
+                rows: byId(rowsOf<MediaRow>(res, at + 1)),
+                links,
+                hidden: (ids) => (gate ? hiddenAmong(ids, gate) : []),
+            };
+        },
+    };
+}
+
+export async function readSetList(db: D1Database, limit: number): Promise<SetList | null> {
+    const gated = await hiddenReady(db);
+    const plan = setListPlan(db, limit, gated);
+    const res = await tryBatch(db, plan.statements);
+    if (!res) return null;
+    return plan.parse(res, 0);
+}
+
+export type PrivateHome = { links: PrivateLinkRow[]; newLinks: NewLinks; sets: SetList };
+
+// GET /share/private: the live private links, the new-links setting and the gallery list, in the list's one round
+// trip. Null when the database has no batch or a statement failed (a table of a migration that is not applied yet):
+// the caller asks for each as it always did.
+export async function readPrivateHome(db: D1Database, limit: number): Promise<PrivateHome | null> {
+    const gated = await hiddenReady(db);
+    const plan = setListPlan(db, limit, gated);
+    const res = await tryBatch(db, [allLiveLinksStmt(db), db.prepare("SELECT new_links FROM share_settings WHERE id = 1"), ...plan.statements]);
+    if (!res) return null;
+    return {
+        links: rowsOf<PrivateLinkRow>(res, 0),
+        newLinks: rowsOf<{ new_links: string }>(res, 1)[0]?.new_links === "private" ? "private" : "public",
+        sets: plan.parse(res, 2),
+    };
+}
+
+// What a collection reroll reads before it writes: the collection, its live links, those links' files, which of the
+// files are hidden, and which links are private. One round trip. Null: ask for each, as before.
+export type RerollRead = {
+    row: { id: string; name: string; created_at: number; updated_at: number } | null;
+    members: { collection_id: string; set_id: string }[];
+    sets: { id: string; items: string }[];
+    hidden: string[];
+    links: Map<string, PrivateLinkRow>;
+};
+
+export async function readReroll(db: D1Database, id: string): Promise<RerollRead | null> {
+    const gated = await hiddenReady(db);
+    const members = `SELECT i.set_id FROM share_collection_items i JOIN share_sets s ON s.id = i.set_id
+                      WHERE i.collection_id = ?1 AND s.revoked_at IS NULL`;
+    const files = `SELECT j.value FROM share_sets s, json_each(s.items) j WHERE s.revoked_at IS NULL AND s.id IN (${members})`;
     const res = await tryBatch(db, [
-        db.prepare(live),
-        db.prepare(rowsSql(files, gated ? NOT_HIDDEN_SQL : "")),
-        liveLinksInStmt(db, "set", `SELECT l.id FROM (${live}) l`, []),
-        ...(gated ? [db.prepare(gateSql(files))] : []),
+        db.prepare("SELECT id, name, created_at, updated_at FROM share_collections WHERE id = ?1").bind(id),
+        db.prepare(
+            `SELECT i.collection_id, i.set_id FROM share_collection_items i JOIN share_sets s ON s.id = i.set_id
+              WHERE i.collection_id = ?1 AND s.revoked_at IS NULL ORDER BY i.added_at DESC, i.set_id DESC`,
+        ).bind(id),
+        db.prepare(`SELECT id, items FROM share_sets WHERE revoked_at IS NULL AND id IN (${members})`).bind(id),
+        liveLinksInStmt(db, "set", members, [id]),
+        ...(gated ? [db.prepare(gateSql(files)).bind(id)] : []),
     ]);
     if (!res) return null;
     const links = new Map<string, PrivateLinkRow>();
-    for (const r of rowsOf<PrivateLinkRow>(res, 2)) links.set(r.target_id, r);
-    const gate = gated ? gateOf(rowsOf<GateRow>(res, 3)) : null;
+    for (const r of rowsOf<PrivateLinkRow>(res, 3)) links.set(r.target_id, r);
+    const sets = rowsOf<{ id: string; items: string }>(res, 2);
+    const gate = gated ? gateOf(rowsOf<GateRow>(res, 4)) : null;
     return {
-        sets: rowsOf<SetRow>(res, 0),
-        rows: byId(rowsOf<MediaRow>(res, 1)),
+        row: rowsOf<RerollRead["row"] & object>(res, 0)[0] ?? null,
+        members: rowsOf(res, 1),
+        sets,
+        hidden: gate ? hiddenAmong(sets.flatMap((s) => parseItemsSafe(s.items)), gate) : [],
         links,
-        hidden: (ids) => (gate ? hiddenAmong(ids, gate) : []),
     };
+}
+
+// json_each already failed the batch when items is not JSON; a row that is JSON of a list is read the way parseItems does.
+function parseItemsSafe(raw: string): string[] {
+    try {
+        const v = JSON.parse(raw);
+        return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    } catch {
+        return [];
+    }
 }
 
 export type NewSetChecks = { hidden: string[]; newLinks: NewLinks | null; rows: Map<string, MediaRow> };

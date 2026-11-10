@@ -3,9 +3,9 @@
 // collection never revokes its links; a revoked link drops out of every collection.
 
 import { writeCaption, setSubject, type Captioner } from "./roast";
-import { linkInsert, liveLinksFor, revokeStmt } from "./private-links";
+import { linkInsert, liveLinksFor, revokeStmt, type PrivateLinkRow } from "./private-links";
 import { captionSoon, mintSetId, parseItems, setRoastInput } from "./share-sets";
-import { readTogether, rowsOf, tryBatch } from "./share-reads";
+import { readReroll, readTogether, rowsOf, tryBatch } from "./share-reads";
 import { hiddenFileIds } from "./hidden-store";
 import type { StudioReply } from "./studio";
 
@@ -225,25 +225,44 @@ export const REROLL_CAPTION_WAIT_MS = 8000;
 
 export async function rerollCollection(d: CollectionDeps, id: string, keyId: string): Promise<StudioReply> {
     try {
-        const first = await readTogether(d.db, [oneStmt(d.db, id), membersStmt(d.db, id)]);
-        const row = rowsOf<Row>(first, 0)[0];
-        if (!row) return err(404, "error.collection.not_found");
-        const [shape] = shaped([row], rowsOf<Member>(first, 1));
-        const old = shape!.set_ids;
-        if (old.length === 0) return err(409, "error.collection.empty");
-        const marks = old.map((_, i) => `?${i + 1}`).join(", ");
-        const { results: sets } = await d.db
-            .prepare(`SELECT id, items FROM share_sets WHERE id IN (${marks}) AND revoked_at IS NULL`)
-            .bind(...old)
-            .all<{ id: string; items: string }>();
-        // the new links would share a hidden post's files again: refused (section 37.2)
-        const hidden = await hiddenFileIds(d.db, sets.flatMap((s) => parseItems(s.items)));
-        if (hidden.length > 0) return err(409, "error.hidden", { ids: hidden });
+        // the collection, its links, their files, the hidden check and which are private: one round trip
+        const read = await readReroll(d.db, id);
+        let row: Row;
+        let sets: { id: string; items: string }[];
+        let priv: Map<string, PrivateLinkRow>;
+        if (read) {
+            if (!read.row) return err(404, "error.collection.not_found");
+            row = read.row;
+            const [shape] = shaped([row], read.members);
+            if (shape!.set_ids.length === 0) return err(409, "error.collection.empty");
+            if (read.hidden.length > 0) return err(409, "error.hidden", { ids: read.hidden });
+            const order = new Map(read.members.map((m, i) => [m.set_id, i]));
+            sets = [...read.sets].sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+            priv = read.links;
+        } else {
+            const first = await readTogether(d.db, [oneStmt(d.db, id), membersStmt(d.db, id)]);
+            const found = rowsOf<Row>(first, 0)[0];
+            if (!found) return err(404, "error.collection.not_found");
+            row = found;
+            const [shape] = shaped([row], rowsOf<Member>(first, 1));
+            const old = shape!.set_ids;
+            if (old.length === 0) return err(409, "error.collection.empty");
+            const marks = old.map((_, i) => `?${i + 1}`).join(", ");
+            const { results } = await d.db
+                .prepare(`SELECT id, items FROM share_sets WHERE id IN (${marks}) AND revoked_at IS NULL`)
+                .bind(...old)
+                .all<{ id: string; items: string }>();
+            const order = new Map(old.map((setId, i) => [setId, i]));
+            sets = [...results].sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+            // the new links would share a hidden post's files again: refused (section 37.2)
+            const hidden = await hiddenFileIds(d.db, sets.flatMap((s) => parseItems(s.items)));
+            if (hidden.length > 0) return err(409, "error.hidden", { ids: hidden });
+            priv = await liveLinksFor(d.db, "set", sets.map((s) => s.id));
+        }
         const now = d.now();
         const replaced: Record<string, string> = {};
         const stmts: D1PreparedStatement[] = [];
         // a private link stays private (section 36): its key is revoked with it and the new link gets a new one
-        const priv = await liveLinksFor(d.db, "set", sets.map((s) => s.id));
         for (const s of sets) {
             const fresh = mintSetId(d.setRandomBytes);
             replaced[s.id] = fresh;

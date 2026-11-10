@@ -248,8 +248,11 @@ describe("GET /library", () => {
                 const body = x.body as { posts: { id: string }[]; next: string | null; counts: unknown; usage: unknown };
                 seen.push(...body.posts.map((p) => p.id));
                 // the totals are the whole library's on every page
-                expect(body.counts).toEqual({ posts: 6, files: shape.startsWith("v=3") ? 10 : 6, hidden: 1 });
-                expect(body.usage).toEqual({ public_bytes: 1300, private_bytes: 3590 });
+                // v=3 counts every live file of a shown post; without it a private webp and the gallery's made
+                // files stay out, and the hidden post is out of both
+                expect(body.counts).toEqual({ posts: 6, files: shape.startsWith("v=3") ? 10 : 7, hidden: 1 });
+                // hidden posts are out of the page and still in the byte totals (X4, 100 bytes)
+                expect(body.usage).toEqual({ public_bytes: 1300, private_bytes: 3690 });
                 cursor = body.next;
             } while (cursor);
             expect(seen).toEqual([S7, U6, U5, S3, U2, S1]);
@@ -261,7 +264,8 @@ describe("GET /library", () => {
         const v3 = (await libraryList(w.d, q("v=3"))).body as any;
         const post = (id: string) => v3.posts.find((p: any) => p.id === id);
         // titles, sessions, the gallery fields
-        expect(post(S1)).toMatchObject({ custom_title: "the clip", service: "x", session: { id: S1 }, visibility: "public", hidden: false, hidden_by: null });
+        // the newer ready session of the post (the upload one) is the one a client can reopen
+        expect(post(S1)).toMatchObject({ custom_title: "the clip", service: "x", session: { id: S1B }, visibility: "public", hidden: false, hidden_by: null });
         expect(post(S3)).toMatchObject({ kind: "gallery", item_count: 2, items_failed: [2], custom_title: null });
         expect(post(S3).files.map((f: any) => f.id)).toEqual([G3A, G3B, G3S]);
         // the private link of the one file that has one
@@ -362,8 +366,7 @@ describe("GET /library", () => {
         await Promise.all(kept);
 
         // and a page with nothing to make a poster of does not kick
-        w.fake.raw.prepare("UPDATE media_items SET poster = ? WHERE id = ?").run(POSTER, O7);
-        w.fake.raw.prepare("UPDATE media_items SET poster = ? WHERE content_type IN ('image/png', 'image/jpeg')").run(POSTER);
+        w.fake.raw.prepare("UPDATE media_items SET poster = ? WHERE poster IS NULL").run(POSTER);
         const before = kicks;
         await libraryList({ ...w.d, kickPosters }, q("v=3"));
         expect(kicks).toBe(before);
@@ -427,7 +430,7 @@ describe("GET /capabilities", () => {
 describe("DELETE /library/items/<id>/post", () => {
     const gone = [O1, W1, W1P];
 
-    it("deletes from three batches exactly what it deletes statement by statement", async () => {
+    it("deletes from one batch exactly what it deletes statement by statement", async () => {
         const a = world("batch");
         const b = world("plain");
         const x = await libraryPostDelete(a.d, W1);
@@ -452,7 +455,7 @@ describe("DELETE /library/items/<id>/post", () => {
         expect(await libraryPostDelete(b.d, W1)).toEqual(again);
     });
 
-    it("waits for D1 three times, and not at all for what the answer does not report", async () => {
+    it("waits for D1 once, and not at all for what the answer does not report", async () => {
         const w = world("batch");
         await libraryList(w.d, q("v=3")); // (nothing of the delete depends on it; the isolate is simply not new)
         // the probe objects are the first thing left for later: hold them, so "later" can be looked at
@@ -467,8 +470,8 @@ describe("DELETE /library/items/<id>/post", () => {
         const kept: Promise<unknown>[] = [];
         const { n, out } = await trips(w, () => libraryPostDelete({ ...w.d, waitUntil: (p) => void kept.push(p) }, O1));
         expect(out).toEqual({ status: 200, body: { status: "success", post: S1, deleted: { files: 3, bytes: 1340 }, remaining: [] } });
-        // the post with its sessions and running renders; the expiry with the files; every row write
-        expect(n).toBe(3);
+        // one batch: the post, the expiry, the row marks, the title and the about row
+        expect(n).toBe(1);
         expect(kept).toHaveLength(1);
         // answered: the rows, the title and the about row are done, the files' own objects are gone ...
         let s = state(w);
@@ -488,8 +491,9 @@ describe("DELETE /library/items/<id>/post", () => {
         expect(s.originals).not.toContain(LEFTOVER);
         expect(s.originals).not.toContain(aboutObjectKeys(O1)[0]);
         expect(w.purged).toHaveLength(1);
-        // the one statement of the leftovers: is the poster still used by a live row
-        expect(w.stats.n).toBe(2 + 3 + 3 + 1);
+        // the library's first read (migration check + two batches), this delete's one batch, and the poster's
+        // "is it still used" check once the leftovers run
+        expect(w.stats.n).toBe(3 + 1 + 1);
     });
 
     it("a post that is busy is refused from the first batch: nothing expired, nothing deleted", async () => {
@@ -514,9 +518,11 @@ describe("DELETE /library/items/<id>/post", () => {
         const run = async (kind: "batch" | "plain") => {
             const w = world(kind);
             const real = w.media.delete.bind(w.media);
-            w.media.delete = async (key: string) => {
-                if (key === "Abcdefghij.webp") throw new Error("R2 down");
-                return real(key);
+            w.media.delete = async (key: string | string[]) => {
+                for (const k of Array.isArray(key) ? key : [key]) {
+                    if (k === "Abcdefghij.webp") throw new Error("R2 down");
+                    await real(k);
+                }
             };
             return { w, out: await libraryPostDelete(w.d, O1) };
         };
@@ -572,8 +578,9 @@ describe("DELETE /library/items/<id>", () => {
             expect(await libraryItemDelete(w.d, iid("Nope"))).toEqual({ status: 404, body: { status: "error", error: { code: "error.library.not_found" } } });
         }
         // a made file goes whatever the items are
-        expect(await libraryItemDelete(a.d, G3S)).toEqual({ status: 200, body: { status: "success", deleted: { files: 1, bytes: 100 } } });
-        expect(await libraryItemDelete(b.d, G3S)).toEqual(await libraryItemDelete(a.d, G3S).then(() => ({ status: 404, body: { status: "error", error: { code: "error.library.not_found" } } })));
+        const made = await libraryItemDelete(a.d, G3S);
+        expect(made).toEqual({ status: 200, body: { status: "success", deleted: { files: 1, bytes: 100 } } });
+        expect(await libraryItemDelete(b.d, G3S)).toEqual(made);
     });
 
     it("the poster, the edge copy and the probe objects do not hold the answer", async () => {
@@ -604,7 +611,7 @@ describe("DELETE /library/items/<id>", () => {
 describe("GET /hidden/rules", () => {
     it("the rules and the two counts are one round trip, and the same answer as one by one", async () => {
         const rules = (db: FakeD1) => {
-            db.raw.prepare("INSERT INTO hidden_rules (id, kind, value, enabled, hits, created_at, updated_at) VALUES ('Rule000000000001', 'uploads', '', 1, 2, ?, ?)").run(T - 50, T - 50);
+            db.raw.prepare("INSERT INTO hidden_rules (id, kind, value, enabled, hits, created_at, updated_at) VALUES ('Rule000000000001', 'upload', '', 1, 2, ?, ?)").run(T - 50, T - 50);
             db.raw.prepare("INSERT INTO media_hidden (post_key, state, by, rule_id, at) VALUES (?, 'held', 'rule', NULL, ?)").run(U5, T - 10);
         };
         const a = world("batch", rules);

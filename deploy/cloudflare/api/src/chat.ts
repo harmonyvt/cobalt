@@ -9,7 +9,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { assemblePosts, libraryHide, type AppDeps } from "./app-routes";
 import { hiddenPostKeys } from "./hidden-store";
 import { lookBlocks, lookImages, type LookDeps } from "./look-pictures";
-import { chatTools, loadPosts, picturesOf, recordsOf, type ChatCollect, type ChatToolDeps, type ChatTools, type Ranked } from "./chat-tools";
+import { chatTools, loadPosts, postStatements, postsFrom, recordsOf, type ChatCollect, type ChatToolDeps, type ChatTools, type Post, type Ranked } from "./chat-tools";
+import { readTogether } from "./library";
 import { chatToolbox, runConfirmed } from "./registry/ai";
 import type { OpBase } from "./registry/context";
 import { toolTypes } from "./registry/index";
@@ -599,11 +600,13 @@ function mergeRoles(messages: any[]): any[] {
     return out;
 }
 
-async function history(d: ChatDeps, rows: MessageRow[]): Promise<any[]> {
+async function history(d: ChatDeps, rows: MessageRow[], known?: Map<string, Post>): Promise<any[]> {
     const msgs: any[] = [];
-    let records = new Map<string, unknown>();
+    const records = new Map<string, unknown>();
     const attached = [...new Set(rows.filter((r) => r.role === "user").flatMap((r) => parse<string[]>(r.post_ids, [])))];
-    if (attached.length > 0) records = new Map((await recordsOf(d, attached)).map((r) => [r.id, r]));
+    for (const id of attached) if (known?.has(id)) records.set(id, known.get(id)!.record);
+    const missing = attached.filter((id) => !records.has(id));
+    if (missing.length > 0) for (const r of await recordsOf(d, missing)) records.set(r.id, r);
     for (const r of rows) {
         if (r.role === "user") {
             const ids = parse<string[]>(r.post_ids, []);
@@ -665,36 +668,73 @@ export async function sendMessage(d: ChatDeps, request: Request, id: string): Pr
     let userRow: MessageRow;
     let botRow: MessageRow;
     let postIds: string[];
+    let posts: Post[] = [];
     const now = d.now();
+    const asked = [...new Set(rawIds as string[])];
     try {
-        thread = await oneThread(d.db, id);
-        if (!thread) return err(404, "error.chat.not_found");
-        // a sub-agent's thread only takes its parent's messages (section 43.6)
-        if (await agentBehind(d.db, id)) return err(409, "error.chat.agent_thread");
-        const { results } = await d.db.prepare("SELECT * FROM chat_messages WHERE thread_id = ?1 ORDER BY id").bind(id).all<MessageRow>();
+        // The thread, whether a sub-agent owns it, the messages and (when files were attached) those posts: one round
+        // trip. The two new rows and the thread's touch are the next. A database without chat_agents, or without
+        // batch, does each statement on its own, as before.
+        const together = await readTogether(d.db, [
+            d.db.prepare("SELECT id, title, titled_by, created_at, updated_at FROM chat_threads WHERE id = ?1").bind(id),
+            d.db.prepare("SELECT id FROM chat_agents WHERE id = ?1").bind(id),
+            d.db.prepare("SELECT * FROM chat_messages WHERE thread_id = ?1 ORDER BY id").bind(id),
+            ...(asked.length > 0 ? postStatements(d.db, asked) : []),
+        ]);
+        let results: MessageRow[];
+        if (together) {
+            thread = (together[0]![0] as ThreadRow | undefined) ?? null;
+            if (!thread) return err(404, "error.chat.not_found");
+            if (together[1]![0]) return err(409, "error.chat.agent_thread");
+            results = together[2] as unknown as MessageRow[];
+            posts = asked.length > 0 ? postsFrom(together[3] as never, together[4] as never, together[5] as never, d.mediaBaseUrl) : [];
+        } else {
+            thread = await oneThread(d.db, id);
+            if (!thread) return err(404, "error.chat.not_found");
+            // a sub-agent's thread only takes its parent's messages (section 43.6)
+            if (await agentBehind(d.db, id)) return err(409, "error.chat.agent_thread");
+            results = (await d.db.prepare("SELECT * FROM chat_messages WHERE thread_id = ?1 ORDER BY id").bind(id).all<MessageRow>()).results;
+            posts = await loadPosts(d, asked);
+        }
         if (results.length + 2 > MESSAGES_MAX) return err(409, "error.chat.full");
         const last = results[results.length - 1];
         if (last && last.status === "running" && now - last.updated_at <= STALE_MS) return err(409, "error.chat.busy");
         // a reply that died mid-way is closed as interrupted before the next one starts
-        if (last && last.status === "running") {
-            await d.db.prepare("UPDATE chat_messages SET status = 'error', error = 'error.chat.interrupted' WHERE id = ?1").bind(last.id).run();
-            last.status = "error";
-        }
+        const interrupt = !!(last && last.status === "running");
+        if (interrupt) last.status = "error";
         earlier = results.slice(-HISTORY_MESSAGES);
-        const live = new Set((await loadPosts(d, [...new Set(rawIds as string[])])).map((p) => p.record.id));
-        postIds = [...new Set(rawIds as string[])].filter((i) => live.has(i));
-        userRow = (await d.db
+        const live = new Set(posts.map((p) => p.record.id));
+        postIds = asked.filter((i) => live.has(i));
+        const userStmt = d.db
             .prepare("INSERT INTO chat_messages (thread_id, role, text, post_ids, status, created_at, updated_at) VALUES (?1, 'user', ?2, ?3, 'done', ?4, ?4) RETURNING *")
-            .bind(id, text, JSON.stringify(postIds), now)
-            .first<MessageRow>())!;
-        botRow = (await d.db
+            .bind(id, text, JSON.stringify(postIds), now);
+        const botStmt = d.db
             .prepare("INSERT INTO chat_messages (thread_id, role, text, status, created_at, updated_at) VALUES (?1, 'assistant', '', 'running', ?2, ?2) RETURNING *")
-            .bind(id, now)
-            .first<MessageRow>())!;
-        if (results.length === 0 && thread.titled_by === "auto") {
-            await d.db.prepare("UPDATE chat_threads SET title = ?2, updated_at = ?3 WHERE id = ?1").bind(id, codePoints(oneLine(text), TITLE_MAX), now).run();
+            .bind(id, now);
+        const titleStmt =
+            results.length === 0 && thread.titled_by === "auto"
+                ? d.db.prepare("UPDATE chat_threads SET title = ?2, updated_at = ?3 WHERE id = ?1").bind(id, codePoints(oneLine(text), TITLE_MAX), now)
+                : d.db.prepare("UPDATE chat_threads SET updated_at = ?2 WHERE id = ?1").bind(id, now);
+        const interruptStmt = d.db.prepare("UPDATE chat_messages SET status = 'error', error = 'error.chat.interrupted' WHERE id = ?1").bind(last?.id ?? 0);
+        const writes = [...(interrupt ? [interruptStmt] : []), userStmt, botStmt, titleStmt];
+        let wrote: D1Result<unknown>[] | null = null;
+        if (typeof d.db.batch === "function") {
+            try {
+                wrote = await d.db.batch(writes);
+            } catch (e) {
+                console.error("[chat] writing the turn in one batch failed, writing one by one", String(e));
+                wrote = null;
+            }
+        }
+        if (wrote && wrote.length === writes.length) {
+            const at = interrupt ? 1 : 0;
+            userRow = wrote[at]!.results[0] as MessageRow;
+            botRow = wrote[at + 1]!.results[0] as MessageRow;
         } else {
-            await d.db.prepare("UPDATE chat_threads SET updated_at = ?2 WHERE id = ?1").bind(id, now).run();
+            if (interrupt) await interruptStmt.run();
+            userRow = (await userStmt.first<MessageRow>())!;
+            botRow = (await botStmt.first<MessageRow>())!;
+            await titleStmt.run();
         }
         if (results.length === 0 && thread.titled_by === "auto") thread = { ...thread, title: codePoints(oneLine(text), TITLE_MAX), updated_at: now };
     } catch (e) {
@@ -702,7 +742,7 @@ export async function sendMessage(d: ChatDeps, request: Request, id: string): Pr
         return err(503, "error.api.generic");
     }
 
-    return streamReply(d, { thread: thread!, earlier, userRow, botRow, text, postIds });
+    return streamReply(d, { thread: thread!, earlier, userRow, botRow, text, postIds, posts });
 }
 
 // The reply as server-sent events. The reply keeps going (and is saved) after the app goes away.
@@ -747,6 +787,8 @@ type ReplyCtx = {
     // the user's text, or the note on how Harmony answered the card
     text: string;
     postIds: string[];
+    // posts already read for this turn (sendMessage's batch); a continuation has none
+    posts?: Post[];
     emit: (event: string, data: unknown) => void;
 };
 
@@ -840,11 +882,25 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
     let handedOver = false;
 
     try {
-        const prior = await history(d, c.earlier);
+        const known = new Map((c.posts ?? []).map((p) => [p.record.id, p]));
+        const wanted = [
+            ...new Set([
+                ...c.earlier.filter((r) => r.role === "user").flatMap((r) => parse<string[]>(r.post_ids, [])),
+                ...c.postIds,
+            ]),
+        ].filter((i) => !known.has(i));
+        if (wanted.length > 0) for (const p of await loadPosts(d, wanted)) known.set(p.record.id, p);
+        const prior = await history(d, c.earlier, known);
         let opening: any;
         if (c.userRow) {
-            const records = await recordsOf(d, c.postIds);
-            const pics = await picturesOf(d, c.postIds.slice(0, 4));
+            const records = c.postIds.flatMap((i) => (known.has(i) ? [known.get(i)!.record] : []));
+            const show = new Set(c.postIds.slice(0, 4));
+            const pics = new Map(
+                [...known.values()]
+                    .filter((p) => show.has(p.record.id) && p.picture)
+                    .sort((a, b) => b.latest - a.latest || (a.record.id < b.record.id ? 1 : -1))
+                    .map((p) => [p.record.id, p.picture!]),
+            );
             opening = {
                 role: "user",
                 content: [

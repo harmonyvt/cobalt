@@ -108,8 +108,10 @@ export async function lookupKey(
     country?: string | null,
     cache?: KeyCache,
     fresh = false,
+    // a caller that already hashed the key (the capabilities name lookup) passes it, so the two statements start together
+    knownHash?: string,
 ): Promise<string | null> {
-    const hash = await hashKey(key);
+    const hash = knownHash ?? (await hashKey(key));
     const cached = fresh ? null : (cache?.get(hash, now) ?? null);
     if (cached !== null) return cached;
     let res: D1Result<{ id: string; expires_at?: number | null }>;

@@ -4,6 +4,7 @@
 // runs on node:sqlite.
 import { beforeEach, describe, expect, it } from "vitest";
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
+import { timedDb } from "../src/d1-timing";
 import { hashKey } from "../src/keys";
 import { withBatch } from "./d1-batch";
 import { MAX_CODE_RUNS, STALE_MS, systemPrompt, trimDangling, type ChatModel, type CodeRunner, type ModelTurn } from "../src/chat";
@@ -198,6 +199,28 @@ describe("chat: threads", () => {
 });
 
 describe("chat: a reply", () => {
+    it("asks D1 twice before the model, plus the key check: the reads, then the two rows", async () => {
+        const { db: timed, stats } = timedDb(db);
+        env = { ...env, DB: timed as unknown as FakeD1 };
+        const post = item({ name: "attached.mp4", link: "https://x.com/a/status/9", post_key: "PostKey00000001", created_at: 4_000 });
+        const t = await newThread();
+        let atModel = 0;
+        const watching: ChatModel = {
+            ...model,
+            async turn(req) {
+                atModel = stats.n;
+                return model.turn(req);
+            },
+        };
+        script = [() => say("hello")];
+        const before = stats.n;
+        const res = await send(`/chat/threads/${t.id}/messages`, "POST", { text: "look", post_ids: [post.post_key] }, { chatModel: watching, codeRunner: runner });
+        await res.text();
+        // the key, one batch of reads (thread, agent, messages, the attached post), one batch of writes
+        expect(atModel - before).toBe(3);
+        expect(seen[0]?.messages.at(-1)?.content?.at(-1)?.text).toContain("attached.mp4");
+    });
+
     it("streams text and a code step, shows files, saves everything and names the thread", async () => {
         const cat = item({ name: "cat falls off couch.mp4", link: "https://www.tiktok.com/@a/video/1", created_at: 5_000 });
         item({ name: "dog.mp4", link: "https://x.com/b/status/2", created_at: 6_000 });

@@ -369,9 +369,9 @@ describe("round trips", () => {
         expect([changed, u.status]).toEqual([2, 200]);
         expect((u.body as any).collection).toMatchObject({ name: "renamed", set_ids: [s3, s2] });
         expect((await trips(() => listCollections(w.collections)))[0]).toBe(1);
-        // the collection, its links, the hidden check (two), their private links, the writes with the answer behind them
+        // one read (the collection, its links, the hidden check, their private links) and one write, the answer behind it
         const [rerolled, r] = await trips(() => rerollCollection(w.collections, col, "key-1"));
-        expect([rerolled, r.status]).toEqual([6, 200]);
+        expect([rerolled, r.status]).toEqual([2, 200]);
 
         const [gMade, g] = await trips(() => createGroup(w.groups, post({ name: "all", collection_ids: [col] }), "key-1"));
         expect([gMade, g.status]).toEqual([2, 201]);
@@ -385,7 +385,7 @@ describe("round trips", () => {
         expect((await listCollections(w.collections)).body).toEqual({ status: "success", collections: [] });
     });
 
-    it("through the Worker: GET /share/sets is the key and the list; GET /share/private adds its two reads", async () => {
+    it("through the Worker: GET /share/sets and GET /share/private are each the key and one read", async () => {
         const raw = createBatchD1();
         const { db, stats } = timedDb(raw);
         const w = world(raw, db);
@@ -413,9 +413,9 @@ describe("round trips", () => {
         const [sets, listed] = await get("/share/sets");
         expect(sets).toBe(2);
         expect(listed.sets).toHaveLength(1);
-        // its links and the new-links setting are private-actions.ts's own two statements
+        // the key, then one batch: the private links, the setting and the gallery list
         const [priv, body] = await get("/share/private");
-        expect(priv).toBe(4);
+        expect(priv).toBe(2);
         expect(body.sets).toEqual(listed.sets);
     });
 });

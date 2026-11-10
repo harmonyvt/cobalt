@@ -473,9 +473,11 @@ describe("DELETE /library/items/<id>/post removes the title", () => {
         seedAll();
         await patch(SAVED, { title: "A" });
         const orig = w.media.delete.bind(w.media);
-        (w.media as any).delete = async (k: string) => {
-            if (k === "Abcdefghij.webp") throw new Error("R2 down");
-            return orig(k);
+        (w.media as any).delete = async (k: string | string[]) => {
+            for (const key of Array.isArray(k) ? k : [k]) {
+                if (key === "Abcdefghij.webp") throw new Error("R2 down");
+                await orig(key);
+            }
         };
         const part = await w.call(`/library/items/${SAVED}/post`, { method: "DELETE", headers: auth });
         expect(part.status).toBe(502);

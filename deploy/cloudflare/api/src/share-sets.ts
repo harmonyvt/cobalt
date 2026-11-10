@@ -282,22 +282,22 @@ async function setListInTurn(db: D1Database): Promise<{ sets: SetRow[]; rows: Ma
     return { sets: results, rows, links, hidden: (ids) => hiddenFileIds(db, ids) };
 }
 
+// The list body for a read that already has the rows (GET /share/sets, and GET /share/private which reads the same
+// list in its own batch).
+export async function shapeShareSets(d: ShareSetDeps, list: { sets: SetRow[]; rows: Map<string, MediaRow>; links: Map<string, PrivateLinkRow>; hidden: (ids: string[]) => string[] | Promise<string[]> }): Promise<ReturnType<typeof setShape>[]> {
+    const { sets: results, rows, links } = list;
+    const all = [...new Set(results.flatMap((s) => parseItems(s.items)))];
+    // a hidden file is listed like a deleted one (url null), and says so (section 37.2)
+    const hidden = new Set(await list.hidden(all));
+    const mark = (items: SetItem[]) => (hidden.size === 0 ? items : items.map((i) => (hidden.has(i.id) ? { ...i, hidden: true } : i)));
+    return results.map((s) => setShape(d, s, mark(itemsFor(d, parseItems(s.items), rows, links.get(s.id))), links.get(s.id) ?? null));
+}
+
 export async function listShareSets(d: ShareSetDeps): Promise<StudioReply> {
     try {
         // one round trip for the links, their files, their private links and the hidden files
         const list = (await readSetList(d.db, SHARE_LIST_MAX)) ?? (await setListInTurn(d.db));
-        const { sets: results, rows, links } = list;
-        const all = [...new Set(results.flatMap((s) => parseItems(s.items)))];
-        // a hidden file is listed like a deleted one (url null), and says so (section 37.2)
-        const hidden = new Set(await list.hidden(all));
-        const mark = (items: SetItem[]) => (hidden.size === 0 ? items : items.map((i) => (hidden.has(i.id) ? { ...i, hidden: true } : i)));
-        return {
-            status: 200,
-            body: {
-                status: "success",
-                sets: results.map((s) => setShape(d, s, mark(itemsFor(d, parseItems(s.items), rows, links.get(s.id))), links.get(s.id) ?? null)),
-            },
-        };
+        return { status: 200, body: { status: "success", sets: await shapeShareSets(d, list) } };
     } catch {
         return err(503, "error.api.generic");
     }

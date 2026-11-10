@@ -2960,9 +2960,11 @@ describe("DELETE /library/items/<id>/post (APP-API-CONTRACT.md section 12)", () 
             seedPostA();
             const real = w.media.delete.bind(w.media);
             let failing = true;
-            w.media.delete = async (k: string) => {
-                if (failing && k === "Abcdefghik.webp") throw new Error("R2 down");
-                return real(k);
+            w.media.delete = async (k: string | string[]) => {
+                for (const key of Array.isArray(k) ? k : [k]) {
+                    if (failing && key === "Abcdefghik.webp") throw new Error("R2 down");
+                    await real(key);
+                }
             };
             const res = await del(SAVED);
             expect(res.status).toBe(502);

@@ -169,13 +169,24 @@ export async function resolveKeyState(
     if (auth === "missing") return { key: "missing", key_name: null };
     if (auth === "invalid" || !key) return { key: "invalid", key_name: null };
     // The name is asked for by the key's hash (unique, and what the check itself goes by), so it does not have to wait
-    // for the check to say which row it is: the two travel at the same time. Used only when the check accepts the key.
-    const named: Promise<{ name: string } | null> = hashKey(key)
-        .then((hash) => db.prepare("SELECT name FROM api_keys WHERE key_hash = ?1").bind(hash).first<{ name: string }>())
-        .catch(() => null); // valid, just unnamed
+    // for the check to say which row it is: the hash is taken once and the two statements start together. Used only
+    // when the check accepts the key.
+    const hash = await hashKey(key);
+    // prepare throwing (D1 down for this one statement) is "unnamed", not an unknown key. The statement is started
+    // before the key check's own statement, so the two are out at once when both can be asked.
+    let named: Promise<{ name: string } | null>;
+    try {
+        named = db
+            .prepare("SELECT name FROM api_keys WHERE key_hash = ?1")
+            .bind(hash)
+            .first<{ name: string }>()
+            .catch(() => null);
+    } catch {
+        named = Promise.resolve(null);
+    }
     let keyId: string | null;
     try {
-        keyId = await lookupKey(db, key, now, undefined, cache);
+        keyId = await lookupKey(db, key, now, undefined, cache, false, hash);
     } catch {
         return { key: "unknown", key_name: null };
     }
@@ -188,10 +199,12 @@ export async function resolveKeyState(
 // on the next request, as before.
 const applied = new WeakMap<object, Set<string>>();
 async function onceApplied(db: D1Database, what: string, ask: (db: D1Database) => Promise<boolean>): Promise<boolean> {
+    // The set is created before the await: two checks in one Promise.all must share it, or the one that
+    // finishes second would replace the set and the first's "yes" would be asked again next time.
     let yes = applied.get(db);
-    if (yes?.has(what)) return true;
-    if (!(await ask(db))) return false;
     if (!yes) applied.set(db, (yes = new Set()));
+    if (yes.has(what)) return true;
+    if (!(await ask(db))) return false;
     yes.add(what);
     return true;
 }
@@ -1586,6 +1599,31 @@ const postDeleteReads = (db: D1Database, postSql: string, bound: string, since: 
         .bind(bound),
 });
 
+// One storage call per bucket, the list form R2 answers in a single request (up to 1000 keys). A bucket that
+// refuses a list, or a request that fails, is asked one key at a time so a single object that will not go is still
+// the only one reported. Returns the keys that did not go.
+async function deleteStored(bucket: { delete(key: string): Promise<void> }, keys: string[]): Promise<Set<string>> {
+    const failed = new Set<string>();
+    const unique = [...new Set(keys)];
+    if (unique.length === 0) return failed;
+    const del = bucket.delete.bind(bucket) as (key: string | string[]) => Promise<void>;
+    const chunks: string[][] = [];
+    for (let i = 0; i < unique.length; i += 1000) chunks.push(unique.slice(i, i + 1000));
+    try {
+        await Promise.all(chunks.map((c) => del(c.length === 1 ? c[0]! : c)));
+        return failed;
+    } catch {
+        for (const k of unique) {
+            try {
+                await bucket.delete(k);
+            } catch {
+                failed.add(k);
+            }
+        }
+        return failed;
+    }
+}
+
 // Deletes everything of the post the anchor file belongs to: the anchor is read including
 // soft-deleted rows, so the call is idempotent and any file id of the post works. Order
 // (each step safe to repeat): expire the post's sessions, delete each live file's R2 object,
@@ -1593,8 +1631,12 @@ const postDeleteReads = (db: D1Database, postSql: string, bound: string, since: 
 // request can keep work alive) the leftovers nothing reports: probe objects, posters, the edge
 // copies, the sessions' stored originals.
 //
-// D1 is asked three times, each one batch: the post with its sessions and running renders, the
-// expiry with the files, and every row write. Each statement used to be a round trip of its own.
+// On a database that batches, D1 is asked ONCE: the reads, a conditional expiry, the row marks and the title and
+// about deletes are one transaction. The writes are no-ops unless the post exists and nothing is still saving, so a
+// 404 or a 409 changes nothing. The objects then go in one storage batch. A file whose object did not go is unmarked
+// again (and the title put back) before the answer, so a retry finishes it. A crash in the gap after the mark and
+// before the objects go would hide a file whose bytes are still stored; the sequential path below, which a failed
+// batch falls back to, still deletes the object before the row.
 export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioReply> {
     const now = d.now();
     const since = now - POST_DELETE_BUSY_MS;
@@ -1603,10 +1645,47 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
     let post: string;
     let sessions: PostSession[];
     let files: PostFile[];
+    // the one-batch path has already expired the sessions and marked the rows; a file whose object stays is put back
+    let markedAhead = false;
+    type SavedTitle = { post_key: string; title: string; key_id: string | null; updated_at: number };
+    let savedTitle: SavedTitle | null = null;
+    let savedAbout: Record<string, unknown> | null = null;
     try {
+        const anchorSql = `(${ANCHOR_POST})`;
         const anchorStmt = d.db.prepare(ANCHOR_POST).bind(id);
-        const byId = postDeleteReads(d.db, `(${ANCHOR_POST})`, id, since);
-        const together = await readTogether(d.db, [anchorStmt, byId.sessions, byId.pending]);
+        const byId = postDeleteReads(d.db, anchorSql, id, since);
+        // writes apply only when the post exists and nothing recent is still saving or rendering. The same test
+        // savingNow and the pending count apply below, so a 409 leaves the rows as they were read.
+        const notBusy = `EXISTS ${anchorSql}
+            AND NOT EXISTS (SELECT 1 FROM studio_sessions s WHERE ${SESSION_POST_KEY_SQL} = ${anchorSql} AND s.status = 'saving' AND s.created_at > ?2)
+            AND NOT EXISTS (SELECT 1 FROM studio_renders WHERE status = 'pending' AND created_at > ?2 AND session_id IN (
+                SELECT s.id FROM studio_sessions s WHERE ${SESSION_POST_KEY_SQL} = ${anchorSql}))`;
+        // Built inside the call: a prepare that throws (a test, or a statement the database refuses to parse) fails
+        // the batch and nothing is applied, and the one-by-one path below still runs.
+        const together = await readTogether(d.db, () => [
+            anchorStmt,
+            byId.sessions,
+            byId.pending,
+            byId.files,
+            d.db.prepare(`SELECT post_key, title, key_id, updated_at FROM media_titles WHERE post_key = ${anchorSql}`).bind(id),
+            d.db.prepare(`SELECT * FROM media_about WHERE post_key = ${anchorSql}`).bind(id),
+            d.db
+                .prepare(
+                    `UPDATE studio_sessions SET expires_at = ?3
+                     WHERE expires_at > ?3 AND id IN (SELECT s.id FROM studio_sessions s WHERE ${SESSION_POST_KEY_SQL} = ${anchorSql})
+                       AND (${notBusy})`,
+                )
+                .bind(id, since, now),
+            d.db
+                .prepare(
+                    `UPDATE media_items SET deleted_at = ?3 WHERE deleted_at IS NULL AND id IN (
+                        SELECT id FROM (SELECT m.id AS id, m.deleted_at AS deleted_at, ${POST_KEY_SQL} AS post_key FROM media_items m)
+                        WHERE post_key = ${anchorSql} AND deleted_at IS NULL) AND (${notBusy})`,
+                )
+                .bind(id, since, now),
+            d.db.prepare(`DELETE FROM media_titles WHERE post_key = ${anchorSql} AND (${notBusy})`).bind(id, since),
+            d.db.prepare(`DELETE FROM media_about WHERE post_key = ${anchorSql} AND (${notBusy})`).bind(id, since),
+        ]);
         if (together) {
             const anchor = together[0]![0] as { post_key: string } | undefined;
             if (!anchor) return err(404, "error.library.not_found");
@@ -1614,8 +1693,13 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
             sessions = together[1] as unknown as PostSession[];
             if (savingNow(sessions)) return busy();
             if (Number((together[2]![0] as { n: number } | undefined)?.n ?? 0) > 0) return busy();
+            files = together[3] as unknown as PostFile[];
+            savedTitle = (together[4]![0] as SavedTitle | undefined) ?? null;
+            savedAbout = (together[5]![0] as Record<string, unknown> | undefined) ?? null;
+            markedAhead = true;
         } else {
-            // no batch (or it failed): one by one, in the order they always ran
+            // no batch, or it failed (media_about is missing before migration 0022, which fails all of it and applies
+            // none): one by one, in the order they always ran
             const anchor = await anchorStmt.first<{ post_key: string }>();
             if (!anchor) return err(404, "error.library.not_found");
             post = anchor.post_key;
@@ -1624,51 +1708,44 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
             if (savingNow(sessions)) return busy();
             const pending = await byKey.pending.first<{ n: number }>();
             if ((pending?.n ?? 0) > 0) return busy();
-        }
-
-        // 1. no new render or source read can start from here on (they answer 410); and only then the files are
-        // read. One batch runs its statements in the order given, so the two stay in that order in one round trip.
-        const expireStmt = d.db
-            .prepare(
-                `UPDATE studio_sessions SET expires_at = ?1
-                 WHERE expires_at > ?1 AND id IN (SELECT s.id FROM studio_sessions s WHERE ${SESSION_POST_KEY_SQL} = ?2)`,
-            )
-            .bind(now, post);
-        const filesStmt = postDeleteReads(d.db, "?1", post, since).files;
-        const expired = await readTogether(d.db, [expireStmt, filesStmt]);
-        if (expired) {
-            files = expired[1] as unknown as PostFile[];
-        } else {
+            const expireStmt = d.db
+                .prepare(
+                    `UPDATE studio_sessions SET expires_at = ?1
+                     WHERE expires_at > ?1 AND id IN (SELECT s.id FROM studio_sessions s WHERE ${SESSION_POST_KEY_SQL} = ?2)`,
+                )
+                .bind(now, post);
             await expireStmt.run();
-            files = (await filesStmt.all<PostFile>()).results;
+            files = (await byKey.files.all<PostFile>()).results;
         }
     } catch (e) {
         console.error("[library] post delete lookup failed", id, String(e));
         return err(503, "error.api.generic");
     }
 
-    // 2. every live file: the object first, then the row (a row whose object could not be
-    // deleted stays live and is reported, so a retry finishes it)
+    // 2. every live file's object, one call per bucket. A row whose object could not be deleted stays live and is
+    // reported, so a retry finishes it. The public mirror of a private file (section 16) goes with it.
     const deleted = { files: 0, bytes: 0 };
     const failed = new Set<string>();
     const posters = new Set<string>();
     const purged: string[] = [];
-    // the files whose objects are gone, and of those the ones whose rows are marked
     const gone: PostFile[] = [];
     const marked: PostFile[] = [];
+    const [origFailed, mediaFailed] = await Promise.all([
+        deleteStored(d.originals, files.filter((f) => f.bucket !== "media").map((f) => f.r2_key)),
+        deleteStored(
+            d.media,
+            files.flatMap((f) => (f.bucket === "media" ? [f.r2_key] : f.public_key ? [f.public_key] : [])),
+        ),
+    ]);
     for (const f of files) {
-        try {
-            await (f.bucket === "media" ? d.media : d.originals).delete(f.r2_key);
-            // the public mirror of a private file (section 16) goes with it, the edge copy is purged below
-            if (f.public_key) {
-                await d.media.delete(f.public_key);
-            }
-            if (f.url) purged.push(f.url);
-            gone.push(f);
-        } catch (e) {
-            console.error("[library] post delete file failed", f.id, f.bucket, String(e));
+        const missed = f.bucket === "media" ? mediaFailed.has(f.r2_key) : origFailed.has(f.r2_key) || (f.public_key ? mediaFailed.has(f.public_key) : false);
+        if (missed) {
+            console.error("[library] post delete file failed", f.id, f.bucket);
             failed.add(f.id);
+            continue;
         }
+        if (f.url) purged.push(f.url);
+        gone.push(f);
     }
     const markStmt = (f: PostFile) => d.db.prepare("UPDATE media_items SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL").bind(now, f.id);
     const count = (f: PostFile) => {
@@ -1684,32 +1761,62 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
     // and what it was about (section 34; no table before migration 0022)
     const aboutStmt = () => d.db.prepare("DELETE FROM media_about WHERE post_key = ?1").bind(post);
 
-    // The rows of the files whose objects went, and with every object gone the title and the about row: one batch.
-    // If it fails (media_about is missing before 0022, which fails all of it) nothing was written, and each is
-    // written on its own below, where a row that fails is reported and the rest still go.
-    const inOne = await writeTogether(d.db, () => [...gone.map(markStmt), ...(failed.size === 0 ? [titleStmt(), aboutStmt()] : [])]);
-    if (inOne) {
+    if (markedAhead) {
         for (const f of gone) count(f);
-    } else {
-        for (const f of gone) {
-            try {
-                await markStmt(f).run();
-                count(f);
-            } catch (e) {
-                console.error("[library] post delete file failed", f.id, f.bucket, String(e));
-                failed.add(f.id);
+        // the batch marked every live row and dropped the title before the objects were asked. Put back whatever
+        // did not go, and the title with it, so the answer matches the path that marks a row only after its object.
+        if (failed.size > 0) {
+            const ids = [...failed];
+            const back: D1PreparedStatement[] = [
+                d.db.prepare(`UPDATE media_items SET deleted_at = NULL WHERE deleted_at = ?1 AND id IN (${placeholders(ids.length, 2)})`).bind(now, ...ids),
+            ];
+            if (savedTitle) {
+                back.push(
+                    d.db
+                        .prepare("INSERT INTO media_titles (post_key, title, key_id, updated_at) VALUES (?1, ?2, ?3, ?4)")
+                        .bind(savedTitle.post_key, savedTitle.title, savedTitle.key_id, savedTitle.updated_at),
+                );
+            }
+            if (savedAbout) {
+                const cols = Object.keys(savedAbout);
+                back.push(
+                    d.db
+                        .prepare(`INSERT INTO media_about (${cols.join(", ")}) VALUES (${placeholders(cols.length)})`)
+                        .bind(...cols.map((c) => savedAbout![c])),
+                );
+            }
+            if (!(await writeTogether(d.db, back))) {
+                for (const s of back) await s.run().catch((e) => console.error("[library] post delete restore failed", String(e)));
             }
         }
-        if (failed.size === 0) {
-            try {
-                await titleStmt().run();
-            } catch (e) {
-                console.error("[library] post delete title failed", post, String(e));
+    } else {
+        // The rows of the files whose objects went, and with every object gone the title and the about row: one batch.
+        // If it fails (media_about is missing before 0022, which fails all of it) nothing was written, and each is
+        // written on its own below, where a row that fails is reported and the rest still go.
+        const inOne = await writeTogether(d.db, () => [...gone.map(markStmt), ...(failed.size === 0 ? [titleStmt(), aboutStmt()] : [])]);
+        if (inOne) {
+            for (const f of gone) count(f);
+        } else {
+            for (const f of gone) {
+                try {
+                    await markStmt(f).run();
+                    count(f);
+                } catch (e) {
+                    console.error("[library] post delete file failed", f.id, f.bucket, String(e));
+                    failed.add(f.id);
+                }
             }
-            try {
-                await aboutStmt().run();
-            } catch {
-                // no table before migration 0022: nothing to delete
+            if (failed.size === 0) {
+                try {
+                    await titleStmt().run();
+                } catch (e) {
+                    console.error("[library] post delete title failed", post, String(e));
+                }
+                try {
+                    await aboutStmt().run();
+                } catch {
+                    // no table before migration 0022: nothing to delete
+                }
             }
         }
     }

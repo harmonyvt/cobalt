@@ -1092,6 +1092,24 @@ describe("save progress on the session body", () => {
         expect(seen).toEqual([3, 5, 7]);
     });
 
+    it("a sleeping container does not hold the 201", async () => {
+        const s = setup();
+        const hold = gated();
+        const st = s.make({
+            kickMs: 10_000,
+            isRunning: () => false,
+            ensureRunning: () => hold.gate,
+        });
+        const created = st.create(KEY_ID, body({ url: LINK }));
+        const winner = await Promise.race([
+            created.then(() => "created" as const),
+            new Promise<"held">((r) => setTimeout(() => r("held"), 80)),
+        ]);
+        expect(winner).toBe("created");
+        hold.release();
+        expect(asBody(await created).status).toBe("success");
+    });
+
     it("waking is true while the save waits for the container to start, false once it is up", async () => {
         const s = setup();
         const hold = gated();
