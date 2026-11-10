@@ -117,6 +117,20 @@ struct SyncGlowStatusTests {
         #expect(status.state == .syncing)
     }
 
+    @Test func aSlowCatchUpDoesNotReplaceANudge() {
+        let clock = GlowClock()
+        let status = SyncGlowStatus(clock: { clock.now })
+        status.nudged()
+        clock.advance(9)
+        status.passBegan()
+        status.passEnded(pending: 0)
+        #expect(status.lastEvent == .nudge)
+        #expect(status.state == .nudge)
+        status.tick()
+        #expect(status.state == .upToDate)
+        #expect(status.lastEvent == .caughtUp)
+    }
+
     @Test func aMissingRouteTurnsTheGlowOffAndDropsAForce() {
         let status = SyncGlowStatus()
         status.passBegan()

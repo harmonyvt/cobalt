@@ -37,9 +37,10 @@ public final class SyncGlowStatus {
     public func passBegan() {
         passRunning = true
         guard forced == nil else { return }
-        if !transientActive(at: clock()) {
+        // A nudge is set just before this pass. Catching up must not replace it, even when the
+        // pass took long enough that the animation window would already have elapsed. `tick` ends it.
+        if transient == .none {
             lastEvent = .passBegan
-            transient = .none
         }
         publish(clock())
     }

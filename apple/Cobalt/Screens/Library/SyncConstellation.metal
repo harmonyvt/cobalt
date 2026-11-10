@@ -45,8 +45,20 @@ float glowHash(float2 p) {
     return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453123);
 }
 
+/// `pow` on a negative base is NaN, which the tone map turns into black. Bases here are colours and falloff.
+float safePow(float base, float exponent) {
+    return pow(max(base, 0.0), exponent);
+}
+
+/// NaN and inf become 0, then the value stays in a finite non-negative range before bloom and tone map.
+float3 sanitize(float3 c) {
+    c = select(c, float3(0.0), isnan(c));
+    c = select(c, float3(0.0), isinf(c));
+    return clamp(c, float3(0.0), float3(8.0));
+}
+
 float3 toLinear(float3 srgb) {
-    return pow(saturate(srgb), float3(2.2));
+    return float3(safePow(saturate(srgb).r, 2.2), safePow(saturate(srgb).g, 2.2), safePow(saturate(srgb).b, 2.2));
 }
 
 float3 palette(float s) {
@@ -210,7 +222,7 @@ fragment float4 glowStars(
     float2 size = max(float2(u.width, u.height), float2(1.0));
     float2 uv = in.position.xy / size;
     float fade = saturate(u.transition);
-    float3 col = mix(constellation(u.previous, uv, u, atlas, smp), constellation(u.state, uv, u, atlas, smp), fade);
+    float3 col = sanitize(mix(constellation(u.previous, uv, u, atlas, smp), constellation(u.state, uv, u, atlas, smp), fade));
     return float4(col, clamp(max(col.r, max(col.g, col.b)), 0.0, 1.0));
 }
 
@@ -232,7 +244,7 @@ fragment float4 glowBlurH(
     c += src.sample(smp, uv - texel * 3.0) * 0.054054;
     c += src.sample(smp, uv + texel * 4.0) * 0.016216;
     c += src.sample(smp, uv - texel * 4.0) * 0.016216;
-    return c;
+    return float4(sanitize(c.rgb), saturate(c.a));
 }
 
 fragment float4 glowBlurV(
@@ -253,7 +265,7 @@ fragment float4 glowBlurV(
     c += src.sample(smp, uv - texel * 3.0) * 0.054054;
     c += src.sample(smp, uv + texel * 4.0) * 0.016216;
     c += src.sample(smp, uv - texel * 4.0) * 0.016216;
-    return c;
+    return float4(sanitize(c.rgb), saturate(c.a));
 }
 
 float3 tonemap(float3 linear, float headroom) {
@@ -281,24 +293,25 @@ fragment float4 glowPresent(
     float2 size = max(float2(u.width, u.height), float2(1.0));
     float2 uv = in.position.xy / size;
     float t = u.reduced > 0.5 ? 1.7 : u.time;
-    float fall = pow(1.0 - smoothstep(0.0, 0.98, uv.y), 1.35);
+    float fall = safePow(1.0 - smoothstep(0.0, 0.98, uv.y), 1.35);
     float fade = saturate(u.transition);
     float3 base = mix(palette(u.previous), palette(u.state), fade);
-    float amp = mix(amplitude(u.previous), amplitude(u.state), fade) * u.intensity;
+    float amp = mix(amplitude(u.previous), amplitude(u.state), fade) * max(u.intensity, 0.0);
     if (u.lowPower > 0.5) amp *= 0.85;
     float3 wash = base * amp * fall * (0.45 + 0.55 * (1.0 - uv.y));
     bool sweeping = (abs(u.state - 1.0) < 0.5 || abs(u.previous - 1.0) < 0.5) && u.reduced < 0.5;
     if (sweeping) {
-        float sweep = fract(t * 0.20);
-        float pulse = exp(-pow((uv.x - sweep) * 7.0, 2.0));
+        // `pow(x, 2)` is NaN for x < 0. Left of the sweep that blacked out a solid region.
+        float delta = (uv.x - fract(t * 0.20)) * 7.0;
+        float pulse = exp(-(delta * delta));
         float amount = abs(u.state - 1.0) < 0.5 ? fade : (1.0 - fade);
         wash += base * pulse * fall * amp * 0.7 * amount;
     }
-    float3 sharp = stars.sample(smp, uv).rgb;
-    float3 soft = bloom.sample(smp, uv).rgb;
+    float3 sharp = sanitize(stars.sample(smp, uv).rgb);
+    float3 soft = sanitize(bloom.sample(smp, uv).rgb);
     float lift = 1.0 + max(u.headroom - 1.0, 0.0) * 0.45;
-    float3 color = wash + (sharp * lift + soft * 0.95) * (0.65 + amp) * fall;
-    color = tonemap(color, u.headroom);
+    float3 color = sanitize(wash + (sharp * lift + soft * 0.95) * (0.65 + amp) * fall);
+    color = tonemap(color, max(u.headroom, 1.0));
     float grainClock = u.reduced > 0.5 ? 0.0 : t;
     float dither = (glowHash(in.position.xy + grainClock * float2(17.0, 13.0)) - 0.5) / 180.0;
     color += dither;
