@@ -402,6 +402,7 @@ struct AppShell: View {
                 .sheetCorner()
                 .sheetClose { model.queueShown = false }
         }
+        .syncGlow(model.library.syncStatus)
         .presentationDetents([.large])
         .cobaltRoot(model: model)
         .environment(\.shell, actions)

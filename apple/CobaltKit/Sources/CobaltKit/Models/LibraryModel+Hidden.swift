@@ -9,6 +9,10 @@ extension LibraryModel {
 
     /// The first page of the hidden album (`GET /library?hidden=1`), replacing what was loaded.
     public func loadHidden() async {
+        if let sync, sync.isActive {
+            await sync.syncNow()
+            return
+        }
         guard !hiddenLoading else { return }
         hiddenLoading = true
         defer { hiddenLoading = false }
@@ -25,6 +29,7 @@ extension LibraryModel {
 
     /// The next page of the album.
     public func loadMoreHidden() async {
+        if sync?.isActive == true { return }
         guard !hiddenLoading, hiddenHasMore, let cursor = hiddenCursor else { return }
         hiddenLoading = true
         defer { hiddenLoading = false }
@@ -39,6 +44,10 @@ extension LibraryModel {
 
     /// Every hidden post up to `cap`, pages of 50 (a sort, a filter or a search in the album needs them all).
     func loadAllHidden(cap: Int) async {
+        if let sync, sync.isActive {
+            await sync.syncNow()
+            return
+        }
         guard !hiddenLoading, hiddenPosts.isEmpty || hiddenHasMore else { return }
         hiddenLoading = true
         defer { hiddenLoading = false }
@@ -105,7 +114,7 @@ extension LibraryModel {
         if index != ctx.settings.hiddenIndex { ctx.settings.hiddenIndex = index; hiddenVersion += 1 }
     }
 
-    private func replaceHiddenIndex(with posts: [LibraryPost]) {
+    func replaceHiddenIndex(with posts: [LibraryPost]) {
         var index = ctx.settings.hiddenIndex
         index.replace(with: posts)
         if index != ctx.settings.hiddenIndex { ctx.settings.hiddenIndex = index; hiddenVersion += 1 }
@@ -158,12 +167,28 @@ extension LibraryModel {
     /// Gives every post the status: `hidden` takes them out of the library into the album, `off`, `public` and `private`
     /// put a hidden post back (its files stay off until the status says otherwise) and switch a visible one. One
     /// `POST /library/status` per `limits.statusIds` posts (200 at most); what the server refused is in the outcome and
-    /// stays as it was. A post moves only after the server answered for it.
+    /// stays as it was. A post moves only after the server answered for it, unless the sync engine is on:
+    /// then it moves at once and the outbox sends the same route, putting the post back only if the server refuses.
     @discardableResult
     public func setStatus(_ status: PostStatus, posts targets: [LibraryPost]) async -> StatusOutcome {
         var seen = Set<String>()
         let unique = targets.filter { seen.insert($0.id).inserted }
         guard !unique.isEmpty else { return StatusOutcome() }
+        if let sync, sync.isActive {
+            var changed = 0
+            var failed: [StatusChange.Failure] = []
+            for post in unique {
+                let before = storedPost(post.id) ?? post
+                let after = stageLocalStatus(status, post: before)
+                do {
+                    try await sync.enqueueStatus(before: before, after: after, status: status)
+                    changed += 1
+                } catch {
+                    failed.append(StatusChange.Failure(id: post.id, error: Self.statusErrorCode(error)))
+                }
+            }
+            return StatusOutcome(changed: changed, failed: failed)
+        }
         let byID = Dictionary(unique.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let size = max(1, min(200, ctx.capabilities.limits.statusIds))
         let ids = unique.map(\.id)
