@@ -343,6 +343,14 @@ public enum SyncGlowField {
     }
 }
 
+/// Where the one glow in a window lives. A full-screen sheet or the editor cover draws it itself;
+/// the window band steps aside so two Metal views are never up in that window together.
+public enum SyncGlowPlacement {
+    public static func windowShowsBand(queueSheet: Bool, editorCover: Bool) -> Bool {
+        !queueSheet && !editorCover
+    }
+}
+
 /// Launch arguments and the debug menu. `-previewSyncGlow syncing`, `-previewSyncGlowPending 4`.
 public enum SyncGlowDebugParse {
     public static func state(from raw: String?) -> SyncGlowState? {

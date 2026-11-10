@@ -335,10 +335,6 @@ private struct LibraryContent: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { controller.decideInspector(width: $0) }
             .onChange(of: tier, initial: true) { controller.compact = tier == .compact }
             .modifier(LibraryClickRows(controller: controller, rows: rows))
-            .overlay(alignment: .top) {
-                SyncGlowBand(status: library.syncStatus, tabVisible: model.selectedTab == .library)
-                    .ignoresSafeArea(edges: .top)
-            }
             .background { GalleryFileShare(fileURLs: $filesToShare) }
             // centred over a light scrim: at the bottom it sat under the floating tab bar
             .overlay {

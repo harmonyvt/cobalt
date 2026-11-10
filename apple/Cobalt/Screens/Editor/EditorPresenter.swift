@@ -111,6 +111,7 @@ struct EditorWindowContent: View {
             }
         }
         .background(CobaltColor.bg.ignoresSafeArea())
+        .syncGlow(model.library.syncStatus)
     }
 }
 

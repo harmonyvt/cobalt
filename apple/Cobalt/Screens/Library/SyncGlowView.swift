@@ -10,11 +10,10 @@ import UIKit
 import AppKit
 #endif
 
-/// The soft band along the top of the library. Hit testing is off. The keyboard and the Finder
-/// extension do not use this view.
+/// The soft band along the top of a window. One instance per window. Hit testing is off, so nav
+/// buttons keep working. The keyboard and the Finder extension do not use this view.
 struct SyncGlowBand: View {
     var status: SyncGlowStatus?
-    var tabVisible: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -80,7 +79,7 @@ struct SyncGlowBand: View {
             lowPower: lowPower,
             intensity: colorScheme == .dark ? SyncGlowComposer.defaultIntensity : 0.48,
             density: SyncGlowComposer.defaultDensity,
-            visible: onScreen && tabVisible,
+            visible: onScreen,
             sceneActive: scenePhase == .active)
         #if os(iOS)
         SyncGlowMetalIOS(draw: draw)
@@ -394,11 +393,26 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
     }
 }
 
+extension View {
+    /// One constellation band along the top. `suppressed` is true while a full-screen presentation
+    /// in this same window is drawing the band itself.
+    func syncGlow(_ status: SyncGlowStatus?, suppressed: Bool = false) -> some View {
+        overlay(alignment: .top) {
+            if !suppressed {
+                SyncGlowBand(status: status)
+                    .ignoresSafeArea(edges: .top)
+            }
+        }
+    }
+}
+
 #if DEBUG
 @MainActor
 enum SyncGlowDebugLaunch {
     /// `-previewSyncGlow upToDate|syncing|offline|refused|repull|nudge|off`
     /// `-previewSyncGlowPending N` (offline with no number shows three waiting stars)
+    /// `-previewTab save|library|links|chat|stage|names|queue|settings` chooses which screen is up.
+    /// The band is on the window, so the same flags work on every tab.
     static func apply(to model: AppModel) {
         let defaults = UserDefaults.standard
         guard let state = SyncGlowDebugParse.state(from: defaults.string(forKey: "previewSyncGlow")) else { return }

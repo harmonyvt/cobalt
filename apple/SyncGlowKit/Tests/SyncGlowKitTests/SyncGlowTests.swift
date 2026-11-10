@@ -290,6 +290,16 @@ struct GlyphAtlasTests {
     }
 }
 
+@Suite("glow placement")
+struct SyncGlowPlacementTests {
+    @Test func theWindowKeepsTheBandUntilAFullScreenPresentationTakesIt() {
+        #expect(SyncGlowPlacement.windowShowsBand(queueSheet: false, editorCover: false))
+        #expect(!SyncGlowPlacement.windowShowsBand(queueSheet: true, editorCover: false))
+        #expect(!SyncGlowPlacement.windowShowsBand(queueSheet: false, editorCover: true))
+        #expect(!SyncGlowPlacement.windowShowsBand(queueSheet: true, editorCover: true))
+    }
+}
+
 @Suite("glow debug arguments")
 struct SyncGlowDebugParseTests {
     @Test func theLaunchWordsMapOntoEachState() {
