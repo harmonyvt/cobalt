@@ -117,6 +117,8 @@ public final class LibraryModel {
     @ObservationIgnored var hiddenSyncTask: Task<Void, Never>?
     /// A whole-album read (`syncHiddenIndex`) is running.
     @ObservationIgnored var hiddenSyncing = false
+    /// The on-device library, when `sync.engine` is on. Nil leaves every load on `GET /library`.
+    @ObservationIgnored var sync: LibrarySync?
 
     static let pageSize = 20
     static let wholePageSize = 50
@@ -148,6 +150,7 @@ public final class LibraryModel {
     }
 
     func apply(_ page: LibraryPage, replacing: Bool) {
+        let wasEmpty = posts.isEmpty
         // A post the server calls hidden (or this device just hid) is in no list but the hidden album, whatever page it
         // came on (APP-API-CONTRACT 37.2).
         let listed = page.posts.filter { !$0.hidden && !recentlyHidden.contains($0.id) }
@@ -163,6 +166,7 @@ public final class LibraryModel {
         cursor = page.next
         hasMore = page.next != nil
         didApply(page: page)
+        if wasEmpty, !posts.isEmpty { LaunchTiming.noteFirstContent(source: "network") }
     }
 
     /// Called after every page (refresh, `loadMore`, `loadAll`, `locate`, the seed) has joined `posts`:
@@ -185,9 +189,24 @@ public final class LibraryModel {
     }
 
     public func refresh() async {
+        if let sync, sync.isActive {
+            let started = Date()
+            await sync.syncNow()
+            if sync.isActive {
+                LaunchTiming.noteLibraryLoad(ms: LaunchTiming.millis(from: started), posts: posts.count, source: "sync")
+                FinderLibraryEvents.noteRefresh()
+                return
+            }
+        }
+        await refreshFromServer()
+    }
+
+    /// Today's `GET /library` page. Also the path after `GET /sync` answers 404.
+    func refreshFromServer() async {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
+        let started = Date()
         do {
             let client = ctx.client
             if ctx.capabilities.titles { await ctx.titles.flush(client: client) }       // titles that failed to send, before the page reads them
@@ -202,9 +221,11 @@ public final class LibraryModel {
         } catch {
             if let f = pipelineFailure(from: error, during: .saving) { failure = f }
         }
+        LaunchTiming.noteLibraryLoad(ms: LaunchTiming.millis(from: started), posts: posts.count, source: "library")
     }
 
     public func loadMore() async {
+        if sync?.isActive == true { return }
         guard !isLoading, hasMore, let cursor else { return }
         isLoading = true
         defer { isLoading = false }
@@ -222,6 +243,10 @@ public final class LibraryModel {
     /// Everything on device: pages of 50 until the server has no more or `cap` posts are in. A quiet
     /// `loadingAll` reports the count while it runs. A failure stops it and lands in `failure`.
     public func loadAll(cap: Int = 1000) async {
+        if let sync, sync.isActive {
+            await sync.syncNow()
+            return
+        }
         if showingHidden { return await loadAllHidden(cap: cap) }       // the album's own pages
         await settle()
         guard !isLoading else { return }
@@ -234,6 +259,10 @@ public final class LibraryModel {
     /// Loads pages until the post is in `posts` (or the server has no more, or the cap of 1000 posts):
     /// true when it is loaded.
     public func locate(postID: String) async -> Bool {
+        if let sync, sync.isActive {
+            await sync.syncNow()
+            return posts.contains { $0.id == postID } || hiddenPosts.contains { $0.id == postID }
+        }
         if posts.contains(where: { $0.id == postID }) { return true }
         await settle()
         if posts.contains(where: { $0.id == postID }) { return true }

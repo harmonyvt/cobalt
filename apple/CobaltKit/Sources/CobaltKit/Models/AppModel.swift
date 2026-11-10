@@ -250,6 +250,7 @@ public final class AppModel {
     /// The real app: app-group stores, the keychain, the configured server.
     public static func live() -> AppModel {
         Telemetry.start(process: .app)
+        LaunchTiming.arm()
         let settings = Settings.shared()
         let keychain = settings.keychain
         let factory: @MainActor (Settings) -> any CobaltClient = { settings in
@@ -308,6 +309,23 @@ public final class AppModel {
             Task { @MainActor in model.serverRefusedKey() }
         }
         pull.start()                             // the 5 minute tick (a no-op without the Mac folder)
+        if SyncFeature.isEnabled(settings.defaults) {
+            do {
+                let librarySync = try LibrarySync(databaseURL: SyncContract.databaseURL()) { @MainActor [unowned ctx] in
+                    ctx.client as? HTTPCobaltClient
+                }
+                model.library.sync = librarySync
+                librarySync.onApply = { [weak model] snapshot, source in
+                    model?.library.replaceFromSync(snapshot, source: source)
+                }
+                librarySync.onLegacy = { [weak model] in
+                    await model?.library.refreshFromServer()
+                }
+                Task { await librarySync.start() }
+            } catch {
+                Telemetry.log(.error, .sync, "sync store failed", data: ["error": .string(String(describing: error))])
+            }
+        }
         model.managesFinderDomain = true
         model.watchOwnUploads()
         fetcher.isActive = { [unowned ctx] in ctx.background.activity.isActive }
@@ -440,6 +458,7 @@ public final class AppModel {
         ctx.client = makeClient(settings)
         apply(.unknown)
         library.reset()
+        if let sync = library.sync { Task { await sync.invalidate() } }
         shareSets.reset()
         chat.reset()
         stage.reset()
@@ -555,6 +574,7 @@ public final class AppModel {
         await offlineDownloads.reconcile()
         await photosSync.refresh()
         await photosSync.reconcile()
+        if let sync = library.sync, sync.isActive { Task { await sync.kick(.foreground) } }
         // The Mac's pull of saves made anywhere (13.8): at launch and on every activation, once the engine has landed what
         // arrived. Not awaited: a slow library never holds the foregrounding.
         Task { @MainActor [savePull] in await savePull.check() }

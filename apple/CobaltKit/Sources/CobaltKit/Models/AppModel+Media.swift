@@ -46,6 +46,23 @@ extension AppModel {
         persistLocalTitle(new, for: item)
         guard capabilities.titles, let post, let anchor = post.files.first?.id else { return }
 
+        if let sync = library.sync, sync.isActive {
+            let before = library.storedPost(post.id) ?? post
+            library.setCustomTitle(new, post: post.id)
+            var after = before
+            after.customTitle = new
+            do {
+                try await sync.enqueueTitle(before: before, after: after, anchor: anchor, title: new) { [weak self] in
+                    self?.library.setCustomTitle(previousPost, post: post.id)
+                    self?.persistLocalTitle(previousLocal, for: item)
+                }
+            } catch {
+                library.setCustomTitle(previousPost, post: post.id)
+                persistLocalTitle(previousLocal, for: item)
+                throw failure(from: error)
+            }
+            return
+        }
         library.setCustomTitle(new, post: post.id)
         do {
             let result = try await ctx.client.setTitle(anchor: anchor, new)
@@ -95,6 +112,25 @@ extension AppModel {
         }
         guard !library.visibilityInFlight.contains(listed.id) else { return VisibilityChange(file: listed, cacheCleared: nil) }
         let previous = library.file(id: listed.id) ?? listed
+        if let sync = library.sync, sync.isActive, let before = library.postOwning(file: listed.id) {
+            var optimistic = previous
+            optimistic.wireVisibility = makePublic ? .public : .private
+            if !makePublic { optimistic.url = nil }
+            library.replace(file: optimistic)
+            var after = before
+            if let index = after.files.firstIndex(where: { $0.id == listed.id }) {
+                after.files[index] = optimistic
+                after.visibility = after.files.first { $0.role == .privateCopy }?.visibility
+                    ?? (after.files.contains(where: \.isPublic) ? .public : .private)
+            }
+            do {
+                try await sync.enqueueVisibility(before: before, after: after, fileID: listed.id, makePublic: makePublic)
+            } catch {
+                library.replace(file: previous)
+                throw failure(from: error)
+            }
+            return VisibilityChange(file: optimistic, cacheCleared: nil)
+        }
         library.visibilityInFlight.insert(listed.id)
         defer { library.visibilityInFlight.remove(listed.id) }
 
@@ -266,7 +302,28 @@ extension AppModel {
         return try await deleteWebpsOnly(item)
     }
 
+    /// Device files leave only after the server has accepted the delete. A refusal puts the library row back
+    /// and the files are still here.
+    private func removeLocalMedia(of item: MediaItem) async {
+        guard let local = item.local else { return }
+        if !(await store.removeMedia(local.id)) {
+            for record in local.renditions where !store.isInUse(record.id) { await store.remove(record.id) }
+        }
+    }
+
     private func deleteWholePost(_ item: MediaItem, post: LibraryPost, anchor: String) async throws -> DeleteOutcome {
+        if let sync = library.sync, sync.isActive {
+            let before = library.storedPost(post.id) ?? post
+            library.drop(post: post.id)
+            do {
+                try await sync.enqueueDelete(post: before, anchor: anchor) { [weak self] in
+                    await self?.removeLocalMedia(of: item)
+                }
+            } catch {
+                throw failure(from: error)
+            }
+            return .done
+        }
         let result: PostDeleteResult
         do {
             result = try await ctx.client.deletePost(anchor: anchor)
