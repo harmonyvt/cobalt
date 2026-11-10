@@ -1,6 +1,36 @@
 import Foundation
 import Network
 import Synchronization
+import SyncGlowKit
+
+/// Notes from a pass. The engine appends and returns; it does not wait on the main actor. `Mutex`
+/// stays inside this class, so the callback captures a reference.
+private final class SyncInbox: @unchecked Sendable {
+    enum Item: Sendable {
+        case snapshot(SyncLibrarySnapshot, String)
+        case fallback
+        case acknowledged(String)
+        case refused(SyncOp)
+        case activity(SyncActivity)
+    }
+
+    private let items = Mutex<[Item]>([])
+    private let ping = Mutex<(@Sendable () -> Void)?>(nil)
+
+    /// A retry the engine starts itself has no `kick` to drain this. The ping schedules that drain.
+    func arm(_ body: @escaping @Sendable () -> Void) {
+        ping.withLock { $0 = body }
+    }
+
+    func add(_ item: Item) {
+        items.withLock { $0.append(item) }
+        ping.withLock { $0?() }
+    }
+
+    func drain() -> [Item] {
+        items.withLock { let copy = $0; $0.removeAll(); return copy }
+    }
+}
 
 /// The library's copy of the engine. Created only when `SyncFeature` is on. Screens keep reading
 /// `LibraryModel`; this fills it from the store at launch and after every pass, so a filter, a sort
@@ -16,8 +46,14 @@ final class LibrarySync {
     private var confirmations: [String: @MainActor () async -> Void] = [:]
     private var undos: [String: @MainActor () -> Void] = [:]
     private var connected = false
+    /// Engine callbacks append here and return. They do not hop to the main actor: a pass that
+    /// waited on the main actor (the caller of `kick`) stalled for seconds, and a nudge set just
+    /// before that wait was already "over" by the time the pass began.
+    private let inbox = SyncInbox()
     /// False after `GET /sync` answers 404. Today's library loading takes over for this launch.
     private(set) var isActive = true
+    /// What the constellation glow draws. Updated as passes start and end; it does not decide them.
+    let status = SyncGlowStatus()
     var onApply: (@MainActor (SyncLibrarySnapshot, String) -> Void)?
     /// The route is missing and the cache, if any, must not be the only copy the screen keeps.
     var onLegacy: (@MainActor () async -> Void)?
@@ -25,6 +61,9 @@ final class LibrarySync {
     init(store: SyncStore, transport: any SyncTransport, sender: any SyncSender) {
         self.store = store
         self.engine = SyncEngine(store: store, transport: transport, sender: sender)
+        inbox.arm { [weak self] in
+            Task { @MainActor [weak self] in await self?.flushInbox() }
+        }
     }
 
     /// The real client. `client` is read on each request, so a server change is picked up.
@@ -40,9 +79,11 @@ final class LibrarySync {
         if await store.hasReadyMarker(), let snapshot = try? await store.snapshot(), !snapshot.visible.isEmpty || !snapshot.hidden.isEmpty {
             deliver(snapshot, source: "cache")
         }
-        paths.start { [weak self] in
+        paths.start({ [weak self] in
             Task { @MainActor in await self?.kick(.reconnect) }
-        }
+        }, onReachable: { [weak self] up in
+            Task { @MainActor in await self?.noteReachable(up) }
+        })
         await kick(.launch)
         if !isActive { await onLegacy?() }
     }
@@ -51,11 +92,16 @@ final class LibrarySync {
         guard isActive else { return }
         await connect()
         await engine.syncNow()
+        await flushInbox()
         _ = trigger
     }
 
     /// The ChangeFeed socket will call this. The nudge carries no rows; the pull does.
-    func nudge() async { await kick(.nudge) }
+    /// The glow plays a shooting star, then the same pass as any other kick.
+    func nudge() async {
+        status.nudged()
+        await kick(.nudge)
+    }
 
     func syncNow() async { await kick(.foreground) }
 
@@ -117,19 +163,63 @@ final class LibrarySync {
     private func connect() async {
         guard !connected else { return }
         connected = true
+        let inbox = inbox
         await engine.setCallbacks(
-            snapshot: { [weak self] snapshot in
-                await self?.apply(snapshot, source: "sync")
+            snapshot: { [inbox] snapshot in
+                inbox.add(.snapshot(snapshot, "sync"))
             },
-            fallback: { [weak self] in
-                await self?.markFellBack()
+            fallback: { [inbox] in
+                inbox.add(.fallback)
             },
-            acknowledged: { [weak self] id in
-                await self?.acknowledge(id)
+            acknowledged: { [inbox] id in
+                inbox.add(.acknowledged(id))
             },
-            refused: { [weak self] op in
-                await self?.refuse(op)
+            refused: { [inbox] op in
+                inbox.add(.refused(op))
             })
+        await engine.setActivity { [inbox] signal in
+            inbox.add(.activity(signal))
+        }
+    }
+
+    /// Applies what the pass recorded. `kick` calls this before it returns, so the screen and the
+    /// glow match the pass with no extra hop. A retry the engine starts on its own has no `kick`,
+    /// so the callback also asks for a flush; draining twice is empty the second time.
+    private func flushInbox() async {
+        for item in inbox.drain() {
+            switch item {
+            case .snapshot(let snapshot, let source):
+                apply(snapshot, source: source)
+            case .fallback:
+                markFellBack()
+            case .acknowledged(let id):
+                await acknowledge(id)
+            case .refused(let op):
+                refuse(op)
+            case .activity(let signal):
+                receive(signal)
+            }
+        }
+    }
+
+    private func receive(_ signal: SyncActivity) {
+        switch signal {
+        case .passBegan:
+            status.passBegan()
+        case .passEnded(let pending):
+            status.passEnded(pending: pending)
+        case .refused(let pending):
+            status.refused(pending: pending)
+        case .repull:
+            status.repullBegan()
+        case .fellBack:
+            status.routeFellBack()
+        }
+    }
+
+    private func noteReachable(_ up: Bool) async {
+        let pending = (try? await store.pendingOps().count) ?? status.pendingCount
+        status.reachability(up, pending: pending)
     }
 
     private func apply(_ snapshot: SyncLibrarySnapshot, source: String) {
@@ -211,12 +301,14 @@ final class SyncPathWatch: @unchecked Sendable {
     private let wasDown = PathDown()
     private var started = false
 
-    func start(_ onReconnect: @escaping @Sendable () -> Void) {
+    func start(_ onReconnect: @escaping @Sendable () -> Void, onReachable: @escaping @Sendable (Bool) -> Void = { _ in }) {
         guard !started else { return }
         started = true
         let down = wasDown
         monitor.pathUpdateHandler = { path in
-            if path.status != .satisfied {
+            let up = path.status == .satisfied
+            onReachable(up)
+            if !up {
                 down.flag.withLock { $0 = true }
                 return
             }

@@ -1,5 +1,14 @@
 import Foundation
 
+/// What one pass did, for the library glow. The engine still sends, rolls back and pulls exactly as before.
+enum SyncActivity: Sendable, Equatable {
+    case passBegan
+    case passEnded(pending: Int)
+    case refused(pending: Int)
+    case repull
+    case fellBack
+}
+
 /// Sends the outbox, oldest first, then asks what changed. One pass is the body of the loop; tests
 /// call `syncNow` directly. The socket nudge is `SyncTrigger.nudge` and does nothing but run a pass:
 /// the socket itself is a later slice.
@@ -19,6 +28,8 @@ actor SyncEngine {
     private var onFallback: (@Sendable () async -> Void)?
     private var onAcknowledged: (@Sendable (String) async -> Void)?
     private var onRefused: (@Sendable (SyncOp) async -> Void)?
+    /// Reports what a pass did, for the library glow. Never changes what is sent or pulled.
+    private var onActivity: (@Sendable (SyncActivity) async -> Void)?
 
     func setCallbacks(
         snapshot: @escaping @Sendable (SyncLibrarySnapshot) async -> Void,
@@ -30,6 +41,11 @@ actor SyncEngine {
         onFallback = fallback
         onAcknowledged = acknowledged
         onRefused = refused
+    }
+
+    /// The glow listens here. Leaving it unset (the tests, a caller that does not care) changes nothing.
+    func setActivity(_ handler: (@Sendable (SyncActivity) async -> Void)?) {
+        onActivity = handler
     }
 
     init(store: SyncStore, transport: any SyncTransport, sender: any SyncSender, clock: @escaping @Sendable () -> Date = { Date() }) {
@@ -69,9 +85,17 @@ actor SyncEngine {
 
     private func pass(token: Int) async {
         guard token == generation else { return }
+        await signal(.passBegan)
         let drained = await OutboxDrainer.drain(store: store, sender: sender, now: clock())
-        if token != generation { return }
-        for op in drained.refused { await onRefused?(op) }
+        if token != generation {
+            await signal(.passEnded(pending: await pendingCount()))
+            return
+        }
+        let pending = await pendingCount()
+        for op in drained.refused {
+            await onRefused?(op)
+            await signal(.refused(pending: pending))
+        }
         for id in drained.acknowledged { await onAcknowledged?(id) }
         await publish()
         schedule(drained.wake)
@@ -80,8 +104,13 @@ actor SyncEngine {
         } catch SyncError.notDeployed {
             fellBack = true
             await onFallback?()
+            await signal(.fellBack)
         } catch SyncError.cursorTooOld {
-            guard token == generation else { return }
+            guard token == generation else {
+                await signal(.passEnded(pending: await pendingCount()))
+                return
+            }
+            await signal(.repull)
             try? await store.resetCursor()
             await publish()
             do { try await pull(token: token) } catch {
@@ -90,6 +119,15 @@ actor SyncEngine {
         } catch {
             Telemetry.log(.warn, .sync, "sync pull failed", data: ["error": .string(String(describing: error))])
         }
+        await signal(.passEnded(pending: await pendingCount()))
+    }
+
+    private func signal(_ event: SyncActivity) async {
+        await onActivity?(event)
+    }
+
+    private func pendingCount() async -> Int {
+        (try? await store.pendingOps().count) ?? 0
     }
 
     private func pull(token: Int) async throws {

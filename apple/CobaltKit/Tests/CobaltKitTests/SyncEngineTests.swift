@@ -232,6 +232,53 @@ struct SyncEngineTests {
         #expect(SyncPage.isCursorTooOld(status: 409, data: envelope))
     }
 
+    @Test func aReportDoesNotChangeARefusalOrAStaleCursor() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let original = sample("p", title: "old", custom: "old")
+        try await store.upsert(original)
+        _ = try await store.commit(post: renamed(original, "new"), op: op(.title, post: original, title: "new"))
+        let seen = Mutex<[SyncActivity]>([])
+        // The op is stamped `t0`. The engine's default clock is "now", which is years later, so the
+        // outbox would drop the edit as expired and never refuse it.
+        let engine = SyncEngine(
+            store: store,
+            transport: ScriptedSync { _ in
+                SyncPage(seq: 1, more: false, posts: [original], links: [], collections: [], sets: [], names: [], rules: [], gone: [])
+            },
+            sender: ScriptedSender(results: [.failure(SyncError.refused("error.library.bad_title"))]),
+            clock: { t0 })
+        await engine.setActivity { event in seen.withLock { $0.append(event) } }
+        await engine.syncNow()
+        let events = seen.withLock { $0 }
+        #expect(events.first == .passBegan)
+        #expect(events.contains { if case .refused(let pending) = $0 { return pending == 0 } else { return false } })
+        #expect(events.last == .passEnded(pending: 0))
+        #expect(try await store.post(id: "p")?.customTitle == "old")
+        #expect(try await store.pendingOps().isEmpty)
+
+        let restart = try SyncStore(fileURL: try tempDB())
+        let kept = sample("old", title: "old")
+        try await restart.apply(SyncPage(seq: 50, more: false, posts: [kept], links: [], collections: [], sets: [], names: [], rules: [], gone: []))
+        var pendingTitle = op(.title, post: kept, title: "pending")
+        pendingTitle.createdAt = Date()
+        _ = try await restart.commit(post: renamed(kept, "pending"), op: pendingTitle)
+        let pulls = ScriptedSync { since in
+            if since != 0 { throw SyncError.cursorTooOld }
+            return SyncPage(seq: 1, more: false, posts: [sample("fresh", title: "fresh")], links: [], collections: [], sets: [], names: [], rules: [], gone: [])
+        }
+        let again = Mutex<[SyncActivity]>([])
+        let restartEngine = SyncEngine(store: restart, transport: pulls, sender: ScriptedSender(results: [.failure(SyncError.retryable("offline"))]))
+        await restartEngine.setActivity { event in again.withLock { $0.append(event) } }
+        await restartEngine.syncNow()
+        #expect(pulls.calls == [50, 0])
+        #expect(try await restart.post(id: "old") == nil)
+        #expect(try await restart.pendingOps().count == 1)
+        #expect(await restart.cursor() == 1)
+        let reported = again.withLock { $0 }
+        #expect(reported.contains(.repull))
+        #expect(reported.last == .passEnded(pending: 1))
+    }
+
     @Test func featureFlagDefaultsOff() {
         let defaults = UserDefaults(suiteName: "cobalt.sync.flag.\(UUID().uuidString)")!
         #expect(!SyncFeature.isEnabled(defaults))
@@ -285,6 +332,54 @@ struct SyncHTTPTests {
     }
 }
 
+@Suite("library glow wiring")
+@MainActor
+struct LibrarySyncGlowTests {
+    @Test func aRefusalReachesTheGlowAndTheTitleStillComesBack() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let original = sample("p", title: "old", custom: "old")
+        try await store.upsert(original)
+        let sync = LibrarySync(
+            store: store,
+            transport: QuietPull { _ in
+                SyncPage(seq: 3, more: false, posts: [original], links: [], collections: [], sets: [], names: [], rules: [], gone: [])
+            },
+            sender: ScriptedSender(results: [.failure(SyncError.refused("error.library.bad_title"))]))
+        try await sync.enqueueTitle(before: original, after: renamed(original, "nope"), anchor: "p-f", title: "nope", undo: {})
+        #expect(sync.status.state == .refused)
+        #expect(sync.status.lastEvent == .refused)
+        #expect(try await store.post(id: "p")?.customTitle == "old")
+        #expect(try await store.pendingOps().isEmpty)
+    }
+
+    @Test func aNudgeMarksTheGlowAndStillPulls() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let pulls = QuietPull { _ in
+            SyncPage(seq: 2, more: false, posts: [sample("a", title: "a")], links: [], collections: [], sets: [], names: [], rules: [], gone: [])
+        }
+        let sync = LibrarySync(store: store, transport: pulls, sender: ScriptedSender(results: []))
+        await sync.nudge()
+        #expect(sync.status.lastEvent == .nudge)
+        #expect(sync.status.state == .nudge)
+        #expect(pulls.calls == [0])
+        #expect(try await store.post(id: "a")?.title == "a")
+    }
+
+    @Test func aMissingRouteTurnsTheGlowOffAndKeepsTheCopy() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        try await store.upsert(sample("kept", title: "kept"))
+        let sync = LibrarySync(
+            store: store,
+            transport: QuietPull { _ in throw SyncError.notDeployed },
+            sender: ScriptedSender(results: []))
+        await sync.kick(.launch)
+        #expect(!sync.isActive)
+        #expect(sync.status.state == .off)
+        #expect(sync.status.lastEvent == .fellBack)
+        #expect(try await store.post(id: "kept")?.title == "kept")
+    }
+}
+
 // MARK: - fixtures
 
 private func tempDB() throws -> URL {
@@ -317,6 +412,22 @@ private func op(_ kind: SyncOp.Kind, post: LibraryPost, title: String?) -> SyncO
             anchor: post.files.first?.id ?? post.id, title: title, status: nil, makePublic: nil, fileID: nil,
             before: SyncPostCoding.encode(post)),
         createdAt: t0, tries: 0, nextAttemptAt: Date(timeIntervalSince1970: 0))
+}
+
+/// A pull double that does not call `#expect`. `ScriptedSync` does, and from a `@MainActor` test that
+/// is waiting on the engine, that record has to get back onto the main actor and the pass stalls.
+private final class QuietPull: SyncTransport, @unchecked Sendable {
+    private let handler: @Sendable (Int64) throws -> SyncPage
+    private let seen = Mutex<[Int64]>([])
+    var calls: [Int64] { seen.withLock { $0 } }
+
+    init(_ handler: @escaping @Sendable (Int64) throws -> SyncPage) { self.handler = handler }
+
+    func pull(since: Int64, limit: Int) async throws -> SyncPage {
+        seen.withLock { $0.append(since) }
+        _ = limit
+        return try handler(since)
+    }
 }
 
 private final class ScriptedSync: SyncTransport, @unchecked Sendable {

@@ -120,6 +120,7 @@ struct CobaltApp: App {
         SwiftUI.Settings {
             SettingsScreen(model: model)
                 .cobaltRoot(model: model)
+                .syncGlow(model.library.syncStatus)
                 .frame(width: 560, height: 740)
         }
         EditorWindow(model: model)
@@ -140,6 +141,7 @@ struct CobaltApp: App {
         #endif
         #if DEBUG
         LaunchConfig.runDebugLiveIfRequested()
+        SyncGlowDebugLaunch.apply(to: model)
         await LaunchConfig.runPreviewScriptIfRequested(model)
         #endif
     }
@@ -160,6 +162,7 @@ struct CobaltApp: App {
 
     private var windowContent: some View {
         rootContent
+            .syncGlow(model.library.syncStatus, suppressed: windowGlowSuppressed)
             .onOpenURL { url in
                 #if DEBUG
                 DebugHooks.log("onOpenURL \(url.absoluteString)")
@@ -172,6 +175,17 @@ struct CobaltApp: App {
             #endif
     }
 
+    /// iOS full-screen presentations draw their own band. The window's band waits, so the two never stack.
+    private var windowGlowSuppressed: Bool {
+        #if os(iOS)
+        !SyncGlowPlacement.windowShowsBand(
+            queueSheet: model.queueShown,
+            editorCover: model.editor.session != nil || EditorLauncher.shared.isBusy)
+        #else
+        false
+        #endif
+    }
+
     #if os(iOS)
     private var mainWindow: some Scene {
         WindowGroup { windowContent }
@@ -181,6 +195,9 @@ struct CobaltApp: App {
             .backgroundTask(.urlSession(matching: AppModel.ownsBackgroundSession)) { [model] identifier in
                 await model.handleBackgroundDownloads(identifier: identifier)
             }
+            #if DEBUG
+            .commands { SyncGlowDebugCommands(model: model) }
+            #endif
     }
     #else
     /// One window, not a `WindowGroup`: a group opens another window for every `cobalt-apple://` link
@@ -209,6 +226,9 @@ struct CobaltApp: App {
                 CommandGroup(after: .toolbar) {
                     StageWallpaperCommand(menu: wallpaper, model: model)
                 }
+                #if DEBUG
+                SyncGlowDebugCommands(model: model)
+                #endif
             }
     }
 
