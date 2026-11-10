@@ -50,7 +50,8 @@ export async function normalizeUrlField(request: Request): Promise<Request> {
 
 // ---- request log (d1/migrations/0002_request_log.sql) -----------------------
 // Records what a keyed POST carried and what came back, never keys. Failures
-// here are swallowed: logging must not break a download.
+// here are swallowed: logging must not break a download. The row does not hold
+// the answer either: the ops write it through background() (src/background.ts).
 
 export type BodyInfo = {
     contentType: string | null;
@@ -95,7 +96,10 @@ export async function describeBody(request: Request): Promise<BodyInfo> {
     }
 }
 
-export async function logRequest(
+// Writes the row. Everything it needs from the request and the response is taken HERE, before the first await: the
+// call sites hand this to background() (src/background.ts) and return `res` to the client, and a response that is
+// already on its way out can no longer be cloned. The row itself may then be written after the answer.
+export function logRequest(
     db: D1Database,
     route: string,
     keyId: string,
@@ -103,11 +107,24 @@ export async function logRequest(
     info: BodyInfo,
     res: Response,
 ): Promise<void> {
+    const ts = Date.now();
+    const status = res.status;
+    const userAgent = (request.headers.get("user-agent") ?? "").slice(0, 200);
+    let copy: Response | null = null;
+    try {
+        if ((res.headers.get("content-type") ?? "").includes("json")) copy = res.clone();
+    } catch {
+        // a body that cannot be cloned: the row goes without result and error code
+    }
+    return writeLogRow(db, [ts, route, keyId, userAgent, info.contentType, info.bytes, info.keys, info.urlType, info.urlLen, info.urlPrefix, status], copy);
+}
+
+async function writeLogRow(db: D1Database, row: (string | number | null)[], copy: Response | null): Promise<void> {
     try {
         let result: string | null = null;
         let errorCode: string | null = null;
-        if ((res.headers.get("content-type") ?? "").includes("json")) {
-            const body = (await res.clone().json().catch(() => null)) as {
+        if (copy) {
+            const body = (await copy.json().catch(() => null)) as {
                 status?: unknown;
                 error?: { code?: unknown };
             } | null;
@@ -118,21 +135,7 @@ export async function logRequest(
             .prepare(
                 "INSERT INTO request_log (ts, route, key_id, user_agent, content_type, body_bytes, body_keys, url_type, url_len, url_prefix, status, result, error_code) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             )
-            .bind(
-                Date.now(),
-                route,
-                keyId,
-                (request.headers.get("user-agent") ?? "").slice(0, 200),
-                info.contentType,
-                info.bytes,
-                info.keys,
-                info.urlType,
-                info.urlLen,
-                info.urlPrefix,
-                res.status,
-                result,
-                errorCode,
-            )
+            .bind(...row, result, errorCode)
             .run();
     } catch {
         // never let logging fail the request

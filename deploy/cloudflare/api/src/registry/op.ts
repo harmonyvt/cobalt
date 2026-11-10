@@ -8,6 +8,7 @@ import type { AppDeps } from "../app-routes";
 import type { ChatCollect, ChatTools } from "../chat-tools";
 import type { ContainerStub, StageEdge } from "../deps";
 import type { EmbedClient } from "../embed";
+import type { KeyCache } from "../keys";
 import type { EdgeDeps } from "../studio-edge";
 import type { WorkerEnv } from "../worker";
 import type { Registry } from "./registry";
@@ -61,6 +62,9 @@ export type OpContext = {
     registry: Registry;
     // what the stage needs beyond the env (the StageRoom Durable Object; tests pass fakes)
     stageEdge: StageEdge;
+    // the isolate's key cache (src/keys.ts), when the call came through the Worker's fetch handler: the key checks read
+    // it, and registry/http.ts empties it after a write through the account routes
+    keyCache?: KeyCache;
     // lazily built, once per call
     app(): AppDeps;
     embed(): EmbedClient | null;

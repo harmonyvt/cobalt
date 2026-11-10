@@ -6,6 +6,10 @@ export default defineConfig({
 		compatibilityDate: "2026-09-01",
 		entrypoint: "src/index.ts",
 		workersDev: false,
+		// Worker console output and exceptions to Workers Logs, with one line per request (the same block as the API
+		// Worker's, ../api/cloudflare.config.ts). Only the paths in runWorkerFirst below run the Worker, so only those
+		// show up; a static asset never reaches it.
+		observability: { enabled: true, logs: { enabled: true, invocationLogs: true } },
 		previewUrls: false,
 		assets: {
 			notFoundHandling: "404-page",

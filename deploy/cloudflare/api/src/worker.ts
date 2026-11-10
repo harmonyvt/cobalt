@@ -9,7 +9,7 @@ import { decide, isStudioPath } from "./gate";
 import { SERVICE_HEADER, stripInternalHeaders } from "./headers";
 import type { PublishBucket } from "./publish";
 import { serviceAuthorized } from "./service-auth";
-import { countryOf } from "./keys";
+import { countryOf, type KeyCache } from "./keys";
 import { handleOp, opBase, REGISTRY, type Registry } from "./registry/index";
 import type { RouteHost } from "./registry/op";
 import type { OriginalsBucket } from "./studio";
@@ -123,11 +123,15 @@ export interface WorkerEnv {
     CHAT_AGENTS?: DurableObjectNamespace;
     // How many sub-agents one chat may start per UTC day (default 20, "0" turns sub-agents off).
     CHAT_DAILY_AGENTS?: string;
+    // "1": every request's D1 round trips are counted and one JSON line per request is logged (src/d1-timing.ts).
+    // Anything else: DB is the plain binding and nothing is logged.
+    D1_TIMING?: string;
 }
 
 
-// The op registry the Worker routes through (section 33); tests pass their own.
-export type RegistryEdge = { registry?: Registry };
+// The op registry the Worker routes through (section 33); tests pass their own. `keyCache` is the isolate's key cache
+// (src/keys.ts): index.ts passes its one; without it every key check is a D1 statement.
+export type RegistryEdge = { registry?: Registry; keyCache?: KeyCache };
 
 export { embedFrom, type ContainerStub, type StageEdge } from "./deps";
 export { bodyLink, describeBody, extractFirstUrl, logRequest, normalizeUrlField, type BodyInfo } from "./request-log";
@@ -158,7 +162,7 @@ export async function handleRequest(
     const host = hostOf(env, edge, deps, new URL(incoming.url).hostname);
     if (host !== "api") {
         const url = new URL(incoming.url);
-        const res = await handleOp(registry, opBase(env, container, edge, registry, deps), { request: incoming, url, service: false, host });
+        const res = await handleOp(registry, opBase(env, container, edge, registry, deps, deps.keyCache), { request: incoming, url, service: false, host });
         return res ?? new Response(null, { status: 404 });
     }
     const res = await handleInner(incoming, env, container, edge, deps);
@@ -208,7 +212,7 @@ async function handleInner(
 
     // Every route is an op (section 33.12).
     const registry = stageEdge.registry ?? REGISTRY;
-    const byOp = await handleOp(registry, opBase(env, container, edge, registry, stageEdge), { request, url, service: isService, allowOrigin, country: countryOf(incoming) });
+    const byOp = await handleOp(registry, opBase(env, container, edge, registry, stageEdge, stageEdge.keyCache), { request, url, service: isService, allowOrigin, country: countryOf(incoming) });
     if (byOp) return byOp;
 
     // What no op takes: preflights, and a bodyless 404 for everything else.

@@ -8,7 +8,7 @@
 //    links.rotate (asks). Rotating every key and the new-links setting are the owner's: routes only.
 import * as z from "zod";
 import { ITEM_ID_REGEX } from "../../gate";
-import { linkByKey, PRIVATE_KEY_REGEX, type PrivateKind } from "../../private-links";
+import { linkByKey, linkShape, PRIVATE_KEY_REGEX, type PrivateKind } from "../../private-links";
 import {
     collectionPrivacy,
     currentLink,
@@ -24,7 +24,8 @@ import {
 import { COLLECTION_ID_REGEX } from "../../share-collections";
 import { HIDDEN_HINT } from "../../hidden";
 import { privateFileUrls } from "../../share-private";
-import { listShareSets, liveSetRow, SET_ID_REGEX } from "../../share-sets";
+import { listShareSets, liveSetRow, SET_ID_REGEX, SHARE_LIST_MAX, shapeShareSets } from "../../share-sets";
+import { readPrivateHome } from "../../share-reads";
 import type { StudioReply } from "../../studio";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
 import { linkFiles, shareSetDeps, unwrap } from "./share";
@@ -101,9 +102,22 @@ const ROUTE_OPS = [
         summary:
             "Every live private link, newest first, whether new gallery links start private, and the gallery links themselves (the section 24 list, for the web Worker, which GET /share/sets refuses) (GET /share/private).",
         run: async (ctx, d) => {
+            const sd = shareSetDeps(ctx);
+            // the private links, the setting and the gallery list are one round trip (the key check is the other)
+            const home = sd ? await readPrivateHome(d.db, SHARE_LIST_MAX) : null;
+            if (home && sd) {
+                return {
+                    status: 200,
+                    body: {
+                        status: "success",
+                        links: home.links.map((l) => linkShape(l, d.shareBaseUrl)),
+                        new_links: home.newLinks,
+                        sets: await shapeShareSets(sd, home.sets),
+                    },
+                };
+            }
             const r = await listPrivate(d);
             if (r.status !== 200) return r;
-            const sd = shareSetDeps(ctx);
             const sets = sd ? await listShareSets(sd) : null;
             const list = sets && sets.status === 200 ? ((sets.body as { sets?: unknown[] }).sets ?? []) : [];
             return { status: 200, body: { ...(r.body as Record<string, unknown>), sets: list } };

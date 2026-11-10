@@ -12,6 +12,7 @@ import { effectiveTags, parseList, ABOUT_MAX_ATTEMPTS, type AboutRow } from "./a
 import {
     deleteHiddenRow,
     hiddenCount,
+    hiddenCountStmt,
     hiddenReady,
     hiddenRows,
     postKeysOfFiles,
@@ -20,6 +21,7 @@ import {
     type HiddenRow,
 } from "./hidden-store";
 import { randomBase62 } from "./ids";
+import { readTogether } from "./library";
 import { POST_KEY_SQL } from "./post-key";
 import { itemOn, type PrivateDeps } from "./private-actions";
 import { revokeLinkQuietly } from "./private-links";
@@ -474,7 +476,17 @@ async function ruleById(db: D1Database, id: string): Promise<RuleRow | null> {
 
 export async function listRules(d: Pick<HiddenDeps, "db">): Promise<StudioReply> {
     return guarded(d.db, "rules", async () => {
-        const { results } = await d.db.prepare("SELECT * FROM hidden_rules ORDER BY created_at, id").all<RuleRow>();
+        const rulesStmt = d.db.prepare("SELECT * FROM hidden_rules ORDER BY created_at, id");
+        // the rules and the two counts in one round trip (guarded: the tables are there); one by one without a batch
+        const together = await readTogether(d.db, [rulesStmt, hiddenCountStmt(d.db, "hidden"), hiddenCountStmt(d.db, "held")]);
+        if (together) {
+            const n = (rows: Record<string, unknown>[]) => Number((rows[0] as { n?: number } | undefined)?.n ?? 0);
+            return {
+                status: 200,
+                body: { status: "success", rules: (together[0] as unknown as RuleRow[]).map(ruleShape), hidden: n(together[1]!), held: n(together[2]!) },
+            };
+        }
+        const { results } = await rulesStmt.all<RuleRow>();
         return {
             status: 200,
             body: { status: "success", rules: results.map(ruleShape), hidden: await hiddenCount(d.db, "hidden"), held: await hiddenCount(d.db, "held") },

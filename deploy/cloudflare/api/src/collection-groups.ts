@@ -4,6 +4,7 @@
 // out of every group.
 
 import { COLLECTION_ID_REGEX, COLLECTION_NAME_MAX, mintCollectionId } from "./share-collections";
+import { readTogether, rowsOf, tryBatch } from "./share-reads";
 import type { StudioReply } from "./studio";
 
 export const GROUP_NAME_MAX = COLLECTION_NAME_MAX;
@@ -51,31 +52,25 @@ async function readBody(request: Request): Promise<Record<string, unknown> | nul
     }
 }
 
-// The existing collections among `ids`; the rest are answered as not found.
-async function existing(db: D1Database, ids: string[]): Promise<Set<string>> {
-    if (ids.length === 0) return new Set();
-    const marks = ids.map((_, i) => `?${i + 1}`).join(", ");
-    const { results } = await db
-        .prepare(`SELECT id FROM share_collections WHERE id IN (${marks})`)
-        .bind(...ids)
-        .all<{ id: string }>();
-    return new Set(results.map((r) => r.id));
-}
+// The statements below are built apart from being run, so a route can send several of them as one batch: one round
+// trip to D1 where each used to be its own.
+type Member = { group_id: string; collection_id: string };
 
-// Each group with its existing collections, newest added first.
-async function shapes(db: D1Database, rows: Row[]) {
-    if (rows.length === 0) return [];
-    const marks = rows.map((_, i) => `?${i + 1}`).join(", ");
-    const { results } = await db
-        .prepare(
-            `SELECT i.group_id, i.collection_id FROM collection_group_items i JOIN share_collections c ON c.id = i.collection_id
-              WHERE i.group_id IN (${marks})
-              ORDER BY i.added_at DESC, i.collection_id DESC`,
-        )
-        .bind(...rows.map((r) => r.id))
-        .all<{ group_id: string; collection_id: string }>();
+// The existing collections among `ids`; the rest are answered as not found.
+const existingStmt = (db: D1Database, ids: string[]) =>
+    db.prepare("SELECT id FROM share_collections WHERE id IN (SELECT value FROM json_each(?1))").bind(JSON.stringify(ids));
+
+// The existing collections of the groups named by `ids` (SQL: a list of group ids), newest added first.
+const membersSql = (ids: string) =>
+    `SELECT i.group_id, i.collection_id FROM collection_group_items i JOIN share_collections c ON c.id = i.collection_id
+      WHERE i.group_id IN (${ids})
+      ORDER BY i.added_at DESC, i.collection_id DESC`;
+const membersStmt = (db: D1Database, id: string) => db.prepare(membersSql("?1")).bind(id);
+
+// Each group with its existing collections, in the order `members` came.
+function shaped(rows: Row[], members: Member[]) {
     const by = new Map<string, string[]>();
-    for (const r of results) by.set(r.group_id, [...(by.get(r.group_id) ?? []), r.collection_id]);
+    for (const r of members) by.set(r.group_id, [...(by.get(r.group_id) ?? []), r.collection_id]);
     return rows.map((r) => ({
         id: r.id,
         name: r.name,
@@ -85,18 +80,16 @@ async function shapes(db: D1Database, rows: Row[]) {
     }));
 }
 
-async function one(db: D1Database, id: string): Promise<Row | null> {
-    return (
-        (await db.prepare("SELECT id, name, created_at, updated_at FROM collection_groups WHERE id = ?1").bind(id).first<Row>()) ?? null
-    );
-}
+const oneStmt = (db: D1Database, id: string) => db.prepare("SELECT id, name, created_at, updated_at FROM collection_groups WHERE id = ?1").bind(id);
+
+const LIST_SQL = `SELECT id, name, created_at, updated_at FROM collection_groups ORDER BY updated_at DESC, id DESC LIMIT ${GROUP_MAX}`;
 
 export async function listGroups(d: GroupDeps): Promise<StudioReply> {
     try {
-        const { results } = await d.db
-            .prepare(`SELECT id, name, created_at, updated_at FROM collection_groups ORDER BY updated_at DESC, id DESC LIMIT ${GROUP_MAX}`)
-            .all<Row>();
-        return { status: 200, body: { status: "success", groups: await shapes(d.db, results) } };
+        // the groups and their collections in one round trip: the second statement names the same groups by repeating
+        // the list
+        const res = await readTogether(d.db, [d.db.prepare(LIST_SQL), d.db.prepare(membersSql(`SELECT g.id FROM (${LIST_SQL}) g`))]);
+        return { status: 200, body: { status: "success", groups: shaped(rowsOf<Row>(res, 0), rowsOf<Member>(res, 1)) } };
     } catch {
         return err(503, "error.api.generic");
     }
@@ -108,14 +101,15 @@ export async function createGroup(d: GroupDeps, request: Request, keyId: string)
     const ids = collectionIds(b?.collection_ids);
     if (!b || name === null || ids === null) return err(400, "error.group.bad_request");
     try {
-        const count = await d.db.prepare("SELECT COUNT(*) AS n FROM collection_groups").first<{ n: number }>();
-        if ((count?.n ?? 0) >= GROUP_MAX) return err(409, "error.group.too_many");
-        const have = await existing(d.db, ids);
+        // two round trips: what is checked, then the writes with the answer read back behind them
+        const checks = await readTogether(d.db, [d.db.prepare("SELECT COUNT(*) AS n FROM collection_groups"), existingStmt(d.db, ids)]);
+        if ((rowsOf<{ n: number }>(checks, 0)[0]?.n ?? 0) >= GROUP_MAX) return err(409, "error.group.too_many");
+        const have = new Set(rowsOf<{ id: string }>(checks, 1).map((r) => r.id));
         const missing = ids.filter((i) => !have.has(i));
         if (missing.length > 0) return err(409, "error.group.collection_not_found", { collection_ids: missing });
         const now = d.now();
         const row: Row = { id: mintGroupId(d.randomBytes), name, created_at: now, updated_at: now };
-        await d.db.batch([
+        const done = await d.db.batch([
             d.db
                 .prepare("INSERT INTO collection_groups (id, name, key_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)")
                 .bind(row.id, row.name, keyId, now),
@@ -125,8 +119,9 @@ export async function createGroup(d: GroupDeps, request: Request, keyId: string)
                     .prepare("INSERT INTO collection_group_items (group_id, collection_id, added_at) VALUES (?1, ?2, ?3)")
                     .bind(row.id, c, now + ids.length - i),
             ),
+            membersStmt(d.db, row.id),
         ]);
-        const [shape] = await shapes(d.db, [row]);
+        const [shape] = shaped([row], rowsOf<Member>(done, done.length - 1));
         return { status: 201, body: { status: "success", group: shape } };
     } catch {
         return err(503, "error.api.generic");
@@ -144,18 +139,19 @@ export async function updateGroup(d: GroupDeps, request: Request, id: string): P
         return err(400, "error.group.bad_request");
     }
     try {
-        const row = await one(d.db, id);
-        if (!row) return err(404, "error.group.not_found");
-        const have = await existing(d.db, add);
+        // two round trips: what is checked, then the writes with the answer read back behind them
+        const checks = await readTogether(d.db, [
+            oneStmt(d.db, id),
+            existingStmt(d.db, add),
+            d.db.prepare("SELECT COUNT(*) AS n FROM collection_group_items WHERE group_id = ?1").bind(id),
+        ]);
+        if (rowsOf<Row>(checks, 0).length === 0) return err(404, "error.group.not_found");
+        const have = new Set(rowsOf<{ id: string }>(checks, 1).map((r) => r.id));
         const missing = add.filter((i) => !have.has(i));
         if (missing.length > 0) return err(409, "error.group.collection_not_found", { collection_ids: missing });
-        const count = await d.db
-            .prepare("SELECT COUNT(*) AS n FROM collection_group_items WHERE group_id = ?1")
-            .bind(id)
-            .first<{ n: number }>();
-        if ((count?.n ?? 0) + add.length - remove.length > GROUP_COLLECTIONS_MAX) return err(409, "error.group.full");
+        if ((rowsOf<{ n: number }>(checks, 2)[0]?.n ?? 0) + add.length - remove.length > GROUP_COLLECTIONS_MAX) return err(409, "error.group.full");
         const now = d.now();
-        await d.db.batch([
+        const done = await d.db.batch([
             d.db.prepare("UPDATE collection_groups SET name = COALESCE(?2, name), updated_at = ?3 WHERE id = ?1").bind(id, name ?? null, now),
             ...remove.map((c) => d.db.prepare("DELETE FROM collection_group_items WHERE group_id = ?1 AND collection_id = ?2").bind(id, c)),
             ...add.map((c, i) =>
@@ -163,8 +159,10 @@ export async function updateGroup(d: GroupDeps, request: Request, id: string): P
                     .prepare("INSERT INTO collection_group_items (group_id, collection_id, added_at) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING")
                     .bind(id, c, now + add.length - i),
             ),
+            oneStmt(d.db, id),
+            membersStmt(d.db, id),
         ]);
-        const [shape] = await shapes(d.db, [(await one(d.db, id))!]);
+        const [shape] = shaped([rowsOf<Row>(done, done.length - 2)[0]!], rowsOf<Member>(done, done.length - 1));
         return { status: 200, body: { status: "success", group: shape } };
     } catch {
         return err(503, "error.api.generic");
@@ -174,12 +172,16 @@ export async function updateGroup(d: GroupDeps, request: Request, id: string): P
 // Deletes the group only; its collections stay. Unknown id: 404 (already gone).
 export async function deleteGroup(d: GroupDeps, id: string): Promise<StudioReply> {
     try {
-        const row = await one(d.db, id);
-        if (!row) return err(404, "error.group.not_found");
-        await d.db.batch([
+        // one round trip: is there such a group, and the deletes, which change nothing for an unknown id
+        const deletes = [
             d.db.prepare("DELETE FROM collection_group_items WHERE group_id = ?1").bind(id),
             d.db.prepare("DELETE FROM collection_groups WHERE id = ?1").bind(id),
-        ]);
+        ];
+        const done = await tryBatch(d.db, [oneStmt(d.db, id), ...deletes]);
+        if (done) return rowsOf<Row>(done, 0).length > 0 ? { status: 200, body: { status: "success" } } : err(404, "error.group.not_found");
+        // the batch failed, and nothing of it was applied: the read, then the deletes, as before
+        if (!(await oneStmt(d.db, id).first<Row>())) return err(404, "error.group.not_found");
+        await d.db.batch(deletes);
         return { status: 200, body: { status: "success" } };
     } catch {
         return err(503, "error.api.generic");

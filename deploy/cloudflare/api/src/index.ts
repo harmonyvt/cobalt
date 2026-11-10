@@ -29,6 +29,8 @@ import { indexTerms } from "./about";
 import { indexMoments, MOMENTS_RUN_BUDGET_MS, timeTranscripts, TRANSCRIPT_RUN_BUDGET_MS } from "./transcripts";
 import { setRoastInput } from "./share-sets";
 import { embedFrom, handleRequest, type WorkerEnv } from "./worker";
+import { KeyCache } from "./keys";
+import { withD1Timing } from "./d1-timing";
 import { loaderRunner } from "./chat-loader";
 import { relayFetch } from "./model-fetch";
 import { roomPort, stageRetention } from "./stage";
@@ -441,17 +443,27 @@ const SPACE_WAKE_MS = 60_000;
 // The word list's vectors after the indexer (APP-API-CONTRACT.md section 34.5), inside the indexer's share of the run.
 const TERMS_RUN_BUDGET_MS = 45_000;
 
+// The isolate's key cache (src/keys.ts): a client key checked in the last minute is answered from here, not from D1.
+// Module scope, so it lives as long as the isolate and is shared by every request it serves; the Durable Objects
+// (other isolates) have none.
+const KEY_CACHE = new KeyCache();
+
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-        return handleRequest(request, env, getContainer(env.COBALT, "main"), {
-            // chat (APP-API-CONTRACT.md section 27): the model's code runs in a Dynamic Worker; a reply keeps
-            // going after the app goes away
-            codeRunner: env.LOADER ? loaderRunner(env.LOADER as WorkerLoader) : undefined,
-            waitUntil: (p) => ctx.waitUntil(p),
-            modelFetch: env.MODEL_RELAY ? relayFetch(env.MODEL_RELAY as any) : undefined,
-            // stage (section 30): the canvas WebSockets and the events pushed to them
-            stageRoom: env.STAGE_ROOM ? roomPort(env.STAGE_ROOM as any) : undefined,
-        });
+        // With D1_TIMING "1" the handler sees DB wrapped in a counter and one JSON line per request is logged
+        // (src/d1-timing.ts); otherwise `e` is `env` itself.
+        return withD1Timing(request, env, (e) =>
+            handleRequest(request, e, getContainer(env.COBALT, "main"), {
+                // chat (APP-API-CONTRACT.md section 27): the model's code runs in a Dynamic Worker; a reply keeps
+                // going after the app goes away
+                codeRunner: env.LOADER ? loaderRunner(env.LOADER as WorkerLoader) : undefined,
+                waitUntil: (p) => ctx.waitUntil(p),
+                modelFetch: env.MODEL_RELAY ? relayFetch(env.MODEL_RELAY as any) : undefined,
+                // stage (section 30): the canvas WebSockets and the events pushed to them
+                stageRoom: env.STAGE_ROOM ? roomPort(env.STAGE_ROOM as any) : undefined,
+                keyCache: KEY_CACHE,
+            }),
+        );
     },
     // Daily cron (cloudflare.config.ts triggers): telemetry retention, 30 days (D1 and R2
     // only, the container and the Durable Object are not touched), and the poster backfill:
