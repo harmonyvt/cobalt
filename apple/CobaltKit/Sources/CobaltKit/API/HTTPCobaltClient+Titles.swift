@@ -17,6 +17,11 @@ extension HTTPCobaltClient {
     /// `.server("error.library.not_found")`; anything else as the other keyed calls throw it
     /// (`CobaltError.api(code:httpStatus:)`, which maps to `.keyInvalid` for a revoked key).
     public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult {
+        try await writeTitle(anchor: itemID, title, idempotencyKey: nil)
+    }
+
+    /// `setTitle` with `Idempotency-Key`, so a retried outbox send cannot apply twice.
+    func writeTitle(anchor itemID: String, _ title: String?, idempotencyKey: String?) async throws -> PostTitleResult {
         let (key, session) = titleCredentials
         guard let key else { throw CobaltError.noAPIKey }               // never leaves the device
         guard var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
@@ -34,6 +39,7 @@ extension HTTPCobaltClient {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Api-Key \(key)", forHTTPHeaderField: "Authorization")
+        if let idempotencyKey { req.setValue(idempotencyKey, forHTTPHeaderField: SyncContract.idempotencyHeader) }
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["title": title.map { $0 as Any } ?? NSNull()])
 
         let data: Data
