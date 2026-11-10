@@ -231,26 +231,32 @@ final class HTTPSyncClient: SyncTransport, SyncSender, @unchecked Sendable {
     }
 }
 
+/// `Mutex` is not copyable, so the path callback cannot capture one by value. It keeps this reference.
+private final class PathDown: Sendable {
+    let flag = Mutex(false)
+}
+
 /// Fires when the path becomes usable again. The first satisfied path is launch, which already pulls.
 final class SyncPathWatch: @unchecked Sendable {
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "cobalt.sync.path")
-    private let wasDown = Mutex(false)
+    private let wasDown = PathDown()
     private var started = false
 
     func start(_ onReconnect: @escaping @Sendable () -> Void, onReachable: @escaping @Sendable (Bool) -> Void = { _ in }) {
         guard !started else { return }
         started = true
-        monitor.pathUpdateHandler = { [wasDown] path in
+        let down = wasDown
+        monitor.pathUpdateHandler = { path in
             let up = path.status == .satisfied
             onReachable(up)
             if !up {
-                wasDown.withLock { $0 = true }
+                down.flag.withLock { $0 = true }
                 return
             }
-            let again = wasDown.withLock { down -> Bool in
-                if !down { return false }
-                down = false
+            let again = down.flag.withLock { wasDown -> Bool in
+                if !wasDown { return false }
+                wasDown = false
                 return true
             }
             if again { onReconnect() }
