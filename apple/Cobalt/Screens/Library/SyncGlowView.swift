@@ -18,6 +18,8 @@ struct SyncGlowBand: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     @State private var onScreen = false
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
     @State private var previous: SyncGlowState = .upToDate
@@ -26,8 +28,13 @@ struct SyncGlowBand: View {
 
     var body: some View {
         let state = status?.state ?? .off
+        // The band is a veil over the toolbar and the first rows. Its star cores cover up to 86% whatever
+        // the strength, so dimming cannot promise legible buttons: with Reduce Transparency or Increase
+        // Contrast on it is not drawn at all. The modifiers below hang off the band's one child, so while
+        // it is not drawn (this, or the glow being off) none of them run, the tick included.
+        let plain = reduceTransparency || contrast == .increased
         Group {
-            if let status, state != .off {
+            if let status, state != .off, !plain {
                 representable(status: status, state: state)
                     .frame(height: 152)
                     .allowsHitTesting(false)
@@ -50,12 +57,18 @@ struct SyncGlowBand: View {
                 eventStart = CACurrentMediaTime()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
+        // The system posts this on whatever queue it likes. State is written on the main thread only.
+        .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange).receive(on: RunLoop.main)) { _ in
             lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
         }
         .task(id: taskKey(state)) {
+            // One tick whenever the state, the screen or the scene changes. Only a one-shot moment ends
+            // by the clock, so only then does the loop keep going. It keeps going behind another window
+            // too: a refusal that ended while nobody looked must not still be the state on return.
+            let ticking = SyncGlowPace.needsTick(state: state)
             while !Task.isCancelled {
                 status?.tick()
+                guard ticking else { return }
                 try? await Task.sleep(for: .milliseconds(200))
             }
         }
@@ -136,8 +149,39 @@ private struct SyncGlowMetalMac: NSViewRepresentable {
 
 /// Clears hit testing. The band is decoration over the library, including the Mac title bar area.
 final class SyncGlowMTKView: MTKView {
+    /// Told when the platform says whether anybody can see the band: on iOS the view leaves its window
+    /// while a full-screen cover is up, on the Mac the window reports being minimised or fully covered.
+    /// An ordinary sheet over the band is not reported by either.
+    var onShowingChange: ((SyncGlowMTKView, Bool) -> Void)?
+
     #if os(macOS)
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Selector observers are dropped with the view, so nothing is left to remove at the end.
+        let centre = NotificationCenter.default
+        centre.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        if let window {
+            centre.addObserver(
+                self, selector: #selector(occlusionChanged(_:)),
+                name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        }
+        reportShowing()
+    }
+
+    @objc private func occlusionChanged(_ note: Notification) {
+        reportShowing()
+    }
+
+    private func reportShowing() {
+        onShowingChange?(self, window?.occlusionState.contains(.visible) ?? false)
+    }
+    #else
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        onShowingChange?(self, window != nil)
+    }
     #endif
 
     override init(frame frameRect: CGRect, device: MTLDevice?) {
@@ -160,36 +204,26 @@ final class SyncGlowMTKView: MTKView {
     }
 }
 
-/// Draws the constellation into an extended-range drawable. Frame rate comes from `SyncGlowPace`:
-/// idle is slow, a sweep or a crossfade is faster, and a hidden or background library does not draw.
+/// What every band draws with: the device, its queue, the four pipelines and the glyph atlas. Built
+/// once, on the first band. The window band, the queue sheet's and the editor cover's take turns, and
+/// building all of this again on each turn was a main-thread hitch in the middle of a presentation.
 @MainActor
-final class SyncGlowRenderer: NSObject, MTKViewDelegate {
-    private let device: MTLDevice?
-    private let queue: MTLCommandQueue?
-    private var starsPipeline: MTLRenderPipelineState?
-    private var blurHPipeline: MTLRenderPipelineState?
-    private var blurVPipeline: MTLRenderPipelineState?
-    private var presentPipeline: MTLRenderPipelineState?
-    private var atlas: MTLTexture?
-    private var starTex: MTLTexture?
-    private var blurTex: MTLTexture?
-    private var bloomTex: MTLTexture?
-    private var starSize = CGSize.zero
-    private var bloomSize = CGSize.zero
-    private var drawState = SyncGlowDraw(
-        state: .upToDate, previous: .upToDate, transitionStart: 0, eventStart: 0, pinEventAge: nil,
-        pending: 0, reduceMotion: false, lowPower: false, intensity: SyncGlowComposer.defaultIntensity,
-        density: SyncGlowComposer.defaultDensity, visible: true, sceneActive: true)
-    private var lastStill: SyncGlowDraw?
-    private var drawing = false
-    private let started = CACurrentMediaTime()
-    private var glyphs = false
+final class SyncGlowResources {
+    static let shared = SyncGlowResources()
 
-    override init() {
+    let device: MTLDevice?
+    let queue: MTLCommandQueue?
+    private(set) var starsPipeline: MTLRenderPipelineState?
+    private(set) var blurHPipeline: MTLRenderPipelineState?
+    private(set) var blurVPipeline: MTLRenderPipelineState?
+    private(set) var presentPipeline: MTLRenderPipelineState?
+    private(set) var atlas: MTLTexture?
+    private(set) var glyphs = false
+
+    private init() {
         let device = MTLCreateSystemDefaultDevice()
         self.device = device
         queue = device?.makeCommandQueue()
-        super.init()
         guard let device else { return }
         buildPipelines(device)
         if let image = GlyphAtlasBaker.rasterize(), let texture = GlyphAtlasBaker.texture(device: device, image: image) {
@@ -201,9 +235,74 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
         }
     }
 
+    private static func fallbackAtlas(_ device: MTLDevice) -> MTLTexture? {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .r8Unorm, width: 1, height: 1, mipmapped: false)
+        descriptor.usage = [.shaderRead]
+        descriptor.storageMode = .shared
+        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
+        var pixel: UInt8 = 0
+        texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &pixel, bytesPerRow: 1)
+        return texture
+    }
+
+    private func buildPipelines(_ device: MTLDevice) {
+        guard let library = device.makeDefaultLibrary(),
+              let vertex = library.makeFunction(name: "glowVertex"),
+              let stars = library.makeFunction(name: "glowStars"),
+              let blurH = library.makeFunction(name: "glowBlurH"),
+              let blurV = library.makeFunction(name: "glowBlurV"),
+              let present = library.makeFunction(name: "glowPresent") else { return }
+        starsPipeline = pipeline(device, vertex: vertex, fragment: stars, format: .rgba16Float)
+        blurHPipeline = pipeline(device, vertex: vertex, fragment: blurH, format: .rgba16Float)
+        blurVPipeline = pipeline(device, vertex: vertex, fragment: blurV, format: .rgba16Float)
+        presentPipeline = pipeline(device, vertex: vertex, fragment: present, format: .rgba16Float)
+    }
+
+    private func pipeline(_ device: MTLDevice, vertex: MTLFunction, fragment: MTLFunction, format: MTLPixelFormat) -> MTLRenderPipelineState? {
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = vertex
+        descriptor.fragmentFunction = fragment
+        descriptor.colorAttachments[0].pixelFormat = format
+        return try? device.makeRenderPipelineState(descriptor: descriptor)
+    }
+}
+
+/// Draws the constellation into an extended-range drawable. Frame rate comes from `SyncGlowPace`:
+/// a sweep, a crossfade or a one-shot moment runs, a settled calm band is one still frame, and a
+/// hidden, covered or background library does not draw. The render targets are this band's own.
+@MainActor
+final class SyncGlowRenderer: NSObject, MTKViewDelegate {
+    private let resources: SyncGlowResources
+    private var starTex: MTLTexture?
+    private var blurTex: MTLTexture?
+    private var bloomTex: MTLTexture?
+    private var starSize = CGSize.zero
+    private var bloomSize = CGSize.zero
+    private var drawState = SyncGlowDraw(
+        state: .upToDate, previous: .upToDate, transitionStart: 0, eventStart: 0, pinEventAge: nil,
+        pending: 0, reduceMotion: false, lowPower: false, intensity: SyncGlowComposer.defaultIntensity,
+        density: SyncGlowComposer.defaultDensity, visible: true, sceneActive: true)
+    /// The last settled frame that reached the screen. A frame from the middle of a crossfade is not one.
+    private var lastStill: SyncGlowDraw?
+    private var drawing = false
+    /// A redraw for a new drawable size is already waiting for the next main-actor turn.
+    private var resizeRedraw = false
+    /// False while the view has no window (iOS) or its window is minimised or fully covered (Mac).
+    private var showing = true
+    private let started = CACurrentMediaTime()
+
+    override init() {
+        resources = SyncGlowResources.shared
+        super.init()
+    }
+
     func makeView() -> SyncGlowMTKView {
-        let view = SyncGlowMTKView(frame: .zero, device: device)
+        let view = SyncGlowMTKView(frame: .zero, device: resources.device)
         view.delegate = self
+        view.onShowingChange = { [weak self] view, showing in
+            self?.showingChanged(showing, in: view)
+        }
         view.colorPixelFormat = .rgba16Float
         view.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         view.isPaused = true
@@ -222,16 +321,41 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
     }
 
     func update(_ view: SyncGlowMTKView, draw: SyncGlowDraw) {
+        // A new state reaches this view one update before the band's `onChange` hands over the start
+        // of its crossfade. A still drawn in between would flash the finished picture for a frame, so
+        // that update leaves the still to the one that follows. Reduce Motion has no crossfade.
+        let handover = draw.state != drawState.state && draw.transitionStart == drawState.transitionStart
+            && !draw.reduceMotion
         drawState = draw
+        schedule(view, still: !handover)
+    }
+
+    private func showingChanged(_ now: Bool, in view: SyncGlowMTKView) {
+        guard now != showing else { return }
+        showing = now
+        // Coming back, the still is drawn again: the layer may not have kept the old one.
+        if now { lastStill = nil }
+        schedule(view)
+    }
+
+    private func crossfade(at now: TimeInterval) -> Float {
+        SyncGlowComposer.transition(elapsed: now - drawState.transitionStart, reduceMotion: drawState.reduceMotion)
+    }
+
+    /// Runs the display link while something moves. Otherwise the view is paused and one still is drawn
+    /// if the picture on screen is not already this one. A state change arrives through `update` with a
+    /// fresh `transitionStart`, which is what wakes a resting band.
+    private func schedule(_ view: MTKView, still: Bool = true) {
         let fps = SyncGlowPace.framesPerSecond(
-            state: draw.state, transitioning: false, reduceMotion: draw.reduceMotion, lowPower: draw.lowPower,
-            visible: draw.visible, sceneActive: draw.sceneActive)
+            state: drawState.state, transitioning: !SyncGlowPace.isSettled(transition: crossfade(at: CACurrentMediaTime())),
+            reduceMotion: drawState.reduceMotion, lowPower: drawState.lowPower,
+            visible: drawState.visible && showing, sceneActive: drawState.sceneActive)
         if let fps {
             view.preferredFramesPerSecond = fps
             if view.isPaused { view.isPaused = false }
         } else {
             view.isPaused = true
-            if lastStill != draw { view.draw() }
+            if still, lastStill != drawState { view.draw() }
         }
     }
 
@@ -246,17 +370,31 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
     }
 
     private func mtkViewMain(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        guard !drawing, view.isPaused, lastStill != drawState, size.width > 0, size.height > 0 else { return }
-        view.draw()
+        // A paused band shows a still, and a still drawn for the old size is stretched to the new one
+        // until something else changes. Rotation and a window resize change nothing else, so the still
+        // is drawn again. Not from in here: this is the "will change" call, and a draw inside it may
+        // still get a drawable of the old size. The next main-actor turn has the new one either way.
+        guard size.width > 0, size.height > 0, !resizeRedraw else { return }
+        resizeRedraw = true
+        Task { @MainActor [weak self, weak view] in
+            guard let self else { return }
+            self.resizeRedraw = false
+            guard let view else { return }
+            // Forgotten here, not above: a frame in flight when the size changed would mark itself kept.
+            self.lastStill = nil
+            self.schedule(view)
+        }
     }
 
     private func drawMain(in view: MTKView) {
         guard !drawing else { return }
         drawing = true
         defer { drawing = false }
-        guard drawState.visible, drawState.sceneActive, drawState.state != .off else { return }
-        guard let drawable = view.currentDrawable, let queue, let command = queue.makeCommandBuffer() else { return }
-        guard let starsPipeline, let blurHPipeline, let blurVPipeline, let presentPipeline, let atlas else { return }
+        guard drawState.visible, showing, drawState.sceneActive, drawState.state != .off else { return }
+        guard let starsPipeline = resources.starsPipeline, let blurHPipeline = resources.blurHPipeline,
+              let blurVPipeline = resources.blurVPipeline, let presentPipeline = resources.presentPipeline,
+              let atlas = resources.atlas else { return }
+        guard let drawable = view.currentDrawable, let command = resources.queue?.makeCommandBuffer() else { return }
         let width = drawable.texture.width
         let height = drawable.texture.height
         guard width > 0, height > 0 else { return }
@@ -266,13 +404,16 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
               let starTex, let blurTex, let bloomTex else { return }
 
         let now = CACurrentMediaTime()
-        let fade = SyncGlowComposer.transition(
-            elapsed: now - drawState.transitionStart, reduceMotion: drawState.reduceMotion)
+        let fade = crossfade(at: now)
+        let settled = SyncGlowPace.isSettled(transition: fade)
         if let fps = SyncGlowPace.framesPerSecond(
-            state: drawState.state, transitioning: fade < 0.999, reduceMotion: drawState.reduceMotion,
+            state: drawState.state, transitioning: !settled, reduceMotion: drawState.reduceMotion,
             lowPower: drawState.lowPower, visible: true, sceneActive: true
-        ), view.preferredFramesPerSecond != fps {
-            view.preferredFramesPerSecond = fps
+        ) {
+            if view.preferredFramesPerSecond != fps { view.preferredFramesPerSecond = fps }
+        } else if !view.isPaused {
+            // The crossfade into calm has just finished. This frame is the still; no more are scheduled.
+            view.isPaused = true
         }
         let age = drawState.pinEventAge.map { TimeInterval($0) } ?? max(0, now - drawState.eventStart)
         let time = Float(now - started)
@@ -280,7 +421,7 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
             time: time, state: drawState.state, previous: drawState.previous, transition: fade,
             pendingCount: drawState.pending, reduceMotion: drawState.reduceMotion, lowPower: drawState.lowPower,
             headroom: headroom(of: view), eventAge: age, width: Float(width), height: Float(height),
-            glyphsEnabled: glyphs, intensity: drawState.intensity, density: drawState.density)
+            glyphsEnabled: resources.glyphs, intensity: drawState.intensity, density: drawState.density)
         var packed = uniforms.packed
 
         encode(command, pipeline: starsPipeline, target: starTex, clear: true, packed: &packed) { encoder in
@@ -301,7 +442,7 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
         }
         command.present(drawable)
         command.commit()
-        lastStill = drawState
+        lastStill = settled ? drawState : nil
     }
 
     private func encode(
@@ -330,7 +471,7 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
     }
 
     private func ensureTargets(width: Int, height: Int, bloomW: Int, bloomH: Int) -> Bool {
-        guard let device else { return false }
+        guard let device = resources.device else { return false }
         if starTex == nil || Int(starSize.width) != width || Int(starSize.height) != height {
             starTex = makeTarget(device, width: width, height: height)
             starSize = CGSize(width: width, height: height)
@@ -343,44 +484,12 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
         return starTex != nil && blurTex != nil && bloomTex != nil
     }
 
-    private static func fallbackAtlas(_ device: MTLDevice) -> MTLTexture? {
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .r8Unorm, width: 1, height: 1, mipmapped: false)
-        descriptor.usage = [.shaderRead]
-        descriptor.storageMode = .shared
-        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
-        var pixel: UInt8 = 0
-        texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &pixel, bytesPerRow: 1)
-        return texture
-    }
-
     private func makeTarget(_ device: MTLDevice, width: Int, height: Int) -> MTLTexture? {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba16Float, width: width, height: height, mipmapped: false)
         descriptor.usage = [.shaderRead, .renderTarget]
         descriptor.storageMode = .private
         return device.makeTexture(descriptor: descriptor)
-    }
-
-    private func buildPipelines(_ device: MTLDevice) {
-        guard let library = device.makeDefaultLibrary(),
-              let vertex = library.makeFunction(name: "glowVertex"),
-              let stars = library.makeFunction(name: "glowStars"),
-              let blurH = library.makeFunction(name: "glowBlurH"),
-              let blurV = library.makeFunction(name: "glowBlurV"),
-              let present = library.makeFunction(name: "glowPresent") else { return }
-        starsPipeline = pipeline(device, vertex: vertex, fragment: stars, format: .rgba16Float)
-        blurHPipeline = pipeline(device, vertex: vertex, fragment: blurH, format: .rgba16Float)
-        blurVPipeline = pipeline(device, vertex: vertex, fragment: blurV, format: .rgba16Float)
-        presentPipeline = pipeline(device, vertex: vertex, fragment: present, format: .rgba16Float)
-    }
-
-    private func pipeline(_ device: MTLDevice, vertex: MTLFunction, fragment: MTLFunction, format: MTLPixelFormat) -> MTLRenderPipelineState? {
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = vertex
-        descriptor.fragmentFunction = fragment
-        descriptor.colorAttachments[0].pixelFormat = format
-        return try? device.makeRenderPipelineState(descriptor: descriptor)
     }
 
     private func headroom(of view: MTKView) -> Float {

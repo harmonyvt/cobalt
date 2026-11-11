@@ -227,13 +227,16 @@ public final class LibraryModel {
             if sync.isActive {
                 LaunchTiming.noteLibraryLoad(ms: LaunchTiming.millis(from: started), posts: posts.count, source: "sync")
                 FinderLibraryEvents.noteRefresh()
-                return
             }
+            // Not active any more: the pass fell back, and the engine has already started today's
+            // first page for it (`LibrarySync.onLegacy`). Asking again here would load it twice.
+            return
         }
         await refreshFromServer()
     }
 
-    /// Today's `GET /library` page. Also the path after `GET /sync` answers 404.
+    /// Today's `GET /library` page. Also the path after `GET /sync` falls back (a 404, or a
+    /// pull that failed with nothing on the device to show).
     func refreshFromServer() async {
         guard !isLoading else { return }
         isLoading = true

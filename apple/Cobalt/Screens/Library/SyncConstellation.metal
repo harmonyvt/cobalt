@@ -34,6 +34,10 @@ constant float kGlyphDot = 0.0;
 constant float kGlyphStar = 1.0;
 constant float kGlyphDash = 6.0;
 
+// The grid was drawn for a phone in portrait: a band 393 pt wide and 152 pt tall. Same number as
+// SyncGlowField.referenceAspect.
+constant float kReferenceAspect = 393.0 / 152.0;
+
 vertex GlowVertex glowVertex(uint id [[vertex_id]]) {
     float2 p = float2(float((id << 1) & 2), float(id & 2));
     GlowVertex out;
@@ -90,6 +94,14 @@ float linkGlyphId(float2 delta, float salt) {
     return (delta.x * delta.y) < 0.0 ? 7.0 : 8.0;
 }
 
+/// How much wider than the phone band this drawable is. The band's height is fixed, so the column
+/// count is multiplied by this: a wide window gets more cells, and a glyph keeps its shape.
+/// Same as SyncGlowField.aspectScale.
+float aspectScale(constant GlowUniforms &u) {
+    float2 size = max(float2(u.width, u.height), float2(1.0));
+    return max(size.x / size.y / kReferenceAspect, 0.25);
+}
+
 float glyphMask(float2 uv, float2 pos, float gid, float2 cells, texture2d<float> atlas, sampler smp) {
     float2 local = (uv - pos) * float2(cells.x * 1.15, cells.y * 1.85) + 0.5;
     if (local.x < 0.0 || local.y < 0.0 || local.x > 1.0 || local.y > 1.0) return 0.0;
@@ -106,7 +118,7 @@ struct Star {
     float blink;
 };
 
-Star starCell(float2 gid, float2 cells, float st, float age, float reduced, float density, float pending, float time) {
+Star starCell(float2 gid, float2 cells, float scale, float st, float age, float reduced, float density, float pending, float time) {
     Star s;
     float stateId = floor(st + 0.5);
     float h = glowHash(gid + 17.0 * stateId);
@@ -147,7 +159,8 @@ Star starCell(float2 gid, float2 cells, float st, float age, float reduced, floa
     // Offline: dim the field and hold N stars in a blinking cluster. N is capped at 8.
     if (abs(st - 2.0) < 0.5) {
         float2 cluster = float2(0.68, 0.36);
-        float inCluster = smoothstep(0.26, 0.06, distance(s.pos, cluster));
+        // Measured in the phone band's units, so a wide window holds the same few stars, not more.
+        float inCluster = smoothstep(0.26, 0.06, length((s.pos - cluster) * float2(scale, 1.0)));
         float n = floor(clamp(pending, 0.0, 8.0) + 0.5);
         float idx = floor(glowHash(gid + 4.2) * 8.0);
         float held = step(idx, n - 0.5) * inCluster;
@@ -160,19 +173,20 @@ Star starCell(float2 gid, float2 cells, float st, float age, float reduced, floa
 
 float3 constellation(float st, float2 uv, constant GlowUniforms &u, texture2d<float> atlas, sampler smp) {
     if (u.glyphsEnabled < 0.5 || st > 5.5) return float3(0.0);
-    float2 cells = float2(7.0 + 12.0 * u.density, 3.0 + 2.2 * u.density);
+    float scale = aspectScale(u);
+    float2 cells = float2((7.0 + 12.0 * u.density) * scale, 3.0 + 2.2 * u.density);
     float2 gid0 = floor(uv * cells);
     float3 col = float3(0.0);
     float t = u.reduced > 0.5 ? 1.7 : u.time;
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             float2 gid = gid0 + float2(float(i), float(j));
-            Star s = starCell(gid, cells, st, u.eventAge, u.reduced, u.density, u.pending, t);
+            Star s = starCell(gid, cells, scale, st, u.eventAge, u.reduced, u.density, u.pending, t);
             float mask = glyphMask(uv, s.pos, s.glyph, cells, atlas, smp);
             col += palette(st) * mask * s.exist * s.blink;
             if (i == 0 && j == 0) {
-                Star right = starCell(gid + float2(1.0, 0.0), cells, st, u.eventAge, u.reduced, u.density, u.pending, t);
-                Star down = starCell(gid + float2(0.0, 1.0), cells, st, u.eventAge, u.reduced, u.density, u.pending, t);
+                Star right = starCell(gid + float2(1.0, 0.0), cells, scale, st, u.eventAge, u.reduced, u.density, u.pending, t);
+                Star down = starCell(gid + float2(0.0, 1.0), cells, scale, st, u.eventAge, u.reduced, u.density, u.pending, t);
                 float saltH = glowHash(gid + 21.0 + floor(st + 0.5));
                 float saltV = glowHash(gid + 44.0 + floor(st + 0.5));
                 float linkH = step(0.62, saltH) * s.exist * right.exist;
@@ -190,8 +204,10 @@ float3 constellation(float st, float2 uv, constant GlowUniforms &u, texture2d<fl
                     linkH *= keep;
                     linkV *= keep;
                 }
-                float hid = linkGlyphId(right.pos - s.pos, saltH);
-                float vid = linkGlyphId(down.pos - s.pos, saltV);
+                // The slope is judged in the phone band's units too, or a wide window would read
+                // every link between side-by-side stars as upright.
+                float hid = linkGlyphId((right.pos - s.pos) * float2(scale, 1.0), saltH);
+                float vid = linkGlyphId((down.pos - s.pos) * float2(scale, 1.0), saltV);
                 for (int stepIndex = 1; stepIndex <= 4; stepIndex++) {
                     float f = float(stepIndex) / 5.0;
                     float2 hp = mix(s.pos, right.pos, f);
@@ -207,8 +223,9 @@ float3 constellation(float st, float2 uv, constant GlowUniforms &u, texture2d<fl
         float sx = mix(-0.12, 1.08, travel);
         float sy = 0.30 + 0.02 * sin(u.eventAge * 3.0);
         col += palette(st) * glyphMask(uv, float2(sx, sy), kGlyphStar, cells, atlas, smp) * 1.6;
-        col += palette(st) * glyphMask(uv, float2(sx - 0.055, sy + 0.012), kGlyphDash, cells, atlas, smp) * 0.9;
-        col += palette(st) * glyphMask(uv, float2(sx - 0.105, sy + 0.028), kGlyphDot, cells, atlas, smp) * 0.55;
+        // The tail follows at a fixed distance in glyphs, whatever the width.
+        col += palette(st) * glyphMask(uv, float2(sx - 0.055 / scale, sy + 0.012), kGlyphDash, cells, atlas, smp) * 0.9;
+        col += palette(st) * glyphMask(uv, float2(sx - 0.105 / scale, sy + 0.028), kGlyphDot, cells, atlas, smp) * 0.55;
     }
     return col;
 }
@@ -222,7 +239,10 @@ fragment float4 glowStars(
     float2 size = max(float2(u.width, u.height), float2(1.0));
     float2 uv = in.position.xy / size;
     float fade = saturate(u.transition);
-    float3 col = sanitize(mix(constellation(u.previous, uv, u, atlas, smp), constellation(u.state, uv, u, atlas, smp), fade));
+    // Once the crossfade is over the outgoing field has no weight, so it is not worked out at all.
+    float3 col = constellation(u.state, uv, u, atlas, smp);
+    if (fade < 0.999) col = mix(constellation(u.previous, uv, u, atlas, smp), col, fade);
+    col = sanitize(col);
     return float4(col, clamp(max(col.r, max(col.g, col.b)), 0.0, 1.0));
 }
 

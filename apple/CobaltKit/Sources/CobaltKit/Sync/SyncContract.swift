@@ -5,7 +5,8 @@ import Foundation
 // until `SyncFeature` is on. With the flag off, nothing in this folder runs.
 
 /// `UserDefaults` switch for the engine. Off unless this key is true, so today's library loading stays
-/// as it is. A `404` from `GET /sync` also leaves the flag on but uses today's loading for that launch.
+/// as it is. A `404` from `GET /sync`, or a pull that fails with nothing on the device to show, also
+/// leaves the flag on but uses today's loading for that launch.
 enum SyncFeature {
     static let defaultsKey = "sync.engine"
 
@@ -47,6 +48,9 @@ enum SyncError: Error, Equatable, Sendable {
     case refused(String)
     /// Offline, a 5xx, a 429, a busy 409: the edit stays queued.
     case retryable(String)
+    /// `409 error.idempotency.conflict`: the server holds another body under this key. The edit is
+    /// not refused; it is sent again under a new key.
+    case keyConflict
 }
 
 enum SyncTrigger: String, Sendable {
@@ -82,6 +86,7 @@ struct SyncEntity: Sendable, Equatable {
 /// }
 /// 410 { "error": "sync.cursor_too_old" }     // or { "error": { "code": "sync.cursor_too_old" } }
 /// 404                                        // route not deployed: fall back to GET /library
+/// 503                                        // a database read failed: an error like any other 5xx
 /// ```
 ///
 /// `seq` is the cursor to send as `since` next time. `more` means call again with that `seq`.
@@ -202,8 +207,9 @@ enum SyncPostCoding {
     }
 }
 
-/// A change waiting to be sent. `opID` is the `Idempotency-Key`. `before` is the post as it was,
-/// so a refusal can put it back; nil means the post did not exist.
+/// A change waiting to be sent. `opID` names the row; it is also the `Idempotency-Key` until the
+/// server answers that the key is taken by another body (`payload.key` then holds the new one).
+/// `before` is the post as it was, so a refusal can put it back; nil means the post did not exist.
 struct SyncOp: Sendable, Equatable {
     var opID: String
     var kind: Kind
@@ -212,6 +218,12 @@ struct SyncOp: Sendable, Equatable {
     var createdAt: Date
     var tries: Int
     var nextAttemptAt: Date
+    /// The op is with the sender. Set in the store before the request leaves, so a later edit is
+    /// queued behind it instead of being written into a request that is already on its way.
+    var sending = false
+
+    /// What goes in the `Idempotency-Key` header.
+    var idempotencyKey: String { payload.key ?? opID }
 
     enum Kind: String, Sendable, Codable { case title, delete, hide, visibility }
 
@@ -222,14 +234,29 @@ struct SyncOp: Sendable, Equatable {
         var makePublic: Bool?
         var fileID: String?
         var before: Data?
+        /// Set after a `409 error.idempotency.conflict`; nil means the op id is the key.
+        var key: String?
     }
+}
+
+/// What the server said about an edit it took, where that is not simply "done as asked".
+struct SyncReceipt: Sendable, Equatable {
+    /// The post as the server left it, when it could not do all that was asked (a status change some
+    /// files did not take, a delete that left files). Nil: the device's own row stands.
+    var post: LibraryPost?
+    /// File ids a delete left on the server (`502 error.library.partial`). Empty for a whole delete.
+    var remaining: [String] = []
+
+    static let done = SyncReceipt()
 }
 
 /// Pending edits win over a pulled row until the server accepts them.
 enum SyncMerge {
     /// The pulled post with pending edits laid on top, or nil when a pending delete keeps it gone.
+    /// `ops` are in outbox order (the store reads them so): two edits stamped the same instant keep
+    /// the order they were made in.
     static func overlay(_ post: LibraryPost, ops: [SyncOp]) -> LibraryPost? {
-        let mine = ops.filter { $0.target == post.id }.sorted { $0.createdAt < $1.createdAt }
+        let mine = ops.filter { $0.target == post.id }
         if mine.contains(where: { $0.kind == .delete }) { return nil }
         var post = post
         for op in mine { apply(op, to: &post) }
@@ -240,6 +267,54 @@ enum SyncMerge {
     static func keepsRow(id: String, ops: [SyncOp]) -> Bool {
         let mine = ops.filter { $0.target == id }
         return mine.contains { $0.kind != .delete }
+    }
+
+    /// A new edit may be written into a queued one only when both are the same edit of the same
+    /// thing. One file's switch and another file's, or one file's switch and the whole post's status,
+    /// are different edits: each keeps its own op.
+    static func sameEdit(_ a: SyncOp, _ b: SyncOp) -> Bool {
+        a.kind == b.kind && a.target == b.target && a.payload.fileID == b.payload.fileID
+            && (a.payload.makePublic == nil) == (b.payload.makePublic == nil)
+    }
+
+    /// The post after `POST /library/status` took it but could not switch every file. The same rules
+    /// as the library's own handling of that answer: the server's word for each file it describes, a
+    /// failed file it does not describe stays as it was, the rest follow the status.
+    static func settle(_ before: LibraryPost, answer: StatusChange.Post, failedFiles: Set<String>) -> LibraryPost {
+        var post = before
+        if answer.status == .hidden {
+            post.hidden = true
+            post.hiddenBy = .you
+            post.hiddenRule = nil
+        } else {
+            post.hidden = false
+            post.hiddenBy = nil
+            post.hiddenRule = nil
+        }
+        for index in post.files.indices {
+            let id = post.files[index].id
+            let wire = answer.files.first { $0.id == id }
+            if wire == nil, failedFiles.contains(id) { continue }
+            let isPublic = wire.map { $0.visibility == "public" } ?? (answer.status == .public)
+            if isPublic {
+                post.files[index].wireVisibility = .public
+                post.files[index].privateURL = nil
+            } else {
+                post.files[index].wireVisibility = .private
+                post.files[index].url = nil
+                post.files[index].privateURL = answer.status == .private ? wire?.privateURL : nil
+            }
+        }
+        if post.visibility != nil {
+            let files = post.files
+            if answer.status == .hidden {
+                post.visibility = files.contains(where: \.isPublic) ? .public : .private
+            } else {
+                post.visibility = files.first { $0.role == .privateCopy }?.visibility
+                    ?? (files.contains(where: \.isPublic) ? .public : .private)
+            }
+        }
+        return post
     }
 
     static func apply(_ op: SyncOp, to post: inout LibraryPost) {
@@ -310,7 +385,7 @@ protocol SyncTransport: Sendable {
     func pull(since: Int64, limit: Int) async throws -> SyncPage
 }
 
-/// How a queued edit is sent through today's write routes. The key is `op.opID`.
+/// How a queued edit is sent through today's write routes. The key is `op.idempotencyKey`.
 protocol SyncSender: Sendable {
-    func send(_ op: SyncOp) async throws
+    func send(_ op: SyncOp) async throws -> SyncReceipt
 }

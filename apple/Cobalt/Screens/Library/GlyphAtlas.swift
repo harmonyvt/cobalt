@@ -22,9 +22,10 @@ enum GlyphAtlasBaker {
         let width = layout.pixelWidth
         let height = layout.pixelHeight
         guard width > 0, height > 0 else { return nil }
-        var pixels = [UInt8](repeating: 0, count: width * height)
+        // Core Graphics owns the buffer: a pointer into a Swift array is only good for the call it is
+        // passed to, and this context is drawn into long after its initialiser returns.
         guard let context = CGContext(
-            data: &pixels,
+            data: nil,
             width: width,
             height: height,
             bitsPerComponent: 8,
@@ -33,11 +34,12 @@ enum GlyphAtlasBaker {
             bitmapInfo: CGImageAlphaInfo.none.rawValue
         ) else { return nil }
 
-        // A bitmap context's first row is its bottom. Flip so the rects below are top-left, then
-        // Core Text (which draws upward) is flipped back per line. Row 0 of `pixels` is the top of
-        // the atlas after this, which is what the shader's v = 0 expects.
-        context.translateBy(x: 0, y: CGFloat(height))
-        context.scaleBy(x: 1, y: -1)
+        // No flip. A bitmap context has its origin at the bottom left with y growing upward, which is
+        // the space Core Text draws upright in, and its memory starts with the top scanline. So row 0
+        // of the pixels is the top of the atlas, which is what the shader's v = 0 expects. Flipping
+        // here as well baked every glyph upside down: `/` came out as `\` and `.` hung from the top.
+        context.setFillColor(gray: 0, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)
         context.interpolationQuality = CGInterpolationQuality.high
@@ -63,10 +65,20 @@ enum GlyphAtlasBaker {
             let framesetter = CTFramesetterCreateWithAttributedString(text)
             let path = CGPath(rect: rect, transform: nil)
             let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: text.length), path, nil)
-            // The context is already flipped to a top-left origin, which is the Core Text recipe
-            // (translate by the height, scale y by -1, then CTFrameDraw).
+            // Each cell's line box is centred in the cell, so it is the same rect from either edge.
             context.textMatrix = .identity
             CTFrameDraw(frame, context)
+        }
+        guard let data = context.data else { return nil }
+        // The context may pad its rows. Copy them out one by one, top row first.
+        let rowBytes = context.bytesPerRow
+        guard rowBytes >= width else { return nil }
+        var pixels = [UInt8](repeating: 0, count: width * height)
+        pixels.withUnsafeMutableBytes { out in
+            guard let base = out.baseAddress else { return }
+            for row in 0 ..< height {
+                (base + row * width).copyMemory(from: UnsafeRawPointer(data) + row * rowBytes, byteCount: width)
+            }
         }
         return Image(width: width, height: height, pixels: pixels)
     }

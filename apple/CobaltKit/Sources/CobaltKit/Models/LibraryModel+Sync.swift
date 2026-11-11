@@ -33,6 +33,14 @@ extension LibraryModel {
         if wasEmpty, !posts.isEmpty { LaunchTiming.noteFirstContent(source: source) }
     }
 
+    /// A sync pass ended without a pull while the engine stays on (offline, a key the server will not
+    /// take, or a server error with a copy on the device). The lists keep what they have; `failure`
+    /// says why they are not fresh, as it does after a failed `GET /library`. The next snapshot
+    /// clears it.
+    func syncPullFailed(_ error: any Error) {
+        if let f = pipelineFailure(from: error, during: .saving) { failure = f }
+    }
+
     /// The screen moves before the outbox sends. Returns the post as it now is, or nil when a delete
     /// would be the honest result (status changes never delete).
     @discardableResult

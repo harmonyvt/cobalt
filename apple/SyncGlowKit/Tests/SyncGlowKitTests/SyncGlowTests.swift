@@ -143,6 +143,37 @@ struct SyncGlowStatusTests {
         #expect(status.state == .off)
     }
 
+    @Test func theGlowComesBackWhenAPassAfterAFallbackFindsTheRoute() {
+        let status = SyncGlowStatus()
+        status.passBegan()
+        status.routeFellBack()
+        status.passEnded(pending: 0)
+        #expect(status.state == .off)
+        // The engine was reset for another server and tries again. The band waits for the answer.
+        status.passBegan()
+        #expect(status.state == .off)
+        #expect(status.lastEvent == .fellBack)
+        status.passEnded(pending: 0)
+        #expect(status.state == .upToDate)
+        #expect(status.lastEvent == .caughtUp)
+        // From here it is an ordinary band again: offline and waiting edits show.
+        status.reachability(false, pending: 2)
+        #expect(status.state == .offlinePending)
+        #expect(status.pendingCount == 2)
+    }
+
+    @Test func aSecondMissingRouteLeavesTheGlowOff() {
+        let status = SyncGlowStatus()
+        status.passBegan()
+        status.routeFellBack()
+        status.passEnded(pending: 0)
+        status.passBegan()
+        status.routeFellBack()
+        status.passEnded(pending: 4)
+        #expect(status.state == .off)
+        #expect(status.lastEvent == .fellBack)
+    }
+
     @Test func aDebugForcePinsTheAgeAndIgnoresTheEngineUntilItIsCleared() {
         let clock = GlowClock()
         let status = SyncGlowStatus(clock: { clock.now })
@@ -209,15 +240,86 @@ struct SyncGlowComposerTests {
     }
 
     @Test func theFrameRateDropsWhenIdleAndStopsWhenItShouldNotDraw() {
-        #expect(SyncGlowPace.framesPerSecond(state: .upToDate, transitioning: false, reduceMotion: false, lowPower: false, visible: true, sceneActive: true) == 15)
         #expect(SyncGlowPace.framesPerSecond(state: .offlinePending, transitioning: false, reduceMotion: false, lowPower: false, visible: true, sceneActive: true) == 15)
+        #expect(SyncGlowPace.framesPerSecond(state: .offlinePending, transitioning: false, reduceMotion: false, lowPower: true, visible: true, sceneActive: true) == 8)
         #expect(SyncGlowPace.framesPerSecond(state: .syncing, transitioning: false, reduceMotion: false, lowPower: false, visible: true, sceneActive: true) == 30)
         #expect(SyncGlowPace.framesPerSecond(state: .nudge, transitioning: true, reduceMotion: false, lowPower: true, visible: true, sceneActive: true) == 15)
-        #expect(SyncGlowPace.framesPerSecond(state: .upToDate, transitioning: false, reduceMotion: false, lowPower: true, visible: true, sceneActive: true) == 8)
         #expect(SyncGlowPace.framesPerSecond(state: .upToDate, transitioning: false, reduceMotion: true, lowPower: false, visible: true, sceneActive: true) == nil)
         #expect(SyncGlowPace.framesPerSecond(state: .syncing, transitioning: false, reduceMotion: false, lowPower: false, visible: false, sceneActive: true) == nil)
         #expect(SyncGlowPace.framesPerSecond(state: .syncing, transitioning: false, reduceMotion: false, lowPower: false, visible: true, sceneActive: false) == nil)
         #expect(SyncGlowPace.framesPerSecond(state: .off, transitioning: false, reduceMotion: false, lowPower: false, visible: true, sceneActive: true) == nil)
+    }
+
+    @Test func aCalmBandIsOneStillFrameOnceItsCrossfadeIsOver() {
+        // In sync and settled: no frames, with or without Low Power Mode.
+        #expect(SyncGlowPace.framesPerSecond(state: .upToDate, transitioning: false, reduceMotion: false, lowPower: false, visible: true, sceneActive: true) == nil)
+        #expect(SyncGlowPace.framesPerSecond(state: .upToDate, transitioning: false, reduceMotion: false, lowPower: true, visible: true, sceneActive: true) == nil)
+        // The crossfade into calm still plays, then the band stops.
+        #expect(SyncGlowPace.framesPerSecond(state: .upToDate, transitioning: true, reduceMotion: false, lowPower: false, visible: true, sceneActive: true) == 30)
+        #expect(SyncGlowPace.framesPerSecond(state: .upToDate, transitioning: true, reduceMotion: false, lowPower: true, visible: true, sceneActive: true) == 15)
+        #expect(!SyncGlowPace.isSettled(transition: 0.5))
+        #expect(SyncGlowPace.isSettled(transition: 1))
+        // A covered band (the view's window is gone or occluded) is passed as not visible.
+        #expect(SyncGlowPace.framesPerSecond(state: .upToDate, transitioning: true, reduceMotion: false, lowPower: false, visible: false, sceneActive: true) == nil)
+    }
+
+    @Test func oneShotMomentsPlayInFullAndAreTheOnlyStatesThatNeedTheTick() {
+        for state in [SyncGlowState.refused, .repull, .nudge] {
+            #expect(SyncGlowPace.isOneShot(state))
+            // After the crossfade the moment itself is still running: it keeps its frames.
+            #expect(SyncGlowPace.framesPerSecond(state: state, transitioning: false, reduceMotion: false, lowPower: false, visible: true, sceneActive: true) == 30)
+            #expect(SyncGlowPace.framesPerSecond(state: state, transitioning: false, reduceMotion: false, lowPower: true, visible: true, sceneActive: true) == 15)
+            #expect(SyncGlowPace.needsTick(state: state))
+        }
+        for state in [SyncGlowState.upToDate, .syncing, .offlinePending, .off] {
+            #expect(!SyncGlowPace.isOneShot(state))
+            #expect(!SyncGlowPace.needsTick(state: state))
+        }
+    }
+
+    @MainActor @Test func aNudgeOnACalmBandWakesItPlaysAndLetsItRestAgain() {
+        let clock = GlowClock()
+        let status = SyncGlowStatus(clock: { clock.now })
+        func fps(_ transitioning: Bool) -> Int? {
+            SyncGlowPace.framesPerSecond(
+                state: status.state, transitioning: transitioning, reduceMotion: false, lowPower: false,
+                visible: true, sceneActive: true)
+        }
+        #expect(status.state == .upToDate)
+        #expect(fps(false) == nil)
+        status.nudged()
+        #expect(fps(true) == 30)
+        clock.advance(SyncGlowTiming.nudge - 0.1)
+        status.tick()
+        #expect(status.state == .nudge)
+        #expect(fps(false) == 30)
+        clock.advance(0.2)
+        status.tick()
+        #expect(status.state == .upToDate)
+        #expect(fps(true) == 30)
+        #expect(fps(false) == nil)
+    }
+
+    @MainActor @Test func aRefusalBehindAnotherWindowHasEndedByTheTimeTheWindowIsBack() {
+        let clock = GlowClock()
+        let status = SyncGlowStatus(clock: { clock.now })
+        status.refused(pending: 0)
+        // The band's loop, as the view runs it while the scene is not active: it draws no frames
+        // there, and the tick must still go on until the moment is over.
+        #expect(SyncGlowPace.framesPerSecond(state: status.state, transitioning: false, reduceMotion: false, lowPower: false, visible: true, sceneActive: false) == nil)
+        var ticks = 0
+        while SyncGlowPace.needsTick(state: status.state), ticks < 50 {
+            clock.advance(0.2)
+            status.tick()
+            ticks += 1
+        }
+        #expect(status.state == .upToDate)
+        #expect(ticks == 6)
+        // Minutes later the window comes back: nothing is left to fade out of.
+        clock.advance(300)
+        status.tick()
+        #expect(status.state == .upToDate)
+        #expect(!SyncGlowPace.needsTick(state: status.state))
     }
 }
 
@@ -287,6 +389,29 @@ struct GlyphAtlasTests {
         let h = SyncGlowField.hash(1, 2)
         #expect(h >= 0 && h < 1)
         #expect(SyncGlowField.hash(1, 2) == h)
+    }
+
+    @Test func aGlyphKeepsItsShapeAtEveryWidth() {
+        // The phone band is the reference: its grid is the plain one.
+        let phone = SyncGlowField.cellGrid(density: 0.7, width: 393, height: 152)
+        let plain = SyncGlowField.cellGrid(density: 0.7)
+        #expect(abs(phone.x - plain.x) < 0.001)
+        #expect(phone.y == plain.y)
+        let reference = SyncGlowField.glyphBox(density: 0.7, width: 393, height: 152)
+        // iPad, a Mac window, a phone in landscape, and the same shapes in pixels at 2x and 3x.
+        let sizes: [(Float, Float)] = [(1366, 152), (1400, 152), (852, 152), (320, 152), (2732, 304), (1179, 456)]
+        for (width, height) in sizes {
+            let points = height / 152
+            let box = SyncGlowField.glyphBox(density: 0.7, width: width, height: height)
+            #expect(abs(box.width / points - reference.width) < 0.01)
+            #expect(abs(box.height / points - reference.height) < 0.01)
+            // More columns, never fewer rows.
+            #expect(SyncGlowField.cellGrid(density: 0.7, width: width, height: height).y == plain.y)
+        }
+        #expect(SyncGlowField.cellGrid(density: 0.7, width: 1366, height: 152).x > plain.x * 3)
+        // A drawable with no size yet must not divide by zero or collapse the grid.
+        let empty = SyncGlowField.cellGrid(density: 0.7, width: 0, height: 0)
+        #expect(empty.x.isFinite && empty.x > 0)
     }
 }
 

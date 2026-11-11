@@ -235,7 +235,9 @@ public enum SyncGlowComposer {
     }
 }
 
-/// Nil means do not schedule another frame. The view draws one still when Reduce Motion is on.
+/// Nil means do not schedule another frame: the view draws one still and waits for the next change.
+/// That is Reduce Motion, and also an up to date band once its crossfade has finished, so a library
+/// that is simply in sync costs one frame and not fifteen a second for as long as it is open.
 public enum SyncGlowPace {
     public static let idle = 15
     public static let active = 30
@@ -252,9 +254,30 @@ public enum SyncGlowPace {
     ) -> Int? {
         if !visible || !sceneActive || state == .off { return nil }
         if reduceMotion { return nil }
-        let moving = transitioning || state == .syncing || state == .refused || state == .repull || state == .nudge
+        // Nothing on a settled calm band changes until the state does. Offline keeps its slow clock:
+        // the waiting stars blink, and that blink is what says edits have not been sent.
+        if state == .upToDate, !transitioning { return nil }
+        let moving = transitioning || state == .syncing || isOneShot(state)
         if lowPower { return moving ? lowPowerActive : lowPowerIdle }
         return moving ? active : idle
+    }
+
+    /// A moment that plays once and is then cleared by `SyncGlowStatus.tick`.
+    public static func isOneShot(_ state: SyncGlowState) -> Bool {
+        state == .refused || state == .repull || state == .nudge
+    }
+
+    /// Whether the view has to keep calling `tick`. Only a one-shot moment ends by the clock. The
+    /// scene does not matter: a one-shot is the state until a tick clears it however old it is, so a
+    /// window left in the background would come back showing a moment that ended long ago. The loop
+    /// costs a few ticks, then the state is steady and it stops.
+    public static func needsTick(state: SyncGlowState) -> Bool {
+        isOneShot(state)
+    }
+
+    /// A frame drawn at this point of the crossfade is the finished picture and may be kept as the still.
+    public static func isSettled(transition: Float) -> Bool {
+        transition >= 0.999
     }
 }
 
@@ -330,6 +353,28 @@ public enum SyncGlowField {
     public static func cellGrid(density: Float) -> (x: Float, y: Float) {
         let d = min(max(density, 0), 1)
         return (7 + 12 * d, 3 + 2.2 * d)
+    }
+
+    /// The band the grid above was drawn for: a phone in portrait, 393 pt wide and 152 pt tall.
+    public static let referenceAspect: Float = 393.0 / 152.0
+
+    /// How much wider than that band a drawable is. The band's height is fixed, so this is what
+    /// the column count is multiplied by: a wide window gets more cells, not wider ones.
+    public static func aspectScale(width: Float, height: Float) -> Float {
+        let w = max(width, 1)
+        let h = max(height, 1)
+        return max(w / h / referenceAspect, 0.25)
+    }
+
+    public static func cellGrid(density: Float, width: Float, height: Float) -> (x: Float, y: Float) {
+        let grid = cellGrid(density: density)
+        return (grid.x * aspectScale(width: width, height: height), grid.y)
+    }
+
+    /// The box one glyph is drawn in, in the units of `width` and `height`. Same factors as `glyphMask`.
+    public static func glyphBox(density: Float, width: Float, height: Float) -> (width: Float, height: Float) {
+        let grid = cellGrid(density: density, width: width, height: height)
+        return (max(width, 1) / (grid.x * 1.15), max(height, 1) / (grid.y * 1.85))
     }
 
     public static func showsStar(hash: Float, density: Float) -> Bool {
