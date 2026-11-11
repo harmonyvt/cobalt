@@ -8,7 +8,7 @@ let UP = params.get("up") || "http://127.0.0.1:9";
 // ?mcp=<url>: a dev MCP server (mcp-dev.mjs). Tool calls from a widget go to it, not to the fixtures, and __host.loadLive()
 // opens a widget from a real tool result and the widget HTML the server serves (with the CSP it advertises).
 const MCP = params.get("mcp");
-const LIVE_VIEW = { search_library: "search", show_post: "post", show_edit: "edit", list_collections: "collections", list_share_links: "links", create_share_link: "links", convert_to_webp: "webp", upload_files: "upload", save_link: "save" };
+const LIVE_VIEW = { search_library: "search", show_post: "post", show_edit: "edit", list_collections: "collections", list_share_links: "links", create_share_link: "links", convert_to_webp: "webp", upload_files: "upload", save_link: "save", box_run: "terminal", box_pull: "terminal", box_save: "terminal" };
 let rpcId = 1;
 async function mcpRpc(method, p) {
     const res = await fetch(MCP, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: rpcId++, method, params: p }) });
@@ -47,6 +47,22 @@ const FIX = {
     "save.running": { tool: "save_link", args: { url: "https://x.com/someone/status/1987654321" }, out: () => F.saveOut("running") },
     "save.done": { tool: "save_link", args: { url: "https://x.com/someone/status/1987654321" }, out: F.saveDone },
     "save.error": { tool: "save_link", args: { url: "https://x.com/someone/status/1987654321" }, out: F.saveError },
+    "term.probe": { tool: "box_run", args: { cmd: "ffprobe -v error -show_entries format=duration -of csv=p=0 clip.mp4" }, out: F.termProbe },
+    "term.ffmpeg": { tool: "box_run", args: { cmd: "ffmpeg ..." }, out: F.termFfmpeg },
+    "term.ytdlp": { tool: "box_run", args: { cmd: "yt-dlp -F ..." }, out: F.termYtdlp },
+    "term.quiet": { tool: "box_run", args: { cmd: "ffmpeg ..." }, out: F.termQuiet },
+    "term.cut": { tool: "box_run", args: { cmd: "yt-dlp --dump-json ..." }, out: F.termCut },
+    "term.timeout": { tool: "box_run", args: { cmd: "ffmpeg ..." }, out: F.termTimeout },
+    "term.notfound": { tool: "box_run", args: { cmd: "yt-dl -F https://youtu.be/dQw4w9WgXcQ" }, out: F.termNotFound },
+    "term.fferr": { tool: "box_run", args: { cmd: "ffmpeg ..." }, out: F.termFfErr },
+    "term.xss": { tool: "box_run", args: { cmd: "echo" }, out: F.termXss },
+    "term.pull": { tool: "box_pull", args: { id: "post-vid-1" }, out: F.termPull },
+    "term.save": { tool: "box_save", args: { path: "clip-720.mp4" }, out: () => F.termSave(false) },
+    "term.save-public": { tool: "box_save", args: { path: "clip-720.mp4", public: true }, out: () => F.termSave(true) },
+    // the call's arguments, and no result yet: the command and a running line
+    "term.running": { tool: "box_run", args: { cmd: 'ffmpeg -y -i out.mp4 -vf "thumbnail,scale=480:-2" -frames:v 1 poster.jpg' }, out: null, view: "terminal" },
+    // the box is off for the day: one red line under the command
+    "term.off": { tool: "box_run", args: { cmd: "ls -lh" }, error: "cobalt.box.run: the workbench is used up for today (60 awake minutes); it opens again at midnight UTC", view: "terminal" },
     // never answers: the skeleton
     "skeleton.search": { tool: "search_library", args: { query: "pink" }, out: null, view: "search" },
     "skeleton.webp": { tool: "convert_to_webp", args: { id: "x" }, out: null, view: "webp" },

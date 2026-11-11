@@ -98,7 +98,7 @@ await step("initialize, tools/list and resources over HTTP", async () => {
     }
     const { resources } = await client.listResources();
     eq(resources.map((r) => r.uri).sort(), WIDGETS.map((w) => w.uri).sort(), "resources/list names every widget");
-    eq(resources.length, 8, "eight widgets");
+    eq(resources.length, 9, "nine widgets");
     for (const w of WIDGETS) {
         const read = await client.readResource({ uri: w.uri });
         const c = read.contents[0];

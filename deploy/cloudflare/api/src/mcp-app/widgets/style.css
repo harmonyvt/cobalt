@@ -240,6 +240,58 @@ a.ext:hover{text-decoration:underline}
 .job>div:last-child{min-width:0}
 .job .u{font:11.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+/* terminal (box_run, box_pull, box_save): the panel is dark in both themes, like a terminal */
+.tt{display:flex;align-items:center;gap:6px;min-width:0}
+.btn.sm{height:20px;line-height:18px;padding:0 6px;font-size:10.5px}
+.term{background:#0b0a0a;color:#d9d4cc;font:11.5px/1.45 var(--mono)}
+:root[data-display=fullscreen] .term{font-size:13px}
+.term .btn{background:#1a1817;border-color:#33302c;color:#d9d4cc}
+.term .cpfall{padding:0 10px}
+.cmd{display:flex;gap:6px;align-items:flex-start;padding:7px 6px 5px 10px}
+.cmd .ps{color:#7d776f;white-space:nowrap;user-select:none}
+.cmd .tx{flex:1;min-width:0;color:#f1eee9;white-space:pre-wrap;overflow-wrap:anywhere}
+.tx .cm{color:#58c995}.tx .fl{color:#9ab7f0}.tx .st{color:#e3ab4a}
+.term .out{margin:0;padding:0 10px 2px;font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}
+.out .ln{display:block;min-height:1.45em}
+.out .e{color:#e3ab4a}.out .e.hard{color:#f0877e}
+.out .cutl{color:#7d776f;font-style:italic}
+.tail{display:flex;gap:8px;align-items:center;margin:0 10px 3px;padding:1px 0;border-bottom:1px dashed #2a2724;font:11px var(--sans);color:#a39d95}
+.tail button{border:0;background:none;padding:0;color:#f27bb3;font:inherit}
+.tail button:hover{text-decoration:underline}
+.noout{color:#7d776f;font-style:italic;padding:0 10px 4px}
+.cur{display:inline-block;width:6px;height:12px;margin-left:4px;background:#d9d4cc;vertical-align:-2px;animation:pulse 1s steps(2) infinite}
+.tmeta{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:3px 8px 7px 10px;font:11px var(--sans);color:#a39d95}
+.tmeta .sp{flex:1}
+.tmeta .clip{color:#e3ab4a}
+.tmeta .bad{color:#f0877e}
+.pill.code{font-family:var(--mono);font-size:10.5px}
+.term .pill{background:#1d3329;color:#58c995}.term .pill.bad{background:#3d211f;color:#f0877e}.term .pill.warn{background:#3a2f1a;color:#e3ab4a}
+.a30{color:#7d776f}.a31{color:#f0877e}.a32{color:#58c995}.a33{color:#e3ab4a}.a34{color:#6c9be8}.a35{color:#c79bf0}.a36{color:#56c8d8}.a37{color:#f1eee9}
+.a90{color:#8d877f}.a91{color:#ff9f97}.a92{color:#7ee0b0}.a93{color:#f3c76e}.a94{color:#8fb4f5}.a95{color:#d9b4f7}.a96{color:#7fdbe8}.a97{color:#fff}
+.ab{font-weight:700}.ad{opacity:.65}.au{text-decoration:underline}
+.bstat{display:flex;align-items:center;gap:6px;padding:4px 10px;border-bottom:1px solid var(--line);font-size:var(--fm);color:var(--mute)}
+.bstat b{font-weight:500;color:var(--ink)}
+.bstat .sp{flex:1}
+.bstat .wipe{font-variant-numeric:tabular-nums}
+.bstat .wipe.low{color:var(--amber)}
+.cwd{padding:6px 10px 3px;background:#0b0a0a;color:#7d776f;font:11px var(--mono)}
+.ls{font:11.5px/1.35 var(--mono)}
+.lsr{display:grid;grid-template-columns:minmax(0,1fr) 52px 50px;gap:8px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--line)}
+.lsr:last-child{border-bottom:0}
+.lsr .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lsr .n i{font-style:normal;color:var(--mute)}
+.lsr .z{text-align:right;color:var(--mute);font-variant-numeric:tabular-nums}
+.lsr .k{font:10.5px var(--sans);color:var(--mute);text-align:center;background:var(--soft);border-radius:99px}
+.lsfoot{padding:0 var(--p) var(--p)}
+.lsfoot:has(>[hidden]){display:none}
+.sv{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:8px;align-items:center;padding:6px 8px}
+.sv .pic{width:44px;height:44px;border-radius:6px}
+.sv .pic .lockb{position:absolute;left:2px;top:2px;padding:2px 3px}
+.sv .t{min-width:0}
+.sv .t b{display:block;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sv .t>span:last-child{display:block;font-size:var(--fm);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sv .ok{display:flex;align-items:center;gap:4px;font-size:var(--fm);color:var(--green)}
+
 /* skeleton */
 .sk{background:var(--soft);border-radius:6px;animation:pulse 1.4s ease-in-out infinite}
 @keyframes pulse{50%{opacity:.5}}

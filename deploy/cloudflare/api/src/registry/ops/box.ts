@@ -68,7 +68,7 @@ export const boxRunOp = defineOp({
         cmd: z.string().min(1).max(8000),
         timeoutS: z.number().int().min(1).max(RUN_MAX_S).optional().describe(`default ${RUN_DEFAULT_S}, max ${RUN_MAX_S}`),
     }),
-    output: z.object({ code: z.number(), stdout: z.string(), stderr: z.string(), timed_out: z.boolean() }),
+    output: z.object({ code: z.number(), stdout: z.string(), stderr: z.string(), timed_out: z.boolean(), ms: z.number() }),
     ai: {
         tier: "free",
         only: true,
@@ -81,7 +81,8 @@ export const boxRunOp = defineOp({
     handler: async (ctx, input) => {
         const r = await workbenchPort(ctx).run(threadOf(ctx), input.cmd, input.timeoutS);
         if (isError(r)) throw new OpError(503, "error.workbench", `cobalt.box.run: ${r.error}`);
-        return ok({ code: r.code, stdout: r.stdout, stderr: r.stderr, timed_out: r.timed_out });
+        // ms: how long the command itself ran (the MCP terminal widget shows it)
+        return ok({ code: r.code, stdout: r.stdout, stderr: r.stderr, timed_out: r.timed_out, ms: r.ms });
     },
 });
 

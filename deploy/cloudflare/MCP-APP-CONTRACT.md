@@ -122,7 +122,7 @@ Not in this step: deletes, status changes, rendering an edit, rerolling links (t
 
 ## 5. Widgets
 
-- One bundle, eight views. `scripts/build-widgets.mjs` inlines `src/mcp-app/widgets/` (shared bridge, shared CSS, one
+- One bundle, nine views (the ninth, `terminal`, is section 5.1). `scripts/build-widgets.mjs` inlines `src/mcp-app/widgets/` (shared bridge, shared CSS, one
   renderer per view) into self-contained HTML and writes `WIDGETS` (one entry per view, the same bundle with that view as
   the default) to `widgets.generated.ts`. `--check` fails when the generated file is stale, like `gen:check`.
 - No framework, no remote script, no remote font. Light and dark from the host's theme (host context), falling back to
@@ -152,6 +152,38 @@ Not in this step: deletes, status changes, rendering an edit, rerolling links (t
 - The upload view sends each chosen file with `PUT` straight to its `upload_url` (XHR, for progress) and shows the item
   the PUT answers.
 - Copy buttons use `navigator.clipboard` from a click, with a visible fallback (select the text) when it is refused.
+
+### 5.1 The box terminal (`terminal`)
+
+Owner (2026-11-11), on the mockup `/mnt/project-files/capystore-mcp-app/box-terminal-mockup.png`: "Implement, please."
+The workbench box tools `box_run`, `box_pull` and `box_save` (registry ops, listed only while the box is on) end on
+`ui://capystore/terminal.html` through `src/mcp-app/follow.ts` (section 6.5). Their text stays the op's JSON;
+`structuredContent` is that JSON plus `view: "terminal"`, `tool` (`run`, `pull`, `save`) and `sleeps_at` (the call's time
+plus the box's 2-minute idle sleep, when its files are wiped unless another box call comes first); shapes `TerminalOut`
+in `shapes.ts`.
+
+- `box_run` adds `cmd` (the input), `ms` (now in the op's own answer too: how long the command ran) and `stdout_cut` /
+  `stderr_cut` (the stream was over 8 KB and holds the `… (N bytes cut) …` line). The widget: a dark monospace panel,
+  `/workspace $` and the wrapped command (program, flags and quoted strings lightly marked), stdout plain, stderr amber,
+  red when the exit code is not 0 (a timeout keeps it amber and shows a "timed out" chip instead of the code), ANSI SGR
+  colours (16 colours, bold, dim, underline; 256-colour 0..15; other escapes dropped), a line rewritten with `\r` keeps its
+  last part, tail first (the last 8 lines, "show all N lines"; full screen shows all), the exit chip (green 0, red
+  otherwise, "command not found" for 127), the duration, "stdout cut to 8 KB", copy buttons for the command and the
+  output (plain text, no escapes).
+- `box_pull`: an `ls -lh` list (name with a dim extension, size as `ls -h` writes it, kind), first 3 and "show N more".
+- `box_save`: one row, "saved to library": the post's picture (a post that is not public: the lock, and its signed
+  thumbnail in `_meta["capystore/preview"]` under the post id, as `show_post` files it), title, kind · size · private or
+  public · processing, and "open" (calls `show_post`). `post` is the post as search shows it (null when it cannot be read
+  or is hidden).
+- A status line over each: "box awake · wiped in m:ss if idle", counting down to `sleeps_at` on the widget's clock
+  (amber under a minute), then "box asleep · files wiped, unless used since" (a later call in the chat may have kept it).
+- The call's arguments arrive before its result (`ui/notifications/tool-input`): the command and a running line show
+  until the result comes. A failed call (the box off, its daily minutes used, a file it cannot read) is one red line,
+  under the command when there was one; no retry button.
+- Output is untrusted: `src/mcp-app/widgets/term.js` only splits and classifies it (no DOM; unit tests in
+  `test/mcp-app-terminal.test.ts`) and every piece goes in with `textContent`. No new origin.
+- Not done: a history of several runs in one terminal. Each tool result is its own widget frame, and a widget only sees
+  its own result, so earlier runs cannot be stacked inside one; every run draws its own panel.
 
 ## 6. Core: what a host sees
 
@@ -213,6 +245,7 @@ the tool carries `_meta.ui.resourceUri` in `tools/list`. Any failure of the read
 | `collections_create`, `collections_add`, `collections_update` | `collections` | that collection, as `list_collections` builds it |
 | `links_update`; `links_private`, `links_rotate` on a gallery link | `links` | that link, `created` set to it |
 | `library_title`; `library_visibility`, `library_status` on one post | `post` | that post, as `show_post` builds it |
+| `box_run`, `box_pull`, `box_save` (while the box is on) | `terminal` | the op's own answer (section 5.1); `box_save` reads the new post |
 
 A private link of a single file, several posts, or a hidden result have no view. Ask-tier tools keep `destructiveHint`.
 

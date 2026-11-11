@@ -4142,7 +4142,7 @@ model sees them only while the box is on (`WORKBENCH` bound and `WORKBENCH_DAILY
   back through the rule. Names resolve on Cloudflare's network, which cannot reach private addresses. Other ports and raw
   TCP have no route out, and HTTPS to a bare IP fails (interception needs a name).
 - **`cobalt.box.run(cmd, { timeoutS? })`**: `bash -c cmd`, default 60 s, at most 120 s (then killed, `code: 124`,
-  `timed_out: true`). Returns `{ code, stdout, stderr, timed_out }`. Each stream is cut to 8 KB: the first 2 KB and the last
+  `timed_out: true`). Returns `{ code, stdout, stderr, timed_out, ms }` (`ms`: how long the command ran). Each stream is cut to 8 KB: the first 2 KB and the last
   6 KB, with `… (N bytes cut) …` between.
 - **`cobalt.box.save(path, { title?, public? })`**: the file's size and first 64 bytes are read, the type comes **from the
   bytes** (jpg, png, webp, gif, heic, mp4/m4v by a video `ftyp` brand, mov), and the bytes stream into **the

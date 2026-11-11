@@ -135,6 +135,68 @@ export function previewMetaOf(sc) {
     if (pr) {
         for (const o of [...(pr.main || []), ...(pr.overlay || []), pr.render]) if (o && o.private && o.file_id) put(o.file_id, { url: signed(o.file_id), poster: signed(o.file_id, true) });
     }
+    // the terminal's saved post: its signed thumbnail, as show_post files it
+    if (sc.view === "terminal" && sc.post && sc.post.status !== "public") put(sc.post.id, { thumb: signed(sc.post.id, true) });
     for (const q of sc.projects || []) if (q.id === "edit-5") put(q.id, { poster: signed(q.id, true) });
     return Object.keys(m).length ? { "capystore/preview": m } : undefined;
 }
+
+// ---- the box terminal (box_run, box_pull, box_save: the op's JSON plus view, tool, sleeps_at), data from the mockup
+const E = "\x1b";
+const sleepsIn = (s) => new Date(Date.now() + s * 1000).toISOString();
+const run = (o) => ({ view: "terminal", tool: "run", cmd: "true", code: 0, stdout: "", stderr: "", timed_out: false, ms: 120, stdout_cut: false, stderr_cut: false, sleeps_at: sleepsIn(102), ...o });
+export const FF_LOG = [
+    "ffmpeg version 7.1 Copyright (c) 2000-2024 the FFmpeg developers",
+    "  built with gcc 14 (Debian 14.2.0-6)",
+    "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'in.mp4':",
+    "  Duration: 00:00:24.04, start: 0.000000, bitrate: 6431 kb/s",
+    "  Stream #0:0[0x1](und): Video: h264 (High), yuv420p, 1920x1080, 60 fps",
+    "Stream mapping:",
+    "  Stream #0:0 -> #0:0 (h264 (native) -> h264 (libx264))",
+    `${E}[1;32m[libx264 @ 0x55d1]${E}[0m using cpu capabilities: MMX2 SSE2Fast SSSE3 SSE4.2 AVX2`,
+    "Output #0, mp4, to 'out.mp4':",
+    "frame=  118 fps= 51 q=28.0 size=     256kB time=00:00:03.93 speed=1.7x\rframe=  412 fps= 54 q=28.0 size=     768kB time=00:00:13.73 speed=1.8x\rframe=  721 fps= 55 q=-1.0 Lsize=    1792kB time=00:00:24.03 speed=1.82x\r",
+    `${E}[1;34m[libx264 @ 0x55d1]${E}[0m frame I:6     Avg QP:20.31  size: 21534`,
+    `${E}[1;34m[libx264 @ 0x55d1]${E}[0m frame P:188   Avg QP:24.02  size:  4822`,
+    `${E}[1;34m[libx264 @ 0x55d1]${E}[0m kb/s:597.68`,
+    `${E}[0;32mvideo:1540kB audio:188kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: 3.7%${E}[0m`,
+].join("\n") + "\n";
+const FORMATS = [
+    "[youtube] Extracting URL: https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "[info] Available formats for dQw4w9WgXcQ:",
+    "ID      EXT   RESOLUTION FPS |   FILESIZE   TBR PROTO | VCODEC          ACODEC",
+    "------------------------------------------------------------------------------",
+    "139     m4a   audio only     |    1.62MiB   49k https | audio only      mp4a.40.5",
+    "140     m4a   audio only     |    4.30MiB  130k https | audio only      mp4a.40.2",
+    "251     webm  audio only     |    4.41MiB  133k https | audio only      opus",
+    "160     mp4   256x144     30 |    1.19MiB   36k https | avc1.4d400c     video only",
+    "134     mp4   640x360     30 |    4.77MiB  144k https | avc1.4d401e     video only",
+    "136     mp4   1280x720    30 |   15.4MiB   466k https | avc1.4d401f     video only",
+    "137     mp4   1920x1080   30 |   41.9MiB  1269k https | avc1.640028     video only",
+    "18      mp4   640x360     30 |   10.2MiB  308k https | avc1.42001E     mp4a.40.2",
+].join("\n") + "\n";
+export const XSS_OUT = `<img src=x onerror="window.__xss=1"> <script>window.__xss=2</script>\n${E}[31m<b>red but not bold</b>${E}[0m &amp; done\n`;
+export const termProbe = () => run({ cmd: "ffprobe -v error -show_entries format=duration -of csv=p=0 clip.mp4", stdout: "24.040000\n", ms: 312 });
+export const termFfmpeg = () => run({ cmd: 'ffmpeg -y -i in.mp4 -vf "scale=720:-2,fps=30" -c:v libx264 -crf 23 out.mp4', stderr: FF_LOG, ms: 13240 });
+export const termYtdlp = () => run({ cmd: 'yt-dlp -F "https://www.youtube.com/watch?v=dQw4w9WgXcQ"', stdout: FORMATS, ms: 2910 });
+export const termQuiet = () => run({ cmd: 'ffmpeg -hide_banner -loglevel error -y -i in.mp4 -vf "scale=720:-2,fps=30" -c:v libx264 -crf 23 out.mp4', ms: 13200, sleeps_at: sleepsIn(41) });
+export const termCut = () => run({ cmd: 'yt-dlp --dump-json "https://www.youtube.com/watch?v=dQw4w9WgXcQ"', stdout: '{"id": "dQw4w9WgXcQ", "title": "Rick Astley - Never Gonna Give You Up", "formats": [{"format_id": "sb3", "ext": "mhtml"},\n… (61442 bytes cut) …\n{"format_id": "22", "ext": "mp4", "width": 1280, "height": 720}], "duration": 213, "channel": "Rick Astley"}\n', stdout_cut: true, ms: 3400 });
+export const termTimeout = () => run({ cmd: 'ffmpeg -y -i long.mp4 -vf "scale=1920:-2" -c:v libx264 -preset veryslow out.mp4', code: 124, timed_out: true, stderr: "frame= 1930 fps=4.1 q=29.0 size=   10240kB time=00:01:04.33 speed=0.14x\r\n(killed after 60 s)", ms: 60004 });
+export const termNotFound = () => run({ cmd: "yt-dl -F https://youtu.be/dQw4w9WgXcQ", code: 127, stderr: "bash: line 1: yt-dl: command not found\n", ms: 14 });
+export const termFfErr = () => run({ cmd: 'ffmpeg -hide_banner -loglevel error -y -i in.mp4 -c:v libx265 -crf 23 out.mp4', code: 1, stderr: "Unknown encoder 'libx265'\n[vost#0:0/libx265 @ 0x55a2] Error selecting an encoder\nError opening output file out.mp4.\nError opening output files: Encoder not found\n", ms: 402 });
+export const termXss = () => run({ cmd: 'echo "<img src=x onerror=window.__xss=3>" && printf done', stdout: XSS_OUT, stderr: `${E}]0;title${E}\\${E}[2Kwarn${E}[K\n`, ms: 8 });
+export const termPull = () => ({
+    view: "terminal", tool: "pull", sleeps_at: sleepsIn(118),
+    files: [
+        { path: "clip.mp4", file_id: "f1", content_type: "video/mp4", bytes: 29_360_128, seconds: 24.04, width: 1920, height: 1080 },
+        { path: "poster.jpg", file_id: "f2", content_type: "image/jpeg", bytes: 421_888, seconds: null, width: 1080, height: 1920 },
+        { path: "captions.srt", file_id: "f3", content_type: null, bytes: 98_304, seconds: null, width: null, height: null },
+        { path: "clip-720.mp4", file_id: "f4", content_type: "video/mp4", bytes: 9_856_614, seconds: 24.04, width: 720, height: 1280 },
+        { path: "audio.m4a", file_id: "f5", content_type: "audio/mp4", bytes: 3_250_585, seconds: 24.04, width: null, height: null },
+    ],
+});
+export const termSave = (pub = false) => ({
+    view: "terminal", tool: "save", sleeps_at: sleepsIn(96), post_id: pub ? "post-vid-1" : "post-priv-1", kind: "video", bytes: 9_856_614, processing: !pub,
+    public_url: pub ? `${MEDIA}clip720.mp4` : null,
+    post: pub ? POSTS[1] : { ...POSTS[3], title: "clip 720p" },
+});

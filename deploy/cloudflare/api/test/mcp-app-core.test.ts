@@ -310,7 +310,7 @@ describe("the JSON-RPC edges kept from the first core (through the Worker)", () 
         const res = await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "1999-01-01" } });
         expect(((await res.json()) as any).result.protocolVersion).toBe("2025-11-25");
     });
-    it("the real app tools and widgets list through the Worker: ten tools with their widget links, eight widgets", async () => {
+    it("the real app tools and widgets list through the Worker: ten tools with their widget links, nine widgets", async () => {
         const tools = ((await (await post({ jsonrpc: "2.0", id: 1, method: "tools/list" })).json()) as any).result.tools as any[];
         const names = ["search_library", "show_post", "show_edit", "list_collections", "list_share_links", "convert_to_webp", "upload_files", "create_share_link", "save_link", "job_status"];
         expect(tools.slice(0, 10).map((t) => t.name)).toEqual(names);
@@ -330,7 +330,7 @@ describe("the JSON-RPC edges kept from the first core (through the Worker)", () 
         for (const t of tools.slice(0, 10)) expect(t.outputSchema, t.name).toMatchObject({ type: "object" });
         const res = (await (await post({ jsonrpc: "2.0", id: 2, method: "resources/list" })).json()) as any;
         expect(res.result.resources.map((r: any) => r.uri)).toEqual(VIEWS.map((v) => `ui://capystore/${v}.html`));
-        expect(res.result.resources).toHaveLength(8);
+        expect(res.result.resources).toHaveLength(9);
         expect(res.result.resources.every((r: any) => r.mimeType === "text/html;profile=mcp-app")).toBe(true);
     });
 

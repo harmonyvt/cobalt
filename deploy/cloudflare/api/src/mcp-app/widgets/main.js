@@ -110,7 +110,11 @@ function render() {
         }
         wrap.appendChild(node);
     } else if (S.done && !S.err) wrap.appendChild(h("div", { class: "empty", text: "done." }));
-    else if (!S.err) wrap.appendChild(skeleton(S.defView));
+    else if (!S.err) {
+        // a view that can show the call's arguments while it runs (the terminal: the command) does; the rest a skeleton
+        const wait = S.input && VIEWS[S.defView] && VIEWS[S.defView].wait;
+        wrap.appendChild(wait ? wait(S.input) : skeleton(S.defView));
+    }
     root.replaceChildren(wrap);
 }
 
@@ -120,8 +124,11 @@ bridge.on("result", (p) => {
     takePreviews(p && p._meta);
     S.stack = [];
     if (p && p.isError) {
-        S.data = null;
-        S.err = { msg: ((p.content || []).map((c) => c.text).filter(Boolean).join(" ")) || "that didn't work" };
+        const msg = ((p.content || []).map((c) => c.text).filter(Boolean).join(" ")) || "that didn't work";
+        // a view that draws its own failure (the terminal: one red line under the command) does; the rest the banner
+        const fail = VIEWS[S.defView] && VIEWS[S.defView].fail;
+        S.data = fail ? fail(msg, S.input) : null;
+        S.err = fail ? null : { msg };
     } else if (sc && VIEWS[sc.view]) {
         S.data = sc;
         S.err = null;
@@ -132,6 +139,10 @@ bridge.on("result", (p) => {
         S.done = true;
     }
     render();
+});
+bridge.on("input", (a) => {
+    S.input = a && typeof a === "object" ? a : null;
+    if (!S.data && !S.err && !S.done && VIEWS[S.defView] && VIEWS[S.defView].wait) render();
 });
 bridge.on("cancelled", () => {
     if (!S.data) {

@@ -3,7 +3,7 @@
 // "may be missing" value is nullable, and every result carries `view`, the widget view that draws it.
 import * as z from "zod";
 
-export const VIEWS = ["search", "post", "edit", "collections", "links", "webp", "upload", "save"] as const;
+export const VIEWS = ["search", "post", "edit", "collections", "links", "webp", "upload", "save", "terminal"] as const;
 export type View = (typeof VIEWS)[number];
 export const widgetUri = (view: View) => `ui://capystore/${view}.html`;
 
@@ -266,3 +266,53 @@ export const SaveOut = z.looseObject({
     save_id: z.string().nullable(),
     saves_left_today: z.number().nullable(),
 });
+
+// The workbench box tools (box_run, box_pull, box_save: registry ops, not app tools) drawn as a terminal
+// (src/mcp-app/follow.ts). Each is the op's own JSON plus `view`, `tool` and `sleeps_at`, so a reader of the plain
+// structuredContent loses nothing.
+const BoxCommon = {
+    view: z.literal("terminal"),
+    // when the box sleeps and its files are wiped if no other box call comes first (2 minutes after this one); null: unknown
+    sleeps_at: iso.nullable(),
+};
+export const TerminalRun = z.looseObject({
+    ...BoxCommon,
+    tool: z.literal("run"),
+    cmd: z.string(),
+    code: z.number(),
+    stdout: z.string(),
+    stderr: z.string(),
+    timed_out: z.boolean(),
+    // how long the command ran; null from an older op
+    ms: z.number().nullable(),
+    // the stream was over 8 KB: its middle was cut ("… (N bytes cut) …")
+    stdout_cut: z.boolean(),
+    stderr_cut: z.boolean(),
+});
+export const TerminalPull = z.looseObject({
+    ...BoxCommon,
+    tool: z.literal("pull"),
+    files: z.array(
+        z.looseObject({
+            path: z.string(),
+            file_id: z.string(),
+            content_type: z.string().nullable(),
+            bytes: z.number(),
+            seconds: z.number().nullable(),
+            width: z.number().nullable(),
+            height: z.number().nullable(),
+        }),
+    ),
+});
+export const TerminalSave = z.looseObject({
+    ...BoxCommon,
+    tool: z.literal("save"),
+    post_id: z.string(),
+    kind: z.enum(["video", "image"]),
+    bytes: z.number(),
+    processing: z.boolean(),
+    public_url: url,
+    // the new post as search and show_post show it (a private one's signed thumbnail in _meta); null when it could not be read
+    post: PostSummary.nullable(),
+});
+export const TerminalOut = z.discriminatedUnion("tool", [TerminalRun, TerminalPull, TerminalSave]);
