@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>capystore widgets: dev host</title>
+<style>
+body{margin:0;font:13px/1.4 system-ui,sans-serif;background:#ddd;color:#222;display:flex;min-height:100vh}
+html[data-theme=dark] body{background:#0c0b0a;color:#eee}
+aside{width:200px;flex:none;padding:10px;border-right:1px solid #8884;overflow:auto}
+aside button{display:block;width:100%;text-align:left;margin:2px 0;padding:3px 6px;font:inherit;cursor:pointer}
+main{flex:1;padding:16px}
+#frame{max-width:100%}
+label{display:block;margin:6px 0}
+</style>
+</head>
+<body>
+<aside>
+  <b>host</b>
+  <label>theme <select id="theme"><option>light</option><option>dark</option></select></label>
+  <label>width <select id="width"><option>320</option><option>480</option><option selected>640</option><option>760</option><option value="0">fill</option></select></label>
+  <div id="nav"></div>
+</aside>
+<main><div id="stage"><div id="frame"></div></div></main>
+<script src="dist/host.js"></script>
+</body>
+</html>
