@@ -90,7 +90,7 @@ describe("a pasted Discord attachment link through POST /studio", () => {
         expect(rows).toHaveLength(1);
         expect(rows[0]).toMatchObject({
             source: "saved", bucket: "originals", r2_key: `originals/${sid}.png`, content_type: "image/png", duration: null,
-            role: null, item_index: null, post_key: null, width: 1024, height: 768, session_id: sid, link: DISCORD.split("?")[0],
+            role: null, item_index: null, post_key: sid, width: 1024, height: 768, session_id: sid, link: DISCORD.split("?")[0],
         });
         expect(rows[0].poster).toMatch(/^https:\/\/media\.capybaraharmony\.com\/[A-Za-z0-9]{10}\.jpg$/);
         expect(w.originals.objects.get(`originals/${sid}.png`)!.bytes).toEqual(PNG);

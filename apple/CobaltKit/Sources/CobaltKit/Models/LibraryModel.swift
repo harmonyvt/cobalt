@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SyncGlowKit
 import UniformTypeIdentifiers
 
 @MainActor @Observable
@@ -117,6 +118,39 @@ public final class LibraryModel {
     @ObservationIgnored var hiddenSyncTask: Task<Void, Never>?
     /// A whole-album read (`syncHiddenIndex`) is running.
     @ObservationIgnored var hiddenSyncing = false
+    /// The on-device library, when `sync.engine` is on. Nil leaves every load on `GET /library`.
+    @ObservationIgnored var sync: LibrarySync?
+    #if DEBUG
+    /// A glow status with no engine behind it, so a debug build can force a state for a screenshot
+    /// while `sync.engine` is off.
+    public var debugStatus: SyncGlowStatus?
+    #endif
+
+    /// The sync glow. Nil while the flag is off and nothing has forced a preview.
+    public var syncStatus: SyncGlowStatus? {
+        #if DEBUG
+        sync?.status ?? debugStatus
+        #else
+        sync?.status
+        #endif
+    }
+
+    #if DEBUG
+    /// Holds the glow on one state. `nil` follows the engine again (and hides the band when there is no engine).
+    public func debugSyncGlow(_ state: SyncGlowState?, pending: Int) {
+        if state == nil {
+            sync?.status.debugForce(nil, pending: 0)
+            debugStatus = nil
+            return
+        }
+        if let status = sync?.status {
+            status.debugForce(state, pending: pending)
+            return
+        }
+        if debugStatus == nil { debugStatus = SyncGlowStatus() }
+        debugStatus?.debugForce(state, pending: pending)
+    }
+    #endif
 
     static let pageSize = 20
     static let wholePageSize = 50
@@ -148,6 +182,7 @@ public final class LibraryModel {
     }
 
     func apply(_ page: LibraryPage, replacing: Bool) {
+        let wasEmpty = posts.isEmpty
         // A post the server calls hidden (or this device just hid) is in no list but the hidden album, whatever page it
         // came on (APP-API-CONTRACT 37.2).
         let listed = page.posts.filter { !$0.hidden && !recentlyHidden.contains($0.id) }
@@ -163,6 +198,7 @@ public final class LibraryModel {
         cursor = page.next
         hasMore = page.next != nil
         didApply(page: page)
+        if wasEmpty, !posts.isEmpty { LaunchTiming.noteFirstContent(source: "network") }
     }
 
     /// Called after every page (refresh, `loadMore`, `loadAll`, `locate`, the seed) has joined `posts`:
@@ -185,9 +221,27 @@ public final class LibraryModel {
     }
 
     public func refresh() async {
+        if let sync, sync.isActive {
+            let started = Date()
+            await sync.syncNow()
+            if sync.isActive {
+                LaunchTiming.noteLibraryLoad(ms: LaunchTiming.millis(from: started), posts: posts.count, source: "sync")
+                FinderLibraryEvents.noteRefresh()
+            }
+            // Not active any more: the pass fell back, and the engine has already started today's
+            // first page for it (`LibrarySync.onLegacy`). Asking again here would load it twice.
+            return
+        }
+        await refreshFromServer()
+    }
+
+    /// Today's `GET /library` page. Also the path after `GET /sync` falls back (a 404, or a
+    /// pull that failed with nothing on the device to show).
+    func refreshFromServer() async {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
+        let started = Date()
         do {
             let client = ctx.client
             if ctx.capabilities.titles { await ctx.titles.flush(client: client) }       // titles that failed to send, before the page reads them
@@ -202,9 +256,11 @@ public final class LibraryModel {
         } catch {
             if let f = pipelineFailure(from: error, during: .saving) { failure = f }
         }
+        LaunchTiming.noteLibraryLoad(ms: LaunchTiming.millis(from: started), posts: posts.count, source: "library")
     }
 
     public func loadMore() async {
+        if sync?.isActive == true { return }
         guard !isLoading, hasMore, let cursor else { return }
         isLoading = true
         defer { isLoading = false }
@@ -222,6 +278,10 @@ public final class LibraryModel {
     /// Everything on device: pages of 50 until the server has no more or `cap` posts are in. A quiet
     /// `loadingAll` reports the count while it runs. A failure stops it and lands in `failure`.
     public func loadAll(cap: Int = 1000) async {
+        if let sync, sync.isActive {
+            await sync.syncNow()
+            return
+        }
         if showingHidden { return await loadAllHidden(cap: cap) }       // the album's own pages
         await settle()
         guard !isLoading else { return }
@@ -234,6 +294,10 @@ public final class LibraryModel {
     /// Loads pages until the post is in `posts` (or the server has no more, or the cap of 1000 posts):
     /// true when it is loaded.
     public func locate(postID: String) async -> Bool {
+        if let sync, sync.isActive {
+            await sync.syncNow()
+            return posts.contains { $0.id == postID } || hiddenPosts.contains { $0.id == postID }
+        }
         if posts.contains(where: { $0.id == postID }) { return true }
         await settle()
         if posts.contains(where: { $0.id == postID }) { return true }

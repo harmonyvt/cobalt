@@ -15,6 +15,7 @@ import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
 import { purgeFrom } from "./visibility";
 import { releaseHeld } from "./hidden";
+import { syncMaintenance } from "./sync";
 import { shareBaseFrom } from "./deps";
 import { shareLinkFrom } from "./share";
 import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
@@ -475,6 +476,13 @@ export default {
         // SEARCH_RUN_BUDGET_MS (APP-API-CONTRACT.md sections 21 and 23). D1 and the Hugging Face Space
         // only; the container is not touched. Awaited, not waitUntil: the run is the handler's work.
         if (controller.cron === SEARCH_CRON) {
+            // Change log upkeep (migration 0038): fill any post key the migration's batches did not reach, and drop
+            // delete markers past their month. A caught-up library is two cheap statements. Before 0038 it just logs.
+            try {
+                await syncMaintenance(env.DB, Date.now());
+            } catch (e) {
+                console.error("[sync] maintenance failed", e instanceof Error ? e.message.slice(0, 200) : "error");
+            }
             // Editor (section 31.9): re-queue renders whose renderer went away, and kick both instances when anything is
             // queued. D1 only unless there is work; an owner without migration 0021 just logs.
             if (env.EDIT_RENDERER) {

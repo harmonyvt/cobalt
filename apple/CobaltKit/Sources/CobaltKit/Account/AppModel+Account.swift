@@ -78,6 +78,10 @@ extension AppModel {
         if settings.hasAPIKey { _ = try? await ctx.client.signOutSession() }
         settings.forgetSession()
         account.reset()
+        if library.sync != nil {
+            library.reset()
+            if let sync = library.sync { Task { await sync.invalidate() } }
+        }
         var caps = capabilities
         caps.key = .missing
         caps.keyName = nil

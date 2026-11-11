@@ -29,9 +29,9 @@ extension HTTPCobaltClient {
     /// The endpoint's reply decoded as `T` (not as the endpoint's generated type). Errors as `send(_ endpoint:)` throws them.
     func send<R: Decodable & Sendable, T: Decodable>(
         _ endpoint: APIEndpoint<R>, as type: T.Type, query: [(String, String)] = [], body: [String: Any]? = nil,
-        timeout: TimeInterval = 30
+        timeout: TimeInterval = 30, idempotencyKey: String? = nil
     ) async throws -> T {
-        let req = try makeRequest(endpoint, query: query, timeout: timeout)
+        let req = try makeRequest(endpoint, query: query, timeout: timeout, idempotencyKey: idempotencyKey)
         let (data, http) = try await send(req, body: body.flatMap(Self.jsonBody))
         guard (200..<300).contains(http.statusCode) else { throw apiError(data, status: http.statusCode) }
         do { return try CobaltJSON.decoder().decode(T.self, from: data) }
@@ -60,9 +60,13 @@ extension HTTPCobaltClient {
 
     /// `POST /library/status {ids, status}`: 200 with `posts` and `failed`; `400 error.library.bad_request` for a bad body.
     public func setStatus(ids: [String], status: PostStatus) async throws -> StatusChange {
+        try await writeStatus(ids: ids, status: status, idempotencyKey: nil)
+    }
+
+    func writeStatus(ids: [String], status: PostStatus, idempotencyKey: String?) async throws -> StatusChange {
         let wire = try await send(
             Endpoints.libraryStatusRoute(), as: HiddenWire.Status.self,
-            body: ["ids": ids, "status": status.rawValue], timeout: 120)
+            body: ["ids": ids, "status": status.rawValue], timeout: 120, idempotencyKey: idempotencyKey)
         return wire.value
     }
 
