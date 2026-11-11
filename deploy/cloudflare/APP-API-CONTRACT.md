@@ -6123,3 +6123,166 @@ gives the real total.
 Add `OPENROUTER_API_KEY` to `~/.config/cobalt/secrets.json` (without it titles are off; the key must exist in the file for
 `cf deploy`), apply `deploy/cloudflare/d1/migrations/0037_ai_titles.sql`, then deploy the API. Vars: `AI_TITLE_MODEL`
 (default `minimax/minimax-m3.1-flash`), `AI_TITLES` ("0" turns titles off). No app change.
+
+## 54. Sync: a change log, `GET /sync`, and writes that can be retried (addendum, 2026-11-10; the sync engine's server half. Numbering: 53 + 0037 are the AI video titles, so this is migration 0038)
+
+The apps keep a local copy of the library and ask the server only for what changed. This section is the server side:
+a change log in D1, one read route, and two additions to four existing write routes. Nothing else changes: every other
+route answers as before, and an app with the user default `sync.engine` off (the default) never calls `GET /sync`.
+
+### 54.1 The change log (migration 0038)
+
+`changes (seq, entity, id, gone, at)`: one row per synced thing, unique on `(entity, id)`. A newer change of the same
+thing replaces its row and takes the next `seq` (an AUTOINCREMENT number: it only goes up, has gaps, and is never used
+twice), so the log stays the size of the library. `gone = 1` is a delete marker. The rows are written by triggers, so
+every writer is covered (the API, the 15-minute cron, the web Worker, a statement run by hand) and no route's code
+knows about the log.
+
+| entity | id | written when |
+|---|---|---|
+| `post` | the post key (section 15) | a `media_items` row is inserted, deleted, or changes a column the post shows (not `poster_at` alone); a title (`media_titles`) or hidden state (`media_hidden`) is written; a `studio_sessions` row for the post is inserted, deleted, or changes `status`, `service`, `expires_at`, `items` or `link`; a file's private link (`private_links`, kind `item`) is made or its `revoked_at` changes. Gone when the post has no live file. |
+| `link` | `share_sets.id` | the gallery link is inserted, updated or deleted. Gone when revoked or deleted. |
+| `collection` | `share_collections.id` | the collection, or a `share_collection_items` row of it, is inserted, updated or deleted. |
+| `set` | `collection_groups.id` | the set, or a `collection_group_items` row of it, is inserted, updated or deleted. |
+| `name` | `search_names.id` | the name, or a `search_name_posts` row of it, is inserted, updated or deleted. |
+| `rule` | `hidden_rules.id` | the rule is inserted, updated or deleted. |
+
+Details the apps can rely on:
+
+- `media_items.post_key` is now stored on every row (filled by the migration, by a trigger on insert, and by the cron
+  for a library past 40,000 rows). It equals the key the routes computed before.
+- A session is logged under the post `GET /library` gives it: the post named by an `upload:<post>` link, else the
+  session id, and only while that post has a live file (a save's session is written before its first file, whose insert
+  logs the post). An update that leaves the five columns as they were writes nothing.
+- A membership row that moves (an UPDATE of `share_collection_items` or `collection_group_items`, as a collection reroll
+  does for every collection holding the link) logs the owner it left and the owner it joined.
+- Not logged: a private link's `opened` count; a gallery link's own private link (kind `set`), which the `links` rows
+  below do not carry; embeddings, captions, transcripts, loops, ratings.
+
+`sync_state (id = 1, trimmed_seq)`: the highest `seq` of a delete marker that was thrown away, 0 when none was.
+The 15-minute cron drops delete markers older than 30 days and raises it.
+
+`idempotency_keys (caller, key, fingerprint, status, body, seq, created_at)`, primary key `(caller, key)`: section 54.6.
+
+The migration can be applied again (every CREATE is `IF NOT EXISTS`, every seed row is skipped when the thing already
+has a row). Its seed gives the newest posts the lowest numbers, so a first load receives recent saves first.
+
+### 54.2 `GET /sync?since=<cursor>&limit=<n>`
+
+Auth as `GET /library` (`Api-Key`, a session, or the library service). `cache-control: no-store`. One D1 batch a call.
+
+- `since`: the cursor, 1 to 16 digits. Absent, empty or `0`: from the start. Anything else is the `seq` of an earlier
+  reply, sent back unchanged.
+- `limit`: 1 to 9999, capped at 500 (the default).
+- Anything else in either: 400 `{"status":"error","error":{"code":"error.sync.bad_request"}}`.
+
+200:
+
+```
+{
+  "seq": 1234,            // the cursor for the next call
+  "more": false,          // true: call again now with this seq
+  "posts": [ ... ],       // the post object of GET /library?v=3 (hidden posts included, with "hidden": true)
+  "links": [ { "id", "title", "items": ["<file id>", ...], "created_at" } ],
+  "collections": [ { "id", "name", "created_at", "updated_at", "set_ids": ["<link id>", ...] } ],
+  "sets": [ { "id", "name", "created_at", "updated_at", "collection_ids": ["<collection id>", ...] } ],
+  "names": [ { "id", "name", "aliases": [], "meaning", "strength", "cutoff", "enabled", "yes": ["<post key>"], "no": [], "created_at", "updated_at" } ],
+  "rules": [ { "id", "kind", "value", "enabled", "hits", "created_at", "updated_at" } ],
+  "gone": [ { "entity": "post", "id": "<post key>" }, ... ]
+}
+```
+
+A page is up to `limit` change rows after the cursor, in `seq` order. Each live thing in it is sent as it is now (not
+as it was when the row was written), in the array of its entity; each delete marker, and a post whose last file went
+since its row was written, is in `gone`. A thing appears at most once in a walk that is not overtaken by a new change
+to it; a client applies pages in order and the last write wins. `links`, `collections`, `sets`, `names` and `rules` are
+slim rows, not the objects of their list routes; `set_ids` and `collection_ids` are newest member first. A post equals
+the same post from `GET /library?v=3` (or `?v=3&hidden=1`) at the same moment; `session` is null once `expires_at`
+has passed, as of the call.
+
+### 54.3 Paging and the cursor
+
+Start with `since=0`. Apply the page, store `seq`, and while `more` is true call again with it. When `more` is false
+the device is caught up; later pulls send the stored `seq`. A caught-up call with nothing new answers the same `seq`,
+`more: false` and empty arrays.
+
+`seq` is opaque: store it and send it back, and do not compare it with a change number from elsewhere
+(`x-change-seq`, section 54.6) or expect each one to be larger than the last. In particular, once a delete marker has
+been trimmed, the pages of a load from 0 that have `more: true` answer a cursor that also records the trim it was read
+under (`trimmed_seq` x 100,000,000 + the last row's number), and the page with `more: false` answers a plain change
+number, which is smaller. The reason: such a load reads rows whose numbers are below `trimmed_seq`, and a plain number
+there could not be told from the cursor of a device that last synced before the trim. While nothing has been trimmed
+every cursor is the plain number of the page's last row. The last page of any walk answers at least `trimmed_seq`.
+
+### 54.4 `410 sync.cursor_too_old`
+
+```
+410 {"error":"sync.cursor_too_old"}
+```
+
+(This body is the bare form, not the `error.*` envelope of the other routes.) The client drops its copy and starts
+again from `since=0`, which always works. It is answered when:
+
+- the cursor is a plain number above 0 and below `trimmed_seq`: a delete marker the device never read is gone, so it
+  would keep something that was deleted;
+- the cursor is the unfinished-load form of 54.3 and `trimmed_seq` has changed since it was handed out (the same
+  reason; a load that goes on while nothing more is trimmed is never refused);
+- the cursor is above the head, `max(MAX(seq), trimmed_seq)`: this log did not hand it out. That happens after the
+  database is restored to an earlier point (D1 Time Travel) or reset; the numbers between the head and that cursor would
+  be used again for changes the device would skip. A device that is caught up is never above the head, also after its
+  newest row, a delete marker, was trimmed.
+
+The third rule only catches a device that pulls before the restored log has grown past its cursor. So after any
+restore the owner makes every device reload, before new writes: move the numbers well past any cursor and set the
+trim to match (not rehearsed on production D1):
+
+```sql
+UPDATE sqlite_sequence SET seq = seq + 1000000 WHERE name = 'changes';
+UPDATE sync_state SET trimmed_seq = (SELECT seq FROM sqlite_sequence WHERE name = 'changes') WHERE id = 1;
+```
+
+The two forms are one number and are told apart by the head: a cursor of 100,000,000 or more is read as the
+unfinished-load form only while it is above the head, and as a plain change number otherwise. So plain cursors stay
+good however far change numbers grow (a pull with one of 100,000,000 or more costs a second D1 batch).
+
+Limits of the unfinished-load cursor: it is handed out only when the page's last row is below 100,000,000,
+`trimmed_seq` is at most 90,071,991, and the cursor is at least 100,000,000 above the head (further than the log grows
+while a load runs; with a `trimmed_seq` of 1 it is not, and no plain cursor is stale then). Otherwise the pages of a
+load from 0 answer plain numbers and a load of more than one page can meet the first rule.
+
+### 54.5 `503` before the migration
+
+Until migration 0038 is applied `GET /sync` answers `503 {"status":"error","error":{"code":"error.api.generic"}}`
+(also for any D1 failure in the batch; the call can be retried). Every other route works without the migration: the
+four write routes below skip the idempotency table and send no `x-change-seq`.
+
+### 54.6 `Idempotency-Key` and `x-change-seq` on four write routes
+
+`POST /library/status`, `PATCH /library/items/:id/visibility`, `PATCH /library/items/:id/post` and
+`DELETE /library/items/:id/post`:
+
+- Every answer carries `x-change-seq: <n>`, the log's highest `seq` read after the write (after the replay for a
+  retried key). It is informative: under concurrent writers it can be another writer's number, so the apps pull with
+  their stored cursor and do not use it as one.
+- `Idempotency-Key: <1 to 200 characters>` is optional. Without it (or with an empty value) the route behaves exactly
+  as it did. With it, the first 2xx answer is stored for 7 days, and a later request from the same caller with the same
+  key, method, path and body is answered with that status and body and the `x-change-seq` it had, without running the
+  write again. Answers that are not 2xx are not stored: the retry runs.
+- The same key from the same caller with another method, path or body: `409
+  {"status":"error","error":{"code":"error.idempotency.conflict"}}`, nothing is written.
+- A key longer than 200 characters: `400 {"status":"error","error":{"code":"error.idempotency.bad_key"}}`, nothing is
+  written.
+- A key belongs to its caller, the `Authorization` header the request was let in with (each client key and each
+  signed-in device is one; the table holds a hash of it). The same key from two callers is two keys. Calls from the
+  web Worker's service binding carry no `Authorization` and share one scope.
+- The key is not claimed before the write runs: two requests with one key that race each other can both run. The four
+  routes set a state or delete, so the second run changes nothing.
+
+### 54.7 Rollout
+
+Apply `deploy/cloudflare/d1/migrations/0038_sync.sql` with the global `cf`, then deploy the API (the other order is
+safe for apps with the engine off: `GET /sync` answers 503 until the migration is there). 0038 is the first migration
+with triggers; `scripts/sync-miniflare.mjs` in `deploy/cloudflare/api` rehearses it on local workerd D1 as one statement
+string, the way the apply sends it, and applies it twice more to show a repeat changes nothing. On D1 a write's
+`meta.changes` now includes the rows its triggers wrote (three for one `media_items` row), so code compares it with 0
+only and counts rows with a SELECT.
