@@ -312,6 +312,27 @@ public final class Settings {
         }
     }
 
+    /// "paste from anywhere" (Mac): the keys that save the clipboard while another app is in front. Nil is off, the
+    /// default. The Mac settings row is the only control; iOS never reads it.
+    public var pasteShortcut: GlobalShortcut? {
+        get {
+            access(keyPath: \.pasteShortcut)
+            guard let data = defaults.data(forKey: Self.pasteShortcutKey) else { return nil }
+            return try? JSONDecoder().decode(GlobalShortcut.self, from: data)
+        }
+        set {
+            withMutation(keyPath: \.pasteShortcut) {
+                if let newValue, let data = try? JSONEncoder().encode(newValue) {
+                    defaults.set(data, forKey: Self.pasteShortcutKey)
+                } else {
+                    defaults.removeObject(forKey: Self.pasteShortcutKey)
+                }
+            }
+        }
+    }
+
+    private static let pasteShortcutKey = "mac.pasteShortcut"
+
     private static let menuBarExtraKey = "menuBarExtra"
 
     private static func storedMenuBarExtra(_ defaults: UserDefaults) -> Bool {
