@@ -36,7 +36,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
 
     func makeRequest(
         _ method: String, _ path: String, query: [(String, String)] = [],
-        keyed: Bool, optionalKey: Bool = false, timeout: TimeInterval = 30
+        keyed: Bool, optionalKey: Bool = false, timeout: TimeInterval = 30,
+        idempotencyKey: String? = nil
     ) throws -> URLRequest {
         guard var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw CobaltError.invalidResponse(httpStatus: 0)
@@ -59,6 +60,9 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
             } else if keyed {
                 throw CobaltError.noAPIKey
             }
+        }
+        if let idempotencyKey {
+            req.setValue(idempotencyKey, forHTTPHeaderField: SyncContract.idempotencyHeader)
         }
         return req
     }
@@ -578,7 +582,12 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     /// `PATCH /library/items/<id>/visibility` (keyed): 200 → the file as it is now and `cache_cleared`;
     /// `409 error.library.not_toggleable` → `.unsupported`; any other error as the keyed calls throw it.
     public func setVisibility(item id: String, public makePublic: Bool) async throws -> VisibilityChange {
-        let req = try makeRequest("PATCH", "/library/items/\(Self.encode(id))/visibility", keyed: true, timeout: 60)
+        try await writeVisibility(item: id, public: makePublic, idempotencyKey: nil)
+    }
+
+    func writeVisibility(item id: String, public makePublic: Bool, idempotencyKey: String?) async throws -> VisibilityChange {
+        let req = try makeRequest(
+            "PATCH", "/library/items/\(Self.encode(id))/visibility", keyed: true, timeout: 60, idempotencyKey: idempotencyKey)
         let wire = try await sendJSON(VisibilityWire.self, req, body: Self.jsonBody(["public": makePublic]))
         return VisibilityChange(file: wire.item, cacheCleared: wire.cacheCleared)
     }
@@ -1125,7 +1134,11 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     /// gone, the call is idempotent); `409 error.library.busy` → `CobaltError.api`, which maps to
     /// `PipelineFailure.serverBusy`; 404 → `PipelineFailure.expired` (the post is already gone).
     public func deletePost(anchor itemID: String) async throws -> PostDeleteResult {
-        let req = try makeRequest("DELETE", "/library/items/\(Self.encode(itemID))/post", keyed: true)
+        try await writeDelete(anchor: itemID, idempotencyKey: nil)
+    }
+
+    func writeDelete(anchor itemID: String, idempotencyKey: String?) async throws -> PostDeleteResult {
+        let req = try makeRequest("DELETE", "/library/items/\(Self.encode(itemID))/post", keyed: true, idempotencyKey: idempotencyKey)
         let (data, http) = try await send(req)
         switch http.statusCode {
         case 200..<300:

@@ -7561,6 +7561,33 @@
         }
       }
     },
+    "/sync": {
+      "get": {
+        "operationId": "sync",
+        "summary": "What changed in the library since a change number (GET /sync).",
+        "tags": [
+          "sync"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/telemetry": {
       "post": {
         "operationId": "telemetry",

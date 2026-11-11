@@ -72,6 +72,16 @@ export default defineConfig({
 		// Worker + Durable Object console output and exceptions to Workers Logs.
 		observability: { enabled: true, logs: { enabled: true, invocationLogs: true } },
 		previewUrls: false,
+		// Run the fetch handler next to D1, not next to the caller. The database `cobalt-keys` is in Oceania and every
+		// route makes several statements one after another; from the owner's edge (Singapore, Hong Kong) each was a
+		// ~190 ms round trip (GET /library: 11 statements, p50 2.2 s there against 0.13 s from Melbourne). With this
+		// the caller pays one hop to Sydney and the statements are local. The explicit region ("aws:ap-southeast-2",
+		// Sydney; `cf workers placement regions list` names them all) rather than mode "smart": smart placement
+		// decides from the traffic it has seen and can decide nothing for a Worker with one owner's traffic, and what
+		// it would have to find out is already known. Placement moves the fetch handler only: the crons and the
+		// Durable Objects stay where they are. After a deploy the `cf-placement` response header says where a request
+		// ran ("remote-SYD": moved there; "local-<colo>": answered where it arrived).
+		placement: { region: "aws:ap-southeast-2" },
 		// share.: the rich link pages of public files (src/share.ts, APP-API-CONTRACT.md section 22).
 		// The Worker answers that host itself and never wakes the container for it.
 		// studio.: the stage's canvas, store and Twitch webhooks (src/stage.ts, APP-API-CONTRACT.md section 30), also
@@ -88,6 +98,11 @@ export default defineConfig({
 		],
 		env: {
 			API_URL: bindings.text("https://api.capybaraharmony.com/"),
+			// "1": each request's D1 round trips are counted and one JSON line is logged when its response is ready
+			// (src/d1-timing.ts): {"evt":"req","method","path","status","ms","d1":{"n","ms"},"colo"}. Never the query
+			// string or a header, and of the path only the route's words (ids, names and tokens are "*"). Anything else:
+			// DB is the plain binding and there is no line.
+			D1_TIMING: bindings.text("1"),
 			CORS_URL: bindings.text("https://cobalt.capybaraharmony.com"),
 			// INTERNAL key only (UUID): used between this Worker and the
 			// container, never seen by clients. Uploaded with

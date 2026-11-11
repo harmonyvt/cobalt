@@ -109,7 +109,7 @@ describe("POST /studio with public: true", () => {
         expect(pub.status).toBe(201);
 
         const rowOf = (sid: string) => hostRows(w).find((r) => r.session_id === sid)!;
-        const shape = (r: any) => ({ ...r, id: "-", r2_key: "-", url: "-", name: "-", session_id: "-", created_at: 0, public_key: "-", public_id: "-" });
+        const shape = (r: any) => ({ ...r, id: "-", r2_key: "-", url: "-", name: "-", session_id: "-", post_key: "-", created_at: 0, public_key: "-", public_id: "-" });
         expect(shape(rowOf(viaFlag))).toEqual(shape(rowOf(manual)));
         const meta = (sid: string) => w.media.objects.get(rowOf(sid).public_key)!;
         expect(Object.keys(meta(viaFlag).meta).sort()).toEqual(Object.keys(meta(manual).meta).sort());

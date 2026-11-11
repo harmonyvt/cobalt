@@ -157,11 +157,11 @@ real("the Durable Object against the real helper", () => {
         serve("b.jpg", "image/jpeg");
         resolveBody = async () => picker3();
         const a = await save(w, { url: LINK, items: "first-video" });
-        expect(rowsOf(w, a.sid, "r2_key, role, item_index, post_key")).toEqual([{ r2_key: `originals/${a.sid}.mp4`, role: null, item_index: null, post_key: null }]);
+        expect(rowsOf(w, a.sid, "r2_key, role, item_index, post_key")).toEqual([{ r2_key: `originals/${a.sid}.mp4`, role: null, item_index: null, post_key: a.sid }]);
         expect(a.done).not.toHaveProperty("items");
         resolveBody = async () => ({ status: "redirect", url: cdn("v.mp4"), filename: "x.mp4" });
         const b = await save(w, { url: "https://x.com/a/status/2", items: "all" });
-        expect(rowsOf(w, b.sid, "r2_key, role, item_index, post_key")).toEqual([{ r2_key: `originals/${b.sid}.mp4`, role: null, item_index: null, post_key: null }]);
+        expect(rowsOf(w, b.sid, "r2_key, role, item_index, post_key")).toEqual([{ r2_key: `originals/${b.sid}.mp4`, role: null, item_index: null, post_key: b.sid }]);
         expect(w.session(b.sid).item_count).toBeNull();
     });
 

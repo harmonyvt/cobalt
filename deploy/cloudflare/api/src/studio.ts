@@ -970,6 +970,31 @@ export class StudioService {
         return engine === "ytdlp" && this.d.ytdlp ? this.d.ytdlp.ensureRunning() : this.d.ensureRunning();
     }
 
+    // The cobalt container sleeps after 45 s and takes about 6 s to accept a port. A save's first step used to wait
+    // for that, and POST /studio waited with it. "up": it is accepting calls. "waking": the start is underway and this
+    // step should come back later (the progress stays `waking`). "down": the start already failed.
+    private async wakeEngine(engine: SaveEngine): Promise<"up" | "waking" | "down"> {
+        const cold = engine === "cobalt" && !!this.d.isRunning && !this.d.isRunning();
+        const p = this.ensureEngine(engine);
+        if (!cold) {
+            try {
+                await p;
+                return "up";
+            } catch {
+                return "down";
+            }
+        }
+        const quick = await Promise.race([
+            p.then(
+                () => "up" as const,
+                () => "down" as const,
+            ),
+            new Promise<"waking">((resolve) => setTimeout(() => resolve("waking"), 0)),
+        ]);
+        if (quick === "waking") void p.catch(() => {});
+        return quick;
+    }
+
     // What the container's helper says it can do (APP-API-CONTRACT.md 18.8): every answer carries it, and the last
     // one seen is kept in storage, so `features.gallery` is advertised only while the helper that runs has the
     // slideshow routes (an older image answers without the header). Unknown until the first call.
@@ -2065,6 +2090,8 @@ export class StudioService {
                 : singleFileOk(items) && make === null && this.d.ytdlp && this.d.saveEngine === "first"
                   ? "ytdlp"
                   : "cobalt";
+        // Wake a sleeping container while the session row is written, instead of at the first helper call.
+        if (engine === "cobalt" && this.d.isRunning && !this.d.isRunning()) void this.d.ensureRunning().catch(() => {});
         const extra = {
             ...(items !== undefined || itemCount !== undefined ? { items, itemCount } : {}),
             ...(engine === "ytdlp" ? { engine: "ytdlp" as const } : {}),
@@ -2667,9 +2694,9 @@ export class StudioService {
             total: null,
             waking: engine === "cobalt" && this.d.isRunning ? !this.d.isRunning() : false,
         });
-        try {
-            await this.ensureEngine(engine);
-        } catch {
+        const woke = await this.wakeEngine(engine);
+        if (woke === "waking") return POLL_INTERVAL_MS;
+        if (woke === "down") {
             await this.setProgress(sid, { step: "fetching", bytes: null, total: null, waking: false });
             return await this.miss(sid, rec);
         }

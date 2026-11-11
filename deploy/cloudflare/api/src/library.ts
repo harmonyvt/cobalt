@@ -6,6 +6,7 @@
 // file, so every call here swallows (and logs) its errors.
 
 import { randomBase62 } from "./ids";
+import { postKeyInsertSql } from "./post-key";
 
 export const ITEM_ID_LENGTH = 16;
 
@@ -65,7 +66,7 @@ export async function insertMediaItem(
         const res = await db
             .prepare(
                 "INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, poster, visibility, role, item_index, made_from, made_spec, post_key) " +
-                    "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23 " +
+                    `SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ${postKeyInsertSql("?23", "?14", "?13", "?1")} ` +
                     "WHERE NOT EXISTS (SELECT 1 FROM media_items WHERE bucket = ?4 AND r2_key = ?5)",
             )
             .bind(
@@ -183,6 +184,47 @@ export async function releasePoster(
         return true;
     } catch (e) {
         console.error("[library] poster delete failed", name, String(e));
+        return false;
+    }
+}
+
+// ---- several statements, one round trip ---------------------------------------------------------
+
+// D1 lives in one region and the Worker can run far from it: every statement asked on its own is a full round trip, and
+// a route's statements wait for one another. Reads that do not need each other's answers go to D1 as ONE batch instead.
+// Returns each statement's rows, in the order given (a batch runs its statements in that order, in one transaction).
+//
+// Null when the database has no batch (the plain fake of the tests), a statement could not be made, or the batch
+// failed. A batch is one transaction, so one failing statement fails them all: the caller then asks one by one, exactly
+// as it did before, and a statement that is allowed to fail alone (a table of a migration that is not applied yet) keeps
+// the handling it always had. With D1 itself down the caller's own statements fail next and it answers as it always has.
+// `statements` may be a function, for a caller whose statements are only allowed to fail one by one.
+type Statements = D1PreparedStatement[] | (() => D1PreparedStatement[]);
+
+export async function readTogether(db: D1Database, statements: Statements): Promise<Record<string, unknown>[][] | null> {
+    if (typeof (db as { batch?: unknown }).batch !== "function") return null;
+    try {
+        const list = typeof statements === "function" ? statements() : statements;
+        const answers = await db.batch<Record<string, unknown>>(list);
+        if (!Array.isArray(answers) || answers.length !== list.length) return null;
+        return answers.map((a) => a.results ?? []);
+    } catch (e) {
+        console.error("[library] reading in one batch failed, asking one by one", String(e));
+        return null;
+    }
+}
+
+// Writes that belong together, as ONE batch: one transaction and one round trip instead of one per statement. False
+// when the database has no batch, a statement could not be made, or the batch failed. A failed batch applied nothing,
+// so the caller then writes them one by one, as it did before, and each statement fails or passes on its own again.
+export async function writeTogether(db: D1Database, statements: Statements): Promise<boolean> {
+    if (typeof (db as { batch?: unknown }).batch !== "function") return false;
+    try {
+        const list = typeof statements === "function" ? statements() : statements;
+        if (list.length > 0) await db.batch(list);
+        return true;
+    } catch (e) {
+        console.error("[library] writing in one batch failed, writing one by one", String(e));
         return false;
     }
 }

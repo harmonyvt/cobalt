@@ -56,6 +56,11 @@ enum Endpoints {
         APIEndpoint(op: "queue", method: "GET", path: "/queue", auth: .key)
     }
 
+    /// `GET /sync` (op `sync`, auth key_or_service): What changed in the library since a change number (GET /sync).
+    static func sync() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "sync", method: "GET", path: "/sync", auth: .keyOrService)
+    }
+
     /// `POST /studio` (op `studio.create`, auth key_or_service): Save a link (POST /studio); the chat uses library.save.
     static func studioCreate() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "studio.create", method: "POST", path: "/studio", auth: .keyOrService)

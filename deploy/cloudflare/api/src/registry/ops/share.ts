@@ -34,7 +34,7 @@ import { ShareCollectionsListShape } from "../shapes";
 
 const shareOff = () => new OpError(404, "error.share.off", "share links are off on this server");
 
-// Gallery links: D1 only. The captioner writes the link's roast caption at creation (section 25); a new link's videos
+// Gallery links: D1 only. The captioner writes the link's roast caption as the link is made (section 25); a new link's videos
 // get moving previews while GALLERY_LOOPS is "1" (section 29).
 export function shareSetDeps(ctx: OpContext, o: { captions?: boolean } = {}): ShareSetDeps | null {
     const { env, edge, container } = ctx;
@@ -45,6 +45,8 @@ export function shareSetDeps(ctx: OpContext, o: { captions?: boolean } = {}): Sh
         shareBaseUrl: ctx.shareBaseUrl,
         now: ctx.now,
         captioner: o.captions === false ? null : (edge.captioner ?? captionerFrom(env, edge.modelFetch)),
+        // the caption is written after the answer (captionSoon in share-sets.ts)
+        waitUntil: edge.waitUntil,
         kickLoops:
             env.GALLERY_LOOPS !== "1"
                 ? undefined
@@ -74,6 +76,7 @@ export function collectionDeps(ctx: OpContext): CollectionDeps | null {
         mediaBaseUrl: ctx.mediaBaseUrl,
         shareBaseUrl: ctx.env.SHARE_BASE_URL,
         captioner: ctx.edge.captioner === undefined ? captionerFrom(ctx.env, ctx.edge.modelFetch) : ctx.edge.captioner,
+        waitUntil: ctx.edge.waitUntil,
     };
 }
 

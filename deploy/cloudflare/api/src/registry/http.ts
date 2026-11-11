@@ -21,6 +21,20 @@ const json = (status: number, body: unknown, allowOrigin?: string, extra: Record
 
 const errBody = (code: string) => ({ status: "error", error: { code } });
 
+// The isolate's key cache (src/keys.ts) may accept a key for up to a minute after it was revoked. Two rules keep that
+// minute from mattering where it would do harm:
+//  - The routes that hand out or take away a credential (the account routes of section 42: sessions and keys for tools;
+//    the MCP link's settings, section 35.5) always check their key in D1. A session signed out a moment ago, in any
+//    isolate, cannot make itself a key or a link that outlives it; and the caller's own row is stamped by the request,
+//    so GET /auth/sessions shows the calling device as used now.
+//  - A write through the account routes may have revoked keys or sessions (sign out, sign out the others, a deleted
+//    key, the session cap after a sign-in), so it empties the cache: this isolate asks D1 about every key again, and
+//    the revoked one is refused on its next request. Emptying costs each live key one statement, once.
+const ACCOUNT_PATH = "/auth/";
+const FRESH_KEY_PATHS = [ACCOUNT_PATH, "/mcp/settings"];
+const checksKeyInD1 = (op: Op) => FRESH_KEY_PATHS.some((p) => op.route?.path.startsWith(p));
+const mayRevoke = (op: Op, method: string) => method !== "GET" && method !== "HEAD" && !!op.route?.path.startsWith(ACCOUNT_PATH);
+
 export type HttpCall = {
     request: Request; // internal headers already stripped
     url: URL;
@@ -61,7 +75,7 @@ export async function handleOp(registry: Registry, base: OpBase, call: HttpCall)
             const parsed = parseAuthorization(call.request.headers.get("Authorization"));
             if (!("key" in parsed)) return json(401, errBody(parsed.errorCode), allowOrigin);
             try {
-                keyId = await lookupKey(base.db, parsed.key, base.now(), country);
+                keyId = await lookupKey(base.db, parsed.key, base.now(), country, base.keyCache, checksKeyInD1(op));
             } catch {
                 // fail closed: never run an op when D1 cannot vouch for the key
                 return json(503, errBody("error.api.generic"), allowOrigin);
@@ -91,6 +105,9 @@ export async function handleOp(registry: Registry, base: OpBase, call: HttpCall)
         if (e instanceof OpError) return json(e.status, errBody(e.code), origin, headers);
         console.error(`[ops] ${op.name} failed`, e instanceof Error ? e.message : String(e));
         return json(503, errBody("error.api.generic"), origin, headers);
+    } finally {
+        // whatever the handler answered: a refusal may still have followed a statement that revoked
+        if (mayRevoke(op, call.request.method)) base.keyCache?.clear();
     }
 }
 

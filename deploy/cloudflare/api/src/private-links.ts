@@ -82,6 +82,15 @@ export async function liveLinksFor(db: D1Database, kind: PrivateKind, ids: strin
     return out;
 }
 
+// The live links of the targets a subquery names, as a statement for a caller's own batch (GET /library reads its files
+// and their links in one round trip, so it has no list of ids to give yet). `idsSql` is a SELECT of one column whose
+// parameters are ?1.. = `binds`. Fails like any statement while the table is missing: the caller falls back to
+// liveLinksFor.
+export const liveLinksInStmt = (db: D1Database, kind: PrivateKind, idsSql: string, binds: unknown[]): D1PreparedStatement =>
+    db
+        .prepare(`SELECT ${COLUMNS} FROM private_links WHERE kind = ?${binds.length + 1} AND revoked_at IS NULL AND target_id IN (${idsSql})`)
+        .bind(...binds, kind);
+
 // Whether a gallery link is private right now (its public /g/<id> routes are then 404s). A missing table: no.
 export async function setIsPrivate(db: D1Database, setId: string): Promise<boolean> {
     return (await liveLinksFor(db, "set", [setId])).has(setId);
@@ -99,6 +108,11 @@ export async function linkByKey(db: D1Database, key: string): Promise<PrivateLin
         throw e;
     }
 }
+
+// Every live link, newest first, as a statement for a caller's batch (GET /share/private reads it with the gallery
+// list). Throws when run if the table is missing.
+export const allLiveLinksStmt = (db: D1Database): D1PreparedStatement =>
+    db.prepare(`SELECT ${COLUMNS} FROM private_links WHERE revoked_at IS NULL ORDER BY created_at DESC, key DESC`);
 
 // Every live link, newest first. Throws when the table is missing.
 export async function allLiveLinks(db: D1Database): Promise<PrivateLinkRow[]> {

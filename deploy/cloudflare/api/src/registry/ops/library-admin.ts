@@ -6,6 +6,7 @@ import * as z from "zod";
 import { libraryFile, libraryPostersBackfill, libraryVisibilityMigrate } from "../../app-routes";
 import { librarySearchIndex, librarySearchPost } from "../../embed";
 import { ITEM_ID_REGEX, STUDIO_SID_REGEX } from "../../gate";
+import { background } from "../../background";
 import { logRequest } from "../../request-log";
 import { parseSourceWait, parseStudioWait } from "../../studio";
 import { studioSource, studioStatus } from "../../studio-edge";
@@ -81,7 +82,7 @@ export const libraryAdoptOp = defineOp({
     handler: async (ctx) => {
         const { request, log } = await loggedPost(ctx.request!);
         const res = await ctx.container.fetch(toDurableObject(request, ctx.keyId!));
-        await logRequest(ctx.db, "POST /library/adopt", ctx.keyId!, request, log, res);
+        await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "POST /library/adopt", ctx.keyId!, request, log, res));
         return res;
     },
 });

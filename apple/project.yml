@@ -21,13 +21,15 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: "7.9"
+    MARKETING_VERSION: "8.0"
     CURRENT_PROJECT_VERSION: "26"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
 packages:
   CobaltKit:
     path: CobaltKit
+  SyncGlowKit:
+    path: SyncGlowKit
 
 targets:
   Cobalt:
@@ -37,6 +39,9 @@ targets:
       - path: Cobalt
     dependencies:
       - package: CobaltKit
+      - package: SyncGlowKit
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
       - target: CobaltShare
         embed: true
         platformFilter: iOS

@@ -49,15 +49,21 @@ export async function notHiddenClause(db: D1Database): Promise<string> {
 
 // ---- reads -------------------------------------------------------------------------------------------------------------
 
+// The statements behind hiddenRows and hiddenCount, for a caller that reads them in a batch of its own (GET /library).
+// They name media_hidden: only for a database where hiddenReady() said yes.
+export const hiddenRowsStmt = (db: D1Database, keys?: string[]): D1PreparedStatement =>
+    keys
+        ? db.prepare("SELECT post_key, state, by, rule_id, at FROM media_hidden WHERE post_key IN (SELECT value FROM json_each(?1))").bind(JSON.stringify([...new Set(keys)]))
+        : db.prepare("SELECT post_key, state, by, rule_id, at FROM media_hidden");
+export const hiddenCountStmt = (db: D1Database, state: HiddenState = "hidden"): D1PreparedStatement =>
+    db.prepare("SELECT COUNT(*) AS n FROM media_hidden WHERE state = ?1").bind(state);
+
 // The rows of these posts (all rows when `keys` is absent). Empty before 0025.
 export async function hiddenRows(db: D1Database, keys?: string[]): Promise<Map<string, HiddenRow>> {
     const out = new Map<string, HiddenRow>();
     if (keys && keys.length === 0) return out;
     if (!(await hiddenReady(db))) return out;
-    const stmt = keys
-        ? db.prepare("SELECT post_key, state, by, rule_id, at FROM media_hidden WHERE post_key IN (SELECT value FROM json_each(?1))").bind(JSON.stringify([...new Set(keys)]))
-        : db.prepare("SELECT post_key, state, by, rule_id, at FROM media_hidden");
-    for (const r of (await stmt.all<HiddenRow>()).results) out.set(r.post_key, r);
+    for (const r of (await hiddenRowsStmt(db, keys).all<HiddenRow>()).results) out.set(r.post_key, r);
     return out;
 }
 
@@ -70,7 +76,7 @@ export async function hiddenPostKeys(db: D1Database): Promise<Set<string>> {
 
 export async function hiddenCount(db: D1Database, state: HiddenState = "hidden"): Promise<number> {
     if (!(await hiddenReady(db))) return 0;
-    const r = await db.prepare("SELECT COUNT(*) AS n FROM media_hidden WHERE state = ?1").bind(state).first<{ n: number }>();
+    const r = await hiddenCountStmt(db, state).first<{ n: number }>();
     return Number(r?.n ?? 0);
 }
 

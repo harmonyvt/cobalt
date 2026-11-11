@@ -4,6 +4,7 @@
 import type { AppDeps } from "./app-routes";
 import { spaceClient, type EmbedClient } from "./embed";
 import { KEY_ID_HEADER } from "./headers";
+import type { KeyCache } from "./keys";
 import { safetyConfigFrom } from "./safety";
 import { noRoom, stageBaseFrom, twitchConfigFrom, type RoomPort, type StageDeps } from "./stage";
 import type { TwitchFetch } from "./stage-twitch";
@@ -49,8 +50,9 @@ async function doJson(res: Response): Promise<{ status: number; body: unknown }>
 // What the app's routes need, wired to this request's bindings. The one call
 // into the Durable Object is the internal adopt path a stored video continues
 // into; the caller's key id (set here, after the D1 lookup) travels in the
-// header the Worker strips from every client request.
-export function appDeps(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps): AppDeps {
+// header the Worker strips from every client request. `keyCache` is the isolate's key cache (src/keys.ts), when the
+// caller has one.
+export function appDeps(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps, keyCache?: KeyCache): AppDeps {
     return {
         db: env.DB,
         originals: env.ORIGINALS,
@@ -60,6 +62,8 @@ export function appDeps(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps
         apiUrl: env.API_URL,
         webUrl: env.CORS_URL,
         now: edge.now,
+        waitUntil: edge.waitUntil,
+        keyCache,
         purge: purgeFrom(env),
         fixedLength: edge.fixedLength ?? ((n) => new FixedLengthStream(n)),
         // Queues the missing posters in the Durable Object (records only; it answers at once).

@@ -3,7 +3,8 @@
 // Cloudflare imports so the tests run them under node.
 
 import { whyFor } from "./about";
-import { POST_KEY_SQL } from "./app-routes";
+import { POST_KEY_SQL } from "./post-key";
+import { readTogether } from "./library";
 import { searchPosts, type EmbedClient } from "./embed";
 import { effectiveVisibility } from "./visibility";
 import { liveLinksFor } from "./private-links";
@@ -63,7 +64,7 @@ export type PostRecord = {
     caption: string | null;
 };
 
-type Post = { record: PostRecord; rows: FileRow[]; lead: FileRow; latest: number; picture: string | null };
+export type Post = { record: PostRecord; rows: FileRow[]; lead: FileRow; latest: number; picture: string | null };
 
 const withSlash = (u: string) => (u.endsWith("/") ? u : `${u}/`);
 
@@ -91,28 +92,40 @@ function leadOf(fs: FileRow[]): FileRow {
     );
 }
 
+// The three statements loadPosts asks (files, titles, captions), for a caller's own batch. `onlyIds` empty is refused
+// by loadPosts before this; absent means every live post. Built at the call, not at load: POST_KEY_SQL is read then.
+export function postStatements(db: D1Database, onlyIds?: string[]): D1PreparedStatement[] {
+    const filesSql = `SELECT m.id, m.name, m.link, m.poster, m.url, m.content_type, m.bucket, m.r2_key, m.source, m.role, m.item_index,
+                               m.duration, m.width, m.height, m.bytes, m.visibility, m.created_at, ${POST_KEY_SQL} AS post_key
+                        FROM media_items m WHERE m.deleted_at IS NULL`;
+    const where = onlyIds ? ` WHERE post_key IN (${onlyIds.map((_, i) => `?${i + 1}`).join(", ")})` : "";
+    const files = db.prepare(`SELECT * FROM (${filesSql})${where} ORDER BY created_at DESC, id DESC`);
+    const titles = db.prepare(`SELECT post_key, title FROM media_titles${where}`);
+    const caps = db.prepare("SELECT subject, title FROM media_captions WHERE title IS NOT NULL AND subject LIKE 'item:%'");
+    return onlyIds ? [files.bind(...onlyIds), titles.bind(...onlyIds), caps] : [files, titles, caps];
+}
+
 // Every live post, newest first, with what the tools report and what `look` may show.
 export async function loadPosts(d: Pick<ChatToolDeps, "db" | "mediaBaseUrl">, onlyIds?: string[]): Promise<Post[]> {
     if (onlyIds && onlyIds.length === 0) return [];
-    const where = onlyIds ? ` WHERE post_key IN (${onlyIds.map((_, i) => `?${i + 1}`).join(", ")})` : "";
-    const stmt = d.db.prepare(
-        `SELECT * FROM (SELECT m.id, m.name, m.link, m.poster, m.url, m.content_type, m.bucket, m.r2_key, m.source, m.role, m.item_index,
-                               m.duration, m.width, m.height, m.bytes, m.visibility, m.created_at, ${POST_KEY_SQL} AS post_key
-                        FROM media_items m WHERE m.deleted_at IS NULL)${where}
-         ORDER BY created_at DESC, id DESC`,
-    );
-    const { results: rows } = await (onlyIds ? stmt.bind(...onlyIds) : stmt).all<FileRow>();
+    const together = await readTogether(d.db, postStatements(d.db, onlyIds));
+    if (together) {
+        return postsFrom(together[0] as FileRow[], together[1] as { post_key: string; title: string }[], together[2] as { subject: string; title: string }[], d.mediaBaseUrl);
+    }
+    const [filesStmt, titlesStmt, capsStmt] = postStatements(d.db, onlyIds);
+    const rows = (await filesStmt.all<FileRow>()).results;
+    if (rows.length === 0) return [];
+    const titleRows = (await titlesStmt.all<{ post_key: string; title: string }>()).results;
+    const capRows = (await capsStmt.all<{ subject: string; title: string }>()).results;
+    return postsFrom(rows, titleRows, capRows, d.mediaBaseUrl);
+}
+
+export function postsFrom(rows: FileRow[], titleRows: { post_key: string; title: string }[], capRows: { subject: string; title: string }[], mediaBaseUrl: string): Post[] {
     if (rows.length === 0) return [];
     const keys = [...new Set(rows.map((r) => r.post_key))];
-    const titles = new Map<string, string>();
+    const titles = new Map(titleRows.map((t) => [t.post_key, t.title]));
     const captions = new Map<string, string>();
-    // titles and captions for these posts (all of them when listing the library)
-    const tStmt = d.db.prepare(`SELECT post_key, title FROM media_titles${onlyIds ? where : ""}`);
-    for (const t of (await (onlyIds ? tStmt.bind(...onlyIds) : tStmt).all<{ post_key: string; title: string }>()).results) titles.set(t.post_key, t.title);
-    const { results: caps } = await d.db
-        .prepare("SELECT subject, title FROM media_captions WHERE title IS NOT NULL AND subject LIKE 'item:%'")
-        .all<{ subject: string; title: string }>();
-    for (const c of caps) captions.set(c.subject.slice(5), c.title);
+    for (const c of capRows) captions.set(c.subject.slice(5), c.title);
 
     const byPost = new Map<string, FileRow[]>();
     for (const r of rows) {
@@ -120,7 +133,7 @@ export async function loadPosts(d: Pick<ChatToolDeps, "db" | "mediaBaseUrl">, on
         if (list) list.push(r);
         else byPost.set(r.post_key, [r]);
     }
-    const base = withSlash(d.mediaBaseUrl);
+    const base = withSlash(mediaBaseUrl);
     const out: Post[] = [];
     for (const key of keys) {
         const fs = byPost.get(key)!;

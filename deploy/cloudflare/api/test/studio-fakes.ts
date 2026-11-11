@@ -82,8 +82,8 @@ export class MemoryOriginals implements OriginalsBucket {
             ? { size: o.bytes.length, httpMetadata: { contentType: o.contentType }, httpEtag: etagOf(key, o.bytes.length), uploaded: UPLOADED }
             : null;
     }
-    async delete(key: string) {
-        this.objects.delete(key);
+    async delete(key: string | string[]) {
+        for (const k of Array.isArray(key) ? key : [key]) this.objects.delete(k);
     }
 }
 
@@ -144,10 +144,12 @@ export class MemoryMedia implements MediaBucket, PublishBucket {
     }
     failDelete = false;
     deletes: string[] = [];
-    async delete(key: string) {
-        this.deletes.push(key);
-        if (this.failDelete) throw new Error("R2 delete down");
-        this.objects.delete(key);
+    async delete(key: string | string[]) {
+        for (const k of Array.isArray(key) ? key : [key]) {
+            this.deletes.push(k);
+            if (this.failDelete) throw new Error("R2 delete down");
+            this.objects.delete(k);
+        }
     }
     heads: string[] = [];
     async head(key: string) {

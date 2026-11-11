@@ -22,10 +22,12 @@ import { ITEM_ID_REGEX, STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "../../gate";
 import { KEY_ID_HEADER } from "../../headers";
 import { publishStudio } from "../../publish";
 import { HIDDEN_HINT, hiddenTargets } from "../../hidden";
+import { background } from "../../background";
 import { bodyLink, describeBody, logRequest, normalizeUrlField } from "../../request-log";
 import { studioErr } from "../../studio";
 import { studioStatus } from "../../studio-edge";
 import { effectiveVisibility, isWebpSource, purgeFrom } from "../../visibility";
+import { closeWrite, openWrite } from "../../sync";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
 
 // ---- the routes -------------------------------------------------------------------------------------------------------
@@ -37,6 +39,15 @@ const json = (status: number, body: unknown) =>
 const NoInput = z.object({});
 const none = () => ({});
 const reply = (r: { status: number; body: unknown }): OpReply => ({ status: r.status, body: r.body });
+
+// Idempotency-Key and the change number, on the write routes the app retries. No key still runs the write once and
+// still carries the number. A database from before migration 0038 skips both and answers as it always has.
+const tracked = async (ctx: OpContext, run: () => Promise<OpReply>): Promise<OpReply> => {
+    if (!ctx.request) return run();
+    const gate = await openWrite(ctx.db, ctx.request);
+    if (gate.replay) return gate.replay;
+    return closeWrite(ctx.db, gate, await run());
+};
 const keyOf = (ctx: OpContext) => ctx.keyId!;
 
 // POST /studio (sections 2, 14, 17.3, 18.2): the free-text `url` is cut to its first link, a body with no link is
@@ -58,14 +69,14 @@ export const studioCreateOp = defineOp({
         if (logEntry.urlPrefix !== null && !/^https?:\/\//i.test(logEntry.urlPrefix)) logEntry.urlPrefix = null;
         if ((await bodyLink(request)) === null) {
             const res = json(400, studioErr(400, "error.studio.no_link").body);
-            await logRequest(ctx.db, "POST /studio", keyOf(ctx), request, logEntry, res);
+            await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "POST /studio", keyOf(ctx), request, logEntry, res));
             return res;
         }
         const headers = new Headers(request.headers);
         headers.delete("Authorization");
         headers.set(KEY_ID_HEADER, keyOf(ctx));
         const res = await ctx.container.fetch(new Request(request, { headers }));
-        await logRequest(ctx.db, "POST /studio", keyOf(ctx), request, logEntry, res);
+        await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "POST /studio", keyOf(ctx), request, logEntry, res));
         return res;
     },
 });
@@ -84,7 +95,7 @@ export const studioUploadOp = defineOp({
     handler: async (ctx) => {
         const r = await studioUpload(ctx.app(), ctx.request!, keyOf(ctx), ctx.query);
         const res = json(r.status, r.body);
-        await logRequest(ctx.db, "PUT /studio/upload", keyOf(ctx), ctx.request!, uploadLogInfo(ctx.request!), res);
+        await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "PUT /studio/upload", keyOf(ctx), ctx.request!, uploadLogInfo(ctx.request!), res));
         return res;
     },
 });
@@ -146,7 +157,7 @@ export const libraryVisibilityRouteOp = defineOp({
     input: NoInput,
     http: none,
     ai: { tier: "hidden", summary: "One file public or private." },
-    handler: async (ctx) => reply(await libraryVisibility(ctx.app(), ctx.params.id!, ctx.request!, keyOf(ctx))),
+    handler: async (ctx) => tracked(ctx, async () => reply(await libraryVisibility(ctx.app(), ctx.params.id!, ctx.request!, keyOf(ctx)))),
 });
 
 // PATCH /library/items/<id>/post (section 15): a post's custom title. No CORS, no-store.
@@ -160,7 +171,7 @@ export const libraryTitleRouteOp = defineOp({
     input: NoInput,
     http: none,
     ai: { tier: "hidden", summary: "A post's custom title." },
-    handler: async (ctx) => reply(await libraryPostTitle(ctx.app(), ctx.params.id!, ctx.request!, keyOf(ctx))),
+    handler: async (ctx) => tracked(ctx, async () => reply(await libraryPostTitle(ctx.app(), ctx.params.id!, ctx.request!, keyOf(ctx)))),
 });
 
 // DELETE /library/items/<id>/post (section 12): the whole post. No CORS, no-store.
@@ -174,7 +185,7 @@ export const libraryPostDeleteRouteOp = defineOp({
     input: NoInput,
     http: none,
     ai: { tier: "hidden", summary: "Delete a whole post." },
-    handler: async (ctx) => reply(await libraryPostDelete(ctx.app(), ctx.params.id!)),
+    handler: async (ctx) => tracked(ctx, async () => reply(await libraryPostDelete(ctx.app(), ctx.params.id!))),
 });
 
 // DELETE /library/items/<id> (18.4): one item of a gallery, or a made file. No CORS, no-store.

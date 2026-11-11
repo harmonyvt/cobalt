@@ -106,16 +106,7 @@ public final class TitleQueue: Sendable {
     /// The server's answer will not change by asking again: the item is gone (404) or the title is not
     /// one it takes (400).
     static func isFinal(_ error: Error) -> Bool {
-        if let failure = error as? PipelineFailure, case .server(let code) = failure {
-            return code == "error.library.not_found" || code == "error.library.bad_title"
-        }
-        if let e = error as? CobaltError {
-            switch e {
-            case .api(_, let status), .invalidResponse(let status): return status == 404 || status == 400
-            default: return false
-            }
-        }
-        return false
+        MutationRetry.isFinal(error)
     }
 
     static func pruned(_ entries: [PendingTitle], now: Date) -> [PendingTitle] {
