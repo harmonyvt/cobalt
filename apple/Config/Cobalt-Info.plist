@@ -52,6 +52,51 @@
 	<string>capystore saves videos you choose to your photos.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>capystore keeps the videos it saves together in a “cobalt” album. it doesn't look through your other photos.</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>save link to capystore</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>saveToCapystore</string>
+			<key>NSPortName</key>
+			<string>cobalt</string>
+			<key>NSRequiredContext</key>
+			<dict>
+				<key>NSTextContent</key>
+				<string>URL</string>
+			</dict>
+			<key>NSSendTypes</key>
+			<array>
+				<string>public.utf8-plain-text</string>
+				<string>NSStringPboardType</string>
+				<string>public.url</string>
+				<string>NSURLPboardType</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>save to capystore</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>saveToCapystore</string>
+			<key>NSPortName</key>
+			<string>cobalt</string>
+			<key>NSRequiredContext</key>
+			<dict/>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.movie</string>
+				<string>public.image</string>
+				<string>public.audio</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>

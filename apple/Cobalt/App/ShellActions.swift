@@ -106,10 +106,22 @@ enum Pasteboard {
     static func contents() -> [PastedContent] {
         if let override { return [.text(override)] }
         #if canImport(AppKit)
-        let files = NSPasteboard.general.readObjects(
+        return contents(of: .general)
+        #else
+        return string().map { [.text($0)] } ?? []
+        #endif
+    }
+
+    #if canImport(AppKit)
+    /// The same reading of any pasteboard: the general one for a paste, the one a service is handed (`QuickSave`).
+    static func contents(of pasteboard: NSPasteboard) -> [PastedContent] {
+        let files = pasteboard.readObjects(
             forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         if !files.isEmpty { return files.map(PastedContent.file) }
-        #endif
-        return string().map { [.text($0)] } ?? []
+        if let text = pasteboard.string(forType: .string) { return [.text(text)] }
+        // a link with no text beside it (a browser's "copy link" always has both; a service may send only this)
+        if let link = (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first { return [.link(link)] }
+        return []
     }
+    #endif
 }
