@@ -1,6 +1,6 @@
 // The capystore MCP server (APP-API-CONTRACT.md section 35): the chat AI's tools, served to any MCP client (Claude Code,
 // Claude Desktop, other agents) over Streamable HTTP at POST /mcp on the API host. The tools ARE the op registry's chat
-// calls (src/registry/): same ops, same zod checks, same handlers, same daily caps, so the MCP and the chat never drift.
+// calls (src/registry/): same ops, same zod checks, same handlers, same daily caps (except renders and saves, which the MCP does not cap), so the MCP and the chat never drift.
 //
 // Stateless: every POST is one JSON-RPC message (or a batch) answered with JSON; no session id, no SSE stream. The
 // protocol itself is the official SDK (src/mcp-app/server.ts); this file holds the tool mapping and the upload tokens.
@@ -84,7 +84,8 @@ const ASK_NOTE =
 // chat's own job hook. (The registry's summaries stay as they are; the chat AI reads them.)
 const SAY_INSTEAD: [RegExp, string][] = [
     [/\bHand its job to jobs\.onDone to get its report when it finishes\./g, "Check on its job with job_status (it waits a few seconds at most; call it again until the job is done) to get its report."],
-    [/\bSame answer and daily cap as library\.save\./g, "Answers the save's own JSON (status, save_id, post_id...), not save_link's; the same daily cap as save_link."],
+    [/\bSame answer as library\.save\./g, "Answers the save's own JSON (status, save_id, post_id...), not save_link's."],
+    [/\n?The in-app chat may save at most \d+ a day per thread \(the MCP has no daily cap\)\./g, ""],
     [/\bhand (?:it|a job that is still going) to jobs\.onDone(?: instead)?\.?/gi, "check it with job_status."],
     [/\bNever call it again in later runs to poll: [^.]*\./g, "Call it again to follow a job that is still going."],
     [/\bcobalt\.jobs\.onDone\b|\bjobs\.onDone\b/g, "job_status"],

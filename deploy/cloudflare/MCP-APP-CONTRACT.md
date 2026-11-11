@@ -6,7 +6,7 @@ collections, share links and when it uploads files to capystore", then "I want y
 Mockup: https://claude.ai/artifact/HULkU9NF2qdercxogPdtDu (source `/mnt/project-files/capystore-mcp-app/mockup.html`).
 
 The existing MCP server (section 35: `POST /mcp`, `POST /mcp/k/<secret>`, the registry's chat ops as tools) stays where it
-is, with the same URLs, keys, private link, threads and caps. Three things change:
+is, with the same URLs, keys, private link and threads, and no daily render or save cap. Three things change:
 
 1. Its hand-written JSON-RPC core is replaced by the official MCP TypeScript SDK (`@modelcontextprotocol/server` 2.x, the
    successor of `@modelcontextprotocol/sdk`, which is what `@modelcontextprotocol/ext-apps` 2.x pairs with) inside the same
@@ -39,7 +39,7 @@ lane. `package.json` belongs to the core lane: another lane that needs a script 
   `{ text, structured }`. The core turns that into `{ content: [{ type: "text", text }], structuredContent: structured }`.
   A thrown `OpError` (or any error) becomes `{ content: [text], isError: true }`, worded as the existing tools word it.
 - `AppToolCtx.call(callName, input)` runs a registry chat op as the MCP thread, exactly as an existing MCP tool call does
-  (same `runOp`, same thread key, same daily caps). App tools are compositions of existing ops plus read-only D1 reads
+  (same `runOp`, same thread key; no daily render or save cap for MCP calls). App tools are compositions of existing ops plus read-only D1 reads
   through `ctx.op.db`; they are **not** registry ops, so `openapi.json`, the route snapshot and `npm run gen` do not move.
 - A `Widget` is `{ view, uri, title, html }`.
 
@@ -97,7 +97,7 @@ optional and the defaults stay widget-sized.
   no `files`: one link; the flat `name` and `title` are the single-file form of `upload_begin`.
 - `create_share_link { ids: string[] | string (no tool limit; the op allows 10 files), title?: string, private?: boolean, collection?: string }`
 - `save_link { url: http(s) URL, engine?: "auto"|"cobalt"|"ytdlp" = "auto", items?, public?, title?, wait?: 0..60 = 8 }`
-  (`auto` leaves the op's engine unset); the answer carries `save_id` and `saves_left_today`.
+  (`auto` leaves the op's engine unset); the answer carries `save_id` and `saves_left_today` (`null`: no cap here).
 - `job_status { job: string, seconds?: 0..25 = 8 }`: besides state and post, `file_id`, `post_id`, `queue_ahead`, a finished
   render's `file`, and for a helper (`agent:<id>`) its `agent` report.
 

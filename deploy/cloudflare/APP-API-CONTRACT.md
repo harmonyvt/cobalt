@@ -3975,7 +3975,9 @@ route and becomes tier `free` (`cobalt.queue()`).
   A "make private" with nothing public refuses (`error.library.already_private`) instead of asking.
 - **Daily cap**: a thread may save `CHAT_DAILY_SAVES` links (a plain var, default `20`, `0` = off) in any 24 hours,
   counted from `studio_sessions.key_id = chat:<thread>`. Over it the call throws `error.chat.save_cap` with a line telling
-  the model to send Harmony to the app. No migration.
+  the model to send Harmony to the app. No migration. **MCP calls (`/mcp`, `/mcp/k/<secret>`) have no save cap**: every
+  Claude conversation on one client key shares one MCP thread, so a per-thread cap ran out across all of Claude. The count
+  is not even read, and `saves_left_today` is `null`. The in-app chat and sub-agents keep the cap.
 - A code run may now take **90 s** of wall time (`CODE_TIMEOUT_MS`, was 30 s) so a save can wait. The CPU limit is unchanged.
 - The system prompt gains one paragraph: change the library only when Harmony asks, never save links Harmony did not give,
   and put every post of one delete or "make private" into one call.
@@ -4046,7 +4048,8 @@ made file):
 (slideshow, gallery image). The chat is Harmony's own, so the chat's slideshow, still and gallery image calls carry the
 session's `key_id` (a reopened file's session is the chat's own). The render route has no key, as before.
 
-**Daily cap.** Every start (each `make.*`, `edits.render`, and the start inside `jobs.wait` for an `open:` job) takes one
+**Daily cap** (the in-app chat and its sub-agents only: MCP calls have no render cap, `rendersCap(ctx)` is `null` when
+`ctx.chat.mcp` is set, and then nothing is taken from or given back to the counter). Every start (each `make.*`, `edits.render`, and the start inside `jobs.wait` for an `open:` job) takes one
 unit of a per-thread, per-UTC-day counter, `CHAT_DAILY_RENDERS` (a plain var, default `10`, `0..1000`). At the cap the call
 throws `cobalt.<call>: this chat already made <n> files today, …` and nothing starts (a trim makes no project). A start
 that is refused, or an `edits.render` that answers an already running render, gives its unit back. The counter lives in
@@ -4416,7 +4419,7 @@ done), then the indexer embeds every post again. Then the app release.
 ## 35. The capystore MCP server (addendum, 2026-10-30; owner: "can we build a capystore mcp? same tools at the agent but exposed over mcp please", "I want to be able to enable the agent to upload videos too please")
 
 Any MCP client (Claude Code, Claude Desktop, other agents) can use the chat AI's tools. There is no second copy of them:
-the MCP's tools are the op registry's chat calls (section 33), with the same zod checks, handlers and daily caps, so a
+the MCP's tools are the op registry's chat calls (section 33), with the same zod checks and handlers (and the daily caps, except that MCP calls have no daily render or save cap), so a
 new or changed op shows up in both at once. Code: `src/mcp.ts` (protocol, tool list, upload tokens) and
 `src/registry/ops/mcp.ts` (the routes and `upload.begin`). Tests: `test/mcp.test.ts`.
 
@@ -4450,7 +4453,7 @@ new or changed op shows up in both at once. Code: `src/mcp.ts` (protocol, tool l
   check with the user first.
 - **Who they run as**: each client key has one MCP "thread", `mcpThreadId(key id)` = 16 base62 characters of
   SHA-256(`mcp:` + key id). Calls run as that thread's chat key (`chat:<thread>`, caller `chat`), exactly like a chat
-  thread: the Durable Object sees that key id, the daily caps (saves 33.7, renders 33.8) count per key, and the box keeps
+  thread: the Durable Object sees that key id, the daily caps (saves 33.7, renders 33.8) do not apply to MCP calls, and the box keeps
   that thread's files while awake. Results are the op's JSON as text, cut at 200 000 characters.
 
 ### 35.3 Uploading a local file: `upload_begin` + `PUT /mcp/upload/<token>`
@@ -5198,7 +5201,8 @@ answer 503 `error.chat.agents_not_ready` and everything else behaves as before.
 | `cobalt.agents.stop(agent)` | id or name | the `Agent` (parent only) |
 
 - `spawn` is offered to the parent only. A sub-agent's calls run as its parent's chat key (`chat:<parent>`): the same daily
-  caps (renders, saves), the same studio sessions and the same workbench box (33.11). It never gets confirm cards: an `ask`
+  caps (renders, saves), even when the parent is an MCP thread (only the MCP's own calls are uncapped; an agent's ctx
+  carries no `mcp`), the same studio sessions and the same workbench box (33.11). It never gets confirm cards: an `ask`
   op throws ("a sub-agent cannot ask") and the agent puts it in its report, so Harmony still answers one card in the main
   chat. `jobs.onDone` only looks for a sub-agent (it has no watcher); it may `jobs.wait`.
 - `send` to a sub-agent that is `done` or `error` (and has replies left) sets it `queued` and wakes it: it answers in a new
@@ -5794,7 +5798,7 @@ downloader by default and the only one for picked items of a post (`items` as an
 Offered to the chat AI (`cobalt.ytdlp.*`) and the MCP (`ytdlp_save`, `ytdlp_info`) while the `YTDLP` binding is there.
 Tier free, no route.
 - `ytdlp.save(url, { public, title, wait })`: `library.save` with `engine: "ytdlp"` (yt-dlp only), same answer and the
-  same daily cap. `library.save` also takes `engine`.
+  same cap rules (none for MCP calls). `library.save` also takes `engine`.
 - `ytdlp.info(url)`: what yt-dlp knows about a link, nothing saved (box `POST /info`, `yt-dlp -J --flat-playlist`, 60 s,
   one look-up at a time, 429 otherwise; a running save does not block it). Answer: `title, duration, uploader, channel,
   extractor, webpage_url, thumbnail, upload_date, view_count, like_count, description` (2000 chars), `is_live`,

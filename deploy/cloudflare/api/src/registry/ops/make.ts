@@ -1,7 +1,7 @@
 // Make ops (APP-API-CONTRACT.md 33.8, plan T4): the routes that make files (the webp render of one video, the slideshow,
 // the gallery image, reopening a library file, the editor) moved onto the registry unchanged, and the chat AI's calls
 // that use them: cobalt.make.webp / still / trim / crop / slideshow / galleryImage, cobalt.edits.*, and
-// cobalt.jobs.wait / jobs.onDone. Everything the AI starts counts against a per-thread daily cap (CHAT_DAILY_RENDERS, default 10).
+// cobalt.jobs.wait / jobs.onDone. Everything the AI starts counts against a per-thread daily cap (CHAT_DAILY_RENDERS, default 10); MCP calls have no cap.
 //
 // The route ops wrap the old handlers: same parsing, same error codes, same headers (the route snapshot pins them).
 import * as z from "zod";
@@ -274,7 +274,10 @@ export const JobSchema = z
     .meta({ id: "Job" });
 type Job = z.infer<typeof JobSchema>;
 
-export const rendersCap = (ctx: OpContext) => dailyCap(ctx.env.CHAT_DAILY_RENDERS, CHAT_DAILY_RENDERS_DEFAULT);
+// The daily render cap of this call, or null when there is none: MCP calls (every Claude conversation on one client key
+// shares one MCP "thread", so a per-thread cap ran out across all of Claude) are not capped. The in-app chat keeps its cap,
+// and so does a sub-agent (its ctx carries no `mcp`).
+export const rendersCap = (ctx: OpContext): number | null => (ctx.chat?.mcp ? null : dailyCap(ctx.env.CHAT_DAILY_RENDERS, CHAT_DAILY_RENDERS_DEFAULT));
 
 function threadOf(ctx: OpContext, call: string): string {
     if (!ctx.chat) throw new OpError(404, "error.chat.off", `cobalt.${call}: only the chat can call this`);
@@ -285,11 +288,16 @@ function threadOf(ctx: OpContext, call: string): string {
 // One unit of today's render cap for this thread, or a refusal the model can read.
 export async function takeRender(ctx: OpContext, call: string): Promise<void> {
     const cap = rendersCap(ctx);
+    if (cap === null) return; // uncapped: no counter is touched
     if (!(await budgetPort(ctx.container).take(threadOf(ctx, call), "renders", cap))) {
         throw new OpError(429, "error.chat.render_cap", `cobalt.${call}: this chat already made ${cap} files today, the most it may make in a day. Tell Harmony it can make more tomorrow.`);
     }
 }
-export const refundRender = (ctx: OpContext, call: string) => budgetPort(ctx.container).refund(threadOf(ctx, call), "renders");
+// Gives back what takeRender took: nothing when the call is uncapped (nothing was taken).
+export const refundRender = async (ctx: OpContext, call: string): Promise<void> => {
+    if (rendersCap(ctx) === null) return;
+    await budgetPort(ctx.container).refund(threadOf(ctx, call), "renders");
+};
 
 // Start a studio make (render, slideshow, gallery image) on an open session. The keyed ones run as the session's owner:
 // the chat is Harmony's own, and the Durable Object only lets the key that made a session add to it.

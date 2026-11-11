@@ -33,7 +33,7 @@ export const ytdlpSaveOp = defineOp({
         tier: "free",
         only: true,
         summary:
-            "Save a link into the library with yt-dlp only (no cobalt): for a site cobalt can't save, or when Harmony asks for yt-dlp. One video, at most 720p and 200 MB; no photo posts. Same answer and daily cap as library.save.",
+            "Save a link into the library with yt-dlp only (no cobalt): for a site cobalt can't save, or when Harmony asks for yt-dlp. One video, at most 720p and 200 MB; no photo posts. Same answer as library.save.",
         params: ["url"],
         options: true,
         when: (f) => f.ytdlp === true,
