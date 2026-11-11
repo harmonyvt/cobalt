@@ -13,7 +13,7 @@ import type { EdgeDeps } from "../studio-edge";
 import type { WorkerEnv } from "../worker";
 import type { Registry } from "./registry";
 
-export type HttpMethod = "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
+export type HttpMethod = "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
 // Who may call a route:
 //  - "key":            an `Api-Key` client key (D1 lookup). The library service credential gets 404, like the gate.

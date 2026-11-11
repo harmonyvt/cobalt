@@ -736,6 +736,11 @@ enum Endpoints {
         APIEndpoint(op: "mcp.upload", method: "PUT", path: "/mcp/upload/\(HTTPCobaltClient.encode(token))", auth: .capability)
     }
 
+    /// `OPTIONS /mcp/upload/:token` (op `mcp.upload.preflight`, auth open): The preflight of an MCP upload link's PUT (OPTIONS /mcp/upload/<token>).
+    static func mcpUploadPreflight(token: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "mcp.upload.preflight", method: "OPTIONS", path: "/mcp/upload/\(HTTPCobaltClient.encode(token))", auth: .open)
+    }
+
     /// `GET /mcp/settings` (op `mcp.settings`, auth key_or_service): How agents reach the MCP: the mode and the private link's use (GET /mcp/settings).
     static func mcpSettings() -> APIEndpoint<McpSettingsResponse> {
         APIEndpoint(op: "mcp.settings", method: "GET", path: "/mcp/settings", auth: .keyOrService)

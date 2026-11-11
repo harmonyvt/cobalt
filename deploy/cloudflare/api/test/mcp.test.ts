@@ -1,10 +1,12 @@
 // The capystore MCP server (APP-API-CONTRACT.md section 35): POST /mcp speaks JSON-RPC with the chat's own tools, and
 // upload_begin + PUT /mcp/upload/<token> put a local file into the library. The Worker, the registry, the real handlers
 // and the real SQL on node:sqlite run together; the Durable Object is a fake.
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
 import { hashKey } from "../src/keys";
-import { MCP_SKIPPED_CALLS, mcpThreadId, mcpToolName, signUploadToken, UPLOAD_TOKEN_TTL_MS } from "../src/mcp";
+import { MCP_SKIPPED_CALLS, mcpFlags, mcpInput, mcpOps, mcpThreadId, mcpToolName, signUploadToken, UPLOAD_TOKEN_TTL_MS } from "../src/mcp";
+import { EMBED_DIMS, EMBED_MODEL } from "../src/embed";
+import { APP_TOOLS } from "../src/mcp-app/tools";
 import { REGISTRY } from "../src/registry/index";
 import { handleRequest, type WorkerEnv } from "../src/worker";
 import { withBatch } from "./d1-batch";
@@ -71,7 +73,7 @@ describe("POST /mcp: the protocol", () => {
     it("initialize answers the asked version, the tools capability and instructions", async () => {
         const r = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } });
         expect(r.result.protocolVersion).toBe("2025-06-18");
-        expect(r.result.capabilities).toEqual({ tools: { listChanged: false } });
+        expect(r.result.capabilities).toEqual({ tools: { listChanged: false }, resources: {}, prompts: {} });
         expect(r.result.serverInfo.name).toBe("capystore");
         expect(r.result.instructions).toMatch(/upload_begin/);
         // an unknown version gets the newest one
@@ -82,7 +84,8 @@ describe("POST /mcp: the protocol", () => {
         expect(res.status).toBe(202);
         expect(await res.text()).toBe("");
         expect((await rpc("ping")).result).toEqual({});
-        expect((await rpc("resources/list")).error.code).toBe(-32601);
+        expect(Array.isArray((await rpc("resources/list")).result.resources)).toBe(true);
+        expect((await rpc("nope/nothing")).error.code).toBe(-32601);
         const bad = (await (await mcp({ id: 1, method: "ping" })).json()) as any;
         expect(bad.error.code).toBe(-32600);
         const parse = await send(new Request(`${API}/mcp`, { method: "POST", headers: { authorization: `Bearer ${CLIENT}` }, body: "{nope" }));
@@ -133,7 +136,11 @@ describe("POST /mcp: who may call", () => {
 
 describe("tools/list: the chat's tools", () => {
     it("is the chat AI's calls (same switches) minus the chat-only ones, plus upload_begin", async () => {
-        const tools = (await rpc("tools/list")).result.tools as any[];
+        // the app tools come first (MCP-APP-CONTRACT.md section 6); the rest is the chat's tools
+        const all = (await rpc("tools/list")).result.tools as any[];
+        const appNames = APP_TOOLS.filter((t) => !t.when || t.when({ search: false, box: false, mcp: true })).map((t) => t.name);
+        expect(all.slice(0, appNames.length).map((t) => t.name)).toEqual(appNames);
+        const tools = all.slice(appNames.length);
         const chat = REGISTRY.toolsFor("chat", { search: false, box: false })
             .filter((o) => !MCP_SKIPPED_CALLS.has(o.callName))
             .map((o) => mcpToolName(o.callName));
@@ -254,5 +261,90 @@ describe("upload_begin + PUT /mcp/upload/<token>", () => {
         const { upload_url } = textOf(await call("upload_begin"));
         expect((await put(upload_url, PNG, "text/plain")).status).toBe(415);
         expect(originals.objects.size).toBe(0);
+    });
+});
+
+// ---- ops with their own argument mapping (ai.args) -----------------------------------------------------------------------
+// An MCP client always sends the op's input object. library.search / library.about map positional chat arguments, which used
+// to turn { query } into { query: { query } } and fail the op's own check.
+
+describe("MCP calls to ops that have an ai.args mapping", () => {
+    // an input-shaped object for every offered op that maps its arguments; a new such op must be added here
+    const SAMPLES: Record<string, unknown> = {
+        "library.search": { query: "cat", limit: 5 },
+        "library.about": { key: "Ab3dE6gH9jK2mN5p" },
+        collage: { ids: ["Ab3dE6gH9jK2mN5p"], title: "t", query: "cat" },
+    };
+
+    it("every op with ai.args takes its own input object as it is (MCP-offered or not)", () => {
+        const withMapping = REGISTRY.ops.filter((o) => o.ai.args).map((o) => o.callName).sort();
+        expect(withMapping).toEqual(Object.keys(SAMPLES).sort());
+        const offered = mcpOps(REGISTRY, { search: true, box: true, mcp: true, agents: true, ytdlp: true }).filter((o) => o.ai.args).map((o) => o.callName).sort();
+        expect(offered).toEqual(["library.about", "library.search"]);
+        for (const op of REGISTRY.ops.filter((o) => o.ai.args)) {
+            const sample = SAMPLES[op.callName];
+            expect(op.input.safeParse(sample).success, op.callName).toBe(true);
+            const r = mcpInput(op, sample);
+            expect(r.success, op.callName).toBe(true);
+            expect(r.success && r.data).toEqual(op.input.parse(sample));
+        }
+    });
+    it("a positional-style object the op's schema refuses is still mapped when that makes it valid", () => {
+        const search = REGISTRY.ops.find((o) => o.callName === "library.search")!;
+        // the old search(query, limit) shape would only reach here as the mapping's own output, which parses too
+        expect(mcpInput(search, { query: "cat" }).success).toBe(true);
+        const bad = mcpInput(search, { limit: 3 });
+        expect(bad.success).toBe(false);
+        expect(!bad.success && bad.error.issues[0]!.path).toEqual(["query"]);
+    });
+
+    describe("through tools/call with the search Space fake", () => {
+        let embedCalls: number;
+        beforeEach(() => {
+            embedCalls = 0;
+            env.EMBED_URL = "https://embed.test";
+            env.EMBED_TOKEN = "t";
+            vi.stubGlobal("fetch", async (input: unknown, init?: { body?: string }) => {
+                const url = String(input instanceof Request ? input.url : input);
+                if (url !== "https://embed.test/embed") throw new Error(`unexpected fetch ${url}`);
+                embedCalls++;
+                const n = (JSON.parse(String(init?.body)) as { inputs: unknown[] }).inputs.length;
+                const v = new Array(EMBED_DIMS).fill(0);
+                v[0] = 1;
+                return Response.json({ model: EMBED_MODEL, dims: EMBED_DIMS, vectors: Array.from({ length: n }, () => v), images: Array.from({ length: n }, () => false) });
+            });
+            db.raw
+                .prepare(
+                    `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, key_id, created_at, visibility, post_key)
+                     VALUES ('Ab3dE6gH9jK2mN5p', 'public', 'saved', 'media', 'Nm0000000001.mp4', ?, 'a cat video.mp4', 'video/mp4', 1000, 720, 1280, 5, 'https://x.com/a/status/1', 'k', ?, 'public', 'Ab3dE6gH9jK2mN5p')`,
+                )
+                .run(`${MEDIA}Nm0000000001.mp4`, clock - 1000);
+        });
+        afterEach(() => {
+            vi.unstubAllGlobals();
+        });
+
+        it("library_search takes { query, limit } (it used to fail with 'expected string, received object')", async () => {
+            const r = await call("library_search", { query: "cat", limit: 5 });
+            expect(r.isError).toBeUndefined();
+            const hits = textOf(r);
+            expect(hits).toHaveLength(1);
+            expect(hits[0]).toMatchObject({ id: "Ab3dE6gH9jK2mN5p" });
+            expect(embedCalls).toBeGreaterThan(0);
+            const bad = await call("library_search", {});
+            expect(bad.isError).toBe(true);
+            expect(bad.content[0].text).toMatch(/^library_search: query:/);
+        });
+        it("library_about takes { key }", async () => {
+            const r = await call("library_about", { key: "Ab3dE6gH9jK2mN5p" });
+            expect(r.content[0].text).not.toMatch(/Invalid input|received object/);
+        });
+        it("the app tool search_library answers by meaning, not by title", async () => {
+            const r = await call("search_library", { query: "cat", limit: 12 });
+            expect(r.isError).toBeUndefined();
+            expect(r.structuredContent).toMatchObject({ view: "search", query: "cat", mode: "meaning", total: 1 });
+            expect(r.structuredContent.items[0]).toMatchObject({ id: "Ab3dE6gH9jK2mN5p", status: "public" });
+            expect(r.content[0].text).toContain("by meaning");
+        });
     });
 });
