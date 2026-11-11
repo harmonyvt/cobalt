@@ -797,13 +797,14 @@ async function migrateMerge(d: VisDeps, o: MigrateOptions): Promise<StudioReply>
             processed++;
         }
         if (mergeable.length - page.length <= 0) {
-            // step 4, once after the last page
-            const res = await db
+            // step 4, once after the last page. The rows are counted first: on D1 the write's own count also holds
+            // the rows the change log's triggers wrote (three for each file), so it is not the number of files.
+            backfilled = await count(db, "visibility IS NULL AND deleted_at IS NULL");
+            await db
                 .prepare(
                     "UPDATE media_items SET visibility = CASE WHEN bucket = 'media' THEN 'public' ELSE 'private' END WHERE visibility IS NULL AND deleted_at IS NULL",
                 )
                 .run();
-            backfilled = Number(res.meta?.changes ?? 0);
         }
     }
 
@@ -916,13 +917,11 @@ async function undoMerge(d: VisDeps, o: MigrateOptions): Promise<StudioReply> {
     if (!o.dryRun && remaining === 0) {
         // back to "not migrated": every reader derives visibility from the bucket again (a webp that was
         // switched private lives in the private bucket now and keeps its explicit value)
-        const res = await db
-            .prepare(
-                // (a switched webp keeps its explicit value; so do the rows made after 0009, which have no pre-0008 shape)
-                "UPDATE media_items SET visibility = NULL WHERE visibility IS NOT NULL AND NOT (bucket = 'originals' AND (role IS NOT NULL OR source IN ('webp', 'studio', 'made')))",
-            )
-            .run();
-        cleared = Number(res.meta?.changes ?? 0);
+        // (a switched webp keeps its explicit value; so do the rows made after 0009, which have no pre-0008 shape)
+        const reset = "visibility IS NOT NULL AND NOT (bucket = 'originals' AND (role IS NOT NULL OR source IN ('webp', 'studio', 'made')))";
+        // counted first, as in the migrate: the write's own count includes the change log's trigger rows on D1
+        cleared = await count(db, reset);
+        await db.prepare(`UPDATE media_items SET visibility = NULL WHERE ${reset}`).run();
     }
     return {
         status: 200,

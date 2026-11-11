@@ -321,6 +321,14 @@ public final class AppModel {
                 librarySync.onLegacy = { [weak model] in
                     await model?.library.refreshFromServer()
                 }
+                librarySync.onPullFailure = { [weak model] error in
+                    model?.library.syncPullFailed(error)
+                }
+                // A delete queued by an earlier launch: the device's copy of that post goes now.
+                librarySync.onDeleteConfirmed = { [weak model] post in
+                    guard let model, let media = model.store.media(joining: post) else { return }
+                    await model.store.removeMedia(media.id)
+                }
                 Task { await librarySync.start() }
             } catch {
                 Telemetry.log(.error, .sync, "sync store failed", data: ["error": .string(String(describing: error))])

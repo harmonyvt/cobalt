@@ -385,3 +385,38 @@ describe("undo (the rollback)", () => {
         expect(r2.body.report.new_code_publics).toBe(0);
     });
 });
+
+describe("reported counts on a table with triggers", () => {
+    // D1 counts the rows a statement's triggers wrote in meta.changes; node:sqlite does not. With the change log's
+    // triggers (migration 0038) every updated media_items row adds a delete and an insert, so D1 answers three per
+    // file. This makes the fake answer the same way for writes to media_items.
+    const countLikeD1 = () => {
+        const wrap = (st: any, sql: string): any => {
+            if (!/^\s*(UPDATE|INSERT INTO|DELETE FROM)\s+media_items\b/i.test(sql)) return st;
+            const run = st.run.bind(st);
+            const bind = st.bind.bind(st);
+            st.run = async () => {
+                const r = await run();
+                return { ...r, meta: { ...r.meta, changes: Number(r.meta?.changes ?? 0) * 3 } };
+            };
+            st.bind = (...p: unknown[]) => wrap(bind(...p), sql);
+            return st;
+        };
+        const prepare = w.db.prepare.bind(w.db);
+        (w.db as any).prepare = (sql: string) => wrap(prepare(sql), sql);
+    };
+
+    it("backfilled and visibility_cleared are files, not rows written", async () => {
+        const n = (where: string) => (w.db.raw.prepare(`SELECT COUNT(*) AS n FROM media_items WHERE ${where}`).get() as { n: number }).n;
+        countLikeD1();
+        const r = await migrate(w, "dry_run=0&limit=100");
+        expect(r.body.report.backfilled).toBe(80);
+        expect(n("visibility IS NULL AND deleted_at IS NULL")).toBe(0);
+
+        const undone = await migrate(w, "undo=1&dry_run=0&limit=100");
+        expect(undone.body.report.processed).toBe(6);
+        // every row is back to "not migrated", and the report says how many that was
+        expect(n("visibility IS NOT NULL")).toBe(0);
+        expect(undone.body.report.visibility_cleared).toBe(80);
+    });
+});

@@ -330,6 +330,35 @@ struct SyncHTTPTests {
         let syncs = server.requests.filter { $0.path == "/sync" }
         #expect(syncs.contains { $0.target.contains("since=0") && $0.target.contains("limit=500") })
     }
+
+    /// Only a 404 is "not there". The server answers 503 for any database read that failed, so it is
+    /// thrown as the client's own error, like a 500: the engine decides (it falls back when the
+    /// device has nothing to show, and stays on when it has a copy).
+    @Test func a503AndA500AreTheServersErrorAndNotAMissingRoute() async throws {
+        let fixture = SyncFixture(posts: [])
+        let server = try await LoopbackServer.start { request in fixture.respond(request) }
+        defer { server.stop() }
+        let client = HTTPCobaltClient(baseURL: server.base, apiKey: { "test-key" })
+
+        fixture.setMode(.notReady)
+        do {
+            _ = try await client.syncChanges(since: 0, limit: 500)
+            Issue.record("a 503 should throw")
+        } catch let error as CobaltError {
+            #expect(error == .api(code: "error.api.generic", httpStatus: 503))
+        } catch {
+            Issue.record("unexpected \(error)")
+        }
+        fixture.setMode(.broken)
+        do {
+            _ = try await client.syncChanges(since: 0, limit: 500)
+            Issue.record("a 500 should throw")
+        } catch let error as CobaltError {
+            #expect(error == .api(code: "error.api.generic", httpStatus: 500))
+        } catch {
+            Issue.record("unexpected \(error)")
+        }
+    }
 }
 
 @Suite("library glow wiring")
@@ -377,6 +406,586 @@ struct LibrarySyncGlowTests {
         #expect(sync.status.state == .off)
         #expect(sync.status.lastEvent == .fellBack)
         #expect(try await store.post(id: "kept")?.title == "kept")
+    }
+}
+
+@Suite("sync outbox: an op in flight is never rewritten")
+struct SyncOutboxMergeTests {
+    @Test func anEditMadeWhileTheFirstIsBeingSentGetsItsOwnOpAndIsSentAfterIt() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let original = sample("p", title: "clip")
+        try await store.upsert(original)
+        var hiddenPost = original
+        hiddenPost.hidden = true
+        let hidden = hiddenPost
+        let first = try await store.commit(post: hidden, op: edit(.hide, post: original, status: .hidden))
+        let second = edit(.hide, post: hidden, status: .off)
+        let sender = HookSender { op in
+            // the owner unhides while the hide is still on its way
+            if op.opID == first.opID { _ = try await store.commit(post: original, op: second) }
+            return .done
+        }
+
+        let done = await OutboxDrainer.drain(store: store, sender: sender, now: t0)
+        #expect(done.acknowledged == [first.opID])
+        #expect(sender.sent.map(\.payload.status) == ["hidden"])
+        let left = try await store.pendingOps()
+        #expect(left.map(\.opID) == [second.opID])
+        #expect(left.first?.payload.status == "off")
+
+        let next = await OutboxDrainer.drain(store: store, sender: sender, now: t0)
+        #expect(next.acknowledged == [second.opID])
+        #expect(sender.sent.map(\.payload.status) == ["hidden", "off"])
+        #expect(sender.sent.map(\.idempotencyKey) == [first.opID, second.opID])
+        #expect(try await store.pendingOps().isEmpty)
+    }
+
+    @Test func anEditMergedIntoAnOpThatWasNeverHandedOutIsWhatTheDrainSends() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let a = sample("a", title: "a", custom: "a")
+        let b = sample("b", title: "b", custom: "b")
+        let first = try await store.commit(post: renamed(a, "a2"), op: edit(.title, post: a, title: "a2"))
+        let queued = try await store.commit(post: renamed(b, "one"), op: edit(.title, post: b, title: "one"))
+        let again = edit(.title, post: renamed(b, "one"), title: "two")
+        let sender = HookSender { op in
+            // b is renamed again while a's title is on its way: b's op was only listed, never handed out
+            if op.opID == first.opID { _ = try await store.commit(post: renamed(b, "two"), op: again) }
+            return .done
+        }
+
+        let done = await OutboxDrainer.drain(store: store, sender: sender, now: t0)
+        #expect(done.acknowledged == [first.opID, queued.opID])
+        #expect(sender.sent.map(\.payload.title) == ["a2", "two"])
+        #expect(try await store.pendingOps().isEmpty)
+        #expect(try await store.post(id: "b")?.customTitle == "two")
+    }
+
+    @Test func aSendCutOffByTheAppEndingCountsAsATryAndIsNotMergedInto() async throws {
+        let file = try tempDB()
+        let original = sample("p", title: "old", custom: "old")
+        var handedID = ""
+        do {
+            let store = try SyncStore(fileURL: file)
+            let stored = try await store.commit(post: renamed(original, "one"), op: edit(.title, post: original, title: "one"))
+            let begun = try await store.beginSend(stored.opID)
+            let handed = try #require(begun)
+            #expect(handed.sending)
+            handedID = handed.opID
+        }
+        // the next launch
+        let store = try SyncStore(fileURL: file)
+        let waiting = try await store.pendingOps()
+        #expect(waiting.map(\.opID) == [handedID])
+        #expect(waiting.first?.sending == false)
+        #expect(waiting.first?.tries == 1)
+        let second = try await store.commit(post: renamed(original, "two"), op: edit(.title, post: renamed(original, "one"), title: "two"))
+        #expect(second.opID != handedID)
+        let both = try await store.pendingOps()
+        #expect(both.map(\.payload.title) == ["one", "two"])
+    }
+
+    @Test func oneFilesSwitchAnothersAndTheWholePostsStatusAreSeparateOps() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let post = twoFiles("p", visibility: .private)
+        try await store.upsert(post)
+        _ = try await store.commit(post: post, op: edit(.visibility, post: post, fileID: "p-f", makePublic: true))
+        let g = try await store.commit(post: post, op: edit(.visibility, post: post, fileID: "p-g", makePublic: true))
+        var ops = try await store.pendingOps()
+        #expect(ops.map(\.payload.fileID) == ["p-f", "p-g"])
+
+        // the same file again, nothing sent yet: the same op, with the newer answer
+        let gAgain = try await store.commit(post: post, op: edit(.visibility, post: post, fileID: "p-g", makePublic: false))
+        #expect(gAgain.opID == g.opID)
+        ops = try await store.pendingOps()
+        #expect(ops.map(\.payload.makePublic) == [true, false])
+
+        // the whole post, then the first file again: neither is written into an older op
+        _ = try await store.commit(post: post, op: edit(.visibility, post: post, status: .private))
+        _ = try await store.commit(post: post, op: edit(.visibility, post: post, fileID: "p-f", makePublic: false))
+        ops = try await store.pendingOps()
+        #expect(ops.count == 4)
+        #expect(ops.map(\.payload.fileID) == ["p-f", "p-g", nil, "p-f"])
+        #expect(ops.map(\.payload.status) == [nil, nil, "private", nil])
+    }
+
+    @Test func aKeyConflictIsSentAgainUnderANewKeyAndIsNotARefusal() async throws {
+        #expect(MutationRetry.attempt(CobaltError.api(code: "error.idempotency.conflict", httpStatus: 409), kind: .title) == .rekey)
+        #expect(MutationRetry.attempt(SyncError.keyConflict, kind: .hide) == .rekey)
+        #expect(MutationRetry.attempt(CobaltError.api(code: "error.library.conflict", httpStatus: 409), kind: .title) == .refused)
+
+        let store = try SyncStore(fileURL: try tempDB())
+        let original = sample("p", title: "old", custom: "old")
+        let stored = try await store.commit(post: renamed(original, "new"), op: edit(.title, post: original, title: "new"))
+        let sender = ScriptedSender(results: [
+            .failure(CobaltError.api(code: "error.idempotency.conflict", httpStatus: 409)), .success(()),
+        ])
+        let first = await OutboxDrainer.drain(store: store, sender: sender, now: t0)
+        #expect(first.refused.isEmpty)
+        #expect(first.acknowledged.isEmpty)
+        #expect(try await store.post(id: "p")?.customTitle == "new")
+        let waiting = try await store.pendingOps()
+        #expect(waiting.map(\.opID) == [stored.opID])
+        #expect(waiting.first?.tries == 1)
+        let newKey = try #require(waiting.first?.idempotencyKey)
+        #expect(newKey != stored.opID)
+
+        let second = await OutboxDrainer.drain(store: store, sender: sender, now: t0.addingTimeInterval(MutationRetry.backoff(tries: 1)))
+        #expect(second.acknowledged == [stored.opID])
+        #expect(sender.keys == [stored.opID, newKey])
+        #expect(try await store.pendingOps().isEmpty)
+    }
+
+    @Test func aRefusalPutsBackThePostWithoutThatEditAndKeepsTheLaterOne() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let original = sample("p", title: "old", custom: "old")
+        let first = try await store.commit(post: renamed(original, "one"), op: edit(.title, post: original, title: "one"))
+        _ = try await store.beginSend(first.opID)
+        let second = try await store.commit(post: renamed(original, "two"), op: edit(.title, post: renamed(original, "one"), title: "two"))
+        #expect(second.opID != first.opID)
+
+        try await store.rollback(first)
+        #expect(try await store.post(id: "p")?.customTitle == "two")
+        let left = try await store.pendingOps()
+        #expect(left.map(\.opID) == [second.opID])
+        let before = try #require(left.first?.payload.before)
+        #expect(SyncPostCoding.decode(before)?.customTitle == "old")
+
+        try await store.rollback(try #require(left.first))
+        #expect(try await store.post(id: "p")?.customTitle == "old")
+    }
+}
+
+@Suite("sync outbox: what the server answered")
+struct SyncReplyTests {
+    @Test func aStatusReplyThatListsThePostAsFailedIsARefusal() throws {
+        let post = twoFiles("p", visibility: .private)
+        let op = edit(.visibility, post: post, status: .public)
+
+        let refusedReply = StatusChange(posts: [], failed: [StatusChange.Failure(id: "p", error: "error.private.not_toggleable")])
+        #expect(throws: SyncError.refused("error.private.not_toggleable")) {
+            _ = try SyncReply.status(refusedReply, op: op)
+        }
+
+        let taken = StatusChange(posts: [StatusChange.Post(id: "p", postKey: "p", status: .public)], failed: [])
+        #expect(try SyncReply.status(taken, op: op) == .done)
+
+        // the post was taken, one file was not: the server's account of the files is the receipt
+        let partly = StatusChange(
+            posts: [StatusChange.Post(id: "p", postKey: "p", status: .public, files: [StatusChange.File(id: "p-f", visibility: "public")])],
+            failed: [StatusChange.Failure(id: "p-g", error: "error.share.off")])
+        let receipt = try SyncReply.status(partly, op: op)
+        let served = try #require(receipt.post)
+        #expect(served.files.map(\.isPublic) == [true, false])
+        #expect(served.visibility == .public)
+        #expect(!served.hidden)
+    }
+
+    @Test func theServersAnswerReplacesTheOptimisticRow() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let post = twoFiles("p", visibility: .private)
+        var optimistic = post
+        SyncMerge.apply(PostStatus.public, to: &optimistic)
+        let stored = try await store.commit(post: optimistic, op: edit(.visibility, post: post, status: .public))
+        #expect(try await store.post(id: "p")?.files.map(\.isPublic) == [true, true])
+
+        var answer = post
+        answer.files[0].wireVisibility = .public
+        let served = answer
+        let sender = HookSender { _ in SyncReceipt(post: served) }
+        let done = await OutboxDrainer.drain(store: store, sender: sender, now: t0)
+        #expect(done.acknowledged == [stored.opID])
+        #expect(done.receipts[stored.opID]?.post?.id == "p")
+        #expect(try await store.post(id: "p")?.files.map(\.isPublic) == [true, false])
+        #expect(try await store.pendingOps().isEmpty)
+    }
+
+    @Test func aPartialDeleteKeepsThePostWithTheFilesThatAreLeft() async throws {
+        let post = twoFiles("p")
+        let op = edit(.delete, post: post)
+        #expect(SyncReply.delete(PostDeleteResult(deletedFiles: 2, deletedBytes: 20, remaining: []), op: op) == .done)
+        let receipt = SyncReply.delete(PostDeleteResult(deletedFiles: 1, deletedBytes: 10, remaining: ["p-g"]), op: op)
+        #expect(receipt.remaining == ["p-g"])
+        #expect(receipt.post?.files.map(\.id) == ["p-g"])
+
+        let store = try SyncStore(fileURL: try tempDB())
+        try await store.upsert(post)
+        let stored = try await store.commit(post: nil, op: op)
+        #expect(try await store.post(id: "p") == nil)
+        let sender = HookSender { _ in receipt }
+        let done = await OutboxDrainer.drain(store: store, sender: sender, now: t0)
+        #expect(done.acknowledged == [stored.opID])
+        #expect(done.receipts[stored.opID]?.remaining == ["p-g"])
+        #expect(try await store.post(id: "p")?.files.map(\.id) == ["p-g"])
+    }
+}
+
+@Suite("sync outbox: markers, expiry and a changed server")
+struct SyncOutboxSettleTests {
+    @Test func aDeleteMarkerHeldForAPendingEditIsAppliedWhenTheEditIsRefused() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let original = sample("p2", title: "old name", custom: "old name")
+        let stored = try await store.commit(post: renamed(original, "new name"), op: edit(.title, post: original, title: "new name"))
+        try await store.apply(page(44, gone: [SyncGone(entity: "post", id: "p2")]))
+        #expect(try await store.post(id: "p2")?.customTitle == "new name")
+
+        // the title's retry is answered 404: the post is gone, and the row must not come back
+        let restored = try await store.rollback(stored)
+        #expect(restored == nil)
+        #expect(try await store.post(id: "p2") == nil)
+        #expect(try await store.pendingOps().isEmpty)
+    }
+
+    @Test func aDeleteMarkerHeldForAPendingEditIsAppliedWhenTheEditIsTaken() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let original = sample("p2", title: "clip")
+        var hiddenPost = original
+        hiddenPost.hidden = true
+        let stored = try await store.commit(post: hiddenPost, op: edit(.hide, post: original, status: .hidden))
+        try await store.apply(page(44, gone: [SyncGone(entity: "post", id: "p2")]))
+        #expect(try await store.post(id: "p2") != nil)
+
+        try await store.settle(stored, post: nil)
+        #expect(try await store.post(id: "p2") == nil)
+
+        // a marker is only held while an edit is pending: a post the server lists later is kept
+        try await store.apply(page(45, posts: [original]))
+        #expect(try await store.post(id: "p2") != nil)
+    }
+
+    @Test func anEditGivenUpAfterAWeekIsRolledBackAndReportedAsRefused() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let post = sample("p", title: "kept")
+        try await store.upsert(post)
+        let stored = try await store.commit(post: nil, op: edit(.delete, post: post))
+        #expect(try await store.post(id: "p") == nil)
+        let sender = ScriptedSender(results: [])
+
+        let late = t0.addingTimeInterval(MutationRetry.retention + 1)
+        let dropped = await OutboxDrainer.drain(store: store, sender: sender, now: late)
+        #expect(sender.keys.isEmpty)
+        #expect(dropped.refused.map(\.opID) == [stored.opID])
+        #expect(dropped.reasons[stored.opID] == OutboxDrainer.expiredReason)
+        #expect(try await store.post(id: "p")?.title == "kept")
+        #expect(try await store.pendingOps().isEmpty)
+    }
+
+    @Test func aDrainStopsSendingAndPutsNothingBackOnceTheServerChanged() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let a = sample("a", title: "a", custom: "a")
+        let b = sample("b", title: "b", custom: "b")
+        let first = try await store.commit(post: renamed(a, "a2"), op: edit(.title, post: a, title: "a2"))
+        _ = try await store.commit(post: renamed(b, "b2"), op: edit(.title, post: b, title: "b2"))
+
+        // the server is changed while the first request is out: the copy and the outbox are wiped
+        let changed = Mutex(false)
+        let sender = HookSender { _ in
+            changed.withLock { $0 = true }
+            try await store.wipeAll()
+            throw SyncError.refused("error.library.not_found")
+        }
+        let drained = await OutboxDrainer.drain(store: store, sender: sender, now: t0) {
+            !changed.withLock { $0 }
+        }
+        #expect(sender.sent.map(\.opID) == [first.opID])
+        #expect(drained.refused.isEmpty)
+        #expect(try await store.post(id: "a") == nil)
+        #expect(try await store.post(id: "b") == nil)
+
+        // even without the check, an op that is no longer in the outbox puts nothing back
+        let restored = try await store.rollback(first)
+        #expect(restored == nil)
+        #expect(try await store.post(id: "a") == nil)
+    }
+}
+
+@Suite("sync pull failures")
+struct SyncPullFailureTests {
+    @Test func aCursorAnswered410OnceLeadsToExactlyOneFullReload() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        try await store.apply(page(50, posts: [sample("old", title: "old")]))
+        let refusals = Mutex(0)
+        let transport = ScriptedSync { since in
+            if since == 50 {
+                refusals.withLock { $0 += 1 }
+                throw SyncError.cursorTooOld
+            }
+            if since == 0 { return page(2, more: true, posts: [sample("a", title: "a")]) }
+            return page(4, posts: since < 4 ? [sample("b", title: "b")] : [])
+        }
+        let engine = SyncEngine(store: store, transport: transport, sender: ScriptedSender(results: []))
+        await engine.syncNow()
+        #expect(transport.calls == [50, 0, 2])
+        #expect(refusals.withLock { $0 } == 1)
+        #expect(try await store.snapshot().visible.map(\.id).sorted() == ["a", "b"])
+        #expect(await store.cursor() == 4)
+        #expect(!(await engine.fellBack))
+
+        // the next pass carries on from the new cursor: no second reload
+        await engine.syncNow()
+        #expect(transport.calls == [50, 0, 2, 4])
+    }
+
+    @Test func aReloadThatIsAnswered410AgainStopsAndFallsBackInsteadOfLooping() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        try await store.apply(page(50, posts: [sample("old", title: "old")]))
+        let transport = ScriptedSync { since in
+            if since != 0 { throw SyncError.cursorTooOld }
+            return page(2, more: true, posts: [sample("a", title: "a")])
+        }
+        let seen = Mutex<[SyncActivity]>([])
+        let engine = SyncEngine(store: store, transport: transport, sender: ScriptedSender(results: []))
+        await engine.setActivity { event in seen.withLock { $0.append(event) } }
+        await engine.syncNow()
+        #expect(transport.calls == [50, 0, 2])
+        #expect(await engine.fellBack)
+        #expect(seen.withLock { $0 }.contains(.fellBack))
+        // half a library is not kept as the copy
+        #expect(!(await store.hasReadyMarker()))
+        #expect(await store.cursor() == 0)
+
+        await engine.syncNow()
+        #expect(transport.calls == [50, 0, 2])
+    }
+
+    @Test func aServerErrorWithNothingOnTheDeviceFallsBack() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let transport = ScriptedSync { _ in throw CobaltError.api(code: "error.api.generic", httpStatus: 500) }
+        let seen = Mutex<[SyncActivity]>([])
+        let engine = SyncEngine(store: store, transport: transport, sender: ScriptedSender(results: []))
+        await engine.setActivity { event in seen.withLock { $0.append(event) } }
+        await engine.syncNow()
+        #expect(await engine.fellBack)
+        let events = seen.withLock { $0 }
+        #expect(events.contains(.fellBack))
+        #expect(events.last == .passEnded(pending: 0))
+    }
+
+    @Test func aServerErrorWithACopyKeepsTheCopyAndSaysSo() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        try await store.apply(page(7, posts: [sample("kept", title: "kept")]))
+        let transport = ScriptedSync { _ in throw CobaltError.api(code: "error.api.generic", httpStatus: 500) }
+        let seen = Mutex<[SyncActivity]>([])
+        let failures = Mutex<[String]>([])
+        let engine = SyncEngine(store: store, transport: transport, sender: ScriptedSender(results: []))
+        await engine.setCallbacks(
+            snapshot: { _ in }, fallback: {}, acknowledged: { _, _ in }, refused: { _, _ in },
+            pullFailed: { error in failures.withLock { $0.append(String(describing: error)) } })
+        await engine.setActivity { event in seen.withLock { $0.append(event) } }
+        await engine.syncNow()
+        #expect(!(await engine.fellBack))
+        #expect(failures.withLock { $0 }.count == 1)
+        #expect(seen.withLock { $0 }.contains(.pullFailed(offline: false)))
+        #expect(try await store.post(id: "kept")?.title == "kept")
+        #expect(await store.cursor() == 7)
+    }
+
+    /// A 503 is what the server answers when a database read fails. With a copy and an edit waiting
+    /// the engine must stay on: turned off, the queued edit would sit unsent for the whole launch
+    /// and overwrite a newer one on the next.
+    @Test func a503WithACopyAndAnEditWaitingKeepsTheEngineOnAndTheEditQueued() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let original = sample("p", title: "old", custom: "old")
+        try await store.apply(page(7, posts: [original]))
+        let stored = try await store.commit(post: renamed(original, "new"), op: op(.title, post: original, title: "new"))
+        let transport = ScriptedSync { _ in throw CobaltError.api(code: "error.api.generic", httpStatus: 503) }
+        let sender = ScriptedSender(results: [.failure(SyncError.retryable("offline"))])
+        let seen = Mutex<[SyncActivity]>([])
+        let failures = Mutex<[String]>([])
+        // The op is stamped `t0`; on the default clock ("now") the outbox would drop it as expired.
+        let engine = SyncEngine(store: store, transport: transport, sender: sender, clock: { t0 })
+        await engine.setCallbacks(
+            snapshot: { _ in }, fallback: { Issue.record("a 503 with a copy must not fall back") },
+            acknowledged: { _, _ in }, refused: { _, _ in },
+            pullFailed: { error in failures.withLock { $0.append(String(describing: error)) } })
+        await engine.setActivity { event in seen.withLock { $0.append(event) } }
+        await engine.syncNow()
+        #expect(!(await engine.fellBack))
+        #expect(failures.withLock { $0 }.count == 1)
+        let events = seen.withLock { $0 }
+        #expect(events.contains(.pullFailed(offline: false)))
+        #expect(!events.contains(.fellBack))
+        #expect(events.last == .passEnded(pending: 1))
+        #expect(try await store.pendingOps().map(\.opID) == [stored.opID])
+        #expect(try await store.post(id: "p")?.customTitle == "new")
+        #expect(await store.cursor() == 7)
+    }
+
+    /// The API deployed before its migration: 503 and nothing on the device. Today's pages are used.
+    @Test func a503WithNothingOnTheDeviceFallsBack() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let transport = ScriptedSync { _ in throw CobaltError.api(code: "error.api.generic", httpStatus: 503) }
+        let engine = SyncEngine(store: store, transport: transport, sender: ScriptedSender(results: []))
+        await engine.syncNow()
+        #expect(await engine.fellBack)
+    }
+
+    @Test func offlineOnTheFirstLaunchStaysOnAndSaysSoThenFillsWhenTheServerAnswers() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let down = Mutex(true)
+        let transport = ScriptedSync { _ in
+            if down.withLock({ $0 }) { throw CobaltError.network(.notConnectedToInternet) }
+            return page(3, posts: [sample("a", title: "a")])
+        }
+        let seen = Mutex<[SyncActivity]>([])
+        let failures = Mutex<[String]>([])
+        let engine = SyncEngine(store: store, transport: transport, sender: ScriptedSender(results: []))
+        await engine.setCallbacks(
+            snapshot: { _ in }, fallback: {}, acknowledged: { _, _ in }, refused: { _, _ in },
+            pullFailed: { error in failures.withLock { $0.append(String(describing: error)) } })
+        await engine.setActivity { event in seen.withLock { $0.append(event) } }
+        await engine.syncNow()
+        #expect(!(await engine.fellBack))
+        #expect(failures.withLock { $0 }.count == 1)
+        #expect(seen.withLock { $0 }.contains(.pullFailed(offline: true)))
+
+        down.withLock { $0 = false }
+        await engine.syncNow()
+        #expect(seen.withLock { $0 }.contains(.pulled))
+        #expect(failures.withLock { $0 }.count == 1)
+        #expect(try await store.post(id: "a")?.title == "a")
+    }
+}
+
+@Suite("library sync: answers reach the caller and the glow")
+@MainActor
+struct LibrarySyncAnswerTests {
+    @Test func aStatusTheServerWillNotTakeComesBackToTheCallerAndTheRowIsRestored() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let original = twoFiles("p", visibility: .private)
+        try await store.upsert(original)
+        let sync = LibrarySync(
+            store: store,
+            transport: QuietPull { _ in page(3, posts: [original]) },
+            sender: ScriptedSender(results: [.failure(SyncError.refused("error.private.not_toggleable"))]))
+        var after = original
+        SyncMerge.apply(PostStatus.public, to: &after)
+        do {
+            try await sync.enqueueStatus(before: original, after: after, status: .public)
+            Issue.record("a refused status should throw")
+        } catch SyncError.refused(let code) {
+            #expect(code == "error.private.not_toggleable")
+            #expect(LibraryModel.statusErrorCode(SyncError.refused(code)) == "error.private.not_toggleable")
+        } catch {
+            Issue.record("unexpected \(error)")
+        }
+        #expect(try await store.post(id: "p")?.visibility == .private)
+        #expect(try await store.post(id: "p")?.files.map(\.isPublic) == [false, false])
+        #expect(try await store.pendingOps().isEmpty)
+        #expect(sync.status.state == .refused)
+    }
+
+    @Test func aPartialDeleteIsReportedToTheCallerAndToItsConfirmation() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let post = twoFiles("p")
+        try await store.upsert(post)
+        var kept = post
+        kept.files.removeAll { $0.id != "p-g" }
+        let served = kept
+        let sync = LibrarySync(
+            store: store,
+            transport: QuietPull { _ in page(3, posts: [served]) },
+            sender: HookSender { _ in SyncReceipt(post: served, remaining: ["p-g"]) })
+        let confirmed = Mutex<[[String]]>([])
+        let remaining = try await sync.enqueueDelete(post: post, anchor: "p-f") { left in
+            confirmed.withLock { $0.append(left) }
+        }
+        #expect(remaining == ["p-g"])
+        #expect(confirmed.withLock { $0 } == [["p-g"]])
+        #expect(try await store.post(id: "p")?.files.map(\.id) == ["p-g"])
+    }
+
+    @Test func aDeleteQueuedByAnEarlierLaunchStillRemovesTheDevicesCopy() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let post = sample("p", title: "going")
+        // queued last launch: the op is in the outbox, the closure that removed the files is not
+        _ = try await store.commit(post: nil, op: edit(.delete, post: post, at: Date()))
+        let sync = LibrarySync(store: store, transport: QuietPull { _ in page(3) }, sender: ScriptedSender(results: []))
+        let removed = Mutex<[String]>([])
+        sync.onDeleteConfirmed = { gone in removed.withLock { $0.append(gone.id) } }
+        await sync.kick(.launch)
+        #expect(removed.withLock { $0 } == ["p"])
+        #expect(try await store.pendingOps().isEmpty)
+    }
+
+    @Test func aPullThatCannotReachTheServerTurnsTheGlowOfflineAndTellsTheLibrary() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        try await store.apply(page(1, posts: [sample("kept", title: "kept")]))
+        let down = Mutex(true)
+        let pulls = QuietPull { _ in
+            if down.withLock({ $0 }) { throw CobaltError.network(.notConnectedToInternet) }
+            return page(2, posts: [sample("b", title: "b")])
+        }
+        let sync = LibrarySync(store: store, transport: pulls, sender: ScriptedSender(results: []))
+        let told = Mutex<[PipelineFailure?]>([])
+        sync.onPullFailure = { error in told.withLock { $0.append(pipelineFailure(from: error, during: .saving)) } }
+        await sync.kick(.foreground)
+        #expect(sync.isActive)
+        #expect(sync.status.state == .offlinePending)
+        #expect(told.withLock { $0 } == [.unreachable])
+        #expect(try await store.post(id: "kept")?.title == "kept")
+
+        down.withLock { $0 = false }
+        await sync.kick(.foreground)
+        #expect(sync.status.state == .upToDate)
+        #expect(told.withLock { $0 }.count == 1)
+    }
+
+    /// Offline, then the server is reached and will not serve the pull. The refused flicker plays
+    /// and, once it is over, the glow must not settle back on "offline": the server answered.
+    @Test func aPullTheServerRefusesAfterAnOfflineOneEndsTheGlowsOffline() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        try await store.apply(page(1, posts: [sample("kept", title: "kept")]))
+        let down = Mutex(true)
+        let pulls = QuietPull { _ in
+            if down.withLock({ $0 }) { throw CobaltError.network(.notConnectedToInternet) }
+            throw CobaltError.api(code: "error.api.generic", httpStatus: 500)
+        }
+        let sync = LibrarySync(store: store, transport: pulls, sender: ScriptedSender(results: []))
+        let told = Mutex(0)
+        sync.onPullFailure = { _ in told.withLock { $0 += 1 } }
+        await sync.kick(.foreground)
+        #expect(sync.status.state == .offlinePending)
+
+        down.withLock { $0 = false }
+        await sync.kick(.foreground)
+        #expect(sync.isActive)
+        #expect(sync.status.state == .refused)
+        #expect(told.withLock { $0 } == 2)
+        // long after the flicker
+        sync.status.tick(now: Date().addingTimeInterval(3_600))
+        #expect(sync.status.state == .upToDate)
+    }
+
+    @Test func aPullTheServerRefusesWithACopyFlickersTheGlowAndTellsTheLibrary() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        try await store.apply(page(1, posts: [sample("kept", title: "kept")]))
+        let sync = LibrarySync(
+            store: store,
+            transport: QuietPull { _ in throw CobaltError.api(code: "error.api.generic", httpStatus: 500) },
+            sender: ScriptedSender(results: []))
+        let told = Mutex(0)
+        sync.onPullFailure = { _ in told.withLock { $0 += 1 } }
+        await sync.kick(.foreground)
+        #expect(sync.isActive)
+        #expect(sync.status.state == .refused)
+        #expect(told.withLock { $0 } == 1)
+    }
+
+    @Test func aPullTheServerCannotServeWithNothingOnTheDeviceLoadsTheOldWayOnce() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let sync = LibrarySync(
+            store: store,
+            transport: QuietPull { _ in throw CobaltError.api(code: "error.api.generic", httpStatus: 500) },
+            sender: ScriptedSender(results: []))
+        let loads = Mutex(0)
+        sync.onLegacy = { loads.withLock { $0 += 1 } }
+        await sync.kick(.foreground)
+        #expect(!sync.isActive)
+        #expect(sync.status.state == .off)
+        #expect(loads.withLock { $0 } == 1)
+
+        await sync.kick(.foreground)
+        #expect(loads.withLock { $0 } == 1)
     }
 }
 
@@ -452,16 +1061,57 @@ private final class ScriptedSender: SyncSender, @unchecked Sendable {
 
     init(results: [Result<Void, Error>]) { self.results = results }
 
-    func send(_ op: SyncOp) async throws {
+    func send(_ op: SyncOp) async throws -> SyncReceipt {
         let index = count.withLock { n -> Int in
             let current = n
             n += 1
             return current
         }
-        sent.withLock { $0.append(op.opID) }
+        sent.withLock { $0.append(op.idempotencyKey) }
         if results.indices.contains(index) { try results[index].get() }
         else if let last = results.last { try last.get() }
+        return .done
     }
+}
+
+/// A sender whose answer is a closure, so a test can act while a request is "on its way" (make a
+/// second edit, change the server) and can answer with a receipt.
+private final class HookSender: SyncSender, @unchecked Sendable {
+    private let body: @Sendable (SyncOp) async throws -> SyncReceipt
+    private let seen = Mutex<[SyncOp]>([])
+    var sent: [SyncOp] { seen.withLock { $0 } }
+
+    init(_ body: @escaping @Sendable (SyncOp) async throws -> SyncReceipt) { self.body = body }
+
+    func send(_ op: SyncOp) async throws -> SyncReceipt {
+        seen.withLock { $0.append(op) }
+        return try await body(op)
+    }
+}
+
+/// A post with two files, `<id>-f` and `<id>-g`.
+private func twoFiles(_ id: String, visibility: Visibility? = nil) -> LibraryPost {
+    var post = sample(id, title: id, visibility: visibility)
+    var second = post.files[0]
+    second.id = "\(id)-g"
+    post.files.append(second)
+    return post
+}
+
+private func edit(
+    _ kind: SyncOp.Kind, post: LibraryPost, status: PostStatus? = nil, fileID: String? = nil, makePublic: Bool? = nil,
+    title: String? = nil, at: Date = t0
+) -> SyncOp {
+    SyncOp(
+        opID: UUID().uuidString, kind: kind, target: post.id,
+        payload: SyncOp.Payload(
+            anchor: fileID ?? post.files.first?.id ?? post.id, title: title, status: status?.rawValue,
+            makePublic: makePublic, fileID: fileID, before: SyncPostCoding.encode(post)),
+        createdAt: at, tries: 0, nextAttemptAt: Date(timeIntervalSince1970: 0))
+}
+
+private func page(_ seq: Int64, more: Bool = false, posts: [LibraryPost] = [], gone: [SyncGone] = []) -> SyncPage {
+    SyncPage(seq: seq, more: more, posts: posts, links: [], collections: [], sets: [], names: [], rules: [], gone: gone)
 }
 
 /// A stand-in for the server slice: one page of posts, then `more: false`, and write routes that
@@ -473,7 +1123,7 @@ private final class SyncFixture: @unchecked Sendable {
         var mode: Mode = .ok
         var applied: [String: Int] = [:]
     }
-    enum Mode { case ok, missing, tooOld }
+    enum Mode { case ok, missing, tooOld, notReady, broken }
 
     init(posts: [LibraryPost]) { state = Mutex(State(posts: posts)) }
 
@@ -486,6 +1136,8 @@ private final class SyncFixture: @unchecked Sendable {
                 switch state.mode {
                 case .missing: return .json(#"{"error":{"code":"error.route.not_found"}}"#, status: 404)
                 case .tooOld: return .json(#"{"error":"sync.cursor_too_old"}"#, status: 410)
+                case .notReady: return .json(#"{"error":{"code":"error.api.generic"}}"#, status: 503)
+                case .broken: return .json(#"{"error":{"code":"error.api.generic"}}"#, status: 500)
                 case .ok:
                     let since = query(request.target, "since").flatMap(Int64.init) ?? 0
                     let page = SyncPage(

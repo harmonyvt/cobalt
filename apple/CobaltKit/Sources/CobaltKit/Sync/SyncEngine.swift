@@ -7,6 +7,10 @@ enum SyncActivity: Sendable, Equatable {
     case refused(pending: Int)
     case repull
     case fellBack
+    /// The pull of this pass reached the server and was applied.
+    case pulled
+    /// The pass ended without a pull and the engine stays on. `offline`: nothing reached the server.
+    case pullFailed(offline: Bool)
 }
 
 /// Sends the outbox, oldest first, then asks what changed. One pass is the body of the loop; tests
@@ -26,21 +30,25 @@ actor SyncEngine {
     /// The library publishes off this. Set from `LibrarySync` once the engine exists.
     private var onSnapshot: (@Sendable (SyncLibrarySnapshot) async -> Void)?
     private var onFallback: (@Sendable () async -> Void)?
-    private var onAcknowledged: (@Sendable (String) async -> Void)?
-    private var onRefused: (@Sendable (SyncOp) async -> Void)?
+    private var onAcknowledged: (@Sendable (SyncOp, SyncReceipt) async -> Void)?
+    private var onRefused: (@Sendable (SyncOp, String) async -> Void)?
+    /// A pass ended without a pull and the copy on screen is not fresh. The error is the pull's own.
+    private var onPullFailed: (@Sendable (any Error) async -> Void)?
     /// Reports what a pass did, for the library glow. Never changes what is sent or pulled.
     private var onActivity: (@Sendable (SyncActivity) async -> Void)?
 
     func setCallbacks(
         snapshot: @escaping @Sendable (SyncLibrarySnapshot) async -> Void,
         fallback: @escaping @Sendable () async -> Void,
-        acknowledged: @escaping @Sendable (String) async -> Void,
-        refused: @escaping @Sendable (SyncOp) async -> Void
+        acknowledged: @escaping @Sendable (SyncOp, SyncReceipt) async -> Void,
+        refused: @escaping @Sendable (SyncOp, String) async -> Void,
+        pullFailed: (@Sendable (any Error) async -> Void)? = nil
     ) {
         onSnapshot = snapshot
         onFallback = fallback
         onAcknowledged = acknowledged
         onRefused = refused
+        onPullFailed = pullFailed
     }
 
     /// The glow listens here. Leaving it unset (the tests, a caller that does not care) changes nothing.
@@ -86,25 +94,25 @@ actor SyncEngine {
     private func pass(token: Int) async {
         guard token == generation else { return }
         await signal(.passBegan)
-        let drained = await OutboxDrainer.drain(store: store, sender: sender, now: clock())
+        let drained = await OutboxDrainer.drain(store: store, sender: sender, now: clock()) { [weak self] in
+            await self?.isCurrent(token) ?? false
+        }
         if token != generation {
             await signal(.passEnded(pending: await pendingCount()))
             return
         }
         let pending = await pendingCount()
         for op in drained.refused {
-            await onRefused?(op)
+            await onRefused?(op, drained.reasons[op.opID] ?? "")
             await signal(.refused(pending: pending))
         }
-        for id in drained.acknowledged { await onAcknowledged?(id) }
+        for op in drained.settled { await onAcknowledged?(op, drained.receipts[op.opID] ?? .done) }
         await publish()
         schedule(drained.wake)
         do {
             try await pull(token: token)
         } catch SyncError.notDeployed {
-            fellBack = true
-            await onFallback?()
-            await signal(.fellBack)
+            await fallBack()
         } catch SyncError.cursorTooOld {
             guard token == generation else {
                 await signal(.passEnded(pending: await pendingCount()))
@@ -113,13 +121,69 @@ actor SyncEngine {
             await signal(.repull)
             try? await store.resetCursor()
             await publish()
-            do { try await pull(token: token) } catch {
-                Telemetry.log(.warn, .sync, "sync restart failed", data: ["error": .string(String(describing: error))])
+            do {
+                try await pull(token: token)
+            } catch SyncError.notDeployed {
+                await fallBack()
+            } catch SyncError.cursorTooOld {
+                // The reload from 0 was itself answered "too old". Reloading again would get the same
+                // answer, so there is one reload per pass and no more: the half-filled copy is dropped
+                // (it must not be shown as the library next launch) and today's pages are used instead.
+                Telemetry.log(.warn, .sync, "sync restart refused", data: ["error": .string(SyncContract.cursorTooOld)])
+                if token == generation {
+                    try? await store.resetCursor()
+                    await fallBack()
+                }
+            } catch {
+                await pullFailed(error, token: token, restart: true)
             }
         } catch {
-            Telemetry.log(.warn, .sync, "sync pull failed", data: ["error": .string(String(describing: error))])
+            await pullFailed(error, token: token, restart: false)
         }
         await signal(.passEnded(pending: await pendingCount()))
+    }
+
+    private func isCurrent(_ token: Int) -> Bool { token == generation }
+
+    /// `GET /sync` is not there on this server, or failed with nothing on the device to show: today's loading takes over for this launch.
+    private func fallBack() async {
+        fellBack = true
+        await onFallback?()
+        await signal(.fellBack)
+    }
+
+    /// The pass ends without a pull. Nothing schedules another one, so this must not pass silently.
+    ///
+    /// Offline, or a key the server will not take: today's pages would fail the same way, so the
+    /// engine stays on, the library is told why (it shows the copy it has, if any, and the failure),
+    /// and the next reconnect, foreground or pull-to-refresh tries again. Anything else (a 5xx, a page
+    /// that does not decode) with no copy to show: today's pages are used for this launch, since they
+    /// may well work where the sync route does not.
+    private func pullFailed(_ error: any Error, token: Int, restart: Bool) async {
+        guard token == generation else { return }
+        Telemetry.log(.warn, .sync, restart ? "sync restart failed" : "sync pull failed", data: ["error": .string(String(describing: error))])
+        let offline = Self.isUnreachable(error)
+        if !offline, !Self.isAuth(error), !(await store.hasReadyMarker()) {
+            await fallBack()
+            return
+        }
+        await onPullFailed?(error)
+        await signal(.pullFailed(offline: offline))
+    }
+
+    private static func isUnreachable(_ error: any Error) -> Bool {
+        if error is URLError { return true }
+        if let e = error as? CobaltError, case .network = e { return true }
+        return false
+    }
+
+    private static func isAuth(_ error: any Error) -> Bool {
+        guard let e = error as? CobaltError else { return false }
+        switch e {
+        case .noAPIKey: return true
+        case .api(_, let status), .invalidResponse(let status): return status == 401 || status == 403
+        default: return false
+        }
     }
 
     private func signal(_ event: SyncActivity) async {
@@ -140,10 +204,10 @@ actor SyncEngine {
             try await store.apply(page)
             await publish()
             pages += 1
-            if !page.more { return }
-            if page.seq <= since { return }
+            if !page.more || page.seq <= since { break }
             since = page.seq
         }
+        await signal(.pulled)
     }
 
     private func publish() async {
@@ -169,46 +233,81 @@ struct OutboxDrain: Sendable {
     var wake: Date?
     var acknowledged: [String] = []
     var refused: [SyncOp] = []
+    /// The ops behind `acknowledged`, in the same order, as they were sent.
+    var settled: [SyncOp] = []
+    /// What the server said about an acknowledged op, by op id, where it said more than "done".
+    var receipts: [String: SyncReceipt] = [:]
+    /// Why each refused op was refused, by op id (an error code where the server gave one).
+    var reasons: [String: String] = [:]
 }
 
 /// The life of one outbox row: send it, and only a refusal puts the post back.
 enum OutboxDrainer {
+    static let expiredReason = "error.app.expired"
+
     /// The date the oldest not-ready op becomes ready, when one is waiting.
-    static func drain(store: SyncStore, sender: any SyncSender, now: Date) async -> OutboxDrain {
+    ///
+    /// `isCurrent` is asked before each send and before anything is written after one: false means
+    /// the server or the account changed while this drain ran, so what is left of the list belonged
+    /// to the other library and is neither sent nor put back.
+    static func drain(
+        store: SyncStore, sender: any SyncSender, now: Date, isCurrent: @Sendable () async -> Bool = { true }
+    ) async -> OutboxDrain {
         var result = OutboxDrain()
         let ops: [SyncOp]
         do { ops = try await store.pendingOps() } catch { return result }
         let fresh = ops.filter { now.timeIntervalSince($0.createdAt) < MutationRetry.retention }
         for expired in ops where now.timeIntervalSince(expired.createdAt) >= MutationRetry.retention {
-            try? await store.removeOp(expired.opID)
+            // Given up after a week. The server never took it, so the post goes back to what it was
+            // and the owner is told, exactly as for a refusal: left alone, the device would keep
+            // showing an edit (or a delete) that exists nowhere else.
+            _ = try? await store.rollback(expired)
+            result.refused.append(expired)
+            result.reasons[expired.opID] = expiredReason
             Telemetry.log(.info, .sync, "outbox dropped", data: ["op": .string(expired.opID), "kind": .string(expired.kind.rawValue)])
         }
         var blocked: Set<String> = []
-        for op in fresh {
-            if blocked.contains(op.target) { continue }
-            if op.nextAttemptAt > now {
-                blocked.insert(op.target)
-                result.wake = min(result.wake ?? op.nextAttemptAt, op.nextAttemptAt)
+        for listed in fresh {
+            if blocked.contains(listed.target) { continue }
+            if listed.nextAttemptAt > now {
+                blocked.insert(listed.target)
+                result.wake = min(result.wake ?? listed.nextAttemptAt, listed.nextAttemptAt)
                 continue
             }
+            guard await isCurrent() else { break }
+            // The op as the store holds it now, marked as sending. An edit made since the list was
+            // read may have been merged into it; from here on none is.
+            guard let op = try? await store.beginSend(listed.opID) else { continue }
             do {
-                try await sender.send(op)
-                try await store.removeOp(op.opID)
+                let receipt = try await sender.send(op)
+                guard await isCurrent() else { break }
+                try await store.settle(op, post: receipt.post)
                 result.acknowledged.append(op.opID)
+                result.settled.append(op)
+                if receipt != .done { result.receipts[op.opID] = receipt }
             } catch {
-                switch MutationRetry.attempt(error, kind: op.kind) {
+                guard await isCurrent() else { break }
+                let outcome = MutationRetry.attempt(error, kind: op.kind)
+                switch outcome {
                 case .succeeded:
                     try? await store.removeOp(op.opID)
                     result.acknowledged.append(op.opID)
+                    result.settled.append(op)
                 case .refused:
                     _ = try? await store.rollback(op)
                     result.refused.append(op)
                     let reason = (error as? SyncError).flatMap { if case .refused(let why) = $0 { return why } else { return nil } } ?? String(describing: error)
+                    result.reasons[op.opID] = reason
                     Telemetry.log(.warn, .sync, "outbox refused", data: ["op": .string(op.opID), "kind": .string(op.kind.rawValue), "error": .string(reason)])
-                case .retry:
+                case .retry, .rekey:
                     let tries = op.tries + 1
                     let next = now.addingTimeInterval(MutationRetry.backoff(tries: tries))
-                    try? await store.markRetry(op, tries: tries, next: next)
+                    if outcome == .rekey {
+                        // the server holds another body under this key: the same wait, then a new key
+                        try? await store.rekey(op, tries: tries, next: next)
+                    } else {
+                        try? await store.markRetry(op, tries: tries, next: next)
+                    }
                     blocked.insert(op.target)
                     result.wake = min(result.wake ?? next, next)
                     Telemetry.log(.warn, .sync, "outbox waiting", data: ["op": .string(op.opID), "tries": .int(tries)])

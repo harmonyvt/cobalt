@@ -28,9 +28,15 @@ enum MutationRetry {
     }
 
     /// What the outbox does with a failed send.
-    enum Outcome: Equatable, Sendable { case succeeded, refused, retry }
+    /// `rekey`: the server holds another body under this `Idempotency-Key`. Asking again under the
+    /// same key gets the same answer, and the edit itself was never judged, so it is neither a retry
+    /// nor a refusal: it goes out again under a new key.
+    enum Outcome: Equatable, Sendable { case succeeded, refused, retry, rekey }
+
+    static let keyConflictCode = "error.idempotency.conflict"
 
     static func attempt(_ error: Error, kind: SyncOp.Kind) -> Outcome {
+        if isKeyConflict(error) { return .rekey }
         if kind == .delete, isMissing(error) { return .succeeded }   // already gone: the delete stands
         if isBusy(error) || isAuth(error) || isNetwork(error) { return .retry }
         if isFinal(error) { return .refused }
@@ -40,6 +46,13 @@ enum MutationRetry {
             return .retry
         }
         return .retry
+    }
+
+    private static func isKeyConflict(_ error: Error) -> Bool {
+        if let e = error as? SyncError, e == .keyConflict { return true }
+        if let e = error as? CobaltError, case .api(let code, _) = e { return code == keyConflictCode }
+        if let failure = error as? PipelineFailure, case .server(let code) = failure { return code == keyConflictCode }
+        return false
     }
 
     private static func isMissing(_ error: Error) -> Bool {

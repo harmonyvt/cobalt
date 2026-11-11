@@ -30,6 +30,11 @@ actor SyncStore {
         try Self.exec(opened, "PRAGMA journal_mode=WAL")
         try Self.exec(opened, "PRAGMA busy_timeout=2000")
         try Self.exec(opened, Self.schema)
+        try Self.addSendingColumn(opened)
+        // A send the last launch never heard back from (the app was closed or killed mid-request). The
+        // server may hold it, so it counts as one try: nothing is merged into it and it goes out again
+        // under the same key.
+        try Self.exec(opened, "UPDATE outbox SET tries = MAX(tries, 1), sending = 0 WHERE sending = 1")
     }
 
     // MARK: - Posts
@@ -83,7 +88,10 @@ actor SyncStore {
     func apply(_ page: SyncPage) throws {
         try transaction {
             let pending = try readOps()
+            let held = try heldGone()
             for post in page.posts {
+                // the server lists it again: an older delete marker for it no longer holds
+                if held.contains(post.id) { try releaseGone(post.id) }
                 if let merged = SyncMerge.overlay(post, ops: pending) {
                     try write(merged)
                 } else {
@@ -92,7 +100,12 @@ actor SyncStore {
             }
             for gone in page.gone {
                 if gone.entity == "post" {
-                    if SyncMerge.keepsRow(id: gone.id, ops: pending) { continue }
+                    if SyncMerge.keepsRow(id: gone.id, ops: pending) {
+                        // The server sends a marker once. It is kept until the edit is settled, and
+                        // applied then (`applyHeldGone`).
+                        try holdGone(gone.id)
+                        continue
+                    }
                     try removePost(gone.id)
                 } else if let table = Self.table(for: gone.entity) {
                     try removeEntity(table, id: gone.id)
@@ -126,6 +139,7 @@ actor SyncStore {
         try transaction {
             try exec("DELETE FROM posts")
             try exec("DELETE FROM outbox")
+            try exec("DELETE FROM held_gone")
             for table in Self.entityTables { try exec("DELETE FROM \(table)") }
             try putMeta("cursor", "0")
             try putMeta("ready", "0")
@@ -141,14 +155,17 @@ actor SyncStore {
 
     // MARK: - Outbox
 
-    /// Writes the post and the op in one transaction. A not-yet-sent op for the same kind and target
-    /// keeps its id (the retry must reuse it) and its `before` (refusal returns to the original).
+    /// Writes the post and the op in one transaction. The edit is written into the newest queued op
+    /// for the post when that op is the same edit (`SyncMerge.sameEdit`) and was never handed to the
+    /// sender: it keeps its id and its `before` (a refusal returns to the original). An op that is
+    /// being sent, or was sent and is waiting to be retried, is never rewritten: the server may hold
+    /// its body under its key, so the new edit gets its own op and is sent after it.
     @discardableResult
     func commit(post: LibraryPost?, op: SyncOp) throws -> SyncOp {
         var stored = op
         try transaction {
             if let post { try write(post) } else { try removePost(op.target) }
-            if let existing = try unsent(kind: op.kind, target: op.target) {
+            if let existing = try mergeable(with: op) {
                 stored = existing
                 stored.payload.title = op.payload.title
                 stored.payload.status = op.payload.status
@@ -165,9 +182,20 @@ actor SyncStore {
 
     func pendingOps() throws -> [SyncOp] { try readOps() }
 
+    /// Hands an op to the sender: marks it as sending and returns it as it is stored now, which may
+    /// be newer than the copy the drain listed. Nil when it is no longer in the outbox.
+    func beginSend(_ id: String) throws -> SyncOp? {
+        var handed: SyncOp?
+        try transaction {
+            try run("UPDATE outbox SET sending = 1 WHERE op_id = ?") { stmt in bind(stmt, 1, id) }
+            handed = try readOps().first { $0.opID == id }
+        }
+        return handed
+    }
+
     func markRetry(_ op: SyncOp, tries: Int, next: Date) throws {
         try transaction {
-            let sql = "UPDATE outbox SET tries = ?, next_attempt_at = ? WHERE op_id = ?"
+            let sql = "UPDATE outbox SET tries = ?, next_attempt_at = ?, sending = 0 WHERE op_id = ?"
             try run(sql) { stmt in
                 sqlite3_bind_int64(stmt, 1, Int64(tries))
                 sqlite3_bind_int64(stmt, 2, Self.millis(next))
@@ -176,17 +204,82 @@ actor SyncStore {
         }
     }
 
-    func removeOp(_ id: String) throws {
-        try transaction { try run("DELETE FROM outbox WHERE op_id = ?") { stmt in bind(stmt, 1, id) } }
+    /// `409 error.idempotency.conflict`: the op waits like any retry and goes out under a new key.
+    /// The op id stays, so whoever is waiting on it still finds it.
+    func rekey(_ op: SyncOp, tries: Int, next: Date) throws {
+        var renewed = op.payload
+        renewed.key = UUID().uuidString
+        let payload = try json(renewed)
+        try transaction {
+            let sql = "UPDATE outbox SET payload = ?, tries = ?, next_attempt_at = ?, sending = 0 WHERE op_id = ?"
+            try run(sql) { stmt in
+                bind(stmt, 1, payload)
+                sqlite3_bind_int64(stmt, 2, Int64(tries))
+                sqlite3_bind_int64(stmt, 3, Self.millis(next))
+                bind(stmt, 4, op.opID)
+            }
+        }
     }
 
-    /// Puts `before` back and drops the op. Returns the restored post, or nil when the edit had created it.
+    func removeOp(_ id: String) throws {
+        try transaction {
+            let target = try readOps().first { $0.opID == id }?.target
+            guard try deleteOp(id), let target else { return }
+            try applyHeldGone(target)
+        }
+    }
+
+    /// The server took the op. `post` is its answer where that is not what the device assumed; edits
+    /// still queued for the post are laid over it. Nothing is written when the op is no longer in the
+    /// outbox (it was wiped for another server while the request was out).
+    func settle(_ op: SyncOp, post: LibraryPost?) throws {
+        try transaction {
+            guard try deleteOp(op.opID) else { return }
+            if let post {
+                let rest = try readOps()
+                if let merged = SyncMerge.overlay(post, ops: rest) {
+                    try write(merged)
+                } else {
+                    try removePost(post.id)
+                }
+            }
+            try applyHeldGone(op.target)
+        }
+    }
+
+    /// Puts `before` back and drops the op. Returns the restored post, or nil when nothing went back:
+    /// the edit had created the post, the server has since said the post is gone, or the op is no
+    /// longer in the outbox (it was wiped for another server while the request was out).
+    ///
+    /// Edits queued after this one for the same post were made on top of it. They are laid over the
+    /// restored post, and each one's `before` is moved to the post without the refused edit, so a
+    /// second refusal does not bring the first one's change back.
     @discardableResult
     func rollback(_ op: SyncOp) throws -> LibraryPost? {
-        let restored = op.payload.before.flatMap(SyncPostCoding.decode)
+        var restored = op.payload.before.flatMap(SyncPostCoding.decode)
         try transaction {
-            if let restored { try write(restored) } else { try removePost(op.target) }
-            try run("DELETE FROM outbox WHERE op_id = ?") { stmt in bind(stmt, 1, op.opID) }
+            guard try deleteOp(op.opID) else {
+                restored = nil
+                return
+            }
+            let later = try readOps().filter { $0.target == op.target }
+            if try heldGone().contains(op.target) {
+                restored = nil
+                if later.isEmpty { try applyHeldGone(op.target) }
+                return
+            }
+            var base = restored
+            for var next in later {
+                next.payload.before = base.flatMap(SyncPostCoding.encode)
+                try update(next)
+                if next.kind == .delete {
+                    base = nil
+                } else if var post = base {
+                    SyncMerge.apply(next, to: &post)
+                    base = post
+                }
+            }
+            if let base { try write(base) } else { try removePost(op.target) }
         }
         return restored
     }
@@ -246,7 +339,18 @@ actor SyncStore {
       next_attempt_at INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS outbox_order ON outbox (created_at);
+    CREATE TABLE IF NOT EXISTS held_gone (id TEXT PRIMARY KEY);
     """
+
+    /// `sending` came after the first databases were made, and `CREATE TABLE IF NOT EXISTS` leaves an
+    /// existing table as it is. Adding a column that is already there is the one error let through.
+    private static func addSendingColumn(_ db: OpaquePointer) throws {
+        do {
+            try exec(db, "ALTER TABLE outbox ADD COLUMN sending INTEGER NOT NULL DEFAULT 0")
+        } catch let error as SyncStoreError {
+            guard error.message.contains("duplicate column name") else { throw error }
+        }
+    }
 
     private func write(_ post: LibraryPost) throws {
         guard let json = SyncPostCoding.encode(post) else {
@@ -317,8 +421,9 @@ actor SyncStore {
         return rows.first
     }
 
+    /// Oldest first. Two ops stamped the same instant keep the order they were queued in (`rowid`).
     private func readOps() throws -> [SyncOp] {
-        try query("SELECT op_id, kind, target, payload, created_at, tries, next_attempt_at FROM outbox ORDER BY created_at ASC, op_id ASC") { _ in
+        try query("SELECT op_id, kind, target, payload, created_at, tries, next_attempt_at, sending FROM outbox ORDER BY created_at ASC, rowid ASC") { _ in
         } row: { stmt in
             guard let id = column(stmt, 0), let kindRaw = column(stmt, 1), let kind = SyncOp.Kind(rawValue: kindRaw),
                   let target = column(stmt, 2), let payloadText = column(stmt, 3),
@@ -328,12 +433,47 @@ actor SyncStore {
                 opID: id, kind: kind, target: target, payload: payload,
                 createdAt: Self.date(sqlite3_column_int64(stmt, 4)),
                 tries: Int(sqlite3_column_int64(stmt, 5)),
-                nextAttemptAt: Self.date(sqlite3_column_int64(stmt, 6)))
+                nextAttemptAt: Self.date(sqlite3_column_int64(stmt, 6)),
+                sending: sqlite3_column_int64(stmt, 7) != 0)
         }
     }
 
-    private func unsent(kind: SyncOp.Kind, target: String) throws -> SyncOp? {
-        try readOps().first { $0.kind == kind && $0.target == target && $0.tries == 0 }
+    /// The op a new edit may be written into: the newest one queued for the post, when it is the
+    /// same edit and no sender ever had it. Only the newest, so the order of edits is kept (a file
+    /// switched, the whole post made private, the file switched again are three ops, not two).
+    private func mergeable(with op: SyncOp) throws -> SyncOp? {
+        guard let newest = try readOps().last(where: { $0.target == op.target }),
+              newest.tries == 0, !newest.sending, SyncMerge.sameEdit(newest, op) else { return nil }
+        return newest
+    }
+
+    /// True when the row was there.
+    private func deleteOp(_ id: String) throws -> Bool {
+        try run("DELETE FROM outbox WHERE op_id = ?") { stmt in bind(stmt, 1, id) }
+        return sqlite3_changes(db) > 0
+    }
+
+    // MARK: - Delete markers held for a pending edit
+
+    private func heldGone() throws -> Set<String> {
+        let ids: [String] = try query("SELECT id FROM held_gone") { _ in } row: { stmt in column(stmt, 0) }
+        return Set(ids)
+    }
+
+    private func holdGone(_ id: String) throws {
+        try run("INSERT OR IGNORE INTO held_gone (id) VALUES (?)") { stmt in bind(stmt, 1, id) }
+    }
+
+    private func releaseGone(_ id: String) throws {
+        try run("DELETE FROM held_gone WHERE id = ?") { stmt in bind(stmt, 1, id) }
+    }
+
+    /// The last edit for a post has left the outbox: a delete marker that was held for it is applied.
+    private func applyHeldGone(_ target: String) throws {
+        guard try heldGone().contains(target) else { return }
+        if try readOps().contains(where: { $0.target == target }) { return }
+        try removePost(target)
+        try releaseGone(target)
     }
 
     private func insert(_ op: SyncOp) throws {

@@ -304,7 +304,16 @@ extension AppModel {
 
     /// Device files leave only after the server has accepted the delete. A refusal puts the library row back
     /// and the files are still here.
-    private func removeLocalMedia(of item: MediaItem) async {
+    private func removeLocalMedia(of item: MediaItem, remaining: Set<String> = []) async {
+        guard remaining.isEmpty else {
+            // Partial: what the server confirmed gone leaves this device too; the rest stays.
+            for rendition in item.renditions {
+                let ids = Set(rendition.serverFileIDs)
+                guard !ids.isEmpty, ids.isDisjoint(with: remaining), let local = rendition.local else { continue }
+                await store.remove(local.id)
+            }
+            return
+        }
         guard let local = item.local else { return }
         if !(await store.removeMedia(local.id)) {
             for record in local.renditions where !store.isInUse(record.id) { await store.remove(record.id) }
@@ -315,14 +324,18 @@ extension AppModel {
         if let sync = library.sync, sync.isActive {
             let before = library.storedPost(post.id) ?? post
             library.drop(post: post.id)
+            // The server may leave files behind (`502 error.library.partial`): the outbox then keeps
+            // the post with those, only the confirmed renditions leave the device, and the answer is
+            // `.partial`, as without the engine.
+            let remaining: [String]
             do {
-                try await sync.enqueueDelete(post: before, anchor: anchor) { [weak self] in
-                    await self?.removeLocalMedia(of: item)
+                remaining = try await sync.enqueueDelete(post: before, anchor: anchor) { [weak self] left in
+                    await self?.removeLocalMedia(of: item, remaining: Set(left))
                 }
             } catch {
                 throw failure(from: error)
             }
-            return .done
+            return remaining.isEmpty ? .done : .partial(remaining: remaining.count)
         }
         let result: PostDeleteResult
         do {

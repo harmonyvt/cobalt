@@ -11,6 +11,9 @@ public final class SyncGlowStatus {
 
     @ObservationIgnored private var engineEnabled = true
     @ObservationIgnored private var routeActive = true
+    /// A pass began while the route was marked missing. The engine only starts one then if it was
+    /// reset for another server or account, so how this pass ends says whether the route is there now.
+    @ObservationIgnored private var retryingRoute = false
     @ObservationIgnored private var reachable = true
     @ObservationIgnored private var passRunning = false
     /// The outbox count the engine last reported. A debug force displays its own count until cleared.
@@ -36,10 +39,12 @@ public final class SyncGlowStatus {
 
     public func passBegan() {
         passRunning = true
+        if !routeActive { retryingRoute = true }
         guard forced == nil else { return }
         // A nudge is set just before this pass. Catching up must not replace it, even when the
         // pass took long enough that the animation window would already have elapsed. `tick` ends it.
-        if transient == .none {
+        // While the route is still marked missing the band is off and the last event stays "fell back".
+        if transient == .none, routeActive {
             lastEvent = .passBegan
         }
         publish(clock())
@@ -48,6 +53,13 @@ public final class SyncGlowStatus {
     public func passEnded(pending: Int) {
         passRunning = false
         enginePending = max(0, pending)
+        // The pass that was tried after a fallback ended without another 404: sync is running again
+        // (a new server, or the route was deployed), so the band comes back. The pass that fell back
+        // itself also ends here, and must leave the band off.
+        if retryingRoute {
+            retryingRoute = false
+            routeActive = true
+        }
         guard forced == nil else { return }
         pendingCount = enginePending
         // A refusal, a nudge, or a re-pull stays up when the pass returns. Wall time spent inside
@@ -93,6 +105,7 @@ public final class SyncGlowStatus {
         forced = nil
         pinnedAge = nil
         routeActive = false
+        retryingRoute = false
         passRunning = false
         transient = .none
         transientAt = nil

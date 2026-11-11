@@ -168,7 +168,8 @@ extension LibraryModel {
     /// put a hidden post back (its files stay off until the status says otherwise) and switch a visible one. One
     /// `POST /library/status` per `limits.statusIds` posts (200 at most); what the server refused is in the outcome and
     /// stays as it was. A post moves only after the server answered for it, unless the sync engine is on:
-    /// then it moves at once and the outbox sends the same route, putting the post back only if the server refuses.
+    /// then it moves at once and the outbox sends the same route, putting the post back only if the server refuses
+    /// (a refusal that arrives while this call waits is in the outcome's `failed`, like the server's own list).
     @discardableResult
     public func setStatus(_ status: PostStatus, posts targets: [LibraryPost]) async -> StatusOutcome {
         var seen = Set<String>()
@@ -184,6 +185,10 @@ extension LibraryModel {
                     try await sync.enqueueStatus(before: before, after: after, status: status)
                     changed += 1
                 } catch {
+                    // The server would not take it (a 200 that lists the post under `failed`, or an
+                    // error answer). The outbox has put the row back; the owner is told as below.
+                    recentlyHidden.remove(post.id)
+                    recentlyUnhidden.remove(post.id)
                     failed.append(StatusChange.Failure(id: post.id, error: Self.statusErrorCode(error)))
                 }
             }
@@ -262,6 +267,10 @@ extension LibraryModel {
         case let f as PipelineFailure:
             if case .server(let code) = f { return code }
             return f == .unsupported ? "error.library.unsupported" : "error.api.generic"
+        case let e as SyncError:
+            // the outbox's refusal carries the server's code when it gave one
+            if case .refused(let code) = e, code.hasPrefix("error.") { return code }
+            return "error.api.generic"
         default:
             return "error.api.generic"
         }
