@@ -48,6 +48,8 @@ struct SettingsScreen: View {
             PhotosSettingsSection(model: model)
             liveSection
             menuBarSection
+            // the on-device library and its glow: off until switched on here
+            LibrarySyncSettingsSection(model: model)
             TelemetrySettingsSection(model: model)
             feelSection
         }
