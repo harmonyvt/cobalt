@@ -6,23 +6,24 @@ VIEWS.links = (d) => {
         w.appendChild(h("div", { class: "empty", text: "no share links here yet." }));
         return w;
     }
-    const body = h("div", { class: "wbody", style: "padding:4px 14px" });
+    const box = h("div");
     links.forEach((l) => {
         const stack = h("div", { class: "stack", "aria-hidden": "true" });
-        const th = (l.thumbs || []).slice(0, 4);
+        const th = (l.thumbs || []).slice(0, 3);
         if (th.length) th.forEach((t, i) => stack.appendChild(pic(t, l.id + i)));
         else stack.appendChild(pic(null, l.id));
         const title = l.title || `${plural(l.files, "file")} · ${fmtDate(l.created_at)}`.replace(/ · $/, "");
         const isNew = d.created && d.created === l.id;
-        const row = h("div", { class: "lk" + (isNew ? " new" : "") }, stack,
+        box.appendChild(h("div", { class: "lk" + (isNew ? " new" : "") }, stack,
             h("div", { class: "t" }, h("b", { text: title }), ext(l.url, urlLabel(l.url), "")),
-            isNew ? h("span", { class: "tag", text: "new" }) : null,
-            h("span", { class: "tag", text: plural(l.files, "file") }),
-            l.private ? h("span", { class: "tag w", text: "private" }) : null,
-            l.collection ? h("span", { class: "tag", text: l.collection }) : null,
-            copyBtn(l.url, "copy", `copy link ${title}`));
-        body.appendChild(row);
+            h("div", { class: "m" },
+                isNew ? h("span", { class: "tag n", text: "new" }) : null,
+                h("span", { class: "tag", text: plural(l.files, "file") }),
+                l.private ? h("span", { class: "tag w" }, ic("lock", 9), "private") : null,
+                l.collection ? h("span", { class: "tag", text: l.collection }) : null),
+            copyBtn(l.url, "copy", `copy link ${title}`)));
     });
-    w.appendChild(body);
+    const ml = limitList(box, 3);
+    w.appendChild(h("div", { class: "wbody", style: "padding-top:2px" }, box, ml.btn));
     return w;
 };

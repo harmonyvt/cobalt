@@ -48,8 +48,10 @@ lane. `package.json` belongs to the core lane: another lane that needs a script 
 The zod schemas there are the contract between tools and widgets. Rules:
 
 - Every result carries `view`. Objects are loose. Anything that can be missing is `null`, never absent.
-- URLs handed to a widget must be loadable by a browser with no credentials: public `media.capybaraharmony.com` files and
-  `share.capybaraharmony.com` links. A private or off post has `thumb_url: null` (the widget draws a placeholder).
+- URLs handed to a widget must be loadable by a browser with no credentials: public `media.capybaraharmony.com` files,
+  `share.capybaraharmony.com` links, and for a file that is not public a signed one-hour preview link on the API host, which
+  travels in the tool result's `_meta["capystore/preview"]` and never in `structuredContent` or the text (section 9). A private
+  or off post's `thumb_url` is `null`; its signed thumbnail is in `_meta` under the post's id.
   Share links are always `share.capybaraharmony.com` links, never raw media links, wherever a link is for a person.
 - The tools lane may add optional (nullable) fields; it lists them in its report. Widgets ignore fields they don't know.
 
@@ -83,10 +85,15 @@ optional and the defaults stay widget-sized.
   caption substring match. At most 500 rows by meaning, 1000 by list. Items carry `score`, `why`, `said`, `source_link`
   and `caption` (null when the search did not give them).
 - `show_post { id: string }`: every file with `id`, `role`, `name`, `url`, `share_url`, `private_url`, `private_file_url`
-  (what `library.post` gave the caller; a hidden post is an error and gives no URL).
+  (what `library.post` gave the caller; a hidden post is an error and gives no URL), plus the post's `preview_expires_at`.
+  For a file that is not public its signed links are in `_meta["capystore/preview"]` under the file's `id` (section 9).
 - `show_edit { id?: string, query?: string }`: an id, or a title to find; neither, or several matches: `project: null`
   and the list in `projects` (up to 100). A project carries its raw `timeline` (what `edits_update` takes back; its
-  `sources`, with names and pictures, are not passed on).
+  `sources`, with names and pictures, are not passed on). For the timeline player each main clip also has `video_url`
+  (the source file: public, or `null` with `private: true`; then its signed links are in `_meta` under `file_id`), `media_kind`, `poster_url`, `src_w`, `src_h`, `file_id`
+  next to `in`, `out`, `speed`, `muted`; each overlay has `in`, `out`, `frame {x, y, w, h}` (fractions of the canvas; `h` from the
+  source's shape), `opacity`, `url`, `media_kind`, `poster_url`, `private`, `file_id`; the render has `video_url` once it is done
+  (and `file_id`; `private` renders have their links in `_meta` like a clip). `preview_expires_at` says when the signed links end.
 - `list_collections { name?: string, limit?: 1..500 = 20 }`: collections carry `link_ids` and `post_ids`.
 - `list_share_links { collection?: string, query?: string, limit?: 1..500 = 20 }`: links carry `post_ids` and a private
   link's `file_urls`.
@@ -119,7 +126,21 @@ Not in this step: deletes, status changes, rendering an edit, rerolling links (t
   renderer per view) into self-contained HTML and writes `WIDGETS` (one entry per view, the same bundle with that view as
   the default) to `widgets.generated.ts`. `--check` fails when the generated file is stale, like `gen:check`.
 - No framework, no remote script, no remote font. Light and dark from the host's theme (host context), falling back to
-  `prefers-color-scheme`. Looks like the mockup.
+  `prefers-color-scheme`.
+- **Compact by default, phone first** (designed for 360 to 400 px, scaling up to about 680): 12.5 px text, 11 px meta, a
+  32 px one-line header, dense rows. Mockup: `/mnt/project-files/capystore-mcp-app/compact-mockup.png`. Every list (search
+  results, edit list, share links, collections, upload rows) shows its **first 3 rows** and a "show N more" button that reveals the
+  rest inline ("show less" folds them); a tile grid shows its **first row** (3 tiles on a phone, 6 from 560 px). The host's full
+  screen (`displayMode: "fullscreen"`, the expand button in every header) is the roomy view: larger type, every row shown, no
+  show-more button. Search has a grid and a list toggle.
+- **Private media plays.** A file that is not public arrives with a signed preview link in the result's `_meta` (section 9; the widget keeps them by id from every result it receives, and ignores one past its `expires_at`); the post player,
+  search thumbnails and the timeline use it and show a lock badge, "private · link valid 1 h" (and "until <time>"). If a link
+  has run out the player says so and "refresh preview" calls the tool again.
+- **Timeline (`edit`)**: a real preview on top plays the source under the playhead (the video seeks to
+  `in + (t - start) * speed`, speed is the playback rate, the source switches at clip boundaries, one clock for the playhead);
+  scrubbing the tracks seeks; each overlay in range is drawn as a dashed box at its frame `{x, y, w, h}`; the main track is a
+  filmstrip (the clip's poster repeated, since there are no frames), overlay lanes are thin and stacked, a timecode, frame
+  step and play buttons. A finished render with a `video_url` can be played instead ("render" in the switch).
 - The bridge is the MCP Apps one: JSON-RPC over `postMessage` (`ui/initialize`, `ui/notifications/initialized`,
   tool input and tool result notifications, `tools/call`, open link, size changes, host context). Message names and
   shapes come from `node_modules/@modelcontextprotocol/ext-apps` (its spec types), not from memory. `window.openai` is
@@ -127,6 +148,7 @@ Not in this step: deletes, status changes, rendering an edit, rerolling links (t
 - A view draws from the tool result's `structuredContent` by its `view` field. Buttons call tools through the bridge:
   a tapped post calls `show_post` and the bundle swaps to the post view; the webp view calls `convert_to_webp` with the
   picked range, then `job_status` until done; the save view polls `job_status`; a collection opens `list_share_links`.
+  A result with no view is a neutral "done" (not an error).
 - The upload view sends each chosen file with `PUT` straight to its `upload_url` (XHR, for progress) and shows the item
   the PUT answers.
 - Copy buttons use `navigator.clipboard` from a click, with a visible fallback (select the text) when it is refused.
@@ -138,7 +160,8 @@ Not in this step: deletes, status changes, rendering an edit, rerolling links (t
   app tools only (and the retired names do not answer there). An app tool with a view carries `_meta.ui.resourceUri` (and
   the legacy `_meta["ui/resourceUri"]`), as `registerAppTool` writes them; so do the older tools of 6.5.
 - `resources/list`, `resources/read`: the widgets, `mimeType: "text/html;profile=mcp-app"`, with `_meta.ui.csp`:
-  `resourceDomains` = the media and share origins, `connectDomains` = the API origin (the upload PUT).
+  `resourceDomains` = the media and share origins and the API origin (signed previews are played and drawn from it),
+  `connectDomains` = the API origin (the upload PUT).
   `_meta.ui.domain`: only if a host needs it; if set, it is worked out per request from the URL the host connected to
   (for the private link that URL holds the secret) and only for that host.
 - `PUT /mcp/upload/<token>` answers CORS for any origin (the token is the credential; a widget's sandbox origin is not
@@ -208,3 +231,31 @@ login, one session row per host.
 - The widgets in Chromium (Playwright) inside a test host built on ext-apps' `app-bridge`: each view renders from a
   fixture, a tap calls the right tool, light and dark.
 - By hand, after a deploy: MCP Inspector, then the prompt set in `deploy/cloudflare/MCP-APP.md` per host.
+
+## 9. Signed previews (`GET /mcp/media/<token>`)
+
+A widget runs in a sandboxed iframe and sends no headers, so a private file cannot play from `share.../p/<key>` (that needs a
+private link the file may not have) or from R2. The app tools mint short-lived links instead (`src/mcp-preview.ts`):
+
+- **Token**: `base64url({ k, i, e, p }).base64url(HMAC-SHA256)`: `k` the client credential (key id, or `link:<id>` for the private
+  link), `i` the file id, `e` the expiry (1 hour after the tool call), `p` 1 when the token opens the file's poster only and 0 when
+  it opens the file itself. Signed with a key derived from the internal `COBALT_API_KEY` under its own domain label (an upload
+  token is not a preview token). Nothing is stored. A token with no `p` is not valid.
+- **Routes** (ops `mcp.media`, `mcp.media.poster`, hidden, method any): `/mcp/media/<token>` streams the file,
+  `/mcp/media/<token>/poster` its poster. A poster token on the file path, or a file token on the poster path, is a 403: a poster
+  link never opens the original. Bytes come from R2 (`originals` for a private file, `media` for a public one) with
+  Range support (206, 416; HEAD; open `OPTIONS` preflight), the file's content type, `cache-control: private, no-store`,
+  `access-control-allow-origin: *` (also on refusals). An invalid, tampered or expired token, or one whose credential is gone (key
+  revoked or its session expired, private link rotated, the MCP mode changed), is a 403; a hidden, deleted or unknown file, or a
+  poster it has not, is a 404. When the hidden-posts check cannot be answered the route fails closed: 503, nothing is served.
+- **Who gets one**: only files of posts that `readPosts` returned (so never a hidden post): `show_post` (every file that is not
+  public, plus the post's thumbnail), `search_library` (the thumbnail of each private or off post that is shown), `show_edit` (every
+  clip and overlay source that is not public, a finished private render, and the poster of a private render in the project list).
+  `AppToolCtx.preview(key, fileId, slot, poster?)` signs one and files it in the result.
+- **In `_meta`, not in the content.** The result carries `_meta["capystore/preview"]`: `{ <id>: { url?, poster?, thumb?, expires_at } }`
+  where `<id>` is a file id (`url` its bytes, `poster` its poster), a post id (`thumb`, its picture) or an edit project id
+  (`poster`, in the list). `expires_at` is ISO 8601. Neither `structuredContent` nor the text contains a signed link, so the
+  model never sees one (and a transcript or a saved conversation does not keep a working one). The widget reads it from the
+  CallToolResult it receives (`ui/notifications/tool-result` params, and the answer to its own `tools/call`; ChatGPT's
+  `window.openai.toolResponseMetadata`). Widgets after a write (section 6.5) carry it too. The output schemas have no field for it.
+- **Logs**: the path is masked like every credential-in-path route (`maskPath`).

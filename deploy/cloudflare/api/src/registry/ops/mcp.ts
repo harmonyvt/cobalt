@@ -26,6 +26,7 @@ import {
     setMcpMode,
 } from "../../mcp-link";
 import { background } from "../../background";
+import { previewRefusal, PREVIEW_CORS, PREVIEW_TOKEN_REGEX, servePreview, verifyPreviewToken } from "../../mcp-preview";
 import { logRequest } from "../../request-log";
 import { chatKeyId } from "../ai";
 import { defineOp, ok, OpError, type OpContext } from "../op";
@@ -253,7 +254,7 @@ export const mcpUploadOp = defineOp({
                 live = await linkLive(ctx.db, claims.k.slice(5));
             } else {
                 if (mode !== "public") return refuse(404, "error.mcp.not_found");
-                live = (await ctx.db.prepare("SELECT id FROM api_keys WHERE id = ?1 AND revoked_at IS NULL").bind(claims.k).first<{ id: string }>()) !== null;
+                live = (await ctx.db.prepare("SELECT id FROM api_keys WHERE id = ?1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?2)").bind(claims.k, ctx.now()).first<{ id: string }>()) !== null;
             }
         } catch {
             return refuse(503, "error.api.generic");
@@ -290,6 +291,52 @@ export const mcpUploadPreflightOp = defineOp({
             },
         }),
 });
+
+// GET /mcp/media/<token> and /mcp/media/<token>/poster: a file (or its poster) for a widget to play (section 9 of
+// MCP-APP-CONTRACT.md). The signed token is the credential; its client key (or private link) must still be live and the
+// mode must still be the way in. HEAD and the preflight answer too; CORS is open to any origin (a sandbox's origin is unknowable).
+const previewOp = (name: string, path: string, poster: boolean) =>
+    defineOp({
+        name,
+        route: { method: "ANY", path, params: { token: PREVIEW_TOKEN_REGEX } },
+        auth: "capability",
+        runs: "worker",
+        cors: false,
+        noStore: true,
+        raw: true,
+        input: NoInput,
+        http: none,
+        ai: { tier: "hidden", summary: `${path.replace(":token", "<token>")}: a signed one-hour preview of a library file for MCP widgets.` },
+        handler: async (ctx) => {
+            const request = ctx.request!;
+            if (request.method === "OPTIONS") {
+                return new Response(null, { status: 204, headers: { ...PREVIEW_CORS, "access-control-allow-methods": "GET, HEAD, OPTIONS", "access-control-allow-headers": "range", "access-control-max-age": "600" } });
+            }
+            if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { ...PREVIEW_CORS, allow: "GET, HEAD, OPTIONS" } });
+            const claims = await verifyPreviewToken(ctx.env.COBALT_API_KEY, ctx.params.token!, ctx.now());
+            // a poster token opens the poster only, a file token the file only: the original never rides on a poster link
+            if (!claims || claims.p !== (poster ? 1 : 0)) return previewRefusal(403);
+            try {
+                const mode = await mcpMode(ctx.db);
+                let live: boolean;
+                if (claims.k.startsWith("link:")) {
+                    live = mode === "private" && (await linkLive(ctx.db, claims.k.slice(5)));
+                } else {
+                    live =
+                        mode === "public" &&
+                        (await ctx.db.prepare("SELECT id FROM api_keys WHERE id = ?1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?2)").bind(claims.k, ctx.now()).first<{ id: string }>()) !== null;
+                }
+                if (!live) return previewRefusal(403);
+                const env = ctx.env as { ORIGINALS?: unknown; MEDIA?: unknown };
+                return await servePreview({ db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl, media: env.MEDIA as never, originals: env.ORIGINALS as never }, request, claims, poster);
+            } catch (e) {
+                console.error("[mcp] preview failed", String(e));
+                return new Response("try again\n", { status: 503, headers: { ...PREVIEW_CORS, "cache-control": "no-store", "retry-after": "5" } });
+            }
+        },
+    });
+export const mcpMediaOp = previewOp("mcp.media", "/mcp/media/:token", false);
+export const mcpMediaPosterOp = previewOp("mcp.media.poster", "/mcp/media/:token/poster", true);
 
 const UploadLinkSchema = z.object({
     upload_url: z.string().describe("PUT the file's bytes here (any HTTP client; no other header is needed)"),
@@ -443,6 +490,8 @@ export const MCP_OPS = [
     mcpLinkEndOp,
     mcpUploadOp,
     mcpUploadPreflightOp,
+    mcpMediaOp,
+    mcpMediaPosterOp,
     uploadBeginOp,
     mcpSettingsOp,
     mcpSetModeOp,

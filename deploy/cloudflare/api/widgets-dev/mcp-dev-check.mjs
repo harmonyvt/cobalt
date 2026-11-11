@@ -127,13 +127,24 @@ await step("CSP and ui.domain follow --public-url", async () => {
 
 let ids = {};
 await step("read tools: every answer passes its schema", async () => {
-    const s = await sc("search_library", { query: "a", limit: 24 });
+    const sr = await call("search_library", { query: "a", limit: 24 });
+    const s = sr.structuredContent;
     ok(s.items.length >= 11, `search lists the demo posts (${s.items.length})`);
     ok(s.items.some((i) => i.kind === "gallery") && s.items.some((i) => i.kind === "image") && s.items.some((i) => i.kind === "video"), "videos, images and a gallery");
     ok(s.items.some((i) => i.status === "private"), "a private post shows as private");
     ok(!s.items.some((i) => /hidden/i.test(i.title)), "the hidden post never shows");
     const priv = s.items.find((i) => i.status === "private");
-    eq(priv.thumb_url, null, "a private post has no thumb");
+    // a private post's thumbnail is a signed one-hour preview link on the API origin, filed in the result's _meta (by post id),
+    // never in structuredContent or the text; it loads with no headers
+    eq(priv.thumb_url, null, "a private post has no thumb_url in structuredContent");
+    ok(!JSON.stringify(sr.structuredContent).includes("/mcp/media/") && !sr.content[0].text.includes("/mcp/media/"), "no signed link in structuredContent or the text");
+    const thumb = sr._meta?.["capystore/preview"]?.[priv.id]?.thumb;
+    ok(/\/mcp\/media\/[\w-]+\.[\w-]{43}(\/poster)?$/.test(thumb || ""), `a private post has a signed thumb in _meta (${thumb})`);
+    const thumbRes = await fetch(thumb);
+    ok(thumbRes.status === 200 && (await thumbRes.arrayBuffer()).byteLength > 50, "the signed thumb answers with the picture");
+    // a forged signature of the right shape (a malformed token matches no route at all, so it would be a 404)
+    ok((await fetch(thumb.replace(/\.[\w-]{43}(\/poster)?$/, `.${"A".repeat(43)}$1`))).status === 403, "a tampered signed link is a 403");
+    if (thumb.endsWith("/poster")) ok((await fetch(thumb.slice(0, -"/poster".length))).status === 403, "a poster link never opens the original");
     ids = { video: s.items.find((i) => i.title.startsWith("Sunset")).id, short: s.items.find((i) => i.title.startsWith("Pancake")).id, image: s.items.find((i) => i.kind === "image" && i.status === "public").id, gallery: s.items.find((i) => i.kind === "gallery").id, priv: priv.id };
     await sc("search_library", { query: "cat", kind: "video" });
     await sc("search_library", { query: "zzz-nothing" });
@@ -299,8 +310,9 @@ const live = async (tool, args, { theme = "light", width = 640 } = {}) => {
     await page.waitForTimeout(250);
 };
 const hostCalls = () => page.evaluate(() => __host.log.calls);
+// the pictures drawn now: the compact lists keep the rest behind "show more" (hidden, so a lazy image there never loads)
 const loaded = async (sel) => frame().evaluate(async (s) => {
-    const imgs = [...document.querySelectorAll(s)];
+    const imgs = [...document.querySelectorAll(s)].filter((i) => !i.closest("[hidden]"));
     await Promise.all(imgs.map((i) => (i.complete ? 0 : new Promise((r) => { i.onload = i.onerror = r; }))));
     return imgs.map((i) => i.naturalWidth);
 }, sel);
@@ -309,8 +321,9 @@ await step("browser: search grid draws demo posts with pictures", async () => {
     await live("search_library", { query: "a", limit: 12 });
     const n = await F().locator(".th").count();
     ok(n >= 10, `grid has ${n} posts`);
+    ok((await F().locator(".th .pic img").count()) >= 8, "every post tile has a picture");
     const widths = await loaded(".th .pic img");
-    ok(widths.length >= 8 && widths.every((w) => w > 0), `pictures loaded (naturalWidth > 0): ${widths.length} images, min ${Math.min(...widths)}`);
+    ok(widths.length >= 3 && widths.every((w) => w > 0), `drawn pictures loaded (naturalWidth > 0): ${widths.length} images, min ${Math.min(...widths)}`);
     await shot("search");
     await live("search_library", { query: "a", limit: 12 }, { theme: "dark", width: 320 });
     await shot("search-dark-320");
@@ -320,7 +333,7 @@ await step("browser: tapping a post shows the post view (video plays from the de
     await live("search_library", { query: "sunset" });
     // the webp flow above made a second "sunset" post (an image); the video is the one with a length badge
     await F().locator(".th:has(.badge)").first().click();
-    await F().locator(".post video").waitFor({ timeout: 8000 });
+    await F().locator(".cpost video").waitFor({ timeout: 8000 });
     const c = await hostCalls();
     eq(c.at(-1)?.name, "show_post", "tap calls show_post through the server");
     ok((await F().locator(".whead").innerText()).includes("Sunset timelapse"), "post title");
@@ -335,19 +348,20 @@ await step("browser: tapping a post shows the post view (video plays from the de
     ok(dur > 10 || dur === -1, `video metadata loaded under the CSP (duration ${dur}; -1 means no ffmpeg sample)`);
     await shot("post");
     await live("show_post", { id: ids.gallery });
-    ok((await loaded(".player img")).every((w) => w > 0), "gallery picture loads");
+    ok((await loaded(".vp img")).every((w) => w > 0), "gallery picture loads");
     await live("show_post", { id: ids.priv });
-    ok((await F().locator(".player .none").count()) === 1, "the private post shows its placeholder");
+    ok((await F().locator(".vp .lockb").count()) === 1, "the private post shows the lock badge");
+    ok((await loaded(".vp img.still")).every((w) => w > 0), "the private picture loads through its signed link under the CSP");
 });
 
 await step("browser: edit timeline renders clips", async () => {
     await live("show_edit", { query: "montage" });
-    const clips = await F().locator(".lane .clip").count();
+    const clips = await F().locator(".film, .cclip").count();
     ok(clips >= 3, `timeline has clips (${clips})`);
     ok((await F().locator(".whead .pill").innerText()).includes("rendered"), "render pill");
     await shot("edit");
     await live("show_edit", { query: "stickers" });
-    ok((await F().locator(".trk label").count()) >= 3, "tracks drawn for the overlay edit");
+    ok((await F().locator(".labs div").count()) >= 4, "tracks drawn for the overlay edit");
     await shot("edit-overlays");
     await live("show_edit", {});
     ok((await F().locator("button, .th, .row, [role=button]").count()) > 0, "the project list draws");
@@ -392,7 +406,7 @@ await step("browser: upload tray uploads a file and shows it saved", async () =>
     ok((await F().locator(".up .tag").count()) === 1, "in library tag");
     await shot("upload-done");
     await F().locator(".up .btn").first().click();
-    await F().locator(".post").waitFor({ timeout: 8000 });
+    await F().locator(".cpost").waitFor({ timeout: 8000 });
     ok((await F().locator(".whead").innerText()).toLowerCase().includes("tray"), "tapping the item opens its post");
     const found = await fetch(dev.mcpUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "search_library", arguments: { query: "tray" } } }) }).then((r) => r.json());
     ok(found.result.structuredContent.items.length === 1, "the server has the uploaded post");

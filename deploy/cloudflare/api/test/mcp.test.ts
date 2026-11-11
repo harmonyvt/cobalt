@@ -266,6 +266,10 @@ describe("upload_files + PUT /mcp/upload/<token>", () => {
         db.raw.prepare("UPDATE api_keys SET revoked_at = 5").run();
         expect((await put(upload_url)).status).toBe(401);
         db.raw.prepare("UPDATE api_keys SET revoked_at = NULL").run();
+        // a session key past its own expiry (migration 0026) is not a live credential either
+        db.raw.prepare("UPDATE api_keys SET expires_at = ?").run(clock - 1);
+        expect((await put(upload_url)).status).toBe(401);
+        db.raw.prepare("UPDATE api_keys SET expires_at = NULL").run();
         // expired
         clock += UPLOAD_TOKEN_TTL_MS;
         const res = await put(upload_url);

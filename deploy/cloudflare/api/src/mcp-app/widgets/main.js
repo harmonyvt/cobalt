@@ -10,6 +10,7 @@ async function rpc(name, args) {
     }
     const text = ((r && r.content) || []).filter((c) => c && c.type === "text").map((c) => c.text).join("\n");
     if (!r || r.isError) return { error: text || "that didn't work" };
+    takePreviews(r._meta);
     return { sc: r.structuredContent || null, text };
 }
 
@@ -91,6 +92,7 @@ function mountErr(wd) {
 }
 
 function render() {
+    CTX_HOOKS.length = 0;
     S.cleanups.splice(0).forEach((f) => {
         try {
             f();
@@ -115,6 +117,7 @@ function render() {
 // the first result: a tool answer pushed by the host
 bridge.on("result", (p) => {
     const sc = p && p.structuredContent;
+    takePreviews(p && p._meta);
     S.stack = [];
     if (p && p.isError) {
         S.data = null;
@@ -138,7 +141,8 @@ bridge.on("cancelled", () => {
 });
 bridge.on("teardown", () => S.cleanups.splice(0).forEach((f) => f()));
 bridge.on("context", () => {
-    // a theme change needs no redraw (CSS variables); a locale change would only touch dates
+    // a theme change needs no redraw (CSS variables); full screen re-applies the row limits and the button
+    CTX_HOOKS.forEach((f) => f());
 });
 render();
 bridge.init();

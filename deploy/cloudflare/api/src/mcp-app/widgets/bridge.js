@@ -96,10 +96,10 @@ const bridge = (() => {
 
     async function init() {
         // hosts that inject the result (window.openai) hand it over at load
-        if (typeof window.openai !== "undefined" && window.openai && window.openai.toolOutput) emit("result", { structuredContent: window.openai.toolOutput });
+        if (typeof window.openai !== "undefined" && window.openai && window.openai.toolOutput) emit("result", { structuredContent: window.openai.toolOutput, _meta: window.openai.toolResponseMetadata });
         window.addEventListener("openai:set_globals", (e) => {
             const o = e.detail && e.detail.globals && e.detail.globals.toolOutput;
-            if (o) emit("result", { structuredContent: o });
+            if (o) emit("result", { structuredContent: o, _meta: e.detail.globals.toolResponseMetadata || (window.openai && window.openai.toolResponseMetadata) });
         });
         if (standalone) return;
         try {

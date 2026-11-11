@@ -4935,6 +4935,212 @@
         }
       }
     },
+    "/mcp/media/{token}": {
+      "get": {
+        "operationId": "mcp.media",
+        "summary": "/mcp/media/<token>: a signed one-hour preview of a library file for MCP widgets.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "head": {
+        "operationId": "mcp.media.head",
+        "summary": "/mcp/media/<token>: a signed one-hour preview of a library file for MCP widgets.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden",
+          "same_op": "mcp.media"
+        }
+      },
+      "options": {
+        "operationId": "mcp.media.options",
+        "summary": "/mcp/media/<token>: a signed one-hour preview of a library file for MCP widgets.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden",
+          "same_op": "mcp.media"
+        }
+      }
+    },
+    "/mcp/media/{token}/poster": {
+      "get": {
+        "operationId": "mcp.media.poster",
+        "summary": "/mcp/media/<token>/poster: a signed one-hour preview of a library file for MCP widgets.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "head": {
+        "operationId": "mcp.media.poster.head",
+        "summary": "/mcp/media/<token>/poster: a signed one-hour preview of a library file for MCP widgets.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden",
+          "same_op": "mcp.media.poster"
+        }
+      },
+      "options": {
+        "operationId": "mcp.media.poster.options",
+        "summary": "/mcp/media/<token>/poster: a signed one-hour preview of a library file for MCP widgets.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden",
+          "same_op": "mcp.media.poster"
+        }
+      }
+    },
     "/mcp/settings": {
       "get": {
         "operationId": "mcp.settings",

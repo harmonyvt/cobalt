@@ -14,10 +14,21 @@ export type AppToolCtx = {
     flags: AiFlags;
     // the API's public origin, e.g. https://api.capybaraharmony.com
     origin: string;
+    // Signs a one-hour link a widget can play (MCP-APP-CONTRACT.md section 9) and files it under `key` in the result's
+    // `_meta["capystore/preview"]`, never in structuredContent or text. `slot` is where it goes: "url" (the file's bytes),
+    // "poster" (its poster) or "thumb" (a post's picture: the file itself, or its poster when `poster` is true). A
+    // poster-slot link opens the poster only. Only for a file the caller already read through a post that is not hidden.
+    preview(key: string, fileId: string, slot: "url" | "poster" | "thumb", poster?: boolean): Promise<void>;
+    // when those links stop working (ISO 8601)
+    previewExpires: string;
 };
 
 // `text` is the whole answer for a host with no widgets; `structured` matches the tool's `output` schema.
 export type AppToolResult = { text: string; structured: Record<string, unknown> };
+
+// The signed links of one result, by post, file or project id: { url?, poster?, thumb?, expires_at }
+export type PreviewMeta = Record<string, { url?: string; poster?: string; thumb?: string; expires_at: string }>;
+export const PREVIEW_META_KEY = "capystore/preview";
 
 export type AppTool<I = any> = {
     // snake_case, unique among all MCP tools

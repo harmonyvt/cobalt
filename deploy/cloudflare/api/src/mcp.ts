@@ -167,7 +167,7 @@ export const INSTRUCTIONS = [
 export type McpCaller = { ctx: OpContext; clientKeyId: string; threadKey?: string; origin: string; fetch?: typeof fetch };
 
 type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
-export type ToolResult = { content: Content[]; isError?: boolean; structuredContent?: Json };
+export type ToolResult = { content: Content[]; isError?: boolean; structuredContent?: Json; _meta?: Json };
 
 export const cutText = (text: string) => (text.length > MCP_RESULT_MAX ? `${text.slice(0, MCP_RESULT_MAX)}… (cut: ask for less, e.g. a smaller limit)` : text);
 
@@ -235,8 +235,8 @@ export function structuredOf(value: unknown): Json | undefined {
 }
 
 // Run one tool as the client's MCP thread. Its arguments are the op's input object, checked by the op's own schema.
-// `follow` may build a widget's structuredContent from the op's answer (src/mcp-app/follow.ts); the text stays the op's.
-export async function callTool(op: Op, caller: McpCaller, args: Json, follow?: (value: unknown, input: unknown) => Promise<Json | null>): Promise<ToolResult> {
+// `follow` may build a widget's structuredContent (and the signed preview links for its `_meta`) from the op's answer (src/mcp-app/follow.ts); the text stays the op's.
+export async function callTool(op: Op, caller: McpCaller, args: Json, follow?: (value: unknown, input: unknown) => Promise<{ structured: Json; meta?: Json } | null>): Promise<ToolResult> {
     const ctx = await threadContext(caller);
     const parsed = mcpInput(op, args);
     if (!parsed.success) return textResult(issuesText(mcpToolName(op.callName), parsed.error), true);
@@ -250,8 +250,8 @@ export async function callTool(op: Op, caller: McpCaller, args: Json, follow?: (
         const result = textResult(value);
         // a throw in the view (even a synchronous one) must not turn the write that succeeded into an error
         const viewed = follow ? await Promise.resolve().then(() => follow(value, parsed.data)).catch(() => null) : null;
-        const structured = viewed ?? structuredOf(value);
-        return structured ? { ...result, structuredContent: structured } : result;
+        const structured = viewed?.structured ?? structuredOf(value);
+        return structured ? { ...result, structuredContent: structured, ...(viewed?.meta ? { _meta: viewed.meta } : {}) } : result;
     } catch (e) {
         return textResult(errorText(mcpToolName(op.callName), e), true);
     }
@@ -314,8 +314,8 @@ export const UPLOAD_TOKEN_REGEX = /^[A-Za-z0-9_-]{16,400}\.[A-Za-z0-9_-]{43}$/;
 
 export type UploadClaims = { k: string; t: string; e: number };
 
-const b64url = (bytes: Uint8Array) => toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const fromB64url = (s: string) => {
+export const b64url = (bytes: Uint8Array) => toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+export const fromB64url = (s: string) => {
     const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4));
     return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 };

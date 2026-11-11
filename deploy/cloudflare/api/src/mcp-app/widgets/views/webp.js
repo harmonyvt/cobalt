@@ -2,11 +2,11 @@ const WEBP_MAX = 10;
 const WEBP_MIN = 0.5;
 
 function postCard(post, shareUrl, openLabel) {
-    const box = h("div", { class: "result" }, pic(post && post.thumb_url, post ? post.id : "x"));
+    const box = h("div", { class: "result" }, pic(post && (post.thumb_url || signed(post.id, "thumb")), post ? post.id : "x"));
     const side = h("div");
     if (post) side.appendChild(h("b", { text: post.title }));
-    if (shareUrl) side.appendChild(h("div", { class: "linkrow" }, ext(shareUrl, urlLabel(shareUrl), ""), copyBtn(shareUrl, "copy", "copy share link")));
-    if (post) side.appendChild(h("div", { class: "row", style: "margin-top:10px" }, h("button", { class: "btn pri", type: "button", text: openLabel || "open post", onclick: () => go("show_post", { id: post.id }) })));
+    if (shareUrl) side.appendChild(h("div", { class: "linkrow", style: "margin-top:3px" }, ext(shareUrl, urlLabel(shareUrl), ""), copyBtn(shareUrl, "copy", "copy share link")));
+    if (post) side.appendChild(h("div", { class: "acts", style: "margin-top:6px" }, h("button", { class: "btn pri", type: "button", text: openLabel || "open post", onclick: () => go("show_post", { id: post.id }) })));
     box.appendChild(side);
     return box;
 }
@@ -24,7 +24,7 @@ function webpPick(d) {
     w.appendChild(head(h("b", { text: `webp · ${src.title || ""}` }), readout));
 
     const cells = h("div", { class: "cells" });
-    if (safeUrl(src.poster_url)) cells.appendChild(h("img", { src: src.poster_url, alt: "" }));
+    if (safeUrl(src.poster_url)) filmBg(cells, src.poster_url);
     else cells.style.background = grad(src.id);
     const sel = h("div", { class: "sel" });
     cells.appendChild(sel);
@@ -95,9 +95,9 @@ function webpPick(d) {
     };
     const go2 = h("button", { class: "btn pri", type: "button", text: "convert", onclick: () => go("convert_to_webp", { id: src.id, start: s, end: e, width, quality }, { push: false }) });
     w.appendChild(h("div", { class: "wbody" }, strip,
-        h("div", { class: "row", style: "justify-content:space-between;margin:6px 6px 0;font:11px var(--mono);color:var(--mute)" }, h("span", { text: "0:00" }), status, h("span", { text: dur(total) })),
+        h("div", { class: "row", style: "justify-content:space-between;margin:4px 6px 0;font:10.5px var(--mono);color:var(--mute)" }, h("span", { text: "0:00" }), status, h("span", { text: dur(total) })),
         h("div", { class: "rng" }, seg("quality", ["low", "med", "high"], () => quality, (v) => (quality = v)), seg("width in pixels", [320, 480], () => width, (v) => (width = v)), h("span", { class: "spacer" }), go2),
-        h("p", { class: "note", style: "margin:10px 0 0", text: `pick up to ${WEBP_MAX} seconds. drag the pink handles, or focus one and use the arrow keys.` })));
+        h("p", { class: "note", style: "margin:6px 0 0", text: `up to ${WEBP_MAX} s. drag the pink handles, or focus one and use the arrow keys.` })));
     paint();
     return w;
 }
@@ -150,7 +150,7 @@ VIEWS.webp = (d) => {
     if (d.state === "error") {
         const retry = () => (d.range ? go("convert_to_webp", { id: src.id, start: d.range.start, end: d.range.end, width: d.width, quality: d.quality }, { push: false }) : show(Object.assign({}, d, { state: "pick", error: null }), { push: false }));
         return h("div", null, head(`webp · ${src.title || ""}`, null),
-            h("div", { class: "wbody" }, h("div", { class: "err", style: "margin:0 0 10px" }, h("span", { text: d.error || "the conversion failed" }), h("button", { class: "btn", type: "button", text: "retry", onclick: retry }))));
+            h("div", { class: "wbody" }, h("div", { class: "err", style: "margin:0" }, h("span", { text: d.error || "the conversion failed" }), h("button", { class: "btn", type: "button", text: "retry", onclick: retry }))));
     }
     // done
     const post = d.post;
@@ -158,5 +158,5 @@ VIEWS.webp = (d) => {
     const r = d.range;
     return h("div", null, head(`webp ready · ${src.title || ""}`, h("span", { class: "pill", text: "done" })),
         h("div", { class: "wbody" }, postCard(post, d.share_url, "open post"),
-            h("p", { class: "note", style: "margin:10px 0 0", text: `${r ? (r.end - r.start).toFixed(1) + " s · " : ""}${d.width} px · ${d.quality}${bytes}` })));
+            h("p", { class: "note", style: "margin:6px 0 0", text: `${r ? (r.end - r.start).toFixed(1) + " s · " : ""}${d.width} px · ${d.quality}${bytes}` })));
 };

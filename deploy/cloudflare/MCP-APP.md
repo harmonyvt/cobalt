@@ -28,6 +28,14 @@ A host that struggles with the full list can use the short list: add `?tools=app
 Clients that send headers (Claude Code, the xAI API) can keep using `https://api.capybaraharmony.com/mcp` with
 `Authorization: Bearer <client key>`.
 
+## What the widgets look like
+
+Compact by default so they fit a phone chat: one-line headers, dense rows, and every list shows its first 3 items with a
+"show N more" button (a grid shows its first row). The expand button in each header asks the host for full screen, the roomy
+view with everything shown. Private posts, thumbnails and timeline sources play through signed one-hour links (a lock badge says
+so); if a link ran out, "refresh preview" in the widget asks again. The timeline has a real preview player: scrub the tracks,
+press play, overlays are boxed where they sit on the frame, and a finished render can be played instead.
+
 ## Claude
 
 1. claude.ai > Settings > Connectors > **Add custom connector**.
@@ -89,7 +97,8 @@ After editing anything under `src/mcp-app/widgets/`, run `npm run widgets` (it r
 | - | - | - |
 | direct | "search capystore for pink cat girl" | `search_library`, the grid (Grok: a numbered list) |
 | direct | "show my capystore share links" | `list_share_links`, rows with copy buttons |
-| direct | "open my latest edit in capystore" | `show_edit`, the timeline |
+| direct | "open my latest edit in capystore" | `show_edit`, the timeline with a playing preview (a private clip shows the lock badge) |
+| direct | "show that private video" | `show_post` of a private post: it plays, lock badge "private · link valid 1 h" |
 | direct | "show my collections" | `list_collections`, the grid |
 | indirect | "what did I save most recently?" | `search_library` or `library_list`, newest first |
 | indirect | "I need a looping sticker of the jumpscare clip" | finds the post, then `convert_to_webp` with the range picker |

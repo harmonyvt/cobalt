@@ -27,8 +27,10 @@ const FIX = {
     "post.image": { tool: "show_post", args: { id: "post-img-1" }, out: () => F.postDetail("post-img-1") },
     "post.gallery": { tool: "show_post", args: { id: "post-gal-1" }, out: () => F.postDetail("post-gal-1") },
     "post.private": { tool: "show_post", args: { id: "post-priv-1" }, out: () => F.postDetail("post-priv-1") },
+    "post.private-plain": { tool: "show_post", args: { id: "post-priv-2" }, out: () => F.postDetail("post-priv-2") },
     "post.xss": { tool: "show_post", args: { id: "post-xss" }, out: () => F.postDetail("post-xss") },
     "edit.project": { tool: "show_edit", args: { query: "Shrek" }, out: () => F.editOut(F.EDIT) },
+    "edit.private": { tool: "show_edit", args: { id: "edit-priv" }, out: F.editPrivate },
     "edit.list": { tool: "show_edit", args: {}, out: F.editList },
     "edit.long": { tool: "show_edit", args: { id: "edit-long" }, out: F.editLong },
     "edit.short": { tool: "show_edit", args: { id: "edit-short" }, out: F.editShort },
@@ -56,7 +58,10 @@ const upOut = (names) => ({ ...F.uploadOut(UP, names), ...(MAX ? { max_bytes: MA
 const jobs = {};
 const log = { calls: [], links: [], messages: [], display: [], sizes: [], failNext: null, delay: 0 };
 const text = (t) => [{ type: "text", text: t }];
-const ok = (sc) => ({ content: text(sc.view + " ok"), structuredContent: sc });
+const ok = (sc) => {
+    const _meta = F.previewMetaOf(sc);
+    return { content: text(sc.view + " ok"), structuredContent: sc, ...(_meta ? { _meta } : {}) };
+};
 const bad = (m) => ({ isError: true, content: text(m) });
 
 function handleCall(p) {
@@ -74,7 +79,7 @@ function handleCall(p) {
         }
         case "search_library": return ok(F.searchOut(a.query, 6));
         case "list_share_links": return ok({ ...F.linksOut(), links: F.LINKS.slice(0, 2), total: 2 });
-        case "show_edit": return ok(F.editOut(F.EDIT));
+        case "show_edit": return ok(a.id === "edit-priv" ? F.editPrivate() : F.editOut(F.EDIT));
         case "convert_to_webp": return ok(F.webp("running", { job: "job-webp-2", progress: 0, range: { start: a.start, end: a.end }, width: a.width, quality: a.quality }));
         case "save_link": return ok(F.saveOut("running", { url: a.url, job: "job-save-2" }));
         case "upload_files": return ok(upOut((a.files || [{ name: "file" }]).map((f) => f.name)));
@@ -128,7 +133,7 @@ async function mount(key, fx, opts = {}) {
     if (state.clip) iframe.setAttribute("allow", "clipboard-write");
     iframe.style.cssText = `width:100%;border:0;display:block;height:${opts.height || 120}px;color-scheme:normal`;
     const upOrigin = new URL(UP).origin;
-    const csp = opts.csp || `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: https://media.capybaraharmony.com https://share.capybaraharmony.com; media-src https://media.capybaraharmony.com; connect-src ${upOrigin} https://api.capybaraharmony.com">`;
+    const csp = opts.csp || `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: https://media.capybaraharmony.com https://share.capybaraharmony.com https://api.capybaraharmony.com; media-src https://media.capybaraharmony.com https://api.capybaraharmony.com; connect-src ${upOrigin} https://api.capybaraharmony.com">`;
     iframe.srcdoc = w.html.replace("<head>", "<head>" + csp);
     const bridge = new AppBridge(null, { name: "dev-host", version: "1.0.0" }, { openLinks: {}, serverTools: {}, message: { text: {} }, updateModelContext: { text: {} }, logging: {} }, {
         hostContext: hostContext(),
