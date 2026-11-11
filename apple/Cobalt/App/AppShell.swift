@@ -324,42 +324,49 @@ struct AppShell: View {
         TabView(selection: $model.selectedTab) {
             Tab(Copy.tab(.save), systemImage: icon(for: .save), value: AppTab.save) {
                 NavigationStack { HomeScreen(model: model, tier: tier) }
+                    .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
             }
             if model.capabilities.library {
                 Tab(Copy.tab(.library), systemImage: icon(for: .library), value: AppTab.library) {
                     // One branch at every width: the screen brings its own navigation stack, so a width change (a
                     // rotation, a split view) never replaces it and its selection, scroll and controller survive.
                     LibraryScreen(model: model, tier: tier)
+                        .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
                 }
             }
             // the gallery share links made from the library's select mode (APP-API-CONTRACT 24)
             if model.capabilities.shareSets {
                 Tab(Copy.tab(.links), systemImage: icon(for: .links), value: AppTab.links) {
                     NavigationStack { LinksScreen(model: model) }
+                        .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
                 }
             }
             // threads with Claude about the library (APP-API-CONTRACT 27)
             if model.capabilities.chat {
                 Tab(Copy.tab(.chat), systemImage: icon(for: .chat), value: AppTab.chat) {
                     NavigationStack { ChatScreen(model: model, tier: tier) }
+                        .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
                 }
             }
             // the stream canvas, its store and Twitch channel points (APP-API-CONTRACT 30); "studio" on screen
             if model.capabilities.stage {
                 Tab(Copy.tab(.stage), systemImage: icon(for: .stage), value: AppTab.stage) {
                     NavigationStack { StageScreen(model: model, tier: tier) }
+                        .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
                 }
             }
             // the words taught to search (APP-API-CONTRACT 48.6); with six tabs iPhone puts it under "more"
             if model.capabilities.names {
                 Tab(Copy.tab(.names), systemImage: icon(for: .names), value: AppTab.names) {
                     NavigationStack { NamesScreen(model: model) }
+                        .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
                 }
             }
             // the queue is not a tab here: it is a sheet opened from the toolbar button on save, library, links and chat
             // (apple/CONTRACT.md 12; `AppModel.showQueue()`)
             Tab(Copy.tab(.settings), systemImage: icon(for: .settings), value: AppTab.settings) {
                 NavigationStack { SettingsScreen(model: model) }
+                    .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
             }
         }
         .tabViewStyle(.sidebarAdaptable)
@@ -380,19 +387,33 @@ struct AppShell: View {
             .tint(CobaltColor.text)
             .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 260)
         } detail: {
-            switch model.selectedTab {
-            case .save: HomeScreen(model: model, tier: tier)
-            case .library: LibraryScreen(model: model, tier: tier)
-            case .links: NavigationStack { LinksScreen(model: model) }
-            case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
-            case .stage: NavigationStack { StageScreen(model: model, tier: tier) }
-            case .names: NavigationStack { NamesScreen(model: model) }
-            case .queue: NavigationStack { QueueScreen(model: model) }
-            case .settings: SettingsScreen(model: model)
+            Group {
+                switch model.selectedTab {
+                case .save: HomeScreen(model: model, tier: tier)
+                case .library: LibraryScreen(model: model, tier: tier)
+                case .links: NavigationStack { LinksScreen(model: model) }
+                case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
+                case .stage: NavigationStack { StageScreen(model: model, tier: tier) }
+                case .names: NavigationStack { NamesScreen(model: model) }
+                case .queue: NavigationStack { QueueScreen(model: model) }
+                case .settings: SettingsScreen(model: model)
+                }
             }
+            // Bottom of the detail column, under the window's content and clear of the sidebar.
+            .syncGlow(model.library.syncStatus)
         }
         #endif
     }
+
+    #if os(iOS)
+    /// A tab's band steps aside while the queue sheet or the editor cover draws one of its own, so two
+    /// Metal views are never drawing in this window at once.
+    private var tabGlowSuppressed: Bool {
+        !SyncGlowPlacement.tabShowsBand(
+            queueSheet: model.queueShown,
+            editorCover: model.editor.session != nil || EditorLauncher.shared.isBusy)
+    }
+    #endif
 
     #if os(iOS)
     /// The queue on iPhone and iPad: the whole screen in a large sheet, closed with the x like the other sheets.

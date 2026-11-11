@@ -162,7 +162,6 @@ struct CobaltApp: App {
 
     private var windowContent: some View {
         rootContent
-            .syncGlow(model.library.syncStatus, suppressed: windowGlowSuppressed)
             .onOpenURL { url in
                 #if DEBUG
                 DebugHooks.log("onOpenURL \(url.absoluteString)")
@@ -173,17 +172,6 @@ struct CobaltApp: App {
             #if os(macOS)
             .frame(minWidth: 900, minHeight: 600)
             #endif
-    }
-
-    /// iOS full-screen presentations draw their own band. The window's band waits, so the two never stack.
-    private var windowGlowSuppressed: Bool {
-        #if os(iOS)
-        !SyncGlowPlacement.windowShowsBand(
-            queueSheet: model.queueShown,
-            editorCover: model.editor.session != nil || EditorLauncher.shared.isBusy)
-        #else
-        false
-        #endif
     }
 
     #if os(iOS)

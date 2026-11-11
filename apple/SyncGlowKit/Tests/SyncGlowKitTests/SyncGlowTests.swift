@@ -237,6 +237,34 @@ struct SyncGlowComposerTests {
         #expect(packed[SyncGlowUniforms.Index.height] == 148)
         #expect(packed[SyncGlowUniforms.Index.atlasColumns] == 12)
         #expect(packed[SyncGlowUniforms.Index.glyphsEnabled] == 0)
+        #expect(packed[SyncGlowUniforms.Index.pointScale] == 1)
+        #expect(packed[SyncGlowUniforms.Index.dark] == 1)
+        #expect(packed[SyncGlowUniforms.Index.barInset] == 0)
+    }
+
+    @Test func theBlockIsTwentyFloatsAndCarriesScaleAppearanceAndBars() {
+        // `setFragmentBytes` wants a multiple of 16 bytes; the Metal struct is twenty floats.
+        #expect(SyncGlowUniforms.Index.count == 20)
+        #expect((SyncGlowUniforms.Index.count * MemoryLayout<Float>.size) % 16 == 0)
+        #expect(MemoryLayout<SyncGlowUniforms>.size == SyncGlowUniforms.Index.count * MemoryLayout<Float>.size)
+        let uniforms = SyncGlowComposer.uniforms(
+            time: 1, state: .nudge, previous: .upToDate, transition: 1, pendingCount: 0,
+            reduceMotion: false, lowPower: false, headroom: 1, eventAge: 0.5, width: 1206, height: 609,
+            pointScale: 3, dark: false, barInset: 83)
+        let packed = uniforms.packed
+        #expect(packed.count == SyncGlowUniforms.Index.count)
+        #expect(packed[SyncGlowUniforms.Index.pointScale] == 3)
+        #expect(packed[SyncGlowUniforms.Index.dark] == 0)
+        #expect(packed[SyncGlowUniforms.Index.barInset] == 83)
+        #expect(packed[SyncGlowUniforms.Index.pad0] == 0)
+        #expect(packed[SyncGlowUniforms.Index.pad1] == 0)
+        // A drawable with no size yet, or a bad inset, cannot reach the shader as NaN or below 1x.
+        let odd = SyncGlowComposer.uniforms(
+            time: 1, state: .upToDate, previous: .upToDate, transition: 1, pendingCount: 0,
+            reduceMotion: false, lowPower: false, headroom: 1, eventAge: 0, width: 0, height: 0,
+            pointScale: .nan, barInset: -.infinity)
+        #expect(odd.pointScale == 1)
+        #expect(odd.barInset == 0)
     }
 
     @Test func theFrameRateDropsWhenIdleAndStopsWhenItShouldNotDraw() {
@@ -377,51 +405,154 @@ struct GlyphAtlasTests {
         #expect(GlyphAtlasLayout.linkGlyphIndex(dx: 1, dy: 1) == 8)
     }
 
-    @Test func theCellGridAndStarPickMatchTheShaderConstants() {
-        let grid = SyncGlowField.cellGrid(density: 0.7)
-        #expect(grid.x == 7 + 12 * Float(0.7))
-        #expect(grid.y == 3 + Float(2.2) * Float(0.7))
-        #expect(SyncGlowField.cellGrid(density: 4).x == SyncGlowField.cellGrid(density: 1).x)
-        #expect(!SyncGlowField.showsStar(hash: 0.9, density: 0.7))
-        #expect(SyncGlowField.showsStar(hash: 0.1, density: 0.7))
-        #expect(SyncGlowField.starGlyphIndex(hash: 0) == 0)
-        #expect(SyncGlowField.starGlyphIndex(hash: 0.999) == 5)
+    @Test func starsAreSmallSparseTextureFromTheStarCellsOnly() {
+        // Near stars draw at about 9 to 10 pt, far ones smaller, both from star glyphs only: no line
+        // characters and no `o`, so nothing in the sky reads as a word.
+        #expect(abs(SyncGlowField.fontPoints(SyncGlowField.near) - 9.6) < 0.2)
+        #expect(SyncGlowField.fontPoints(SyncGlowField.far) < SyncGlowField.fontPoints(SyncGlowField.near))
+        #expect(SyncGlowField.far.brightness < SyncGlowField.near.brightness)
+        #expect(SyncGlowField.far.cellWidth < SyncGlowField.near.cellWidth)
+        for layer in [SyncGlowField.near, SyncGlowField.far] {
+            #expect(layer.probability < 0.4)
+            for index in layer.glyphs {
+                #expect(index < GlyphAtlasLayout.starCount)
+                #expect(GlyphAtlasLayout.glyphs[index] != "o")
+            }
+            #expect(SyncGlowField.showsStar(hash: 0.01, layer: layer, density: 0.7))
+            #expect(!SyncGlowField.showsStar(hash: 0.5, layer: layer, density: 1))
+            #expect(layer.glyphs.contains(SyncGlowField.starGlyphIndex(hash: 0, layer: layer)))
+            #expect(layer.glyphs.contains(SyncGlowField.starGlyphIndex(hash: 0.999, layer: layer)))
+        }
         let h = SyncGlowField.hash(1, 2)
         #expect(h >= 0 && h < 1)
         #expect(SyncGlowField.hash(1, 2) == h)
     }
 
-    @Test func aGlyphKeepsItsShapeAtEveryWidth() {
-        // The phone band is the reference: its grid is the plain one.
-        let phone = SyncGlowField.cellGrid(density: 0.7, width: 393, height: 152)
-        let plain = SyncGlowField.cellGrid(density: 0.7)
-        #expect(abs(phone.x - plain.x) < 0.001)
-        #expect(phone.y == plain.y)
-        let reference = SyncGlowField.glyphBox(density: 0.7, width: 393, height: 152)
-        // iPad, a Mac window, a phone in landscape, and the same shapes in pixels at 2x and 3x.
-        let sizes: [(Float, Float)] = [(1366, 152), (1400, 152), (852, 152), (320, 152), (2732, 304), (1179, 456)]
-        for (width, height) in sizes {
-            let points = height / 152
-            let box = SyncGlowField.glyphBox(density: 0.7, width: width, height: height)
-            #expect(abs(box.width / points - reference.width) < 0.01)
-            #expect(abs(box.height / points - reference.height) < 0.01)
-            // More columns, never fewer rows.
-            #expect(SyncGlowField.cellGrid(density: 0.7, width: width, height: height).y == plain.y)
+    @Test func starsKeepToTheLowerPartOfTheBandAndFadeWithHeight() {
+        for band: Float in [120, 203, 154] {
+            let ceiling = band * SyncGlowLook.starCeiling
+            #expect(SyncGlowField.starFade(heightAbove: 2, band: band) == 0)
+            #expect(SyncGlowField.starFade(heightAbove: 10, band: band) == 1)
+            #expect(SyncGlowField.starFade(heightAbove: ceiling, band: band) == 0)
+            #expect(SyncGlowField.starFade(heightAbove: band, band: band) == 0)
+            var last: Float = 1
+            for step in stride(from: Float(8), through: ceiling, by: 4) {
+                let fade = SyncGlowField.starFade(heightAbove: step, band: band)
+                #expect(fade <= last + 0.000_1)
+                last = fade
+            }
         }
-        #expect(SyncGlowField.cellGrid(density: 0.7, width: 1366, height: 152).x > plain.x * 3)
-        // A drawable with no size yet must not divide by zero or collapse the grid.
-        let empty = SyncGlowField.cellGrid(density: 0.7, width: 0, height: 0)
-        #expect(empty.x.isFinite && empty.x > 0)
+    }
+
+    @Test func theWaitingRowIsCentredAndEvenlySpaced() {
+        #expect(SyncGlowField.waitingStarX(index: 0, count: 1, width: 400) == 200)
+        let row = (0..<4).map { SyncGlowField.waitingStarX(index: $0, count: 4, width: 400) }
+        #expect(abs((row[0] + row[3]) / 2 - 200) < 0.001)
+        #expect(abs(row[1] - row[0] - SyncGlowLook.waitingSpacing) < 0.001)
+        #expect(SyncGlowLook.waitingRowHeight > SyncGlowLook.horizonHeight)
+    }
+}
+
+@Suite("glow readability")
+struct SyncGlowLookTests {
+    @Test func theWashPeaksAtTheBottomEdgeWithinTheCapsAndIsGoneAtTheTop() {
+        #expect(SyncGlowLook.peakCover(dark: true) <= 0.38)
+        #expect(SyncGlowLook.peakCover(dark: false) <= 0.30)
+        for dark in [true, false] {
+            #expect(SyncGlowLook.washCover(heightFraction: 0, dark: dark) == SyncGlowLook.peakCover(dark: dark))
+            #expect(SyncGlowLook.washCover(heightFraction: 1, dark: dark) == 0)
+            // No visible top edge: the last tenth of the band is all but clear.
+            #expect(SyncGlowLook.washCover(heightFraction: 0.95, dark: dark) < 0.02)
+            var last = Float.infinity
+            for step in 0...20 {
+                let cover = SyncGlowLook.washCover(heightFraction: Float(step) / 20, dark: dark)
+                #expect(cover <= last)
+                last = cover
+            }
+            for state in SyncGlowState.allCases {
+                let cover = SyncGlowLook.washCover(heightFraction: 0, dark: dark, amplitude: SyncGlowLook.amplitude(state))
+                #expect(cover <= SyncGlowLook.peakCover(dark: dark))
+            }
+            #expect(SyncGlowLook.washCover(heightFraction: .nan, dark: dark) == 0)
+        }
+        #expect(SyncGlowLook.amplitude(.off) == 0)
+        #expect(SyncGlowLook.starCoverCap <= 0.55)
+        #expect(SyncGlowLook.totalCoverCap <= 0.6)
+        #expect(abs(SyncGlowLook.horizonThickness - 1.5) < 0.001)
+    }
+
+    @Test func theShaderRepeatsTheseNumbers() throws {
+        // The shader cannot import SyncGlowKit, so its constants are checked here against the source.
+        let shader = try String(contentsOf: Self.repo.appending(path: "Cobalt/Screens/Library/SyncConstellation.metal"), encoding: .utf8)
+        func has(_ line: String) { #expect(shader.contains(line), "shader is missing: \(line)") }
+        has("constant float kPeakDark = \(SyncGlowLook.peakCover(dark: true));")
+        has("constant float kPeakLight = \(SyncGlowLook.peakCover(dark: false));")
+        has("constant float kStarCap = \(SyncGlowLook.starCoverCap);")
+        has("constant float kStarCeiling = \(SyncGlowLook.starCeiling);")
+        has("constant float kHorizonY = \(SyncGlowLook.horizonHeight);")
+        has("constant float kHorizonWidth = \(SyncGlowLook.horizonThickness);")
+        has("constant float kWaitingY = \(SyncGlowLook.waitingRowHeight);")
+        has("constant float kWaitingSpacing = \(SyncGlowLook.waitingSpacing);")
+        has("constant float kNudgeHeight = \(SyncGlowLook.nudgeHeight);")
+        has("constant float kNudgeTail = \(SyncGlowLook.nudgeTail);")
+        for (name, layer) in [("kFarCell", SyncGlowField.far), ("kNearCell", SyncGlowField.near)] {
+            has("constant float4 \(name) = float4(\(layer.cellWidth), \(layer.cellHeight), \(layer.glyph), \(layer.probability));")
+        }
+        has("safePow(1.0 - saturate(f), 1.7)")
+        // Twenty floats, in Index order.
+        let fields = ["time", "state", "previous", "transition", "pending", "intensity", "density", "reduced",
+                      "headroom", "lowPower", "eventAge", "width", "height", "atlasColumns", "glyphsEnabled",
+                      "pointScale", "dark", "barInset", "pad0", "pad1"]
+        #expect(fields.count == SyncGlowUniforms.Index.count)
+        let body = try #require(shader.range(of: "struct GlowUniforms {")).upperBound
+        let end = try #require(shader.range(of: "};", range: body..<shader.endIndex)).lowerBound
+        let declared = shader[body..<end].split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        #expect(declared == fields.map { "float \($0);" })
+    }
+
+    @Test func thePaletteComesFromTheAppsTokens() throws {
+        // Each colour the shader draws with is one of CobaltColor's, so the band matches the app.
+        let shader = try String(contentsOf: Self.repo.appending(path: "Cobalt/Screens/Library/SyncConstellation.metal"), encoding: .utf8)
+        let tokens = try String(contentsOf: Self.repo.appending(path: "Cobalt/Design/Tokens.swift"), encoding: .utf8)
+        let pairs = [
+            ("linkBlue = Color(light: 0x196bd4, dark: 0x2f8af9)", ["0x196bd4", "0x2f8af9"]),
+            ("sharedInk = Color(hex: 0x8ab8ff)", ["0x8ab8ff"]),
+            ("caption = Color(light: 0x6e6e75, dark: 0x8f8f8f)", ["0x6e6e75", "0x8f8f8f"]),
+            ("errorText = Color(light: 0xc4142a, dark: 0xff5c6c)", ["0xc4142a", "0xff5c6c"]),
+        ]
+        for (token, hexes) in pairs {
+            #expect(tokens.contains(token), "Tokens.swift changed: \(token)")
+            for hex in hexes { #expect(shader.contains("hexLinear(\(hex))"), "shader does not use \(hex)") }
+        }
+        let used = shader.matches(of: /hexLinear\((0x[0-9a-f]{6})\)/).map { String($0.1) }
+        let allowed = Set(pairs.flatMap(\.1))
+        for hex in used { #expect(allowed.contains(hex), "\(hex) is not a design token") }
+    }
+
+    /// apple/, found from this file: apple/SyncGlowKit/Tests/SyncGlowKitTests/SyncGlowTests.swift.
+    static var repo: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
     }
 }
 
 @Suite("glow placement")
 struct SyncGlowPlacementTests {
-    @Test func theWindowKeepsTheBandUntilAFullScreenPresentationTakesIt() {
-        #expect(SyncGlowPlacement.windowShowsBand(queueSheet: false, editorCover: false))
-        #expect(!SyncGlowPlacement.windowShowsBand(queueSheet: true, editorCover: false))
-        #expect(!SyncGlowPlacement.windowShowsBand(queueSheet: false, editorCover: true))
-        #expect(!SyncGlowPlacement.windowShowsBand(queueSheet: true, editorCover: true))
+    @Test func aTabKeepsItsBandUntilAPresentationDrawsItsOwn() {
+        #expect(SyncGlowPlacement.tabShowsBand(queueSheet: false, editorCover: false))
+        #expect(!SyncGlowPlacement.tabShowsBand(queueSheet: true, editorCover: false))
+        #expect(!SyncGlowPlacement.tabShowsBand(queueSheet: false, editorCover: true))
+        #expect(!SyncGlowPlacement.tabShowsBand(queueSheet: true, editorCover: true))
+    }
+
+    @Test func theBandReachesUnderTheBarsToTheBottomEdge() {
+        // 120 pt in view, plus whatever the tab bar and home indicator cover, so their glass sits on it.
+        #expect(SyncGlowLook.bandHeight == 120)
+        #expect(SyncGlowPlacement.bandHeight(bottomInset: 0) == 120)
+        #expect(SyncGlowPlacement.bandHeight(bottomInset: 83) == 203)
+        #expect(SyncGlowPlacement.bandHeight(bottomInset: -4) == 120)
+        #expect(SyncGlowPlacement.bandHeight(bottomInset: .nan) == 120)
     }
 }
 

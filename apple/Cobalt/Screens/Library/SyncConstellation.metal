@@ -1,10 +1,13 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Uniform block. The order is SyncGlowUniforms.Index in SyncGlowKit: fifteen floats, no padding.
+// The sync glow: a band that rises from the bottom of the content, under the bars' glass.
+//
+// Uniform block. The order is SyncGlowUniforms.Index in SyncGlowKit: twenty floats, 80 bytes.
 // 0 time, 1 state, 2 previous, 3 transition, 4 pending, 5 intensity, 6 density,
 // 7 reduced motion, 8 display headroom, 9 low power, 10 event age, 11 width, 12 height,
-// 13 atlas columns (12), 14 glyphs enabled, 15 pad. Sixteen floats, 64 bytes.
+// 13 atlas columns (12), 14 glyphs enabled, 15 point scale (pixels per point), 16 dark,
+// 17 bar inset (points), 18 pad, 19 pad.
 // State: 0 up to date, 1 syncing, 2 offline, 3 refused, 4 re-pull, 5 nudge, 6 off.
 struct GlowUniforms {
     float time;
@@ -22,7 +25,11 @@ struct GlowUniforms {
     float height;
     float atlasColumns;
     float glyphsEnabled;
-    float pad;
+    float pointScale;
+    float dark;
+    float barInset;
+    float pad0;
+    float pad1;
 };
 
 struct GlowVertex {
@@ -32,11 +39,27 @@ struct GlowVertex {
 // Glyph row, matching GlyphAtlasLayout.glyphs: . * + o ' `  - / \ | _ :
 constant float kGlyphDot = 0.0;
 constant float kGlyphStar = 1.0;
-constant float kGlyphDash = 6.0;
+constant float kGlyphPlus = 2.0;
+constant float kGlyphTick = 4.0;
 
-// The grid was drawn for a phone in portrait: a band 393 pt wide and 152 pt tall. Same number as
-// SyncGlowField.referenceAspect.
-constant float kReferenceAspect = 393.0 / 152.0;
+// SyncGlowLook, in points.
+constant float kPeakDark = 0.38;
+constant float kPeakLight = 0.3;
+constant float kStarCap = 0.55;
+constant float kTotalCap = 0.60;
+constant float kStarCeiling = 0.6;
+constant float kHorizonY = 3.0;
+constant float kHorizonWidth = 1.5;
+constant float kWaitingY = 12.0;
+constant float kWaitingSpacing = 18.0;
+constant float kNudgeHeight = 16.0;
+constant float kNudgeTail = 120.0;
+
+// SyncGlowField.far and .near: cell width, cell height, glyph box, probability; then brightness.
+constant float4 kFarCell = float4(20.0, 15.0, 11.0, 0.38);
+constant float kFarBright = 0.45;
+constant float4 kNearCell = float4(34.0, 24.0, 15.5, 0.34);
+constant float kNearBright = 1.0;
 
 vertex GlowVertex glowVertex(uint id [[vertex_id]]) {
     float2 p = float2(float((id << 1) & 2), float(id & 2));
@@ -49,7 +72,7 @@ float glowHash(float2 p) {
     return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453123);
 }
 
-/// `pow` on a negative base is NaN, which the tone map turns into black. Bases here are colours and falloff.
+/// `pow` on a negative base is NaN, which the compositor shows as black. Bases here are colours and falloff.
 float safePow(float base, float exponent) {
     return pow(max(base, 0.0), exponent);
 }
@@ -61,173 +84,272 @@ float3 sanitize(float3 c) {
     return clamp(c, float3(0.0), float3(8.0));
 }
 
-float3 toLinear(float3 srgb) {
-    return float3(safePow(saturate(srgb).r, 2.2), safePow(saturate(srgb).g, 2.2), safePow(saturate(srgb).b, 2.2));
+float sanitize1(float a) {
+    return (isnan(a) || isinf(a)) ? 0.0 : clamp(a, 0.0, 1.0);
 }
 
-float3 palette(float s) {
-    if (s > 5.5) return float3(0.0);
-    if (s < 0.5) return toLinear(float3(0.42, 0.66, 0.95));
-    if (s < 1.5) return toLinear(float3(0.55, 0.84, 1.00));
-    if (s < 2.5) return toLinear(float3(0.50, 0.52, 0.58));
-    if (s < 3.5) return toLinear(float3(0.95, 0.36, 0.30));
-    if (s < 4.5) return toLinear(float3(0.50, 0.80, 0.94));
-    return toLinear(float3(0.72, 0.86, 1.00));
+float3 hexLinear(uint hex) {
+    float3 srgb = float3(float((hex >> 16) & 0xff), float((hex >> 8) & 0xff), float(hex & 0xff)) / 255.0;
+    return float3(safePow(srgb.r, 2.2), safePow(srgb.g, 2.2), safePow(srgb.b, 2.2));
 }
 
+// The palette, all from the app's design tokens (apple/Cobalt/Design/Tokens.swift, CobaltColor):
+//   accent      linkBlue  light 0x196bd4, dark 0x2f8af9 (dark is also `focus`)
+//   star dark   sharedInk 0x8ab8ff (the library's light link blue on dark)
+//   star light  linkBlue light 0x196bd4 (deeper and more saturated, so stars show on white)
+//   offline     caption   light 0x6e6e75, dark 0x8f8f8f
+//   refused     errorText light 0xc4142a, dark 0xff5c6c
+float3 accentColor(bool dark) { return dark ? hexLinear(0x2f8af9) : hexLinear(0x196bd4); }
+float3 starColor(bool dark) { return dark ? hexLinear(0x8ab8ff) : hexLinear(0x196bd4); }
+float3 greyColor(bool dark) { return dark ? hexLinear(0x8f8f8f) : hexLinear(0x6e6e75); }
+float3 redColor(bool dark) { return dark ? hexLinear(0xff5c6c) : hexLinear(0xc4142a); }
+
+/// The wash's colour per state. Refused keeps the accent: only its horizon flashes red.
+float3 washColor(float s, bool dark) {
+    if (abs(s - 2.0) < 0.5) return greyColor(dark);
+    return accentColor(dark);
+}
+
+/// SyncGlowLook.amplitude.
 float amplitude(float s) {
     if (s > 5.5) return 0.0;
-    if (s < 0.5) return 0.40;
-    if (s < 1.5) return 0.78;
-    if (s < 2.5) return 0.30;
-    if (s < 3.5) return 0.72;
-    if (s < 4.5) return 0.66;
-    return 0.62;
+    if (s < 0.5) return 0.62;
+    if (s < 1.5) return 1.0;
+    if (s < 2.5) return 0.7;
+    if (s < 3.5) return 0.9;
+    if (s < 4.5) return 0.85;
+    return 0.8;
 }
 
-// Same choice as GlyphAtlasLayout.linkGlyph. y grows downward. `/` rises to the right.
-float linkGlyphId(float2 delta, float salt) {
-    float ax = abs(delta.x);
-    float ay = abs(delta.y);
-    if (ay < ax * 0.35 || (ax < 0.0001 && ay < 0.0001)) return salt > 0.72 ? 10.0 : 6.0;
-    if (ax < ay * 0.35) return salt > 0.78 ? 11.0 : 9.0;
-    return (delta.x * delta.y) < 0.0 ? 7.0 : 8.0;
+/// SyncGlowLook.washCover: strongest at the bottom edge, flat to nothing at the band's top.
+float washCover(float f, bool dark, float amp) {
+    float peak = dark ? kPeakDark : kPeakLight;
+    return peak * saturate(amp) * safePow(1.0 - saturate(f), 1.7);
 }
 
-/// How much wider than the phone band this drawable is. The band's height is fixed, so the column
-/// count is multiplied by this: a wide window gets more cells, and a glyph keeps its shape.
-/// Same as SyncGlowField.aspectScale.
-float aspectScale(constant GlowUniforms &u) {
-    float2 size = max(float2(u.width, u.height), float2(1.0));
-    return max(size.x / size.y / kReferenceAspect, 0.25);
+/// SyncGlowField.starFade: 1 low down, 0 at the star ceiling, none tucked under the horizon.
+float starFade(float yb, float band) {
+    float ceiling = max(band, 1.0) * kStarCeiling;
+    float s = smoothstep(ceiling * 0.5, ceiling, yb);
+    return yb < 6.0 ? 0.0 : 1.0 - s;
 }
 
-float glyphMask(float2 uv, float2 pos, float gid, float2 cells, texture2d<float> atlas, sampler smp) {
-    float2 local = (uv - pos) * float2(cells.x * 1.15, cells.y * 1.85) + 0.5;
+/// Distance from a point to a segment, in points.
+float segmentDistance(float2 p, float2 a, float2 b) {
+    float2 ab = b - a;
+    float t = saturate(dot(p - a, ab) / max(dot(ab, ab), 0.0001));
+    return length(p - (a + ab * t));
+}
+
+/// One glyph from the atlas, centred on `pos`, in a `box`-point square. `p` and `pos` are in points with y up.
+float glyphMask(float2 p, float2 pos, float gid, float box, bool glyphs, texture2d<float> atlas, sampler smp) {
+    if (!glyphs) {
+        // No atlas: a small soft dot stands in for every star.
+        float r = box * 0.09;
+        return 1.0 - smoothstep(r * 0.4, r, length(p - pos));
+    }
+    float2 local = float2((p.x - pos.x) / box + 0.5, 0.5 - (p.y - pos.y) / box);
     if (local.x < 0.0 || local.y < 0.0 || local.x > 1.0 || local.y > 1.0) return 0.0;
-    float2 inset = local;
-    inset = mix(float2(0.12), float2(0.88), local);
-    float2 auv = float2((inset.x + gid) / 12.0, inset.y);
+    float2 auv = float2((local.x + gid) / 12.0, local.y);
     return atlas.sample(smp, auv).r;
 }
 
-struct Star {
+/// The syncing pulse's place along the horizon, in points.
+float pulseX(float t, float widthPt) {
+    return mix(-0.15, 1.15, fract(t * 0.22)) * widthPt;
+}
+
+/// The re-pull sweep: dissolve from the left, then draw back in from the left. 1 is drawn.
+float repullMask(float x01, float age, float reduced) {
+    float p = reduced > 0.5 ? 1.0 : clamp(age / 2.2, 0.0, 1.0);
+    if (p < 0.5) {
+        float edge = p / 0.5;
+        return smoothstep(edge - 0.02, edge + 0.12, x01);
+    }
+    float edge = (p - 0.5) / 0.5;
+    return 1.0 - smoothstep(edge - 0.12, edge + 0.02, x01);
+}
+
+/// How far a refusal has broken the figure: rises, then settles back.
+float shatterAmount(float age, float reduced) {
+    if (reduced > 0.5) return 0.0;
+    return smoothstep(0.0, 0.35, age) * (1.0 - smoothstep(0.35, 1.15, age));
+}
+
+struct StarInfo {
     float2 pos;
     float exist;
     float glyph;
-    float blink;
+    float bright;
 };
 
-Star starCell(float2 gid, float2 cells, float scale, float st, float age, float reduced, float density, float pending, float time) {
-    Star s;
-    float stateId = floor(st + 0.5);
-    float h = glowHash(gid + 17.0 * stateId);
-    float h2 = glowHash(gid + 91.0);
-    s.exist = step(h, 0.22 + 0.28 * density);
-    s.blink = 1.0;
-    if (st > 5.5) s.exist = 0.0;
-    // 410: dissolve from the left, then draw back in from the left. Reduce Motion shows the finished field.
-    if (abs(st - 4.0) < 0.5) {
-        float p = reduced > 0.5 ? 1.0 : clamp(age / 2.2, 0.0, 1.0);
-        float x = (gid.x + 0.5) / max(cells.x, 1.0);
-        float mask = 1.0;
-        if (p < 0.5) {
-            float edge = p / 0.5;
-            mask = smoothstep(edge - 0.02, edge + 0.12, x);
-        } else {
-            float edge = (p - 0.5) / 0.5;
-            mask = 1.0 - smoothstep(edge - 0.12, edge + 0.02, x);
-        }
-        s.exist *= mask;
+StarInfo starAt(float2 cell, float4 layer, float salt, float st, float widthPt, float band, constant GlowUniforms &u, float t) {
+    StarInfo s;
+    float h = glowHash(cell + salt);
+    float h2 = glowHash(cell + salt + 91.0);
+    float h3 = glowHash(cell + salt + 33.0);
+    float prob = layer.w * (0.6 + 0.4 * saturate(u.density));
+    s.exist = step(h, prob);
+    float2 jitter = (float2(h2, h3) - 0.5) * 0.7;
+    float shatter = abs(st - 3.0) < 0.5 ? shatterAmount(u.eventAge, u.reduced) : 0.0;
+    jitter += (float2(glowHash(cell + 3.1), glowHash(cell + 8.7)) - 0.5) * shatter * 1.4;
+    s.pos = (cell + 0.5 + jitter) * layer.xy;
+    s.bright = 1.0;
+    if (u.reduced < 0.5) s.bright = 0.72 + 0.28 * sin(t * (0.6 + h2 * 0.9) + h * 6.283);
+    s.bright *= mix(1.0, 0.55, shatter);
+    // Syncing: stars lift and brighten as the horizon's pulse passes under them.
+    if (abs(st - 1.0) < 0.5 && u.reduced < 0.5) {
+        float d = (s.pos.x - pulseX(t, widthPt)) / 46.0;
+        float g = exp(-d * d);
+        s.pos.y += 6.0 * g;
+        s.bright *= 1.0 + 1.4 * g;
     }
-    float2 jitter = float2(h, h2) - 0.5;
-    // A refusal breaks the figure, then it settles back.
-    if (abs(st - 3.0) < 0.5 && reduced < 0.5) {
-        float rise = smoothstep(0.0, 0.35, age);
-        float fall = 1.0 - smoothstep(0.35, 1.15, age);
-        float shatter = rise * fall;
-        jitter += (float2(glowHash(gid + 3.1), glowHash(gid + 8.7)) - 0.5) * shatter * 1.6;
-        s.exist *= mix(0.45, 1.0, 1.0 - shatter);
-    }
-    s.pos = (gid + 0.5 + jitter * 0.46) / cells;
-    s.glyph = floor(min(h2, 0.999) * 6.0);
-    if (reduced < 0.5) {
-        float speed = st < 0.5 ? 1.1 : 2.2;
-        if (st > 1.5 && st < 2.5) speed = 1.4;
-        s.blink = 0.72 + 0.28 * sin(time * speed + h * 6.283);
-    }
-    // Offline: dim the field and hold N stars in a blinking cluster. N is capped at 8.
-    if (abs(st - 2.0) < 0.5) {
-        float2 cluster = float2(0.68, 0.36);
-        // Measured in the phone band's units, so a wide window holds the same few stars, not more.
-        float inCluster = smoothstep(0.26, 0.06, length((s.pos - cluster) * float2(scale, 1.0)));
-        float n = floor(clamp(pending, 0.0, 8.0) + 0.5);
-        float idx = floor(glowHash(gid + 4.2) * 8.0);
-        float held = step(idx, n - 0.5) * inCluster;
-        if (reduced < 0.5) s.blink = mix(0.35, 1.0, abs(sin(time * 2.4 + idx)));
-        s.exist = max(s.exist * 0.28, held);
-        s.blink = mix(s.blink, max(s.blink, 0.45), held);
-    }
+    // Offline: the sky dims; the waiting row says the rest.
+    if (abs(st - 2.0) < 0.5) s.bright *= 0.45;
+    if (abs(st - 4.0) < 0.5) s.exist *= repullMask(s.pos.x / max(widthPt, 1.0), u.eventAge, u.reduced);
+    s.exist *= starFade(s.pos.y, band);
+    s.glyph = h2;
     return s;
 }
 
-float3 constellation(float st, float2 uv, constant GlowUniforms &u, texture2d<float> atlas, sampler smp) {
-    if (u.glyphsEnabled < 0.5 || st > 5.5) return float3(0.0);
-    float scale = aspectScale(u);
-    float2 cells = float2((7.0 + 12.0 * u.density) * scale, 3.0 + 2.2 * u.density);
-    float2 gid0 = floor(uv * cells);
-    float3 col = float3(0.0);
-    float t = u.reduced > 0.5 ? 1.7 : u.time;
+/// One layer of stars, premultiplied: rgb is light, a is cover.
+float4 starLayer(float2 p, float4 layer, float layerBright, float salt, bool near, float st, float widthPt, float band,
+                 constant GlowUniforms &u, float t, texture2d<float> atlas, sampler smp) {
+    bool dark = u.dark > 0.5;
+    bool glyphs = u.glyphsEnabled > 0.5;
+    float3 colour = abs(st - 2.0) < 0.5 ? greyColor(dark) : starColor(dark);
+    float2 cell0 = floor(p / layer.xy);
+    float cover = 0.0;
+    float links = 0.0;
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
-            float2 gid = gid0 + float2(float(i), float(j));
-            Star s = starCell(gid, cells, scale, st, u.eventAge, u.reduced, u.density, u.pending, t);
-            float mask = glyphMask(uv, s.pos, s.glyph, cells, atlas, smp);
-            col += palette(st) * mask * s.exist * s.blink;
-            if (i == 0 && j == 0) {
-                Star right = starCell(gid + float2(1.0, 0.0), cells, scale, st, u.eventAge, u.reduced, u.density, u.pending, t);
-                Star down = starCell(gid + float2(0.0, 1.0), cells, scale, st, u.eventAge, u.reduced, u.density, u.pending, t);
-                float saltH = glowHash(gid + 21.0 + floor(st + 0.5));
-                float saltV = glowHash(gid + 44.0 + floor(st + 0.5));
-                float linkH = step(0.62, saltH) * s.exist * right.exist;
-                float linkV = step(0.70, saltV) * s.exist * down.exist;
-                if (abs(st - 1.0) < 0.5 && u.reduced < 0.5) {
-                    float sweep = fract(t * 0.22);
-                    float boost = smoothstep(0.0, 0.15, sweep - s.pos.x + 0.1);
-                    linkH *= mix(0.35, 1.35, boost);
-                    linkV *= mix(0.35, 1.2, boost);
-                }
-                if (abs(st - 3.0) < 0.5 && u.reduced < 0.5) {
-                    float rise = smoothstep(0.0, 0.35, u.eventAge);
-                    float fall = 1.0 - smoothstep(0.35, 1.15, u.eventAge);
-                    float keep = 1.0 - rise * fall;
-                    linkH *= keep;
-                    linkV *= keep;
-                }
-                // The slope is judged in the phone band's units too, or a wide window would read
-                // every link between side-by-side stars as upright.
-                float hid = linkGlyphId((right.pos - s.pos) * float2(scale, 1.0), saltH);
-                float vid = linkGlyphId((down.pos - s.pos) * float2(scale, 1.0), saltV);
-                for (int stepIndex = 1; stepIndex <= 4; stepIndex++) {
-                    float f = float(stepIndex) / 5.0;
-                    float2 hp = mix(s.pos, right.pos, f);
-                    float2 vp = mix(s.pos, down.pos, f);
-                    col += palette(st) * glyphMask(uv, hp, hid, cells, atlas, smp) * linkH * 0.9;
-                    col += palette(st) * glyphMask(uv, vp, vid, cells, atlas, smp) * linkV * 0.75;
+            float2 cell = cell0 + float2(float(i), float(j));
+            StarInfo s = starAt(cell, layer, salt, st, widthPt, band, u, t);
+            if (s.exist > 0.001) {
+                float gid;
+                if (near) gid = s.glyph < 0.4 ? kGlyphStar : (s.glyph < 0.75 ? kGlyphPlus : kGlyphDot);
+                else gid = s.glyph < 0.6 ? kGlyphDot : kGlyphTick;
+                float m = glyphMask(p, s.pos, gid, layer.z, glyphs, atlas, smp);
+                // Light mode inks stars a little more, so they read as deep blue rather than faded.
+                cover = max(cover, m * s.exist * s.bright * layerBright * (dark ? 1.0 : 1.35));
+            }
+            // The constellation: now and then a near star is joined to its right-hand neighbour by a
+            // hairline. A thin line, not a run of characters, so it never reads as text.
+            if (near && glowHash(cell + 21.0) > 0.55 && abs(st - 2.0) > 0.5) {
+                StarInfo r = starAt(cell + float2(1.0, 0.0), layer, salt, st, widthPt, band, u, t);
+                float both = min(s.exist, r.exist);
+                if (both > 0.001) {
+                    float d = segmentDistance(p, s.pos, r.pos);
+                    // Stops short of each star so the line does not run through the glyph.
+                    float ends = smoothstep(4.0, 7.0, length(p - s.pos)) * smoothstep(4.0, 7.0, length(p - r.pos));
+                    float keep = abs(st - 3.0) < 0.5 ? 1.0 - shatterAmount(u.eventAge, u.reduced) : 1.0;
+                    links = max(links, (1.0 - smoothstep(0.25, 0.75, d)) * ends * both * keep * 0.22);
                 }
             }
         }
     }
-    if (abs(st - 5.0) < 0.5 && u.reduced < 0.5) {
-        float travel = clamp(u.eventAge / 1.6, 0.0, 1.0);
-        float sx = mix(-0.12, 1.08, travel);
-        float sy = 0.30 + 0.02 * sin(u.eventAge * 3.0);
-        col += palette(st) * glyphMask(uv, float2(sx, sy), kGlyphStar, cells, atlas, smp) * 1.6;
-        // The tail follows at a fixed distance in glyphs, whatever the width.
-        col += palette(st) * glyphMask(uv, float2(sx - 0.055 / scale, sy + 0.012), kGlyphDash, cells, atlas, smp) * 0.9;
-        col += palette(st) * glyphMask(uv, float2(sx - 0.105 / scale, sy + 0.028), kGlyphDot, cells, atlas, smp) * 0.55;
+    float a = min(max(cover, links), kStarCap);
+    return float4(colour * a, a);
+}
+
+/// The horizon and what rides on it, premultiplied.
+float4 horizon(float2 p, float st, float widthPt, constant GlowUniforms &u, float t, texture2d<float> atlas, sampler smp) {
+    bool dark = u.dark > 0.5;
+    float d = (p.y - kHorizonY) / (kHorizonWidth * 0.5);
+    float line = exp(-d * d);
+    float halo = exp(-max(p.y, 0.0) / 9.0) * 0.28;
+    float3 colour = accentColor(dark);
+    // Up to date is the faint, steady baseline the other states brighten or break.
+    float level = 0.4;
+    float3 out = float3(0.0);
+    float a = 0.0;
+    if (abs(st - 1.0) < 0.5) {
+        float px = u.reduced > 0.5 ? widthPt * 0.5 : pulseX(t, widthPt);
+        float g = (p.x - px) / 55.0;
+        float pulse = exp(-g * g);
+        // A dim line with one bright, whiter bead of light running along it.
+        level = 0.3 + 1.7 * pulse;
+        halo *= 0.6 + 3.0 * pulse;
+        colour = mix(colour, starColor(dark), pulse * 0.6);
+    } else if (abs(st - 2.0) < 0.5) {
+        colour = greyColor(dark);
+        // Broken into dashes: 9 pt on, 6 pt off.
+        float phase = fract(p.x / 15.0) * 15.0;
+        float dash = smoothstep(0.0, 0.8, phase) * (1.0 - smoothstep(8.2, 9.0, phase));
+        level = 0.85 * dash;
+        halo *= 0.4;
+        // The waiting edits: a row of stars just above the line, blinking slowly.
+        float n = floor(clamp(u.pending, 0.0, 8.0) + 0.5);
+        float best = 0.0;
+        for (int k = 0; k < 8; k++) {
+            if (float(k) >= n) break;
+            float x = widthPt * 0.5 + (float(k) - (n - 1.0) * 0.5) * kWaitingSpacing;
+            float blink = u.reduced > 0.5 ? 1.0 : mix(0.45, 1.0, 0.5 + 0.5 * sin(t * 1.6 + float(k) * 1.3));
+            float m = glyphMask(p, float2(x, kWaitingY), kGlyphStar, 15.5, u.glyphsEnabled > 0.5, atlas, smp);
+            best = max(best, m * blink);
+        }
+        float sa = min(best, 0.85);
+        out += starColor(dark) * sa * (dark ? 1.4 : 1.0);
+        a = max(a, sa);
+    } else if (abs(st - 3.0) < 0.5) {
+        // One red flash, then back to the accent.
+        float flash = u.reduced > 0.5 ? 1.0 : smoothstep(0.0, 0.08, u.eventAge) * (1.0 - smoothstep(0.45, 1.1, u.eventAge));
+        colour = mix(colour, redColor(dark), flash);
+        level = 0.4 + 1.1 * flash;
+        halo *= 1.0 + 2.0 * flash;
+    } else if (abs(st - 4.0) < 0.5) {
+        float m = repullMask(p.x / max(widthPt, 1.0), u.eventAge, u.reduced);
+        // A bright pen at the front of the sweep, rubbing out and then drawing the line back in.
+        float prog = u.reduced > 0.5 ? 1.0 : clamp(u.eventAge / 2.2, 0.0, 1.0);
+        float edge = prog < 0.5 ? prog / 0.5 : (prog - 0.5) / 0.5;
+        float g = (p.x - edge * widthPt) / 16.0;
+        float pen = prog < 0.999 ? exp(-g * g) : 0.0;
+        level = 0.5 * m + 1.8 * pen;
+        halo *= m + 3.0 * pen;
+        colour = mix(colour, starColor(dark), pen * 0.6);
+    } else if (abs(st - 5.0) < 0.5) {
+        // The shooting star: low, just above the bars, with a long tapering tail.
+        float travel = u.reduced > 0.5 ? 0.55 : clamp(u.eventAge / 1.6, 0.0, 1.0);
+        float y0 = u.barInset + kNudgeHeight;
+        float2 head = float2(mix(-0.05, 1.1, travel) * widthPt, y0 + 10.0 * (1.0 - travel));
+        float2 dir = normalize(float2(1.0, -0.09));
+        float2 tailEnd = head - dir * kNudgeTail;
+        float2 ab = head - tailEnd;
+        float along = saturate(dot(p - tailEnd, ab) / dot(ab, ab));
+        float dist = segmentDistance(p, tailEnd, head);
+        float width = mix(0.3, 1.4, along);
+        float tail = (1.0 - smoothstep(width * 0.5, width + 0.6, dist)) * along * along;
+        float glow = exp(-length(p - head) / 4.0) * 0.7;
+        float m = glyphMask(p, head, kGlyphStar, 17.0, u.glyphsEnabled > 0.5, atlas, smp);
+        // It may cross a label for a moment, so even its head stays below full cover.
+        float sa = min(max(max(tail * 0.85, m), glow), 0.75);
+        out += starColor(dark) * sa * (dark ? 1.3 : 1.0);
+        a = max(a, sa);
     }
-    return col;
+    float la = saturate(line * level + halo * level * 0.6);
+    out += colour * la * (dark ? 1.3 : 1.0);
+    // Dark: the halo is light added around the line. Light: added light only whitens a white page,
+    // so the halo is ink like the line, and the pulse or pen shows as a deeper blue bead.
+    a = max(a, dark ? saturate(line * level) : min(la, 0.85));
+    return float4(out, a);
+}
+
+/// Everything that emits light and gets bloom: both star layers and the horizon. Premultiplied.
+float4 field(float st, float2 p, float widthPt, float band, constant GlowUniforms &u, texture2d<float> atlas, sampler smp) {
+    if (st > 5.5) return float4(0.0);
+    float t = u.reduced > 0.5 ? 1.7 : u.time;
+    float4 far = starLayer(p, kFarCell, kFarBright, 0.0, false, st, widthPt, band, u, t * 0.5, atlas, smp);
+    float4 near = starLayer(p, kNearCell, kNearBright, 57.0, true, st, widthPt, band, u, t, atlas, smp);
+    float4 sky = near + far * (1.0 - near.a);
+    float4 line = horizon(p, st, widthPt, u, t, atlas, smp);
+    return line + sky * (1.0 - line.a);
+}
+
+/// Pixel to points, y measured up from the bottom edge.
+float2 pointsOf(float2 pixel, constant GlowUniforms &u) {
+    float scale = max(u.pointScale, 1.0);
+    float h = max(u.height, 1.0);
+    return float2(pixel.x / scale, (h - pixel.y) / scale);
 }
 
 fragment float4 glowStars(
@@ -236,14 +358,28 @@ fragment float4 glowStars(
     texture2d<float> atlas [[texture(0)]]
 ) {
     constexpr sampler smp(coord::normalized, address::clamp_to_edge, filter::linear);
-    float2 size = max(float2(u.width, u.height), float2(1.0));
-    float2 uv = in.position.xy / size;
+    float scale = max(u.pointScale, 1.0);
+    float widthPt = max(u.width, 1.0) / scale;
+    float band = max(u.height, 1.0) / scale;
+    float2 p = pointsOf(in.position.xy, u);
     float fade = saturate(u.transition);
     // Once the crossfade is over the outgoing field has no weight, so it is not worked out at all.
-    float3 col = constellation(u.state, uv, u, atlas, smp);
-    if (fade < 0.999) col = mix(constellation(u.previous, uv, u, atlas, smp), col, fade);
-    col = sanitize(col);
-    return float4(col, clamp(max(col.r, max(col.g, col.b)), 0.0, 1.0));
+    float4 c = field(u.state, p, widthPt, band, u, atlas, smp);
+    if (fade < 0.999) c = mix(field(u.previous, p, widthPt, band, u, atlas, smp), c, fade);
+    return float4(sanitize(c.rgb), sanitize1(c.a));
+}
+
+float4 blur9(texture2d<float> src, sampler smp, float2 uv, float2 texel) {
+    float4 c = src.sample(smp, uv) * 0.227027;
+    c += src.sample(smp, uv + texel * 1.0) * 0.1945946;
+    c += src.sample(smp, uv - texel * 1.0) * 0.1945946;
+    c += src.sample(smp, uv + texel * 2.0) * 0.1216216;
+    c += src.sample(smp, uv - texel * 2.0) * 0.1216216;
+    c += src.sample(smp, uv + texel * 3.0) * 0.054054;
+    c += src.sample(smp, uv - texel * 3.0) * 0.054054;
+    c += src.sample(smp, uv + texel * 4.0) * 0.016216;
+    c += src.sample(smp, uv - texel * 4.0) * 0.016216;
+    return float4(sanitize(c.rgb), sanitize1(c.a));
 }
 
 fragment float4 glowBlurH(
@@ -253,18 +389,7 @@ fragment float4 glowBlurH(
 ) {
     constexpr sampler smp(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 size = max(float2(u.width, u.height), float2(1.0));
-    float2 uv = in.position.xy / size;
-    float2 texel = float2(1.6 / size.x, 0.0);
-    float4 c = src.sample(smp, uv) * 0.227027;
-    c += src.sample(smp, uv + texel * 1.0) * 0.1945946;
-    c += src.sample(smp, uv - texel * 1.0) * 0.1945946;
-    c += src.sample(smp, uv + texel * 2.0) * 0.1216216;
-    c += src.sample(smp, uv - texel * 2.0) * 0.1216216;
-    c += src.sample(smp, uv + texel * 3.0) * 0.054054;
-    c += src.sample(smp, uv - texel * 3.0) * 0.054054;
-    c += src.sample(smp, uv + texel * 4.0) * 0.016216;
-    c += src.sample(smp, uv - texel * 4.0) * 0.016216;
-    return float4(sanitize(c.rgb), saturate(c.a));
+    return blur9(src, smp, in.position.xy / size, float2(1.6 / size.x, 0.0));
 }
 
 fragment float4 glowBlurV(
@@ -274,33 +399,19 @@ fragment float4 glowBlurV(
 ) {
     constexpr sampler smp(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 size = max(float2(u.width, u.height), float2(1.0));
-    float2 uv = in.position.xy / size;
-    float2 texel = float2(0.0, 1.6 / size.y);
-    float4 c = src.sample(smp, uv) * 0.227027;
-    c += src.sample(smp, uv + texel * 1.0) * 0.1945946;
-    c += src.sample(smp, uv - texel * 1.0) * 0.1945946;
-    c += src.sample(smp, uv + texel * 2.0) * 0.1216216;
-    c += src.sample(smp, uv - texel * 2.0) * 0.1216216;
-    c += src.sample(smp, uv + texel * 3.0) * 0.054054;
-    c += src.sample(smp, uv - texel * 3.0) * 0.054054;
-    c += src.sample(smp, uv + texel * 4.0) * 0.016216;
-    c += src.sample(smp, uv - texel * 4.0) * 0.016216;
-    return float4(sanitize(c.rgb), saturate(c.a));
+    return blur9(src, smp, in.position.xy / size, float2(0.0, 1.6 / size.y));
 }
 
+/// 1.0 is SDR white. With headroom, light above it rolls off softly up to the display's peak.
 float3 tonemap(float3 linear, float headroom) {
     float3 x = max(linear, float3(0.0));
     float peak = max(headroom, 1.0);
-    if (peak <= 1.05) {
-        float a = 2.51;
-        float b = 0.03;
-        float c = 2.43;
-        float d = 0.59;
-        float e = 0.14;
-        return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-    }
-    // 1.0 is SDR white. The shoulder lets star cores sit above it, up to the display's headroom.
-    return min(x * peak / (x + peak * 0.55), float3(peak));
+    // SDR: scale the whole colour down by its brightest channel. Clipping each channel on its own
+    // turned the bright blue of a star's head green.
+    if (peak <= 1.05) return x / max(1.0, max(x.r, max(x.g, x.b)));
+    float room = peak - 1.0;
+    float3 over = max(x - 1.0, float3(0.0));
+    return min(x, float3(1.0)) + room * (1.0 - exp(-over / room));
 }
 
 fragment float4 glowPresent(
@@ -312,31 +423,43 @@ fragment float4 glowPresent(
     constexpr sampler smp(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 size = max(float2(u.width, u.height), float2(1.0));
     float2 uv = in.position.xy / size;
-    float t = u.reduced > 0.5 ? 1.7 : u.time;
-    float fall = safePow(1.0 - smoothstep(0.0, 0.98, uv.y), 1.35);
+    bool dark = u.dark > 0.5;
+    float scale = max(u.pointScale, 1.0);
+    float band = size.y / scale;
+    float2 p = pointsOf(in.position.xy, u);
+    float f = saturate(p.y / max(band, 1.0));
     float fade = saturate(u.transition);
-    float3 base = mix(palette(u.previous), palette(u.state), fade);
-    float amp = mix(amplitude(u.previous), amplitude(u.state), fade) * max(u.intensity, 0.0);
-    if (u.lowPower > 0.5) amp *= 0.85;
-    float3 wash = base * amp * fall * (0.45 + 0.55 * (1.0 - uv.y));
+    float gain = max(u.intensity, 0.0) * (u.lowPower > 0.5 ? 0.9 : 1.0);
+
+    // The wash: colour and cover crossfade between the two states.
+    float3 tint = mix(washColor(u.previous, dark), washColor(u.state, dark), fade);
+    float amp = mix(amplitude(u.previous), amplitude(u.state), fade) * gain;
+    float washA = washCover(f, dark, amp);
+    float t = u.reduced > 0.5 ? 1.7 : u.time;
     bool sweeping = (abs(u.state - 1.0) < 0.5 || abs(u.previous - 1.0) < 0.5) && u.reduced < 0.5;
     if (sweeping) {
-        // `pow(x, 2)` is NaN for x < 0. Left of the sweep that blacked out a solid region.
-        float delta = (uv.x - fract(t * 0.20)) * 7.0;
-        float pulse = exp(-(delta * delta));
+        // The wash swells a little over the pulse, low down only.
         float amount = abs(u.state - 1.0) < 0.5 ? fade : (1.0 - fade);
-        wash += base * pulse * fall * amp * 0.7 * amount;
+        float g = (p.x - pulseX(t, size.x / scale)) / 90.0;
+        washA += exp(-g * g) * washCover(f * 1.6, dark, 1.0) * 0.35 * amount;
     }
-    float3 sharp = sanitize(stars.sample(smp, uv).rgb);
-    float3 soft = sanitize(bloom.sample(smp, uv).rgb);
-    float lift = 1.0 + max(u.headroom - 1.0, 0.0) * 0.45;
-    float3 color = sanitize(wash + (sharp * lift + soft * 0.95) * (0.65 + amp) * fall);
-    color = tonemap(color, max(u.headroom, 1.0));
+    washA = min(washA, dark ? kPeakDark : kPeakLight);
+
+    float4 sharp = stars.sample(smp, uv);
+    float4 soft = bloom.sample(smp, uv);
+    sharp = float4(sanitize(sharp.rgb), sanitize1(sharp.a));
+    soft = float4(sanitize(soft.rgb), sanitize1(soft.a));
+    // Dark: star cores lift into the display's headroom and bloom. Light: no real bloom (it would
+    // grey the white page), just deeper ink.
+    float lift = dark ? 1.0 + max(u.headroom - 1.0, 0.0) * 0.5 : 1.0;
+    float bloomGain = dark ? 0.9 : 0.12;
+    float3 light = sharp.rgb * lift * gain + soft.rgb * bloomGain * gain;
+    float a = saturate(sharp.a * gain + soft.a * bloomGain * 0.4);
+    float3 color = light + tint * washA * (1.0 - a);
+    float cover = min(a + washA * (1.0 - a), kTotalCap);
+    color = tonemap(sanitize(color), max(u.headroom, 1.0));
     float grainClock = u.reduced > 0.5 ? 0.0 : t;
-    float dither = (glowHash(in.position.xy + grainClock * float2(17.0, 13.0)) - 0.5) / 180.0;
-    color += dither;
-    float starCover = clamp(max(sharp.r, max(sharp.g, sharp.b)) * 1.4, 0.0, 1.0);
-    float cover = clamp(fall * amp * 1.35 + starCover * fall, 0.0, 0.86);
-    color = max(color, float3(0.0));
-    return float4(color * cover, cover);
+    float dither = (glowHash(in.position.xy + grainClock * float2(17.0, 13.0)) - 0.5) / 255.0;
+    color = max(color + dither * cover, float3(0.0));
+    return float4(color, cover);
 }

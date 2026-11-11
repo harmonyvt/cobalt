@@ -10,10 +10,13 @@ import UIKit
 import AppKit
 #endif
 
-/// The soft band along the top of a window. One instance per window. Hit testing is off, so nav
-/// buttons keep working. The keyboard and the Finder extension do not use this view.
+/// The soft band that rises from the bottom of a screen's content. It sits beneath the bars, so the
+/// tab bar's glass bends it instead of it covering the bar. Hit testing is off and it is hidden from
+/// accessibility. The keyboard and the Finder extension do not use this view.
 struct SyncGlowBand: View {
     var status: SyncGlowStatus?
+    /// Points at the bottom covered by bars (tab bar, home indicator). The band reaches under them.
+    var barInset: CGFloat = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -28,15 +31,15 @@ struct SyncGlowBand: View {
 
     var body: some View {
         let state = status?.state ?? .off
-        // The band is a veil over the toolbar and the first rows. Its star cores cover up to 86% whatever
-        // the strength, so dimming cannot promise legible buttons: with Reduce Transparency or Increase
-        // Contrast on it is not drawn at all. The modifiers below hang off the band's one child, so while
-        // it is not drawn (this, or the glow being off) none of them run, the tick included.
+        // The band lies over the last rows and under the tab bar's glass. Its cover is capped, but
+        // someone who asked for less transparency or more contrast gets none of it: with Reduce
+        // Transparency or Increase Contrast on it is not drawn at all. The modifiers below hang off the
+        // band's one child, so while it is not drawn (this, or the glow being off) none of them run,
+        // the tick included.
         let plain = reduceTransparency || contrast == .increased
         Group {
             if let status, state != .off, !plain {
                 representable(status: status, state: state)
-                    .frame(height: 152)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
                     .allowedDynamicRange(.high)
@@ -80,25 +83,41 @@ struct SyncGlowBand: View {
 
     @ViewBuilder
     private func representable(status: SyncGlowStatus, state: SyncGlowState) -> some View {
-        let pinned: Float? = status.pinsEventAge ? Float(status.eventAge(at: Date())) : nil
+        let draw = drawState(status: status, state: state)
+        #if os(iOS)
+        SyncGlowMetalIOS(draw: draw)
+        #else
+        SyncGlowMetalMac(draw: draw)
+        #endif
+    }
+
+    private func drawState(status: SyncGlowStatus, state: SyncGlowState) -> SyncGlowDraw {
+        var pinned: Float? = status.pinsEventAge ? Float(status.eventAge(at: Date())) : nil
+        var pinTime: Float?
+        #if DEBUG
+        // `-previewSyncGlowAge` freezes the whole picture at that moment, for stills.
+        if status.pinsEventAge, let age = SyncGlowDebugLaunch.frozenAge {
+            pinned = Float(age)
+            pinTime = Float(age)
+        }
+        #endif
         let draw = SyncGlowDraw(
             state: state,
             previous: previous,
             transitionStart: transitionStart,
             eventStart: eventStart,
             pinEventAge: pinned,
+            pinTime: pinTime,
             pending: status.pendingCount,
             reduceMotion: reduceMotion,
             lowPower: lowPower,
-            intensity: colorScheme == .dark ? SyncGlowComposer.defaultIntensity : 0.48,
+            intensity: SyncGlowComposer.defaultIntensity,
             density: SyncGlowComposer.defaultDensity,
+            dark: colorScheme == .dark,
+            barInset: Float(barInset),
             visible: onScreen,
             sceneActive: scenePhase == .active)
-        #if os(iOS)
-        SyncGlowMetalIOS(draw: draw)
-        #else
-        SyncGlowMetalMac(draw: draw)
-        #endif
+        return draw
     }
 }
 
@@ -108,11 +127,14 @@ struct SyncGlowDraw: Equatable {
     var transitionStart: TimeInterval
     var eventStart: TimeInterval
     var pinEventAge: Float?
+    var pinTime: Float?
     var pending: Int
     var reduceMotion: Bool
     var lowPower: Bool
     var intensity: Float
     var density: Float
+    var dark: Bool
+    var barInset: Float
     var visible: Bool
     var sceneActive: Bool
 }
@@ -147,7 +169,7 @@ private struct SyncGlowMetalMac: NSViewRepresentable {
 }
 #endif
 
-/// Clears hit testing. The band is decoration over the library, including the Mac title bar area.
+/// Clears hit testing. The band is decoration under the bars, over the last rows of content.
 final class SyncGlowMTKView: MTKView {
     /// Told when the platform says whether anybody can see the band: on iOS the view leaves its window
     /// while a full-screen cover is up, on the Mac the window reports being minimised or fully covered.
@@ -205,7 +227,7 @@ final class SyncGlowMTKView: MTKView {
 }
 
 /// What every band draws with: the device, its queue, the four pipelines and the glyph atlas. Built
-/// once, on the first band. The window band, the queue sheet's and the editor cover's take turns, and
+/// once, on the first band. The tabs' bands, the queue sheet's and the editor cover's take turns, and
 /// building all of this again on each turn was a main-thread hitch in the middle of a presentation.
 @MainActor
 final class SyncGlowResources {
@@ -281,8 +303,8 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
     private var bloomSize = CGSize.zero
     private var drawState = SyncGlowDraw(
         state: .upToDate, previous: .upToDate, transitionStart: 0, eventStart: 0, pinEventAge: nil,
-        pending: 0, reduceMotion: false, lowPower: false, intensity: SyncGlowComposer.defaultIntensity,
-        density: SyncGlowComposer.defaultDensity, visible: true, sceneActive: true)
+        pinTime: nil, pending: 0, reduceMotion: false, lowPower: false, intensity: SyncGlowComposer.defaultIntensity,
+        density: SyncGlowComposer.defaultDensity, dark: true, barInset: 0, visible: true, sceneActive: true)
     /// The last settled frame that reached the screen. A frame from the middle of a crossfade is not one.
     private var lastStill: SyncGlowDraw?
     private var drawing = false
@@ -416,12 +438,17 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
             view.isPaused = true
         }
         let age = drawState.pinEventAge.map { TimeInterval($0) } ?? max(0, now - drawState.eventStart)
-        let time = Float(now - started)
+        let time = drawState.pinTime ?? Float(now - started)
+        // Pixels per point, from the drawable against the view's own size, so stars and the horizon
+        // keep their size in points at 1x, 2x and 3x.
+        let boundsWidth = Double(view.bounds.width)
+        let pointScale = boundsWidth > 0 ? Float(Double(width) / boundsWidth) : 1
         var uniforms = SyncGlowComposer.uniforms(
             time: time, state: drawState.state, previous: drawState.previous, transition: fade,
             pendingCount: drawState.pending, reduceMotion: drawState.reduceMotion, lowPower: drawState.lowPower,
             headroom: headroom(of: view), eventAge: age, width: Float(width), height: Float(height),
-            glyphsEnabled: resources.glyphs, intensity: drawState.intensity, density: drawState.density)
+            glyphsEnabled: resources.glyphs, intensity: drawState.intensity, density: drawState.density,
+            pointScale: pointScale, dark: drawState.dark, barInset: drawState.barInset)
         var packed = uniforms.packed
 
         encode(command, pipeline: starsPipeline, target: starTex, clear: true, packed: &packed) { encoder in
@@ -503,13 +530,23 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
 }
 
 extension View {
-    /// One constellation band along the top. `suppressed` is true while a full-screen presentation
-    /// in this same window is drawing the band itself.
+    /// The band along the bottom of this content: `SyncGlowLook.bandHeight` points above the bottom
+    /// safe area, reaching down under the bars to the edge. Attach it to content that sits beneath the
+    /// bars (a tab's root, the Mac detail column, a sheet's stack), never on top of a whole window, or
+    /// it is drawn over the bars instead of under their glass. `suppressed` is true while another
+    /// presentation in this window draws the band itself.
     func syncGlow(_ status: SyncGlowStatus?, suppressed: Bool = false) -> some View {
-        overlay(alignment: .top) {
-            if !suppressed {
-                SyncGlowBand(status: status)
-                    .ignoresSafeArea(edges: .top)
+        overlay(alignment: .bottom) {
+            if !suppressed, status != nil {
+                GeometryReader { proxy in
+                    let inset = proxy.safeAreaInsets.bottom
+                    SyncGlowBand(status: status, barInset: inset)
+                        .frame(height: SyncGlowPlacement.bandHeight(bottomInset: Double(inset)))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .ignoresSafeArea(.container, edges: .bottom)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
         }
     }
@@ -520,8 +557,16 @@ extension View {
 enum SyncGlowDebugLaunch {
     /// `-previewSyncGlow upToDate|syncing|offline|refused|repull|nudge|off`
     /// `-previewSyncGlowPending N` (offline with no number shows three waiting stars)
+    /// `-previewSyncGlowAge S` freezes the picture S seconds into the state (the event age and the
+    /// clock both), so a still lands on a chosen moment: mid-flash, mid-sweep, mid-crossing.
     /// `-previewTab save|library|links|chat|stage|names|queue|settings` chooses which screen is up.
-    /// The band is on the window, so the same flags work on every tab.
+    /// Every tab, the queue sheet and the editor have their own band, so the flags work on each.
+    static var frozenAge: Double? {
+        guard let raw = UserDefaults.standard.string(forKey: "previewSyncGlowAge"),
+              let value = Double(raw.trimmingCharacters(in: .whitespacesAndNewlines)), value.isFinite else { return nil }
+        return max(0, value)
+    }
+
     static func apply(to model: AppModel) {
         let defaults = UserDefaults.standard
         guard let state = SyncGlowDebugParse.state(from: defaults.string(forKey: "previewSyncGlow")) else { return }
