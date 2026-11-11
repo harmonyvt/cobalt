@@ -154,7 +154,7 @@ describe("initialize", () => {
         expect(client.getServerCapabilities()).toMatchObject({ tools: {}, resources: {} });
         const text = client.getInstructions()!;
         expect(text).toMatch(/search_library, show_post, show_edit/);
-        expect(text).toMatch(/upload_begin/);
+        expect(text).toMatch(/upload_files/);
         await client.close();
     });
 });
@@ -166,9 +166,11 @@ describe("tools/list", () => {
         const names = tools.map((t) => t.name);
         // `only_with_search` is gated off (no search Space)
         expect(names.slice(0, 4)).toEqual(["search_library", "convert_to_webp", "job_status", "long_answer"]);
-        expect(names).toContain("library_list");
-        expect(names).toContain("upload_begin");
-        expect(names.indexOf("library_list")).toBeGreaterThan(3);
+        // the older tools follow; the twelve retired ones are not listed
+        expect(names).toContain("library_title");
+        expect(names).not.toContain("library_list");
+        expect(names).not.toContain("upload_begin");
+        expect(names.indexOf("library_title")).toBeGreaterThan(3);
         const search = tools.find((t) => t.name === "search_library")!;
         expect(search.title).toBe("Search the library");
         expect(search.annotations?.readOnlyHint).toBe(true);
@@ -224,8 +226,9 @@ describe("tools/call on an app tool", () => {
         expect(r.content[0].text).toMatch(/… \(cut/);
     });
     it("an existing tool still answers through the SDK", async () => {
-        const r = (await rpc("tools/call", { name: "library_list", arguments: {} })).result;
-        expect(JSON.parse(r.content[0].text)).toEqual([]);
+        const r = (await rpc("tools/call", { name: "library_hidden", arguments: {} })).result;
+        expect(JSON.parse(r.content[0].text)).toEqual({ posts: [], next: null });
+        expect(r.structuredContent).toEqual({ posts: [], next: null });
     });
 });
 
@@ -342,9 +345,9 @@ describe("the JSON-RPC edges kept from the first core (through the Worker)", () 
     });
     it("tools/call: arguments missing, null, an array or a string are {}; no name is -32602 'tools/call needs a name'", async () => {
         for (const args of [undefined, null, [], [1, 2], "x", 5]) {
-            const body = (await (await post({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "library_list", ...(args === undefined ? {} : { arguments: args }) } })).json()) as any;
+            const body = (await (await post({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "library_hidden", ...(args === undefined ? {} : { arguments: args }) } })).json()) as any;
             expect(body.error, JSON.stringify(args)).toBeUndefined();
-            expect(JSON.parse(body.result.content[0].text)).toEqual([]);
+            expect(JSON.parse(body.result.content[0].text)).toEqual({ posts: [], next: null });
         }
         for (const params of [{}, { name: 5 }, { name: null, arguments: {} }, null, undefined, "x"]) {
             const body = (await (await post({ jsonrpc: "2.0", id: 7, method: "tools/call", ...(params === undefined ? {} : { params }) })).json()) as any;

@@ -21,6 +21,7 @@ let VARS = null;
 const FIX = {
     "search.grid": { tool: "search_library", args: { query: "pink cat girl edits" }, out: () => F.searchOut("pink cat girl edits", 8) },
     "search.few": { tool: "search_library", args: { query: "jumpscare" }, out: () => ({ ...F.searchOut("jumpscare", 2), mode: "text" }) },
+    "search.list": { tool: "search_library", args: {}, out: () => ({ ...F.searchOut("", 8), mode: "list" }) },
     "search.empty": { tool: "search_library", args: { query: "zzzz" }, out: () => ({ view: "search", query: "zzzz", mode: "meaning", total: 0, items: [] }) },
     "post.video": { tool: "show_post", args: { id: "post-vid-1" }, out: () => F.postDetail("post-vid-1") },
     "post.image": { tool: "show_post", args: { id: "post-img-1" }, out: () => F.postDetail("post-img-1") },

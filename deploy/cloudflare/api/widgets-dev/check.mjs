@@ -179,6 +179,12 @@ await step("search: empty and text mode", async () => {
     await open("search.few");
     ok((await txt(".whead")).includes("text match"), "text mode tag");
 });
+await step("search: a list with no query has no quoted words and no mode tag", async () => {
+    await open("search.list");
+    const head = await txt(".whead");
+    ok(head.includes("21 posts") && !head.includes('"') && !head.includes("text match"), `list title: ${head}`);
+    eq(await count(".th"), 8, "the grid still draws");
+});
 
 // ---------------------------------------------------------------- post
 await step("post.video: meta, share row, copy fallback, similar, links, full screen", async () => {

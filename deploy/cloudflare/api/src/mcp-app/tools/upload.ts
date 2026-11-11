@@ -8,11 +8,16 @@ import { arr, int, plural, rec, str } from "./common";
 
 const Input = z.object({
     files: z
-        .array(z.object({ name: z.string().min(1).max(200), title: z.string().min(1).max(200).optional() }))
+        .array(z.object({ name: z.string().min(1).max(200).optional(), title: z.string().min(1).max(200).optional() }))
         .min(1)
         .max(10)
         .optional(),
+    // one file, flat (what upload_begin took): the same as files: [{ name, title }]
+    name: z.string().min(1).max(200).optional(),
+    title: z.string().min(1).max(200).optional(),
     public: z.boolean().optional(),
+    // wait in the server's line when it is busy instead of failing
+    queue: z.boolean().optional(),
 });
 
 // 'image/jpeg' -> '.jpg'
@@ -24,21 +29,18 @@ const extensions = (types: unknown): string[] => {
     return out.includes(".jpg") && !out.includes(".jpeg") ? [...out, ".jpeg"] : out;
 };
 
-// a file name inside single quotes for a shell
-const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-
 export const uploadFiles: AppTool<z.infer<typeof Input>> = {
     name: "upload_files",
     title: "Upload files",
     description:
-        "Get upload links (15 minutes) for up to 10 local videos or images to add to the capystore library. Each link takes the file's bytes with an HTTP PUT; the answer includes a ready curl command per file.",
+        "Get upload links (15 minutes) for up to 10 local videos or images to add to the capystore library (files: [{ name, title }], or name and title for a single file; public hosts them publicly; queue waits in line when the server is busy). Each link takes the file's bytes with an HTTP PUT; the answer includes a ready curl command per file.",
     input: Input,
     output: UploadOut,
     readOnly: false,
     annotations: { destructiveHint: false, openWorldHint: false },
     view: "upload",
     async run(ctx, input) {
-        const wanted = input.files ?? [{ name: "", title: undefined as string | undefined }];
+        const wanted = (input.files ?? [{ name: input.name, title: input.title }]).map((f) => ({ name: f.name ?? "", title: f.title }));
         const isPublic = input.public === true;
         const made = await Promise.all(
             wanted.map(async (f) => {
@@ -47,6 +49,7 @@ export const uploadFiles: AppTool<z.infer<typeof Input>> = {
                         ...(f.name ? { name: f.name } : {}),
                         ...(f.title ? { title: f.title } : {}),
                         ...(isPublic ? { public: true } : {}),
+                        ...(input.queue ? { queue: true } : {}),
                     }),
                 );
                 return { name: f.name, r };
@@ -59,8 +62,8 @@ export const uploadFiles: AppTool<z.infer<typeof Input>> = {
                 name: name || "file",
                 upload_url: url,
                 expires_at: str(r.expires_at) ?? new Date(ctx.op.now()).toISOString(),
-                // the op's own line has a FILE placeholder; the file's name stands there when there is one
-                curl: `curl -sS -T ${name ? shellQuote(name) : "FILE"} '${url}'`,
+                // as the op's own line: FILE stands for the path of the file on disk
+                curl: `curl -sS -T FILE '${url}'`,
             };
         });
         const maxBytes = int(first.max_bytes, MAX_UPLOAD_BYTES);
@@ -69,7 +72,7 @@ export const uploadFiles: AppTool<z.infer<typeof Input>> = {
         const text = [
             `${plural(uploads.length, "upload link")} ready (valid for 15 minutes, up to ${mb} MB each; ${accept.map((a) => a.slice(1)).join(", ")}${isPublic ? "; the files will be public" : ""}).`,
             ...uploads.map((u, i) => `${i + 1}. ${u.name}: ${u.curl}`),
-            "Each file is added to the library when its upload finishes.",
+            "Replace FILE with the path of the file on disk. Each file is added to the library when its upload finishes.",
         ].join("\n");
         return { text, structured: { view: "upload", uploads, max_bytes: maxBytes, accept, public: isPublic } satisfies z.infer<typeof UploadOut> };
     },

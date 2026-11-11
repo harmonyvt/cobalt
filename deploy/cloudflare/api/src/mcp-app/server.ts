@@ -17,9 +17,11 @@ import {
     MCP_SERVER_NAME,
     MCP_SERVER_VERSION,
     mcpFlags,
+    mcpListedOps,
     mcpOps,
     mcpToolList,
     mcpToolName,
+    MCP_RESULT_MAX,
     runChatOp,
     type McpCaller,
     type McpTool,
@@ -27,6 +29,9 @@ import {
 } from "../mcp";
 import { OpError } from "../registry/op";
 import type { Registry } from "../registry/registry";
+import { FOLLOWS } from "./follow";
+import { RETIRED_TOOLS } from "./retired";
+import type { View } from "./shapes";
 import { APP_TOOLS } from "./tools";
 import type { AppTool, AppToolCtx, Widget } from "./types";
 import { WIDGETS } from "./widgets.generated";
@@ -37,14 +42,16 @@ export type McpParts = { appTools?: AppTool[]; widgets?: Widget[] };
 
 // ---- the app tools ----------------------------------------------------------------------------------------------------
 
+// _meta of a tool tied to a widget, as registerAppTool writes it: the nested key and the legacy flat one
+const viewMeta = (view: View): Json => {
+    const uri = `ui://capystore/${view}.html`;
+    return { ui: { resourceUri: uri }, [RESOURCE_URI_META_KEY]: uri };
+};
+
 function appToolEntry(tool: AppTool): McpTool & Json {
     const extra = (tool as { annotations?: Json }).annotations;
     const ui: Json = {};
-    if (tool.view) {
-        // as registerAppTool writes them: the nested key and the legacy flat one
-        const uri = `ui://capystore/${tool.view}.html`;
-        ui.resourceUri = uri;
-    }
+    if (tool.view) ui.resourceUri = `ui://capystore/${tool.view}.html`;
     if (tool.appOnly) ui.visibility = ["app"];
     const meta: Json = {};
     if (Object.keys(ui).length) meta.ui = ui;
@@ -65,15 +72,11 @@ const toolsOffered = (tools: AppTool[], caller: McpCaller) => {
     return tools.filter((t) => (t.when ? t.when(flags) : true));
 };
 
-async function callAppTool(tool: AppTool, registry: Registry, caller: McpCaller, args: unknown): Promise<ToolResult> {
-    const parsed = tool.input.safeParse(args);
-    if (!parsed.success) {
-        const parts = parsed.error.issues.slice(0, 4).map((i) => `${i.path.length ? i.path.join(".") : "input"}: ${i.message}`);
-        return { content: [{ type: "text", text: `${tool.name}: ${parts.join("; ")}` }], isError: true };
-    }
+// What an app tool runs with: every op the MCP can run (the retired calls too), as this MCP thread.
+function toolCtx(registry: Registry, caller: McpCaller): AppToolCtx {
     const flags = mcpFlags(caller.ctx);
     const ops = mcpOps(registry, flags);
-    const ctx: AppToolCtx = {
+    return {
         op: caller.ctx,
         flags,
         origin: caller.origin,
@@ -84,9 +87,38 @@ async function callAppTool(tool: AppTool, registry: Registry, caller: McpCaller,
             return runChatOp(op, caller, input);
         },
     };
+}
+
+// structuredContent past MCP_RESULT_MAX is trimmed: the longest list in it is halved until it fits. `trimmed` says how many rows
+// of that list are left (null when nothing was cut).
+export function fitStructured(value: Json): { value: Json; trimmed: string | null } {
+    const size = (v: Json) => JSON.stringify(v).length;
+    if (size(value) <= MCP_RESULT_MAX) return { value, trimmed: null };
+    const out: Json = { ...value };
+    let note: string | null = null;
+    for (let guard = 0; guard < 20 && size(out) > MCP_RESULT_MAX; guard++) {
+        const key = Object.keys(out)
+            .filter((k) => Array.isArray(out[k]) && (out[k] as unknown[]).length > 1)
+            .sort((a, b) => JSON.stringify(out[b]).length - JSON.stringify(out[a]).length)[0];
+        if (!key) break;
+        const rows = out[key] as unknown[];
+        out[key] = rows.slice(0, Math.ceil(rows.length / 2));
+        note = `${(out[key] as unknown[]).length} of ${rows.length} ${key}`;
+    }
+    return { value: out, trimmed: note };
+}
+
+async function callAppTool(tool: AppTool, registry: Registry, caller: McpCaller, args: unknown): Promise<ToolResult> {
+    const parsed = tool.input.safeParse(args);
+    if (!parsed.success) {
+        const parts = parsed.error.issues.slice(0, 4).map((i) => `${i.path.length ? i.path.join(".") : "input"}: ${i.message}`);
+        return { content: [{ type: "text", text: `${tool.name}: ${parts.join("; ")}` }], isError: true };
+    }
+    const ctx = toolCtx(registry, caller);
     try {
         const r = await tool.run(ctx, parsed.data);
-        return { content: [{ type: "text", text: cutText(r.text) }], structuredContent: r.structured };
+        const fit = fitStructured(r.structured as Json);
+        return { content: [{ type: "text", text: cutText(fit.trimmed ? `${r.text}\n(The structured list was cut to ${fit.trimmed}: ask for less, e.g. a smaller limit.)` : r.text) }], structuredContent: fit.value };
     } catch (e) {
         return { content: [{ type: "text", text: errorText(tool.name, e) }], isError: true };
     }
@@ -146,18 +178,36 @@ function buildServer(registry: Registry, caller: McpCaller, request: Request, pa
 
     server.setRequestHandler("tools/list", async () => {
         const app = toolsOffered(parts.appTools, caller).map(appToolEntry);
-        const old = mode.appOnly ? [] : mcpToolList(registry, mcpFlags(caller.ctx));
+        // the older tools; those whose result also draws a widget carry its link, like an app tool does
+        const old = mode.appOnly
+            ? []
+            : mcpToolList(registry, mcpFlags(caller.ctx)).map((t) => {
+                  const follow = Object.entries(FOLLOWS).find(([callName]) => mcpToolName(callName) === t.name)?.[1];
+                  return follow ? { ...t, _meta: viewMeta(follow.view) } : t;
+              });
         return { tools: [...app, ...old] as never };
     });
 
     server.setRequestHandler("tools/call", async (req) => {
         const { name } = req.params;
         const args = req.params.arguments && typeof req.params.arguments === "object" && !Array.isArray(req.params.arguments) ? req.params.arguments : {};
-        const app = toolsOffered(parts.appTools, caller).find((t) => t.name === name);
+        const offered = toolsOffered(parts.appTools, caller);
+        const app = offered.find((t) => t.name === name);
         if (app) return (await callAppTool(app, registry, caller, args)) as never;
-        const op = mode.appOnly ? undefined : mcpOps(registry, mcpFlags(caller.ctx)).find((o) => mcpToolName(o.callName) === name);
-        if (!op) throw new ProtocolError(ProtocolErrorCode.InvalidParams, `unknown tool ${name}`);
-        return (await callTool(op, caller, args)) as never;
+        if (!mode.appOnly) {
+            // A retired tool name (not listed any more) is answered by its replacement app tool, so old clients and saved
+            // prompts keep working; the answer is the app tool's (text and structuredContent).
+            const retired = Object.hasOwn(RETIRED_TOOLS, name) ? RETIRED_TOOLS[name]! : null;
+            const replacement = retired ? offered.find((t) => t.name === retired.tool) : undefined;
+            if (retired && replacement) return (await callAppTool(replacement, registry, caller, retired.map(args))) as never;
+            const op = mcpListedOps(registry, mcpFlags(caller.ctx)).find((o) => mcpToolName(o.callName) === name);
+            if (op) {
+                const follow = FOLLOWS[op.callName];
+                const view = follow ? (value: unknown, input: unknown) => follow.build(toolCtx(registry, caller), input, value) : undefined;
+                return (await callTool(op, caller, args, view)) as never;
+            }
+        }
+        throw new ProtocolError(ProtocolErrorCode.InvalidParams, `unknown tool ${name}`);
     });
 
     server.setRequestHandler("resources/list", async () => ({

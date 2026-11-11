@@ -25,6 +25,23 @@ export const MCP_SERVER_VERSION = "2.0.0";
 // Chat calls that only mean something inside the chat app's own reply (thumbnails, the collage, continuing a chat).
 export const MCP_SKIPPED_CALLS = new Set(["show", "collage", "jobs.onDone"]);
 
+// The twelve chat calls the app tools replaced (src/mcp-app/retired.ts maps each to its app tool). They are not listed;
+// a call by their old name is answered by the app tool. App tools still run them through `ctx.call`, so `mcpOps` keeps them.
+export const MCP_RETIRED_CALLS = new Set([
+    "library.search",
+    "library.list",
+    "library.post",
+    "edits.get",
+    "edits.list",
+    "collections.list",
+    "links.list",
+    "links.create",
+    "make.webp",
+    "upload.begin",
+    "library.save",
+    "jobs.wait",
+]);
+
 // A tool's text result is cut here (the chat cuts its own results too).
 export const MCP_RESULT_MAX = 200_000;
 // look: at most this many pictures per call, each at most this big
@@ -50,18 +67,51 @@ export function mcpFlags(ctx: Pick<OpContext, "env" | "embed">): AiFlags {
     return { search: ctx.embed() !== null, box: workbenchOn(ctx.env), mcp: true, agents: agentsOn(ctx.env), ytdlp: !!ctx.env.YTDLP };
 }
 
+// Everything the MCP can run: what is listed plus the retired calls, which the app tools use.
 export function mcpOps(registry: Registry, flags: AiFlags): Op[] {
     return registry.toolsFor("chat", flags).filter((op) => !MCP_SKIPPED_CALLS.has(op.callName));
+}
+
+// The ops that are listed as tools of their own.
+export function mcpListedOps(registry: Registry, flags: AiFlags): Op[] {
+    return mcpOps(registry, flags).filter((op) => !MCP_RETIRED_CALLS.has(op.callName));
 }
 
 const ASK_NOTE =
     "Changes or removes things for good (in the capystore chat this asks Harmony first): check with the user before calling it.";
 
+// What the chat's cheat-sheet summaries say that means nothing here: the app tools' names for the retired calls, and the
+// chat's own job hook. (The registry's summaries stay as they are; the chat AI reads them.)
+const SAY_INSTEAD: [RegExp, string][] = [
+    [/\bHand its job to jobs\.onDone to get its report when it finishes\./g, "Check on its job with job_status (it waits a few seconds at most; call it again until the job is done) to get its report."],
+    [/\bSame answer and daily cap as library\.save\./g, "Answers the save's own JSON (status, save_id, post_id...), not save_link's; the same daily cap as save_link."],
+    [/\bhand (?:it|a job that is still going) to jobs\.onDone(?: instead)?\.?/gi, "check it with job_status."],
+    [/\bNever call it again in later runs to poll: [^.]*\./g, "Call it again to follow a job that is still going."],
+    [/\bcobalt\.jobs\.onDone\b|\bjobs\.onDone\b/g, "job_status"],
+    [/\blibrary\.(?:list|search)\/(?:search|list)\b/g, "search_library"],
+    [/\b(?:library\.(?:search|list)|library_(?:search|list))\b/g, "search_library"],
+    [/\b(?:library\.post|library_post)\b/g, "show_post"],
+    [/\b(?:edits\.(?:get|list)|edits_(?:get|list))\b/g, "show_edit"],
+    [/\b(?:collections\.list|collections_list)\b/g, "list_collections"],
+    [/\b(?:links\.list|links_list)\b/g, "list_share_links"],
+    [/\b(?:links\.create|links_create)\b/g, "create_share_link"],
+    [/\b(?:make\.webp|make_webp)\b/g, "convert_to_webp"],
+    [/\b(?:upload\.begin|upload_begin)\b/g, "upload_files"],
+    [/\b(?:library\.save|library_save)\b/g, "save_link"],
+    [/\b(?:jobs\.wait|jobs_wait)\b/g, "job_status"],
+];
+
+// "cobalt.make.crop(...)" and "make.crop" are the chat's spelling; a tool here is make_crop
+const toolSpelling = (text: string, names: Set<string>) =>
+    text.replace(/\b(?:cobalt\.)?([a-z]+)\.([A-Za-z]+)\b/g, (whole, a: string, b: string) => (names.has(`${a}.${b}`) ? `${a}_${b}` : whole));
+
 // The MCP description of a call: its cheat-sheet summary, with the chat's wording made general.
-function describeOp(op: Op): string {
+function describeOp(op: Op, callNames: Set<string>): string {
     let text = op.ai.summary.replace(/\n/g, " ");
     if (op.callName === "look")
         text = `See these posts' pictures (poster or image, private ones too), returned as images. grid: labelled lines every 0.1 to read off a crop box; box: draws a crop you are about to make so you can check it; frames: up to 3 frames across a video. Max ${MCP_LOOK_MAX} per call.`;
+    for (const [from, to] of SAY_INSTEAD) text = text.replace(from, to);
+    text = toolSpelling(text, callNames);
     if (op.ai.tier === "ask") text += ` ${ASK_NOTE}`;
     return text;
 }
@@ -87,9 +137,11 @@ export const inputSchemaOf = (op: Op): Json => jsonSchemaOf(op.input, "input");
 export type McpTool = { name: string; description: string; inputSchema: Json; annotations?: Json };
 
 export function mcpToolList(registry: Registry, flags: AiFlags): McpTool[] {
-    return mcpOps(registry, flags).map((op) => ({
+    const all = mcpOps(registry, flags);
+    const callNames = new Set(all.map((o) => o.callName));
+    return mcpListedOps(registry, flags).map((op) => ({
         name: mcpToolName(op.callName),
-        description: describeOp(op),
+        description: describeOp(op, callNames),
         inputSchema: inputSchemaOf(op),
         ...(op.ai.tier === "ask" ? { annotations: { destructiveHint: true, readOnlyHint: false } } : {}),
     }));
@@ -97,14 +149,14 @@ export function mcpToolList(registry: Registry, flags: AiFlags): McpTool[] {
 
 export const INSTRUCTIONS = [
     "capystore is Harmony's media library: videos, images and galleries saved from links or uploaded, with public share links.",
-    "Posts are found with library_list or library_search (meaning search) and opened with library_post; use the post `id` they return.",
-    "Save a link (TikTok, X, YouTube, Instagram, a direct file...) with library_save. Upload a local file with upload_begin, then PUT the file's bytes to the upload_url it returns (its `curl` field is ready to run).",
-    "Make ops (make_*, edits_render, chat_video) answer a job: check on it with jobs_wait. Share links: links_create; collections and sets group them.",
+    "Posts are found with search_library (meaning search; with no query it lists the library newest first) and opened with show_post; use the post `id` they return.",
+    "Save a link (TikTok, X, YouTube, Instagram, a direct file...) with save_link. Upload a local file with upload_files, then PUT the file's bytes to the upload_url it returns (its `curl` field is ready to run).",
+    "Make ops (make_*, edits_render, chat_video, convert_to_webp) answer a job: check on it with job_status. Share links: create_share_link; collections and sets group them.",
     "Cropping (make_cropImage for pictures, make_crop for videos): never guess the position or assume the centre. Look at the source with grid: true (a video: frames: true, or make_frames for frames at chosen seconds), read the box off the labelled grid, check it with look's box option before making it, and look at the result after. A moving subject needs a box that covers it in every frame, or several clips with their own crops. Plain crop by default: cutout only for a subject on a plain background, never for banners, bars or text. Then edits_addOverlay to use it in a video.",
-    "When offered, agents_spawn starts a helper (another capystore agent with these tools) on one task in the background; follow it with agents_get or jobs_wait on its job, message it with agents_send, read what helpers sent you with agents_inbox.",
+    "When offered, agents_spawn starts a helper (another capystore agent with these tools) on one task in the background; follow it with agents_get or job_status on its job, message it with agents_send, read what helpers sent you with agents_inbox.",
     "Tools marked destructive delete or change things for good: confirm with the user first.",
-    "Some tools show a picture answer (a widget) where the host draws one: when it helps, prefer search_library, show_post, show_edit, list_collections, list_share_links, convert_to_webp, upload_files, create_share_link and save_link; each also answers in text.",
-    "The older tools (library_*, links_*, make_*...) remain for everything else, deletes and edits included.",
+    "Some tools show a picture answer (a widget) where the host draws one: search_library, show_post, show_edit, list_collections, list_share_links, convert_to_webp, upload_files, create_share_link and save_link, and after a change the collections_*, links_update, links_private, links_rotate, library_title, library_visibility and library_status tools. Every tool also answers in text, and with structuredContent (the same JSON) where it has one.",
+    "The other tools (make_*, edits_*, library_*, links_*...) cover everything else, deletes and edits included.",
 ].join("\n");
 
 // ---- calling a tool ---------------------------------------------------------------------------------------------------
@@ -168,8 +220,22 @@ export async function runChatOp(op: Op, caller: McpCaller, args: unknown): Promi
     return runOp(op, ctx, parsed.data);
 }
 
+// The JSON of an op's answer as `structuredContent`: a plain object as it is, a list as { items }, a string or null none.
+// An answer too big for the text (cut at MCP_RESULT_MAX) is left out here too.
+export function structuredOf(value: unknown): Json | undefined {
+    const wrapped = Array.isArray(value) ? { items: value } : value && typeof value === "object" ? (value as Json) : null;
+    if (!wrapped) return undefined;
+    try {
+        const json = JSON.stringify(wrapped);
+        return json.length > MCP_RESULT_MAX ? undefined : (JSON.parse(json) as Json);
+    } catch {
+        return undefined;
+    }
+}
+
 // Run one tool as the client's MCP thread. Its arguments are the op's input object, checked by the op's own schema.
-export async function callTool(op: Op, caller: McpCaller, args: Json): Promise<ToolResult> {
+// `follow` may build a widget's structuredContent from the op's answer (src/mcp-app/follow.ts); the text stays the op's.
+export async function callTool(op: Op, caller: McpCaller, args: Json, follow?: (value: unknown, input: unknown) => Promise<Json | null>): Promise<ToolResult> {
     const ctx = await threadContext(caller);
     const parsed = mcpInput(op, args);
     if (!parsed.success) return textResult(issuesText(mcpToolName(op.callName), parsed.error), true);
@@ -179,7 +245,12 @@ export async function callTool(op: Op, caller: McpCaller, args: Json): Promise<T
             return await look(ctx, caller, l.ids, { grid: l.grid === true, frames: l.frames === true, ...(l.box ? { box: l.box } : {}) });
         }
         // the chat's own runner, so a route op goes through the Durable Object exactly as the chat's does
-        return textResult((await runOp(op, ctx, parsed.data)) ?? null);
+        const value = (await runOp(op, ctx, parsed.data)) ?? null;
+        const result = textResult(value);
+        // a throw in the view (even a synchronous one) must not turn the write that succeeded into an error
+        const viewed = follow ? await Promise.resolve().then(() => follow(value, parsed.data)).catch(() => null) : null;
+        const structured = viewed ?? structuredOf(value);
+        return structured ? { ...result, structuredContent: structured } : result;
     } catch (e) {
         return textResult(errorText(mcpToolName(op.callName), e), true);
     }

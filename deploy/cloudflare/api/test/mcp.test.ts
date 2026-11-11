@@ -1,10 +1,10 @@
 // The capystore MCP server (APP-API-CONTRACT.md section 35): POST /mcp speaks JSON-RPC with the chat's own tools, and
-// upload_begin + PUT /mcp/upload/<token> put a local file into the library. The Worker, the registry, the real handlers
+// upload_files + PUT /mcp/upload/<token> put a local file into the library. The Worker, the registry, the real handlers
 // and the real SQL on node:sqlite run together; the Durable Object is a fake.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
 import { hashKey } from "../src/keys";
-import { MCP_SKIPPED_CALLS, mcpFlags, mcpInput, mcpOps, mcpThreadId, mcpToolName, signUploadToken, UPLOAD_TOKEN_TTL_MS } from "../src/mcp";
+import { MCP_RETIRED_CALLS, MCP_SKIPPED_CALLS, mcpFlags, mcpInput, mcpOps, mcpThreadId, mcpToolName, signUploadToken, UPLOAD_TOKEN_TTL_MS } from "../src/mcp";
 import { EMBED_DIMS, EMBED_MODEL } from "../src/embed";
 import { APP_TOOLS } from "../src/mcp-app/tools";
 import { REGISTRY } from "../src/registry/index";
@@ -75,7 +75,9 @@ describe("POST /mcp: the protocol", () => {
         expect(r.result.protocolVersion).toBe("2025-06-18");
         expect(r.result.capabilities).toEqual({ tools: { listChanged: false }, resources: {}, prompts: {} });
         expect(r.result.serverInfo.name).toBe("capystore");
-        expect(r.result.instructions).toMatch(/upload_begin/);
+        expect(r.result.instructions).toMatch(/upload_files/);
+        // it names only tools that are listed
+        expect(r.result.instructions).not.toMatch(/library_list|library_post|library_save|upload_begin|jobs_wait|links_create/);
         // an unknown version gets the newest one
         expect((await rpc("initialize", { protocolVersion: "1999-01-01" })).result.protocolVersion).toBe("2025-11-25");
     });
@@ -134,55 +136,70 @@ describe("POST /mcp: who may call", () => {
     });
 });
 
-describe("tools/list: the chat's tools", () => {
-    it("is the chat AI's calls (same switches) minus the chat-only ones, plus upload_begin", async () => {
+describe("tools/list: the app tools, then the chat's tools that are not retired", () => {
+    const RETIRED = ["library_search", "library_list", "library_post", "edits_get", "edits_list", "collections_list", "links_list", "links_create", "make_webp", "upload_begin", "library_save", "jobs_wait"];
+    it("is the app tools, then the chat AI's calls (same switches) minus the chat-only and the retired ones", async () => {
         // the app tools come first (MCP-APP-CONTRACT.md section 6); the rest is the chat's tools
         const all = (await rpc("tools/list")).result.tools as any[];
         const appNames = APP_TOOLS.filter((t) => !t.when || t.when({ search: false, box: false, mcp: true })).map((t) => t.name);
         expect(all.slice(0, appNames.length).map((t) => t.name)).toEqual(appNames);
         const tools = all.slice(appNames.length);
         const chat = REGISTRY.toolsFor("chat", { search: false, box: false })
-            .filter((o) => !MCP_SKIPPED_CALLS.has(o.callName))
+            .filter((o) => !MCP_SKIPPED_CALLS.has(o.callName) && !MCP_RETIRED_CALLS.has(o.callName))
             .map((o) => mcpToolName(o.callName));
-        expect(tools.map((t) => t.name)).toEqual([...chat, "upload_begin"]);
-        expect(tools.map((t) => t.name)).toContain("library_list");
-        expect(tools.map((t) => t.name)).toContain("make_webp");
+        expect(tools.map((t) => t.name)).toEqual(chat);
+        expect(new Set(all.map((t) => t.name)).size).toBe(all.length);
+        // the twelve duplicates of the app tools are not listed (they still answer: see test/mcp-retired.test.ts)
+        expect([...MCP_RETIRED_CALLS].map(mcpToolName).sort()).toEqual([...RETIRED].sort());
+        for (const name of RETIRED) expect(all.map((t) => t.name), name).not.toContain(name);
+        expect(tools.map((t) => t.name)).toContain("library_title");
+        expect(tools.map((t) => t.name)).toContain("make_crop");
         expect(tools.map((t) => t.name)).not.toContain("show");
         expect(tools.map((t) => t.name)).not.toContain("collage");
         expect(tools.map((t) => t.name)).not.toContain("jobs_onDone");
         // search is off on this server (no Space), the box too
-        expect(tools.map((t) => t.name)).not.toContain("library_search");
         expect(tools.map((t) => t.name)).not.toContain("box_run");
         for (const t of tools) {
             expect(t.name).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
             expect(t.inputSchema.type).toBe("object");
             expect(t.description.length).toBeGreaterThan(10);
+            // no description names a retired tool, the chat's job hook or its cobalt.x.y spelling
+            expect(t.description, t.name).not.toMatch(/jobs\.onDone|jobs_onDone|\bcobalt\./);
+            for (const name of RETIRED) expect(t.description, `${t.name} mentions ${name}`).not.toMatch(new RegExp(`\\b${name}\\b`));
         }
         // ask-tier ops (confirm cards in the chat) are marked destructive
         const del = tools.find((t) => t.name === "library_delete");
         expect(del.annotations).toEqual({ destructiveHint: true, readOnlyHint: false });
         expect(del.description).toMatch(/check with the user/);
-        expect(tools.find((t) => t.name === "library_list").annotations).toBeUndefined();
+        expect(tools.find((t) => t.name === "library_title").annotations).toBeUndefined();
         // the chat itself never sees upload.begin
         expect(REGISTRY.toolsFor("chat", { search: true, box: true }).map((o) => o.callName)).not.toContain("upload.begin");
     });
-    it("search shows up when the search Space is configured", async () => {
+    it("the descriptions point at the listed tools in place of the chat's calls", async () => {
+        const tools = (await rpc("tools/list")).result.tools as any[];
+        const text = (n: string) => tools.find((t) => t.name === n).description as string;
+        expect(text("make_still")).not.toMatch(/onDone/);
+        expect(text("library_visibility")).toMatch(/show_post/);
+        expect(text("make_crop")).toMatch(/make_cropImage/);
+    });
+    it("retired search tools stay off the list when the search Space is configured; the app tool is the way in", async () => {
         env.EMBED_URL = "https://example.hf.space";
         env.EMBED_TOKEN = "t";
         const tools = (await rpc("tools/list")).result.tools as any[];
-        expect(tools.map((t) => t.name)).toContain("library_search");
+        expect(tools.map((t) => t.name)).not.toContain("library_search");
+        expect(tools.map((t) => t.name)).toContain("search_library");
     });
 });
 
 describe("tools/call", () => {
     it("runs the op with its own schema; a bad argument or unknown tool is an error the agent can read", async () => {
-        expect(textOf(await call("library_list"))).toEqual([]);
-        const bad = await call("library_list", { limit: "lots" });
+        expect(textOf(await call("library_hidden"))).toEqual({ posts: [], next: null });
+        const bad = await call("library_title", { id: "Ab3dE6gH9jK2mN5p", title: 5 });
         expect(bad.isError).toBe(true);
-        expect(bad.content[0].text).toMatch(/^library_list: limit/);
+        expect(bad.content[0].text).toMatch(/^library_title: title/);
         const unknown = await rpc("tools/call", { name: "nope", arguments: {} });
         expect(unknown.error.code).toBe(-32602);
-        const op = await call("library_post", { id: "Ab3dE6gH9jK2mN5p" });
+        const op = await call("library_title", { id: "Ab3dE6gH9jK2mN5p", title: "x" });
         expect(op.isError).toBe(true);
         expect(op.content[0].text).toMatch(/no post/);
     });
@@ -200,18 +217,25 @@ describe("tools/call", () => {
     });
 });
 
-describe("upload_begin + PUT /mcp/upload/<token>", () => {
+describe("upload_files + PUT /mcp/upload/<token>", () => {
     const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8]);
     const put = (url: string, data: Uint8Array = PNG, type: string | null = "image/png") =>
         send(new Request(url, { method: "PUT", headers: { ...(type ? { "content-type": type } : {}), "content-length": String(data.byteLength) }, body: data as unknown as BodyInit }));
 
-    it("mints a 15 minute link on the API host; the PUT stores the file as the MCP thread, and library_list sees it", async () => {
-        const link = textOf(await call("upload_begin", { name: "cat.png", title: "a cat" }));
-        expect(link.method).toBe("PUT");
+    // the link upload_files hands out (structuredContent), for one file
+    const begin = async (args: Record<string, unknown> = {}, tool = "upload_files") => {
+        const r = await call(tool, args);
+        expect(r.isError).toBeUndefined();
+        return r.structuredContent.uploads[0] as { name: string; upload_url: string; expires_at: string; curl: string };
+    };
+    it("mints a 15 minute link on the API host; the PUT stores the file as the MCP thread, and search_library sees it", async () => {
+        const link = await begin({ files: [{ name: "cat.png", title: "a cat" }] });
         expect(link.upload_url).toMatch(new RegExp(`^${API}/mcp/upload/[A-Za-z0-9_.-]+\\?name=cat.png&title=a\\+cat$`));
         expect(link.expires_at).toBe(new Date(clock + UPLOAD_TOKEN_TTL_MS).toISOString());
         expect(link.curl).toContain(link.upload_url);
-        expect(link.types).toContain("video/mp4");
+        expect((await call("upload_files", {})).structuredContent.accept).toContain(".mp4");
+        // the retired upload_begin answers the same link, with the old flat arguments
+        expect((await begin({ name: "cat.png", title: "a cat" }, "upload_begin")).upload_url).toMatch(/\?name=cat.png&title=a\+cat$/);
 
         const res = await put(link.upload_url);
         expect(res.status).toBe(201);
@@ -222,12 +246,12 @@ describe("upload_begin + PUT /mcp/upload/<token>", () => {
         const log = db.raw.prepare("SELECT route FROM request_log").all() as any[];
         expect(log.map((l) => l.route)).toContain("PUT /mcp/upload");
 
-        const list = textOf(await call("library_list"));
-        expect(list).toHaveLength(1);
-        expect(list[0]).toMatchObject({ title: "a cat", kind: "image" });
+        const list = (await call("search_library")).structuredContent;
+        expect(list).toMatchObject({ mode: "list", total: 1 });
+        expect(list.items[0]).toMatchObject({ title: "a cat", kind: "image" });
     });
     it("an expired, forged or malformed link, or one whose key was revoked, stores nothing", async () => {
-        const { upload_url } = textOf(await call("upload_begin"));
+        const { upload_url } = await begin();
         const thread = await mcpThreadId(KEY_ID);
         // forged: signed with another secret
         const forged = await signUploadToken("00000000-0000-4000-8000-000000000000", { k: KEY_ID, t: thread, e: clock + 60_000 });
@@ -251,14 +275,14 @@ describe("upload_begin + PUT /mcp/upload/<token>", () => {
     });
     it("a video with no content type (what `curl -T` sends) is typed by its bytes and opens a studio session as the thread", async () => {
         const clip = new Uint8Array(readFileSync(new URL("./fixtures/clip-portrait.mp4", import.meta.url)));
-        const { upload_url } = textOf(await call("upload_begin", { name: "clip" }));
+        const { upload_url } = await begin({ name: "clip" });
         const res = await put(upload_url, clip, null);
         const b = (await res.json()) as any;
         expect(b.item).toMatchObject({ name: "clip.mp4", content_type: "video/mp4", bytes: clip.byteLength });
         expect(doCalls).toContainEqual({ path: "POST /studio/upload/adopt", key: `chat:${await mcpThreadId(KEY_ID)}` });
     });
     it("the upload code's own rules hold: no length, a wrong type", async () => {
-        const { upload_url } = textOf(await call("upload_begin"));
+        const { upload_url } = await begin();
         expect((await put(upload_url, PNG, "text/plain")).status).toBe(415);
         expect(originals.objects.size).toBe(0);
     });
@@ -324,16 +348,15 @@ describe("MCP calls to ops that have an ai.args mapping", () => {
             vi.unstubAllGlobals();
         });
 
-        it("library_search takes { query, limit } (it used to fail with 'expected string, received object')", async () => {
+        it("the retired library_search takes { query, limit } and is answered by search_library (meaning search)", async () => {
             const r = await call("library_search", { query: "cat", limit: 5 });
             expect(r.isError).toBeUndefined();
-            const hits = textOf(r);
-            expect(hits).toHaveLength(1);
-            expect(hits[0]).toMatchObject({ id: "Ab3dE6gH9jK2mN5p" });
+            expect(r.structuredContent).toMatchObject({ view: "search", mode: "meaning", total: 1 });
+            expect(r.structuredContent.items[0]).toMatchObject({ id: "Ab3dE6gH9jK2mN5p" });
             expect(embedCalls).toBeGreaterThan(0);
-            const bad = await call("library_search", {});
+            const bad = await call("library_search", { limit: 0 });
             expect(bad.isError).toBe(true);
-            expect(bad.content[0].text).toMatch(/^library_search: query:/);
+            expect(bad.content[0].text).toMatch(/^search_library: limit/);
         });
         it("library_about takes { key }", async () => {
             const r = await call("library_about", { key: "Ab3dE6gH9jK2mN5p" });

@@ -14,6 +14,7 @@ export const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 export const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 export const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 export const int = (v: unknown, or = 0): number => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : or);
+export const strings = (v: unknown): string[] => arr(v).filter((x): x is string => typeof x === "string");
 export const round = (n: number, places = 3): number => Math.round(n * 10 ** places) / 10 ** places;
 
 // ---- text ---------------------------------------------------------------------------------------------------------------
@@ -29,9 +30,10 @@ export const clock = (s: number) => {
 };
 export const seconds = (s: number) => `${round(s, 1)} s`;
 
-// A count line, then up to 10 numbered rows (and how many more there are).
-export function listText(count: string, rows: string[], total = rows.length): string {
-    const shown = rows.slice(0, TEXT_ROWS);
+// A count line, then up to 10 numbered rows (and how many more there are). A caller that asked for more rows passes
+// `maxRows`: every row it asked for is then listed (the whole text is still cut at MCP_RESULT_MAX).
+export function listText(count: string, rows: string[], total = rows.length, maxRows = TEXT_ROWS): string {
+    const shown = rows.slice(0, Math.max(TEXT_ROWS, maxRows));
     const lines = [count, ...shown.map((r, i) => `${i + 1}. ${r}`)];
     if (total > shown.length) lines.push(`…and ${total - shown.length} more`);
     return lines.join("\n");
@@ -69,7 +71,7 @@ const IN_LIST = (n: number) => `(SELECT value FROM json_each(?${n}))`;
 // the posts that ?1 (post keys) and ?2 (file ids) name: a file id brings its whole post
 const NAMED = `(post_key IN ${IN_LIST(1)} OR post_key IN (SELECT post_key FROM (${FILES_SQL}) WHERE id IN ${IN_LIST(2)}))`;
 
-const MAX_IDS = 400;
+const MAX_IDS = 1000;
 const uniq = (ids: string[]) => [...new Set(ids.filter((i) => typeof i === "string" && i.length > 0 && i.length <= 2048))].slice(0, MAX_IDS);
 
 type Statement = D1PreparedStatement;

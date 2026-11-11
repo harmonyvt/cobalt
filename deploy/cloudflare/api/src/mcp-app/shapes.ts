@@ -39,15 +39,35 @@ export const PostFile = z.looseObject({
     height: z.number().nullable(),
     duration_s: z.number().nullable(),
     bytes: z.number().nullable(),
+    // the file's name and role (original, webp, frame...), as library.post names them
+    name: z.string().nullable(),
+    role: z.string().nullable(),
+    // its share page (share.capybaraharmony.com/<name>) while public
+    share_url: url,
+    // its own private link while it has one, and that link's direct file
+    private_url: url,
+    private_file_url: url,
+});
+
+// A search or list row: a post summary plus what the search knew about it.
+export const SearchItem = PostSummary.extend({
+    // the original link and the roast caption title, as library.list gave them
+    source_link: url,
+    caption: z.string().nullable(),
+    // meaning search only: its score, up to 3 tags closest to the query, and where it is said in the video
+    score: z.number().nullable(),
+    why: z.array(z.string()).nullable(),
+    said: z.array(z.looseObject({ at: z.number(), end: z.number(), text: z.string(), match: z.string() })).nullable(),
 });
 
 export const SearchOut = z.looseObject({
     view: z.literal("search"),
     query: z.string(),
-    // "meaning": the embedding search answered; "text": the title/link match did (search off or waking up)
-    mode: z.enum(["meaning", "text"]),
+    // "meaning": the embedding search answered; "text": the title/link match did (search off or waking up); "list": no
+    // query, the library newest first (`query` is then "")
+    mode: z.enum(["meaning", "text", "list"]),
     total: z.number().int(),
-    items: z.array(PostSummary),
+    items: z.array(SearchItem),
 });
 
 export const PostOut = z.looseObject({
@@ -58,6 +78,8 @@ export const PostOut = z.looseObject({
         transcript_excerpt: z.string().nullable(),
         share_url: url,
         private_url: url,
+        // that private link's direct file (the bytes), while it has one
+        private_file_url: url,
         file_list: z.array(PostFile),
     }),
 });
@@ -100,6 +122,8 @@ export const EditProject = z.looseObject({
     main: z.array(EditClip),
     overlay: z.array(EditOverlay),
     render: EditRender.nullable(),
+    // the timeline as the editor holds it (what edits_update takes back); ids and numbers, no names or pictures
+    timeline: z.unknown().nullable(),
 });
 export const EditOut = z.looseObject({
     view: z.literal("edit"),
@@ -121,6 +145,9 @@ export const ShareLink = z.looseObject({
     thumbs: z.array(z.string()),
     // the name of the collection it is in
     collection: z.string().nullable(),
+    // the posts in it, and a private link's direct file links (null: a file that is gone), as links.list gave them
+    post_ids: z.array(z.string()).nullable(),
+    file_urls: z.array(z.string().nullable()).nullable(),
 });
 export const LinksOut = z.looseObject({
     view: z.literal("links"),
@@ -141,6 +168,9 @@ export const CollectionsOut = z.looseObject({
             posts: z.number().int(),
             // up to 8 public pictures of its posts
             thumbs: z.array(z.string()),
+            // every live link and post in it, as collections.list gave them
+            link_ids: z.array(z.string()).nullable(),
+            post_ids: z.array(z.string()).nullable(),
         }),
     ),
 });
@@ -156,6 +186,15 @@ export const JobOut = z.looseObject({
     // the post the job made, when done
     post: PostSummary.nullable(),
     share_url: url,
+    // done: the made file's id and the post's id, when the job says them
+    file_id: z.string().nullable(),
+    post_id: z.string().nullable(),
+    // waiting: jobs ahead of it in the line
+    queue_ahead: z.number().nullable(),
+    // a finished render: its file's size and shape
+    file: z.looseObject({ kind: z.string().nullable(), bytes: z.number().nullable(), width: z.number().nullable(), height: z.number().nullable(), seconds: z.number().nullable() }).nullable(),
+    // an agent job (agent:<id>): its name, what it did last, its report and the posts it showed
+    agent: z.looseObject({ id: z.string().nullable(), name: z.string().nullable(), activity: z.string().nullable(), result: z.string().nullable(), post_ids: z.array(z.string()).nullable() }).nullable(),
 });
 
 export const WebpOut = z.looseObject({
@@ -193,4 +232,7 @@ export const SaveOut = z.looseObject({
     post: PostSummary.nullable(),
     // the share page of the saved post, when it is public
     share_url: url,
+    // the save's studio session id and how many saves the thread has left today, as library.save gave them
+    save_id: z.string().nullable(),
+    saves_left_today: z.number().nullable(),
 });

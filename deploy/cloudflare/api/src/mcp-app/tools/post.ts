@@ -7,12 +7,29 @@ import { arr, clock, cut, num, plural, readPosts, rec, str, summaryOf } from "./
 
 const Input = z.object({ id: z.string().min(1).max(2048) });
 
-const FILES_MAX = 24;
+// a gallery saved from a picker holds at most 20 items; every file is listed
+const FILES_MAX = 100;
 const EXCERPT_CHARS = 280;
 // the first lines of speech: the start of the clip is what an excerpt is for
 const EXCERPT_SECONDS = 45;
 
+export const hiddenPost = (id: string) => new OpError(409, "error.library.hidden", `post ${id} is hidden (library_status unhides it)`);
 export const notFound = (id: string) => new OpError(404, "error.library.not_found", `no post with id ${id}`);
+
+// "id · role · name · type · public url / share page / private link", one file per line
+const fileLine = (f: z.infer<typeof PostOut>["post"]["file_list"][number]) =>
+    [
+        f.id,
+        f.role,
+        f.name,
+        f.content_type,
+        f.url ? `url ${f.url}` : null,
+        f.share_url ? `share ${f.share_url}` : null,
+        f.private_url ? `private ${f.private_url}` : null,
+        f.private_file_url ? `private file ${f.private_file_url}` : null,
+    ]
+        .filter(Boolean)
+        .join(" · ");
 
 export const showPost: AppTool<z.infer<typeof Input>> = {
     name: "show_post",
@@ -26,7 +43,7 @@ export const showPost: AppTool<z.infer<typeof Input>> = {
     async run(ctx, input) {
         const post = rec(await ctx.call("library.post", { id: input.id }));
         // a hidden post answers with hidden: true; it is not shown here
-        if (post.hidden === true) throw notFound(input.id);
+        if (post.hidden === true) throw hiddenPost(input.id);
         const id = str(post.id) ?? input.id;
         const isVideo = post.kind === "video";
         const [read, transcript] = await Promise.all([
@@ -56,16 +73,23 @@ export const showPost: AppTool<z.infer<typeof Input>> = {
                     height: num(f.height),
                     duration_s: num(f.duration),
                     bytes: num(f.bytes),
+                    name: str(f.name),
+                    role: str(f.role),
+                    // the same links library.post gave this caller; a hidden post never gets here
+                    share_url: str(f.share_url),
+                    private_url: str(f.private_url),
+                    private_file_url: str(f.private_file_url),
                 },
             ];
         });
         // the first file with a share page (the lead file of a video or picture)
         const shareUrl = read.posts.get(id)?.share_url ?? files.map((f) => str(f.share_url)).find(Boolean) ?? null;
         const privateUrl = files.map((f) => str(f.private_url)).find(Boolean) ?? null;
+        const privateFileUrl = files.map((f) => str(f.private_file_url)).find(Boolean) ?? null;
         const caption = str(post.caption);
         const structured = {
             view: "post" as const,
-            post: { ...summary, source_link: str(post.link), caption, transcript_excerpt: excerpt, share_url: shareUrl, private_url: privateUrl, file_list: fileList },
+            post: { ...summary, source_link: str(post.link), caption, transcript_excerpt: excerpt, share_url: shareUrl, private_url: privateUrl, private_file_url: privateFileUrl, file_list: fileList },
         } satisfies z.infer<typeof PostOut>;
 
         const facts = [
@@ -81,6 +105,7 @@ export const showPost: AppTool<z.infer<typeof Input>> = {
             str(post.link) ? `Saved from: ${str(post.link)}` : summary.source_host ? `Saved from: ${summary.source_host}` : null,
             shareUrl ? `Share link: ${shareUrl}` : privateUrl ? `Private link: ${privateUrl}` : "No share link yet.",
             excerpt ? `Says: ${excerpt}` : null,
+            fileList.length > 0 ? `Files:\n${fileList.map(fileLine).join("\n")}` : null,
         ]
             .filter(Boolean)
             .join("\n");

@@ -12,6 +12,10 @@ const Input = z.object({
     id: z.string().min(1).max(2048),
     start: z.number().min(0).optional(),
     end: z.number().gt(0).optional(),
+    // a crop, as fractions of the picture: left, top, width, height (look's box option shows it before you make it)
+    crop: z
+        .object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().gt(0).max(1), h: z.number().gt(0).max(1) })
+        .optional(),
     width: z.union([z.literal(320), z.literal(480)]).default(480),
     quality: z.enum(["low", "med", "high"]).default("med"),
 });
@@ -27,7 +31,7 @@ export const convertToWebp: AppTool<z.infer<typeof Input>> = {
     name: "convert_to_webp",
     title: "Convert to animated webp",
     description:
-        "Make a silent, looping animated webp (0.5 to 10 seconds, 320 or 480 px wide) from part of a video in the capystore library. Give start and end in seconds; without them the tool shows a range picker (a video of 10 seconds or less converts whole).",
+        "Make a silent, looping animated webp (0.5 to 10 seconds, 320 or 480 px wide) from part of a video in the capystore library. Give start and end in seconds, and optionally a crop {x,y,w,h} as fractions of the picture; without them the tool shows a range picker (a video of 10 seconds or less converts whole).",
     input: Input,
     output: WebpOut,
     readOnly: false,
@@ -77,7 +81,7 @@ export const convertToWebp: AppTool<z.infer<typeof Input>> = {
             throw new OpError(400, "error.webp.range", `a webp is ${WEBP_MIN_S} to ${WEBP_MAX_S} seconds long (end minus start); ${start} to ${end} is ${length}`);
         }
         const range = { start: round(start), end: round(end) };
-        const started = rec(await ctx.call("make.webp", { id: input.id, start: range.start, end: range.end, width: input.width, quality: input.quality }));
+        const started = rec(await ctx.call("make.webp", { id: input.id, start: range.start, end: range.end, ...(input.crop ? { crop: input.crop } : {}), width: input.width, quality: input.quality }));
         let job = str(started.job);
         let phase = phaseOf(started);
         let latest: Record<string, unknown> = started;

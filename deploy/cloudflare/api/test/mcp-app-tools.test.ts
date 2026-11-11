@@ -247,8 +247,10 @@ describe("search_library", () => {
         expect(singles).toBe(0);
         const lines = r.text.split("\n");
         expect(lines[0]).toMatch(/^3 posts for “cat” \(searched by meaning\)/);
-        expect(lines[1]).toBe(`1. A cat falls off a shelf · video · ${pub.id} · ${SHARE}${pub.name}`);
-        expect(lines[2]).toBe(`2. secret · video · ${priv.id}`);
+        // one line per row: title, kind and length, id, day saved, where from, share page (or its state), score
+        expect(lines[1]).toBe(`1. A cat falls off a shelf · video 0:10 · ${pub.id} · 2025-10-09 · tiktok.com · ${SHARE}${pub.name} · score 0.5`);
+        expect(lines[2]).toBe(`2. secret · video 0:10 · ${priv.id} · 2025-10-09 · tiktok.com · private · score 0.5`);
+        expect(lines[3]).toBe(`3. off · video 0:10 · ${off.id} · 2025-10-09 · tiktok.com · not shared · score 0.5`);
         expect(r.text).not.toContain("hidden");
         expect(r.text).not.toMatch(/media\.capybaraharmony\.com/);
         expect(r.text).not.toMatch(/[{}\[\]]/);
@@ -298,16 +300,20 @@ describe("search_library", () => {
         expect(r.out.items.map((i: any) => i.id)).toEqual([a.id]);
     });
 
-    it("limit defaults to 12, clamps at 24 and refuses more; an empty result still answers", async () => {
+    it("limit defaults to 12 and goes up to 1000; the text lists every row asked for; an empty result still answers", async () => {
         for (let i = 0; i < 30; i++) file({ name: `clip ${i}.mp4` });
         const r = await run("search_library", { query: "clip" });
         expect(r.out.items).toHaveLength(12);
         expect(r.out.total).toBeGreaterThanOrEqual(12);
-        // the text lists at most 10 rows and says so
-        expect(r.text.split("\n").filter((l) => /^\d+\. /.test(l))).toHaveLength(10);
-        expect(r.text).toMatch(/…and 2 more/);
-        expect((await run("search_library", { query: "clip", limit: 24 })).out.items).toHaveLength(24);
-        expect(tool("search_library").input.safeParse({ query: "x", limit: 25 }).success).toBe(false);
+        // the text lists the rows asked for (12), not 10, and says how many more there are
+        expect(r.text.split("\n").filter((l) => /^\d+\. /.test(l))).toHaveLength(12);
+        expect(r.text).toMatch(/the first 12; there may be more: raise limit/);
+        const many = await run("search_library", { query: "clip", limit: 30 });
+        expect(many.out.items).toHaveLength(30);
+        expect(many.text.split("\n").filter((l) => /^\d+\. /.test(l))).toHaveLength(30);
+        expect(tool("search_library").input.safeParse({ query: "x", limit: 1000 }).success).toBe(true);
+        // above 1000 is cut to 1000, as the older tools did
+        expect(tool("search_library").input.parse({ query: "x", limit: 5000 }).limit).toBe(1000);
         expect(tool("search_library").input.safeParse({ query: "" }).success).toBe(false);
         expect(tool("search_library").input.safeParse({ query: "x", since: "not a date" }).success).toBe(false);
         const none = await run("search_library", { query: "zebra" });
@@ -377,7 +383,7 @@ describe("show_post", () => {
         await expect(run("show_post", { id: "NoSuchPost" })).rejects.toThrow(/no post with id/);
         const h = file({ name: "h.mp4" });
         hide(h.id);
-        await expect(run("show_post", { id: h.id })).rejects.toThrow(/no post with id/);
+        await expect(run("show_post", { id: h.id })).rejects.toThrow(/is hidden \(library_status unhides it\)/);
         expect(tool("show_post").input.safeParse({}).success).toBe(false);
     });
 
@@ -584,7 +590,8 @@ describe("list_collections and list_share_links", () => {
         const none = await run("list_collections", { name: "zzz" });
         expect(none.out).toMatchObject({ total: 0, collections: [] });
         expect(none.text).toContain("No collection matches");
-        expect(tool("list_collections").input.safeParse({ limit: 51 }).success).toBe(false);
+        expect(tool("list_collections").input.safeParse({ limit: 500 }).success).toBe(true);
+        expect(tool("list_collections").input.safeParse({ limit: 501 }).success).toBe(false);
         expect(tool("list_collections").input.safeParse({ limit: 0 }).success).toBe(false);
     });
 
@@ -771,7 +778,9 @@ describe("upload_files", () => {
         expect(r.out.uploads).toHaveLength(10);
         expect(r.out.public).toBe(true);
         expect(r.out.uploads[0]).toMatchObject({ name: "clip 0.mp4", expires_at: "2025-10-09T00:15:00.000Z" });
-        expect(r.out.uploads[0].curl).toMatch(/^curl -sS -T 'clip 0\.mp4' 'https:/);
+        // FILE stands for the path on disk, as the older tool's line had it
+        expect(r.out.uploads[0].curl).toMatch(/^curl -sS -T FILE 'https:/);
+        expect(r.text).toContain("Replace FILE with the path");
         expect(calls.filter((c) => c.name === "upload.begin")).toHaveLength(10);
         expect(calls[0]!.input).toEqual({ name: "clip 0.mp4", title: "First", public: true });
         expect(r.text.split("\n").filter((l) => /^\d+\. /.test(l))).toHaveLength(10);
@@ -780,10 +789,10 @@ describe("upload_files", () => {
         expect(tool("upload_files").input.safeParse({ files: [{ name: "" }] }).success).toBe(false);
     });
 
-    it("a quote in a file name is escaped for the shell", async () => {
+    it("the curl line has the FILE placeholder whatever the name", async () => {
         answers["upload.begin"] = begin;
         const r = await run("upload_files", { files: [{ name: "it's.mp4" }] });
-        expect(r.out.uploads[0].curl).toContain(`'it'\\''s.mp4'`);
+        expect(r.out.uploads[0].curl).toMatch(/^curl -sS -T FILE 'https:/);
     });
 });
 
@@ -828,7 +837,7 @@ describe("create_share_link", () => {
         expect(r.text).toContain("not put in “Weekend”");
     });
 
-    it("a private post gives no thumbs; a refusal from the op is the error; 10 ids at most", async () => {
+    it("a private post gives no thumbs; a refusal from the op is the error; the op, not the tool, limits the files", async () => {
         const p = file({ visibility: "private" });
         answers["links.create"] = { id: "S1", url: `${SHARE}p/${"k".repeat(22)}`, title: null, files: 1, private: true };
         const r = await run("create_share_link", { ids: [p.id], private: true });
@@ -838,8 +847,9 @@ describe("create_share_link", () => {
         };
         await expect(run("create_share_link", { ids: [p.id] })).rejects.toThrow(/not public/);
         expect(tool("create_share_link").input.safeParse({ ids: [] }).success).toBe(false);
-        expect(tool("create_share_link").input.safeParse({ ids: Array.from({ length: 11 }, (_, i) => `id${i}`) }).success).toBe(false);
-        expect(tool("create_share_link").input.safeParse({ ids: Array.from({ length: 10 }, (_, i) => `id${i}`) }).success).toBe(true);
+        // links.create takes any number of post ids (a gallery post brings its files) and counts the files itself
+        expect(tool("create_share_link").input.safeParse({ ids: Array.from({ length: 11 }, (_, i) => `id${i}`) }).success).toBe(true);
+        expect(tool("create_share_link").input.safeParse({ ids: "one-id" }).success).toBe(true);
     });
 });
 
@@ -914,7 +924,7 @@ describe("job_status", () => {
     it("a running job maps to running with its progress; the wait is short", async () => {
         answers["jobs.wait"] = { job: JOB, status: "running", progress: 0.5 };
         const r = await run("job_status", { job: JOB });
-        expect(r.out).toEqual({ job: JOB, state: "running", progress: 0.5, error: null, post: null, share_url: null });
+        expect(r.out).toEqual({ job: JOB, state: "running", progress: 0.5, error: null, post: null, share_url: null, file_id: null, post_id: null, queue_ahead: null, file: null, agent: null });
         expect(calls[0]!.input).toEqual({ job: JOB, seconds: 8 });
         expect(r.text).toContain("50%");
     });
@@ -1033,5 +1043,303 @@ describe("job_status", () => {
 
     it("an empty job id is refused by the input check", () => {
         expect(tool("job_status").input.safeParse({ job: "" }).success).toBe(false);
+    });
+});
+
+// ---- the options of the retired tools ---------------------------------------------------------------------------------------
+// MCP-APP-CONTRACT.md section 6.3: the app tools take over every option the tools they replace had, and forward it.
+
+describe("search_library: what library.search and library.list could do", () => {
+    const row = (id: string, o: Record<string, unknown> = {}) => ({ id, title: id, saved_at: "2025-10-09T00:00:00.000Z", source: "tiktok.com", link: `https://tiktok.com/${id}`, kind: "video", files: 1, duration: 9.6, public: true, caption: "roasted", ...o });
+
+    it("with no query it lists the library newest first (mode list), with every library.list option forwarded", async () => {
+        const a = file({ name: "new.mp4", created_at: T0 + 5000 });
+        file({ name: "old.mp4", created_at: T0 + 1000 });
+        const r = await run("search_library", { kind: "video", since: "2025-01-01", until: T0 + 10_000_000, source: "tiktok.com", limit: 50 });
+        expect(r.out).toMatchObject({ mode: "list", query: "", total: 2 });
+        expect(r.out.items[0].id).toBe(a.id);
+        expect(calls.map((c) => c.name)).toEqual(["library.list"]);
+        expect(calls[0]!.input).toEqual({ kind: "video", since: "2025-01-01", until: T0 + 10_000_000, source: "tiktok.com", limit: 50 });
+        expect(r.text).toMatch(/^2 posts, newest first\./);
+        // every row names its id, the day saved and where it came from
+        expect(r.text).toContain(a.id);
+        expect(r.text).toMatch(/2025-10-09 · https:\/\/www\.tiktok\.com/);
+        expect(tool("search_library").input.parse({}).limit).toBeUndefined();
+    });
+
+    it("limit goes to 1000 for the list and 500 for a meaning search; the text lists every row asked for", async () => {
+        for (let i = 0; i < 40; i++) file({ name: `clip ${i}.mp4` });
+        const r = await run("search_library", { limit: 40 });
+        expect(r.out.items).toHaveLength(40);
+        expect(r.text.split("\n").filter((l) => /^\d+\. /.test(l))).toHaveLength(40);
+        expect(calls[0]!.input).toMatchObject({ limit: 40 });
+        offered = new Set(["library.search", "library.list"]);
+        answers["library.search"] = [];
+        await run("search_library", { query: "clip", limit: 900 });
+        expect(calls.find((c) => c.name === "library.search")!.input.limit).toBe(500);
+    });
+
+    it("meaning search forwards within, and gives each row its score, why and where it is said", async () => {
+        const a = file({ name: "a.mp4" });
+        offered = new Set(["library.search", "library.list"]);
+        answers["library.search"] = [row(a.id, { score: 0.83, why: ["cat", "shelf"], said: [{ at: 12, end: 14, text: "watch this cat", match: "words" }] })];
+        const r = await run("search_library", { query: "cat", within: { collection: "Favourites" }, limit: 5 });
+        expect(calls[0]).toEqual({ name: "library.search", input: { query: "cat", limit: 5, within: { collection: "Favourites" } } });
+        expect(r.out.items[0]).toMatchObject({ score: 0.83, why: ["cat", "shelf"], said: [{ at: 12, end: 14, text: "watch this cat", match: "words" }], caption: "roasted", source_link: `https://tiktok.com/${a.id}` });
+        expect(r.text).toContain("score 0.83");
+        expect(r.text).toContain("why: cat, shelf");
+        expect(r.text).toContain("says @0:12: “watch this cat”");
+        // a plain string and a posts list are accepted too
+        expect(tool("search_library").input.safeParse({ query: "x", within: "Favourites" }).success).toBe(true);
+        expect(tool("search_library").input.safeParse({ query: "x", within: { posts: ["a"] } }).success).toBe(true);
+        expect(tool("search_library").input.safeParse({ query: "x", within: { nope: 1 } }).success).toBe(false);
+    });
+
+    it("rows without a score (the title match) carry null score and why", async () => {
+        file({ name: "dog.mp4" });
+        const r = await run("search_library", { query: "dog" });
+        expect(r.out.items[0]).toMatchObject({ score: null, why: null, said: null });
+    });
+
+    it("match: text keeps the substring match of library.list even while meaning search is on", async () => {
+        const a = file({ name: "found by name.mp4" });
+        offered = new Set(["library.search", "library.list"]);
+        const r = await run("search_library", { query: "by name", match: "text" });
+        expect(calls.map((c) => c.name)).toEqual(["library.list"]);
+        expect(calls[0]!.input).toMatchObject({ query: "by name" });
+        expect(r.out).toMatchObject({ mode: "text" });
+        expect(r.out.items.map((i: any) => i.id)).toEqual([a.id]);
+    });
+
+    it("within needs meaning search: while it is off or failing the call says so instead of ignoring it", async () => {
+        file({ name: "dog.mp4" });
+        await expect(run("search_library", { query: "dog", within: "Favourites" })).rejects.toThrow(/needs meaning search/);
+        offered = new Set(["library.search", "library.list"]);
+        answers["library.search"] = () => {
+            throw new Error("search is waking up");
+        };
+        await expect(run("search_library", { query: "dog", within: "Favourites" })).rejects.toThrow(/waking up/);
+        // ... without within the title match answers, as before
+        expect((await run("search_library", { query: "dog" })).out.mode).toBe("text");
+    });
+});
+
+describe("show_post: everything library.post gave", () => {
+    it("every file with its id, role, name, urls and private links; the text lists them", async () => {
+        const v = file({ name: "orig.mp4", role: "original" });
+        const w = file({ name: "made.webp", content_type: "image/webp", post_key: v.id, role: "webp", duration: null, poster: null });
+        answers["library.post"] = {
+            id: v.id, title: "orig", saved_at: "2025-10-09T00:00:00.000Z", source: "x.com", link: "https://x.com/a/status/1", kind: "video", duration: 9.6, public: true, caption: null,
+            files: [
+                { id: v.id, name: "orig.mp4", role: "original", kind: "video", content_type: "video/mp4", duration: 9.6, width: 720, height: 1280, bytes: 1000, public: true, url: v.url, share_url: `${SHARE}${v.name}`, private_url: `${SHARE}p/${"k".repeat(22)}`, private_file_url: `${SHARE}p/${"k".repeat(22)}/1.mp4` },
+                { id: w.id, name: "made.webp", role: "webp", kind: "image", content_type: "image/webp", duration: null, width: 480, height: 854, bytes: 500, public: true, url: w.url, share_url: null },
+            ],
+        };
+        offered = new Set(["library.post"]);
+        const r = await run("show_post", { id: v.id });
+        expect(r.out.post.file_list[0]).toMatchObject({ id: v.id, role: "original", name: "orig.mp4", url: v.url, share_url: `${SHARE}${v.name}`, private_url: `${SHARE}p/${"k".repeat(22)}`, private_file_url: `${SHARE}p/${"k".repeat(22)}/1.mp4` });
+        expect(r.out.post.file_list[1]).toMatchObject({ id: w.id, role: "webp", name: "made.webp", share_url: null, private_url: null, private_file_url: null });
+        expect(r.out.post.private_file_url).toBe(`${SHARE}p/${"k".repeat(22)}/1.mp4`);
+        expect(r.text).toContain("Files:");
+        expect(r.text).toContain(`${v.id} · original · orig.mp4 · video/mp4 · url ${v.url} · share ${SHARE}${v.name} · private ${SHARE}p/`);
+        expect(r.text).toContain(`${w.id} · webp · made.webp`);
+    });
+
+    it("a hidden post gives no urls at all", async () => {
+        const v = file({ name: "h.mp4" });
+        hide(v.id);
+        await expect(run("show_post", { id: v.id })).rejects.toThrow(/post \S+ is hidden \(library_status unhides it\)/);
+    });
+});
+
+describe("list_collections and list_share_links: the ids library.* gave", () => {
+    it("collections carry link_ids and post_ids, and the text row names the link ids", async () => {
+        const a = file({ name: "a.mp4" });
+        const b = file({ name: "b.mp4" });
+        set("SetOne", [a.id, b.id], { title: "Cats" });
+        collection("ColA", "Favourites", ["SetOne"]);
+        const r = await run("list_collections", {});
+        expect(r.out.collections[0]).toMatchObject({ id: "ColA", link_ids: ["SetOne"], post_ids: expect.arrayContaining([a.id, b.id]) });
+        expect(r.text).toContain("Favourites · 1 link · 2 posts · ColA · links: SetOne");
+    });
+
+    it("links carry post_ids and a private link's file_urls; rows past 10 are listed when asked for", async () => {
+        const a = file({ name: "a.mp4" });
+        const b = file({ name: "b.mp4" });
+        for (let i = 0; i < 14; i++) set(`Set${String(i).padStart(2, "0")}`, [a.id, b.id], { title: `link ${i}` });
+        set("SetPriv", [a.id, b.id], { title: "secret", private: true });
+        answers["links.list"] = [
+            { id: "SetPriv", url: `${SHARE}p/${"k".repeat(22)}`, private: true, title: "secret", created_at: "2025-10-09T00:00:00.000Z", post_ids: [a.id, b.id], file_urls: [`${SHARE}p/${"k".repeat(22)}/1.mp4`, null] },
+            ...Array.from({ length: 14 }, (_, i) => ({ id: `Set${String(i).padStart(2, "0")}`, url: `${SHARE}g/Set${i}`, private: false, title: `link ${i}`, created_at: "2025-10-09T00:00:00.000Z", post_ids: [a.id, b.id] })),
+        ];
+        const r = await run("list_share_links", { limit: 15 });
+        expect(r.out.links[0]).toMatchObject({ id: "SetPriv", post_ids: [a.id, b.id], file_urls: [`${SHARE}p/${"k".repeat(22)}/1.mp4`, null] });
+        expect(r.out.links[1]).toMatchObject({ post_ids: [a.id, b.id], file_urls: null });
+        expect(r.text.split("\n").filter((l) => /^\d+\. /.test(l))).toHaveLength(15);
+        expect(r.text).toContain(`posts: ${a.id}, ${b.id}`);
+        expect(tool("list_share_links").input.safeParse({ limit: 500 }).success).toBe(true);
+    });
+});
+
+describe("create_share_link, convert_to_webp, upload_files, save_link, job_status: the retired options", () => {
+    it("create_share_link: a lone string id and more than 10 post ids go to links.create as the old tool sent them", async () => {
+        const p = file({ name: "p.mp4" });
+        answers["links.create"] = { id: "S1", url: `${SHARE}g/S1`, title: "t", files: 2, private: true, file_urls: [`${SHARE}p/${"k".repeat(22)}/1.mp4`, null] };
+        const one = await run("create_share_link", { ids: p.id, title: "t", private: true });
+        expect(calls[0]!.input).toEqual({ ids: [p.id], title: "t", private: true });
+        expect(one.out.links[0]).toMatchObject({ post_ids: [p.id], file_urls: [`${SHARE}p/${"k".repeat(22)}/1.mp4`, null] });
+        expect(one.text).toContain("Link id: S1");
+        expect(one.text).toContain(`${SHARE}p/${"k".repeat(22)}/1.mp4`);
+        const ids = Array.from({ length: 12 }, (_, i) => `post${i}`);
+        await run("create_share_link", { ids });
+        expect(calls.at(-1)!.input).toEqual({ ids });
+    });
+
+    it("convert_to_webp: crop is forwarded with the range, width and quality", async () => {
+        const src = file({ duration: 30, name: "s.mp4" });
+        answers["make.webp"] = { job: "studio:AbCdEfGhIjKlMnOpQrStUv:AbCdEfGhIjKlMnOpQrSt", status: "running" };
+        answers["jobs.wait"] = { job: "studio:AbCdEfGhIjKlMnOpQrStUv:AbCdEfGhIjKlMnOpQrSt", status: "running" };
+        await run("convert_to_webp", { id: src.id, start: 1, end: 4, crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 }, width: 320, quality: "high" });
+        expect(calls.find((c) => c.name === "make.webp")!.input).toEqual({ id: src.id, start: 1, end: 4, crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 }, width: 320, quality: "high" });
+        expect(tool("convert_to_webp").input.safeParse({ id: "x", crop: { x: 0, y: 0, w: 0, h: 1 } }).success).toBe(false);
+    });
+
+    it("upload_files: the flat single-file form (name, title) and queue are forwarded", async () => {
+        answers["upload.begin"] = () => ({ upload_url: "https://api.capybaraharmony.com/mcp/upload/tok.sig", method: "PUT", expires_at: "2025-10-09T00:15:00.000Z", max_bytes: 100_000_000, types: ["video/mp4"], curl: "x" });
+        const r = await run("upload_files", { name: "cat.mp4", title: "a cat", public: true, queue: true });
+        expect(calls[0]).toEqual({ name: "upload.begin", input: { name: "cat.mp4", title: "a cat", public: true, queue: true } });
+        expect(r.out.uploads).toHaveLength(1);
+        expect(r.out.uploads[0].name).toBe("cat.mp4");
+        // a title without a name is a link too
+        await run("upload_files", { title: "only a title" });
+        expect(calls.at(-1)!.input).toEqual({ title: "only a title" });
+    });
+
+    it("save_link: items, public, title and wait go to library.save; the saves left are said", async () => {
+        answers["library.save"] = { save_id: "SaveSessionId000000aXY", status: "downloading", saves_left_today: 7 };
+        const r = await run("save_link", { url: "https://x.com/a/status/1", items: [0, 2], public: true, title: "mine", wait: 40, engine: "ytdlp" });
+        expect(calls[0]).toEqual({ name: "library.save", input: { url: "https://x.com/a/status/1", wait: 40, items: [0, 2], public: true, title: "mine", engine: "ytdlp" } });
+        expect(r.out).toMatchObject({ save_id: "SaveSessionId000000aXY", saves_left_today: 7 });
+        expect(r.text).toContain("7 saves left today");
+        await run("save_link", { url: "https://x.com/a/status/2", items: "all" });
+        expect(calls.at(-1)!.input).toEqual({ url: "https://x.com/a/status/2", wait: 8, items: "all" });
+        expect(tool("save_link").input.safeParse({ url: "https://x.com/a", wait: 61 }).success).toBe(false);
+        expect(tool("save_link").input.safeParse({ url: "https://x.com/a", items: [] }).success).toBe(false);
+    });
+
+    it("job_status: seconds is forwarded (0 to 25); a finished render says its file; a helper's report comes through", async () => {
+        const JOB = "studio:AbCdEfGhIjKlMnOpQrStUv:AbCdEfGhIjKlMnOpQrSt";
+        answers["jobs.wait"] = { job: JOB, status: "queued", queue_ahead: 2 };
+        const q = await run("job_status", { job: JOB, seconds: 20 });
+        expect(calls[0]!.input).toEqual({ job: JOB, seconds: 20 });
+        expect(q.out).toMatchObject({ state: "running", queue_ahead: 2 });
+        expect(q.text).toContain("2 jobs ahead");
+        expect(tool("job_status").input.safeParse({ job: JOB, seconds: 26 }).success).toBe(false);
+        expect(tool("job_status").input.safeParse({ job: JOB, seconds: 0 }).success).toBe(true);
+
+        const made = file({ content_type: "image/webp", name: "m.webp", duration: null, poster: null });
+        answers["jobs.wait"] = { job: JOB, status: "done", file_id: made.id, post_id: made.id, kind: "image", bytes: 5000, width: 480, height: 854, seconds: 6.5 };
+        const d = await run("job_status", { job: JOB });
+        expect(d.out).toMatchObject({ state: "done", file_id: made.id, post_id: made.id, file: { kind: "image", bytes: 5000, width: 480, height: 854, seconds: 6.5 } });
+        expect(d.text).toContain(`File: ${made.id} (480x854, 6.5 s)`);
+
+        const AGENT = "agent:Ab3dE6gH9jK2mN5p";
+        answers["jobs.wait"] = { job: AGENT, status: "done", agent: "Ab3dE6gH9jK2mN5p", name: "scout", result: "found 3 cats", post_ids: ["p1", "p2"] };
+        const a = await run("job_status", { job: AGENT });
+        expect(a.out.agent).toMatchObject({ id: "Ab3dE6gH9jK2mN5p", name: "scout", result: "found 3 cats", post_ids: ["p1", "p2"] });
+        expect(a.text).toContain("Report: found 3 cats");
+        expect(a.text).toContain("Posts it showed: p1, p2");
+        answers["jobs.wait"] = { job: AGENT, status: "running", agent: "Ab3dE6gH9jK2mN5p", name: "scout", activity: "library.search" };
+        expect((await run("job_status", { job: AGENT })).text).toContain("scout last did: library.search");
+    });
+});
+
+describe("show_edit: the timeline an agent edits", () => {
+    it("carries the raw timeline in structuredContent and text (ids and numbers, no names)", async () => {
+        const timeline = { version: 1, canvas: { w: 720, h: 1280, fps: 30 }, main: [{ id: "a", item: "FileX", in: 0, out: 2 }], overlay: [] };
+        answers["edits.get"] = { id: "Proj000000000001", title: "Mine", revision: 3, duration: 2, timeline, sources: { FileX: { name: "secret name.mp4", poster_url: "https://media.capybaraharmony.com/x.jpg" } }, render: null };
+        const r = await run("show_edit", { id: "Proj000000000001" });
+        expect(r.out.project.timeline).toEqual(timeline);
+        expect(r.text).toContain(`Timeline (for edits_update):\n${JSON.stringify(timeline)}`);
+        // the sources (names, pictures) are not passed on: a hidden post's name must not come through
+        expect(JSON.stringify(r.structured)).not.toContain("secret name");
+    });
+});
+
+// ---- review fixes -------------------------------------------------------------------------------------------------------------
+
+describe("search_library: limits, within and big answers", () => {
+    it("within with no limit scores up to 500, not 12; an explicit limit is kept", async () => {
+        file({ name: "dog.mp4" });
+        offered = new Set(["library.search", "library.list"]);
+        answers["library.search"] = [];
+        await run("search_library", { query: "dog", within: { collection: "Favourites" } });
+        expect(calls.find((c) => c.name === "library.search")!.input.limit).toBe(500);
+        calls.length = 0;
+        await run("search_library", { query: "dog", within: { collection: "Favourites" }, limit: 7 });
+        expect(calls.find((c) => c.name === "library.search")!.input.limit).toBe(7);
+        calls.length = 0;
+        await run("search_library", { query: "dog" });
+        expect(calls.find((c) => c.name === "library.search")!.input.limit).toBe(12);
+    });
+
+    it("within without a query is an error, not the whole library", async () => {
+        file({ name: "dog.mp4" });
+        await expect(run("search_library", { within: { collection: "Cats" } })).rejects.toThrow(/add a query/);
+        expect(calls).toHaveLength(0);
+    });
+
+    it("counts are right past 400 posts (the read is not capped at 400)", async () => {
+        for (let i = 0; i < 450; i++) file({ name: `bulk ${i}.mp4` });
+        const r = await run("search_library", { limit: 450 });
+        expect(r.out.items).toHaveLength(450);
+        expect(r.out.total).toBe(450);
+    });
+});
+
+describe("create_share_link and list_share_links: review fixes", () => {
+    it("an empty title is accepted and means no title", () => {
+        expect(tool("create_share_link").input.parse({ ids: "a", title: "" }).title).toBeUndefined();
+        expect(tool("create_share_link").input.parse({ ids: "a", title: "x" }).title).toBe("x");
+    });
+
+    it("a private link's row prints its direct file urls", async () => {
+        const a = file({ name: "a.mp4" });
+        set("1000000000000000009", [a.id], { private: true, title: "Mine" });
+        answers["links.list"] = [{ id: "1000000000000000009", url: `${SHARE}p/${"k".repeat(22)}`, title: "Mine", private: true, created_at: "2025-10-09T00:00:00.000Z", post_ids: [a.id], file_urls: ["https://api.example/f/one", "https://api.example/f/two"] }];
+        answers["collections.list"] = [];
+        const r = await run("list_share_links");
+        expect(r.text).toContain("files: https://api.example/f/one, https://api.example/f/two");
+    });
+});
+
+describe("save_link and job_status: a hidden or unreadable saved post", () => {
+    const SID = "AbCdEfGhIjKlMnOpQrStUv";
+
+    it("a hidden saved post still prints its id, says hidden and does not advise a share link", async () => {
+        const v = file({ post_key: SID, id: "SavedFile000009", name: "h.mp4" });
+        hide(SID);
+        answers["library.save"] = { status: "ready", save_id: SID, post_id: SID, title: "Secret", kind: "video", files: 1, public: false, error: null, saves_left_today: 9 };
+        const r = await run("save_link", { url: "https://www.tiktok.com/@a/video/1" });
+        expect(v.id).toBeTruthy();
+        expect(r.text).toContain(`post ${SID}, hidden`);
+        expect(r.text).not.toContain("share link to send");
+        expect(r.out.post).toBeNull();
+    });
+
+    it("a post that cannot be read still prints its id, without advice", async () => {
+        answers["library.save"] = { status: "ready", save_id: SID, post_id: "GonePost", title: "Gone", kind: "video", files: 1, public: false, error: null, saves_left_today: 9 };
+        answers["library.post"] = () => {
+            throw new OpError(404, "error.library.not_found");
+        };
+        const r = await run("save_link", { url: "https://www.tiktok.com/@a/video/1" });
+        expect(r.text).toContain("post GonePost");
+        expect(r.text).not.toContain("share link to send");
+    });
+
+    it("a running job names its id to ask again with", async () => {
+        answers["jobs.wait"] = { job: "studio:AbCdEfGhIjKlMnOpQrStUv:AbCdEfGhIjKlMnOpQrSt", status: "running", progress: 0.4 };
+        const r = await run("job_status", { job: "studio:AbCdEfGhIjKlMnOpQrStUv:AbCdEfGhIjKlMnOpQrSt" });
+        expect(r.text).toContain("job studio:AbCdEfGhIjKlMnOpQrStUv:AbCdEfGhIjKlMnOpQrSt");
     });
 });
