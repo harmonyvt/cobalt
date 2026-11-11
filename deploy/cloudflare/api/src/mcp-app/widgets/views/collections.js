@@ -7,19 +7,28 @@ VIEWS.collections = (d) => {
         w.appendChild(h("div", { class: "empty", text: "no collections yet." }));
         return w;
     }
-    const grid = h("div", { class: "cols" });
+    const grid = h("div", { class: "ccols" });
     cols.forEach((c) => {
         const mos = h("div", { class: "mos", "aria-hidden": "true" });
-        const th = (c.thumbs || []).slice(0, 8);
-        for (let i = 0; i < 8; i++) mos.appendChild(th[i] ? pic(th[i], c.id + i) : h("div", { class: "pic" }));
+        const th = (c.thumbs || []).slice(0, 4);
+        for (let i = 0; i < 4; i++) mos.appendChild(th[i] ? pic(th[i], c.id + i) : h("div", { class: "pic" }));
         const links = c.links || [];
         const sub = `${plural(links.length, "link")} · ${plural(c.posts || 0, "post")}`;
-        const card = h("div", { class: "col" },
-            h("button", { class: "open", type: "button", "aria-label": `${c.name}, ${sub}. show its links`, onclick: () => go("list_share_links", { collection: c.name }) }, mos, h("b", { text: c.name }), h("small", { text: sub })));
+        const card = h("div", { class: "ccol" },
+            h("button", { class: "open", type: "button", "aria-label": `${c.name}, ${sub}. show its links`, onclick: () => go("list_share_links", { collection: c.name }) }, mos, h("span", { class: "mid" }, h("b", { text: c.name }), h("small", { text: sub }))));
         const urls = links.map((l) => l.url).filter(Boolean);
-        if (urls.length) card.appendChild(copyBtn(() => urls.join("\n"), "copy all links", `copy all links in ${c.name}`));
+        card.appendChild(urls.length ? copyBtn(() => urls.join("\n"), "copy", `copy all links in ${c.name}`) : h("span"));
         grid.appendChild(card);
     });
-    w.appendChild(h("div", { class: "wbody" }, grid));
+    // one row of cards however wide the widget is (like search): no lonely third card on a phone
+    const colsN = () => {
+        const n = getComputedStyle(grid).gridTemplateColumns.split(" ").length;
+        return grid.isConnected && n > 1 ? n : 3;
+    };
+    const ml = limitList(grid, colsN);
+    const ro = new ResizeObserver(() => ml.refresh());
+    ro.observe(grid);
+    onCleanup(() => ro.disconnect());
+    w.appendChild(h("div", { class: "wbody" }, grid, ml.btn));
     return w;
 };

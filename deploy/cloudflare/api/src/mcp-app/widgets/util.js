@@ -3,6 +3,25 @@
 const APP_URL = "https://cobalt.capybaraharmony.com/library";
 const S = { data: null, stack: [], err: null, busy: false, cleanups: [], defView: document.body.dataset.defaultView || "search" };
 const VIEWS = {};
+// Signed one-hour preview links for private files. They arrive in the tool result's `_meta["capystore/preview"]`, never in
+// structuredContent: { <post, file or project id>: { url?, poster?, thumb?, expires_at } }. Kept across results (back
+// navigation redraws older data); an entry past its expiry is ignored.
+const PREVIEWS = {};
+function takePreviews(meta) {
+    const m = meta && meta["capystore/preview"];
+    if (!m || typeof m !== "object") return;
+    for (const id in m) if (m[id] && typeof m[id] === "object") PREVIEWS[id] = Object.assign({}, PREVIEWS[id], m[id]);
+}
+// the signed link of `slot` ("url", "poster" or "thumb") filed under `id`, or null when there is none or it ran out
+function signed(id, slot) {
+    const e = id && PREVIEWS[id];
+    const u = e && e[slot];
+    if (typeof u !== "string" || !/^https?:\/\//i.test(u)) return null;
+    return e.expires_at && Date.parse(e.expires_at) < Date.now() ? null : u;
+}
+// callbacks that re-apply layout-dependent state (show more, the full screen button) when the host context changes; cleared on every render
+const CTX_HOOKS = [];
+const roomy = () => bridge.ctx().displayMode === "fullscreen";
 
 function add(el, c) {
     if (c == null || c === false) return;
@@ -29,6 +48,73 @@ function h(tag, props, ...kids) {
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + "s"}`;
 const num = (n) => typeof n === "number" && isFinite(n);
+
+// icons: static paths only (never fed from the library)
+const ICONS = {
+    play: '<path fill="currentColor" d="M8 5.5v13l10.5-6.5z"/>',
+    pause: '<path fill="currentColor" d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>',
+    lock: '<path fill="currentColor" d="M7 10V8a5 5 0 0 1 10 0v2h.5A1.5 1.5 0 0 1 19 11.5v8a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5v-8A1.5 1.5 0 0 1 6.5 10zm2.2 0h5.6V8a2.8 2.8 0 0 0-5.6 0z"/>',
+    expand: '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+    shrink: '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>',
+    grid: '<path fill="currentColor" d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>',
+    list: '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"/>',
+    stepb: '<path fill="currentColor" d="M6 5h2v14H6zM19 5.5v13L9.5 12z"/>',
+    stepf: '<path fill="currentColor" d="M16 5h2v14h-2zM5 5.5v13L14.5 12z"/>',
+    render: '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 6h12v12H4zM16 10l4-2v8l-4-2"/>',
+};
+function ic(name, size) {
+    const s = size || 12;
+    const e = document.createElement("span");
+    e.className = "ic";
+    e.setAttribute("aria-hidden", "true");
+    e.innerHTML = `<svg viewBox="0 0 24 24" width="${s}" height="${s}">${ICONS[name] || ""}</svg>`;
+    return e;
+}
+// an icon-only button
+const ibtn = (name, label, fn, size) => h("button", { class: "ib", type: "button", "aria-label": label, title: label, onclick: fn }, ic(name, size));
+// "private · link valid 1 h" over a picture
+const lockb = (text, big) => h("span", { class: "lockb" + (big ? " lg" : ""), title: text || "private" }, ic("lock", big ? 11 : 9), text || null);
+// a clock time in the host's zone, for "until 3:14 pm"
+function clockAt(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return "";
+    const c = bridge.ctx();
+    try {
+        return new Intl.DateTimeFormat(c.locale || undefined, { hour: "numeric", minute: "2-digit", ...(c.timeZone ? { timeZone: c.timeZone } : {}) }).format(d).toLowerCase();
+    } catch {
+        return d.toTimeString().slice(0, 5);
+    }
+}
+// a picture URL as a CSS background (repeated across a strip: the poster stands in for frames)
+function filmBg(el, url) {
+    if (safeUrl(url)) el.style.backgroundImage = `url("${String(url).replace(/["\\\n\r]/g, (c) => encodeURIComponent(c))}")`;
+}
+
+// First `n` rows (3 by default), then a "show N more" button that shows the rest inline and "show less". `n` may be a
+// function (a grid shows its first row). In the host's full screen everything shows. Call .refresh() after the container's
+// children change. The button goes where the caller puts .btn.
+function limitList(container, n) {
+    let open = false;
+    const btn = h("button", { class: "btn more", type: "button" });
+    btn.addEventListener("click", () => {
+        open = !open;
+        refresh();
+    });
+    function refresh() {
+        const items = [...container.children];
+        const cap = roomy() ? Infinity : typeof n === "function" ? n() : n || 3;
+        const extra = Math.max(0, items.length - cap);
+        items.forEach((el, i) => {
+            el.hidden = !open && i >= cap;
+        });
+        btn.hidden = extra === 0;
+        btn.textContent = open ? "show less" : `show ${extra} more`;
+        btn.setAttribute("aria-expanded", String(open));
+    }
+    CTX_HOOKS.push(refresh);
+    refresh();
+    return { btn, refresh };
+}
 
 // picture URLs: http(s) or an inline image only
 const safeUrl = (u) => typeof u === "string" && /^(https?:\/\/|data:image\/)/i.test(u);
@@ -117,7 +203,7 @@ function copyBtn(text, label, name) {
             const inp = h("textarea", { readOnly: true, value: t, rows: Math.min(4, t.split("\n").length), "aria-label": "text to copy" });
             const note = h("small", { text: "select and copy:" });
             const box = h("div", { class: "cpfall" }, note, inp);
-            const anchor = b.closest(".lk,.linkrow,.col,.whead,.job") || b.parentNode;
+            const anchor = b.closest(".lk,.linkrow,.ccol,.whead,.job,.result") || b.parentNode;
             anchor.insertAdjacentElement("afterend", box);
             inp.focus();
             inp.select();
@@ -159,13 +245,25 @@ function drag(el, fn) {
     });
 }
 
-// the view's header; a back arrow when the widget was reached from another view
+// the view's header: one line. A back arrow when the widget was reached from another view; the host's full screen button
+// (the roomy view) when the host offers one
 function head(title, right, extra) {
     const hl = h("div", { class: "hl" });
     if (S.stack.length) hl.appendChild(h("button", { class: "btn back", type: "button", "aria-label": "back", text: "←", onclick: back }));
     hl.appendChild(typeof title === "string" ? h("b", { text: title }) : title);
     if (extra) hl.appendChild(extra);
-    return h("div", { class: "whead" }, hl, right ? h("div", { class: "hr" }, right) : null);
+    const fs = ibtn("expand", "full screen", () => bridge.fullscreen(), 13);
+    const place = () => {
+        fs.hidden = !bridge.canFull();
+        const full = roomy();
+        const label = full ? "exit full screen" : "full screen";
+        fs.setAttribute("aria-label", label);
+        fs.title = label;
+        fs.replaceChildren(ic(full ? "shrink" : "expand", 13));
+    };
+    CTX_HOOKS.push(place);
+    place();
+    return h("div", { class: "whead" }, hl, right ? h("div", { class: "hr" }, right) : null, fs);
 }
 const onCleanup = (fn) => S.cleanups.push(fn);
 

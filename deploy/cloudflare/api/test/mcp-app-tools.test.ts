@@ -112,6 +112,10 @@ function context(): AppToolCtx {
         op,
         flags: { search: false, mcp: true },
         origin: "https://api.capybaraharmony.com",
+        previewExpires: new Date(T0 + 3_600_000).toISOString(),
+        preview: async (key, id, slot, poster = slot === "poster") => {
+            (previews[key] ??= { expires_at: new Date(T0 + 3_600_000).toISOString() })[slot] = `https://api.capybaraharmony.com/mcp/media/T.${id}${poster ? "/poster" : ""}`;
+        },
         has: (name) => (offered ? offered.has(name) : name !== "library.search"),
         async call(name, input) {
             calls.push({ name, input });
@@ -132,11 +136,16 @@ function context(): AppToolCtx {
 }
 
 // parse like the core does, run, and check the structured answer against the tool's own output schema
-async function run(name: string, input: unknown = {}): Promise<AppToolResult & { out: any }> {
+// the signed links the last run filed (what the server puts in the result's _meta)
+let previews: Record<string, any> = {};
+async function run(name: string, input: unknown = {}): Promise<AppToolResult & { out: any; previews: Record<string, any> }> {
     const t = tool(name);
+    previews = {};
     const r = await t.run(context(), t.input.parse(input));
     const out = t.output.parse(r.structured);
-    return { ...r, out };
+    // signed links never ride in structuredContent or text
+    expect(JSON.stringify(r.structured) + r.text).not.toContain("/mcp/media/");
+    return { ...r, out, previews };
 }
 
 beforeEach(() => {
@@ -221,6 +230,8 @@ it("every tool declares what it does not do: no destructive writes, only save_li
 
 // ---- search_library ---------------------------------------------------------------------------------------------------------
 
+const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
+
 describe("search_library", () => {
     it("meaning search: public posts get their poster, private and off ones none, hidden ones never show", async () => {
         const pub = file({ name: "cat.mp4" });
@@ -238,9 +249,13 @@ describe("search_library", () => {
         expect(r.out.mode).toBe("meaning");
         expect(r.out.items.map((i: any) => [i.id, i.status, i.thumb_url])).toEqual([
             [pub.id, "public", expect.stringMatching(/^https:\/\/media\.capybaraharmony\.com\/Poster/)],
+            // a private or off post's picture is a signed one-hour preview link in _meta (by post id), never a media link
             [priv.id, "private", null],
             [off.id, "off", null],
         ]);
+        expect(Object.keys(r.previews).sort()).toEqual([priv.id, off.id].sort());
+        expect(r.previews[priv.id].thumb).toBe(`https://api.capybaraharmony.com/mcp/media/T.${priv.id}/poster`);
+        expect(r.out.items.some((i: any) => i.id === gone.id)).toBe(false);
         expect(r.out.items[0]).toMatchObject({ title: "A cat falls off a shelf", kind: "video", duration_s: 9.6, source_host: "tiktok.com", files: 1 });
         // one D1 batch for the whole answer, nothing one by one
         expect(batches).toBe(1);
@@ -253,6 +268,7 @@ describe("search_library", () => {
         expect(lines[3]).toBe(`3. off · video 0:10 · ${off.id} · 2025-10-09 · tiktok.com · not shared · score 0.5`);
         expect(r.text).not.toContain("hidden");
         expect(r.text).not.toMatch(/media\.capybaraharmony\.com/);
+        expect(r.text).not.toContain("/mcp/media/");
         expect(r.text).not.toMatch(/[{}\[\]]/);
     });
 
@@ -373,9 +389,13 @@ describe("show_post", () => {
         const v = file({ visibility: "private", name: "mine.mp4" });
         privateLink(v.id);
         const r = await run("show_post", { id: v.id });
-        expect(r.out.post).toMatchObject({ status: "private", thumb_url: null, share_url: null, transcript_excerpt: null });
+        // no public picture or url; it plays through a signed preview that is in _meta only
+        expect(r.out.post).toMatchObject({ status: "private", thumb_url: null, share_url: null, transcript_excerpt: null, preview_expires_at: new Date(T0 + 3_600_000).toISOString() });
         expect(r.out.post.private_url).toMatch(/^https:\/\/share\.capybaraharmony\.com\/p\//);
         expect(r.out.post.file_list[0].url).toBeNull();
+        expect(r.out.post.file_list[0]).not.toHaveProperty("preview_url");
+        expect(r.previews[v.id]).toMatchObject({ url: `https://api.capybaraharmony.com/mcp/media/T.${v.id}`, thumb: `https://api.capybaraharmony.com/mcp/media/T.${v.id}/poster`, expires_at: new Date(T0 + 3_600_000).toISOString() });
+        expect(r.text).not.toContain("/mcp/media/");
         expect(r.text).toContain("Private link: https://share.capybaraharmony.com/p/");
     });
 
@@ -447,10 +467,16 @@ describe("show_edit", () => {
             expect.objectContaining({ id: "c2", name: "main.mp4", start: 4, end: 8, speed: 2, muted: true, poster_url: null }),
         ]);
         expect(p.overlay).toEqual([
-            { id: "o1", name: "my-cutout.png", kind: "cutout", start: 2, end: 5 },
-            { id: "o2", name: "spin.gif", kind: "gif", start: 6, end: 7.5 },
+            expect.objectContaining({ id: "o1", name: "my-cutout.png", kind: "cutout", start: 2, end: 5, in: 0, out: 3, opacity: 1, media_kind: "image", private: false }),
+            expect.objectContaining({ id: "o2", name: "spin.gif", kind: "gif", start: 6, end: 7.5 }),
         ]);
-        expect(p.render).toEqual({ status: "done", progress: 1, post_id: made.id, poster_url: `${MEDIA}PosterM.jpg`, stale: true });
+        // what the widget plays: the public file, per clip and per overlay, with the frame box (height from the source's shape)
+        expect(p.main[0]).toMatchObject({ video_url: expect.stringMatching(/^https:\/\/media\.capybaraharmony\.com\/Nm.*\.mp4$/), media_kind: "video", private: false, src_w: 720, src_h: 1280 });
+        expect(p.overlay[0].url).toMatch(/^https:\/\/media\.capybaraharmony\.com\//);
+        expect(p.overlay[0].frame).toEqual({ x: 0, y: 0, w: 0.5, h: round4((0.5 * 1080 * 1280) / (1920 * 720)) });
+        expect(p.preview_expires_at).toBeNull();
+        expect(p.render).toMatchObject({ status: "done", progress: 1, post_id: made.id, poster_url: `${MEDIA}PosterM.jpg`, stale: true, private: false });
+        expect(p.render.video_url).toMatch(/^https:\/\/media\.capybaraharmony\.com\//);
         expect(r.out.projects).toEqual([]);
         expect(r.text).toContain("Edit “Friday montage”");
         expect(r.text).toContain("1. intro.mp4 · 0:00–0:04");
@@ -468,9 +494,14 @@ describe("show_edit", () => {
         const r = await run("show_edit", { id: EDIT_ID });
         const p = r.out.project;
         // private: the owner's own name stays, the picture goes (it is not a link a browser can load)
-        expect(p.main[0]).toMatchObject({ name: "intro.mp4", poster_url: null });
-        // hidden: neither the name nor the picture
-        expect(p.main[1]).toMatchObject({ name: "clip 2", poster_url: null });
+        // (it plays through a signed preview instead)
+        expect(p.main[0]).toMatchObject({ name: "intro.mp4", poster_url: null, video_url: null, private: true, file_id: "SrcA" });
+        expect(r.previews.SrcA).toMatchObject({ url: "https://api.capybaraharmony.com/mcp/media/T.SrcA", poster: "https://api.capybaraharmony.com/mcp/media/T.SrcA/poster" });
+        expect(p.preview_expires_at).toBe(new Date(T0 + 3_600_000).toISOString());
+        // hidden: neither the name nor the picture, and nothing to play
+        expect(p.main[1]).toMatchObject({ name: "clip 2", poster_url: null, video_url: null, private: false });
+        expect(JSON.stringify(r.out)).not.toContain("T.SrcB");
+        expect(r.text).not.toContain("/mcp/media/");
         expect(JSON.stringify(r.out) + r.text).not.toContain("main.mp4");
         // gone: a neutral name
         expect(p.overlay[0]).toMatchObject({ name: "overlay 1" });
@@ -488,7 +519,12 @@ describe("show_edit", () => {
         const made = file({ visibility: "private" });
         answers["edits.get"] = got({ render: { id: "R1", status: "rendering", revision: 4, progress: 0.4, item_id: made.id, poster_url: `${MEDIA}P.jpg` } });
         const r = await run("show_edit", { id: EDIT_ID });
-        expect(r.out.project.render).toEqual({ status: "running", progress: 0.4, post_id: made.id, poster_url: null, stale: false });
+        expect(r.out.project.render).toEqual({ status: "running", progress: 0.4, post_id: made.id, poster_url: null, video_url: null, private: false, stale: false, file_id: null });
+        // a finished private render plays through a signed preview
+        answers["edits.get"] = got({ render: { id: "R1", status: "done", revision: 4, progress: 1, item_id: made.id, poster_url: `${MEDIA}P.jpg` } });
+        const done = (await run("show_edit", { id: EDIT_ID })).out.project;
+        expect(done.render).toMatchObject({ private: true, video_url: null, poster_url: null, file_id: made.id });
+        expect((await run("show_edit", { id: EDIT_ID })).previews[made.id]).toMatchObject({ url: `https://api.capybaraharmony.com/mcp/media/T.${made.id}` });
         expect(r.text).toContain("Rendering (40%)");
     });
 

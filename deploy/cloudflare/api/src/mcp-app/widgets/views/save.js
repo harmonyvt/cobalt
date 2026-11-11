@@ -2,7 +2,7 @@ VIEWS.save = (d) => {
     const w = h("div", null, head("saving to capystore", null));
     const label = urlLabel(d.url || "");
     if (d.state === "error") {
-        w.appendChild(h("div", { class: "wbody" }, h("div", { class: "err", style: "margin:0 0 10px" }, h("span", { text: d.error || "couldn't save that link" }), h("button", { class: "btn", type: "button", text: "retry", onclick: () => go("save_link", d.engine && d.engine !== "auto" ? { url: d.url, engine: d.engine } : { url: d.url }, { push: false }) })), h("p", { class: "note", style: "margin:0;overflow-wrap:anywhere", text: label })));
+        w.appendChild(h("div", { class: "wbody" }, h("div", { class: "err", style: "margin:0 0 6px" }, h("span", { text: d.error || "couldn't save that link" }), h("button", { class: "btn", type: "button", text: "retry", onclick: () => go("save_link", d.engine && d.engine !== "auto" ? { url: d.url, engine: d.engine } : { url: d.url }, { push: false }) })), h("p", { class: "note", style: "margin:0;overflow-wrap:anywhere", text: label })));
         return w;
     }
     if (d.state === "done") {

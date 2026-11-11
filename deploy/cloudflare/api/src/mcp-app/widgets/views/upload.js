@@ -22,12 +22,13 @@ VIEWS.upload = (d) => {
         "error.api.generic": "capystore had a problem. try again.",
     };
     const w = h("div", null, head("upload to capystore", [h("span", { text: `links last 15 min · ${fmtBytes(max)} each` }), d.public ? h("span", { class: "tag", text: "public" }) : null]));
-    const list = h("div", { style: "margin-top:10px" });
-    const note = h("p", { class: "note", style: "margin:10px 0 0", "aria-live": "polite", text: "the files go from here straight to capystore, not through the chat." });
+    const list = h("div", { style: "margin-top:6px" });
+    const ml = limitList(list, 3);
+    const note = h("p", { class: "note", style: "margin:6px 0 0", "aria-live": "polite", text: "the files go from here straight to capystore, not through the chat." });
     const input = h("input", { type: "file", multiple: true, accept: (d.accept || []).map((x) => "." + String(x).replace(/^\./, "")).join(","), "aria-hidden": "true", tabindex: "-1" });
     const drop = h("div", { class: "drop", role: "button", tabindex: "0", "aria-label": "choose files to upload" },
-        "drop videos or pictures here, or tap to choose", h("br"), h("small", { text: (d.accept || []).join(" ") }), input);
-    w.appendChild(h("div", { class: "wbody" }, drop, list, note));
+        h("span", { text: "drop videos or pictures, or tap to choose" }), h("span", { class: "sp" }), h("span", { class: "btn", text: "choose" }), input);
+    w.appendChild(h("div", { class: "wbody" }, drop, list, ml.btn, note));
 
     function paintRow(s) {
         const name = s.file ? s.file.name : s.link.name;
@@ -39,13 +40,14 @@ VIEWS.upload = (d) => {
         if (s.file) t.appendChild(h("div", { class: "prog", role: "progressbar", "aria-label": `${name} progress`, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(s.state === "saved" ? 100 : s.pct) }, bar));
         t.appendChild(h("small", { class: "st", text: status }));
         row.className = "up" + (s.state === "saved" ? " ok" : s.state === "failed" || s.state === "expired" ? " bad" : "");
-        row.replaceChildren(h("div", { class: "ic pic" }), t);
+        const acts = h("div", { class: "acts2" });
+        row.replaceChildren(h("div", { class: "ic pic" }), t, acts);
         row.firstChild.style.background = grad(name);
         if (s.state === "saved") {
-            row.appendChild(h("span", { class: "tag", text: "in library" }));
-            if (s.item && s.item.id) row.appendChild(h("button", { class: "btn", type: "button", "aria-label": `open ${name}`, text: "open", onclick: () => go("show_post", { id: s.item.id }) }));
-        } else if (s.state === "expired") row.appendChild(h("button", { class: "btn", type: "button", text: "get a fresh link", onclick: () => fresh(s).then(pump) }));
-        else if (s.state === "failed") row.appendChild(h("button", { class: "btn", type: "button", text: "retry", onclick: () => {
+            acts.appendChild(h("span", { class: "tag", text: "in library" }));
+            if (s.item && s.item.id) acts.appendChild(h("button", { class: "btn", type: "button", "aria-label": `open ${name}`, text: "open", onclick: () => go("show_post", { id: s.item.id }) }));
+        } else if (s.state === "expired") acts.appendChild(h("button", { class: "btn", type: "button", text: "get a fresh link", onclick: () => fresh(s).then(pump) }));
+        else if (s.state === "failed") acts.appendChild(h("button", { class: "btn", type: "button", text: "retry", onclick: () => {
             s.state = "waiting";
             s.pct = 0;
             paintRow(s);
@@ -58,6 +60,7 @@ VIEWS.upload = (d) => {
             paintRow(s);
             list.appendChild(s.row);
         });
+        ml.refresh();
     };
 
     // a new link for a slot (the old one expired), or for files beyond the links we have

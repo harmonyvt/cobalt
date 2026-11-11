@@ -6,7 +6,7 @@
 // collection writes, upload.begin and PUT /mcp/upload/<token> (the Worker's own handler on in-memory R2 fakes).
 // What is faked (ops that need a container or a Durable Object): make.webp and jobs.wait (a job that runs, then makes a
 // post), library.save (a save that takes a few seconds), edits.list and edits.get (two canned projects).
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { createFakeD1 } from "../../test-support/d1-sqlite";
@@ -78,12 +78,19 @@ export async function startDevServer(o: DevOptions = {}): Promise<DevServer> {
     db.raw.prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)").run(API_KEY_ID, "dev demo", await hashKey("0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11"), "0b5f2c3e", now());
     const seeded = seedDemo(db, { mediaBase: MEDIA, shareBase: SHARE, now: now(), keyId: API_KEY_ID });
     const media = new MemoryMedia();
+    const originals = new MemoryOriginals();
+    // private demo files for the signed previews (/mcp/media/<token>): a one-pixel JPEG for a picture, the sample for a video
+    const JPEG = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", "base64");
+    for (const r of db.raw.prepare("SELECT r2_key, content_type FROM media_items WHERE bucket = 'originals'").all() as { r2_key: string; content_type: string }[]) {
+        const bytes = r.content_type.startsWith("video/") && o.sampleVideo && existsSync(o.sampleVideo) ? readFileSync(o.sampleVideo) : JPEG;
+        originals.objects.set(r.r2_key, { bytes: new Uint8Array(bytes), contentType: r.content_type, meta: {} });
+    }
     const env = {
         API_URL: `${origin}/`,
         CORS_URL: origin,
         COBALT_API_KEY: INTERNAL_KEY,
         DB: db as unknown as D1Database,
-        ORIGINALS: new MemoryOriginals(),
+        ORIGINALS: originals,
         MEDIA: media,
         MEDIA_BASE_URL: MEDIA,
         SHARE_BASE_URL: SHARE,
@@ -315,12 +322,12 @@ export async function startDevServer(o: DevOptions = {}): Promise<DevServer> {
         const path = url.pathname;
         void (async () => {
             try {
-                if (req.method === "OPTIONS" && !path.startsWith("/mcp/upload/")) return void (cors(res), res.writeHead(204, { "access-control-max-age": "600" }).end());
+                if (req.method === "OPTIONS" && !path.startsWith("/mcp/upload/") && !path.startsWith("/mcp/media/")) return void (cors(res), res.writeHead(204, { "access-control-max-age": "600" }).end());
                 if (path === "/mcp" || path.startsWith("/mcp/k/")) {
                     if (req.method === "POST") return await mcp(req, res, path + url.search);
                     return void (cors(res), res.writeHead(405, { allow: "POST" }).end());
                 }
-                if (path.startsWith("/mcp/upload/")) return await upload(req, res, path + url.search);
+                if (path.startsWith("/mcp/upload/") || path.startsWith("/mcp/media/")) return await upload(req, res, path + url.search);
                 if (path.startsWith("/media/") && (req.method === "GET" || req.method === "HEAD")) return mediaFile(req, res, decodeURIComponent(path.slice(7)));
                 if (path.startsWith("/s/")) return sharePage(res, path);
                 if (path === "/") return text(res, 200, `capystore MCP dev server (demo data only)\nMCP URL: ${mcpUrl}\n`);

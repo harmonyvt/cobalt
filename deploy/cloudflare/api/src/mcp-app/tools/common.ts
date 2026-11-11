@@ -6,6 +6,7 @@ import { POST_KEY_SQL } from "../../post-key";
 import type { OpContext } from "../../registry/op";
 import { effectiveVisibility } from "../../visibility";
 import type { PostSummary } from "../shapes";
+import type { AppToolCtx } from "../types";
 
 export type Rec = Record<string, unknown>;
 
@@ -51,12 +52,32 @@ export type PostFacts = {
     bytes: number | null;
     // the share page of a single file's post (never a media URL); null for a gallery or a post that is not public
     share_url: string | null;
+    // The lead file and what a signed preview of this post's picture would be: its poster, the file itself (a picture),
+    // or nothing. Used by `signThumbs` for a post that is not public.
+    lead_id: string;
+    thumb_source: "poster" | "file" | null;
+};
+// One file of a post that is here (by file id): what a widget needs to play it.
+export type FileFacts = {
+    id: string;
+    post: string;
+    kind: "video" | "image";
+    // the public file URL; null when the file is not public
+    url: string | null;
+    // true when the file is not public and plays through a signed preview
+    private: boolean;
+    // the poster is in the media bucket
+    has_poster: boolean;
+    width: number | null;
+    height: number | null;
 };
 export type PostsRead = {
     // by post key; a hidden or deleted post is not here
     posts: Map<string, PostFacts>;
     // file id -> its post key (only for posts that are here)
     postOfFile: Map<string, string>;
+    // file id -> its playing facts (only for posts that are here)
+    files: Map<string, FileFacts>;
     // gallery link id -> how many files it holds
     setFiles: Map<string, number>;
 };
@@ -84,7 +105,7 @@ export async function readPosts(op: Pick<OpContext, "db" | "mediaBaseUrl" | "sha
     const posts = uniq(want.posts ?? []);
     const files = uniq(want.files ?? []);
     const sets = uniq(want.sets ?? []);
-    const out: PostsRead = { posts: new Map(), postOfFile: new Map(), setFiles: new Map() };
+    const out: PostsRead = { posts: new Map(), postOfFile: new Map(), files: new Map(), setFiles: new Map() };
     if (posts.length === 0 && files.length === 0 && sets.length === 0) return out;
     const db = op.db;
     const pj = JSON.stringify(posts);
@@ -128,6 +149,9 @@ export async function readPosts(op: Pick<OpContext, "db" | "mediaBaseUrl" | "sha
     const hidden = new Set(asRows(answers[2]).map((r) => String(r.post_key)));
     const privately = new Set(asRows(answers[3]).map((r) => String(r.post_key)));
 
+    const mediaPrefix = op.mediaBaseUrl.endsWith("/") ? op.mediaBaseUrl : `${op.mediaBaseUrl}/`;
+    const hasPoster = (f: { poster: string | null }) => !!f.poster && f.poster.startsWith(mediaPrefix);
+    const kindOfType = (ct: string | null): "video" | "image" => (ct && ct.toLowerCase().startsWith("video/") ? "video" : "image");
     const built = postsFrom(fileRows as never, [], [], op.mediaBaseUrl);
     const share = op.shareBaseUrl ? (op.shareBaseUrl.endsWith("/") ? op.shareBaseUrl : `${op.shareBaseUrl}/`) : null;
     for (const p of built) {
@@ -146,8 +170,23 @@ export async function readPosts(op: Pick<OpContext, "db" | "mediaBaseUrl" | "sha
             duration: p.record.duration,
             bytes: num(lead.bytes),
             share_url: share && name && p.record.kind !== "gallery" ? `${share}${name}` : null,
+            lead_id: lead.id,
+            thumb_source: hasPoster(lead) ? "poster" : kindOfType(lead.content_type) === "image" ? "file" : null,
         });
-        for (const f of p.rows) out.postOfFile.set(f.id, id);
+        for (const f of p.rows) {
+            out.postOfFile.set(f.id, id);
+            const isPublic = effectiveVisibility(f) === "public" && !!f.url;
+            out.files.set(f.id, {
+                id: f.id,
+                post: id,
+                kind: kindOfType(f.content_type),
+                url: isPublic ? f.url : null,
+                private: !isPublic,
+                has_poster: hasPoster(f),
+                width: num(f.width),
+                height: num(f.height),
+            });
+        }
     }
     return out;
 }
@@ -180,4 +219,17 @@ export function summaryOf(record: unknown, read: PostsRead): PostSummary | null 
 // "Title · video · id · share link" (the share link where there is one)
 export function postLine(p: PostSummary, share: string | null): string {
     return [cut(p.title, 80), p.kind, p.id, share].filter(Boolean).join(" · ");
+}
+
+// A post that is not public has no picture a browser can load; its poster (or, for a picture, the file) is given as a signed
+// preview link instead (MCP-APP-CONTRACT.md section 9), filed under the post's id in the result's `_meta` (`thumb`), never in
+// structuredContent. A post that is hidden is not in `read`, so it never gets one.
+export async function signThumbs(ctx: Pick<AppToolCtx, "preview">, read: PostsRead, summaries: PostSummary[]): Promise<void> {
+    await Promise.all(
+        summaries.map(async (p) => {
+            const f = read.posts.get(p.id);
+            if (!f || p.status === "public" || p.thumb_url || !f.thumb_source) return;
+            await ctx.preview(p.id, f.lead_id, "thumb", f.thumb_source === "poster");
+        }),
+    );
 }

@@ -91,7 +91,7 @@ export const makeCutoutOp = defineOp({
         const f = await fileOf(ctx, call, input.id, isPicture, "picture");
         if (input.mode === "color" && !input.color) throw stop(call, "mode color needs color");
         const cap = rendersCap(ctx);
-        if (!(await budgetPort(ctx.container).take(thread, "renders", cap))) {
+        if (cap !== null && !(await budgetPort(ctx.container).take(thread, "renders", cap))) {
             throw new OpError(429, "error.chat.render_cap", `cobalt.${call}: this chat already made ${cap} files today, the most it may make in a day. Tell Harmony it can make more tomorrow.`);
         }
         const { id: _id, ...spec } = input;
@@ -102,7 +102,7 @@ export const makeCutoutOp = defineOp({
         });
         const r = await makeCutout(cutoutDeps(ctx), f.id, req, ctx.keyId!);
         if (r.status !== 201) {
-            await budgetPort(ctx.container).refund(thread, "renders");
+            if (cap !== null) await budgetPort(ctx.container).refund(thread, "renders");
             const code = (r.body as { error?: { code?: string } }).error?.code ?? "error.api.generic";
             const msg = (r.body as { message?: string }).message;
             throw new OpError(r.status, code, `cobalt.${call}: ${code}${msg ? ` (${msg})` : ""}`);
@@ -317,7 +317,7 @@ export const makeCropImageOp = defineOp({
         if (input.crop && (input.crop.x + input.crop.w > 1.001 || input.crop.y + input.crop.h > 1.001)) throw stop(call, "the crop goes past the picture's edge (x + w and y + h must be at most 1)");
         if (typeof input.cutout === "object" && input.cutout.mode === "color" && !input.cutout.color) throw stop(call, "cutout mode color needs color");
         const cap = rendersCap(ctx);
-        if (!(await budgetPort(ctx.container).take(thread, "renders", cap))) {
+        if (cap !== null && !(await budgetPort(ctx.container).take(thread, "renders", cap))) {
             throw new OpError(429, "error.chat.render_cap", `cobalt.${call}: this chat already made ${cap} files today, the most it may make in a day. Tell Harmony it can make more tomorrow.`);
         }
         const { id: _id, ...spec } = input;
@@ -328,7 +328,7 @@ export const makeCropImageOp = defineOp({
         });
         const r = await makeImageCrop(cutoutDeps(ctx), f.id, req, ctx.keyId!);
         if (r.status !== 201) {
-            await budgetPort(ctx.container).refund(thread, "renders");
+            if (cap !== null) await budgetPort(ctx.container).refund(thread, "renders");
             const b = r.body as { error?: { code?: string }; message?: string; path?: string };
             const code = b.error?.code ?? "error.api.generic";
             const why = [b.message, b.path ? `field ${b.path}` : null].filter(Boolean).join(", ");

@@ -30,10 +30,11 @@ import {
 import { OpError } from "../registry/op";
 import type { Registry } from "../registry/registry";
 import { FOLLOWS } from "./follow";
+import { PREVIEW_TTL_MS, previewUrl, signPreviewToken } from "../mcp-preview";
 import { RETIRED_TOOLS } from "./retired";
 import type { View } from "./shapes";
 import { APP_TOOLS } from "./tools";
-import type { AppTool, AppToolCtx, Widget } from "./types";
+import { PREVIEW_META_KEY, type AppTool, type AppToolCtx, type PreviewMeta, type Widget } from "./types";
 import { WIDGETS } from "./widgets.generated";
 
 type Json = Record<string, unknown>;
@@ -73,13 +74,21 @@ const toolsOffered = (tools: AppTool[], caller: McpCaller) => {
 };
 
 // What an app tool runs with: every op the MCP can run (the retired calls too), as this MCP thread.
-function toolCtx(registry: Registry, caller: McpCaller): AppToolCtx {
+function toolCtx(registry: Registry, caller: McpCaller): { ctx: AppToolCtx; previews: PreviewMeta } {
     const flags = mcpFlags(caller.ctx);
     const ops = mcpOps(registry, flags);
-    return {
+    const expires = caller.ctx.now() + PREVIEW_TTL_MS;
+    const previews: PreviewMeta = {};
+    const expiresAt = new Date(expires).toISOString();
+    const ctx: AppToolCtx = {
         op: caller.ctx,
         flags,
         origin: caller.origin,
+        previewExpires: expiresAt,
+        preview: async (key, fileId, slot, poster = slot === "poster") => {
+            const url = previewUrl(caller.origin, await signPreviewToken(caller.ctx.env.COBALT_API_KEY, { k: caller.clientKeyId, i: fileId, e: expires, p: poster ? 1 : 0 }), poster);
+            (previews[key] ??= { expires_at: expiresAt })[slot] = url;
+        },
         has: (callName) => ops.some((o) => o.callName === callName),
         call: async (callName, input) => {
             const op = ops.find((o) => o.callName === callName);
@@ -87,6 +96,7 @@ function toolCtx(registry: Registry, caller: McpCaller): AppToolCtx {
             return runChatOp(op, caller, input);
         },
     };
+    return { ctx, previews };
 }
 
 // structuredContent past MCP_RESULT_MAX is trimmed: the longest list in it is halved until it fits. `trimmed` says how many rows
@@ -114,11 +124,16 @@ async function callAppTool(tool: AppTool, registry: Registry, caller: McpCaller,
         const parts = parsed.error.issues.slice(0, 4).map((i) => `${i.path.length ? i.path.join(".") : "input"}: ${i.message}`);
         return { content: [{ type: "text", text: `${tool.name}: ${parts.join("; ")}` }], isError: true };
     }
-    const ctx = toolCtx(registry, caller);
+    const { ctx, previews } = toolCtx(registry, caller);
     try {
         const r = await tool.run(ctx, parsed.data);
         const fit = fitStructured(r.structured as Json);
-        return { content: [{ type: "text", text: cutText(fit.trimmed ? `${r.text}\n(The structured list was cut to ${fit.trimmed}: ask for less, e.g. a smaller limit.)` : r.text) }], structuredContent: fit.value };
+        // signed preview links ride in _meta (the widget reads them there); the model sees neither text nor structuredContent of them
+        return {
+            content: [{ type: "text", text: cutText(fit.trimmed ? `${r.text}\n(The structured list was cut to ${fit.trimmed}: ask for less, e.g. a smaller limit.)` : r.text) }],
+            structuredContent: fit.value,
+            ...(Object.keys(previews).length ? { _meta: { [PREVIEW_META_KEY]: previews } } : {}),
+        };
     } catch (e) {
         return { content: [{ type: "text", text: errorText(tool.name, e) }], isError: true };
     }
@@ -139,7 +154,8 @@ const originOf = (url: string | undefined) => {
 export function widgetCsp(caller: McpCaller): { resourceDomains: string[]; connectDomains: string[] } {
     const { mediaBaseUrl, shareBaseUrl } = caller.ctx;
     const resource = [originOf(mediaBaseUrl), originOf(shareBaseUrl)].filter((o): o is string => !!o);
-    return { resourceDomains: [...new Set(resource)], connectDomains: [caller.origin] };
+    // the API origin too: signed previews (/mcp/media/<token>) are played and drawn from it
+    return { resourceDomains: [...new Set([...resource, caller.origin])], connectDomains: [caller.origin] };
 }
 
 // Claude's sandbox origin for a connector: the first 32 hex characters of SHA-256 of the exact URL it connected to,
@@ -203,7 +219,13 @@ function buildServer(registry: Registry, caller: McpCaller, request: Request, pa
             const op = mcpListedOps(registry, mcpFlags(caller.ctx)).find((o) => mcpToolName(o.callName) === name);
             if (op) {
                 const follow = FOLLOWS[op.callName];
-                const view = follow ? (value: unknown, input: unknown) => follow.build(toolCtx(registry, caller), input, value) : undefined;
+                const view = follow
+                    ? async (value: unknown, input: unknown) => {
+                          const { ctx, previews } = toolCtx(registry, caller);
+                          const structured = await follow.build(ctx, input, value);
+                          return structured ? { structured, ...(Object.keys(previews).length ? { meta: { [PREVIEW_META_KEY]: previews } } : {}) } : null;
+                      }
+                    : undefined;
                 return (await callTool(op, caller, args, view)) as never;
             }
         }

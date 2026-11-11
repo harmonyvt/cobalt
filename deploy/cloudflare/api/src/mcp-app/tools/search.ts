@@ -4,7 +4,7 @@ import * as z from "zod";
 import { OpError } from "../../registry/op";
 import { SearchOut } from "../shapes";
 import type { AppTool } from "../types";
-import { arr, clock, cut, listText, num, plural, readPosts, rec, str, strings, summaryOf, type PostsRead } from "./common";
+import { arr, clock, cut, listText, num, plural, readPosts, rec, signThumbs, str, strings, summaryOf, type PostsRead } from "./common";
 
 type Out = z.infer<typeof SearchOut>;
 type Item = Out["items"][number];
@@ -158,6 +158,7 @@ export const searchLibrary: AppTool<z.infer<typeof Input>> = {
         const cap = mode === "meaning" ? Math.min(limit, SEARCH_MAX) : limit;
         const items = visible.slice(0, cap);
         const total = visible.length;
+        await signThumbs(ctx, read, items);
         const how = mode === "meaning" ? "by meaning" : mode === "text" ? "by title" : "newest first";
         // the title match and the list stop at `limit` rows: when it was reached there may be more to ask for
         const more = mode !== "meaning" && rows.length >= limit;

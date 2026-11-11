@@ -17,7 +17,7 @@ export const PostSummary = z.looseObject({
     id: z.string(),
     title: z.string(),
     kind: z.enum(["video", "image", "gallery"]),
-    // a public poster or picture; null when the post has none a browser can load (private or off)
+    // a public poster or picture; null when the post has none a browser can load (private or off: its signed link is in the result's _meta under the post's id)
     thumb_url: url,
     duration_s: z.number().nullable(),
     saved_at: iso,
@@ -80,6 +80,8 @@ export const PostOut = z.looseObject({
         private_url: url,
         // that private link's direct file (the bytes), while it has one
         private_file_url: url,
+        // when the signed preview links of this result stop working (ISO 8601); null when none was signed
+        preview_expires_at: iso.nullable(),
         file_list: z.array(PostFile),
     }),
 });
@@ -96,6 +98,14 @@ export const EditClip = z.looseObject({
     speed: z.number().nullable(),
     muted: z.boolean().nullable(),
     poster_url: url,
+    // what plays: the source file (a public URL; null when `private`: its signed one-hour link is in the result's _meta), its kind and size
+    video_url: url,
+    media_kind: z.enum(["video", "image"]).nullable(),
+    private: z.boolean(),
+    src_w: z.number().nullable(),
+    src_h: z.number().nullable(),
+    // the source file's id; when it is `private` its signed preview link is in the result's _meta under this id
+    file_id: z.string().nullable(),
 });
 export const EditOverlay = z.looseObject({
     id: z.string(),
@@ -104,14 +114,32 @@ export const EditOverlay = z.looseObject({
     kind: z.string(),
     start: z.number(),
     end: z.number(),
+    // the part of the source it plays (source seconds), and where it sits on the canvas as fractions of the canvas width
+    // (x, w) and height (y, h); h is worked out from the source's shape, null when that is unknown
+    in: z.number().nullable(),
+    out: z.number().nullable(),
+    frame: z.looseObject({ x: z.number(), y: z.number(), w: z.number(), h: z.number().nullable() }).nullable(),
+    opacity: z.number().nullable(),
+    // what draws it: the source file (public URL; null when `private`, see `file_id`), its kind and poster
+    url,
+    media_kind: z.enum(["video", "image"]).nullable(),
+    poster_url: url,
+    private: z.boolean(),
+    // the source file's id (its signed preview link is in the result's _meta under this id when `private`)
+    file_id: z.string().nullable(),
 });
 export const EditRender = z.looseObject({
     status: z.enum(["queued", "running", "done", "error"]),
     progress: z.number().nullable(),
     post_id: z.string().nullable(),
     poster_url: url,
+    // the rendered file: a public URL; null while it is not done or `private` (signed link in _meta under `file_id`)
+    video_url: url,
+    private: z.boolean(),
     // true when the render is of an older revision than the project's
     stale: z.boolean(),
+    // the rendered file's id (its signed preview link is in the result's _meta under this id when `private`)
+    file_id: z.string().nullable(),
 });
 export const EditProject = z.looseObject({
     id: z.string(),
@@ -122,6 +150,8 @@ export const EditProject = z.looseObject({
     main: z.array(EditClip),
     overlay: z.array(EditOverlay),
     render: EditRender.nullable(),
+    // when the signed preview links in this project stop working (ISO 8601); null when none was signed
+    preview_expires_at: iso.nullable(),
     // the timeline as the editor holds it (what edits_update takes back); ids and numbers, no names or pictures
     timeline: z.unknown().nullable(),
 });

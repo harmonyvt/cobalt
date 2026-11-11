@@ -6,6 +6,7 @@ import * as z from "zod";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
 import { hashKey } from "../src/keys";
+import { rotateMcpLink, setMcpMode } from "../src/mcp-link";
 import { claudeUiDomain, serveMcpRequest, widgetCsp } from "../src/mcp-app/server";
 import { VIEWS } from "../src/mcp-app/shapes";
 import type { AppTool, Widget } from "../src/mcp-app/types";
@@ -242,7 +243,7 @@ describe("resources", () => {
         const c = read.contents[0] as any;
         expect(c.mimeType).toBe("text/html;profile=mcp-app");
         expect(c.text).toBe("<html>search</html>");
-        expect(c._meta.ui.csp).toEqual({ resourceDomains: ["https://media.capybaraharmony.com", "https://share.capybaraharmony.com"], connectDomains: [API] });
+        expect(c._meta.ui.csp).toEqual({ resourceDomains: ["https://media.capybaraharmony.com", "https://share.capybaraharmony.com", API], connectDomains: [API] });
         expect(c._meta.ui.domain).toBeUndefined();
         expect((await client.listResourceTemplates()).resourceTemplates).toEqual([]);
         await expect(client.readResource({ uri: "ui://capystore/nope.html" })).rejects.toThrow();
@@ -416,11 +417,11 @@ describe("the real app tools through the official client", () => {
         db.raw.prepare("INSERT INTO share_collection_items (collection_id, set_id, added_at) VALUES ('ColCats', 'SetCats', ?)").run(T0);
     });
 
-    async function realClient() {
+    async function realClient(clientKeyId = "key-1") {
         const fetchLike = async (input: string | URL | Request, init?: RequestInit) => {
             const req = new Request(input, init);
             if (req.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
-            return serveMcpRequest(REGISTRY, callerFor(), req, JSON.parse(await req.clone().text()));
+            return serveMcpRequest(REGISTRY, { ...callerFor(), clientKeyId }, req, JSON.parse(await req.clone().text()));
         };
         const client = new Client({ name: "test", version: "1" });
         await client.connect(new StreamableHTTPClientTransport(new URL(`${API}/mcp`), { fetch: fetchLike as never }));
@@ -471,5 +472,80 @@ describe("the real app tools through the official client", () => {
         expect(webp.isError).toBe(true);
         expect(webp.content[0].text).toMatch(/make_still/);
         await client.close();
+    });
+    // The signed preview, end to end: show_post through the real server, then GET the link it minted (MCP-APP-CONTRACT.md section 9).
+    describe("signed previews", () => {
+        const NOW = 1_800_000_000_000;
+        const send = (req: Request) => handleRequest(req, env, container, { now: () => NOW, sleep: async () => {}, fixedLength: fixedLengthPair });
+        const BYTES = new Uint8Array(Array.from({ length: 64 }, (_, i) => i));
+        beforeEach(() => {
+            (env.ORIGINALS as MemoryOriginals).objects.set("originals/CatSecret000002.mp4", { bytes: BYTES, contentType: "video/mp4", meta: {} });
+            (env.MEDIA as MemoryMedia).objects.set("PosterSecret.jpg", { bytes: 4, meta: {}, contentType: "image/jpeg", data: new Uint8Array([1, 2, 3, 4]), viaStream: false });
+            db.raw.prepare("UPDATE media_items SET poster = ? WHERE id = 'CatSecret000002'").run(`${MEDIA}PosterSecret.jpg`);
+        });
+        const shown = async (clientKeyId: string) => {
+            const client = await realClient(clientKeyId);
+            const r = (await client.callTool({ name: "show_post", arguments: { id: "CatSecret000002" } })) as any;
+            await client.close();
+            expect(r.isError).toBeFalsy();
+            // the signed links are in _meta only, never in structuredContent or the text the model reads
+            expect(JSON.stringify(r.structuredContent) + r.content[0].text).not.toContain("/mcp/media/");
+            const previews = r._meta["capystore/preview"];
+            expect(previews.CatSecret000002).toMatchObject({ expires_at: new Date(NOW + 3_600_000).toISOString() });
+            return previews.CatSecret000002 as { url: string; poster: string; thumb: string };
+        };
+        const get = (url: string) => send(new Request(url));
+
+        it("a public key's link plays the private file; the poster link opens the poster and never the original", async () => {
+            const p = await shown("key-1");
+            expect(p.url).toMatch(new RegExp(`^${API}/mcp/media/[\\w-]+\\.[\\w-]{43}$`));
+            const file = await get(p.url);
+            expect(file.status).toBe(200);
+            expect(new Uint8Array(await file.arrayBuffer())).toEqual(BYTES);
+            const poster = await get(p.poster);
+            expect(poster.status).toBe(200);
+            expect(poster.headers.get("content-type")).toBe("image/jpeg");
+            // the poster token on the file path, and the file token on the poster path, are refused
+            expect((await get(p.poster.replace(/\/poster$/, ""))).status).toBe(403);
+            expect((await get(`${p.url}/poster`)).status).toBe(403);
+            expect(p.thumb).toBe(p.poster);
+        });
+
+        it("a revoked key and a key that is no longer the way in (private mode) stop playing", async () => {
+            const p = await shown("key-1");
+            expect((await get(p.url)).status).toBe(200);
+            await setMcpMode(db as unknown as D1Database, "private", API, NOW);
+            expect((await get(p.url)).status).toBe(403);
+            await setMcpMode(db as unknown as D1Database, "public", API, NOW);
+            expect((await get(p.url)).status).toBe(200);
+            db.raw.prepare("UPDATE api_keys SET revoked_at = ? WHERE id = 'key-1'").run(NOW);
+            expect((await get(p.url)).status).toBe(403);
+        });
+
+        it("the private link's previews play, and a rotated link kills them", async () => {
+            await setMcpMode(db as unknown as D1Database, "private", API, NOW);
+            const linkId = (db.raw.prepare("SELECT id FROM mcp_links WHERE revoked_at IS NULL").get() as { id: string }).id;
+            const p = await shown(`link:${linkId}`);
+            const file = await get(p.url);
+            expect(file.status).toBe(200);
+            expect(new Uint8Array(await file.arrayBuffer())).toEqual(BYTES);
+            // a key's previews do not play while the private link is the way in
+            expect((await get((await signedBy("key-1")).url)).status).toBe(403);
+            await rotateMcpLink(db as unknown as D1Database, API, NOW);
+            expect((await get(p.url)).status).toBe(403);
+            expect((await get(p.poster)).status).toBe(403);
+        });
+        // a link minted while the key was the way in
+        async function signedBy(keyId: string) {
+            const { signPreviewToken, previewUrl } = await import("../src/mcp-preview");
+            const token = await signPreviewToken(INTERNAL, { k: keyId, i: "CatSecret000002", e: NOW + 3_600_000, p: 0 });
+            return { url: previewUrl(API, token) };
+        }
+
+        it("a hidden post's link is a 404 whatever the token says", async () => {
+            const p = await shown("key-1");
+            db.raw.prepare("INSERT INTO media_hidden (post_key, state, by, rule_id, at) VALUES ('CatSecret000002', 'hidden', 'you', NULL, ?)").run(NOW);
+            expect((await get(p.url)).status).toBe(404);
+        });
     });
 });
