@@ -691,6 +691,151 @@ await step("upload: more files than links, expired link, unsupported, too big, u
     eq(await F().locator(".drop").getAttribute("role"), "button", "drop zone is a button");
 });
 
+// ---------------------------------------------------------------- the box terminal (box_run, box_pull, box_save)
+await step("terminal: a short run, prompt and command, exit 0, status line", async () => {
+    await open("term.probe", { theme: "dark" });
+    eq(await txt(".cmd .ps"), "/workspace $", "prompt");
+    eq(await txt(".cmd .tx"), "ffprobe -v error -show_entries format=duration -of csv=p=0 clip.mp4", "whole command");
+    eq(await txt(".cmd .tx .cm"), "ffprobe", "the program is marked");
+    eq(await count(".cmd .tx .fl"), 3, "flags marked");
+    eq(await txt(".out"), "24.040000", "stdout plain");
+    eq(await count(".out .e"), 0, "no stderr");
+    eq(await count(".tail"), 0, "no tail bar for a short output");
+    eq(await txt(".tmeta .pill"), "exit 0", "exit chip");
+    ok(!(await F().locator(".tmeta .pill").getAttribute("class")).includes("bad"), "exit 0 is not red");
+    ok((await txt(".tmeta")).includes("0.3 s"), "duration");
+    ok(/^box awake\s+wiped in 1:[34]\d\s+if idle$/.test((await txt(".bstat")).replace(/\n/g, " ")), `status line: ${await txt(".bstat")}`);
+    eq(await txt(".whead .tt b"), "box_run", "titled by the tool");
+});
+await step("terminal: tail first, \\r progress keeps its last part, ANSI colours, stderr amber on exit 0", async () => {
+    await open("term.ffmpeg", { theme: "dark" });
+    const lines = await F().locator(".out .ln").count();
+    eq(lines, 14, "every line is there");
+    eq(await F().locator(".out .ln:visible").count(), 8, "only the last 8 show");
+    eq(await txt(".tail span"), "6 earlier lines hidden", "says what is hidden");
+    const prog = await F().locator(".out .ln").nth(9).innerText();
+    ok(prog.startsWith("frame=  721") && !prog.includes("frame=  118") && !prog.includes("\r"), `progress line collapses to its last frame: ${prog}`);
+    ok((await count(".out .a32.ab")) >= 1 && (await count(".out .a34.ab")) === 3, "bold green and bold blue runs");
+    eq(await F().locator(".out .a32").last().innerText(), "video:1540kB audio:188kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: 3.7%", "the green summary");
+    ok((await count(".out .e")) === 14 && (await count(".out .e.hard")) === 0, "stderr is amber on exit 0");
+    eq(await fr().evaluate(() => /\x1b/.test(document.querySelector(".out").textContent)), false, "no escape characters reach the page");
+    await F().getByRole("button", { name: "show all 14 lines" }).click();
+    eq(await F().locator(".out .ln:visible").count(), 14, "show all");
+    await F().getByRole("button", { name: "show last 8" }).click();
+    eq(await F().locator(".out .ln:visible").count(), 8, "and back");
+    await shot("terminal-ffmpeg-open");
+    // the host's full screen shows everything, no bar
+    await page.evaluate(() => __host.log.display.length = 0);
+    await F().getByRole("button", { name: "full screen" }).click();
+    await page.waitForTimeout(150);
+    eq(await F().locator(".out .ln:visible").count(), 14, "full screen shows every line");
+    eq(await F().locator(".tail:visible").count(), 0, "no tail bar in full screen");
+});
+await step("terminal: errors (127, ffmpeg), timeout, cut note, no output", async () => {
+    await open("term.notfound");
+    eq(await txt(".tmeta .pill"), "exit 127", "exit 127");
+    ok((await F().locator(".tmeta .pill").getAttribute("class")).includes("bad"), "red chip");
+    ok((await txt(".tmeta")).includes("command not found"), "says not found");
+    eq(await count(".out .e.hard"), 1, "stderr red on a failure");
+    await open("term.fferr");
+    eq(await count(".out .e.hard"), 4, "ffmpeg's error lines red");
+    eq(await txt(".tmeta .pill"), "exit 1", "exit 1");
+    await open("term.timeout");
+    eq(await txt(".tmeta .pill"), "timed out", "timed out chip instead of the exit code");
+    ok((await txt(".tmeta")).includes("1:00"), "a long duration as m:ss");
+    eq(await count(".out .e.hard"), 0, "a timeout keeps stderr amber");
+    ok((await txt(".out")).includes("(killed after 60 s)") && (await txt(".out")).startsWith("frame= 1930"), "\\r\\n is a plain line end");
+    await open("term.cut");
+    ok((await txt(".tmeta .clip")) === "stdout cut to 8 KB", "cut note names the stream");
+    eq(await count(".out .cutl"), 1, "the cut marker line is dimmed");
+    await open("term.quiet");
+    eq(await txt(".noout"), "no output", "no output");
+    eq(await count(".tmeta .btn"), 0, "nothing to copy");
+    ok((await F().locator(".bstat .wipe").getAttribute("class")).includes("low"), "under a minute left: amber");
+});
+await step("terminal: output is text, never HTML", async () => {
+    await open("term.xss");
+    await page.waitForTimeout(200);
+    eq(await fr().evaluate(() => window.__xss), undefined, "no script ran");
+    eq(await count(".term img, .term script, .term b"), 0, "no element came from the output");
+    ok((await txt(".out")).includes('<img src=x onerror="window.__xss=1">'), "the markup shows as text");
+    eq(await F().locator(".out .a31").innerText(), "<b>red but not bold</b>", "a colour run keeps its text as text");
+    ok((await txt(".out")).includes("&amp; done"), "entities stay as typed");
+    ok((await txt(".out")).split("\n").includes("warn"), "OSC title and erase-line sequences are dropped");
+    ok((await txt(".cmd .tx")).includes("<img src=x onerror=window.__xss=3>"), "the command is text too");
+});
+await step("terminal: copy the command and the output (plain text)", async () => {
+    await page.goto(`${base}/?up=${encodeURIComponent(upBase)}&clip=1`);
+    await page.waitForSelector("body[data-ready]");
+    await open("term.ffmpeg");
+    await F().getByRole("button", { name: "copy command" }).click();
+    await page.waitForTimeout(150);
+    eq(await page.evaluate(() => navigator.clipboard.readText()), 'ffmpeg -y -i in.mp4 -vf "scale=720:-2,fps=30" -c:v libx264 -crf 23 out.mp4', "command copied");
+    await F().getByRole("button", { name: "copy output" }).click();
+    await page.waitForTimeout(150);
+    const out = await page.evaluate(() => navigator.clipboard.readText());
+    ok(!out.includes("\x1b") && !out.includes("\r") && out.split("\n").length === 14 && out.includes("[libx264 @ 0x55d1] kb/s:597.68"), "output copied without colours or overwritten progress");
+    await page.goto(`${base}/?up=${encodeURIComponent(upBase)}`);
+    await page.waitForSelector("body[data-ready]");
+});
+await step("terminal: box_pull as ls -lh, first 3 and show more", async () => {
+    await open("term.pull", { theme: "dark" });
+    eq(await txt(".whead .tt b"), "box_pull", "titled box_pull");
+    eq(await txt(".cwd"), "/workspace · ls -lh", "where they went");
+    eq(await F().locator(".lsr:visible").count(), 3, "first 3");
+    eq(await F().locator(".lsr .z").allInnerTexts(), ["28M", "412K", "96K", "9.4M", "3.1M"], "ls -lh sizes");
+    eq(await F().locator(".lsr .k").allInnerTexts(), ["video", "image", "file", "video", "audio"], "kinds");
+    eq(await F().locator(".lsr .n i").first().innerText(), ".mp4", "dim extension");
+    await F().getByRole("button", { name: "show 2 more" }).click();
+    eq(await F().locator(".lsr:visible").count(), 5, "all after show more");
+});
+await step("terminal: box_save row opens the post; a private one shows its signed thumbnail and lock", async () => {
+    await open("term.save", { theme: "dark" });
+    eq(await txt(".whead .tt b"), "box_save", "titled box_save");
+    ok((await txt(".sv .ok")).includes("saved to library"), "saved line");
+    eq(await txt(".sv .t b"), "clip 720p", "title");
+    eq(await txt(".sv .t > span:last-child"), "video · 9.9 MB · private · processing", "kind, size, private");
+    eq(await count(".sv .lockb"), 1, "lock badge");
+    await page.waitForTimeout(150);
+    ok(served.some(([u]) => u === "https://api.capybaraharmony.com/mcp/media/tok.post-priv-1/poster"), "the signed thumbnail from _meta was asked for");
+    await F().getByRole("button", { name: "open the saved post" }).click();
+    await F().locator(".cpost").waitFor();
+    eq(await lastCall(), { name: "show_post", arguments: { id: "post-priv-1" } }, "open calls show_post");
+    await F().getByRole("button", { name: "back" }).click();
+    await F().locator(".sv").waitFor();
+    await open("term.save-public");
+    eq(await count(".sv .lockb"), 0, "a public post has no lock");
+    ok((await txt(".sv .t > span:last-child")).includes("public"), "public");
+});
+await step("terminal: running (the arguments before the result), and the box off", async () => {
+    await open("term.running", { theme: "dark" });
+    ok((await txt(".cmd .tx")).startsWith("ffmpeg -y -i out.mp4"), "the command shows while it runs");
+    ok((await txt(".noout")).includes("running"), "running line");
+    await shot("terminal-running-390");
+    await open("term.off", { theme: "dark" });
+    ok((await txt(".err")).includes("used up for today"), "one red line with the reason");
+    eq(await count(".err"), 1, "one line");
+    eq(await count(".err .btn"), 0, "no retry: it cannot work today");
+    eq(await txt(".cmd .tx"), "ls -lh", "the command it was");
+    eq(await count(".out"), 0, "no output panel");
+});
+await step("terminal: phone height budgets and screenshots at 390 and 680", async () => {
+    const budget = { "term.probe": 180, "term.ffmpeg": 420, "term.pull": 230, "term.save": 140, "term.off": 150 };
+    for (const [key, max] of Object.entries(budget)) {
+        await open(key, { width: 390, theme: "dark" });
+        const h = await fr().evaluate(() => Math.ceil(document.querySelector(".widget").getBoundingClientRect().height));
+        ok(h <= max, `${key} is compact on a phone: ${h} px (budget ${max})`);
+    }
+    for (const key of ["term.probe", "term.ffmpeg", "term.ytdlp", "term.quiet", "term.cut", "term.timeout", "term.notfound", "term.fferr", "term.pull", "term.save", "term.running", "term.off"]) {
+        for (const w of [390, 680]) {
+            await open(key, { width: w, theme: "dark" });
+            await shot(`terminal-${key.slice(5)}-${w}`);
+        }
+    }
+    await open("term.ffmpeg", { width: 390, theme: "light" });
+    await shot("terminal-ffmpeg-390-light");
+});
+
 // ---------------------------------------------------------------- errors, skeleton, host styles, copy, standalone
 await step("tool error: inline banner with retry, view kept", async () => {
     await open("search.grid");

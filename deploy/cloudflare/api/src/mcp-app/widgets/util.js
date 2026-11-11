@@ -60,6 +60,8 @@ const ICONS = {
     list: '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"/>',
     stepb: '<path fill="currentColor" d="M6 5h2v14H6zM19 5.5v13L9.5 12z"/>',
     stepf: '<path fill="currentColor" d="M16 5h2v14h-2zM5 5.5v13L14.5 12z"/>',
+    term: '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM7 10l3 2.5L7 15M13 15h4"/>',
+    check: '<path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="m5 12 5 5 9-10"/>',
     render: '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 6h12v12H4zM16 10l4-2v8l-4-2"/>',
 };
 function ic(name, size) {
@@ -203,7 +205,7 @@ function copyBtn(text, label, name) {
             const inp = h("textarea", { readOnly: true, value: t, rows: Math.min(4, t.split("\n").length), "aria-label": "text to copy" });
             const note = h("small", { text: "select and copy:" });
             const box = h("div", { class: "cpfall" }, note, inp);
-            const anchor = b.closest(".lk,.linkrow,.ccol,.whead,.job,.result") || b.parentNode;
+            const anchor = b.closest(".lk,.linkrow,.ccol,.whead,.job,.result,.term") || b.parentNode;
             anchor.insertAdjacentElement("afterend", box);
             inp.focus();
             inp.select();

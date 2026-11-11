@@ -34,7 +34,9 @@ Compact by default so they fit a phone chat: one-line headers, dense rows, and e
 "show N more" button (a grid shows its first row). The expand button in each header asks the host for full screen, the roomy
 view with everything shown. Private posts, thumbnails and timeline sources play through signed one-hour links (a lock badge says
 so); if a link ran out, "refresh preview" in the widget asks again. The timeline has a real preview player: scrub the tracks,
-press play, overlays are boxed where they sit on the frame, and a finished render can be played instead.
+press play, overlays are boxed where they sit on the frame, and a finished render can be played instead. The box tools
+(`box_run`, `box_pull`, `box_save`) draw a terminal: the command, its output with colours (the last 8 lines first), the exit
+code and time, and how long until the idle box is wiped.
 
 ## Claude
 
@@ -88,7 +90,7 @@ After editing anything under `src/mcp-app/widgets/`, run `npm run widgets` (it r
 
 - `npm test && npm run typecheck && npm run gen:check` in `deploy/cloudflare/api`.
 - MCP Inspector: `npx @modelcontextprotocol/inspector`, transport "Streamable HTTP", URL the private link (or the local
-  one). Check: `tools/list` shows the app tools first, each with an output schema; `resources/list` shows eight
+  one). Check: `tools/list` shows the app tools first, each with an output schema; `resources/list` shows nine
   `ui://capystore/*.html` entries; a `search_library` call answers text plus structured content.
 
 ### Prompt set (run in each host after a deploy)
@@ -104,6 +106,7 @@ After editing anything under `src/mcp-app/widgets/`, run `npm run widgets` (it r
 | indirect | "I need a looping sticker of the jumpscare clip" | finds the post, then `convert_to_webp` with the range picker |
 | indirect | "put these two clips in one link for Discord" | `create_share_link`, a `share.capybaraharmony.com` link |
 | indirect | "I have a video on my computer to add" | `upload_files`, the drop zone (Grok: a curl line) |
+| direct | "in the capystore box, run ffprobe on my latest video" | `box_pull` (an ls list), `box_run` (the terminal, exit 0) |
 | negative | "what's the weather in Melbourne?" | no capystore tool call |
 | negative | "delete everything in my library" | no delete without asking first |
 | negative | "search the web for cat videos" | no capystore tool call |
