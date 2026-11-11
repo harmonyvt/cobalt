@@ -141,7 +141,11 @@ private struct FullScreenVideo: View {
             await item.seek(to: start.isValid ? start : .zero)
             player.play()
         }
-        .onDisappear { player.pause() }
+        // emptied as it goes, so a streamed clip's connections close now rather than whenever the player is freed
+        .onDisappear {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+        }
     }
 
     private func finish() {
