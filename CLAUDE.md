@@ -105,6 +105,11 @@ the files and a real run before anything is called done.
   (`src/mcp.ts`, `src/registry/ops/mcp.ts`), auth `Bearer <client key>`, each key one MCP "thread" (`chat:<thread>`, same
   caps). `upload_begin` mints a 15-minute `PUT /mcp/upload/<token>` link for local files. A new chat op appears there too;
   hide chat-only calls in `MCP_SKIPPED_CALLS`, MCP-only ops use `when: (f) => f.mcp === true`.
+- MCP app (`MCP-APP-CONTRACT.md`, setup per host in `MCP-APP.md`): the same `/mcp` is an MCP App for Claude, ChatGPT and
+  Grok. Core = the official SDK (`@modelcontextprotocol/server`, `src/mcp-app/server.ts`, loaded lazily); app tools in
+  `src/mcp-app/tools/` (text + `structuredContent`, shapes in `shapes.ts`, not registry ops); widgets in `src/mcp-app/widgets/`
+  (one bundle, eight views): after editing them run `npm run widgets`. `npm run widgets:test` clicks through them in Chromium;
+  `npm run mcp:dev` serves the real MCP code over demo data for a tunnel.
 - Workbench (`APP-API-CONTRACT.md` section 33.11, ffmpeg editing 33.11.1): the chat AI and MCP Linux box (`cobalt.box.run`/`pull`/`save`), the
   `Workbench` DO (`api/src/workbench*.ts`) on container app `cobalt-api-workbench` (`deploy/cloudflare/workbench/`, standard-1,
   one instance). No secrets, no own internet: every HTTP(S) request passes the Worker's outbound rule (19.2 + our own zone

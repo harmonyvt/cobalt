@@ -2,7 +2,8 @@
 // Claude Desktop, other agents) over Streamable HTTP at POST /mcp on the API host. The tools ARE the op registry's chat
 // calls (src/registry/): same ops, same zod checks, same handlers, same daily caps, so the MCP and the chat never drift.
 //
-// Stateless: every POST is one JSON-RPC message (or a batch) answered with JSON; no session id, no SSE stream.
+// Stateless: every POST is one JSON-RPC message (or a batch) answered with JSON; no session id, no SSE stream. The
+// protocol itself is the official SDK (src/mcp-app/server.ts); this file holds the tool mapping and the upload tokens.
 // Each client key gets its own stable "thread" (mcpThreadId): its calls run as that thread's chat key, so the per-thread
 // caps (saves, renders) and the workbench box behave as they do for one chat thread.
 // Free of Cloudflare imports: the tests run it under node.
@@ -19,7 +20,7 @@ import { workbenchOn } from "./workbench-rules";
 
 export const MCP_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] as const;
 export const MCP_SERVER_NAME = "capystore";
-export const MCP_SERVER_VERSION = "1.0.0";
+export const MCP_SERVER_VERSION = "2.0.0";
 
 // Chat calls that only mean something inside the chat app's own reply (thumbnails, the collage, continuing a chat).
 export const MCP_SKIPPED_CALLS = new Set(["show", "collage", "jobs.onDone"]);
@@ -67,18 +68,21 @@ function describeOp(op: Op): string {
 
 type Json = Record<string, unknown>;
 
-// The JSON Schema of an op's input, as the client sends it (`io: "input"`), always an object.
-export function inputSchemaOf(op: Op): Json {
-    let schema: Json;
+// The JSON Schema of a zod schema, as a client reads it (`io: "input"` for what it sends), always an object.
+export function jsonSchemaOf(schema: z.ZodType, io: "input" | "output"): Json {
+    let out: Json;
     try {
-        schema = z.toJSONSchema(op.input, { target: "draft-2020-12", unrepresentable: "any", io: "input" }) as Json;
+        out = z.toJSONSchema(schema, { target: "draft-2020-12", unrepresentable: "any", io }) as Json;
     } catch {
-        schema = { type: "object" };
+        out = { type: "object" };
     }
-    delete schema.$schema;
-    if (schema.type !== "object") return { type: "object", additionalProperties: true };
-    return schema;
+    delete out.$schema;
+    if (out.type !== "object") return { type: "object", additionalProperties: true };
+    return out;
 }
+
+// The JSON Schema of an op's input, as the client sends it, always an object.
+export const inputSchemaOf = (op: Op): Json => jsonSchemaOf(op.input, "input");
 
 export type McpTool = { name: string; description: string; inputSchema: Json; annotations?: Json };
 
@@ -91,7 +95,7 @@ export function mcpToolList(registry: Registry, flags: AiFlags): McpTool[] {
     }));
 }
 
-const INSTRUCTIONS = [
+export const INSTRUCTIONS = [
     "capystore is Harmony's media library: videos, images and galleries saved from links or uploaded, with public share links.",
     "Posts are found with library_list or library_search (meaning search) and opened with library_post; use the post `id` they return.",
     "Save a link (TikTok, X, YouTube, Instagram, a direct file...) with library_save. Upload a local file with upload_begin, then PUT the file's bytes to the upload_url it returns (its `curl` field is ready to run).",
@@ -99,76 +103,42 @@ const INSTRUCTIONS = [
     "Cropping (make_cropImage for pictures, make_crop for videos): never guess the position or assume the centre. Look at the source with grid: true (a video: frames: true, or make_frames for frames at chosen seconds), read the box off the labelled grid, check it with look's box option before making it, and look at the result after. A moving subject needs a box that covers it in every frame, or several clips with their own crops. Plain crop by default: cutout only for a subject on a plain background, never for banners, bars or text. Then edits_addOverlay to use it in a video.",
     "When offered, agents_spawn starts a helper (another capystore agent with these tools) on one task in the background; follow it with agents_get or jobs_wait on its job, message it with agents_send, read what helpers sent you with agents_inbox.",
     "Tools marked destructive delete or change things for good: confirm with the user first.",
+    "Some tools show a picture answer (a widget) where the host draws one: when it helps, prefer search_library, show_post, show_edit, list_collections, list_share_links, convert_to_webp, upload_files, create_share_link and save_link; each also answers in text.",
+    "The older tools (library_*, links_*, make_*...) remain for everything else, deletes and edits included.",
 ].join("\n");
 
-// ---- JSON-RPC ---------------------------------------------------------------------------------------------------------
-
-type RpcRequest = { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: unknown };
-type RpcReply = { jsonrpc: "2.0"; id: unknown; result?: unknown; error?: { code: number; message: string } };
-
-const rpcError = (id: unknown, code: number, message: string): RpcReply => ({ jsonrpc: "2.0", id, error: { code, message } });
+// ---- calling a tool ---------------------------------------------------------------------------------------------------
 
 // Who is calling and how to reach the rest of the server. `ctx` is the POST /mcp op's context (its key already checked).
 // `threadKey` names the MCP thread when it is not the client key's own (every private link shares one, section 35.5).
 export type McpCaller = { ctx: OpContext; clientKeyId: string; threadKey?: string; origin: string; fetch?: typeof fetch };
 
-// One JSON-RPC message in, its reply out (null for a notification).
-export async function mcpMessage(registry: Registry, caller: McpCaller, msg: RpcRequest): Promise<RpcReply | null> {
-    const isRequest = msg && typeof msg === "object" && "id" in msg && msg.id !== null && msg.id !== undefined;
-    const id = isRequest ? msg.id : null;
-    if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") {
-        return rpcError(id, -32600, "invalid request");
-    }
-    if (!isRequest) return null; // notifications (initialized, cancelled...) need no answer
-    const params = (msg.params && typeof msg.params === "object" ? msg.params : {}) as Json;
-    switch (msg.method) {
-        case "initialize": {
-            const asked = typeof params.protocolVersion === "string" ? params.protocolVersion : "";
-            const version = (MCP_PROTOCOL_VERSIONS as readonly string[]).includes(asked) ? asked : MCP_PROTOCOL_VERSIONS[0];
-            return {
-                jsonrpc: "2.0",
-                id,
-                result: {
-                    protocolVersion: version,
-                    capabilities: { tools: { listChanged: false } },
-                    serverInfo: { name: MCP_SERVER_NAME, title: "capystore", version: MCP_SERVER_VERSION },
-                    instructions: INSTRUCTIONS,
-                },
-            };
-        }
-        case "ping":
-            return { jsonrpc: "2.0", id, result: {} };
-        case "tools/list":
-            return { jsonrpc: "2.0", id, result: { tools: mcpToolList(registry, mcpFlags(caller.ctx)) } };
-        case "tools/call": {
-            const name = params.name;
-            if (typeof name !== "string") return rpcError(id, -32602, "tools/call needs a name");
-            const op = mcpOps(registry, mcpFlags(caller.ctx)).find((o) => mcpToolName(o.callName) === name);
-            if (!op) return rpcError(id, -32602, `unknown tool ${name}`);
-            const args = params.arguments && typeof params.arguments === "object" && !Array.isArray(params.arguments) ? params.arguments : {};
-            return { jsonrpc: "2.0", id, result: await callTool(op, caller, args as Json) };
-        }
-        default:
-            return rpcError(id, -32601, `method ${msg.method} is not supported`);
-    }
-}
-
 type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
-type ToolResult = { content: Content[]; isError?: boolean };
+export type ToolResult = { content: Content[]; isError?: boolean; structuredContent?: Json };
 
-const textResult = (value: unknown, isError = false): ToolResult => {
-    let text = typeof value === "string" ? value : JSON.stringify(value ?? null, null, 1);
-    if (text.length > MCP_RESULT_MAX) text = `${text.slice(0, MCP_RESULT_MAX)}… (cut: ask for less, e.g. a smaller limit)`;
+export const cutText = (text: string) => (text.length > MCP_RESULT_MAX ? `${text.slice(0, MCP_RESULT_MAX)}… (cut: ask for less, e.g. a smaller limit)` : text);
+
+export const textResult = (value: unknown, isError = false): ToolResult => {
+    const text = cutText(typeof value === "string" ? value : JSON.stringify(value ?? null, null, 1));
     return { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) };
 };
 
-// Run one tool as the client's MCP thread. Its arguments are the op's input object, checked by the op's own schema.
-async function callTool(op: Op, caller: McpCaller, args: Json): Promise<ToolResult> {
+// The words an agent reads for a failed call.
+export const errorText = (name: string, e: unknown) => {
+    if (e instanceof OpError) return e.message === e.code ? `${name} failed: ${e.code}` : e.message;
+    return e instanceof Error ? e.message : String(e);
+};
+
+const issuesText = (name: string, error: z.ZodError) =>
+    `${name}: ${error.issues.slice(0, 4).map((i) => `${i.path.length ? i.path.join(".") : "input"}: ${i.message}`).join("; ")}`;
+
+// The context a chat op runs in for this MCP thread: its chat key, its tools, no request of its own.
+async function threadContext(caller: McpCaller): Promise<OpContext> {
     const collect: ChatCollect = { look: [], show: [], collage: null };
     const threadId = await mcpThreadId(caller.threadKey ?? caller.clientKeyId);
     // the MCP request itself never reaches the op (no request, url or query of its own, like a chat call)
     const { request: _r, url: _u, query: _q, params: _p, chat: _c, keyId: _k, caller: _w, durableObject: _d, ...base } = caller.ctx;
-    const ctx = forCall(base, {
+    return forCall(base, {
         keyId: chatKeyId(threadId),
         caller: "chat",
         chat: {
@@ -178,13 +148,31 @@ async function callTool(op: Op, caller: McpCaller, args: Json): Promise<ToolResu
             mcp: { origin: caller.origin, clientKeyId: caller.clientKeyId },
         },
     });
-    // an op with its own argument mapping (collage) takes the object as its options
-    const raw = op.ai.args ? argsToInput(op, [args]) : args;
-    const parsed = op.input.safeParse(raw);
-    if (!parsed.success) {
-        const parts = parsed.error.issues.slice(0, 4).map((i) => `${i.path.length ? i.path.join(".") : "input"}: ${i.message}`);
-        return textResult(`${mcpToolName(op.callName)}: ${parts.join("; ")}`, true);
-    }
+}
+
+// The input of an MCP call. MCP clients always send the op's input object, so an object its schema accepts as it is runs
+// as it is. An op with its own argument mapping (`ai.args`, written for the chat's positional calls: search(query, limit))
+// is mapped only when that is what makes the call valid; when neither parses, the error is about the object as sent.
+export function mcpInput(op: Op, args: unknown): z.ZodSafeParseResult<unknown> {
+    const direct = op.input.safeParse(args);
+    if (direct.success || !op.ai.args) return direct;
+    const mapped = op.input.safeParse(argsToInput(op, [args]));
+    return mapped.success ? mapped : direct;
+}
+
+// Run a chat op for an app tool: the same context, argument mapping, checks and runner as a tool call. Throws OpError.
+export async function runChatOp(op: Op, caller: McpCaller, args: unknown): Promise<unknown> {
+    const ctx = await threadContext(caller);
+    const parsed = mcpInput(op, args);
+    if (!parsed.success) throw new OpError(400, "error.api.bad_request", issuesText(mcpToolName(op.callName), parsed.error));
+    return runOp(op, ctx, parsed.data);
+}
+
+// Run one tool as the client's MCP thread. Its arguments are the op's input object, checked by the op's own schema.
+export async function callTool(op: Op, caller: McpCaller, args: Json): Promise<ToolResult> {
+    const ctx = await threadContext(caller);
+    const parsed = mcpInput(op, args);
+    if (!parsed.success) return textResult(issuesText(mcpToolName(op.callName), parsed.error), true);
     try {
         if (op.callName === "look") {
             const l = parsed.data as { ids: string[]; grid?: boolean; frames?: boolean; box?: { x: number; y: number; w: number; h: number } };
@@ -193,8 +181,7 @@ async function callTool(op: Op, caller: McpCaller, args: Json): Promise<ToolResu
         // the chat's own runner, so a route op goes through the Durable Object exactly as the chat's does
         return textResult((await runOp(op, ctx, parsed.data)) ?? null);
     } catch (e) {
-        if (e instanceof OpError) return textResult(e.message === e.code ? `${mcpToolName(op.callName)} failed: ${e.code}` : e.message, true);
-        return textResult(e instanceof Error ? e.message : String(e), true);
+        return textResult(errorText(mcpToolName(op.callName), e), true);
     }
 }
 

@@ -475,6 +475,16 @@ public final class Settings {
         set { withMutation(keyPath: \.sendTelemetry) { defaults.set(newValue, forKey: "sendTelemetry") } }
     }
 
+    /// "library sync": the on-device library and its outbox (`SyncFeature`). Off by default. Read once
+    /// at launch, so a change takes effect the next time the app opens.
+    public var syncEngine: Bool {
+        get {
+            access(keyPath: \.syncEngine)
+            return SyncFeature.isEnabled(defaults)
+        }
+        set { withMutation(keyPath: \.syncEngine) { defaults.set(newValue, forKey: SyncFeature.defaultsKey) } }
+    }
+
     // MARK: key and server
 
     /// The stored key, only while it belongs to the current server (see `hasAPIKey`).

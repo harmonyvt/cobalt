@@ -52,6 +52,8 @@ struct SettingsScreen: View {
             // the "paste from anywhere" keys and the right-click service
             QuickSaveSettingsSection(model: model)
             #endif
+            // the on-device library and its glow: off until switched on here
+            LibrarySyncSettingsSection(model: model)
             TelemetrySettingsSection(model: model)
             feelSection
         }

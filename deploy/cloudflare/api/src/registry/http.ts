@@ -47,8 +47,9 @@ export type HttpCall = {
 // The registry's answer, or null when no op has this method and path.
 export async function handleOp(registry: Registry, base: OpBase, call: HttpCall): Promise<Response | null> {
     const host = call.host ?? "api";
-    // The API's preflights stay with the gate (its OPTIONS rule covers every path); the other hosts answer their own.
-    if (host === "api" && call.request.method === "OPTIONS") return null;
+    // The API's preflights stay with the gate (its OPTIONS rule covers every path), unless an op takes a real preflight
+    // (one with Access-Control-Request-Method: the MCP upload link's, section 55); the other hosts answer their own.
+    if (host === "api" && call.request.method === "OPTIONS" && !call.request.headers.has("Access-Control-Request-Method")) return null;
     const m = registry.match(call.request.method, call.url.pathname, host);
     if (!m) return null;
     const { op, params } = m;
