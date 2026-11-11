@@ -4,6 +4,7 @@ import Testing
 
 // settings › "library sync": the stored switch behind `SyncFeature`.
 @Suite("sync setting")
+@MainActor
 struct SyncSettingTests {
     @Test func startsOffAndStoresTheChoiceUnderTheEngineKey() {
         let defaults = UserDefaults(suiteName: "cobaltkit.tests.\(UUID().uuidString)")!
